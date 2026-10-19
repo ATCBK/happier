@@ -2,6 +2,7 @@ import type { CompactAppDestination, DestinationRef } from '../destinations/comp
 import { pruneWorkspaceTabPairs, type SharedWorkspaceTabs } from './workspaceSyncedTabs';
 import { createWorkspaceEmptyTab, reduceWorkspaceState, type WorkspaceState } from './workspaceState';
 import { collectSplitCanvasLeaves } from '../splitCanvas/model/splitCanvasTree';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 export function workspaceSingletonDestinationIds(catalog: readonly CompactAppDestination[]): readonly string[] {
     return catalog.filter(item => item.id === 'workflows' || (item.kind === 'plugin' && item.container === 'appPage')).map(item => item.id);
@@ -11,8 +12,18 @@ export function isWorkspaceSingletonDestination(catalog: readonly CompactAppDest
     return workspaceSingletonDestinationIds(catalog).includes(target.kind);
 }
 
+/** Qualify a catalog-addressed resource once, at admission, so later Home changes cannot retarget it. */
+export function resolveWorkspaceDestinationScope(target: DestinationRef, catalog: readonly CompactAppDestination[], scope?: ServerAccountScope | null): DestinationRef {
+    const destination = catalog.find(item => item.id === target.kind);
+    const policy = destination?.kind === 'builtin' ? destination.workspaceNavigationIdentity : undefined;
+    if (!policy || target.params[policy.resourceParam] === undefined || !policy.scopeParams.includes('serverId')
+        || target.params.serverId !== undefined || !scope?.serverId) return target;
+    return { ...target, params: { ...target.params, serverId: scope.serverId } };
+}
+
 /** Catalog-declared resource identity; an index has no resource or Home qualifier. */
-export function workspaceDestinationNavigationIdentity(target: DestinationRef, catalog: readonly CompactAppDestination[]): string | null {
+export function workspaceDestinationNavigationIdentity(target: DestinationRef, catalog: readonly CompactAppDestination[], scope?: ServerAccountScope | null): string | null {
+    target = resolveWorkspaceDestinationScope(target, catalog, scope);
     const destination = catalog.find(item => item.id === target.kind);
     const policy = destination?.kind === 'builtin' ? destination.workspaceNavigationIdentity : undefined;
     if (!policy) return null;

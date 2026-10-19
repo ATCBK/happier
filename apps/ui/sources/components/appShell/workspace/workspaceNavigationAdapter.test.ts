@@ -68,6 +68,24 @@ describe('workspace navigation adapter', () => {
         expect(Object.keys(h.state().groups)).toHaveLength(2);
     });
 
+    it('retains the admitted Machine Home when current scope changes and never guesses an unavailable scope', () => {
+        const scope = { serverId: 'home-a', accountId: 'alice' };
+        const h = harness([], scope);
+        h.adapter.openHref('/machines/machine-a', { mode: 'newTab' });
+        const retainedId = h.active().id;
+        scope.serverId = 'home-b';
+        h.adapter.openHref('/machines/machine-a');
+        expect(h.active().id).not.toBe(retainedId);
+        expect(h.state().tabs[retainedId]?.target.params.serverId).toBe('home-a');
+        expect(h.active().target.params.serverId).toBe('home-b');
+
+        const unscoped = harness();
+        unscoped.adapter.openHref('/machines/machine-a', { mode: 'newTab' });
+        const unqualifiedId = unscoped.active().id;
+        unscoped.adapter.openHref('/machines/machine-a?serverId=home-b');
+        expect(unscoped.active().id).not.toBe(unqualifiedId);
+    });
+
     it.each([
         ['rail All machines', '/machines?serverId=home-a', '/machines'],
         ['popover machine row', '/machines/machine-a/agents?serverId=home-a', '/machines/machine-a?serverId=home-a'],

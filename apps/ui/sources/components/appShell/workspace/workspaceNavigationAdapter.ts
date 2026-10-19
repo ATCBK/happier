@@ -2,7 +2,7 @@ import type { CompactAppDestination, DestinationRef } from '../destinations/comp
 import { hrefForDestinationRef, resolveDestinationRefFromHref } from '../destinations/compactAppDestinationCatalog';
 import { createWorkspaceNavigationHistory, recordWorkspaceNavigation, stepWorkspaceNavigation, workspaceNavigationRestorationActions, type WorkspaceNavigationEntry } from './workspaceNavigationHistory';
 import { createWorkspaceEmptyTab, type WorkspaceAction, type WorkspaceState, type WorkspaceTab } from './workspaceState';
-import { isWorkspaceSingletonDestination, workspaceDestinationNavigationIdentity } from './workspaceDestinationPolicy';
+import { isWorkspaceSingletonDestination, resolveWorkspaceDestinationScope, workspaceDestinationNavigationIdentity } from './workspaceDestinationPolicy';
 import { createWorkspaceDestinationSplit } from './workspaceSplit';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -52,7 +52,9 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
     let history = createWorkspaceNavigationHistory();
     const resolveOpenTarget = (href: string): DestinationRef | null => {
         const admitted = input.resolveOpenHref ? input.resolveOpenHref(href) : href;
-        return admitted ? resolveDestinationRefFromHref(input.getCatalog(), admitted) : null;
+        const catalog = input.getCatalog();
+        const target = admitted ? resolveDestinationRefFromHref(catalog, admitted) : null;
+        return target ? resolveWorkspaceDestinationScope(target, catalog, input.getScope?.()) : null;
     };
     const isSessionTerminal = (ref: DestinationRef) => {
         if (ref.params.workspacePathname
@@ -89,14 +91,15 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
     };
     const findOpenDestination = (target: DestinationRef, state = input.getState(), groupId?: string, tabId?: string): WorkspaceOpenDestination | null => {
         const catalog = input.getCatalog();
+        const scope = input.getScope?.();
         const singleton = isWorkspaceSingletonDestination(catalog, target);
-        const navigationIdentity = workspaceDestinationNavigationIdentity(target, catalog);
+        const navigationIdentity = workspaceDestinationNavigationIdentity(target, catalog, scope);
         const identity = sessionIdentity(target);
         const tab = Object.values(state.tabs).find(tab => {
             if (tabId && tab.id !== tabId) return false;
             if (groupId && !state.groups[groupId]?.tabIds.includes(tab.id)) return false;
             if (singleton) return tab.target.kind === target.kind;
-            if (navigationIdentity !== null) return workspaceDestinationNavigationIdentity(tab.target, catalog) === navigationIdentity;
+            if (navigationIdentity !== null) return workspaceDestinationNavigationIdentity(tab.target, catalog, scope) === navigationIdentity;
             const href = hrefForDestinationRef(catalog, tab.target);
             const normalized = href ? resolveDestinationRefFromHref(catalog, href) : null;
             if (!normalized) return false;
