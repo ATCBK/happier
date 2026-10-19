@@ -147,6 +147,12 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
     const signature = request.headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER.toLowerCase()];
     const encodedTarget = request.headers[EXTERNAL_ACTION_RESOLVED_TARGET_HEADER.toLowerCase()];
     const target = typeof encodedTarget === 'string' ? decodeExternalActionResolvedTargetV1(encodedTarget) : null;
+    // Root verification signs the original Machine target; Session HTTP reads
+    // use the separately projected Session target under that same signed root.
+    const targetMatches = target?.kind === 'session' && target.sessionId === sessionId
+      || request.method === 'POST' && request.url === '/v1/actions/session.open/execution-authorization/verify'
+        && root?.binding.target.kind === 'machine' && target?.kind === 'machine'
+        && target.machineId === root.binding.target.machineId;
     return access && root?.binding.accountId === accountId
       && (root.binding.target.kind === 'session' && root.binding.target.sessionId === sessionId
         || root.binding.actionId === 'session.open' && root.binding.target.kind === 'machine' && root.binding.target.machineId === 'machine')
@@ -154,7 +160,7 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
       && root.binding.installationId === installationId
       && request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER.toLowerCase()] === root.token
       && request.headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER.toLowerCase()] === root.binding.actionId
-      && target?.kind === 'session' && target.sessionId === sessionId
+      && targetMatches && target !== null
       && typeof signature === 'string' && verifyExternalActionMachineRequestV1({ authorizationToken: root.token,
         effectActionId: root.binding.actionId, target, installationId, requestId: root.binding.requestId,
         method: request.method, path: request.url, publicKey: keyPair.publicKey, signature,
@@ -690,10 +696,10 @@ describe('requester Session lifecycle custody', () => {
         return prepared && resolveTarget ? { ...prepared, resolveTarget } : null;
       },
     });
-    expect(host.requests.some(request => request.path.startsWith('/v2/sessions/') && request.sessionActionAuthorized)).toBe(true);
     expect(admitted, JSON.stringify(admitted)).toMatchObject({ kind: 'response', response: {
       execution: { ok: true, result: { status: 'opened', sessionId } },
     } });
+    expect(host.requests.some(request => request.path.startsWith('/v2/sessions/') && request.sessionActionAuthorized)).toBe(true);
     expect(host.requests.filter(request => request.path.startsWith('/v2/sessions/'))
       .every(request => request.bearer === `Bearer ${credentials.token}` || request.sessionActionAuthorized)).toBe(true);
     // The replay owner reconstructs this original private context after the
