@@ -1,6 +1,6 @@
 import { createAbsolutePathSymlink } from '@happier-dev/plugin-sdk/fs';
 import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 export type ConnectedServiceHomeEntryStat = Awaited<ReturnType<typeof stat>>;
 
@@ -57,6 +57,20 @@ export async function moveConnectedServiceHomeEntryAside(path: string): Promise<
     }
   }
   throw new Error(`Unable to migrate existing connected-service home entry aside for ${path}`);
+}
+
+export async function listDisplacedConnectedServiceHomeDirectories(path: string): Promise<readonly string[]> {
+  const parent = dirname(path);
+  const prefix = `${basename(path)}.local-`;
+  try {
+    return (await readdir(parent, { withFileTypes: true }))
+      .filter(entry => entry.isDirectory() && entry.name.startsWith(prefix)
+        && /^\d+(?:-\d+)?$/.test(entry.name.slice(prefix.length)))
+      .map(entry => join(parent, entry.name));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
+    throw error;
+  }
 }
 
 export async function prepareManagedConnectedServiceHomeDestination(destinationPath: string): Promise<void> {

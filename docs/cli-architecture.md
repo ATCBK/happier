@@ -230,7 +230,16 @@ resume roots feed the same import owner, and adoption does not authorize deletin
 the previous root. Agent declarations own the state inventory and configuration
 inheritance separately; no refresh-specific copier or migration registry exists.
 
-If isolated-to-shared import finds different bytes at the same destination path,
+Home preparation also reimports declared state directories displaced under the
+owner's `.local-<timestamp>` names. A native process can keep appending through an
+open file descriptor after that move; neither turn completion nor process exit
+performs a sync-back. Replacement preparation adopts those writes before normal
+resume verification, retaining the displaced directories and skipping symlinks.
+Codex's existing state codec appends an exact complete-line rollout extension at
+the canonical path, or keeps the existing rollout when the incoming file is its
+prefix.
+
+If isolated-to-shared import finds divergent bytes at the same destination path,
 the existing importer retains that destination and preserves the incoming file
 under a `.happier-import-*` name. Both versions survive, but no conversation merge
 or conflict-resolution decision is made. Antigravity's shared view therefore does
