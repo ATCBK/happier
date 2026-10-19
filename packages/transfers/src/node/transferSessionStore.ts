@@ -11,6 +11,9 @@ type IssuedAttachment = Readonly<{
   handle: SessionAttachmentHandleV1;
   filePath: string;
   name: string;
+  displayPath: string;
+  sizeBytes: number;
+  sha256: string;
 }>;
 
 type UploadSession = {
@@ -300,10 +303,13 @@ export class TransferSessionStore {
     return this.uploads.get(uploadId) ?? null;
   }
 
-  issueAttachment(input: Readonly<{ uploadId: string; sessionId: string; filePath: string; name: string }>): SessionAttachmentHandleV1 {
+  issueAttachment(input: Readonly<{ uploadId: string; sessionId: string; filePath: string; name: string;
+    displayPath: string; sizeBytes: number; sha256: string;
+  }>): SessionAttachmentHandleV1 {
     this.assertOpen();
     const handle: SessionAttachmentHandleV1 = { v: 1, sessionId: input.sessionId, id: input.uploadId };
-    this.attachments.set(handle.id, { handle, filePath: input.filePath, name: input.name });
+    this.attachments.set(handle.id, { handle, filePath: input.filePath, name: input.name,
+      displayPath: input.displayPath, sizeBytes: input.sizeBytes, sha256: input.sha256 });
     return handle;
   }
 
