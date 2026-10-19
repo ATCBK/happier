@@ -73,6 +73,9 @@ import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowMuta
     type ConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { ANTHROPIC_API_KEY_INPUT_SCHEMA } from '../../../../../../../packages/plugins/claude/src/connectedAccounts/anthropicRuntime';
 import { BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
+import { ConnectedServiceSetupPanel, type ConnectedServiceSetupCatalogEntry, type ConnectedServiceSetupTarget } from '../setup/ConnectedServiceSetupPanel';
+import { ConnectedServicesConnectMore } from '../setup/ConnectedServicesConnectMore';
+import { buildConnectedServicesIndexModel } from '../model/buildConnectedServicesIndexModel';
 
 const platform = vi.hoisted(() => ({
     params: {} as Record<string, string | undefined>,
@@ -1198,8 +1201,14 @@ describe('ConnectedAccountSetupController real ownership', () => {
         ]);
     });
 
-    it('retains the email-shaped draft through a choice, target loss and options refresh at the real setup owner', async () => {
+    it.each(['controller', 'page', 'inline', 'inline-offer'] as const)('retains the email-shaped draft through a choice, target loss and options refresh at the real setup owner (%s)', async (host) => {
         waiveConfigurationConfirmation();
+        if (host === 'inline' || host === 'inline-offer') {
+            // Window geometry is the native boundary; the actual inline host,
+            // catalog projection, setup panel and controller all remain real.
+            const native = await import('react-native');
+            vi.spyOn(native, 'useWindowDimensions').mockReturnValue({ width: 1440, height: 900, scale: 1, fontScale: 1 });
+        }
         // Use the real published descriptor, under the external-plugin fixture's
         // identity: the host must not special-case the bundled email plugin.
         const mode = BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS['happier.channel.email/email-imap-smtp']!
@@ -1209,13 +1218,13 @@ describe('ConnectedAccountSetupController real ownership', () => {
         const target = { ...configurationTarget, modeId: mode.id };
         let readMode = mode;
         let describeUnavailable = false;
+        const replacement = deferredReply();
         const reply = () => ({ ...configurationReply, target, mode: readMode,
             configuration: { ...configurationReply.configuration, values: {}, configuredSecretFieldIds: [] } });
         handleControl = command => command.operation === 'listPendingAttempts'
             ? { status: 'pendingAttempts', attempts: [] }
             : command.operation === 'readConfiguration' ? reply()
-                : command.operation === 'replaceConfiguration' ? { ...reply(), status: 'configurationCommitted',
-                    configuration: { ...reply().configuration, status: 'ready', revision: 'config-2' } }
+                : command.operation === 'replaceConfiguration' ? replacement.promise
                     : describeUnavailable ? { status: 'unavailable', code: 'temporarily_unavailable' } : description;
         handleAuthentication = command => command.operation === 'continueConnect'
             ? { status: 'awaitingManual', attemptId: 'attempt-1' }
@@ -1225,31 +1234,53 @@ describe('ConnectedAccountSetupController real ownership', () => {
             const fresh = resolveFreshMachineAdministrationExecutionTarget(selection.selectedTarget);
             return fresh && misbound ? { ...fresh, target: { ...fresh.target, machineId: 'wrong-machine' } } : fresh;
         } };
-        const screen = await renderScreen(element(selected));
+        let catalog: readonly ConnectedServiceSetupCatalogEntry[] = [{
+            serviceKey: `${service.pluginId}/${service.localId}`, service, entry: null, legacyServiceId: null,
+            label: 'Email', usedBy: [], usedByAgentIds: [], connectedCount: 0, section: 'tools', canAdd: true,
+        }];
+        let requestedTarget: ConnectedServiceSetupTarget = { kind: 'service', serviceKey: `${service.pluginId}/${service.localId}` };
+        const handled = () => {};
+        const inline = () => <InjectedAuthProvider credentials={null}>
+            <ConnectedServicesConnectMore layout="section" request={requestedTarget} onRequestHandled={handled} onConnected={onConnected}
+                targetSelection={selected} model={buildConnectedServicesIndexModel({ transport: 'advertised-v4',
+                    entries: catalog.map(() => ({ serviceId: 'acme-work', service, executable: true,
+                        connectCommand: 'happier connect acme-work', supportsOauth: false, projectedTitle: 'Email' })),
+                    qualifiedAccounts: [], qualifiedGroups: [], legacyServices: [], defaultAccountByServiceKey: {},
+                    resolveLabel: entry => String(entry?.projectedTitle ?? ''), resolveFallbackEntry: () => null,
+                    presentDiagnostics: () => ({ primary: null, supportDetails: null }), loadingLabel: 'Loading',
+                    agentUses: host === 'inline-offer' ? [{ title: 'Acme Agent', services: [service], defaults: [] }] : [] })} />
+        </InjectedAuthProvider>;
+        const setup = () => host === 'controller' ? element(selected) : host === 'inline' || host === 'inline-offer' ? inline() : <InjectedAuthProvider credentials={null}>
+            <ConnectedServiceSetupPanel chrome="page" target={requestedTarget}
+                catalog={catalog} targetSelection={selected} onTargetChange={() => {}} onClose={onCancel} />
+        </InjectedAuthProvider>;
+        const screen = await renderScreen(setup());
         await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-configuration:mailbox')).not.toBeNull());
         const entered = { imapHost: 'imap.example.test', imapPort: '39753', mailbox: 'wilson@example.test',
             sentFolder: 'My Sent', smtpHost: 'smtp.example.test', smtpPort: '37419', username: 'wilson-login', inboxFolder: 'Inbox/custom' };
         for (const [id, value] of Object.entries(entered)) {
             await act(async () => screen.changeTextByTestId(`connected-account-configuration:${id}`, value));
         }
+        const securityChoice = () => screen.tree.findAllByType(DropdownMenu)
+            .find(node => node.props.testID === 'connected-account-configuration:smtpSecurity')!;
         const assertDraft = () => {
             for (const [id, value] of Object.entries(entered)) {
                 expect(screen.findHostByTestId(`connected-account-configuration:${id}`)?.props.value, id).toBe(value);
             }
-            expect(screen.tree.findByType(DropdownMenu).props.selectedId).toBe(JSON.stringify('starttls'));
+            expect(securityChoice().props.selectedId).toBe(JSON.stringify('starttls'));
         };
-        await act(async () => screen.tree.findByType(DropdownMenu).props.onSelect(JSON.stringify('starttls')));
+        await act(async () => securityChoice().props.onSelect(JSON.stringify('starttls')));
         assertDraft();
         const state = storage.getState();
         const inventory = { isDataReady: state.isDataReady, machines: state.machines,
             machineListByServerId: state.machineListByServerId, machineListStatusByServerId: state.machineListStatusByServerId };
         await act(async () => storage.setState({ isDataReady: false, machines: {}, machineListByServerId: {}, machineListStatusByServerId: {} }));
-        await screen.update(element(selected));
+        await screen.update(setup());
         expect(selected.resolveExecutionTarget()).toBeNull();
         assertDraft();
         describeUnavailable = true;
         await act(async () => storage.setState(inventory));
-        await screen.update(element(selected));
+        await screen.update(setup());
         await vi.waitFor(() => expect(screen.findHostByTestId('connected-account:error:retry')).not.toBeNull());
         describeUnavailable = false;
         readMode = { ...mode, configuration: { ...mode.configuration!, fields: mode.configuration!.fields.map(field =>
@@ -1263,16 +1294,33 @@ describe('ConnectedAccountSetupController real ownership', () => {
         // Mis-wiring negative: retaining values never lends authority to a
         // resolver that returns another Machine. Recovery uses the same draft.
         misbound = true;
-        await screen.update(element(selected));
+        await screen.update(setup());
         await screen.pressByTestIdAsync('connected-account-configuration:save');
         expect(controlCommands.some(command => command.operation === 'replaceConfiguration')).toBe(false);
         assertDraft();
         misbound = false;
-        await screen.update(element(selected));
+        await screen.update(setup());
         await screen.pressByTestIdAsync('connected-account-configuration:save');
+        await vi.waitFor(() => expect(controlCommands.some(command => command.operation === 'replaceConfiguration')).toBe(true));
+        // Catalog discovery can refresh while Replace/approval is in flight.
+        // The chosen service and attempt still own this ongoing setup journey.
+        catalog = [];
+        await screen.update(setup());
+        assertDraft();
+        await act(async () => replacement.resolve({ ...reply(), status: 'configurationCommitted',
+            configuration: { ...reply().configuration, status: 'ready', revision: 'config-2' } }));
         await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-manual:password')).not.toBeNull());
+        expect(authenticationCommands.filter(command => command.operation === 'beginConnect')).toHaveLength(1);
+        expect(authenticationCommands).toContainEqual({ operation: 'continueConnect', attemptId: 'attempt-1', expectedConfigurationRevision: 'config-2' });
         expect(controlCommands).toContainEqual({ operation: 'replaceConfiguration', target: { kind: 'attempt', attemptId: 'attempt-1' },
             expectedRevision: 'config-1', values: { ...entered, imapPort: 39753, smtpPort: 37419, smtpSecurity: 'starttls' }, secretValues: {} });
+        if (host !== 'controller') {
+            // Retention follows the continuing user intent. Returning to the
+            // catalog must still retire the old attempt and its secret form.
+            requestedTarget = { kind: 'catalog' };
+            await screen.update(setup());
+            expect(screen.findHostByTestId('connected-account-manual:password')).toBeNull();
+        }
     });
 
     it.each(['machine', 'home'] as const)('refuses a setup resolver mis-bound to another %s', async (mismatch) => {
