@@ -407,3 +407,39 @@ describe('switch off track', () => {
         expect(failures).toEqual([]);
     });
 });
+
+/**
+ * The selected radio dot (the question card's options, the composer's pickers). Every consumer draws
+ * the dot inside an unfilled ring, on whatever surface the row stands on, so the dot is a non-text
+ * indicator against that surface (WCAG 1.4.11, 3:1). The old dark dot was a background-like ink
+ * (1.03:1 on `surface.inset`), which drew every selected radio as a hollow ring.
+ */
+// The resting surfaces a radio row stands on: the page, a sheet, the selected question option's
+// inset fill, and the composer's picker popover. No radio row paints `surface.selected`.
+const RADIO_DOT_BACKGROUNDS = ['background.canvas', 'surface.base', 'surface.inset', 'surface.elevated'] as const;
+
+function radioDotFailures(colors: unknown, label: string): string[] {
+    const canvas = readTokenPath(colors, 'background.canvas');
+    const dot = readTokenPath(colors, 'radio.dot');
+    return RADIO_DOT_BACKGROUNDS.flatMap((background) => {
+        const ratio = contrastRatio(dot, readTokenPath(colors, background), canvas);
+        return ratio >= 3 ? [] : [`${label}: radio.dot (${dot}) on ${background} = ${ratio.toFixed(2)}:1`];
+    });
+}
+
+describe('selected radio dot contrast', () => {
+    it('keeps the selected dot visible on every surface in both base themes and every built-in profile', () => {
+        const failures = [
+            ...radioDotFailures(lightTheme.colors, 'light'),
+            ...radioDotFailures(darkTheme.colors, 'dark'),
+            ...BUILT_IN_THEME_PROFILES.flatMap((definition) => (
+                (['light', 'dark'] as const).flatMap((mode) => radioDotFailures(
+                    resolveThemeProfile({ mode, profile: definition.profile }).colors,
+                    `${definition.presetId}/${mode}`,
+                ))
+            )),
+        ];
+
+        expect(failures).toEqual([]);
+    });
+});
