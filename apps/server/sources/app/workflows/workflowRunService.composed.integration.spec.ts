@@ -360,6 +360,33 @@ describe("workflowRunService (integration)", () => {
         await expect(deleteWorkflowRun({ accountId: seeded.accountId, runId, expectedRevision: 5 })).resolves.toMatchObject({ deleted: true });
     });
 
+    it("validates and projects an origin delivery page after its coherent snapshot closes", async () => {
+        const seeded = await seed();
+        const runId = randomUUID();
+        await admitWorkflowRun({ ...seeded, runId, origin: { kind: "direct", originSessionId: seeded.sessionId },
+            acceptedEnvelope: await acceptedEnvelope({ ...seeded, runId, originSessionId: seeded.sessionId }),
+            resultDelivery: { kind: "originating_session" } });
+        await db.automationRun.update({ where: { id: runId }, data: { state: "running", revision: 1 } });
+        const originalTransaction = db.$transaction;
+        let legacyWritePoolTransactions = 0;
+        db.$transaction = new Proxy(originalTransaction, {
+            apply(target, thisArg, args) {
+                legacyWritePoolTransactions += 1;
+                return Reflect.apply(target, thisArg, args);
+            },
+        });
+        try {
+            await expect(workflowRunService.pullWorkflowRunOriginDelivery({
+                accountId: seeded.accountId,
+                originSessionId: seeded.sessionId,
+                pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
+            })).resolves.toMatchObject({ runs: [{ run: { id: runId, state: "running", revision: 1 } }] });
+            expect(legacyWritePoolTransactions).toBe(0);
+        } finally {
+            db.$transaction = originalTransaction;
+        }
+    });
+
     it("pulls delivery-off admitting origin rows under closed control with scoped Run pagination", async () => {
         expect("pullWorkflowRunOriginDelivery" in workflowRunService).toBe(true);
         const seeded = await seed();

@@ -19,6 +19,7 @@ import { markAccountChangesForSessionAccounts } from "@/app/session/changeTracki
 import { emitAutomationRunUpdatedToMachineOnly } from "@/app/automations/automationChangePublisher";
 import { publishManagedRunWakeInTx, publishManagedContextWakeInTx } from '@/app/machines/managed/managedWake';
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
+import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { automationRunCustodyTerminalWhere, readAutomationLiveCauseRunIdsTx } from "@/app/automations/automationCrudService";
 import { AUTOMATION_RUN_TERMINAL_STATES, projectAutomationRunState } from "@/app/automations/automationTypes";
 import { automationRunCauseSelect, automationRunWithoutExecutionWhere } from "@/app/automations/automationPersistenceSelect";
@@ -26,7 +27,7 @@ import { decodeAutomationRunCause } from "@/app/automations/automationRunCauseCo
 import { applyAutomationRunTerminalEffectsTx } from "@/app/automations/automationRunSucceeded";
 import { readRetainedAutomationRunExecutionInputForWorkflowAdmission, validateAutomationStoredContentEnvelopeOuterForMode } from "@/app/automations/automationStoredContentRead";
 import { db } from "@/storage/db";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { isPrismaErrorCode, prismaRuntime } from "@/storage/prisma";
 
 import { assertWorkflowStoredEnvelopeOuterForMode, WorkflowStoredContentError } from "./runs/storedContent";
@@ -201,6 +202,17 @@ async function loadAccountModeTx(tx: Tx, accountId: string, runId?: string): Pro
         throw new WorkflowRunServiceError("content_unavailable");
     }
     return fence.account.currentness.encryptionMode;
+}
+
+async function readAccountModeTx(tx: Tx, accountId: string): Promise<"plain" | "e2ee"> {
+    const account = await tx.account.findUnique({
+        where: { id: accountId },
+        select: { publicKey: true, encryptionMode: true, contentPublicKey: true, contentPublicKeySig: true },
+    });
+    if (!account) throw new WorkflowRunServiceError("content_unavailable");
+    const currentness = deriveAccountEncryptionCurrentnessFromRow(account);
+    if (currentness.status !== "ready") throw new WorkflowRunServiceError("content_unavailable");
+    return currentness.currentness.encryptionMode;
 }
 
 async function loadCurrentWorkflowAccountModeTx(
@@ -778,17 +790,15 @@ export async function pullWorkflowRunOriginDelivery(params: PageOptions & Readon
     const afterDate = decoded?.status === "ok" ? readKeysetCursorTextV1(decoded.parts[0]) : null;
     const afterId = decoded?.status === "ok" ? readKeysetCursorIdV1(decoded.parts[1]) : null;
     if (params.cursor && (!afterDate || !afterId)) throw new WorkflowRunServiceError("invalid_input");
-    return await inTx(async (tx) => {
+    type RawDeliveryCandidate = Readonly<{ row: WorkflowRunFullRow; attentionRequired: boolean }>;
+    const rawPage = await inReadSnapshot(async (tx) => {
         const session = await tx.session.findFirst({ where: { id: params.originSessionId, accountId: params.accountId }, select: { id: true } });
         if (!session) throw new WorkflowRunServiceError("run_not_found");
-        const mode = await loadAccountModeTx(tx, params.accountId);
+        const mode = await readAccountModeTx(tx, params.accountId);
         const wanted = params.limit ?? Number.POSITIVE_INFINITY;
         let pageAfterDate = afterDate;
         let pageAfterId = afterId;
-        type DeliverySnapshot = { run: WorkflowRunSummaryV1; acceptedEnvelope: string; checkpointEnvelope: string | null; resultEnvelope: string | null; invocations: never[]; hasOriginInputCandidates: boolean };
-        let collected: DeliverySnapshot[] = [];
-        let collectedBytes = 2;
-        const cursorFor = (snapshot: DeliverySnapshot) => encodeKeysetCursorV1({ queryKey, parts: [snapshot.run.createdAt, snapshot.run.id] });
+        const collected: RawDeliveryCandidate[] = [];
         for (;;) {
             const batchSize = Math.min(wanted - collected.length, WORKFLOW_PAGE_DATABASE_BATCH_ROWS);
             const rows = await tx.automationRun.findMany({
@@ -805,36 +815,36 @@ export async function pullWorkflowRunOriginDelivery(params: PageOptions & Readon
                 },
                 orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: batchSize + 1,
                 select: { ...workflowRunSelect, workflowInvocations: { where: { lifecycle: { in: [...ORIGIN_INPUT_CANDIDATE_LIFECYCLES] } }, take: 1, select: { id: true } } },
-            });
+            }) as WorkflowRunFullRow[];
             const candidates = rows.slice(0, batchSize);
             const attentionIds = new Set(candidates.length === 0 ? [] : (await tx.automationRun.findMany({
                 where: { accountId: params.accountId, id: { in: candidates.map((row) => row.id) }, AND: [workflowRunAttentionWhere()] }, select: { id: true },
             })).map((row) => row.id));
-            const snapshots: DeliverySnapshot[] = candidates.map((row) => {
-                assertWorkflowStoredEnvelopeOuterForMode({ raw: row.workflowAcceptedSnapshotEnvelope!, mode, binding: { v: 1, purpose: "accepted_snapshot", accountId: params.accountId, runId: row.id } });
-                if (row.workflowCheckpointEnvelope !== null) assertWorkflowStoredEnvelopeOuterForMode({ raw: row.workflowCheckpointEnvelope, mode, binding: { v: 1, purpose: "checkpoint", accountId: params.accountId, runId: row.id } });
-                if (row.resultEnvelope !== null) assertWorkflowStoredEnvelopeOuterForMode({ raw: row.resultEnvelope, mode, binding: { v: 1, purpose: "final_result", accountId: params.accountId, runId: row.id } });
-                // Candidate progress uses the existing byte-paged invocation owner, so even
-                // a Run with many valid parallel inputs never exceeds a grouped snapshot page.
-                return { run: projectRun({ ...row, attentionRequired: attentionIds.has(row.id) } as WorkflowRunRow), acceptedEnvelope: row.workflowAcceptedSnapshotEnvelope!, checkpointEnvelope: row.workflowCheckpointEnvelope, resultEnvelope: row.resultEnvelope, invocations: [], hasOriginInputCandidates: row.workflowInvocations.length > 0 };
-            });
             const batchHasMore = rows.length > batchSize;
-            const bounded = appendBoundedPage({ existing: collected, existingBytes: collectedBytes, candidates: snapshots,
-                byteLimit: params.pageByteLimit, serializeMembers: (snapshot) => [JSON.stringify(snapshot)],
-                emptyPage: (nextCursor) => ({ runs: [], nextCursor: nextCursor ?? null }), nextCursorFor: cursorFor,
-                hasMoreAfter: (index) => index < snapshots.length - 1 || batchHasMore });
-            collected = bounded.rows;
-            collectedBytes = bounded.bytes;
-            if (bounded.shortened || collected.length >= wanted || !batchHasMore) {
-                const last = collected.at(-1);
-                return { runs: collected, nextCursor: (bounded.shortened || batchHasMore) && last ? cursorFor(last) : null };
-            }
+            collected.push(...candidates.map(row => ({ row, attentionRequired: attentionIds.has(row.id) })));
+            if (collected.length >= wanted || !batchHasMore) return { mode, candidates: collected, hasMore: batchHasMore };
             const last = candidates.at(-1);
-            if (!last) return { runs: collected, nextCursor: null };
+            if (!last) return { mode, candidates: collected, hasMore: false };
             pageAfterDate = last.createdAt.toISOString();
             pageAfterId = last.id;
         }
-    }, { isolationLevel: "ReadCommitted", transactionClass: "workflow-pull-run-origin-delivery" });
+    }, { transactionClass: "workflow-pull-run-origin-delivery" });
+    type DeliverySnapshot = { run: WorkflowRunSummaryV1; acceptedEnvelope: string; checkpointEnvelope: string | null; resultEnvelope: string | null; invocations: never[]; hasOriginInputCandidates: boolean };
+    const snapshots: DeliverySnapshot[] = rawPage.candidates.map(({ row, attentionRequired }) => {
+        assertWorkflowStoredEnvelopeOuterForMode({ raw: row.workflowAcceptedSnapshotEnvelope!, mode: rawPage.mode, binding: { v: 1, purpose: "accepted_snapshot", accountId: params.accountId, runId: row.id } });
+        if (row.workflowCheckpointEnvelope !== null) assertWorkflowStoredEnvelopeOuterForMode({ raw: row.workflowCheckpointEnvelope, mode: rawPage.mode, binding: { v: 1, purpose: "checkpoint", accountId: params.accountId, runId: row.id } });
+        if (row.resultEnvelope !== null) assertWorkflowStoredEnvelopeOuterForMode({ raw: row.resultEnvelope, mode: rawPage.mode, binding: { v: 1, purpose: "final_result", accountId: params.accountId, runId: row.id } });
+        // Candidate progress uses the existing byte-paged invocation owner, so even
+        // a Run with many valid parallel inputs never exceeds a grouped snapshot page.
+        return { run: projectRun({ ...row, attentionRequired } as WorkflowRunRow), acceptedEnvelope: row.workflowAcceptedSnapshotEnvelope!, checkpointEnvelope: row.workflowCheckpointEnvelope, resultEnvelope: row.resultEnvelope, invocations: [], hasOriginInputCandidates: row.workflowInvocations.length > 0 };
+    });
+    const cursorFor = (snapshot: DeliverySnapshot) => encodeKeysetCursorV1({ queryKey, parts: [snapshot.run.createdAt, snapshot.run.id] });
+    const bounded = appendBoundedPage({ existing: [], existingBytes: 2, candidates: snapshots,
+        byteLimit: params.pageByteLimit, serializeMembers: (snapshot) => [JSON.stringify(snapshot)],
+        emptyPage: (nextCursor) => ({ runs: [], nextCursor: nextCursor ?? null }), nextCursorFor: cursorFor,
+        hasMoreAfter: (index) => index < snapshots.length - 1 || rawPage.hasMore });
+    const last = bounded.rows.at(-1);
+    return { runs: bounded.rows, nextCursor: (bounded.shortened || rawPage.hasMore) && last ? cursorFor(last) : null };
 }
 
 /** Acknowledgement suppresses only the owner's already-composed snapshot and never changes Run custody. */
