@@ -77,6 +77,32 @@ Receiving Team or Group access on its own creates none of these. It does not
 produce unread state, Inbox pressure, a badge, or a notification. Open the session
 and follow it when you want it in your flow.
 
+## Notify me once
+
+In the unreleased 0.3 checkout, **Notify me** uses your private Follow choice.
+Choose the current turn finishing, including a failed or stopped outcome, or
+the first new request that needs you. The current-turn option stays bound to
+that turn; it does not carry over to the next one.
+
+An accepted Inbox item uses up the one-shot even if push delivery is unavailable.
+Turning the option off clears only the one-shot. Your ongoing Follow choice,
+Include in Voice and read state stay separate.
+
+## Mute a source (0.3 development)
+
+Mute is separate from Unfollow: it stops future delivery from one exact sender
+session or Follow source to one receiver, without removing that receiver's Follow
+or access. Removing the mute lets future delivery resume; it does not undo work
+already accepted. The current unreleased 0.3 source has the private
+`session.delivery.mute.set`, `.remove` and `.list` Action/API contract. The
+user-facing Mute control and delivery integrations are still in development;
+this is not a claim that every route is available in a shipped app.
+
+Older notification shortcuts may still appear as ordinary Habits. Happier keeps
+them because they cannot reliably be distinguished from Habits you authored.
+Review or delete them individually if you no longer need them; authored
+notification workflows continue to work.
+
 ## When following pauses or stops
 
 - **Following is paused while this session is archived.** Unarchive it to resume.

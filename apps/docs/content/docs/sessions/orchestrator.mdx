@@ -85,10 +85,14 @@ Starts use `session.spawn_new`, `execution.run.start`, `review.start`,
 The start policy and available role determine what can run; callers cannot
 override a role's admitted engine or exceed their permission ceiling.
 
-Use `session.reports_to.set` for attach/detach/reparent, including the expected
-current lead, and `session.list` with `underSessionId` to read the subtree.
+Use `session.manager.set` for attach/detach/reparent, including
+`managerSessionId` and `expectedManagerSessionId` (null for a root), and
+`session.list` with `underSessionId` to read the subtree.
 Agents normally list their own led subtree. `session.message.send` sends
-explicit input; `session.worker.publish` reports from a reporting worker.
+explicit input; `session.update.post` persists an update from the current session,
+even when it has no manager. It returns the original publication reference once
+stored; follower policy determines when receivers hear about it. Workflow-step
+sessions retain their workflow publication and review path.
 `session.notes.set` updates orchestration notes. `settings.get` and
 `settings.set` reach declared delegation preferences by `anchor`, under their
 normal approval rules. The Approval reviewer Account preference uses
@@ -99,6 +103,12 @@ Discover exact fields and surfaces in the
 [host Action reference](/plugins/api/host-actions); neither tool discovery
 nor a reporting relation grants permission to invoke an Action. Waits observe
 existing work and ending a wait does not stop it.
+
+The manager link is a Follow relation. A session has at most one manager;
+following that same source separately is independent and survives detaching
+the manager. Manager updates read original publications in order, so an older
+unconsumed report remains available after newer messages arrive. Delivery
+across a daemon restart remains at least once.
 
 ## Related
 

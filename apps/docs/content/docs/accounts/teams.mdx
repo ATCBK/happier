@@ -25,6 +25,24 @@ Home** — losing them would throw away real information. It is a Home whose Tea
 have never loaded on this device that contributes no rows; Happier names that Home
 as unavailable instead of pretending the list is complete.
 
+## Request attribution in 0.3 development
+
+A shared Bot keeps the cause of a request separate from the Session that answers
+and the Account whose credentials execute it. Read these facts as **asked by**,
+**answered by** and **using**. Delegating an answer does not turn the answering
+Session into the original requester. These are development data contracts;
+the corresponding bylines are still being built.
+
+Attribution comes from authenticated host evidence. Unknown or autonomous
+requests stay unknown or autonomous; Happier does not infer a person from a
+Bot's owner or a name in message text. Older history may lack those facts.
+It is not a complete audit log or an access grant.
+
+For an outward write, the original Bot's setup and credentials execute after
+the [requester's confirmation](/sessions/inbox-and-approvals#shared-bot-confirmation-in-03-development).
+Team membership alone does not supply that consent or make the Bot ready;
+see [Bot readiness](/organize/session-organization#bot-readiness-in-03-development).
+
 ## Create a Team
 
 Open **Settings → Teams** and choose **New Team**. Give it a **Name** and, if it

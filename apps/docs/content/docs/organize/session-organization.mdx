@@ -69,6 +69,20 @@ when the rail is too short, they move into the rail's More menu. On a phone, or
 when there's no rail, the same list opens as a sheet from the app's
 destinations and the command palette.
 
+## Bot readiness in 0.3 development
+
+A configured Bot is not necessarily ready to answer. Development Action callers
+can request `session.status.get` with `{sessionId, readiness: true}` to inspect
+the selected Machine, Agent and current permission to submit input. The result
+reports ready, unavailable or unknown and its cause. Missing or stale evidence
+stays unknown.
+
+The current CLI status reader checks conversation readiness only. It does not prove that
+an external credential can perform a write, grant permission, or run a repair.
+If it reports a repair, that uses the normal setup Action and still needs its
+own authority. People and Bot readiness rendering is still being built; this
+section describes the unreleased diagnostic contract.
+
 ## Selecting several at once
 
 Open a row's menu (right-click on desktop or long-press on touch) and choose

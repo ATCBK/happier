@@ -290,6 +290,39 @@ a newer Session. The CLI retains its queued intent and reviewed revision for
 explicit review after a conflict. This is not a claim that the deferred visual
 Work editor already provides draft recovery.
 
+### Saving memory and decisions in 0.3 development
+
+The development Actions save facts in the existing Memory document. When
+`memory.remember`, `memory.decision.save` or an edit finds a possible duplicate,
+it asks for a choice against the revision you reviewed:
+
+- **Update** corrects the selected saved fact.
+- **Replace** makes the incoming fact supersede the selected fact.
+- **Keep both** keeps the saved fact active and adds the incoming one.
+
+Update and Replace keep the previous text in the archive. A stale choice refuses
+instead of applying to newer content. For an edit that matches another saved
+fact, Update corrects that candidate in its existing topic and archives both
+prior versions; Replace uses the incoming edit's destination.
+
+`memory.decision.save` also records a reason and an exact source message from a
+Session or Discussion. The record identifies who approved it when the host
+witnessed a person saving or approving that exact request; otherwise it means
+**not approved by a person**. An Agent or an approval waiver cannot invent an
+approver. Changed wording clears an earlier approval unless a new person save
+or approval is witnessed; renewing only the expiry keeps the existing approval.
+
+Expiry is **Never** or a date. Expired facts stop entering prepared prompts but
+remain stored and searchable. Reason and source detail are read on demand. A
+source link grants no access, and saving refuses when the source is unavailable
+or the Memory document's audience may not receive it. A Project attachment alone
+does not make a Memory document shared; its document grants decide who can read it.
+
+The Project Memory page and decision-saving presentation are still being
+integrated. These contracts do not promise a finished screen workflow. For
+Project scope and older-machine behavior, see
+[Local memory search](/organize/local-memory-search#availability-in-03-development).
+
 ### Recommended usage
 
 Use coding additions for:

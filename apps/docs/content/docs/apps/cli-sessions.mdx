@@ -251,13 +251,13 @@ Send a user message:
 hdev send <session-id-or-prefix-or-tag> "ping"
 ```
 
-Wait for the agent to become idle:
+Observe that exact sent input's outcome (unreleased 0.3 development):
 
 ```bash
-hdev send <session-id-or-prefix-or-tag> "ping" --wait --timeout 60
+hdev send <session-id-or-prefix-or-tag> "ping" --reply wait --timeout-seconds 60
 ```
 
-Or wait without sending:
+Or wait for Session idle without sending:
 
 ```bash
 hdev wait <session-id-or-prefix-or-tag> --timeout 60
@@ -266,7 +266,7 @@ hdev wait <session-id-or-prefix-or-tag> --timeout 60
 Notes:
 
 - `send` targets active sessions. For inactive sessions, use `hdev list --resumable` and `happier resume <session-id-or-prefix-or-tag>` first.
-- `--wait` on a main-session send waits for that session to become idle, so it can time out if the Agent is offline or busy, or if its Agent runtime does not emit an “idle” signal. With `--run`, it instead waits for that one run turn — see [Execution runs](#execution-runs).
+- In 0.3 development, `--reply wait` observes the exact admitted input, not Session idle or the lifetime of a Run. See [Reply modes](#reply-modes-03-development); older scripts may use the retained `--wait` ingress spelling.
 - `--permission-mode` lets you override the permission intent for a single send.
 - `--model` lets you target a specific model for that message when the selected Agent supports it.
 - `--json` + explicit timeouts are recommended for scripts.
@@ -303,46 +303,64 @@ See [Delegated work](/extending/subagents) for lifecycle and result details.
 ## Discussions
 
 <Callout>
-  **Developer Preview:** Session Discussions and their CLI commands are implemented
-  in the current development source and are not released yet. The Session
-  Conversations feature must be enabled on the selected Home.
+  **Under development:** the first-class Home Discussion command family is being
+  implemented in 0.3 source and is not released. The Session Conversations
+  feature must be enabled on the selected Home. Package and live validation of
+  this refactor are not complete.
 </Callout>
 
-List Discussions for one exact Session, then inspect metadata or read messages:
+Discussions belong to the selected Home and can exist without a Session. Use
+the root `discussions` command, then inspect metadata or read messages:
 
 ```bash
-happier session discussions list <session-id-or-prefix-or-tag> --json
-happier session discussions show <session-id-or-prefix-or-tag> <discussion-id> --json
-happier session discussions read <session-id-or-prefix-or-tag> <discussion-id> --json
+happier discussions list --json
+happier discussions show <discussion-id> --json
+happier discussions read <discussion-id> --json
 ```
 
 Create a Discussion and post another message:
 
 ```bash
-happier session discussions create <session-id-or-prefix-or-tag> "Release notes" "Draft the highlights"
-happier session discussions post <session-id-or-prefix-or-tag> <discussion-id> "I added the migration note"
+happier discussions create "Release notes" "Draft the highlights"
+happier discussions post <discussion-id> "I added the migration note"
 ```
 
 Use `--mentioned-account-ids <account-id>` more than once, or pass a
 comma-separated list, to attach explicit Account mentions. For a safe retry
 after an ambiguous response, reuse the original identities with
 `--creation-local-id` and `--message-local-id` on `create`, or `--local-id` on
-`post`; do not generate a new id for the retry.
+`post`. Creation and the first message must use distinct identities; keep both
+when retrying an uncertain create.
 
 Manage the Discussion through the same Action-backed command family:
 
 ```bash
-happier session discussions rename <session-id-or-prefix-or-tag> <discussion-id> "Updated title"
-happier session discussions archive <session-id-or-prefix-or-tag> <discussion-id>
-happier session discussions restore <session-id-or-prefix-or-tag> <discussion-id>
-happier session discussions read-state <session-id-or-prefix-or-tag> <discussion-id> <last-read-seq>
+happier discussions rename <discussion-id> "Updated title"
+happier discussions archive <discussion-id>
+happier discussions restore <discussion-id>
+happier discussions read-state <discussion-id> <last-read-seq>
 ```
 
-Create, rename, archive, restore, and read-state mutation require an interactive
-signed-in user. Discussion reads and deliberate Agent posts retain their normal
-runtime authorization. Use `--server-id <saved-home>` when the same Session
-selector could exist on more than one configured Home; the command keeps that
-Home's identity, credentials, and endpoint together for the whole operation.
+The [host Action reference](/plugins/api/host-actions) owns the full operation
+and authority inventory, including participants, invitations, access grants,
+Leave and ownership transfer. A Discussion has its own grants and encryption
+key; an optional Session anchor grants no access to either resource. Leave
+removes only your direct invitation, so inherited Team or Group access may
+remain. An owner must transfer ownership or archive instead.
+
+Use `--server-id <saved-home>` to select the exact Home. The command retains that
+Home's identity, credentials and endpoint for the operation; the same raw
+Discussion id on another Home is a different address. Reading messages does
+not acknowledge a person's read cursor. If encrypted creation has an uncertain
+outcome, retry with the original identities so the client can recover the
+accepted Discussion and its original key. Pending recipient-key delivery does
+not mean creation failed.
+
+Agent addressing and automatic replies, answer policies, model participants
+and second-opinion entry remain under development; owner-level contracts do
+not establish a completed live conversation. A Bot participates through its
+ordinary Session. Invitation alone does not start a turn, grant source access,
+or change its machine, login or permissions.
 
 ## History
 
@@ -423,6 +441,36 @@ Omit the flag to leave the current source unchanged. `native` clears the connect
 Agent's own model source answers. On `session send` a connection is only ever applied together
 with the model selection it sources, so the flag always needs `--model`: an exact `<id>` needs a
 concrete model id, and `native` accepts a concrete id or `--model default`.
+
+### Reply modes (0.3 development)
+
+In **unreleased 0.3 development source**, choose reply behavior on the same send
+command:
+
+```bash
+hdev send <session-id-or-prefix-or-tag> "The API contract is ready." --reply none
+hdev send <session-id-or-prefix-or-tag> "Inspect the failure and summarize it." --reply wait --timeout-seconds 300
+```
+
+`none` sends information. `wait` observes the answer to that exact input; a
+timeout stops waiting without cancelling accepted work. The existing `--wait`
+flag remains supported for older scripts, but cannot be combined with `--reply`.
+`return` additionally needs an admitted destination for the later answer; it
+does not infer one from a standalone CLI's visible or most recent session.
+In 0.3 development, a present-person Ask can target another Account's shared
+Session. The requester must retain access to the target and input permission
+for their own return Session. That Session's readers must also be allowed to
+read the target. A machine signed into the requester's Account delivers the
+retained answer, even when the return Session runs on another machine.
+Returned information never requests an acknowledgment. Pass, failure,
+cancellation and no result remain distinct outcomes.
+
+Use [Action discovery](/plugins/api/host-actions) for Session selectors and
+current operation support. A group resolves before approval, and approval keeps
+the reviewed concrete sessions even if relations change. Selection never grants
+access. Follow, Discussion and remaining selector integration may report
+unavailable in development; a declared schema is not a promise of support on an
+older Home. These contracts do not certify the composed UI or live Voice flow.
 
 ### Retrying one message safely (`--local-id`)
 
@@ -587,6 +635,17 @@ second hand-written run parser. An ID, unambiguous prefix, or tag is resolved to
 one exact Session before execution. Ambiguous and missing selectors retain their
 typed JSON error and candidate details rather than falling back to another
 Session or Home.
+
+Every `--intent` the `execution.run.start` Action accepts can be started this way.
+Intents that carry typed input, such as `scm_commit_message` and
+`scm_diff_summary`, get their Run kind and run shape (retention, class and I/O
+mode) from the intent. Supply the typed input as `intentInput` through the
+canonical whole-input JSON:
+
+```bash
+happier session run start <session-id-or-prefix-or-tag> --intent scm_commit_message --agent <agent-id> \
+  --input-json '{"intentInput":{"scope":{"kind":"paths","include":["src/a.ts"]}}}' --json
+```
 
 Advanced run control:
 
