@@ -913,70 +913,79 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
 
     /**
      * The state's actions sit in the header beside the Run's own controls (lab run-A): secondary
-     * ones first, the one primary last before `⋯`. Inspect steps is withdrawn while Steps is open,
-     * since it would only point at the view already showing.
+     * ones first, the one primary last before `⋯`. On a phone page they wrap under the outcome, so
+     * the primary leads there instead of landing alone on the second line. Inspect steps is withdrawn
+     * while Steps is open, since it would only point at the view already showing.
      */
+    const resumeAction = props.run.availability.resumeBoundary && props.onResume !== undefined ? (
+        <ToolbarButton
+            key="resume"
+            testID={`${testIDPrefix}-resume`}
+            disabled={operationPending}
+            busy={operationPending}
+            onPress={props.onResume}
+            label={t('workflows.run.resume')}
+            {...(primaryAction === 'resume' ? { tone: 'primary' as const } : {})}
+            size="md"
+        />
+    ) : null;
+    const runAgainAction = props.onRunAgain !== undefined ? (
+        <View key="run-again" ref={props.runAgainAnchorRef} collapsable={false}>
+            <ToolbarButton
+                testID={`${testIDPrefix}-run-again`}
+                onPress={props.onRunAgain}
+                label={t('workflows.run.runAgain')}
+                {...(primaryAction === 'run_again' ? { tone: 'primary' as const } : {})}
+                size="md"
+            />
+        </View>
+    ) : null;
+    const anotherRoundAction = props.onAnotherRound !== undefined ? (
+        <ToolbarButton
+            key="another-round"
+            testID={`${testIDPrefix}-another-round`}
+            disabled={operationPending}
+            onPress={props.onAnotherRound}
+            label={t('workflows.start.anotherRound')}
+            size="md"
+        />
+    ) : null;
+    const outcomeAction = terminalOutcome?.kind === 'result_absent' && props.view !== 'steps' ? (
+        <ToolbarButton
+            key="inspect-steps"
+            testID={`${testIDPrefix}-inspect-steps`}
+            onPress={() => props.onChangeView('steps')}
+            label={t('workflows.run.inspectSteps')}
+            tone="primary"
+            size="md"
+        />
+    ) : terminalOutcome?.kind === 'open_result' ? (
+        <ToolbarButton
+            key="open-result"
+            testID={`${testIDPrefix}-open-result`}
+            onPress={(event) => selectInvocation(terminalOutcome.invocationId, event)}
+            label={t('workflows.run.openResult')}
+            tone="primary"
+            size="md"
+        />
+    ) : terminalOutcome?.kind === 'see_failures' ? (
+        <ToolbarButton
+            key="see-failures"
+            testID={`${testIDPrefix}-see-failures`}
+            onPress={(event) => selectInvocation(terminalOutcome.invocationId, event)}
+            label={t('workflows.run.seeFailures')}
+            tone="primary"
+            size="md"
+        />
+    ) : null;
+    const primaryElement = primaryAction === 'outcome' ? outcomeAction
+        : primaryAction === 'resume' ? resumeAction
+            : primaryAction === 'run_again' ? runAgainAction : null;
+    const secondaryElements = [resumeAction, runAgainAction, anotherRoundAction, outcomeAction]
+        .filter((element) => element !== null && element !== primaryElement);
+    const phonePage = phone && props.embedded !== true;
     const outcomeActions = (
-        <>
-            {props.run.availability.resumeBoundary && props.onResume !== undefined ? (
-                <ToolbarButton
-                    testID={`${testIDPrefix}-resume`}
-                    disabled={operationPending}
-                    busy={operationPending}
-                    onPress={props.onResume}
-                    label={t('workflows.run.resume')}
-                    {...(primaryAction === 'resume' ? { tone: 'primary' as const } : {})}
-                    size="md"
-                />
-            ) : null}
-            {props.onRunAgain !== undefined ? (
-                <View ref={props.runAgainAnchorRef} collapsable={false}>
-                    <ToolbarButton
-                        testID={`${testIDPrefix}-run-again`}
-                        onPress={props.onRunAgain}
-                        label={t('workflows.run.runAgain')}
-                        {...(primaryAction === 'run_again' ? { tone: 'primary' as const } : {})}
-                        size="md"
-                    />
-                </View>
-            ) : null}
-            {props.onAnotherRound !== undefined ? (
-                <ToolbarButton
-                    testID={`${testIDPrefix}-another-round`}
-                    disabled={operationPending}
-                    onPress={props.onAnotherRound}
-                    label={t('workflows.start.anotherRound')}
-                    size="md"
-                />
-            ) : null}
-            {terminalOutcome?.kind === 'result_absent' && props.view !== 'steps' ? (
-                <ToolbarButton
-                    testID={`${testIDPrefix}-inspect-steps`}
-                    onPress={() => props.onChangeView('steps')}
-                    label={t('workflows.run.inspectSteps')}
-                    tone="primary"
-                    size="md"
-                />
-            ) : null}
-            {terminalOutcome?.kind === 'open_result' ? (
-                <ToolbarButton
-                    testID={`${testIDPrefix}-open-result`}
-                    onPress={(event) => selectInvocation(terminalOutcome.invocationId, event)}
-                    label={t('workflows.run.openResult')}
-                    tone="primary"
-                    size="md"
-                />
-            ) : null}
-            {terminalOutcome?.kind === 'see_failures' ? (
-                <ToolbarButton
-                    testID={`${testIDPrefix}-see-failures`}
-                    onPress={(event) => selectInvocation(terminalOutcome.invocationId, event)}
-                    label={t('workflows.run.seeFailures')}
-                    tone="primary"
-                    size="md"
-                />
-            ) : null}
-        </>
+        <>{phonePage ? [primaryElement, ...secondaryElements] : [...secondaryElements, primaryElement]}</>
     );
 
     const stateControls = (

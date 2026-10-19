@@ -128,6 +128,7 @@ type StartRequest = Parameters<
 const startRequests: StartRequest[] = [];
 let executeStart: ((request: StartRequest) => Promise<unknown>) | null = null;
 let delayedRead: Promise<Response> | null = null;
+let artifactReadStatus: number | null = null;
 let startRefusal: Readonly<{ errorCode: string; error: string }> | null = null;
 const plugin = {
   workflow: 'plugin:example.recipe/check',
@@ -270,6 +271,7 @@ beforeEach(async () => {
   startRequests.length = 0;
   executeStart = null;
   delayedRead = null;
+  artifactReadStatus = null;
   startRefusal = null;
   machineRpc.mockReset();
   machineRpc.mockResolvedValue({
@@ -329,6 +331,8 @@ beforeEach(async () => {
       )
         return Response.json(createRootLayoutFeaturesResponse());
       if (request.path === '/v1/artifacts') {
+        if (request.method !== 'POST' && artifactReadStatus !== null)
+          return new Response('{}', { status: artifactReadStatus });
         if (request.method !== 'POST')
           return delayedRead ?? Response.json([...artifacts.values()]);
         const input = request.body as ArtifactCreateRequest;
@@ -473,6 +477,67 @@ describe('WorkflowStartPicker plugin workflows', () => {
         }),
       ]),
     );
+  });
+  it('says why a built-in cannot start here instead of only greying it', async () => {
+    const screen = await renderScreen(
+      <WorkflowStartPicker onSelect={() => {}} onRequestClose={() => {}} maxHeight={600} />,
+    );
+    const root: React.ComponentProps<typeof SelectionList>['rootStep'] =
+      screen.findByType(SelectionList).props.rootStep;
+    const builtins = root.sections.find((entry) => entry.kind === 'static' && entry.id === 'builtins');
+    if (builtins?.kind !== 'static') throw new Error('missing_builtins');
+    expect(builtins.options.find((option) => option.id === 'builtin:keep-going')).toMatchObject({
+      disabled: true, subtitle: t('workflows.start.needsSession'),
+    });
+    // Startable built-ins keep saying what they do.
+    expect(builtins.options.find((option) => option.id === 'builtin:plan-with-a-panel')?.subtitle)
+      .not.toBe(t('workflows.start.needsSession'));
+  });
+  it('gives Your library a loading, failed-with-Retry and empty state instead of vanishing', { timeout: 60_000 }, async () => {
+    const first = createDeferred<Response>();
+    delayedRead = first.promise;
+    const screen = await renderScreen(
+      <WorkflowStartPicker onSelect={() => {}} onRequestClose={() => {}} maxHeight={600} />,
+    );
+    const library = () => {
+      const root: React.ComponentProps<typeof SelectionList>['rootStep'] =
+        screen.findByType(SelectionList).props.rootStep;
+      const section = root.sections.find((entry) => entry.kind === 'dynamic' && entry.id === 'library');
+      if (section?.kind !== 'dynamic') throw new Error('missing_library_section');
+      return section;
+    };
+    expect(library().retryLabel).toBe(t('common.retry'));
+    const settle = (signal = new AbortController().signal) => Promise.race([
+      library().resolve('', signal).then((value) => ({ value }), (error: unknown) => ({ error })),
+      new Promise((resolve) => setTimeout(() => resolve('waiting'), 20)),
+    ]);
+    // While the first page reads, the section waits (its skeletons) rather than settling empty.
+    expect(await settle()).toBe('waiting');
+    artifactReadStatus = 500;
+    delayedRead = null;
+    await act(async () => {
+      first.resolve(new Response('{}', { status: 500 }));
+      await first.promise;
+    });
+    await vi.waitFor(async () => {
+      await act(async () => { await Promise.resolve(); });
+      expect(await settle()).toMatchObject({ error: { name: 'SelectionListSectionFailure' } });
+    }, { timeout: 20_000 });
+    // Retry on that line reads the library again; an empty library then says so.
+    artifactReadStatus = null;
+    const reads = () => home.requests.filter((request) => request.path === '/v1/artifacts' && request.method !== 'POST').length;
+    const before = reads();
+    const retried = new AbortController();
+    void settle(retried.signal);
+    await vi.waitFor(async () => {
+      await act(async () => { await Promise.resolve(); });
+      expect(reads()).toBeGreaterThan(before);
+    }, { timeout: 20_000 });
+    retried.abort();
+    await vi.waitFor(async () => {
+      await act(async () => { await Promise.resolve(); });
+      expect(await settle()).toMatchObject({ value: { options: [], emptyHint: t('workflows.destination.libraryEmpty') } });
+    }, { timeout: 20_000 });
   });
   it.each(['builtin:keep-going'])(
     'offers Choose a session, never Run now, for %s',
@@ -760,7 +825,7 @@ describe('WorkflowStartPicker plugin workflows', () => {
       await vi.waitFor(() => {
         expect(starts()).toHaveLength(1);
         expect(routing.push).toHaveBeenCalledWith(
-          createWorkflowRunRoute(starts()[0]!.input.runId),
+          createWorkflowRunRoute(starts()[0]!.input.runId, storage.getState().profileScope!.serverId),
         );
       });
     });
@@ -893,10 +958,9 @@ describe('WorkflowStartPicker plugin workflows', () => {
     expect(starts()).toEqual([]);
     const composer = hook.tree.root.findByType(WorkflowRunComposer);
     const startSettled = () =>
-      expect(routing.push).toHaveBeenCalledWith({
-        pathname: '/workflows/runs/[runId]',
-        params: { runId: starts()[0]?.input.runId },
-      });
+      expect(routing.push).toHaveBeenCalledWith(createWorkflowRunRoute(
+        String(starts()[0]?.input.runId), storage.getState().profileScope!.serverId,
+      ));
     await act(async () => {
       composer.props.onRun({});
       await vi.waitFor(startSettled);
@@ -1097,6 +1161,7 @@ describe('WorkflowStartPicker plugin workflows', () => {
       await vi.waitFor(() => expect(onStarted).toHaveBeenCalled());
     });
     expect(starts()).toHaveLength(1);
+    expect(onStarted.mock.calls[0]?.[1]).toBe(lifetime.scope.serverId);
   });
   it('keeps a Session start refusal inline in the open form with its typed reason and the draft', async () => {
     const alert = vi.spyOn(Modal, 'alert');

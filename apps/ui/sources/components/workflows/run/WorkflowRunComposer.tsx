@@ -33,7 +33,7 @@ import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
 import { buildWorkflowRunStartInputs, projectWorkflowRunInputFields, type WorkflowRunInputFieldState } from '@/sync/domains/workflows/workflowAuthoring';
-import { WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT_V1 } from '@happier-dev/protocol/workflows';
+import { findWorkflowMainInput, isWorkflowChoiceInput, isWorkflowHostBoundInput, resolveWorkflowBuiltinInputPresentation } from '../presentation/workflowBuiltinInputPresentation';
 import { formatWorkflowInputValue } from '@/sync/domains/workflows/workflowInputText';
 import { describeWorkflowCommandBlockedReason, describeWorkflowInputRepair } from '@/components/workflows/presentation/workflowBlockedReasonText';
 import { WorkflowAcceptedRunRoles, WorkflowRunRoles, workflowUsedRoleIds } from './WorkflowRunRoles';
@@ -157,12 +157,17 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
     const fields = React.useMemo(() => projectWorkflowRunInputFields({
         inputs: props.inputs, values: props.values, rawTextValues, originSession: props.originSession,
     }), [props.inputs, props.values, props.originSession, rawTextValues]);
-    const main = fields.find((field) => field.definition.valueType === 'string' && !isWorkflowChoiceInput(field.definition)) ?? null;
-    // The previous round is Another round's to fill; a first start keeps its default without asking.
-    const remaining = fields.filter((field) => field !== main && field.definition.name !== WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT_V1);
+    // Host-bound inputs (the previous round, a trigger id, a diff fingerprint) are never asked; they keep their defaults.
+    const personFields = React.useMemo(() => fields.filter((field) => !isWorkflowHostBoundInput(field.definition)), [fields]);
+    const mainName = findWorkflowMainInput(props.inputs)?.name;
+    const main = personFields.find((field) => field.definition.name === mainName) ?? null;
+    const remaining = personFields.filter((field) => field !== main);
     const missingFields = fields.filter((field) => field.errorCode === 'missing_required_input');
     const missing = missingFields.length;
-    const inputTitle = (definition: WorkflowInputDefinition) => workflowInputTitle(definition, props.inputPresentation?.[definition.name]);
+    // A built-in reads in its own words wherever its form opens; the source it reads options for names it.
+    const inputPresentation = React.useMemo(() => props.inputPresentation
+        ?? resolveWorkflowBuiltinInputPresentation(props.optionsConsumer?.workflow), [props.inputPresentation, props.optionsConsumer?.workflow]);
+    const inputTitle = (definition: WorkflowInputDefinition) => workflowInputTitle(definition, inputPresentation?.[definition.name]);
     const blocked = fields.find((field) => field.blocking) ?? null;
     const disabled = props.pending === true || props.startDisabled === true || blocked !== null || definitionIssue !== null
         || (!acceptedRepeat && roleDraft.status !== 'ready') || visibility.status !== 'ready' || !visibility.resolution.ok;
@@ -255,7 +260,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                 machineId={props.machineId ?? null} serverId={props.serverId ?? null} prefix={prefix}
                 optionsConsumer={props.optionsConsumer}
                 pickAgentParticipant={props.pickAgentParticipant}
-                {...(props.inputPresentation === undefined ? {} : { presentation: props.inputPresentation })} />
+                {...(inputPresentation === undefined ? {} : { presentation: inputPresentation })} />
             </View>,
         })]),
         ...(props.extraActionChips ?? []),
@@ -307,7 +312,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                 : chip.key === 'workflow-start-roles' ? { controlId: 'workflowRoles' as const }
                     : chip.key === 'workflow-start-targets' ? { controlId: 'workflowTargets' as const }
                         : chip.key === 'workflow-start-visibility' ? { controlId: 'sessionAccess' as const } : {}),
-    })), [changeText, changeValue, main, missing, missingFields, props.inputPresentation, prefix, props.extraActionChips, props.machineId, props.directory, props.pending,
+    })), [changeText, changeValue, main, missing, missingFields, inputPresentation, prefix, props.extraActionChips, props.machineId, props.directory, props.pending,
         props.preview, props.serverId, props.optionsConsumer, props.pickAgentParticipant, props.values, props.workflowChip, props.workflowName, rawTextValues, remaining,
         acceptedRepeat, props.definition, props.materializedLeaves, roleDraft.onChange, roleDraft.retry, roleDraft.status, roleIds, roleOverrides,
         visibility.teams, visibility.onChange, visibilityLabel, visibleTeamId, workflowLabel]);
@@ -326,7 +331,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                         value={main === null ? props.preview ?? props.workflowName ?? t('workflows.start.preview')
                             : rawTextValues[main.definition.name] ?? formatWorkflowInputValue(main.value)}
                         onChangeText={(text) => { if (main !== null) changeText(main.definition.name, text); }}
-                        placeholder={main === null ? t('workflows.start.preview') : main.definition.description ?? props.inputPresentation?.[main.definition.name]?.placeholder ?? inputTitle(main.definition)}
+                        placeholder={main === null ? t('workflows.start.preview') : main.definition.description ?? inputPresentation?.[main.definition.name]?.placeholder ?? inputTitle(main.definition)}
                         inputAccessibilityLabel={main === null ? t('workflows.start.preview') : inputTitle(main.definition)}
                         inputAccessibilityHint={main?.blocking ? reason ?? undefined : undefined}
                         disabled={props.pending === true}
@@ -400,11 +405,6 @@ function WorkflowRunVisibilityChoice(props: Readonly<{
         onSelect={(id) => { props.onSelect(id); setOpen(false); }} />;
 }
 
-/** A declared source, enum or input type is chosen, never typed into the main composer. */
-function isWorkflowChoiceInput(definition: WorkflowInputDefinition): boolean {
-    return definition.optionsSourceId !== undefined || definition.enum !== undefined || definition.inputType !== undefined;
-}
-
 /** A choice, several choices, or a value a custom picker returned (already validated by its host). */
 function readWorkflowSelection(value: unknown): JsonValue | undefined {
     if (!Array.isArray(value)) return readActionInputOptionValue(value);
@@ -458,7 +458,9 @@ export function WorkflowRunInputs(props: Readonly<{
     const { theme } = useUnistyles();
     const accountLifetime = useWorkflowAccountLifetime();
     const selectTheme = usePluginUiTheme(theme);
-    const requests = props.fields.map(({ definition }) => ({
+    // Every Run form (composer, trigger, Run again) shows only what a person is asked for.
+    const fields = React.useMemo(() => props.fields.filter((field) => !isWorkflowHostBoundInput(field.definition)), [props.fields]);
+    const requests = fields.map(({ definition }) => ({
         field: workflowInputToFieldHint(definition, props.presentation?.[definition.name]),
         draftInput: props.values,
         ...(props.optionsConsumer ? { consumer: props.optionsConsumer } : {}),
@@ -467,13 +469,13 @@ export function WorkflowRunInputs(props: Readonly<{
         requests,
         machineId: props.machineId, serverId: props.serverId,
         accountLifetime,
-        enabled: props.fields.some((field) => field.definition.optionsSourceId !== undefined || field.definition.inputType !== undefined),
+        enabled: fields.some((field) => field.definition.optionsSourceId !== undefined || field.definition.inputType !== undefined),
     });
-    return <InputTypePickerHostProvider enabled={props.fields.some((field) => field.definition.inputType !== undefined)}
+    return <InputTypePickerHostProvider enabled={fields.some((field) => field.definition.inputType !== undefined)}
         {...resolveOptions.pickerContext}
         pickAgentParticipant={props.pickAgentParticipant ?? pickAgentParticipantOnDemand}
         contextKey={JSON.stringify([props.optionsConsumer, props.values, snapshot])}>
-        <CoreCollectionScope><View style={styles.fields}>{props.fields.map((field) => {
+        <CoreCollectionScope><View style={styles.fields}>{fields.map((field) => {
         const definition = field.definition;
         const presentation = props.presentation?.[definition.name];
         const title = workflowInputTitle(definition, presentation);

@@ -14,7 +14,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { tLoose } from '@/text';
 import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { useMountedRef } from '@/hooks/ui/useMountedRef';
-import { listWorkflowPersonInputs } from '../presentation/workflowBuiltinInputPresentation';
+import { findWorkflowMainInput } from '../presentation/workflowBuiltinInputPresentation';
 
 type BuiltinWorkflowEntry = (typeof BUILTIN_WORKFLOW_CATALOG_V1)[number];
 
@@ -123,7 +123,7 @@ export function useWorkflowComposerStart(params: Readonly<{
         clearRefusal();
         // The composer's retained draft is the question: it prefills the first text input, as New does.
         const text = options?.retainedDraft ?? '';
-        const main = entry.definition.inputs.find((input) => input.valueType === 'string');
+        const main = findWorkflowMainInput(entry.definition.inputs);
         const draft = main && text.trim() ? { [main.name]: text } : {};
         setPending({ entry, lifetime, values: draft, rawTextValues: draft, project: params.project,
             origin: params.origin, originSession: params.originSession, onComplete: params.onComplete,
@@ -141,8 +141,8 @@ export function useWorkflowComposerStart(params: Readonly<{
         setPending((current) => current ? { ...current, rawTextValues } : current);
     }, []);
     const modalProps = React.useMemo<WorkflowRunComposerModalProps | null>(() => pending === null ? null : {
-        inputs: listWorkflowPersonInputs(pending.entry.source.kind === 'catalog' ? pending.entry.source.workflow : null,
-            pending.entry.definition.inputs),
+        // The composer asks only for person inputs; host-bound ones keep their defaults in the submission.
+        inputs: pending.entry.definition.inputs,
         definition: pending.entry.definition,
         optionsConsumer: pending.entry.source.kind === 'catalog' ? { kind: 'workflow', workflow: pending.entry.source.workflow }
             : pending.entry.source.kind === 'saved' ? { kind: 'workflow', workflow: pending.entry.source.definitionId } : undefined,

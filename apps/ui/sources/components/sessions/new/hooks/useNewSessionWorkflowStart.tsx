@@ -5,6 +5,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { createWorkflowRunActionChip } from '@/components/sessions/agentInput/sessionActions/createWorkflowRunActionChip';
 import { WorkflowStartPicker, type WorkflowStartSelection } from '@/components/workflows/run/WorkflowStartPicker';
 import { WorkflowRunComposer, type WorkflowRunComposerProps } from '@/components/workflows/run/WorkflowRunComposer';
+import { findWorkflowMainInput } from '@/components/workflows/presentation/workflowBuiltinInputPresentation';
 import { useWorkflowRunNowController } from '@/components/workflows/run/useWorkflowRunNowController';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -61,7 +62,7 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
                 </Pressable> : null}
             </View> };
     }, [remove, select, selection]);
-    const main = selection?.definition.inputs.find((input) => input.valueType === 'string');
+    const main = selection ? findWorkflowMainInput(selection.definition.inputs) : undefined;
     const changeRawTextValues = React.useCallback((next: Readonly<Record<string, string>>) => {
         if (main && next[main.name] !== undefined) props.setSessionPrompt(next[main.name]);
         setRawTextValues(next);

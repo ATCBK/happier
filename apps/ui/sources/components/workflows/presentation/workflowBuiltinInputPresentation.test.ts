@@ -30,12 +30,15 @@ describe('built-in workflow input presentation', () => {
         expect(resolveWorkflowBuiltinInputPresentation('plugin:example/custom')).toBeUndefined();
         expect(resolveWorkflowBuiltinInputPresentation(null)).toBeUndefined();
     });
-    it('never asks a person for an input the Run\'s own trigger binds', () => {
-        const inputs = resolveBuiltinWorkflowDefinitionV1('keep-going')!.definition.inputs;
-        expect(inputs.map((input) => input.name)).toContain('triggerId');
-        expect(listWorkflowPersonInputs('builtin:keep-going', inputs).map((input) => input.name))
-            .toEqual(inputs.map((input) => input.name).filter((name) => name !== 'triggerId'));
-        const panel = resolveBuiltinWorkflowDefinitionV1('plan-with-a-panel')!.definition.inputs;
-        expect(listWorkflowPersonInputs('builtin:plan-with-a-panel', panel)).toEqual(panel);
+    it('never asks a person for an input the host binds, for any built-in', () => {
+        const hostBound = ['triggerId', 'diffFingerprint', 'previousRoundContext'];
+        for (const id of ['keep-going', 'review-and-converge', 'plan-with-a-panel', 'open-a-pull-request']) {
+            const inputs = resolveBuiltinWorkflowDefinitionV1(id)!.definition.inputs;
+            expect(listWorkflowPersonInputs(inputs).map((input) => input.name), id)
+                .toEqual(inputs.map((input) => input.name).filter((name) => !hostBound.includes(name)));
+        }
+        // A required input stays askable whatever its name: a form never hides what it needs to start.
+        const required = [{ name: 'triggerId', valueType: 'string' as const, required: true }];
+        expect(listWorkflowPersonInputs(required)).toEqual(required);
     });
 });

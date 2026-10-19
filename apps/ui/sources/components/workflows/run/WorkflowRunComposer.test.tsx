@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { t } from '@/text';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import type { WorkflowInputDefinition } from '@happier-dev/protocol/workflows/workflowV1';
@@ -154,6 +155,14 @@ describe('workflow composer admission', () => {
         expect(pickers.some((node) => node.props.reading === 'session.collaboration.discussion.participants.session')).toBe(true);
         expect(screen.findAllByTestId('workflow-run-inputs-reviewer').some((node) => typeof node.props.value === 'string'
             && node.props.value.includes('reviewer-session'))).toBe(false);
+    });
+    it('reads a built-in\'s inputs in its own words wherever the form opens, without each caller passing them', async () => {
+        const screen = await renderScreen(<WorkflowRunComposer inputs={[{ name: 'focus', valueType: 'string', required: false, default: 'Review it' },
+            { name: 'maxRounds', valueType: 'number', required: false, default: 3 }]}
+            optionsConsumer={{ kind: 'workflow', workflow: 'builtin:review-and-converge' }}
+            values={{}} onChangeValues={() => {}} onRun={() => {}} onCancel={() => {}} />);
+        await screen.pressByTestIdAsync('workflow-run-inputs-inputs-chip');
+        expect(screen.getTextContent()).toContain(t('workflows.builtins.reviewAndConverge.rounds'));
     });
     it('renders and opens a custom Where control in the wrapped composer', async () => {
         const where = { ...createExecutionRunStartContentChip({ key: 'review-where', icon: 'folder',
@@ -347,9 +356,10 @@ describe('workflow composer admission', () => {
             onChangeValues={() => {}} onRun={() => {}} onCancel={() => {}} definition={definition} />);
         expect(screen.findByTestId('workflow-run-inputs-roles-chip')).not.toBeNull();
     });
-    it('never asks for the previous round: Another round fills it, a first start keeps its default', async () => {
+    it('never asks for what the host binds: Another round fills the previous round, a trigger its fingerprint', async () => {
         const onRun = vi.fn();
-        const screen = await renderScreen(<WorkflowRunComposer inputs={[{ name: 'request', valueType: 'string', required: true },
+        const screen = await renderScreen(<WorkflowRunComposer inputs={[{ name: 'diffFingerprint', valueType: 'string', required: false },
+            { name: 'request', valueType: 'string', required: true },
             { name: 'previousRoundContext', valueType: 'json', required: false, default: null }]}
             values={{ request: 'Plan the release' }} onChangeValues={() => {}} onRun={onRun} onCancel={() => {}} />);
         expect(screen.findAllByTestId('workflow-run-inputs-inputs-chip')).toHaveLength(0);
