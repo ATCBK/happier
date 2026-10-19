@@ -29,6 +29,8 @@ type FrameSample = Readonly<{
   mediaFrame: boolean;
 }>;
 
+type MeterFrame = Pick<MachineLiveStreamFrameV1, 'payloadKind' | 'payloadBase64'>;
+
 function sumRecent(samples: readonly FrameSample[], nowMs: number): Readonly<{ bytes: number; frames: number }> {
   const windowStartMs = nowMs - 999;
   let bytes = 0;
@@ -45,7 +47,8 @@ export function createMachineLiveStreamMeter(input: Readonly<{
   caps: MachineLiveStreamCapsV1;
   startedAtMs: number;
 }>): Readonly<{
-  recordFrame: (frame: MachineLiveStreamFrameV1, nowMs: number) => MachineLiveStreamMeterResult;
+  checkFrame: (frame: MeterFrame, nowMs: number) => MachineLiveStreamMeterResult;
+  recordFrame: (frame: MeterFrame, nowMs: number) => MachineLiveStreamMeterResult;
 }> {
   const samples: FrameSample[] = [];
   let bytesSent = 0;
@@ -63,37 +66,45 @@ export function createMachineLiveStreamMeter(input: Readonly<{
     };
   };
 
+  const checkFrame = (frame: MeterFrame, nowMs: number): MachineLiveStreamMeterResult => {
+    const frameBytes = getMachineLiveStreamPayloadDecodedByteLength(frame.payloadBase64);
+    if (typeof input.caps.maxFrameBytes === 'number' && frameBytes > input.caps.maxFrameBytes) {
+      return { ok: false, reasonCode: 'max_frame_bytes_exceeded', metering: snapshot(nowMs) };
+    }
+    if (typeof input.caps.maxDurationMs === 'number' && nowMs - input.startedAtMs > input.caps.maxDurationMs) {
+      return { ok: false, reasonCode: 'max_duration_ms_exceeded', metering: snapshot(nowMs) };
+    }
+
+    // Metadata shares media's byte budgets, but status changes are not image cadence.
+    // framesSent remains the count of all admitted transport frames.
+    const mediaFrame = frame.payloadKind !== 'metadata';
+    const nextSnapshot = snapshot(nowMs, frameBytes, 1, mediaFrame ? 1 : 0);
+    if (typeof input.caps.maxFramesPerSecond === 'number' && nextSnapshot.framesPerSecond > input.caps.maxFramesPerSecond) {
+      return { ok: false, reasonCode: 'max_frames_per_second_exceeded', metering: snapshot(nowMs) };
+    }
+    if (typeof input.caps.maxBitrateBps === 'number' && nextSnapshot.movingBitrateBps > input.caps.maxBitrateBps) {
+      return { ok: false, reasonCode: 'max_bitrate_bps_exceeded', metering: snapshot(nowMs) };
+    }
+    if (typeof input.caps.maxTotalBytes === 'number' && nextSnapshot.bytesSent > input.caps.maxTotalBytes) {
+      return { ok: false, reasonCode: 'max_total_bytes_exceeded', metering: snapshot(nowMs) };
+    }
+
+    return { ok: true, metering: nextSnapshot };
+  };
+
   return {
+    checkFrame,
     recordFrame: (frame, nowMs) => {
+      const result = checkFrame(frame, nowMs);
+      if (!result.ok) return result;
       const frameBytes = getMachineLiveStreamPayloadDecodedByteLength(frame.payloadBase64);
-      if (typeof input.caps.maxFrameBytes === 'number' && frameBytes > input.caps.maxFrameBytes) {
-        return { ok: false, reasonCode: 'max_frame_bytes_exceeded', metering: snapshot(nowMs) };
-      }
-      if (typeof input.caps.maxDurationMs === 'number' && nowMs - input.startedAtMs > input.caps.maxDurationMs) {
-        return { ok: false, reasonCode: 'max_duration_ms_exceeded', metering: snapshot(nowMs) };
-      }
-
-      // Metadata uses the same byte budgets and transport credit as media, but status changes
-      // are not image cadence. framesSent remains the count of all admitted transport frames.
-      const mediaFrame = frame.payloadKind !== 'metadata';
-      const nextSnapshot = snapshot(nowMs, frameBytes, 1, mediaFrame ? 1 : 0);
-      if (typeof input.caps.maxFramesPerSecond === 'number' && nextSnapshot.framesPerSecond > input.caps.maxFramesPerSecond) {
-        return { ok: false, reasonCode: 'max_frames_per_second_exceeded', metering: snapshot(nowMs) };
-      }
-      if (typeof input.caps.maxBitrateBps === 'number' && nextSnapshot.movingBitrateBps > input.caps.maxBitrateBps) {
-        return { ok: false, reasonCode: 'max_bitrate_bps_exceeded', metering: snapshot(nowMs) };
-      }
-      if (typeof input.caps.maxTotalBytes === 'number' && nextSnapshot.bytesSent > input.caps.maxTotalBytes) {
-        return { ok: false, reasonCode: 'max_total_bytes_exceeded', metering: snapshot(nowMs) };
-      }
-
-      samples.push({ atMs: nowMs, bytes: frameBytes, mediaFrame });
+      samples.push({ atMs: nowMs, bytes: frameBytes, mediaFrame: frame.payloadKind !== 'metadata' });
       while (samples.length > 0 && samples[0]!.atMs < nowMs - 999) {
         samples.shift();
       }
       bytesSent += frameBytes;
       framesSent += 1;
-      return { ok: true, metering: nextSnapshot };
+      return result;
     },
   };
 }
@@ -111,6 +122,7 @@ export function applyMachineLiveStreamDropPolicy<TFrame extends MachineLiveStrea
   const frames = [...input.frames];
   let framesDropped = 0;
   let bytesDropped = 0;
+  let mediaDropped = false;
 
   const frameBytes = (frame: MachineLiveStreamFrameV1 | MachineLiveStreamWireFrameV1) => {
     const payloadBase64 = 'payloadBase64' in frame ? frame.payloadBase64
@@ -118,12 +130,15 @@ export function applyMachineLiveStreamDropPolicy<TFrame extends MachineLiveStrea
     return getMachineLiveStreamPayloadDecodedByteLength(payloadBase64);
   };
   const totalBytes = () => frames.reduce((sum, frame) => sum + frameBytes(frame), 0);
-  const overLimit = () => frames.length > input.maxWindowFrames || totalBytes() > input.maxWindowBytes;
+  // Status bursts share the byte budget, not the image queue's frame count.
+  const overFrameLimit = () => frames.reduce((count, frame) => frame.payloadKind === 'metadata' ? count : count + 1, 0) > input.maxWindowFrames;
+  const overLimit = () => overFrameLimit() || totalBytes() > input.maxWindowBytes;
   const dropFrame = (index: number): void => {
     const [dropped] = frames.splice(index, 1);
     if (!dropped) return;
     framesDropped += 1;
     bytesDropped += frameBytes(dropped);
+    if (dropped.payloadKind !== 'metadata') mediaDropped = true;
   };
 
   while (frames.length > 0 && overLimit()) {
@@ -144,6 +159,18 @@ export function applyMachineLiveStreamDropPolicy<TFrame extends MachineLiveStrea
       continue;
     }
     if (dropIndex < 0) {
+      if (overFrameLimit()) {
+        // Dropping status cannot relieve image-count pressure.
+        dropFrame(frames.findIndex(frame => frame.payloadKind !== 'metadata'));
+        continue;
+      }
+      const oldestMetadataIndex = frames.findIndex(frame => frame.payloadKind === 'metadata');
+      const newerMetadata = oldestMetadataIndex >= 0 && frames.slice(oldestMetadataIndex + 1).some(frame => frame.payloadKind === 'metadata');
+      if (newerMetadata || frames.every(frame => frame.payloadKind === 'metadata')) {
+        // Under byte pressure retain the newest status, never an obsolete one.
+        dropFrame(oldestMetadataIndex);
+        continue;
+      }
       const newestKeyframeIndex = (() => {
         for (let index = frames.length - 1; index >= 0; index -= 1) {
           if (frames[index]?.payloadKind === 'image_keyframe') return index;
@@ -159,6 +186,6 @@ export function applyMachineLiveStreamDropPolicy<TFrame extends MachineLiveStrea
     frames,
     framesDropped,
     bytesDropped,
-    requiresKeyframeResync: !frames.some((frame) => frame.payloadKind === 'image_keyframe'),
+    requiresKeyframeResync: mediaDropped && !frames.some((frame) => frame.payloadKind === 'image_keyframe'),
   };
 }

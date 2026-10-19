@@ -19,6 +19,9 @@ const ACTION_SPEC_RPC_METHOD_IDS = Object.freeze({
   [RPC_METHODS.DAEMON_TERMINAL_CLOSE]: 'machines.terminal.close',
   [RPC_METHODS.DAEMON_TERMINAL_RESTART]: 'machines.terminal.restart',
   [RPC_METHODS.MACHINES_VITALS_GET]: 'machines.vitals.get',
+  [RPC_METHODS.MACHINES_PROCESSES_LIST]: 'machines.processes.list',
+  [RPC_METHODS.MACHINES_PROCESSES_GET]: 'machines.processes.get',
+  [RPC_METHODS.MACHINES_PROCESSES_CHECK]: 'machines.processes.check',
   [RPC_METHODS.MACHINES_GUARD_GET]: 'machines.guard.get',
   [RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST]: 'machines.guard.activity.list',
   [RPC_METHODS.MACHINES_GUARD_ACTIVITY_UNDO]: 'machines.guard.activity.undo',
@@ -28,6 +31,10 @@ const ACTION_SPEC_RPC_METHOD_IDS = Object.freeze({
   [RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST]: 'machines.storage.category.list',
   [RPC_METHODS.DAEMON_STORAGE_SIZE_REFRESH]: 'machines.storage.size.refresh',
   [RPC_METHODS.DAEMON_STORAGE_SCAN_GET]: 'machines.storage.scan.get',
+  [RPC_METHODS.DAEMON_STORAGE_PILE_GET]: 'machines.storage.pile.get',
+  [RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK]: 'machines.storage.items.check',
+  [RPC_METHODS.DAEMON_STORAGE_WORKTREES_LIST]: 'machines.storage.worktrees.list',
+  [RPC_METHODS.DAEMON_STORAGE_SUGGESTIONS_LIST]: 'machines.storage.suggestions.list',
   [RPC_METHODS.MACHINES_RESOURCES_POLICY_SET]: 'machines.resources.policy.set',
   [RPC_METHODS.MACHINES_VITALS_HISTORY_GET]: 'machines.vitals.history.get',
   [RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2]: 'session.goal.set',
@@ -210,6 +217,7 @@ const ACTION_SPEC_RPC_METHOD_IDS = Object.freeze({
 // contract owned by the daemon spawn handler. They are not the public V2
 // session.spawn_new Action surface.
 const SESSION_SPAWN_PRIVATE_INTERNAL_METHODS = new Set<string>([
+  RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT,
   RPC_METHODS.SPAWN_HAPPY_SESSION,
   RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE,
 ]);
@@ -237,6 +245,7 @@ const PMS5_DIRECT_INTERNAL_METHODS = new Set<string>([
   RPC_METHODS.DAEMON_SESSION_FOLLOW_SOURCE_KEY_PREPARE,
   RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST,
   RPC_METHODS.DAEMON_EXECUTION_RUN_BROKER_AUTHORITY_RESOLVE,
+  RPC_METHODS.DAEMON_SERVICE_MOVE_START_CLAIM,
   RPC_METHODS.DAEMON_VOICE_INFERENCE_STATUS,
   RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_LIST,
   RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_STATUS,

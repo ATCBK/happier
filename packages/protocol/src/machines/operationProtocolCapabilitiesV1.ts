@@ -30,6 +30,7 @@ export const MachineIrohEndpointCapabilityV1Schema = lazyZodSchema(() => z.reado
 
 export const MachineOperationProtocolCapabilitiesV1Schema = lazyZodSchema(() => z.readonly(z.strictObject({
     sessionInputAdmission: z.optional(MachineOperationProtocolCapabilityThroughV2Schema),
+    sessionMessageReply: z.optional(MachineOperationProtocolCapabilityV1Schema),
     // Published only once the admitted host can open B witnesses and release held Pending input.
     sessionPendingResetStart: z.optional(MachineOperationProtocolCapabilityV1Schema),
     sessionSpawn: z.optional(MachineOperationProtocolCapabilityThroughV2Schema),

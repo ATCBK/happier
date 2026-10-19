@@ -22,6 +22,14 @@ it('admits turn abort under its own Action while retaining submit-input capabili
   });
 });
 
+it('carries Session question origin only through the modern question operations', () => {
+  expect(socketProtocol.isSessionActionRpcMethodV1(RPC_METHODS.SESSION_USER_ACTION_ANSWER)).toBe(true);
+  expect(socketProtocol.isSessionActionRpcMethodV1(SESSION_RPC_METHODS.SESSION_NEEDS_YOU_RAISE)).toBe(true);
+  for (const method of ['permission', 'session.structuredQuestion.respond.v1', RPC_METHODS.APPROVAL_REQUEST_DECIDE]) {
+    expect(socketProtocol.isSessionActionRpcMethodV1(method), method).toBe(false);
+  }
+});
+
 it('admits optional exact Session read proof on PR evidence without changing Machine routing', () => {
   for (const method of [RPC_METHODS.SCM_PULL_REQUEST_LIST, RPC_METHODS.SCM_PULL_REQUEST_GET]) {
     expect(socketProtocol.resolveSocketRpcSessionAuthorization(`machine:${method}`)).toMatchObject({

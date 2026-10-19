@@ -19,7 +19,7 @@ const MAX_TRANSFER_PUBLIC_KEY_BASE64_LENGTH = 256;
 // accidental unbounded JSON bodies.
 const MAX_TRANSFER_CHUNK_PAYLOAD_BASE64_LENGTH = 16 * 1024 * 1024;
 
-function boundedString(maxLength: number): z.ZodMiniString {
+function boundedString(maxLength: number): z.ZodMiniString<string> {
   return z.string().check(z.minLength(1), z.maxLength(maxLength));
 }
 

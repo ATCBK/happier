@@ -38,6 +38,7 @@ import {
 } from '../providers/capabilities/v1.js';
 import { PROVIDER_CATALOG_LIMITS_V1 } from '../providers/catalog/limits.js';
 import { ProviderCatalogProbeModelsV1Schema } from '../providers/catalog/merge.js';
+import { QualifiedConnectedAccountPurposeBindingV1Schema } from '../connect/connectedAccountPurposeBindings.js';
 import { PROVIDER_SETTINGS_LIMITS_V1 } from '../providers/settings/v1.js';
 import {
   ProviderDiscoveryCandidateIdV1Schema,
@@ -807,6 +808,8 @@ export type DaemonProviderTeamCredentialRequestPolicySupportResponseV1 = z.infer
 export const DaemonProviderModelProjectionRowV1Schema = lazyZodSchema(() => z.strictObject({
   ref: ProviderBoundModelRefSchema,
   descriptor: ProviderModelDescriptorV1Schema,
+  /** Admitted source slots for grouping, independent of the selected downstream protocol. */
+  gatewaySlots: z.optional(z.array(QualifiedConnectedAccountPurposeBindingV1Schema)),
   application: z.optional(ProviderBrokerApplicationBindingV1Schema),
   requestPolicySupport: z.optional(DaemonProviderTeamCredentialRequestPolicySupportV1Schema),
   /** Non-secret source-owned facts needed to materialize an admitted direct API key. */

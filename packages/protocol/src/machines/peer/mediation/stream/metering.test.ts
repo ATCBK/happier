@@ -25,6 +25,31 @@ function frame(
 }
 
 describe('machine live-stream metering', () => {
+  it('retains a metadata burst outside the image queue count while enforcing its byte budget', () => {
+    const frames = [frame(1, 'metadata', 3), frame(2, 'metadata', 3), frame(3, 'metadata', 3)];
+    expect(applyMachineLiveStreamDropPolicy({ frames, maxWindowFrames: 1, maxWindowBytes: 9 })).toMatchObject({
+      frames, framesDropped: 0, requiresKeyframeResync: false,
+    });
+    const pressured = applyMachineLiveStreamDropPolicy({ frames, maxWindowFrames: 1, maxWindowBytes: 6 });
+    expect(pressured.frames.map(value => value.sequence)).toEqual([2, 3]);
+    expect(pressured).toMatchObject({ framesDropped: 1, bytesDropped: 3, requiresKeyframeResync: false });
+    const mixed = applyMachineLiveStreamDropPolicy({
+      frames: [frame(1, 'metadata', 3), frame(2, 'image_keyframe', 3), frame(3, 'metadata', 3), frame(4, 'image_keyframe', 3)],
+      maxWindowFrames: 1, maxWindowBytes: 12,
+    });
+    expect(mixed.frames.map(value => value.sequence)).toEqual([1, 3, 4]);
+  });
+  it('checks queued observations without spending delivery budgets until they are recorded', () => {
+    const meter = createMachineLiveStreamMeter({ caps: { maxTotalBytes: 6, maxFramesPerSecond: 1 }, startedAtMs: 1_000 });
+    const picture = frame(1, 'image_keyframe', 3);
+    expect(meter.checkFrame(picture, 1_000)).toMatchObject({ ok: true, metering: { bytesSent: 3 } });
+    expect(meter.checkFrame(picture, 1_000)).toMatchObject({ ok: true, metering: { bytesSent: 3 } });
+    expect(meter.recordFrame(picture, 1_000)).toMatchObject({ ok: true, metering: { bytesSent: 3 } });
+    const status = frame(2, 'metadata', 3);
+    expect(meter.checkFrame(status, 1_000)).toMatchObject({ ok: true, metering: { bytesSent: 6, framesPerSecond: 1 } });
+    expect(meter.recordFrame(status, 1_000)).toMatchObject({ ok: true, metering: { bytesSent: 6, framesPerSecond: 1 } });
+    expect(meter.checkFrame(status, 1_000)).toMatchObject({ ok: false, reasonCode: 'max_total_bytes_exceeded' });
+  });
   it('admits metadata outside media cadence while preserving payload byte budgets', () => {
     const meter = createMachineLiveStreamMeter({
       caps: { maxFramesPerSecond: 2, maxBitrateBps: 96, maxFrameBytes: 3, maxTotalBytes: 12 },

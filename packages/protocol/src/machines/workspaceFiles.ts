@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES } from '../features/payload/capabilities/machineTunnelCapabilities.js';
@@ -10,7 +11,7 @@ export const WORKSPACE_FILE_LIST_MAX_QUERY_CODE_UNITS = 1_024;
 
 export const DaemonWorkspaceFileListRequestSchema = lazyZodSchema(() => z.strictObject({
   rootPath: z.string().check(z.trim(), z.minLength(1), z.maxLength(10_000)),
-  query: z.optional(z.string().check(z.maxLength(WORKSPACE_FILE_LIST_MAX_QUERY_CODE_UNITS))),
+  query: z.optional(z.string().check(maxCodeUnits(WORKSPACE_FILE_LIST_MAX_QUERY_CODE_UNITS))),
   includeHidden: z.optional(z.boolean()),
   limit: z.optional(z.number().check(z.int(), z.positive(), z.maximum(WORKSPACE_FILE_LIST_MAX_RESULTS))),
   /** Remaining caller operation budget at dispatch; expiry returns an incomplete page. */
@@ -21,6 +22,7 @@ export type DaemonWorkspaceFileListRequest = z.infer<typeof DaemonWorkspaceFileL
 export const DaemonWorkspaceFileListErrorCodeSchema = lazyZodSchema(() => z.enum([
   'invalid_request',
   'path_not_allowed',
+  'root_not_found',
   'method_unavailable',
   'ripgrep_unavailable',
   'ripgrep_failed',
@@ -78,7 +80,7 @@ export const WorkspaceFileSearchFileV1Schema = lazyZodSchema(() => z.strictObjec
   matches: z.array(WorkspaceFileSearchMatchV1Schema),
 }));
 export const DaemonWorkspaceFileSearchErrorCodeSchema = lazyZodSchema(() => z.enum([
-  'invalid_pattern', 'root_not_allowed', 'ripgrep_unavailable', 'ripgrep_failed',
+  'invalid_pattern', 'root_not_allowed', 'root_not_found', 'ripgrep_unavailable', 'ripgrep_failed',
 ]));
 export const DaemonWorkspaceFileSearchResponseSchema = lazyZodSchema(() => z.discriminatedUnion('ok', [
   z.strictObject({

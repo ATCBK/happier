@@ -8,7 +8,7 @@ import { MachineOperationProtocolCapabilitiesV1Schema } from './operationProtoco
 import { SessionDataKeyEnvelopeBytesV1Schema } from '../sessions/encryption/sessionDataKeyEnvelopes.js';
 import type { AccountScopedCryptoMaterial } from '../crypto/accountScopedCipher.js';
 import { encodeBase64 } from '../crypto/base64.js';
-import { createMachineDataEncryptionKeyV1, isMachineDataEncryptionKeyTransferableV1 } from './machineStoredContent.js';
+import { createMachineDataEncryptionKeyV1, isMachineDataEncryptionKeyTransferableV1, MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent } from './machineStoredContent.js';
 import { DevcontainerChildProjectionV1Schema } from './managed/devcontainerV1.js';
 
 /** The persisted owner envelope and both revisions form one content identity. */
@@ -30,7 +30,7 @@ export const MachineContentKeyTransitionInputV1Schema = lazyZodSchema(() => z.st
   machineId: z.string().check(z.minLength(1)),
   expected: MachineKeyBasisV1Schema,
   next: z.strictObject({
-    dataEncryptionKey: SessionDataKeyEnvelopeBytesV1Schema,
+    dataEncryptionKey: z.union([SessionDataKeyEnvelopeBytesV1Schema, z.literal(MACHINE_PLAIN_DATA_KEY_MARKER)]),
     metadata: z.string(),
     daemonState: z.nullable(z.string()),
   }),
@@ -105,6 +105,8 @@ export async function prepareMachineContentKeyV1<T extends Readonly<{
 }>>(params: Readonly<{
   machineId: string;
   custodianAccountId: string;
+  /** Persisted Account mode, captured by the authenticated caller. */
+  targetMode?: 'plain' | 'e2ee';
   material: AccountScopedCryptoMaterial | null;
   dataKeyPublicKey?: Uint8Array;
   randomBytes: (length: number) => Uint8Array;
@@ -142,18 +144,26 @@ export async function prepareMachineContentKeyV1<T extends Readonly<{
   if (!material) throw new MachineContentKeyPreparationErrorV1('encryption_material_unavailable');
   const transferable = (row: MachinePublishedRowV1, opened: T) => isMachineDataEncryptionKeyTransferableV1({
     publishedDataEncryptionKey: row.dataEncryptionKey, openedDataEncryptionKey: opened.encryptionKey ?? null, accountScopedMaterial: material });
-  if (transferable(raw, machine)) return machine;
-  let proposed: ReturnType<typeof createMachineDataEncryptionKeyV1>;
-  try {
-    proposed = createMachineDataEncryptionKeyV1({ material,
-      ...(params.dataKeyPublicKey ? { dataKeyPublicKey: params.dataKeyPublicKey } : {}), randomBytes: params.randomBytes });
-  } catch { throw new MachineContentKeyPreparationErrorV1('encryption_material_unavailable'); }
+  const toPlain = params.targetMode === 'plain';
+  if (!toPlain && transferable(raw, machine)) return machine;
+  let proposed: ReturnType<typeof createMachineDataEncryptionKeyV1> | null = null;
+  if (!toPlain) {
+    try {
+      proposed = createMachineDataEncryptionKeyV1({ material,
+        ...(params.dataKeyPublicKey ? { dataKeyPublicKey: params.dataKeyPublicKey } : {}), randomBytes: params.randomBytes });
+    } catch { throw new MachineContentKeyPreparationErrorV1('encryption_material_unavailable'); }
+  }
   const metadata = await params.decodeStored(machine, raw.metadata);
   const daemonState = raw.daemonState === null ? null : await params.decodeStored(machine, raw.daemonState);
+  if (metadata === null || (raw.daemonState !== null && daemonState === null)) {
+    throw new MachineContentKeyPreparationErrorV1('encryption_material_unavailable');
+  }
+  const encodeNext = (value: unknown) => proposed
+    ? params.encodeStored(proposed.encryptionKey, value) : encodePlainMachineStoredContent(value);
   const input = MachineContentKeyTransitionInputV1Schema.parse({ machineId: params.machineId,
     expected: raw.keyBasis ?? { dataEncryptionKey: raw.dataEncryptionKey ?? null, metadataVersion: raw.metadataVersion, daemonStateVersion: raw.daemonStateVersion },
-    next: { dataEncryptionKey: encodeBase64(proposed.dataEncryptionKey), metadata: await params.encodeStored(proposed.encryptionKey, metadata),
-      daemonState: daemonState === null ? null : await params.encodeStored(proposed.encryptionKey, daemonState) } });
+    next: { dataEncryptionKey: proposed ? encodeBase64(proposed.dataEncryptionKey) : MACHINE_PLAIN_DATA_KEY_MARKER, metadata: await encodeNext(metadata),
+      daemonState: daemonState === null ? null : await encodeNext(daemonState) } });
   const corresponds = (row: MachinePublishedRowV1) => row.id === params.machineId && row.dataEncryptionKey === input.next.dataEncryptionKey
     && row.metadata === input.next.metadata && row.daemonState === input.next.daemonState
     && row.metadataVersion === input.expected.metadataVersion + 1 && row.daemonStateVersion === input.expected.daemonStateVersion + 1;
@@ -176,7 +186,7 @@ export async function prepareMachineContentKeyV1<T extends Readonly<{
   if (result.kind === 'conflict') {
     const current = await observe(params.signal);
     const winner = await open(current);
-    if (winner.encryptionMode !== 'plain' && !transferable(current, winner)) throw unavailable();
+    if (winner.encryptionMode !== 'plain' && (toPlain || !transferable(current, winner))) throw unavailable();
     return winner;
   }
   throw new MachineContentKeyPreparationErrorV1(result.code, true);
