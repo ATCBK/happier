@@ -1,0 +1,164 @@
+import { DiscussionSelectionSourceV1Schema, isDiscussionDocEditProposalContentV1, readDiscussionMessagePartsV1 } from '@happier-dev/protocol/discussions/content';
+import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
+
+import type { AgentActivityEntry } from '@/sync/domains/session/agentActivity';
+import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
+import { formatAccountDisplayName, resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { t } from '@/text';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+
+/** Readable message content as one preview line; unknown mentions never expose raw ids. */
+export function readDiscussionMessagePreview(
+    content: DiscussionOpenedMessageV1['content'],
+    labels: Readonly<{
+        account?: (accountId: string) => string | null;
+        session?: (sessionId: string) => string | null;
+    }> = {},
+): string | null {
+    if (!content) return null;
+    const text = readDiscussionMessagePartsV1(content, 'preview').map(part => part.t === 'text' ? part.text
+        : part.participant.kind === 'account'
+            ? `@${labels.account?.(part.participant.accountId) ?? t('session.collaboration.discussion.collaborator')}`
+            : `@${labels.session?.(part.participant.sessionId) ?? t('session.collaboration.discussion.heldParticipant')}`)
+        .join('').replace(/\s+/g, ' ').trim();
+    if (isDiscussionDocEditProposalContentV1(content)) {
+        const title = t('artifacts.browser.proposal.title');
+        return text ? `${title} · ${text}` : title;
+    }
+    return text || null;
+}
+
+/** Display-only: an unacknowledged own row borrows only the exact viewer's profile. */
+export function resolveDiscussionMessageAuthorLabel(
+    message: Pick<DiscussionOpenedMessageV1, 'authorAccountId' | 'accountActor' | 'createdAt'>,
+    viewer?: Readonly<{ accountId: string; profile: Readonly<{ name?: string | null; username?: string | null }> | null }>,
+): string {
+    const actor = message.accountActor;
+    if (actor === null || actor.accountId !== message.authorAccountId) {
+        if (actor === null && message.createdAt === 0 && viewer && message.authorAccountId === viewer.accountId) {
+            return resolveViewerAccountDisplayName(viewer.profile ? formatAccountDisplayName(viewer.profile) : null);
+        }
+        return t('session.collaboration.discussion.collaborator');
+    }
+    if (actor.profile === null) return t('message.accountActorFormerMember');
+    return formatAccountDisplayName(actor.profile) ?? t('message.accountActorUnnamedMember');
+}
+
+export type DiscussionTimelineMessage = Pick<DiscussionOpenedMessageV1, 'id' | 'seq'>;
+
+export type DiscussionTimelineItem<
+    TMessage extends DiscussionTimelineMessage = DiscussionOpenedMessageV1,
+> =
+    | Readonly<{
+        kind: 'human_message';
+        message: TMessage;
+    }>
+    | Readonly<{
+        kind: 'agent_activity_reference';
+        anchorSeq: number;
+        entry: AgentActivityEntry;
+        subagent: SessionSubagent;
+    }>;
+
+type AgentActivityReference = Extract<DiscussionTimelineItem, { kind: 'agent_activity_reference' }>;
+
+function compareReferences(left: AgentActivityReference, right: AgentActivityReference): number {
+    const leftStartedAt = left.entry.startedAtMs;
+    const rightStartedAt = right.entry.startedAtMs;
+    if (leftStartedAt !== rightStartedAt) {
+        if (leftStartedAt === null) return 1;
+        if (rightStartedAt === null) return -1;
+        return leftStartedAt - rightStartedAt;
+    }
+    return (left.entry.runId ?? '').localeCompare(right.entry.runId ?? '');
+}
+
+/**
+ * Joins already loaded Discussion rows to the canonical Session Agent roster.
+ *
+ * Launch provenance is display-only: every referenced message must already be present in this
+ * exact Discussion page, and the exact Run must resolve through the canonical activity owner.
+ * Missing data omits the card; this function never fetches or authorizes anything.
+ */
+export function buildDiscussionTimelineItems<TMessage extends DiscussionTimelineMessage>(params: Readonly<{
+    serverId: string;
+    discussionId: string;
+    messages: readonly TMessage[];
+    subagents: readonly SessionSubagent[];
+    readExecutionRunEntry: (runId: string) => AgentActivityEntry | null;
+}>): readonly DiscussionTimelineItem<TMessage>[] {
+    const messageById = new Map(params.messages.map((message) => [message.id, message]));
+    const referencesByAnchorSeq = new Map<number, AgentActivityReference[]>();
+
+    for (const subagent of params.subagents) {
+        if (subagent.kind !== 'execution_run') continue;
+        const runId = subagent.runRef?.runId;
+        if (!runId) continue;
+
+        const sourceResult = DiscussionSelectionSourceV1Schema.safeParse(subagent.runRef?.launchOrigin);
+        if (!sourceResult.success) continue;
+        const source = sourceResult.data;
+        if (!areServerProfileIdentifiersEquivalent(source.serverId, params.serverId) || source.discussionId !== params.discussionId) continue;
+
+        let anchorSeq = -1;
+        let sourceResolved = true;
+        for (const messageId of source.messageIds) {
+            const message = messageById.get(messageId);
+            if (!message) {
+                sourceResolved = false;
+                break;
+            }
+            anchorSeq = Math.max(anchorSeq, message.seq);
+        }
+        if (!sourceResolved || anchorSeq < 0) continue;
+
+        const entry = params.readExecutionRunEntry(runId);
+        if (!entry || entry.kind !== 'execution_run' || entry.runId !== runId) continue;
+        const reference: AgentActivityReference = {
+            kind: 'agent_activity_reference',
+            anchorSeq,
+            entry,
+            subagent,
+        };
+        const atAnchor = referencesByAnchorSeq.get(anchorSeq);
+        if (atAnchor) atAnchor.push(reference);
+        else referencesByAnchorSeq.set(anchorSeq, [reference]);
+    }
+
+    for (const references of referencesByAnchorSeq.values()) references.sort(compareReferences);
+
+    const items: DiscussionTimelineItem<TMessage>[] = [];
+    for (const message of params.messages) {
+        items.push({ kind: 'human_message', message });
+        items.push(...(referencesByAnchorSeq.get(message.seq) ?? []));
+    }
+    return items;
+}
+
+/**
+ * The canonical rows a reader has actually been shown as readable content.
+ *
+ * A visible row whose content the Discussion cipher could not open is an
+ * unavailable placeholder, not something read. The private cursor is one
+ * monotone sequence, so a later readable row must not carry it past an earlier
+ * unread unreadable one: only rows before the first retained unreadable row
+ * above the confirmed cursor qualify. An unreadable row the cursor already
+ * covers was read before and blocks nothing. Optimistic or unknown rows are
+ * never in `messages` and never qualify.
+ */
+export function resolveReadableVisibleDiscussionSeqs(input: Readonly<{
+    messages: readonly Pick<DiscussionOpenedMessageV1, 'id' | 'seq' | 'content'>[];
+    visibleMessageIds: ReadonlySet<string>;
+    /** The confirmed private read cursor, or null when this viewer has none. */
+    lastReadSeq: number | null;
+}>): readonly number[] {
+    const seqs: number[] = [];
+    for (const message of input.messages) {
+        if (message.content === null) {
+            if (input.lastReadSeq !== null && message.seq <= input.lastReadSeq) continue;
+            break;
+        }
+        if (input.visibleMessageIds.has(message.id)) seqs.push(message.seq);
+    }
+    return seqs;
+}

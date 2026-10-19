@@ -49,7 +49,10 @@ describe('Artifact History pending approval', () => {
             access: 'owner' as const, storageMode: 'plain' as const };
         const persisted = createArtifactStoreBoundary({ ownerAccountId: () => 'owner', encryptionMode: 'plain' });
         const served = await serveActionHomes({
-            homes: [{ key: 'owner', serverUrl: 'https://artifact-history-approval.test', accountId: 'owner' }],
+            homes: [{ key: 'owner', serverUrl: 'https://artifact-history-approval.test', accountId: 'owner', currentAccount: true,
+                settings: { actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                    'artifact.revisions.restore': { approvalRequiredSurfaces: ['ui'] },
+                } }) } }],
             route: request => request.path === '/v1/artifacts/document' && request.method === 'GET'
                 ? Response.json({ ...artifact, ownerAccountId: 'owner', encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
                     header: encodePlainArtifactStoredContent(artifact.header), body: encodePlainArtifactStoredContent({ body: artifact.body }) })
@@ -60,10 +63,6 @@ describe('Artifact History pending approval', () => {
         });
         disposeHome = served.dispose;
         getStorage().getState().addArtifact(artifact);
-        getStorage().setState(state => ({ settings: { ...state.settings,
-            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
-                'artifact.revisions.restore': { approvalRequiredSurfaces: ['ui'] },
-            } }) } }));
         const screen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
         await act(async () => { showArtifactHistorySheet({ artifactId: artifact.id, name: artifact.title, canRestore: true }); });
         await flushHookEffects();

@@ -1,10 +1,15 @@
 import * as React from 'react';
+import type { z } from 'zod/mini';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { ArtifactActionOutputSchemasV1, type ArtifactActionInputV1, type ArtifactActionResultV1, type ArtifactStorageUsageV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
+import { ArtifactActionOutputSchemasV1, type ArtifactActionInputV1, type ArtifactStorageUsageV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
+import { DocCollaborationActionInputSchemasV1, DocCollaborationActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
+import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { getStorage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { createFrontDoorActionExecute, type UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { writeDiscussionSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
 
 /**
  * The Artifacts surfaces reach document writes, history, restore and storage through the canonical `artifact.*`
@@ -22,8 +27,10 @@ export type ArtifactActionFailure = Readonly<{
 
 export type ArtifactActionOutcome<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; failure: ArtifactActionFailure }>;
 
-type SurfaceMutationActionId = 'artifact.create' | 'artifact.update' | 'artifact.revisions.restore' | 'artifact.delete';
-type SurfaceActionId = 'artifact.revisions.list' | 'artifact.storage.usage' | SurfaceMutationActionId;
+type SurfaceMutationActionId = 'artifact.create' | 'artifact.update' | 'artifact.revisions.restore' | 'artifact.delete' | 'doc.comment.reply' | 'doc.edit.propose' | 'doc.edit.accept' | 'doc.edit.decline';
+type SurfaceActionId = 'artifact.revisions.list' | 'artifact.storage.usage' | 'doc.read' | SurfaceMutationActionId;
+const SURFACE_OUTPUT_SCHEMAS = { ...ArtifactActionOutputSchemasV1, ...DocCollaborationActionOutputSchemasV1 };
+type SurfaceActionResult<Id extends SurfaceActionId> = z.infer<(typeof SURFACE_OUTPUT_SCHEMAS)[Id]>;
 
 function readRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -47,18 +54,21 @@ export function readArtifactActionFailure(result: unknown): ArtifactActionFailur
 export function createArtifactActionsClient(scope: ServerAccountScope, execute = createFrontDoorActionExecute()) {
     const dispatch = (actionId: SurfaceActionId, input: unknown, operation?: Pick<UiActionOperation, 'presentUserConfirmation'>) => execute(actionId, input, {
         surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId,
+        // These private UI methods are direct person intents, not an agent/plugin authority adapter.
+        ...(actionId === 'doc.edit.accept' || actionId === 'doc.edit.decline'
+            ? { authority: 'present_user', actionCaller: { kind: 'host' } } as const : {}),
         ...(operation?.presentUserConfirmation ? { authority: 'present_user', actionCaller: { kind: 'host' },
             presentUserConfirmation: operation.presentUserConfirmation } as const : {}),
     }).catch(() => null);
-    const readOutcome = <Id extends SurfaceActionId>(actionId: Id, result: Awaited<ReturnType<typeof dispatch>>): ArtifactActionOutcome<ArtifactActionResultV1<Id>> => {
+    const readOutcome = <Id extends SurfaceActionId>(actionId: Id, result: Awaited<ReturnType<typeof dispatch>>): ArtifactActionOutcome<SurfaceActionResult<Id>> => {
         if (!result) return { ok: false, failure: { code: 'artifact_action_failed' } };
         if (!result.ok) return { ok: false, failure: readArtifactActionFailure(result) };
-        const parsed = ArtifactActionOutputSchemasV1[actionId].safeParse(result.result);
+        const parsed = SURFACE_OUTPUT_SCHEMAS[actionId].safeParse(result.result);
         return parsed.success
-            ? { ok: true, value: parsed.data as ArtifactActionResultV1<Id> }
+            ? { ok: true, value: parsed.data as SurfaceActionResult<Id> }
             : { ok: false, failure: { code: 'artifact_action_invalid_result' } };
     };
-    const run = async <Id extends SurfaceActionId>(actionId: Id, input: unknown): Promise<ArtifactActionOutcome<ArtifactActionResultV1<Id>>> => {
+    const run = async <Id extends SurfaceActionId>(actionId: Id, input: unknown): Promise<ArtifactActionOutcome<SurfaceActionResult<Id>>> => {
         return readOutcome(actionId, await dispatch(actionId, input));
     };
     const runMutation = async <Id extends SurfaceMutationActionId>(actionId: Id, input: unknown,
@@ -70,6 +80,16 @@ export function createArtifactActionsClient(scope: ServerAccountScope, execute =
             : readOutcome(actionId, result);
     };
     return {
+        /** Seed the existing private Discussion draft from the source's captured Home. */
+        beginPassageComment: (passage: DocPassageRefV1) => {
+            writeDiscussionSessionDraft({ scope, address: { kind: 'newDiscussion' }, patch: { passage } });
+            return buildDiscussionRouteHref({ target: { kind: 'new', address: { serverId: scope.serverId } } });
+        },
+        readDoc: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.read']>) => run('doc.read', input),
+        replyToPassage: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.comment.reply']>) => runMutation('doc.comment.reply', input),
+        proposeEdit: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.edit.propose']>) => runMutation('doc.edit.propose', input),
+        acceptEdit: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.edit.accept']>) => runMutation('doc.edit.accept', input),
+        declineEdit: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.edit.decline']>) => runMutation('doc.edit.decline', input),
         createArtifact: (input: ArtifactActionInputV1<'artifact.create'>) => runMutation('artifact.create', input),
         updateArtifact: (input: ArtifactActionInputV1<'artifact.update'>) => runMutation('artifact.update', input),
         storageUsage: () => run('artifact.storage.usage', {}),

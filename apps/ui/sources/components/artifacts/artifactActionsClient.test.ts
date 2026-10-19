@@ -161,7 +161,12 @@ describe('Artifacts list projection', () => {
         await act(async () => { getStorage().getState().addArtifact({ ...artifact, id: 'newer', updatedAt: 2 }); });
         expect(hook.getCurrent()).not.toBe(before);
         expect(hook.getCurrent().map(row => row.id)).toEqual(['newer', 'visible']);
+        const hydratedRows = hook.getCurrent();
         await act(async () => { getStorage().setState({ isDataReady: false }); });
+        expect(hook.getCurrent()).toBe(hydratedRows);
+        // A completed inventory carries its read basis; a hydration batch is additive.
+        const inventoryReadStartedWith = getStorage().getState().artifacts;
+        await act(async () => { getStorage().getState().applyArtifacts([], inventoryReadStartedWith); });
         expect(hook.getCurrent()).toEqual([]);
         await hook.unmount();
     });

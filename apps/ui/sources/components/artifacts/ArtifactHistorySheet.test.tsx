@@ -19,7 +19,7 @@ vi.mock('expo-router', async () => {
 });
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit');
-    return createModalModuleMock({ renderCustomModals: true }).module;
+    return createModalModuleMock({ renderCustomModals: true, confirmResult: true }).module;
 });
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit');
@@ -53,12 +53,12 @@ afterEach(async () => {
     navigation.push.mockClear();
 });
 
-async function setup(route: Parameters<typeof serveActionHomes>[0]['route'], beforeOpen?: () => void, initialWidth = 900) {
-    const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://history.test', accountId: 'owner' }],
+async function setup(route: Parameters<typeof serveActionHomes>[0]['route'], settings?: Readonly<Record<string, unknown>>, initialWidth = 900) {
+    const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://history.test', accountId: 'owner', currentAccount: true, settings }],
         route: request => route(request) ?? (request.path === '/v1/artifacts/document' ? Response.json(storedHead) : undefined) });
     disposeHome = served.dispose;
+    await served.restoreActiveConnection();
     getStorage().getState().addArtifact(artifact);
-    beforeOpen?.();
     let width = initialWidth;
     vi.spyOn(ReactNative, 'useWindowDimensions').mockImplementation(() => ({ width, height: 900, scale: 1, fontScale: 1 }));
     let commits = 0;
@@ -172,11 +172,10 @@ describe('Artifact History continuity', () => {
         await screen.pressByTestIdAsync('artifact-history:version:1');
         const before = commits();
         await screen.pressByTestIdAsync('artifact-history:restore');
-        await flushHookEffects();
+        await vi.waitFor(() => expect(getStorage().getState().artifacts.document).toMatchObject({ bodyVersion: 4, body: 'Notes 1' }));
         console.info('History restore measurement', { redundantReads: redundantRead.mock.calls.length,
             headReads: served.requests.filter(request => request.path === '/v1/artifacts/document').length, commits: commits() - before });
-        expect(getStorage().getState().artifacts.document).toMatchObject({ bodyVersion: 4, body: 'Notes 1' });
-        expect(screen.findByTestId('artifact-history')).toBeNull();
+        await vi.waitFor(() => expect(screen.findByTestId('artifact-history')).toBeNull());
         expect(redundantRead).not.toHaveBeenCalled();
     });
 
@@ -189,16 +188,12 @@ describe('Artifact History continuity', () => {
                 approvalId = String(input.id);
                 return Response.json({ ...storedHead, ...input, headerVersion: 1, bodyVersion: 1 });
             }
-        }, () => {
-            const state = getStorage().getState();
-            getStorage().setState({ settings: { ...state.settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
-                actions: { 'artifact.revisions.restore': { approvalRequiredSurfaces: ['ui'] } } }) } });
-        });
+        }, { actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+            actions: { 'artifact.revisions.restore': { approvalRequiredSurfaces: ['ui'] } } }) });
         await screen.pressByTestIdAsync('artifact-history:version:1');
         await screen.pressByTestIdAsync('artifact-history:restore');
-        await flushHookEffects();
-        expect(approvalId).toBeDefined();
-        expect(navigation.push).toHaveBeenCalledWith(`/inbox/approvals/${encodeURIComponent(approvalId!)}?serverId=${encodeURIComponent(served.homes.owner!.id)}`);
+        await vi.waitFor(() => expect(approvalId).toBeDefined());
+        await vi.waitFor(() => expect(navigation.push).toHaveBeenCalledWith(`/inbox/approvals/${encodeURIComponent(approvalId!)}?serverId=${encodeURIComponent(served.homes.owner!.id)}`));
         expect(served.requests.some(request => request.path.endsWith('/restore'))).toBe(false);
         expect(getStorage().getState().artifacts.document?.bodyVersion).toBe(3);
     });

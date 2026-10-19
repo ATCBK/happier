@@ -1,0 +1,114 @@
+import type { DiscussionCreateResultV1 } from '@happier-dev/protocol/discussions/actions';
+import { DiscussionSecondOpinionStartInputV1Schema, type DiscussionSecondOpinionStartInputV1, type DiscussionSecondOpinionStartResultV1 } from '@happier-dev/protocol/discussions/secondOpinionActions';
+import { prepareAnchoredDiscussionCreateV1 } from '@happier-dev/protocol/actions/executor/discussionSecondOpinion';
+import { createDiscussionClient, type DiscussionClientOutcome } from '@/sync/api/discussions/discussionActions';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { SessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
+import { randomUUID } from '@/platform/randomUUID';
+import { buildDiscussionRouteHref } from './discussionRoutes';
+
+type Draft = Pick<DiscussionSecondOpinionStartInputV1, 'title' | 'question' | 'reviewers' | 'participants'>;
+type Preview = Extract<DiscussionSecondOpinionStartResultV1, { status: 'preview' }>;
+type Result = Readonly<{ operation: 'second_opinion'; outcome: DiscussionClientOutcome<DiscussionSecondOpinionStartResultV1> }>
+    | Readonly<{ operation: 'discuss'; outcome: DiscussionClientOutcome<DiscussionCreateResultV1> }>;
+export type DiscussionSecondOpinionSnapshot = Readonly<{
+    source: DiscussionSecondOpinionStartInputV1['source'];
+    draft: Draft;
+    retry: DiscussionSecondOpinionStartInputV1['retry'];
+    preview: Preview | null;
+    result: Result | null;
+    working: boolean;
+    submitted: boolean;
+    discussionHref: string | null;
+}>;
+
+/** L7's retained draft only; every effect stays at the captured-Home Action owner. */
+export function createDiscussionSecondOpinionController(options: Readonly<{
+    scope: ServerAccountScope;
+    availability: SessionCollaborationAvailability;
+    source: DiscussionSecondOpinionStartInputV1['source'];
+    draft: Draft;
+}>) {
+    const client = createDiscussionClient(options);
+    let snapshot: DiscussionSecondOpinionSnapshot = {
+        source: options.source, draft: options.draft,
+        retry: { creationLocalId: randomUUID(), quoteLocalId: randomUUID(), questionLocalId: randomUUID() },
+        preview: null, result: null, working: false, submitted: false, discussionHref: null,
+    };
+    const listeners = new Set<() => void>();
+    const publish = (patch: Partial<DiscussionSecondOpinionSnapshot>) => {
+        snapshot = { ...snapshot, ...patch };
+        for (const listener of listeners) listener();
+    };
+    let retainedAsk: DiscussionSecondOpinionStartInputV1 | null = null;
+    let retainedDiscuss: Parameters<typeof client.create>[0] | null = null;
+    const href = (serverId: string, discussionId: string, messageId?: string) => buildDiscussionRouteHref({
+        target: { kind: 'discussion', address: { serverId }, discussionId, ...(messageId ? { messageId } : {}) },
+        sourceSurface: 'collaboration',
+    });
+    const applyAsk = (outcome: DiscussionClientOutcome<DiscussionSecondOpinionStartResultV1>) => {
+        const value = outcome.kind === 'succeeded' ? outcome.value : null;
+        publish({ working: false, result: { operation: 'second_opinion', outcome },
+            ...(value?.status === 'preview' ? { preview: value } : {}),
+            ...(value?.status === 'preview_changed' && snapshot.preview
+                ? { preview: { ...snapshot.preview, preview: value.preview } } : {}),
+            ...(value?.status === 'asked' ? { discussionHref: href(value.discussion.serverId,
+                value.discussion.discussionId, value.messageRef.messageId) } : {}),
+        });
+        return outcome;
+    };
+    const runAsk = async (input: DiscussionSecondOpinionStartInputV1, signal?: AbortSignal) => {
+        publish({ working: true });
+        return applyAsk(await client.secondOpinion(input, signal));
+    };
+    const runDiscuss = async (input: Parameters<typeof client.create>[0], signal?: AbortSignal) => {
+        publish({ working: true });
+        const outcome = await client.create(input, signal);
+        publish({ working: false, result: { operation: 'discuss', outcome },
+            ...(outcome.kind === 'succeeded' ? { discussionHref: href(outcome.value.serverId,
+                outcome.value.discussion.id, outcome.value.firstMessage.id) } : {}) });
+        return outcome;
+    };
+    return {
+        getSnapshot: () => snapshot,
+        subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+        updateDraft(draft: Draft): boolean {
+            if (snapshot.submitted) return false;
+            publish({ draft, preview: null, result: null });
+            return true;
+        },
+        async preview(signal?: AbortSignal) {
+            if (snapshot.working || snapshot.submitted) return;
+            const draft = snapshot.draft;
+            publish({ working: true });
+            const outcome = await client.secondOpinion({ ...draft, source: snapshot.source, retry: snapshot.retry, intent: 'preview' }, signal);
+            if (snapshot.draft !== draft) { publish({ working: false }); return outcome; }
+            return applyAsk(outcome);
+        },
+        async ask(signal?: AbortSignal) {
+            if (snapshot.working || !snapshot.preview || retainedDiscuss) return;
+            retainedAsk = DiscussionSecondOpinionStartInputV1Schema.parse({ ...snapshot.draft, source: snapshot.source, retry: snapshot.retry,
+                intent: 'ask', confirmedPreview: snapshot.preview.preview });
+            publish({ submitted: true });
+            return runAsk(retainedAsk, signal);
+        },
+        async discuss(signal?: AbortSignal) {
+            if (snapshot.working || !snapshot.preview || retainedAsk || snapshot.draft.reviewers.length !== 0) return;
+            const prepared = prepareAnchoredDiscussionCreateV1({ source: snapshot.source, title: snapshot.draft.title,
+                quote: snapshot.preview.sourceText, creationLocalId: snapshot.retry.creationLocalId,
+                quoteLocalId: snapshot.retry.quoteLocalId, participants: snapshot.draft.participants });
+            const { firstMessage, ...creation } = prepared;
+            retainedDiscuss = { ...creation, messageLocalId: snapshot.retry.quoteLocalId, content: firstMessage.content,
+                replyTarget: prepared.firstMessage.replyTarget };
+            publish({ submitted: true });
+            return runDiscuss(retainedDiscuss, signal);
+        },
+        async retry(signal?: AbortSignal) {
+            if (snapshot.working) return;
+            if (snapshot.result?.operation === 'second_opinion' && snapshot.result.outcome.kind === 'succeeded'
+                && snapshot.result.outcome.value.status === 'preview_changed') return;
+            if (retainedAsk) return runAsk(retainedAsk, signal);
+            if (retainedDiscuss) return runDiscuss(retainedDiscuss, signal);
+        },
+    };
+}

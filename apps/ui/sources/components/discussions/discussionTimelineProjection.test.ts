@@ -1,0 +1,187 @@
+import { describe, expect, it } from 'vitest';
+import { DiscussionDocEditProposalContentV1Schema } from '@happier-dev/protocol/discussions/content';
+
+import {
+    NO_SESSION_AGENT_ACTIVITY_ATTENTION,
+    type AgentActivityEntry,
+} from '@/sync/domains/session/agentActivity';
+import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
+
+import { buildDiscussionTimelineItems, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel } from '@/components/discussions/discussionTimelineProjection';
+import { t } from '@/text';
+
+describe('readDiscussionMessagePreview', () => {
+    it.each(['Clarify retries', ' \n '])('summarizes a proposal without before/after text: %j', (reason) => {
+        const before = 'Private original passage';
+        const content = DiscussionDocEditProposalContentV1Schema.parse({ kind: 'doc_edit_proposal', proposal: {
+            target: { ref: { kind: 'doc', artifactId: 'doc', serverId: 'home' },
+                revision: { headerVersion: 1, bodyVersion: 1 }, range: { start: 0, end: before.length }, quote: before },
+            baseRevision: { headerVersion: 1, bodyVersion: 1 }, before, after: 'Private replacement passage', reason,
+        } });
+        const title = t('artifacts.browser.proposal.title');
+        expect(readDiscussionMessagePreview(content)).toBe(reason.trim() ? `${title} · ${reason}` : title);
+    });
+
+    it('preserves ordinary text and resolved mentions, and keeps unavailable content explicit', () => {
+        expect(readDiscussionMessagePreview({ v: 1, parts: [
+            { t: 'text', text: 'Ask ' }, { t: 'mention', participant: { kind: 'account', accountId: 'person' } },
+        ] }, { account: () => 'Maya' })).toBe('Ask @Maya');
+        expect(readDiscussionMessagePreview(null)).toBeNull();
+    });
+});
+
+describe('resolveDiscussionMessageAuthorLabel', () => {
+    it.each([
+        [{ name: 'Maya Chen', username: 'maya' }, 'Maya Chen'],
+        [{ name: '  ', username: 'maya' }, 'maya'],
+        [null, t('accountDisplay.yours')],
+    ] as const)('names the optimistic own message from the scoped viewer profile: %j', (profile, expected) => {
+        expect(resolveDiscussionMessageAuthorLabel({ authorAccountId: 'viewer', accountActor: null, createdAt: 0 }, {
+            accountId: 'viewer', profile,
+        })).toBe(expected);
+    });
+
+    it('keeps historical and other Accounts distinct from the viewer', () => {
+        const viewer = { accountId: 'viewer', profile: { name: 'Maya Chen' } };
+        expect(resolveDiscussionMessageAuthorLabel({ authorAccountId: 'other', accountActor: null, createdAt: 0 }, viewer))
+            .toBe(t('session.collaboration.discussion.collaborator'));
+        expect(resolveDiscussionMessageAuthorLabel({ authorAccountId: 'viewer', accountActor: { v: 1, accountId: 'viewer', profile: null }, createdAt: 1 }, viewer))
+            .toBe(t('message.accountActorFormerMember'));
+        expect(resolveDiscussionMessageAuthorLabel({ authorAccountId: 'viewer', accountActor: null, createdAt: 1 }, viewer))
+            .toBe(t('session.collaboration.discussion.collaborator'));
+    });
+});
+
+function message(id: string, seq: number) {
+    return { id, seq };
+}
+
+function entry(runId: string, startedAtMs: number | null): AgentActivityEntry {
+    return {
+        id: `execution_run:${runId}`,
+        kind: 'execution_run',
+        status: 'running',
+        title: runId,
+        metaDetail: null,
+        startedAtMs,
+        endedAtMs: null,
+        provenance: 'local',
+        detailState: 'loaded',
+        parentId: null,
+        runId,
+        sidechainId: null,
+        subagentId: `execution_run:${runId}`,
+        attentionKinds: NO_SESSION_AGENT_ACTIVITY_ATTENTION,
+    };
+}
+
+function run(params: Readonly<{
+    runId: string;
+    serverId?: string;
+    discussionId?: string;
+    messageIds?: readonly string[];
+}>): SessionSubagent {
+    return {
+        id: `execution_run:${params.runId}`,
+        kind: 'execution_run',
+        status: 'running',
+        display: { title: params.runId },
+        transcript: {},
+        runRef: {
+            runId: params.runId,
+            launchOrigin: {
+                kind: 'discussion',
+                serverId: params.serverId ?? 'home-1',
+                discussionId: params.discussionId ?? 'discussion-1',
+                messageIds: [...(params.messageIds ?? ['message-1'])],
+            },
+        },
+        recipient: null,
+        capabilities: {
+            canOpen: true,
+            canSend: false,
+            canStop: false,
+            canLaunchChild: false,
+            canDelete: false,
+            canOpenAdvancedRun: true,
+        },
+        timestamps: {},
+    };
+}
+
+describe('buildDiscussionTimelineItems', () => {
+    it('anchors linked runs after the highest selected message and orders equal anchors by canonical start then run id', () => {
+        const entries = new Map([
+            ['run-z', entry('run-z', 20)],
+            ['run-b', entry('run-b', 10)],
+            ['run-a', entry('run-a', 10)],
+        ]);
+
+        const items = buildDiscussionTimelineItems({
+            serverId: 'home-1',
+            discussionId: 'discussion-1',
+            messages: [message('message-1', 1), message('message-2', 2), message('message-3', 3)],
+            subagents: [
+                run({ runId: 'run-z', messageIds: ['message-1', 'message-3'] }),
+                run({ runId: 'run-b', messageIds: ['message-2'] }),
+                run({ runId: 'run-a', messageIds: ['message-2'] }),
+            ],
+            readExecutionRunEntry: (runId) => entries.get(runId) ?? null,
+        });
+
+        expect(items.map((item) => item.kind === 'human_message'
+            ? `message:${item.message.id}`
+            : `run:${item.entry.runId}@${item.anchorSeq}`)).toEqual([
+            'message:message-1',
+            'message:message-2',
+            'run:run-a@2',
+            'run:run-b@2',
+            'message:message-3',
+            'run:run-z@3',
+        ]);
+    });
+
+    it('ignores another Home with the same raw Discussion ID and unresolved or non-canonical run sources', () => {
+        const validEntry = entry('run-valid', 10);
+        const wrongKindEntry = { ...entry('run-not-execution', 11), kind: 'subagent' as const };
+        const malformed = {
+            ...run({ runId: 'run-malformed' }),
+            runRef: {
+                runId: 'run-malformed',
+                launchOrigin: { kind: 'discussion', serverId: 'home-1' },
+            },
+        } as unknown as SessionSubagent;
+
+        const entries = new Map<string, AgentActivityEntry>([
+            ['run-valid', validEntry],
+            ['run-not-execution', wrongKindEntry],
+            ['run-cross-session', entry('run-cross-session', 12)],
+            ['run-other-discussion', entry('run-other-discussion', 13)],
+            ['run-unresolved', entry('run-unresolved', 14)],
+            ['run-malformed', entry('run-malformed', 15)],
+        ]);
+
+        const items = buildDiscussionTimelineItems({
+            serverId: 'home-1',
+            discussionId: 'discussion-1',
+            messages: [message('message-1', 1)],
+            subagents: [
+                run({ runId: 'run-valid' }),
+                run({ runId: 'run-not-execution' }),
+                run({ runId: 'run-cross-session', serverId: 'home-2' }),
+                run({ runId: 'run-other-discussion', discussionId: 'discussion-2' }),
+                run({ runId: 'run-unresolved', messageIds: ['missing-message'] }),
+                malformed,
+            ],
+            readExecutionRunEntry: (runId) => entries.get(runId) ?? null,
+        });
+
+        expect(items).toHaveLength(2);
+        expect(items[1]).toMatchObject({
+            kind: 'agent_activity_reference',
+            anchorSeq: 1,
+            entry: { runId: 'run-valid' },
+        });
+    });
+
+});

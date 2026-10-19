@@ -1,0 +1,141 @@
+import * as React from 'react';
+import type { ComposerRefV1 } from '@happier-dev/protocol/plugins/ui/composer';
+import { composerRefV1Key } from '@happier-dev/protocol/plugins/ui/composerRef';
+
+import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
+import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { composerControlKey } from '@/components/plugins/actions/pluginContributedActionComposerChips';
+import { usePluginSurfaceExecutionOrigin } from '@/components/plugins/surfaces/pluginSurfaceExecutionOrigin';
+import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
+import {
+    compareOrderedComposerContributions,
+    useComposerScopePluginPresentation,
+    type ComposerScopePluginPresentation,
+} from '@/components/sessions/presentation/useComposerScopePluginPresentation';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+
+type DiscussionComposer = Extract<ComposerRefV1, { kind: 'discussion' }>;
+type Slots = Readonly<{
+    extraActionChips: readonly AgentInputExtraActionChip[];
+    beforeComposer: React.ReactNode;
+    afterComposer: React.ReactNode;
+}>;
+type Contributor = Readonly<{ id: string; pluginId: string }>;
+type PresentationSlots = Readonly<{
+    contributor: Contributor;
+    composerKey: string;
+    lifetime: ServerAccountScopeLifetime;
+    presentation: ComposerScopePluginPresentation;
+}>;
+type SharedProps = Readonly<{
+    composer: DiscussionComposer;
+    lifetime: ServerAccountScopeLifetime;
+    enabled: boolean;
+}>;
+const APP_TARGET = Object.freeze({ kind: 'app' as const });
+const GLOBAL_RESOURCE_CONTEXT = Object.freeze({ kind: 'global' as const });
+
+/** One Account declaration union; each plugin borrows its existing Administration-selected producer. */
+export function DiscussionComposerPluginContributions(props: SharedProps & Readonly<{
+    children(slots: Slots): React.ReactElement;
+}>): React.ReactElement {
+    const shell = useAppShellPluginUiProjection();
+    const active = useLayoutPresentationActive();
+    const projection = shell.pluginUiProjection;
+    // Lift only rendered slot values. Declaration, origin, document and
+    // transaction decisions remain with their incumbent owners below.
+    const [slots, setSlots] = React.useState<ReadonlyMap<string, PresentationSlots>>(() => new Map());
+    const publish = React.useCallback((value: PresentationSlots, remove = false) => {
+        setSlots(previous => {
+            const current = previous.get(value.contributor.pluginId);
+            if (remove ? current !== value : current === value) return previous;
+            const next = new Map(previous);
+            if (remove) next.delete(value.contributor.pluginId);
+            else next.set(value.contributor.pluginId, value);
+            return next;
+        });
+    }, []);
+    const contributors = React.useMemo(() => {
+        const byPlugin = new Map<string, Contributor>();
+        if (projection && props.enabled && active) {
+            for (const entry of [...Object.values(projection.composerControlsById), ...Object.values(projection.composerRegionsById)]) {
+                if (entry.definition.scopes && !entry.definition.scopes.includes('discussion')) continue;
+                byPlugin.set(entry.identity.pluginId, { id: entry.id, pluginId: entry.identity.pluginId });
+            }
+        }
+        return [...byPlugin.values()].sort((left, right) => left.pluginId.localeCompare(right.pluginId));
+    }, [active, projection, props.enabled]);
+    const composerKey = composerRefV1Key(props.composer);
+    const presentations = contributors.flatMap(contributor => {
+        const value = slots.get(contributor.pluginId);
+        return value && value.contributor.id === contributor.id && value.composerKey === composerKey
+            && value.lifetime === props.lifetime && props.lifetime.isCurrent() ? [value.presentation] : [];
+    });
+    const render = () => {
+        const controls = new Map(Object.values(projection?.composerControlsById ?? {}).map(entry => [composerControlKey(entry), entry]));
+        const chips = presentations.flatMap(presentation => presentation.extraActionChips.flatMap(chip => {
+            const contribution = controls.get(chip.key);
+            return contribution ? [{ contribution, chip }] : [];
+        })).sort((left, right) => compareOrderedComposerContributions(left.contribution, right.contribution));
+        const regions = presentations.flatMap(presentation => presentation.composerRegions.map(contribution => ({
+            contribution, render: () => presentation.renderComposerRegion(contribution),
+        }))).sort((left, right) => compareOrderedComposerContributions(left.contribution, right.contribution));
+        return props.children({
+            extraActionChips: chips.map(entry => entry.chip),
+            beforeComposer: regions.filter(entry => entry.contribution.definition.placement === 'beforeComposer')
+                .map(entry => <React.Fragment key={entry.contribution.id}>{entry.render()}</React.Fragment>),
+            afterComposer: regions.filter(entry => entry.contribution.definition.placement === 'afterComposer')
+                .map(entry => <React.Fragment key={entry.contribution.id}>{entry.render()}</React.Fragment>),
+        });
+    };
+    return <>
+        {projection ? contributors.map(contributor => <ContributorSlots key={contributor.pluginId}
+            composer={props.composer} lifetime={props.lifetime} enabled={props.enabled && active}
+            projection={projection} contributor={contributor} onPresentation={publish} />) : null}
+        {render()}
+    </>;
+}
+
+/**
+ * Stable sibling leaves preserve each plugin's UI across unrelated catalog
+ * changes. Slot publication re-renders the parent; unchanged inputs must not
+ * recursively re-evaluate and republish the same contributor's presentation.
+ */
+const ContributorSlots = React.memo(function ContributorSlots(props: SharedProps & Readonly<{
+    projection: PluginUiProjectionModel;
+    contributor: Contributor;
+    onPresentation(value: PresentationSlots, remove?: boolean): void;
+}>): null {
+    const contributor = props.contributor;
+    const entry = props.projection.composerControlsById[contributor.id] ?? props.projection.composerRegionsById[contributor.id];
+    const origin = usePluginSurfaceExecutionOrigin({ pluginId: contributor.pluginId, entry,
+        projection: props.projection, enabled: props.enabled, includeMachineCandidates: false });
+    const supply = origin.selectedSupply;
+    const enabled = props.enabled && props.lifetime.isCurrent() && origin.selection.canExecute;
+    const daemon = useDaemonMergedProjectionInputs({ machineId: supply?.machineId ?? null,
+        serverId: supply?.serverId, enabled, load: enabled });
+    // The Account union selects a producer, not any later installation that
+    // happens to occupy the same Machine's daemon cache.
+    const matchesSelectedSupply = Boolean(supply?.occurrenceId
+        && daemon.inputs?.pluginProjectionById[contributor.pluginId]?.occurrenceId === supply.occurrenceId);
+    const isCurrent = React.useCallback(() => enabled && matchesSelectedSupply && props.lifetime.isCurrent()
+        && origin.isExecutionOriginCurrent(), [enabled, matchesSelectedSupply, origin.isExecutionOriginCurrent, props.lifetime]);
+    const presentation = useComposerScopePluginPresentation({
+        composer: props.composer, contributorPluginId: contributor.pluginId,
+        physicalTarget: APP_TARGET, resourceContext: GLOBAL_RESOURCE_CONTEXT,
+        machineId: supply?.machineId ?? null, serverId: supply?.serverId,
+        projectionPhase: enabled ? daemon.phase : 'idle', projectionInputs: daemon.inputs,
+        accountLifetime: props.lifetime, isScopeCurrent: isCurrent,
+        attachmentsEnabled: false, includeSessionActions: false,
+    });
+    const value = React.useMemo<PresentationSlots>(() => ({ contributor, lifetime: props.lifetime,
+        composerKey: composerRefV1Key(props.composer), presentation,
+    }), [contributor, presentation, props.composer, props.lifetime]);
+    React.useLayoutEffect(() => {
+        props.onPresentation(value);
+        return () => props.onPresentation(value, true);
+    }, [props.onPresentation, value]);
+    return null;
+});

@@ -1,0 +1,78 @@
+import * as React from 'react';
+import type { TranscriptAccountActor } from '@happier-dev/session-core/messages';
+import type { DiscussionParticipantsListResponseV1 } from '@happier-dev/protocol/discussions/participants';
+import type { AccountDisplayProfileV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
+import { areServerAccountScopesEqual, serverAccountScopedResourceKey, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { getUserProfiles } from '@/sync/api/social/apiFriends';
+import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { useShareViewerProfile } from '@/components/sharing/useShareViewerProfile';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+
+/** Safe display facts alongside the admitted roster, never another people inventory or grant owner. */
+export function useDiscussionParticipantProfiles(input: Readonly<{
+    scope: ServerAccountScope;
+    roster: DiscussionParticipantsListResponseV1 | null;
+    enabled: boolean;
+    accountLifetime: ServerAccountScopeLifetime | null;
+}>): Readonly<{ owner: TranscriptAccountActor | null; accounts: ReadonlyMap<string, TranscriptAccountActor> }> {
+    const { scope, roster, enabled, accountLifetime } = input;
+    const subscribe = React.useCallback((notify: () => void) => {
+        const retirement = accountLifetime?.onRetire(notify);
+        return () => retirement?.dispose();
+    }, [accountLifetime]);
+    const isCurrent = React.useSyncExternalStore(subscribe,
+        () => accountLifetime?.isCurrent() === true && areServerAccountScopesEqual(accountLifetime.scope, scope),
+        () => false);
+    const viewerProfile = useShareViewerProfile(scope);
+    const accountIdsKey = JSON.stringify(roster ? [...new Set([roster.ownerAccountId, ...roster.grants.flatMap(grant =>
+        grant.principal.kind === 'account' ? [grant.principal.accountId] : [])])].sort() : []);
+    const key = serverAccountScopedResourceKey(scope, roster?.discussionId ?? '', accountIdsKey);
+    const [resolved, setResolved] = React.useState<Readonly<{
+        key: string; lifetime: ServerAccountScopeLifetime; profiles: ReadonlyMap<string, AccountDisplayProfileV1 | null>;
+    }> | null>(null);
+
+    React.useEffect(() => {
+        if (!enabled || !isCurrent || !accountLifetime || accountIdsKey === '[]') return;
+        const abort = new AbortController();
+        const retirement = accountLifetime.onRetire(() => abort.abort());
+        const ids: string[] = JSON.parse(accountIdsKey);
+        void runWithServerRequestAuthorityForServerAccountScope({ scope,
+            activeRequest: async () => { throw new Error('Discussion profiles require captured Home credentials'); },
+        }, async authority => {
+            if (abort.signal.aborted || !accountLifetime.isCurrent()) return;
+            // The existing people API owns batching/parsing. Every member of this batch uses the
+            // same captured Account authority, including when another Home is focused.
+            const users = await getUserProfiles({ token: authority.context.token }, ids, { retry: 'none',
+                request: (path, init, options) => authority.request(path, { ...init, signal: abort.signal }, { retry: options?.retry }),
+            });
+            if (abort.signal.aborted || !accountLifetime.isCurrent()) return;
+            const usersById = new Map(users.map(user => [user.id, user]));
+            setResolved({ key, lifetime: accountLifetime, profiles: new Map(ids.map(id => {
+                const user = usersById.get(id);
+                return [id, user ? { name: user.name ?? null, firstName: user.firstName,
+                    lastName: user.lastName, username: user.username, avatarUrl: user.avatar?.url ?? null } : null];
+            })) });
+        }).catch(() => { /* Unavailable profiles do not erase acknowledged roster names or imply a former member. */ });
+        return () => { retirement.dispose(); abort.abort(); };
+    }, [accountIdsKey, enabled, key, scope.serverId, scope.accountId, accountLifetime, isCurrent]);
+
+    return React.useMemo(() => {
+        const accounts = new Map<string, TranscriptAccountActor>();
+        if (!isCurrent) return { owner: null, accounts };
+        for (const grant of roster?.grants ?? []) {
+            if (grant.principal.kind !== 'account') continue;
+            accounts.set(grant.principal.accountId, { v: 1, serverId: scope.serverId, accountId: grant.principal.accountId,
+                profile: { name: grant.display.name, username: grant.display.username ?? null,
+                    firstName: null, lastName: null, avatarUrl: null } });
+        }
+        if (resolved?.key === key && resolved.lifetime === accountLifetime) for (const [accountId, profile] of resolved.profiles) {
+            accounts.set(accountId, { v: 1, serverId: scope.serverId, accountId, profile });
+        }
+        // A default/unnamed loading profile must not erase an acknowledged Home name.
+        if (roster && viewerProfile && formatAccountDisplayName(viewerProfile)
+            && (roster.ownerAccountId === scope.accountId || accounts.has(scope.accountId))) {
+            accounts.set(scope.accountId, { v: 1, serverId: scope.serverId, accountId: scope.accountId, profile: viewerProfile });
+        }
+        return { owner: roster ? accounts.get(roster.ownerAccountId) ?? null : null, accounts };
+    }, [key, resolved, roster, scope.serverId, scope.accountId, viewerProfile, accountLifetime, isCurrent]);
+}

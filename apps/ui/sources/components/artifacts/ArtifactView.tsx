@@ -35,6 +35,7 @@ import { useArtifactBody } from './useArtifactBody';
 import { ArtifactBinaryBody } from './ArtifactBinaryBody';
 import { ArtifactHtmlBody } from './ArtifactHtmlBody';
 import { ArtifactWidgetBody } from './ArtifactWidgetBody';
+import { ArtifactPassageSelection } from './ArtifactPassageSelection';
 
 function bodyMarkdown(artifact: DecryptedArtifact): string | null {
     const body = artifact.body;
@@ -143,7 +144,11 @@ function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: A
         initialBytes={props.prepared?.binaryBytes} onRetry={props.onRetry} />;
     const markdown = bodyMarkdown(props.artifact);
     if (markdown === null) return <Text style={stylesheet.noContent}>{t('artifacts.noContent')}</Text>;
-    return <MarkdownView testID="artifact:body" markdown={markdown} />;
+    const body = <MarkdownView testID="artifact:body" markdown={markdown} />;
+    // Only a document's own Markdown is a passage source; a code document's fence is presentation.
+    if (readArtifactCodeLanguage(props.artifact) || props.artifact.bodyVersion === undefined) return body;
+    return <ArtifactPassageSelection artifactId={props.artifact.id} markdown={markdown}
+        revision={{ headerVersion: props.artifact.headerVersion, bodyVersion: props.artifact.bodyVersion }}>{body}</ArtifactPassageSelection>;
 }
 
 function readFacts(artifact: DecryptedArtifact): readonly PageHeaderMetaFact[] {

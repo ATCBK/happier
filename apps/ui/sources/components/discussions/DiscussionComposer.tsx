@@ -1,0 +1,292 @@
+import * as React from 'react';
+import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
+
+import {
+    DISCUSSION_COMPOSER_SUGGESTION_KINDS,
+    type ComposerAccountMentionSource,
+} from '@/components/autocomplete/composerSuggestionKinds';
+import { getSuggestions } from '@/components/autocomplete/suggestions';
+import { matchesComposerSuggestionQuery, type ComposerSuggestionCatalogs } from '@/components/autocomplete/composerSuggestionCatalogs';
+import type { SessionResponsibilityCandidateV1 } from '@happier-dev/protocol/sessions/access/sessionResponsibilityV1';
+import { AgentInput } from '@/components/sessions/agentInput';
+import type { AgentInputSendOptions } from '@/components/sessions/agentInput/agentInputSendOptions';
+import {
+    structuredInputMentionSurvivesText,
+    type ComposerStructuredInputMention,
+} from '@/components/sessions/agentInput/structuredInputMentions';
+import type { SessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
+import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { createDiscussionClient } from '@/sync/api/discussions/discussionActions';
+import { reportDiscussionTypingEdit, stopDiscussionTyping } from '@/sync/domains/session/humanPresence/sessionHumanPresenceRuntime';
+import { t } from '@/text';
+import type { DiscussionHomeAddress } from './discussionDetailsTarget';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { DiscussionComposerMount } from './DiscussionComposerMount';
+import { DiscussionComposerPluginContributions } from './DiscussionComposerPluginContributions';
+import { createMentionActionChip } from '@/components/sessions/agentInput/definitions/createMentionActionChip';
+import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { readComposerSessionSuggestionDisplay } from '@/sync/domains/input/suggestionSession';
+
+import {
+    buildDiscussionContent,
+    buildDiscussionContentFromPendingText,
+    discussionComposerMentionsFromSpans,
+    discussionMentionSpansFromComposerMentions,
+    parseDiscussionMentionSpans,
+    type DiscussionMentionSpan,
+} from './discussionComposerDocument';
+
+export type DiscussionComposerValue = Readonly<{
+    text: string;
+    mentions: readonly DiscussionMentionSpan[];
+}>;
+
+type LatestComposerDocument = Readonly<{
+    text: string;
+    mentions: readonly ComposerStructuredInputMention[];
+}>;
+
+/**
+ * A human discussion's composer: the one composer (`AgentInput`) with the discussion adapter
+ * behind it (INT §6 I4 "One pane"). The adapter owns what is human here — who can be mentioned
+ * (people and executable Session references, fed by this Discussion's admitted roster), and
+ * an empty draft that stays editable — and serializes the document to the discussion's own wire
+ * shape. Nothing an agent composer carries is offered (no engine, conversational Voice or prompt history);
+ * the person gets `@` as a control and dictation, which only writes words into the field.
+ */
+// The composer brings its own side gutter and half of it below; a pane foot adds the other half, so the
+// card sits as far from the pane's bottom edge as from its sides.
+const styles = StyleSheet.create((theme) => ({
+    root: { paddingBottom: theme.space.s8 },
+    hint: { ...Typography.variant('meta'), color: theme.colors.text.tertiary, flexShrink: 1, marginRight: theme.space.s4 },
+}));
+
+export function DiscussionComposer(props: Readonly<{
+    scope: ServerAccountScope;
+    accountLifetime: ServerAccountScopeLifetime;
+    address: DiscussionHomeAddress;
+    discussionId?: string;
+    availability: SessionCollaborationAvailability;
+    value: DiscussionComposerValue;
+    onChange: (value: DiscussionComposerValue) => void;
+    disabled: boolean;
+    onSend: (content: ReturnType<typeof buildDiscussionContent>) => void;
+}>): React.ReactElement {
+    const { scope, availability, disabled, accountLifetime } = props;
+    const client = React.useMemo(() => createDiscussionClient({ scope, availability }), [availability, scope]);
+    const composerMentions = React.useMemo(
+        () => discussionComposerMentionsFromSpans(props.value.text, props.value.mentions),
+        [props.value.mentions, props.value.text],
+    );
+
+    // The composer reports text and mentions in separate callbacks, in either order. The draft
+    // admits a mention only against the text it covers, so both are written together from the
+    // latest pair; an external draft replacement (another device, a clear after send) resets it.
+    const latestRef = React.useRef<LatestComposerDocument>({ text: props.value.text, mentions: composerMentions });
+    const revisionRef = React.useRef(0);
+    const observedValueRef = React.useRef(props.value);
+    if (observedValueRef.current !== props.value) {
+        observedValueRef.current = props.value;
+        if (props.value.text !== latestRef.current.text || !pluginJsonValuesEqual(composerMentions, latestRef.current.mentions)) {
+            latestRef.current = { text: props.value.text, mentions: composerMentions };
+            revisionRef.current += 1;
+        }
+    }
+    const onChangeRef = React.useRef(props.onChange);
+    onChangeRef.current = props.onChange;
+    const write = React.useCallback((next: LatestComposerDocument) => {
+        if (next.text !== latestRef.current.text || !pluginJsonValuesEqual(next.mentions, latestRef.current.mentions)) revisionRef.current += 1;
+        latestRef.current = next;
+        onChangeRef.current({
+            text: next.text,
+            mentions: discussionMentionSpansFromComposerMentions(
+                next.mentions.filter((mention) => structuredInputMentionSurvivesText(next.text, mention)),
+            ),
+        });
+    }, []);
+
+    const presenceTarget = React.useMemo(() => props.discussionId
+        ? { serverId: props.address.serverId, discussionId: props.discussionId }
+        : null, [props.address.serverId, props.discussionId]);
+    React.useEffect(() => {
+        if (disabled && presenceTarget) stopDiscussionTyping(presenceTarget, accountLifetime);
+    }, [accountLifetime, disabled, presenceTarget]);
+    React.useEffect(() => () => {
+        if (presenceTarget) stopDiscussionTyping(presenceTarget, accountLifetime);
+    }, [accountLifetime, presenceTarget]);
+    const onFocusChange = React.useCallback((focused: boolean) => {
+        if (!focused && presenceTarget) stopDiscussionTyping(presenceTarget, accountLifetime);
+    }, [accountLifetime, presenceTarget]);
+
+    const onChangeText = React.useCallback((text: string) => {
+        if (presenceTarget) reportDiscussionTypingEdit(presenceTarget, text.trim().length > 0, accountLifetime);
+        write({ text, mentions: latestRef.current.mentions });
+    }, [accountLifetime, presenceTarget, write]);
+
+    const onMentionsChange = React.useCallback((mentions: readonly ComposerStructuredInputMention[]) => {
+        const text = latestRef.current.text;
+        if (mentions.every((mention) => structuredInputMentionSurvivesText(text, mention))) {
+            write({ text, mentions });
+            return;
+        }
+        // Reported ahead of the text it covers: the text change that follows writes both.
+        latestRef.current = { text, mentions };
+    }, [write]);
+
+    // Retry is a new source, hence a new handler: the open picker asks again for the same token
+    // (useActiveSuggestions re-runs its query when the handler changes).
+    const [searchRevision, setSearchRevision] = React.useState(0);
+    const suggestParticipants = React.useCallback(async (query: string, signal: AbortSignal) => {
+        if (availability !== 'available' || !props.discussionId || !accountLifetime.isCurrent() || signal.aborted) return [];
+        // One current roster is the eligibility authority for both picker sections.
+        // A Session title is display only; it can never admit an outsider.
+        const outcome = await client.participants(props.discussionId, signal).catch(() => null);
+        if (!accountLifetime.isCurrent() || signal.aborted) return [];
+        const sessions: Array<NonNullable<ComposerSuggestionCatalogs['sessions']>[number]> = [];
+        if (outcome?.kind === 'succeeded') {
+            const seen = new Set<string>();
+            for (const participant of outcome.value.participants) {
+                const sessionId = participant.participant.kind === 'session'
+                    ? participant.participant.sessionId : 'sessionId' in participant ? participant.sessionId : null;
+                if (!sessionId || seen.has(sessionId)) continue;
+                seen.add(sessionId);
+                const display = readComposerSessionSuggestionDisplay({ serverId: scope.serverId, sessionId });
+                const neutralLabel = t('session.collaboration.discussion.participants.session');
+                sessions.push({
+                    id: sessionId,
+                    title: display?.title || neutralLabel,
+                    serverId: scope.serverId,
+                    workspaceLabel: display?.workspaceLabel ?? null,
+                    agentLabel: display?.agentLabel ?? neutralLabel,
+                    agentId: display?.agentId ?? null,
+                    machineId: display?.machineId ?? null,
+                });
+            }
+        }
+        const accountMentions: ComposerAccountMentionSource = {
+            search: async ({ query, limit }) => {
+                if (outcome?.kind !== 'succeeded') throw new Error('Discussion participants unavailable');
+                const people = new Map<string, SessionResponsibilityCandidateV1>();
+                for (const grant of outcome.value.grants) {
+                    if (grant.principal.kind !== 'account' || grant.principal.accountId === scope.accountId) continue;
+                    people.set(grant.principal.accountId, {
+                        accountId: grant.principal.accountId,
+                        profile: { name: grant.display.name, firstName: null, lastName: null, username: grant.display.username ?? null, avatarUrl: null },
+                    });
+                }
+                if (outcome.value.ownerAccountId !== scope.accountId && !people.has(outcome.value.ownerAccountId)) {
+                    people.set(outcome.value.ownerAccountId, {
+                        accountId: outcome.value.ownerAccountId,
+                        profile: { name: null, firstName: null, lastName: null, username: null, avatarUrl: null },
+                    });
+                }
+                const matches = [...people.values()].filter((person) => !query || matchesComposerSuggestionQuery(person.profile.name ?? person.profile.username ?? '', query));
+                return { candidates: matches.slice(0, limit), hasMore: matches.length > limit };
+            },
+            retry: () => setSearchRevision((revision) => revision + 1),
+        };
+        const suggestions = await getSuggestions(null, query, {
+            kinds: DISCUSSION_COMPOSER_SUGGESTION_KINDS,
+            accountMentions,
+            // Explicitly empty is authoritative, including after participant removal.
+            catalogs: { sessions },
+            signal,
+        });
+        return accountLifetime.isCurrent() && !signal.aborted ? suggestions : [];
+        // `searchRevision` renews the active query after the existing Retry action.
+    }, [accountLifetime, availability, client, props.discussionId, scope.serverId, scope.accountId, searchRevision]);
+
+    const onSendProp = props.onSend;
+    const send = React.useCallback((options?: AgentInputSendOptions) => {
+        const latest = latestRef.current;
+        const text = options?.inputTextOverride ?? latest.text;
+        if (disabled || text.trim().length === 0) return;
+        if (presenceTarget) stopDiscussionTyping(presenceTarget, accountLifetime);
+        onSendProp(buildDiscussionContentFromPendingText({
+            previousText: latest.text,
+            pendingText: text,
+            mentions: parseDiscussionMentionSpans(discussionMentionSpansFromComposerMentions(latest.mentions), latest.text),
+        }));
+    }, [accountLifetime, disabled, onSendProp, presenceTarget]);
+
+    const placeholder = t('session.collaboration.discussion.messagePlaceholder');
+    // `@` as a control and the one-line addressing rule beside send (lab T2-A): the trigger is written into
+    // the document and the field focused, so the composer's own suggestions open on it.
+    const focusRequestRef = React.useRef<(() => void) | null>(null);
+    const captureFocusRequest = React.useCallback((request: (() => void) | null) => { focusRequestRef.current = request; }, []);
+    // The mounted Composer binding also listens for the focus request: one listener per binding feeds both,
+    // so a new binding still receives the composer's request.
+    type FocusRequestListener = (request: (() => void) | null) => void;
+    const focusListenersRef = React.useRef(new WeakMap<FocusRequestListener, FocusRequestListener>());
+    const focusRequestListener = (bound: FocusRequestListener | undefined): FocusRequestListener => {
+        if (!bound) return captureFocusRequest;
+        let listener = focusListenersRef.current.get(bound);
+        if (!listener) {
+            listener = (request) => { focusRequestRef.current = request; bound(request); };
+            focusListenersRef.current.set(bound, listener);
+        }
+        return listener;
+    };
+    const insertMention = React.useCallback(() => {
+        const latest = latestRef.current;
+        const text = latest.text.length === 0 || /\s$/.test(latest.text) ? `${latest.text}@` : `${latest.text} @`;
+        write({ text, mentions: latest.mentions });
+        requestAnimationFrame(() => focusRequestRef.current?.());
+    }, [write]);
+    const mentionChips = React.useMemo(() => [createMentionActionChip({
+        label: t('session.collaboration.discussion.composer.mention'),
+        disabled,
+        onMention: insertMention,
+    })], [disabled, insertMention]);
+    const phone = useSurfaceStateSize() === 'phone';
+    // A new Discussion's page says how addressing works itself, so the line beside send is for a running thread.
+    const addressingHint = phone || !props.discussionId ? undefined : <Text testID="session-discussion-composer-hint" style={styles.hint} numberOfLines={1}>{t('session.collaboration.discussion.composer.mentionHint')}</Text>;
+    const readDocument = React.useCallback(() => ({ ...latestRef.current, revision: revisionRef.current }), []);
+    const composer = React.useMemo(() => props.discussionId
+        ? { kind: 'discussion' as const, discussionId: props.discussionId } : null, [props.discussionId]);
+    const renderInput = (binding: Partial<React.ComponentProps<typeof AgentInput>> = {}, focusChanged?: (focused: boolean) => void) => {
+        return (
+            <AgentInput
+                {...binding}
+                onComposerFocusRequestChange={focusRequestListener(binding.onComposerFocusRequestChange)}
+                extraActionChips={binding.extraActionChips ?? mentionChips}
+                trailingAccessory={addressingHint}
+                value={props.value.text}
+                placeholder={placeholder}
+                inputAccessibilityLabel={placeholder}
+                submitAccessibilityLabel={t('common.send')}
+                onChangeText={onChangeText}
+                structuredInputMentions={composerMentions}
+                onStructuredInputMentionsChange={onMentionsChange}
+                onComposerFocusChange={(focused) => { onFocusChange(focused); focusChanged?.(focused); }}
+                onSend={send}
+                disabled={disabled}
+                autocompleteKinds={DISCUSSION_COMPOSER_SUGGESTION_KINDS}
+                autocompleteSuggestions={suggestParticipants}
+                engineControls="none"
+                voiceAffordance="dictation"
+                messageHistory="none"
+                promptLibrary="none"
+            />
+        );
+    };
+    return (
+        <View testID="session-discussion-composer-root" style={styles.root}>
+            {composer ? <DiscussionComposerMount
+                key={JSON.stringify([scope.serverId, scope.accountId, composer.discussionId])}
+                composer={composer} scope={scope} lifetime={accountLifetime}
+                available={availability === 'available'} disabled={disabled}
+                readDocument={readDocument} writeDocument={write}
+            >{(binding, focusChanged) => <DiscussionComposerPluginContributions
+                composer={composer} lifetime={accountLifetime} enabled={availability === 'available'}
+            >{slots => <>
+                {slots.beforeComposer}
+                {renderInput({ ...binding, extraActionChips: [...mentionChips, ...slots.extraActionChips] }, focusChanged)}
+                {slots.afterComposer}
+            </>}</DiscussionComposerPluginContributions>}</DiscussionComposerMount> : renderInput()}
+        </View>
+    );
+}
