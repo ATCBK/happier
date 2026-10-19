@@ -193,7 +193,9 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
     // What the last change came to, said where it belongs (never a line that pushes the area down):
     // a refused change on the card it was for, with Retry, until a later change succeeds; one held
     // for someone's approval as the header's quiet meta. A refused add stays on its gallery tile.
-    const [notice, setNotice] = React.useState<AreaNotice | null>(null);
+    const [noticeRecord, setNotice] = React.useState<Readonly<{ write: WidgetAreaWrite; value: AreaNotice | null }> | null>(null);
+    // A replaced page/context/Account binding cannot inherit the old operation's feedback.
+    const notice = noticeRecord?.write === layout.write ? noticeRecord.value : null;
     const [localOrganizing, setLocalOrganizing] = React.useState(false);
     const organizing = props.organize?.active ?? localOrganizing;
     const setOrganizing = props.organize?.onChange ?? setLocalOrganizing;
@@ -202,6 +204,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
         || state.reasonCode === 'widget_area_scope_retired' || state.reasonCode === 'account_target_mismatch'
         || state.reasonCode === 'server_target_mismatch');
     const ready = state.status === 'ready' ? state : null;
+    const areaFailure = notice?.kind === 'failed' && !ready?.placements.some(entry => entry.instance.id === notice.instanceId) ? notice : null;
     const canAdd = ready?.canEdit === true;
     // An open Add surface outlives a re-read that finds the area unavailable: it keeps the layout it was opened on, so a
     // failed Add still says why in its own footer instead of vanishing with the area. Closing releases it.
@@ -236,10 +239,16 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
     const layoutWrite = layout.write;
     const write = React.useCallback(async (operation: Parameters<WidgetAreaWrite>[0]): Promise<WidgetAreaWriteOutcome> => {
         const outcome = await layoutWrite(operation);
-        setNotice(outcome.kind === 'approvalPending' ? { kind: 'pending', ...('instanceId' in operation ? { instanceId: operation.instanceId } : {}) }
-            : outcome.kind === 'refused' && 'instanceId' in operation
-                ? { kind: 'failed', instanceId: operation.instanceId, errorCode: outcome.errorCode, retry: () => write(operation) }
-                : null);
+        const describe = (result: Exclude<WidgetAreaWriteOutcome, { kind: 'approvalPending' }>): AreaNotice | null =>
+            result.kind === 'refused'
+                ? { kind: 'failed', ...('instanceId' in operation ? { instanceId: operation.instanceId } : {}), errorCode: result.errorCode, retry: () => write(operation) }
+                : null;
+        if (outcome.kind === 'approvalPending') {
+            const pending = { write: layoutWrite, value: { kind: 'pending' as const, artifactId: outcome.artifactId,
+                ...('instanceId' in operation ? { instanceId: operation.instanceId } : {}) } };
+            setNotice(pending);
+            void outcome.settled.then(terminal => setNotice(previous => previous === pending ? { write: layoutWrite, value: describe(terminal) } : previous));
+        } else setNotice({ write: layoutWrite, value: describe(outcome) });
         return outcome;
     }, [layoutWrite]);
     const closeAdd = React.useCallback(() => setAddOpen(false), []);
@@ -260,7 +269,8 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
         <View ref={drop.ref} onLayout={drop.onLayout} testID={props.testID} style={styles.area}>
             {props.dashboard ? null : <WidgetAreaHeader
                 title={props.title}
-                meta={notice?.kind === 'pending' ? t('widgetAdd.areaApprovalPending') : props.meta}
+                meta={notice?.kind === 'pending' ? t('widgetAdd.areaApprovalPending')
+                    : areaFailure ? resolveActionExecutionErrorMessage({ errorCode: areaFailure.errorCode }, t('widgetAdd.areaWriteFailed')) : props.meta}
                 testID={props.testID}
                 // The Add keeps its place while the layout first loads, so nothing moves on arrival.
                 add={state.status === 'loading' || canAdd ? (
@@ -333,6 +343,9 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                     failed={notice?.kind === 'failed' ? notice : null}
                     pendingInstanceId={notice?.kind === 'pending' ? notice.instanceId ?? null : null} />
             ) : null}
+            {areaFailure && props.dashboard ? <SurfaceStateCard testID={`${props.testID}.writeFailed`} kind="error" size="line" layout="inline"
+                title={resolveActionExecutionErrorMessage({ errorCode: areaFailure.errorCode }, t('widgetAdd.areaWriteFailed'))}
+                diagnosticCode={areaFailure.errorCode} action={{ label: t('common.retry'), onPress: () => { void areaFailure.retry(); } }} /> : null}
             {props.display !== 'widgets' && props.dashboard && canAdd ? (
                 <View style={styles.header}>
                     {organizeControl}
@@ -399,8 +412,8 @@ function WidgetAreaHeader(props: Readonly<{ title: string; meta?: string | undef
 }
 
 type AreaNotice =
-    | Readonly<{ kind: 'pending'; /** The card the write changes, when it is one (a remove, a resize). */ instanceId?: string }>
-    | Readonly<{ kind: 'failed'; instanceId: string; errorCode: string; retry: () => Promise<WidgetAreaWriteOutcome> }>;
+    | Readonly<{ kind: 'pending'; artifactId: string; /** The card the write changes, when it is one (a remove, a resize). */ instanceId?: string }>
+    | Readonly<{ kind: 'failed'; instanceId?: string; errorCode: string; retry: () => Promise<WidgetAreaWriteOutcome> }>;
 
 type PlacementsProps = WidgetAreaProps & Readonly<{
     failed: Extract<AreaNotice, { kind: 'failed' }> | null;

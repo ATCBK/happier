@@ -1,9 +1,12 @@
 import * as React from 'react';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
-import type { PluginUiWidgetAreaOperationV1, PluginUiWidgetAreaResultV1 } from '@happier-dev/protocol/plugins/ui';
+import { buildWidgetAreaActionInputV1, type PluginUiWidgetAreaOperationV1, type PluginUiWidgetAreaResultV1 } from '@happier-dev/protocol/plugins/ui';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { usePluginHostReadiness } from '@happier-dev/plugin-ui/hostApi';
 import { buildWidgetSurfaceArtifactIdV1, getWidgetLayoutItemIdV1, WidgetAreaLayoutV1Schema, WidgetSurfaceReadV1Schema, type WidgetAreaLayoutV1, type WidgetPlacementV1, type WidgetSurfaceReadV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
-import { storage, useArtifact } from '@/sync/domains/state/storage';
+import { storage, useArtifact, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
+import { resumeActionExecutionResult } from '@/components/approvals/actionApprovalContinuation';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { WidgetEntityMovementPort } from '@/sync/ops/actions/widgetEntityMovement';
@@ -25,11 +28,12 @@ export type WidgetAreaPort = Readonly<{
 }>;
 
 /** A write that was refused or failed: the area keeps its last good layout and says so once. */
-export type WidgetAreaWriteOutcome =
+type WidgetAreaWriteSettlement =
     | Readonly<{ kind: 'applied' }>
-    | Readonly<{ kind: 'approvalPending' }>
     /** `error` is the host's own sentence when it gave one beyond the code, so a refusal can say why. */
     | Readonly<{ kind: 'refused'; errorCode: string; error?: string }>;
+export type WidgetAreaWriteOutcome = WidgetAreaWriteSettlement
+    | Readonly<{ kind: 'approvalPending'; artifactId: string; settled: Promise<WidgetAreaWriteSettlement> }>;
 
 export type WidgetAreaLayoutState<C> =
     | Readonly<{ status: 'loading' }>
@@ -100,6 +104,15 @@ function reconcile<C>(previous: WidgetAreaLayoutState<C>, next: WidgetAreaLayout
  */
 export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: WidgetAreaPort, context: C): WidgetAreaLayout<C> {
     const hostReadiness = usePluginHostReadiness();
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const interest = React.useMemo(() => ({ controller: new AbortController() }), [port, context, lifetime]);
+    React.useEffect(() => {
+        if (interest.controller.signal.aborted) interest.controller = new AbortController();
+        const controller = interest.controller;
+        return () => controller.abort();
+    }, [interest]);
+    const approval = useActionApprovalContinuation({ scopeKey: JSON.stringify(lifetime?.scope ?? null),
+        serverId: lifetime?.scope.serverId ?? '', onExecuted: () => {} });
     const [state, setState] = React.useState<WidgetAreaLayoutState<C>>({ status: 'loading' });
     const displayed = React.useRef(state);
     displayed.current = state;
@@ -193,8 +206,22 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
             const result = await port.execute(operation, undefined, { surface: admitted.surface, context: admitted.context });
             const refused = failureCode(result);
             const reason = refused !== null ? failureReason(result, refused) : undefined;
+            const receipt = result.ok ? ActionApprovalRequestCreatedResultSchema.safeParse(result.result) : null;
+            if (receipt?.success && lifetime?.isCurrent()) {
+                const capturedBinding = binding.current;
+                const settled = resumeActionExecutionResult({ result, actionId: operation.actionId,
+                    actionInput: buildWidgetAreaActionInputV1(operation, admitted.surface), scope: lifetime.scope,
+                    signal: interest.controller.signal, onApprovalPending: approval.requestApproval,
+                }).then((terminal): WidgetAreaWriteSettlement => {
+                    if (!mounted.current || binding.current !== capturedBinding || !lifetime.isCurrent())
+                        return { kind: 'refused', errorCode: 'widget_area_scope_retired' };
+                    void read();
+                    return terminal.ok ? { kind: 'applied' } : { kind: 'refused', errorCode: terminal.errorCode ?? 'widget_area_unavailable' };
+                }).catch((): WidgetAreaWriteSettlement => ({ kind: 'refused', errorCode: 'widget_area_unavailable' }));
+                return { kind: 'approvalPending', artifactId: receipt.data.artifactId, settled };
+            }
             outcome = refused !== null ? { kind: 'refused', errorCode: refused, ...(reason ? { error: reason } : {}) }
-                : result.ok && 'kind' in result.result && result.result.kind === 'approval_request_created' ? { kind: 'approvalPending' }
+                : receipt?.success ? { kind: 'refused', errorCode: 'widget_area_scope_retired' }
                 : { kind: 'applied' };
         } catch {
             outcome = { kind: 'refused', errorCode: 'widget_area_unavailable' };
@@ -204,7 +231,7 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
         // control busy after the write has already committed.
         if (mounted.current) void read();
         return outcome;
-    }, [context, port, read]);
+    }, [approval.requestApproval, context, interest, lifetime, port, read]);
 
     return React.useMemo(() => ({ state, reload, write }), [state, reload, write]);
 }

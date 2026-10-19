@@ -36,7 +36,7 @@ import { DeclarativePluginSurface } from '@/components/plugins/surfaces/Declarat
 import { createDeclarativeWidgetAreaRender, DeclarativeWidgetArea } from '@/components/plugins/surfaces/declarativeWidgetArea';
 import { PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol';
 
-import { PluginPageWidgetArea } from './PluginPageWidgetArea';
+import { PluginPageWidgetArea, pluginPageWidgetContext } from './PluginPageWidgetArea';
 import { WidgetArea } from './WidgetArea';
 import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
 import { WidgetAreaLayoutBar } from './WidgetAreaLayoutBar';
@@ -51,6 +51,8 @@ import type { WidgetAreaPort } from './useWidgetAreaLayout';
 import { createLayoutArtifactHttpBoundary, createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 // Static area consumers reach Sync during collection; install the canonical transport
 // before that graph loads, then configure its disconnected delegate below.
@@ -1005,6 +1007,81 @@ describe('a plugin page widget area', () => {
         // A reason the presenter owns replaces the static line; it never shows next to it.
         if (reason !== 'widgetAdd.areaWriteFailed') expect(screen.getTextContent()).not.toContain('widgetAdd.areaWriteFailed');
         expect(widgetPlacements(await area.store.read())).toEqual([{ instance: pin, size: 'medium' }]);
+    });
+
+    it.each(['approve', 'reject', 'group-reject', 'execution-failed', 'context-replaced'] as const)('settles an area approval after %s without another edit or remount', async scenario => {
+        const grouping = scenario === 'group-reject';
+        const decision = scenario === 'reject' || grouping ? 'reject' : 'approve';
+        const actionId = grouping ? 'widgets.group.create' : 'widgets.item.frame.set';
+        const previous = storage.getState();
+        const approvalRows = createArtifactStoreBoundary({ ownerAccountId: () => scope.accountId, encryptionMode: 'plain' });
+        const fallback = createHomeHubArtifactHttpBoundary(scope.accountId);
+        const http = createLayoutArtifactHttpBoundary<WidgetAreaLayoutV1>(scope.accountId, {
+            artifactId: buildWidgetSurfaceArtifactIdV1(surface), kind: WIDGET_SURFACE_ARTIFACT_KIND_V1,
+            defaultLayout: { v: 1, surface, items: [] }, parseLayout: value => WidgetAreaLayoutV1Schema.parse(value),
+            buildHeader: buildWidgetSurfaceArtifactHeaderV1,
+        });
+        http.seed({ v: 1, surface, items: [{ kind: 'widget', instance: pin, size: 'medium' },
+            ...(grouping ? [{ kind: 'widget' as const, instance: follow, size: 'small' as const }] : [])] });
+        viewerRequest = async (url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {
+                actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                    [actionId]: { approvalRequiredSurfaces: ['ui'] },
+                } }),
+            } }, version: 2 });
+            const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
+            const id = path === '/v1/artifacts' && body && typeof body === 'object' ? Reflect.get(body, 'id') : path.split('/')[3];
+            if (id === http.artifactId) return http.request(url, init);
+            return approvalRows.handle(path, init) ?? fallback.request(url, init);
+        };
+        const restoreLoader = await installRealActionExecutorModuleLoader();
+        try {
+            const { sync } = await import('@/sync/syncEngine');
+            await sync.refreshAccountSettingsFromServer(2, scope);
+            const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+            const executor = createDefaultActionExecutor();
+            const hostPort = createPluginWidgetAreaHostPortV1({ scope, pluginId: 'acme.prs', pageId: 'overview', declarations,
+                isCurrent: () => true, execute: (id, input, context) => executor.execute(id, input, {
+                    ...context, surface: 'ui', authority: 'present_user', expectedAccountId: scope.accountId,
+                }) });
+            const hostApi = { widgetArea: (request: unknown, options?: { signal?: AbortSignal }) => hostPort.execute(request, options?.signal),
+                readResource: async () => { throw new Error('The page reads no Resource'); } } as unknown as PluginUiHostApi;
+            const areaPort: WidgetAreaPort = { execute: (operation, signal) => hostPort.execute({ area: 'pinned', context: { repository: 'happier' }, operation }, signal) };
+            const screen = await renderScreen(page(hostApi, 'happier', grouping ? <WidgetArea port={areaPort}
+                context={pluginPageWidgetContext({ repository: 'happier' })} geometry="grid" title="Pinned" surfaceName="PRs & Issues" testID="prs.pinned" /> : undefined));
+            await flushHookEffects({ cycles: 4 });
+            await runAction(screen, pin.id, grouping ? 'groupWith-follow' : 'frameStyle');
+            if (grouping) expect(screen.findByTestId('prs.pinned.meta')?.props.children).toBe('widgetAdd.areaApprovalPending');
+            else expect(screen.findByTestId('prs.pinned.widget.pin.frame.pending')).not.toBeNull();
+            expect(widgetPlacements(http.layout())[0]?.frameStyle).not.toBe('plain');
+            expect(approvalRows.list()).toHaveLength(1);
+            const receipt = approvalRows.list()[0]!;
+            expect(JSON.parse(approvalRows.readPlainBody(receipt.id)!)).toMatchObject({ actionId, status: 'open' });
+            if (scenario === 'execution-failed') http.setCallerAccess('view');
+            if (scenario === 'context-replaced') {
+                await screen.update(page(hostApi, 'website'));
+                await flushHookEffects({ cycles: 4 });
+                expect(screen.findByTestId('prs.pinned.widget.pin.frame.pending')).toBeNull();
+                expect(screen.findByTestId('prs.pinned.widget.pin.frame.stale')).toBeNull();
+            }
+            expect(await decideApprovalAsInbox(scope.serverId, receipt.id, decision)).toMatchObject({ ok: true });
+            if (grouping) {
+                await vi.waitFor(() => expect(screen.findByTestId('prs.pinned.meta')?.props.children).toBe('widgetAdd.areaWriteFailed'));
+                expect(http.layout().items.every(item => item.kind === 'widget')).toBe(true);
+            } else if (scenario === 'approve' || scenario === 'context-replaced') {
+                await vi.waitFor(() => expect(screen.findByTestId('prs.pinned.widget.pin.frame.pending')).toBeNull());
+                expect(widgetPlacements(http.layout())[0]?.frameStyle).toBe('plain');
+                expect(screen.findByTestId('prs.pinned.widget.pin.frame.stale')).toBeNull();
+                expect(menuOf(screen, pin.id).props.actions.find((entry: { id: string }) => entry.id === 'frameStyle')?.title).toBe('widgetFrame.showFrame');
+            } else {
+                await vi.waitFor(() => expect(screen.findByTestId('prs.pinned.widget.pin.frame.pending')).toBeNull());
+                expect(widgetPlacements(http.layout())[0]?.frameStyle).not.toBe('plain');
+                expect(screen.findByTestId('prs.pinned.widget.pin.frame.stale')).not.toBeNull();
+                expect(screen.getTextContent()).toContain(scenario === 'execution-failed' ? 'widgetAdd.refusals.editDenied' : 'widgetAdd.areaWriteFailed');
+            }
+            expect(screen.findByTestId('prs.pinned.widget.pin')).not.toBeNull();
+        } finally { standardCleanup(); restoreLoader(); storage.setState(previous, true); }
     });
 
     it('says on the card that its remove waits for approval, as an add says Adding… (FA19 P8)', async () => {
