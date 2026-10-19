@@ -4189,12 +4189,15 @@ const REVIEW_COMMENT_ACTION_VOICE_EXAMPLES = {
 
 function createReviewCommentActionSpec(actionId: ReviewCommentActionIdV1): PreNormalizedActionSpec {
   const isRead = actionId === 'reviews.comments.list' || actionId === 'reviews.comments.get';
+  const isReversibleMutation = actionId === 'reviews.comments.transition' || actionId === 'reviews.comments.bulkTransition'
+    || actionId === 'reviews.comments.edit' || actionId === 'reviews.comments.reply';
   const isPublicCommentAction = actionId !== 'reviews.comments.claimPublicationDispatch';
   return {
     id: actionId, approval: { result: 'none' },
     title: REVIEW_COMMENT_ACTION_TITLES[actionId],
     description: 'Operate on durable review comments through the shared review-comment substrate.',
-    safety: isRead ? 'safe' : 'danger',
+    safety: isRead || isReversibleMutation ? 'safe' : 'danger',
+    ...(isReversibleMutation ? { approvalPolicy: { agentDefault: 'authority' as const } } : {}),
     placements: [],
     bindings: {
       rpcMethod: REVIEW_COMMENT_ACTION_RPC_METHODS[actionId],

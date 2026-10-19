@@ -34,6 +34,24 @@ async function loadRoutingResolver() {
 }
 
 describe('isApprovalRequiredByActionsSettings', () => {
+  it.each(['reviews.comments.transition', 'reviews.comments.bulkTransition', 'reviews.comments.edit', 'reviews.comments.reply'] as const)(
+    'admits reversible %s directly on UI while honoring Settings confirmation', actionId => {
+      const spec = getActionSpec(actionId);
+      const context = { surface: 'ui', authority: 'present_user' } as const;
+      for (const settings of [undefined, EMPTY_SETTINGS]) {
+        expect(resolveActionApprovalRouting({ actionId, spec, context, settings }).required).toBe(false);
+        expect(resolveActionApprovalRouting({ actionId, spec, settings,
+          context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(true);
+      }
+      const ask = normalizeActionsSettingsV1({ v: 1,
+        actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } },
+      });
+      expect(resolveActionApprovalRouting({ actionId, spec, context, settings: ask }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId: 'reviews.comments.redact',
+        spec: getActionSpec('reviews.comments.redact'), context }).required).toBe(true);
+    },
+  );
+
   it.each([
     'projects.service.placement.set', 'projects.worker.preferences.set', 'projects.worker.preferences.reset', 'machines.worker.policy.set',
     'session.checkpoint', 'session.connected_services_auth.set', 'prompt_doc.create',
