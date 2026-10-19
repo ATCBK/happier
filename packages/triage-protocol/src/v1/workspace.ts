@@ -22,6 +22,7 @@ import {
 } from './identity.js';
 import {
     TriageConfiguredSourceConnectedAccountInstanceV1Schema,
+    TriageConfiguredSourceCredentialInstanceV1Schema,
     TriageConfiguredSourceInstanceV1Schema,
     type TriageConfiguredSourceInstanceV1,
 } from './instances.js';
@@ -134,6 +135,11 @@ export const TriagePrepareReviewWorkspaceConnectedAccountInputV1Schema = defineP
     instance: TriageConfiguredSourceConnectedAccountInstanceV1Schema,
     ...triagePrepareReviewWorkspaceInputFieldsV1,
 }, { policy: 'closed' });
+export const TriagePrepareReviewWorkspaceCredentialInputV1Schema = defineProtocolObject({
+    v: defineProtocolLiteral(1),
+    instance: TriageConfiguredSourceCredentialInstanceV1Schema,
+    ...triagePrepareReviewWorkspaceInputFieldsV1,
+}, { policy: 'closed' });
 export type TriagePrepareReviewWorkspaceInputV1 = ReturnType<
     typeof TriagePrepareReviewWorkspaceInputV1Schema.parse
 >;
@@ -242,6 +248,11 @@ export const TriageVerifyReviewWorkspaceInputV1Schema = defineProtocolObject({
 export const TriageVerifyReviewWorkspaceConnectedAccountInputV1Schema = defineProtocolObject({
     v: defineProtocolLiteral(1),
     instance: TriageConfiguredSourceConnectedAccountInstanceV1Schema,
+    ...triageVerifyReviewWorkspaceInputFieldsV1,
+}, { policy: 'closed' });
+export const TriageVerifyReviewWorkspaceCredentialInputV1Schema = defineProtocolObject({
+    v: defineProtocolLiteral(1),
+    instance: TriageConfiguredSourceCredentialInstanceV1Schema,
     ...triageVerifyReviewWorkspaceInputFieldsV1,
 }, { policy: 'closed' });
 export type TriageVerifyReviewWorkspaceInputV1 = ReturnType<

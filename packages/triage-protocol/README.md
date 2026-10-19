@@ -19,7 +19,8 @@ The package exposes only three entry points:
   `TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1`, which lists the instances the
   calling contribution already owns. Three of the administration arms name a
   `sourceInstanceId` the caller must already hold, so a Settings surface needs
-  the read Action to reach them. Administration remains the only writer.
+  the read Action to reach them. Administration remains the only configured-source
+  lifecycle writer.
 - `@happier-dev/triage-protocol/testing/v1` exports fixtures, conformance
   assertions, and the published byte-gate derivation
   (`buildMaximalSchemaValue`, `deriveMaximumEncodedBytes`,
@@ -41,9 +42,12 @@ import {
 ```
 
 A source Settings surface passes either ref to `hostApi.executeAction(...)`
-unchanged. Neither request carries a source, plugin, or contribution identity:
-the host stamps the caller, and the target resolves its admitted V1
-contribution, so a caller reads and administers only its own instances.
+unchanged. Both accept an optional exact admitted `source` address; it selects
+the contribution and never supplies caller provenance. The host stamps the
+caller independently. Plugin callers read and administer only their own source's
+instances. Host agent/MCP/CLI callers can read all admitted sources or filter by
+that address; create requires it, while lifecycle changes resolve the source
+from the stored instance and refuse a conflicting address.
 
 The conformance helper verifies the declared source contribution against the
 public V1 contract. Installation, generation currentness, provider behavior,
@@ -52,9 +56,15 @@ and host admission remain owned by their existing host boundaries.
 Account-only sources use `TriageSourceConnectedAccountInputsV1` from `/v1`
 for their Action input schemas. These canonical specializations preserve the
 role fields and require a configured account in every instance-bearing arm.
-Native-capable sources retain the generic role input and declare both account
-and native-service selection paths. Conformance accepts only the published
-generic schema or its account-only specialization.
+Native-capable sources use `TriageSourceCredentialInputsV1` and declare both
+account and native-service selection paths. This specialization requires a real
+credential selection in every input arm. Conformance accepts only the published
+generic schema or its canonical account-only and credential specializations.
+
+In 0.3 development source, a source reading the current authenticated Account's
+data uses the generic input with the explicit Account-data binding. It needs no
+Connected Account or native login. The source remains responsible for the
+current Account's admitted data access on every invocation.
 
 ## Optional pull-request status (development preview)
 
@@ -69,6 +79,30 @@ cannot conclude entry absence or replace `get`/`scan` observations.
 The Session tab requests it only when a PR is expanded, through Triage's own
 safe Action and the source's existing admitted readers. Sources that leave
 the optional role unbound continue to provide their existing entry details.
+
+## Optional task writes (0.3 development source)
+
+Sources may mark a kind as a task and bind optional `create`, `edit` and
+`transition` roles to their ordinary named Actions. The same `/v1` entry exports
+`TriageTaskCreateFieldsV1Schema`, `TriageTaskFieldsV1Schema` and
+`TriageTaskWriteResultV1Schema`, the role inputs, capability declarations and
+`triageTaskStatusCategoryV1`. Account-only specializations are included in
+`TriageSourceConnectedAccountInputsV1`. Sources keep provider authorization,
+native transition semantics and at-most-once settlement; an uncertain result
+does not authorize a replay.
+
+The entry snapshot carries optional live parent, children summary and blocked-by
+facts. External sources do not persist a Happier copy of those relationships.
+The existing state projection supplies mixed-view categories through the one
+mapper; linked-agent activity remains a separate derived fact. See
+[source ownership](../../docs/triage-sources.md#task-sources-03-development-source).
+
+A source whose task record owns Session relationships may also bind optional
+`linkSession` and `readSessionLinks` roles. The write uses the ordinary named
+source Action and its remote-write approval; the safe read returns relationships
+within the current Account and Home. Sources that omit these roles keep the
+existing external-entry link path. The public role inputs and results are
+exported from `/v1` beside the task write contracts.
 
 ## Evolving the ABI
 

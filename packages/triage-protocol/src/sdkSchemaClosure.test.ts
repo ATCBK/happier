@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -95,6 +95,24 @@ export interface ProtocolComposableSchema<TInput = ProtocolJsonValue, TOutput = 
     optional(): ProtocolComposableSchema<TInput | undefined, TOutput | undefined>;
     nullable(): ProtocolComposableSchema<TInput | null, TOutput | null>;
 }
+// These are the external SDK declarations Triage now re-exports. No parser or
+// identity grammar is supplied by this isolated declaration-boundary fixture.
+export type TriageEntryRefV1 = {
+    source: { pluginId: string; localId: string };
+    kindId: string;
+    collisionScope: string;
+    entryId: string;
+};
+export const TriageEntryRefV1Schema: ProtocolComposableSchema<TriageEntryRefV1>;
+export const TriageEntryRefV1JsonSchema: PluginJsonSchema;
+export const TriageIdentifierV1ProtocolSchema: ProtocolComposableSchema<string>;
+export const TriageCollisionScopeV1ProtocolSchema: ProtocolComposableSchema<string>;
+export const MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1: number;
+export const MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1: number;
+export const TRIAGE_SINGLE_LINE_STRING_PATTERN_V1: string;
+export const TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1: string;
+export function defineTriageSingleLineStringV1(maxUtf8Bytes: number): ProtocolComposableSchema<string>;
+export function defineTriageCompositeIdentifierStringV1(maxUtf8Bytes: number): ProtocolComposableSchema<string>;
 `, 'utf8'),
         writeFile(join(sdkRoot, 'contributions.d.ts'), `
 export type ContributionPointAuthorDefinition<TProtocols extends readonly unknown[]> = Readonly<{
@@ -201,9 +219,22 @@ import type { QualifiedConnectedAccountRef } from '@happier-dev/plugin-sdk/conne
 import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifest';
 import type {
     TriageEntryRefV1,
+    TriageEntryStateV1,
     TriageSourceAccountBindingV1,
     TriageSourceObservationV1,
+    TriageTaskWriteResultV1,
 } from '@happier-dev/triage-protocol/v1';
+import {
+    TriageTaskCreateFieldsV1Schema,
+    TriageTaskFieldsV1Schema,
+    TriageTaskWriteResultV1Schema,
+    triageTaskStatusCategoryV1,
+} from '@happier-dev/triage-protocol/v1';
+import {
+    TriageTaskCreateFieldsV1Schema as RootCreateFields,
+    TriageTaskFieldsV1Schema as RootFields,
+    TriageTaskWriteResultV1Schema as RootWriteResult,
+} from '@happier-dev/triage-protocol';
 
 type RootContributionPoint = typeof import('@happier-dev/triage-protocol')
     .TriageSourcesContributionPointV1;
@@ -224,6 +255,14 @@ type V1ConformanceResult = import('@happier-dev/triage-protocol/testing/v1')
 
 declare const entryRef: TriageEntryRefV1;
 declare const observation: TriageSourceObservationV1;
+const taskState: TriageEntryStateV1 = { presentation: 'active', stage: 'started' };
+export const taskCategory = triageTaskStatusCategoryV1(taskState);
+export const taskCreateFields = TriageTaskCreateFieldsV1Schema.parse({ title: 'Task' });
+export const taskEditFields = TriageTaskFieldsV1Schema.parse({ body: 'Task details' });
+export const taskResult: TriageTaskWriteResultV1 = TriageTaskWriteResultV1Schema.parse({ kind: 'uncertain' });
+export const rootCreateFields: typeof TriageTaskCreateFieldsV1Schema = RootCreateFields;
+export const rootFields: typeof TriageTaskFieldsV1Schema = RootFields;
+export const rootWriteResult: typeof TriageTaskWriteResultV1Schema = RootWriteResult;
 
 // The emitted account member must BE the canonical Connected Account ref, not a
 // look-alike. Assignability both ways is what a restated local shape can lose:
@@ -238,6 +277,9 @@ declare const nativeService: Extract<TriageSourceAccountBindingV1, { source: 'na
 declare const canonicalService: PluginContributionIdentity;
 export const emittedNativeServiceIsCanonical: PluginContributionIdentity = nativeService;
 export const canonicalIsEmittedNativeService: Extract<TriageSourceAccountBindingV1, { source: 'native' }>['service'] = canonicalService;
+export const accountDataBinding: Extract<TriageSourceAccountBindingV1, { source: 'accountData' }> = {
+    purpose: 'task-data', source: 'accountData',
+};
 
 export type TriageProtocolExternalConsumerProof = readonly [
     typeof entryRef.source.pluginId,
@@ -255,35 +297,11 @@ export type TriageProtocolExternalConsumerProof = readonly [
     ]);
 }
 
-/**
- * Modification times under a directory, restricted to the extensions that can
- * change what the build emits.
- */
-async function modificationTimes(directory: string): Promise<readonly number[]> {
-    const entries = await readdir(directory, { recursive: true, withFileTypes: true });
-    return Promise.all(entries
-        .filter((entry) => entry.isFile() && /\.(?:ts|js|json)$/u.test(entry.name))
-        .filter((entry) => !/\.(?:test|spec)\.ts$/u.test(entry.name))
-        .map(async (entry) => (await stat(join(entry.parentPath, entry.name))).mtimeMs));
-}
-
 describe('Triage SDK schema closure', () => {
-    it('reads declarations built from current source, not a stale dist', async () => {
-        // This gate must read the built artifact: it decides what an installed
-        // consumer sees. That makes a stale `dist` a silent pass, so freshness
-        // is asserted rather than assumed. `vitest.globalSetup.mjs` builds the
-        // package before any case runs; this case is what falsifies its absence.
-        const [sourceTimes, emitTimes] = await Promise.all([
-            modificationTimes(join(packageRoot, 'src')),
-            modificationTimes(join(packageRoot, 'dist')),
-        ]);
-        expect(emitTimes.length).toBeGreaterThan(0);
-        // The oldest emitted byte, not the newest: a partial rebuild that
-        // refreshed one file would otherwise hide every file it skipped.
-        expect(Math.min(...emitTimes)).toBeGreaterThanOrEqual(Math.max(...sourceTimes));
-    });
-
     it('keeps built declarations consumable with only its declared public dependencies', async () => {
+        // Global setup uses the canonical incremental builder. Unchanged emitted
+        // bytes can legitimately retain old timestamps; the isolated consumer
+        // above instead requires the current public Task exports and state shape.
         const isolationRoot = await mkdtemp(join(tmpdir(), 'happier-triage-protocol-declaration-closure-'));
         try {
             const consumerRoot = join(isolationRoot, 'consumer');

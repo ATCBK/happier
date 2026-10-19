@@ -14,6 +14,7 @@ import {
 } from './identity.js';
 import {
     TriageConfiguredSourceConnectedAccountInstanceV1Schema,
+    TriageConfiguredSourceCredentialInstanceV1Schema,
     TriageConfiguredSourceInstanceV1Schema,
 } from './instances.js';
 import {
@@ -62,6 +63,7 @@ export const TriageScanInputV1Schema = defineTriageScanInputV1(TriageConfiguredS
 export const TriageScanConnectedAccountInputV1Schema = defineTriageScanInputV1(
     TriageConfiguredSourceConnectedAccountInstanceV1Schema,
 );
+export const TriageScanCredentialInputV1Schema = defineTriageScanInputV1(TriageConfiguredSourceCredentialInstanceV1Schema);
 export type TriageScanInputV1 = ReturnType<typeof TriageScanInputV1Schema.parse>;
 
 /**
@@ -119,6 +121,11 @@ export const TriageGetInputV1Schema = defineProtocolObject({
 export const TriageGetConnectedAccountInputV1Schema = defineProtocolObject({
     v: defineProtocolLiteral(1),
     instance: TriageConfiguredSourceConnectedAccountInstanceV1Schema,
+    ...triageGetInputFieldsV1,
+}, { policy: 'closed' });
+export const TriageGetCredentialInputV1Schema = defineProtocolObject({
+    v: defineProtocolLiteral(1),
+    instance: TriageConfiguredSourceCredentialInstanceV1Schema,
     ...triageGetInputFieldsV1,
 }, { policy: 'closed' });
 export type TriageGetInputV1 = ReturnType<typeof TriageGetInputV1Schema.parse>;

@@ -3,7 +3,12 @@ import type { ProtocolJsonValue } from '@happier-dev/plugin-sdk/protocol';
 import { describe, expect, it } from 'vitest';
 
 import { TriageSourcesContributionProtocolV1 } from '../../v1/contribution.js';
-import { TriageSourceConnectedAccountInputsV1 } from '../../v1/index.js';
+import {
+    TriageSourceConnectedAccountInputsV1,
+    TriageListInstancesResultV1Schema,
+    TriageScanInputV1Schema,
+    TriageGetInputV1Schema,
+} from '../../v1/index.js';
 import {
     assertTriageSourceContributionV1,
     checkTriageSourceContributionV1,
@@ -28,6 +33,7 @@ type MutableSourceManifest = {
             surfaces: string[];
             inputSchema?: unknown;
             resultSchema?: unknown;
+            confirmation?: { title: string; body: string };
         }>;
         targetedPluginContributions: Array<{
             operations: Record<string, string>;
@@ -64,7 +70,7 @@ function declareAction(
     };
 }
 
-function createExternalSourceManifest() {
+function createExternalSourceManifest(listInstancesResult: ProtocolJsonValue = fixture.listInstancesResult) {
     return definePlugin({
         id: 'example.forge-source',
         version: '1.0.0',
@@ -72,7 +78,7 @@ function createExternalSourceManifest() {
             [ACTION_IDS.listInstances]: declareAction(
                 'listInstances',
                 'Discover forge scopes',
-                fixture.listInstancesResult,
+                listInstancesResult,
             ),
             [ACTION_IDS.scan]: declareAction('scan', 'Walk forge lanes', fixture.scanResult),
             [ACTION_IDS.get]: declareAction('get', 'Read one forge item', fixture.getResult),
@@ -118,6 +124,47 @@ describe('Triage sources V1 contribution conformance', () => {
         expect(() => assertTriageSourceContributionV1(createExternalSourceManifest())).not.toThrow();
     });
 
+    it('admits a public Account-data source and its discovery-to-read values through the declared role schemas', () => {
+        const candidate = fixture.listInstancesResult.candidates[0]!;
+        const listInstancesResult = TriageListInstancesResultV1Schema.parse({
+            ...fixture.listInstancesResult,
+            candidates: [{ ...candidate, binding: { purpose: fixture.descriptor.purpose, source: 'accountData' } }],
+        });
+        const manifest = createExternalSourceManifest(listInstancesResult);
+        expect(() => assertTriageSourceContributionV1(manifest)).not.toThrow();
+        const discovered = listInstancesResult.candidates[0]!;
+        const configured = { ...fixture.configuredInstance, binding: discovered.binding };
+        const scan = TriageScanInputV1Schema.parse({ ...fixture.scanInput, instance: configured });
+        const get = TriageGetInputV1Schema.parse({ ...fixture.getInput, instance: scan.instance });
+        expect(get.instance.binding).toEqual({ purpose: fixture.descriptor.purpose, source: 'accountData' });
+    });
+
+    it('admits optional source-owned Session relationship roles with their declared write approval', () => {
+        expect(sourceOperations).toHaveProperty('linkSession');
+        expect(sourceOperations).toHaveProperty('readSessionLinks');
+        const manifest = mutableManifest();
+        const contribution = manifest.contributes.targetedPluginContributions[0]!;
+        for (const role of ['linkSession', 'readSessionLinks'] as const) {
+            const declaration = sourceOperations[role].declaration;
+            const id = `author/${role.toLowerCase()}`;
+            manifest.contributes.actions.push({
+                ...manifest.contributes.actions[0]!,
+                id, dangerLevel: declaration.dangerLevel, surfaces: [...declaration.surfaces],
+                inputSchema: declaration.input.kind === 'protocolDefined' ? declaration.input.schema.jsonSchema : undefined,
+                resultSchema: declaration.resultSchema.jsonSchema,
+                ...(declaration.dangerLevel === 'safe' ? {} : {
+                    confirmation: { title: 'Change task link', body: 'Change the task Session relationship.' },
+                }),
+            });
+            contribution.operations[role] = id;
+        }
+        const result = checkTriageSourceContributionV1(manifest);
+        expect(result.ok, result.ok ? undefined : result.errors.join('\n')).toBe(true);
+        const action = manifest.contributes.actions.find((item) => item.id === 'author/linksession')!;
+        action.dangerLevel = 'safe';
+        expect(checkTriageSourceContributionV1(manifest).ok).toBe(false);
+    });
+
     it('accepts the canonical account-only specialization without widening a source to native credentials', () => {
         const manifest = mutableManifest();
         const contribution = manifest.contributes.targetedPluginContributions[0]!;
@@ -137,6 +184,9 @@ describe('Triage sources V1 contribution conformance', () => {
                 contribution.operations[role] = id;
             }
             action.inputSchema = TriageSourceConnectedAccountInputsV1[role].jsonSchema;
+            if (declaration.dangerLevel !== 'safe') {
+                action.confirmation = { title: 'Confirm source operation', body: 'This changes the configured source.' };
+            }
         }
 
         const result = checkTriageSourceContributionV1(manifest);
