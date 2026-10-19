@@ -1,13 +1,18 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, cloneElement, type ReactElement } from 'react';
 import { afterEach, expect, it } from 'vitest';
 import { createPluginUiTestkit, createSurfaceContextFixture, type PluginUiTestkit,
   type PluginUiSemanticSurfaceMount } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiHostApi, RenderSurface } from '@happier-dev/plugin-sdk/ui';
 import type { PluginActionResultById } from '@happier-dev/plugin-sdk/actions';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
+import type { PluginUiDataClient } from '@happier-dev/plugin-ui/data';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
-import { TriageDetailSurfaceInputV1Schema, type TriageDetailSurfaceInputV1 } from '@happier-dev/triage-protocol/v1';
+import { TriageConfiguredSourceInstanceV1Schema, TriageDetailSurfaceInputV1Schema, type TriageDetailSurfaceInputV1 } from '@happier-dev/triage-protocol/v1';
+import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollections.test-support.js';
+import { createTestkitAccountKv } from '../settings/testkit/accountKv.test-support.js';
+import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
+import { CORPUS_SOURCE_INSTANCE_LIFECYCLE } from '../corpus/collections/ids.js';
 import { INTERNAL_TASK_DRAFT_V1, INTERNAL_TASK_SOURCE_V1, internalTaskLocalRefV1 } from './source.js';
 import { renderSurface as renderDetail } from './detail.js';
 import { renderSurface as renderSettings } from './settings.js';
@@ -35,7 +40,32 @@ function taskList(taskId = 'task-a', notes = 'Keep the reviewed implementation n
     undoneOrder: [taskId], completedOrder: [] };
 }
 
-async function mountSurface(surface: RenderSurface, executeAction: ExecuteAction, launchInput?: TriageDetailSurfaceInputV1) {
+function accountData(options: Readonly<{ waitForSources?: Promise<void>; failSources?: boolean }> = {}) {
+  const corpus = createTestkitCorpusCollections();
+  const byId = new Map([
+    ['source-instances', { ...corpus.collections.sourceInstances, query: async (...args: Parameters<typeof corpus.collections.sourceInstances.query>) => {
+      await options.waitForSources;
+      if (options.failSources) throw new Error('Account unavailable');
+      return corpus.collections.sourceInstances.query(...args);
+    } }],
+    ['session-links', corpus.collections.sessionLinks],
+    ['user-marks', corpus.collections.userMarks],
+  ]);
+  // Account Collection/KV transport is the boundary; binding, decoding and lifecycle selection stay real.
+  const client: PluginUiDataClient = {
+    collection(definition) {
+      const collection = byId.get(definition.id);
+      if (!collection) throw new Error(`Undeclared Collection: ${definition.id}`);
+      return collection as ReturnType<PluginUiDataClient['collection']>;
+    },
+    accountKv: createTestkitAccountKv().kv,
+    async openCollectionQuery() { throw new Error('No UI query is declared here.'); },
+  };
+  return { client, corpus };
+}
+
+async function mountSurface(surface: RenderSurface, executeAction: ExecuteAction, launchInput?: TriageDetailSurfaceInputV1,
+  dataClient: PluginUiDataClient | null = accountData().client) {
   const adapter = createPluginUiRnwSemanticSurfaceAdapter();
   let mount: PluginUiSemanticSurfaceMount | undefined;
   let fixture!: PluginUiTestkit;
@@ -44,7 +74,13 @@ async function mountSurface(surface: RenderSurface, executeAction: ExecuteAction
       identity: { instanceId: 'internal-tasks', mountNonce: `internal-${mounted.length}` },
       authorPlugin: { id: 'happier.triage', version: '0.0.0' }, surface,
       surfaceContext: createSurfaceContextFixture(), launchInput,
-      adapter: { mount: async input => { mount = await adapter.mount(input); return mount; } },
+      adapter: { mount: async input => {
+        mount = await adapter.mount({ ...input, surface: context => cloneElement(
+          input.surface(context) as ReactElement<{ dataClient?: PluginUiDataClient }>,
+          dataClient === null ? {} : { dataClient },
+        ) });
+        return mount;
+      } },
       // Only the real host Action transport is substituted; the renderer and UI primitives remain real.
       handlers: { executeAction },
     });
@@ -56,8 +92,76 @@ async function mountSurface(surface: RenderSurface, executeAction: ExecuteAction
   }, updateHostApi: async (hostApi: PluginUiHostApi) => {
     if (!mount) throw new Error('Expected the real semantic mount');
     await mount.update({ ...fixture.context, hostApi });
+  }, updateDataClient: async (next: PluginUiDataClient) => {
+    if (!mount) throw new Error('Expected the real semantic mount');
+    dataClient = next;
+    await mount.update(fixture.context);
   } };
 }
+
+it('does not offer setup until the configured-source read settles, or when that read fails', async () => {
+  let finishRead!: () => void;
+  const pending = accountData({ waitForSources: new Promise<void>(resolve => { finishRead = resolve; }) });
+  const failed = accountData({ failSources: true });
+  const calls: string[] = [];
+  const execute: ExecuteAction = ({ action }) => { calls.push(action); throw new Error('No write expected'); };
+  const first = await mountSurface(renderSettings, execute, undefined, pending.client);
+  await expect(first.fixture.press(await first.fixture.getByRole('button', { name: 'Use Happier tasks' }))).rejects.toThrow();
+  await act(async () => { finishRead(); });
+  const second = await mountSurface(renderSettings, execute, undefined, failed.client);
+  await expect(second.fixture.press(await second.fixture.getByRole('button', { name: 'Use Happier tasks' }))).rejects.toThrow();
+  expect(calls).toEqual([]);
+});
+
+function seedPersonalSource(corpus: ReturnType<typeof accountData>['corpus'], kind: 'active' | 'retired' | 'unrelated' = 'active') {
+  const configured = TriageConfiguredSourceInstanceV1Schema.parse({
+    v: 1, binding: INTERNAL_TASK_DRAFT_V1.binding, localInstanceKey: INTERNAL_TASK_DRAFT_V1.localInstanceKey,
+    configuration: INTERNAL_TASK_DRAFT_V1.configuration, locator: INTERNAL_TASK_DRAFT_V1.locator,
+    instance: { source: kind === 'unrelated' ? { pluginId: 'other.source', localId: 'internal' } : INTERNAL_TASK_SOURCE_V1,
+      sourceInstanceId: '11111111-1111-4111-8111-111111111111' },
+  });
+  corpus.control.sourceInstances.seed(toCorpusStoredValue({
+    instanceTag: `a${'0'.repeat(42)}`, sourceQualifiedId: `${configured.instance.source.pluginId}/${configured.instance.source.localId}`,
+    lifecycle: kind === 'retired' ? CORPUS_SOURCE_INSTANCE_LIFECYCLE.retired : CORPUS_SOURCE_INSTANCE_LIFECYCLE.active,
+    configuredAtMs: 1, configured,
+  }));
+}
+
+it.each(['active', 'retired', 'unrelated'] as const)('reads %s personal-source configuration before offering setup, without writing', async kind => {
+  const { client, corpus } = accountData();
+  seedPersonalSource(corpus, kind);
+  const calls: string[] = [];
+  const { fixture } = await mountSurface(renderSettings, ({ action }) => { calls.push(action); throw new Error('No write expected'); }, undefined, client);
+  if (kind === 'active') {
+    await expect(fixture.getByRole('button', { name: 'Ready' })).resolves.toBeDefined();
+    await expect(fixture.press(await fixture.getByRole('button', { name: 'Ready' }))).rejects.toThrow();
+  } else {
+    await expect(fixture.getByRole('button', { name: 'Use Happier tasks' })).resolves.toBeDefined();
+    await expect(fixture.queryByRole('button', { name: 'Ready' })).resolves.toBeUndefined();
+  }
+  expect(calls).toEqual([]);
+});
+
+it('retires personal-source state on Account replacement and ignores the retired read completion', async () => {
+  const original = accountData();
+  seedPersonalSource(original.corpus);
+  const calls: string[] = [];
+  const surface = await mountSurface(renderSettings, ({ action }) => { calls.push(action); throw new Error('No write expected'); }, undefined, original.client);
+  await expect(surface.fixture.getByRole('button', { name: 'Ready' })).resolves.toBeDefined();
+
+  let finishRead!: () => void;
+  const pending = accountData({ waitForSources: new Promise<void>(resolve => { finishRead = resolve; }) });
+  seedPersonalSource(pending.corpus);
+  await act(async () => { await surface.updateDataClient(pending.client); });
+  await expect(surface.fixture.queryByRole('button', { name: 'Ready' })).resolves.toBeUndefined();
+  await expect(surface.fixture.press(await surface.fixture.getByRole('button', { name: 'Use Happier tasks' }))).rejects.toThrow();
+
+  await act(async () => { await surface.updateDataClient(accountData().client); });
+  await act(async () => { finishRead(); });
+  await expect(surface.fixture.queryByRole('button', { name: 'Ready' })).resolves.toBeUndefined();
+  await expect(surface.fixture.getByRole('button', { name: 'Use Happier tasks' })).resolves.toBeDefined();
+  expect(calls).toEqual([]);
+});
 
 it('configures only on user intent, once while pending and after successful setup', async () => {
   const calls: unknown[] = [];
