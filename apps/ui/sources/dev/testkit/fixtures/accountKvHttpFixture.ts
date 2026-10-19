@@ -1,15 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { KvItem } from '@/sync/api/account/apiKv';
 
 /** External opaque KV HTTP facts; Account codecs, CAS and tab reconciliation stay real. */
 export function createAccountKvHttpFixture() {
     const rows = new Map<string, KvItem>();
     const requests: Array<{ method: string | undefined; path: string }> = [];
-    const mutationsSchema = z.object({ mutations: z.array(z.object({
-        key: z.string(), value: z.string().nullable(), version: z.number().int(),
-    }).strict()) }).strict();
-    const bulkSchema = z.object({ keys: z.array(z.string()) }).strict();
+    const mutationsSchema = z.strictObject({ mutations: z.array(z.strictObject({
+        key: z.string(), value: z.nullable(z.string()), version: z.number().check(z.int()),
+    })) });
+    const bulkSchema = z.strictObject({ keys: z.array(z.string()) });
     return {
         reset: () => { rows.clear(); requests.length = 0; },
         read: (key: string) => rows.get(key),
