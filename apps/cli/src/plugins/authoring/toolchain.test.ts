@@ -7,7 +7,7 @@ import { createPluginManifestV2Fixture } from '../testkit/manifestV2Fixture';
 import { ensureManagedJavaScriptRuntimeCommand } from '@/packagedRuntime/js/managedJavaScriptRuntime';
 import { PluginAuthorBundlerUnavailableError } from './bundleDaemonRuntime';
 import { assertPluginAuthorPrepublicationRuntimeDeclarations } from './hostSdkResolution';
-import { classifyPluginAuthorDaemonBuild, cleanupPluginAuthorGeneratedArtifacts, normalizePluginSdkRegistryOrigin, resolvePluginAuthorToolchainSpawnInvocation, resolveNativeTypeScriptBin, resolvePluginUiBuildBin, runPluginAuthorToolchain, type PluginAuthorToolchainDeps } from './toolchain';
+import { classifyPluginAuthorDaemonBuild, cleanupPluginAuthorGeneratedArtifacts, normalizePluginSdkRegistryOrigin, resolvePluginAuthorToolchainSpawnInvocation, resolveNativeTypeScriptBin, resolvePluginUiBuildBin, runManagedPluginPnpm, runPluginAuthorToolchain, type PluginAuthorToolchainDeps } from './toolchain';
 import { cleanupPluginDaemonOutputManifest, PLUGIN_DAEMON_OUTPUT_MANIFEST_RELATIVE_PATH, writePluginDaemonOutputManifest } from './daemonOutputManifest';
 
 function successfulSpawn(_input?: Parameters<PluginAuthorToolchainDeps['spawn']>[0]) {
@@ -92,6 +92,87 @@ describe('assertPluginAuthorPrepublicationRuntimeDeclarations', () => {
 });
 
 describe('runPluginAuthorToolchain', () => {
+  it.each(['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const)(
+    'resolves only satisfying Happier prepublication specifiers in %s',
+    async (section) => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'happier-author-prepublication-ranges-'));
+      try {
+        await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+          name: 'external-happier-plugin', version: '1.0.0',
+          [section]: {
+            '@happier-dev/plugin-sdk': '0.0.0',
+            '@happier-dev/triage-protocol': ' >=0.0.0 <1.0.0 ',
+            '@happier-dev/triage-sources': '>=1.0.0 <2.0.0',
+            'third-party-protocol': '0.0.0',
+          },
+        }), 'utf8');
+        let installed = false;
+        const result = await runManagedPluginPnpm({ projectRoot, args: ['install', '--ignore-scripts'] }, {
+          ensureManagedPnpmCommand: async () => '/happier/tools/pnpm/current/bin/pnpm',
+          managedPnpmBinPath: () => '/happier/tools/pnpm/current/bin/pnpm',
+          buildManagedPnpmEnvironment: (env = {}) => env,
+          // Process execution is the system boundary; package selection,
+          // publication, materialization and file URLs are the real resolver.
+          spawn: async () => {
+            installed = true;
+            const config = await readFile(join(projectRoot, 'pnpm-workspace.yaml'), 'utf8');
+            const overrides = [...config.matchAll(/^  ("[^"]+"): ("[^"]+")$/gmu)]
+              .map((match) => [JSON.parse(match[1]!) as string, JSON.parse(match[2]!) as string] as const);
+            expect(overrides.map(([name]) => name)).toEqual([
+              '@happier-dev/plugin-sdk', '@happier-dev/triage-protocol',
+            ]);
+            for (const [name, url] of overrides) {
+              const manifest: unknown = JSON.parse(await readFile(join(fileURLToPath(url), 'package.json'), 'utf8'));
+              expect(manifest).toMatchObject({ name, version: '0.0.0' });
+            }
+            return successfulSpawn();
+          },
+          processEnv: {},
+        });
+        expect(result).toMatchObject({ ok: true });
+        expect(installed).toBe(true);
+        await expect(lstat(join(projectRoot, 'pnpm-workspace.yaml'))).rejects.toMatchObject({ code: 'ENOENT' });
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    }, 120_000,
+  );
+
+  it('resolves the real out-of-tree Triage fixture package through bundled author packages', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'happier-author-triage-fixture-ranges-'));
+    try {
+      await writeFile(join(projectRoot, 'package.json'), await readFile(new URL(
+        '../../../../../packages/tests/fixtures/plugin-platform/out-of-tree-triage-source/package.json',
+        import.meta.url,
+      ), 'utf8'), 'utf8');
+      let installed = false;
+      const result = await runManagedPluginPnpm({ projectRoot, args: ['install', '--ignore-scripts'] }, {
+        ensureManagedPnpmCommand: async () => '/happier/tools/pnpm/current/bin/pnpm',
+        managedPnpmBinPath: () => '/happier/tools/pnpm/current/bin/pnpm',
+        buildManagedPnpmEnvironment: (env = {}) => env,
+        spawn: async () => {
+          installed = true;
+          const config = await readFile(join(projectRoot, 'pnpm-workspace.yaml'), 'utf8');
+          const overrides = [...config.matchAll(/^  ("[^"]+"): ("[^"]+")$/gmu)]
+            .map((match) => [JSON.parse(match[1]!) as string, JSON.parse(match[2]!) as string] as const);
+          expect(overrides.map(([name]) => name)).toEqual([
+            '@happier-dev/plugin-sdk', '@happier-dev/triage-protocol', '@happier-dev/triage-sources',
+          ]);
+          for (const [name, url] of overrides) {
+            expect(JSON.parse(await readFile(join(fileURLToPath(url), 'package.json'), 'utf8')))
+              .toMatchObject({ name, version: '0.0.0' });
+          }
+          return successfulSpawn();
+        },
+        processEnv: {},
+      });
+      expect(result).toMatchObject({ ok: true });
+      expect(installed).toBe(true);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   it.each([
     { name: 'author-owned', contents: 'packages:\n  - plugins/*\n', replaceable: false },
     { name: 'author-owned with a quoted marker', contents: 'packages:\n  - plugins/*\n# Happier transient public author workspace\n', replaceable: false },
