@@ -6,7 +6,7 @@ import {
     resolveNewSessionModelCapabilityProbeContext,
     resolveNewSessionOperationalBackendTarget,
 } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
-import type { Settings } from '@/sync/domains/settings/settings';
+import { useSettingsSelector } from '@/sync/store/hooks';
 import type {
     AgentPluginSettingsReadiness,
     AgentPluginSettingsSnapshot,
@@ -31,7 +31,6 @@ export function useNewSessionScreenPreflightState(params: Readonly<{
     backendTarget: PersistedBackendTargetRefV2;
     runtimeCarrierAgentId?: string | null;
     selectedProfileId?: string | null;
-    settings: Settings;
     pluginSettings?: AgentPluginSettingsSnapshot | null;
     pluginSettingsReadiness?: AgentPluginSettingsReadiness | null;
     selectedMachineId: string | null;
@@ -68,22 +67,22 @@ export function useNewSessionScreenPreflightState(params: Readonly<{
         backendTarget: params.backendTarget,
         runtimeCarrierAgentId: params.runtimeCarrierAgentId,
     }), [params.backendTarget, params.runtimeCarrierAgentId]);
-    const capabilityProbeContext = React.useMemo(() => {
+    const capabilityProbeContext = useSettingsSelector(React.useCallback((settings) => {
         if (!probesEnabled) return null;
         return resolveNewSessionCapabilityProbeContext({
             backendTarget: params.backendTarget,
-            settings: params.settings,
+            settings,
             selectedProfileId: params.selectedProfileId,
             runtimeCarrierAgentId: params.runtimeCarrierAgentId,
             machineId: params.selectedMachineId,
             pluginSettings: effectivePluginSettings,
         });
-    }, [effectivePluginSettings, params.backendTarget, params.runtimeCarrierAgentId, params.selectedMachineId, params.selectedProfileId, params.settings, probesEnabled]);
-    const modelCapabilityProbeContext = React.useMemo(() => {
+    }, [effectivePluginSettings, params.backendTarget, params.runtimeCarrierAgentId, params.selectedMachineId, params.selectedProfileId, probesEnabled]));
+    const modelCapabilityProbeContext = useSettingsSelector(React.useCallback((settings) => {
         if (!probesEnabled) return null;
         return resolveNewSessionModelCapabilityProbeContext({
             backendTarget: params.backendTarget,
-            settings: params.settings,
+            settings,
             selectedProfileId: params.selectedProfileId,
             runtimeCarrierAgentId: params.runtimeCarrierAgentId,
             machineId: params.selectedMachineId,
@@ -91,7 +90,7 @@ export function useNewSessionScreenPreflightState(params: Readonly<{
             connectedServices: params.connectedServicesBindingsPayload,
             connectedServicesCacheIdentity: params.connectedServicesModelProbeCacheIdentity,
         });
-    }, [effectivePluginSettings, params.backendTarget, params.connectedServicesBindingsPayload, params.connectedServicesModelProbeCacheIdentity, params.runtimeCarrierAgentId, params.selectedMachineId, params.selectedProfileId, params.settings, probesEnabled]);
+    }, [effectivePluginSettings, params.backendTarget, params.connectedServicesBindingsPayload, params.connectedServicesModelProbeCacheIdentity, params.runtimeCarrierAgentId, params.selectedMachineId, params.selectedProfileId, probesEnabled]));
 
     const { preflightModels, preflightModelsTargetKey, modelOptions, probe: modelOptionsProbe } = useNewSessionPreflightModelsState({
         backendTarget: operationalBackendTarget,

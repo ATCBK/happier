@@ -1,6 +1,8 @@
 import type { AcpBackendDefinitionV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import * as React from 'react';
+import type { buildSessionAgentPickerDetailContent } from './buildSessionAgentPickerDetailContent';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -78,22 +80,6 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 // The seam to New Session's detail tree, not internal picker logic: the hook's
 // contract here is what it does with a selection change, and this captures that
 // callback without mounting another screen's model/config composition.
-const detailSelectionChangeRef = vi.hoisted(() => ({
-    current: null as null | ((next: unknown) => void),
-}));
-const detailModelSummaryRef = vi.hoisted(() => ({ current: null as string | null | undefined }));
-
-vi.mock('./buildSessionAgentPickerDetailContent', () => ({
-    buildSessionAgentPickerDetailContent: (params: {
-        onSelectionChange: (next: unknown) => void;
-        modelSummary?: string;
-    }) => {
-        detailSelectionChangeRef.current = params.onSelectionChange;
-        detailModelSummaryRef.current = params.modelSummary;
-        return null;
-    },
-}));
-
 vi.mock('@/agents/registry/AgentIcon', () => ({
     AgentIcon: (props: Record<string, unknown>) => React.createElement('AgentIcon', props),
 }));
@@ -142,7 +128,6 @@ const supportedSource: SessionAgentContinuationSourceState = {
 };
 
 const detailContext = {
-    settings: {} as never,
     capabilityServerId: 'server-1',
     machineId: 'machine-1',
     cwd: '/repo',
@@ -202,6 +187,15 @@ function optionsOf(controls: ReturnType<typeof useInSessionAgentPickerControls>)
     return controls.composeAgentPickerOptions([CURRENT_AGENT_ROW]);
 }
 
+function detailPropsOf(controls: ReturnType<typeof useInSessionAgentPickerControls>) {
+    const detail = optionsOf(controls)[1]?.renderDetailContent?.({ onRequestClose: () => {} });
+    type DetailProps = Pick<Parameters<typeof buildSessionAgentPickerDetailContent>[0], 'modelSummary' | 'onSelectionChange'>;
+    if (!React.isValidElement<DetailProps>(detail)) {
+        throw new Error('Expected the target Agent detail element');
+    }
+    return detail.props;
+}
+
 /** Open the composer's Agent picker and let its inspections settle. */
 async function openPicker(hook: Awaited<ReturnType<typeof renderControls>>) {
     await act(async () => {
@@ -237,8 +231,6 @@ describe('useInSessionAgentPickerControls', () => {
                 ? { v: 1, inspections: (params.payload.selections ?? []).map(() => AVAILABLE) }
                 : AVAILABLE,
         ));
-        detailSelectionChangeRef.current = null;
-        detailModelSummaryRef.current = null;
         await hydratePurposeCatalog(DEFAULT_DRAFT_SCOPE);
         if (!hydratedAccountScope) throw new Error('Expected restored picker Account scope');
         DEFAULT_DRAFT_SCOPE = hydratedAccountScope;
@@ -307,6 +299,7 @@ describe('useInSessionAgentPickerControls', () => {
         const retained = document.target.routing.agentContinuation.value;
         if (!retained || typeof retained !== 'object' || Array.isArray(retained)) throw new Error('Expected retained continuation value');
         Reflect.set(retained, 'retired', true);
+        if (!('intent' in retained)) throw new Error('Expected retained continuation intent');
         const intent = retained.intent;
         if (!intent || typeof intent !== 'object' || Array.isArray(intent)) throw new Error('Expected retained continuation intent');
         Reflect.set(intent, 'retired', true);
@@ -507,11 +500,11 @@ describe('useInSessionAgentPickerControls', () => {
         const hook = await renderControls();
         await openPicker(hook);
 
-        optionsOf(hook.getCurrent())[1]?.renderDetailContent?.({ onRequestClose: () => {} });
+        const detail = detailPropsOf(hook.getCurrent());
 
-        expect(detailModelSummaryRef.current).toBe(t('session.agentContinuation.detailDescription'));
-        expect(detailModelSummaryRef.current).toContain('as text');
-        expect(detailModelSummaryRef.current).toContain('images and files');
+        expect(detail.modelSummary).toBe(t('session.agentContinuation.detailDescription'));
+        expect(detail.modelSummary).toContain('as text');
+        expect(detail.modelSummary).toContain('images and files');
     });
 
     it('does not promise a carry-over on a Session with nothing to carry', async () => {
@@ -524,11 +517,11 @@ describe('useInSessionAgentPickerControls', () => {
         });
         await openPicker(hook);
 
-        optionsOf(hook.getCurrent())[1]?.renderDetailContent?.({ onRequestClose: () => {} });
+        const detail = detailPropsOf(hook.getCurrent());
 
-        expect(detailModelSummaryRef.current).toBe(t('session.agentContinuation.detailDescriptionEmpty'));
-        expect(detailModelSummaryRef.current).not.toContain('carries over');
-        expect(detailModelSummaryRef.current).toContain('Nothing is sent');
+        expect(detail.modelSummary).toBe(t('session.agentContinuation.detailDescriptionEmpty'));
+        expect(detail.modelSummary).not.toContain('carries over');
+        expect(detail.modelSummary).toContain('Nothing is sent');
     });
 
     it('arms nothing until a row is deliberately selected', async () => {
@@ -606,8 +599,7 @@ describe('useInSessionAgentPickerControls', () => {
         // Choosing a model IS part of the same choice, so it must reach the armed
         // intent rather than waiting for a confirm step that no longer exists.
         await act(async () => {
-            optionsOf(hook.getCurrent())[1]?.renderDetailContent?.({ onRequestClose: () => {} });
-            detailSelectionChangeRef.current?.({
+            detailPropsOf(hook.getCurrent()).onSelectionChange({
                 modelId: 'opus-5',
                 modelSelection: null,
                 sessionModeId: null,
@@ -649,15 +641,14 @@ describe('useInSessionAgentPickerControls', () => {
         });
 
         await act(async () => {
-            optionsOf(hook.getCurrent())[1]?.renderDetailContent?.({ onRequestClose: () => {} });
-            detailSelectionChangeRef.current?.({
+            detailPropsOf(hook.getCurrent()).onSelectionChange({
                 modelId: 'opus-5',
                 modelSelection: {
                     v: 1,
                     updatedAt: 7,
                     ref: {
                         agentTargetKey: 'backend:codex',
-                        providerConnectionId: 'provider-1',
+                        providerConnectionId: ProviderConnectionIdSchema.parse('provider-1'),
                         modelId: 'opus-5',
                     },
                 },
@@ -714,8 +705,7 @@ describe('useInSessionAgentPickerControls', () => {
         });
 
         await act(async () => {
-            optionsOf(hook.getCurrent())[1]?.renderDetailContent?.({ onRequestClose: () => {} });
-            detailSelectionChangeRef.current?.({
+            detailPropsOf(hook.getCurrent()).onSelectionChange({
                 modelId: 'default',
                 modelLabel: 'Gateway default',
                 modelSelection: {
@@ -723,7 +713,7 @@ describe('useInSessionAgentPickerControls', () => {
                     updatedAt: 7,
                     ref: {
                         agentTargetKey: 'backend:codex',
-                        providerConnectionId: 'provider-1',
+                        providerConnectionId: ProviderConnectionIdSchema.parse('provider-1'),
                         modelId: 'default',
                     },
                 },

@@ -20,7 +20,7 @@ vi.mock('@/sync/ops/sessionDrafts/sessionDraftRepository', () => ({
     clearSessionDraftCurrentness: repository.clear,
     clearSessionDraftLaunchCurrentness: repository.clearLaunch,
     readSessionDraftLaunchCurrentness: repository.readLaunch,
-    getSessionDraftSnapshot: repository.getSnapshot,
+    getSessionComposerDraftSnapshot: repository.getSnapshot,
     writeExistingSessionDraft: repository.writeExisting,
 }));
 vi.mock('@/sync/domains/state/storageStore', () => ({
@@ -56,7 +56,7 @@ beforeEach(() => {
     repository.readLaunch.mockReturnValue(currentness);
     repository.getSnapshot.mockReset();
     repository.getSnapshot.mockReturnValue({
-        document: { composer: { text: { value: 'Captured prompt' } } },
+        composer: { text: { value: 'Captured prompt' } },
     });
     repository.writeExisting.mockReset();
     settingsRuntime.applySettings.mockReset();

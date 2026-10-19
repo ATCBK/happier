@@ -74,6 +74,8 @@ export type NewSessionMachineSelectionContentProps<TMachine extends MachineDispl
     showCliGlyphs?: boolean;
     autoDetectCliGlyphs?: boolean;
     maxHeight?: number;
+    /** Content after the last machine that scrolls with the list, so a long list cannot clip it (see `SelectionList` `bodyFooter`). */
+    bodyFooter?: React.ReactNode;
 }>;
 
 export function NewSessionMachineSelectionContent<TMachine extends MachineDisplayRenderable = Machine>(
@@ -148,6 +150,7 @@ export function NewSessionMachineSelectionContent<TMachine extends MachineDispla
             // menu height), as the composer's other pickers draw theirs. The picker page keeps list rows.
             optionPresentation={props.maxHeight === undefined ? undefined : 'menu'}
             maxHeight={props.maxHeight}
+            bodyFooter={props.bodyFooter}
             heightBehavior={
                 props.maxHeight === undefined
                     ? undefined

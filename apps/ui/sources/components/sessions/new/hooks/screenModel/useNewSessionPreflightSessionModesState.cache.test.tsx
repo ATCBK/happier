@@ -1,45 +1,43 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { resetDynamicSessionModeProbeCacheForTests } from '@/sync/domains/sessionModes/dynamicSessionModeProbeCache';
-import { renderScreen } from '@/dev/testkit';
-
+import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { installNewSessionPreflightHarness } from '@/dev/testkit/harness/newSessionPreflightHarness';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const machineCapabilitiesInvokeMock = vi.fn(async (_machineId: any, _request: any, _options: any) => ({
-  supported: true as const,
-  response: {
-    ok: true as const,
-    result: { availableModes: [{ id: 'plan', name: 'Plan' }] },
-  },
+  ok: true as const,
+  result: { availableModes: [{ id: 'plan', name: 'Plan' }] },
 }));
 
-vi.mock('@/sync/ops/capabilities', () => ({
-  machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-}));
-
-vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/agents/catalog/catalog')>();
-  return {
-    ...actual,
-    getAgentCore: () => ({ sessionModes: { kind: 'acpAgentModes' } }),
-  };
+const preflight = await installNewSessionPreflightHarness(machineCapabilitiesInvokeMock);
+const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+beforeEach(async () => {
+  await preflight.reset();
+  resetDynamicSessionModeProbeCacheForTests();
 });
+afterEach(standardCleanup);
+afterAll(() => preflight.dispose());
 
 describe('useNewSessionPreflightSessionModesState (cache)', () => {
   it('does not re-probe when a fresh result is cached', async () => {
-    vi.resetModules();
     machineCapabilitiesInvokeMock.mockClear();
     resetDynamicSessionModeProbeCacheForTests();
 
     const { useNewSessionPreflightSessionModesState } = await import('./useNewSessionPreflightSessionModesState');
 
+    let latest: ReturnType<typeof useNewSessionPreflightSessionModesState> | undefined;
+    const readLatest = () => {
+      if (!latest) throw new Error('Expected preflight modes to render');
+      return latest;
+    };
     function Harness() {
-      useNewSessionPreflightSessionModesState({
+      latest = useNewSessionPreflightSessionModesState({
         backendTarget: { kind: 'backend', backendId: 'opencode' },
         selectedMachineId: 'machine-1',
-        capabilityServerId: 'server-1',
+        capabilityServerId: preflight.serverId,
         cwd: '/repo',
       });
       return null;
@@ -47,12 +45,18 @@ describe('useNewSessionPreflightSessionModesState (cache)', () => {
 
     let root1!: renderer.ReactTestRenderer;
     root1 = (await renderScreen(React.createElement(Harness))).tree;
+    await waitForHomeGovernance(async () => {
+      await flushHookEffects();
+      expect(readLatest().preflightModes).not.toBeNull();
+    });
+    expect(readLatest().preflightModes?.availableModes.map(mode => mode.id)).toEqual(['plan']);
     await act(async () => {
       root1.unmount();
     });
 
     let root2!: renderer.ReactTestRenderer;
     root2 = (await renderScreen(React.createElement(Harness))).tree;
+    expect(readLatest().preflightModes?.availableModes.map(mode => mode.id)).toEqual(['plan']);
     await act(async () => {
       root2.unmount();
     });
@@ -61,7 +65,6 @@ describe('useNewSessionPreflightSessionModesState (cache)', () => {
   });
 
     it('does not attempt dynamic session-mode probing for plugin backend targets', async () => {
-    vi.resetModules();
     machineCapabilitiesInvokeMock.mockClear();
     resetDynamicSessionModeProbeCacheForTests();
 
@@ -71,7 +74,7 @@ describe('useNewSessionPreflightSessionModesState (cache)', () => {
       useNewSessionPreflightSessionModesState({
         backendTarget: { kind: 'backend', backendId: 'acme.review.backend' },
         selectedMachineId: 'machine-1',
-        capabilityServerId: 'server-1',
+        capabilityServerId: preflight.serverId,
         cwd: '/repo',
       });
       return null;
@@ -87,7 +90,6 @@ describe('useNewSessionPreflightSessionModesState (cache)', () => {
     });
 
     it('keeps session-mode probing idle while the selected Agent Settings record loads', async () => {
-        vi.resetModules();
         machineCapabilitiesInvokeMock.mockClear();
         resetDynamicSessionModeProbeCacheForTests();
         const { useNewSessionPreflightSessionModesState } = await import('./useNewSessionPreflightSessionModesState');
@@ -97,7 +99,7 @@ describe('useNewSessionPreflightSessionModesState (cache)', () => {
                 backendTarget: { kind: 'backend', backendId: 'acme.review.backend' },
                 runtimeCarrierAgentId: 'acme.review/provider',
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo',
                 enabled: false,
             });

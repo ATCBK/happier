@@ -1,4 +1,31 @@
-import { vi } from 'vitest';
+import { beforeEach, vi } from 'vitest';
+import { PROFILE_ROWS_ROUTE_V1, ProfileRecordV1Schema, ProfileRowsListResponseV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
+
+export function createProfileCatalogHttpResponse(path: string, settings: Readonly<{
+    profiles: readonly Readonly<{ id: string }>[];
+    profileEnabledById: Readonly<Record<string, boolean>>;
+}>): Response | null {
+    if (!path.startsWith(PROFILE_ROWS_ROUTE_V1)) return null;
+    const records = settings.profiles.map(profile => ProfileRecordV1Schema.parse({
+        v: 1, id: profile.id,
+        definition: { kind: 'legacy', profile },
+        enabled: settings.profileEnabledById[profile.id] !== false,
+        promptStack: [], secretBindings: {},
+    }));
+    const transferControl = {
+        status: 'present' as const, revision: 1, content: { t: 'plain' as const, v: {
+            v: 1 as const, phase: 'active' as const, sourceSettingsVersion: 1, migratedLogicalRevision: 1,
+            inventory: records.map(record => ({ kind: 'account_row' as const, id: record.id, revision: 1 })),
+        } },
+    };
+    if (path === `${PROFILE_ROWS_ROUTE_V1}/transfer`) return Response.json(transferControl);
+    if (path === `${PROFILE_ROWS_ROUTE_V1}/reference-guard`) return Response.json({ status: 'ready', revision: 1 });
+    if (path === PROFILE_ROWS_ROUTE_V1) return Response.json(ProfileRowsListResponseV1Schema.parse({
+        status: 'listed', nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: 1, transferControl,
+        rows: records.map(record => ({ id: record.id, revision: 1, content: { t: 'plain', v: record } })),
+    }));
+    return null;
+}
 
 type NewSessionScreenModelModuleFactory = () => unknown | Promise<unknown>;
 type NewSessionScreenModelImportOriginal = <T = unknown>() => Promise<T>;
@@ -79,6 +106,9 @@ export function installNewSessionScreenModelCommonModuleMocks(
         storage: options.storage,
     };
     newSessionScreenModelModuleState.routerParamsOverrides = {};
+    beforeEach(() => {
+        newSessionScreenModelModuleState.routerParamsOverrides = {};
+    });
 
     vi.mock('react-native', async () => {
         const activeOptions = newSessionScreenModelModuleState.options;

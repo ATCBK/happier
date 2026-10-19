@@ -13,6 +13,7 @@ import { settingsDefaults } from '@/sync/domains/settings/settings';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 
 import type { SessionAgentPickerSelection } from '@/components/sessions/agentPicker/buildSessionAgentPickerDetailContent';
+import { storage } from '@/sync/domains/state/storageStore';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -175,6 +176,32 @@ describe('buildNewSessionAgentPickerOptionInteractions', () => {
         providerModelProjectionInputs.length = 0;
     });
 
+    it('defers full Settings reads until detail mount and keeps that detail current without rebuilding its option', async () => {
+        const previous = storage.getState().settings;
+        const readSettings = vi.fn(() => storage.getState().settings);
+        const { buildNewSessionAgentPickerOptionInteractions } = await import('./buildNewSessionAgentPickerOptionInteractions');
+        const interactions = buildNewSessionAgentPickerOptionInteractions({
+            entry: pluginEntry, disabled: false, selectedMachineId: null, capabilityServerId: 'server-1', selectedPath: '/repo',
+            readSettings,
+            getEngineSelectionForTargetKey: () => ({ modelId: 'default', sessionModeId: null, configOverrides: {} }),
+            selectEngineSelection: vi.fn(),
+        });
+        expect(readSettings).not.toHaveBeenCalled();
+        const renderDetail = interactions.renderDetailContent;
+        if (!renderDetail) throw new Error('Missing engine detail');
+        const screen = await renderScreen(<>{renderDetail({ onRequestClose: vi.fn() })}</>);
+        try {
+            expect(readSettings.mock.results.at(-1)?.value).toBe(storage.getState().settings);
+            const reads = readSettings.mock.calls.length;
+            await act(async () => storage.setState({ settings: { ...storage.getState().settings,
+                experiments: !storage.getState().settings.experiments } }));
+            expect(readSettings.mock.calls.length).toBeGreaterThan(reads);
+            expect(readSettings.mock.results.at(-1)?.value).toBe(storage.getState().settings);
+        } finally {
+            await screen.unmount(); storage.setState({ settings: previous });
+        }
+    });
+
     it('expands an installed Agent detail under that Agent\'s operational identity', async () => {
         capturedConfigOptionsProbe.runtimeCarrierAgentId = undefined;
         const selection: SessionAgentPickerSelection = {
@@ -191,7 +218,7 @@ describe('buildNewSessionAgentPickerOptionInteractions', () => {
             selectedMachineId: 'machine-1',
             capabilityServerId: 'server-1',
             selectedPath: '/repo',
-            settings: settingsDefaults,
+            readSettings: () => settingsDefaults,
             getEngineSelectionForTargetKey: () => selection,
             selectEngineSelection: vi.fn(),
         });
@@ -214,6 +241,7 @@ describe('buildNewSessionAgentPickerOptionInteractions', () => {
         const screenProjection = {
             data: null,
             error: null,
+            pendingApproval: null,
             loading: true,
             status: 'pending' as const,
             refresh: vi.fn(async () => {}),
@@ -228,7 +256,7 @@ describe('buildNewSessionAgentPickerOptionInteractions', () => {
             selectedMachineId: 'machine-1',
             capabilityServerId: 'server-1',
             selectedPath: '/repo',
-            settings: settingsDefaults,
+            readSettings: () => settingsDefaults,
             providerProjection: screenProjection,
             getEngineSelectionForTargetKey: () => selection,
             selectEngineSelection: vi.fn(),
@@ -259,7 +287,7 @@ describe('buildNewSessionAgentPickerOptionInteractions', () => {
             selectedMachineId: 'machine-1',
             capabilityServerId: 'server-1',
             selectedPath: '/repo',
-            settings: settingsDefaults,
+            readSettings: () => settingsDefaults,
             getEngineSelectionForTargetKey: () => selection,
             selectEngineSelection,
         });

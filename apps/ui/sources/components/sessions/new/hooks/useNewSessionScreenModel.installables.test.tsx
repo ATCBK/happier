@@ -1,22 +1,46 @@
 import * as React from 'react';
-import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     buildBackendTargetKey,
     convertBackendTargetRefV2ToV1,
     readBackendTargetRefV2,
+    PluginProjectionV2Schema,
+    SessionSpawnNewInputV2Schema,
+    SessionSpawnNewResultV1Schema,
+    V2SessionListResponseSchema,
     type AcpCatalogSettingsV1,
 } from '@happier-dev/protocol';
+import { qualifyPluginContributionReferenceV1 } from '@happier-dev/protocol/plugins/contribution-identity';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { DaemonWorkspaceFileListResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { MachinesAgentsListOutputSchema } from '@happier-dev/protocol/capabilities';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import {
     flushHookEffects,
     renderHook,
     renderScreen,
+    createMachineFixture,
+    createSessionListRenderableSessionFixture,
 } from '@/dev/testkit';
-import { storage as storageStore } from '@/sync/domains/state/storageStore';
-import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
+import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { readBackendTargetKeyV2, resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
+import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
+import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
+import type { StorageState } from '@/sync/store/types';
+import type { NewSessionDraft } from '@/sync/domains/state/persistence';
 
-import { installNewSessionScreenModelCommonModuleMocks } from './newSessionScreenModelTestHelpers';
+import { createProfileCatalogHttpResponse, installNewSessionScreenModelCommonModuleMocks } from './newSessionScreenModelTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -31,6 +55,7 @@ function buildConfiguredAcpBackendTargetKey(configuredBackendId: string): string
         configuredBackendId,
     });
 }
+const CUSTOM_ACP_AGENT_ID = CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.localId;
 
 function buildProfileCompatibilityTargetKey(target: unknown): string {
     // Real profile compatibility maps are still keyed by V1 backend target keys.
@@ -46,12 +71,6 @@ const pendingFireAndForget = vi.hoisted((): Array<Promise<unknown>> => []);
 const applySettingsMock = vi.hoisted(() => vi.fn());
 const modalShowMock = vi.hoisted(() => vi.fn(() => 'modal-id'));
 const modalAlertMock = vi.hoisted(() => vi.fn());
-const createSessionActionDraftMock = vi.hoisted(() => vi.fn());
-const handleCreateSessionMock = vi.hoisted(() =>
-    vi.fn((opts?: { afterCreated?: (context: { sessionId: string; effectiveSpawnServerId: string | null }) => void | Promise<void> }) => {
-        return opts?.afterCreated?.({ sessionId: 'session-created', effectiveSpawnServerId: null });
-    }),
-);
 const agentInputActionChipActionIdsState = vi.hoisted(() => ({
     value: [] as string[],
 }));
@@ -60,32 +79,13 @@ const enabledAgentIdsState = vi.hoisted(() => ({
     value: ['codex', 'claude'] as string[],
 }));
 
-const cliAvailabilityRefreshMock = vi.hoisted(() => vi.fn());
-
 type CliAvailabilityMockValue = Partial<{
-    refresh: ReturnType<typeof vi.fn>;
-    isDetecting: boolean;
     timestamp: number;
-    available: { codex: boolean; claude: boolean; opencode: boolean | null };
-    login: any;
-    authStatus: any;
-    resolvedPath: any;
-    resolvedCommand: any;
-    resolutionSource: any;
-    tmux: null;
+    available: Record<string, boolean | null>;
 }>;
 
 const cliAvailabilityDefaults = vi.hoisted(() => ({
-    refresh: cliAvailabilityRefreshMock,
-    isDetecting: false,
-    timestamp: 1,
     available: { codex: false, claude: true, opencode: null as boolean | null },
-    login: {} as any,
-    authStatus: {} as any,
-    resolvedPath: {} as any,
-    resolvedCommand: {} as any,
-    resolutionSource: {} as any,
-    tmux: null,
 }));
 
 const cliAvailabilityState = vi.hoisted(() => ({
@@ -199,36 +199,23 @@ const machineCapabilitiesResultsState = vi.hoisted(() => ({
 const includeProjectedCodexAcpInstallableState = vi.hoisted(() => ({
     value: false,
 }));
-const includeLaunchSelectionMachinesState = vi.hoisted(() => ({
-    value: false,
-}));
+const homeState = vi.hoisted(() => ({ targetAccountId: '', targetServerUrl: '', targetServerId: '', activeServerId: '' }));
 
 const storageState = vi.hoisted(() => ({
-    workspaceLocations: {} as Record<string, unknown>,
-    workspaceCheckouts: {} as Record<string, unknown>,
     // The `@session` picker's real candidate source: session-list rows, per server.
-    sessionListRowsByServerId: {} as Record<string, Record<string, unknown>>,
+    sessionListRowsByServerId: {} as StorageState['sessionListRowsByServerId'],
 }));
 const routeParamsState = vi.hoisted(() => ({
     value: {} as Record<string, string | string[] | undefined>,
 }));
 
-const getMockStorageState = vi.hoisted(() => () => ({
-    settings: settingsRuntimeState.current ?? testSettingsDefaults,
-    workspaceLocations: storageState.workspaceLocations,
-    workspaceCheckouts: storageState.workspaceCheckouts,
-    sessions: {} as Record<string, unknown>,
-    sessionListRowsByServerId: storageState.sessionListRowsByServerId,
-    createSessionActionDraft: createSessionActionDraftMock,
-}));
-
-const persistedDraft = vi.hoisted(() => ({
+const persistedDraft = vi.hoisted((): NewSessionDraft => ({
     input: '',
     selectedMachineId: 'machine-1',
     selectedPath: '/repo',
     selectedProfileId: null as string | null,
     selectedSecretId: null,
-    agentType: 'codex' as string,
+    agentType: 'codex',
     permissionMode: 'default',
     modelMode: 'default',
     acpSessionModeId: 'plan',
@@ -238,11 +225,62 @@ const persistedDraft = vi.hoisted(() => ({
 
 const initialHookFlushOptions = { cycles: 2, turns: 2 } as const;
 
-async function renderNewSessionScreenModel() {
-    const { useNewSessionScreenModel } = await useNewSessionScreenModelModulePromise;
-    return renderHook<any>(() => useNewSessionScreenModel() as any, {
+let authoringAccount: Readonly<{ dispose(): void }> | null = null;
+
+async function activateAuthoringScope(scope: Readonly<{ serverId: string; accountId: string }>) {
+    authoringAccount?.dispose();
+    storageStore.getState().activateProfileScope(scope);
+    await storageStore.getState().activateSettingsScope(scope);
+    authoringAccount = await activateStorageAccountScope(scope);
+}
+
+async function renderNewSessionScreenModel(options: Readonly<{ openAgentPicker?: boolean }> = {}) {
+    const seedStore = () => {
+        storageStore.getState().applySettingsLocal(settingsParse(settingsRuntimeState.current ?? {}));
+        const machines = machineState.value.map(machine => createMachineFixture({
+            ...machine, activeAt: Date.now(), metadata: { ...createMachineFixture().metadata!, ...machine.metadata },
+        }));
+        storageStore.getState().applyMachines(machines, true, { sourceServerId: homeState.targetServerId });
+        storageStore.setState({ sessionListRowsByServerId: storageState.sessionListRowsByServerId });
+        const activeScope = storageStore.getState().settingsScope;
+        for (const scope of [activeScope, { serverId: homeState.targetServerId, accountId: 'account-1' }]) {
+            if (!scope) continue;
+            applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1,
+                record: { v: 1, definitions: settingsState.acpCatalogSettingsV1.backends } }, true);
+            applyProfileCatalogSnapshot(scope, {
+                status: 'ready', source: 'legacy', records: [], diagnostics: [],
+                referenceGuardRevision: 'absent', authority: 'inactive', control: null, controlRevision: 'absent',
+            }, true, new Map(), { legacyProfiles: settingsState.profiles });
+        }
+    };
+    seedStore();
+    const scope = storageStore.getState().settingsScope;
+    if (!scope) throw new Error('Installables journey requires its authenticated authoring Account');
+    const draftId = crypto.randomUUID();
+    routeParamsState.value = { ...routeParamsState.value, draftId };
+    writeNewSessionDraftToRepository({ scope, draftId, draft: { ...persistedDraft, targetServerId: homeState.targetServerId } });
+    const hook = await renderHook<any>(() => useNewSessionScreenModel() as any, {
         flushOptions: initialHookFlushOptions,
     });
+    if (options.openAgentPicker) {
+        await invokeHookAction(() => {
+            const model = hook.getCurrent();
+            const picker = model.variant === 'wizard' ? model.wizardProps.agent : model.simpleProps;
+            picker.onAgentPickerVisibilityChange(true);
+        });
+        await vi.waitFor(() => {
+            const model = hook.getCurrent();
+            const picker = model.variant === 'wizard' ? model.wizardProps.agent : model.simpleProps;
+            for (const [agentId, available] of Object.entries(cliAvailabilityState.value.available ?? {})) {
+                if (available !== true || !enabledAgentIdsState.value.includes(agentId)) continue;
+                expect(picker.agentPickerOptions.find((option: { id: string }) => option.id === buildBuiltInBackendTargetKey(agentId))?.disabled).toBe(false);
+            }
+        });
+    }
+    return { ...hook, rerender: async () => {
+        await act(async () => { seedStore(); });
+        await hook.rerender();
+    } };
 }
 
 async function invokeHookAction(action: () => void | Promise<void>) {
@@ -321,42 +359,8 @@ installNewSessionScreenModelCommonModuleMocks({
         navigation: {},
         pathname: '/new',
     },
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit/createPartialStorageModuleMock');
-        return createPartialStorageModuleMock(importOriginal, {
-            // Boundary fixture: this suite only consumes the machine id + metadata shape.
-            useAllMachines: (() => machineState.value as any) as any,
-            useLaunchSelectionMachines: (() => (
-                includeLaunchSelectionMachinesState.value ? machineState.value : []
-            ) as any) as any,
-            useMachineListByServerId: () => ({
-                s1: includeLaunchSelectionMachinesState.value ? machineState.value as any : [],
-            }),
-            useMachineListStatusByServerId: () => ({}),
-            useActiveServerAccountScope: () => ({ serverId: 's1', accountId: 'account-1' }),
-            storage: Object.assign((selector: (state: ReturnType<typeof getMockStorageState>) => unknown) => selector(getMockStorageState()), {
-                getState: () => getMockStorageState(),
-            }) as any,
-            useSetting: (key: string) => (settingsRuntimeState.current as any)?.[key] ?? (testSettingsDefaults as any)[key],
-            useSettingMutable: (key: string) => [
-                (settingsRuntimeState.current as any)?.[key] ?? (testSettingsDefaults as any)[key],
-                vi.fn(),
-            ],
-            useCurrentFavoriteModelSelectionsV1Mutable: () => [
-                (settingsRuntimeState.current as any)?.currentFavoriteModelSelectionsV1
-                    ?? (testSettingsDefaults as any).currentFavoriteModelSelectionsV1,
-                vi.fn(),
-            ],
-            useCurrentRememberedEngineSelectionsByScopeV1Mutable: () => [
-                (settingsRuntimeState.current as any)?.currentRememberedEngineSelectionsByScopeV1
-                    ?? (testSettingsDefaults as any).currentRememberedEngineSelectionsByScopeV1,
-                vi.fn(),
-            ],
-            // Boundary fixture: the suite overrides only the settings fields it actually reads.
-            useSettings: (() => (settingsRuntimeState.current ?? testSettingsDefaults) as any) as any,
-        });
-    },
 });
+vi.doUnmock('@/sync/domains/state/storage');
 
 vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
@@ -379,22 +383,6 @@ vi.mock('@react-navigation/native', () => ({
     useFocusEffect: (_fn: any) => {},
 }));
 
-vi.mock('@/sync/domains/state/persistence', async (importOriginal) => {
-    const actual = await importOriginal<any>();
-    return {
-        ...actual,
-        loadNewSessionDraft: () => persistedDraft,
-        saveNewSessionDraft: () => {},
-    };
-});
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        refreshMachinesThrottled: async () => {},
-        encryptSecretValue: (v: string) => v,
-    },
-}));
-
 vi.mock('@/sync/store/settingsWriters', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/sync/store/settingsWriters')>(),
     useApplySettings: () => applySettingsMock,
@@ -408,30 +396,15 @@ vi.mock('@/agents/hooks/useEnabledAgentIds', () => ({
 
 
 
-const machineCapabilitiesInvoke = vi.hoisted(() =>
-    vi.fn(async () => ({ supported: true, response: { ok: true, result: null } })),
-);
-const machineCapabilitiesCacheRefreshMock = vi.hoisted(() => vi.fn());
-const ensureAgentInstallablesBackgroundMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
-
-vi.mock('@/sync/ops', () => ({
-    machineCapabilitiesInvoke,
-}));
 
 /**
  * The machine RPC transport — a genuine system boundary, and the only thing stubbed on the
  * file-suggestion path. Everything above it (`suggestionFile` → `workspaceFileSearch` →
- * `machineRipgrep`) runs for real, so the address the host resolved is observed where it
+ * `machineWorkspaceFileList`) runs for real, so the address the host resolved is observed where it
  * actually matters: on the wire.
  */
-const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn(async (_params: unknown) => ({} as unknown)));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (params: unknown) => machineRpcWithServerScopeMock(params) as never,
-}));
+const machineRpcResult = vi.hoisted(() => ({ value: {} as unknown }));
 
-vi.mock('@/capabilities/ensureAgentInstallablesBackground', () => ({
-    ensureAgentInstallablesBackground: (params: unknown) => ensureAgentInstallablesBackgroundMock(params),
-}));
 
 vi.mock('@/capabilities/installablesRegistry', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/capabilities/installablesRegistry')>();
@@ -458,18 +431,6 @@ vi.mock('@/capabilities/installablesRegistry', async (importOriginal) => {
     };
 });
 
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({
-    useMachineCapabilitiesCache: () => ({ state: { status: 'idle' }, refresh: machineCapabilitiesCacheRefreshMock }),
-    prefetchMachineCapabilities: async () => {},
-    prefetchMachineCapabilitiesIfStale: async () => {},
-    getMachineCapabilitiesSnapshot: () => ({
-        response: {
-            protocolVersion: 1 as const,
-            results: machineCapabilitiesResultsState.value,
-        },
-    }),
-}));
-
 vi.mock('@/components/sessions/new/hooks/useNewSessionCapabilitiesPrefetch', () => ({
     useNewSessionCapabilitiesPrefetch: () => {},
 }));
@@ -478,13 +439,6 @@ vi.mock('@/components/sessions/new/hooks/useNewSessionDraftAutoPersist', () => (
     useNewSessionDraftAutoPersist: () => {},
 }));
 
-vi.mock('@/components/sessions/new/hooks/useCreateNewSession', () => ({
-    useCreateNewSession: () => ({
-        canCreate: true,
-        connectionStatus: 'ok',
-        handleCreateSession: handleCreateSessionMock,
-    }),
-}));
 
 vi.mock('@/components/sessions/agentInput/sessionActions/listAgentInputActionChipActionIds', () => ({
     listAgentInputActionChipActionIds: () => agentInputActionChipActionIdsState.value,
@@ -524,39 +478,10 @@ vi.mock('@/components/sessions/new/modules/automationFeatureGate', () => ({
     shouldShowAutomationActionChips: () => false,
 }));
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({ serverId: 's_active' }),
-    subscribeActiveServer: (fn: any) => {
-        fn({ serverId: 's_active' });
-        return () => {};
-    },
-}));
-
-vi.mock('@/components/sessions/new/modules/useNewSessionConnectedServices', () => ({
-    useNewSessionConnectedServices: () => ({
-        connectedServicesAuthChip: null,
-    }),
-}));
-
-vi.mock('@/components/sessions/new/modules/profileHelpers', () => ({
-    useProfileMap: (profiles: Array<{ id: string }>) => new Map(profiles.map((profile) => [profile.id, profile])),
-    transformProfileToEnvironmentVars: () => [],
-}));
-
 vi.mock('@/components/sessions/new/hooks/newSessionModelModePolicy', () => ({
     resolveInitialNewSessionModelMode: () => 'default',
     coerceNewSessionModelMode: ({ modelMode }: any) => modelMode,
 }));
-
-vi.mock('@/sync/domains/settings/settings', async (importOriginal) => {
-    const actual = await importOriginal<any>();
-    return {
-        ...actual,
-        settingsDefaults: testSettingsDefaults,
-        isProfileCompatibleWithAnyAgent: (profile: any, agentIds: readonly string[]) =>
-            profileCompatibilityState.isProfileCompatibleWithAnyAgent(profile, agentIds),
-    };
-});
 
 vi.mock('@/sync/domains/profiles/profileCompatibility', async (importOriginal) => {
     const actual = await importOriginal<any>();
@@ -606,45 +531,13 @@ vi.mock('@/components/sessions/new/hooks/serverTarget/useNewSessionServerTargetS
         serverTargets: [],
         resolvedSettingsTarget: { allowedServerIds: [] },
         allowedTargetServerIds: [],
-        targetServerId: 's1',
+        targetServerId: homeState.targetServerId,
         targetServerProfile: null,
         targetServerName: null,
         showServerPickerChip: false,
         serverSelectionProps: {},
-        resolveTargetServerId: () => 's1',
+        resolveTargetServerId: () => homeState.targetServerId,
     }),
-}));
-
-vi.mock('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModelsState', () => ({
-    useNewSessionPreflightModelsState: (params: { backendTarget: any }) => {
-        const targetKey = resolveBackendTargetKeyV2(params.backendTarget);
-        return {
-            preflightModels: null,
-            modelOptions: preflightModelOptionsByTargetKeyState.value[targetKey] ?? [],
-            probe: { phase: 'idle', refresh: vi.fn() },
-        };
-    },
-}));
-
-vi.mock('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightSessionModesState', () => ({
-    useNewSessionPreflightSessionModesState: (params: { backendTarget: any }) => {
-        const targetKey = resolveBackendTargetKeyV2(params.backendTarget);
-        return {
-            preflightModes: null,
-            modeOptions: preflightSessionModeOptionsByTargetKeyState.value[targetKey] ?? [],
-            probe: { phase: 'idle', refresh: vi.fn() },
-        };
-    },
-}));
-
-vi.mock('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightConfigOptionsState', () => ({
-    useNewSessionPreflightConfigOptionsState: (params: { backendTarget: any }) => {
-        const targetKey = resolveBackendTargetKeyV2(params.backendTarget);
-        return {
-            configOptions: preflightConfigOptionsByTargetKeyState.value[targetKey] ?? null,
-            probe: { phase: 'idle', refresh: vi.fn() },
-        };
-    },
 }));
 
 vi.mock('@/hooks/machine/useMachineEnvPresence', () => ({
@@ -664,39 +557,200 @@ vi.mock('@/components/sessions/new/hooks/useSecretRequirementFlow', () => ({
     }),
 }));
 
-vi.mock('@/components/sessions/new/hooks/useNewSessionWizardProps', () => ({
-    useNewSessionWizardProps: () => {
-        React.useMemo(() => null, []);
-        return {
-            layout: {},
-            profiles: {},
-            agent: {},
-            machine: {},
-            footer: {},
-        };
-    },
-}));
-
 // IndexedDB is the browser persistence boundary; the real draft repository prepares and runs beneath it.
 vi.mock('@/sync/domains/state/browserRecordStorage', async () => {
     const { createBrowserRecordStorageModuleMock } = await import('@/dev/testkit/mocks/browserRecordStorage');
     return createBrowserRecordStorageModuleMock();
 });
 
-const useNewSessionScreenModelModulePromise = import('./useNewSessionScreenModel');
+// Compile the cold screen graph during collection, before a behavior test owns
+// an act scope. Otherwise a timed-out import can resume inside the next case.
+const network = await installSessionOpsNetworkBoundary();
+const restoreActionExecutorModuleLoader = await installRealActionExecutorModuleLoader();
+const createdSessions = new Map<string, ReturnType<typeof createPlainSessionCurrentProjectionRecordFixture>>();
+const authoringMemoryHttp = createAuthoringMemoryHttpBoundary();
+let promptLibraryHttp = createPromptLibraryCatalogBoundary();
+let creationHome: Readonly<{ id: string; accountId: string; serverUrl: string }>;
+let creationConnectionActive = false;
+function spawnRequests() {
+    return network.requests.filter(request => request.method === RPC_METHODS.SESSION_SPAWN_NEW);
+}
+function dependencyInstallRequests() {
+    return network.requests.filter(request => request.method === RPC_METHODS.CAPABILITIES_INVOKE
+        && typeof request.payload === 'object' && request.payload !== null
+        && 'id' in request.payload && request.payload.id === 'dep.codex-acp'
+        && 'method' in request.payload && request.payload.method === 'install');
+}
+async function restoreCreationAccount() {
+    const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+    await loadSyncSingletonForTests();
+    const { getActiveServerSnapshot, getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+    const home = getServerProfileById(getActiveServerSnapshot().serverId);
+    if (!home) throw new Error('Creation fixture Home is unavailable');
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id });
+    if (!credentials) throw new Error('Creation fixture Account is unavailable');
+    const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+    await act(async () => { await restoreConnectionToActiveServer(credentials); });
+    creationConnectionActive = true;
+}
+const { storage: storageStore } = await import('@/sync/domains/state/storageStore');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { applyAcpCatalogSnapshot } = await import('@/sync/store/settings/acpCatalogSnapshot');
+const { applyProfileCatalogSnapshot } = await import('@/sync/store/settings/profileCatalogSnapshot');
+const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+const { writeNewSessionDraftToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+const { activateStorageAccountScope } = await import('@/dev/testkit/mocks/storage');
+const { useNewSessionScreenModel } = await import('./useNewSessionScreenModel');
+afterEach(async () => {
+    if (creationConnectionActive) {
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        await disconnectActiveServerConnection();
+        creationConnectionActive = false;
+    }
+    authoringAccount?.dispose();
+    authoringAccount = null;
+    const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+    await serverScopedRpcSocketPool.stopAll();
+    serverScopedRpcSocketPool.resetForTests();
+    const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+    resetScopedMachineTransportCacheForTests();
+});
+afterAll(async () => {
+    restoreActionExecutorModuleLoader();
+    await network.dispose();
+});
 
 describe('useNewSessionScreenModel (installables)', () => {
     beforeEach(async () => {
+        network.resetRequests();
+        const targetHome = await network.addHome('https://installables-target.example.test', 'account-1');
+        homeState.targetServerId = targetHome.id;
+        homeState.targetAccountId = targetHome.accountId;
+        homeState.targetServerUrl = targetHome.serverUrl;
+        creationHome = await network.addHome('https://installables-active.example.test', 'acct_active');
+        homeState.activeServerId = creationHome.id;
+        await setActiveServerId(homeState.activeServerId);
+        const { BUNDLED_CANONICAL_AGENT_DECLARATIONS } = await import('@/agents/registry/generatedBundledPluginEntries');
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, installedPackagesById: {},
+            agentsById: Object.fromEntries(Object.entries(BUNDLED_AGENT_CONTRIBUTION_IDENTITIES).map(([id, identity]) => [id, {
+                id, identity, title: id,
+                connectedAccounts: BUNDLED_CANONICAL_AGENT_DECLARATIONS[id as keyof typeof BUNDLED_CANONICAL_AGENT_DECLARATIONS]?.connectedAccounts.map(purpose => ({
+                    ...purpose,
+                    service: qualifyPluginContributionReferenceV1(purpose.service, identity.pluginId),
+                })) ?? [],
+                capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+            }])),
+            actionsById: {}, familiesById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
+        });
+        network.setRpcResponder(async ({ method, payload }) => {
+            if (method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) {
+                return createExistingSessionDirectoryPreflightResult(payload);
+            }
+            if (method === RPC_METHODS.SESSION_SPAWN_NEW) {
+                const input = SessionSpawnNewInputV2Schema.parse(payload);
+                const result = SessionSpawnNewResultV1Schema.parse({
+                    type: 'success', disposition: 'created', sessionId: 'session-created',
+                    executionTarget: input.executionTarget,
+                    organizationPlacement: input.organizationPlacement ?? { folderId: null, tagIds: [] },
+                    initialInput: input.initialInput ? { status: 'accepted', localId: 'initial-input' } : { status: 'notRequested' },
+                });
+                if (result.type !== 'success') throw new Error('Creation boundary returned a non-success fixture');
+                createdSessions.set(`${input.executionTarget.serverId}|${result.sessionId}`,
+                    createPlainSessionCurrentProjectionRecordFixture({ id: result.sessionId,
+                        metadata: { path: '/repo', host: 'fixture-host', machineId: input.executionTarget.machineId } }));
+                return result;
+            }
+            if (method.includes('contributionRegistryProjection.describe')) {
+                return { protocolVersion: 1, projection };
+            }
+            if (method === 'capabilities.detect') {
+                const available = { ...cliAvailabilityDefaults.available, ...cliAvailabilityState.value.available };
+                const baseFacts = { version: '1', latestVersion: null, update: { supported: false, command: null },
+                    signIn: { status: 'signedIn', loginSupport: 'status_only' }, platform: { supported: true },
+                    install: { available: true, mode: 'managed', sizeBytes: null, guideUrl: null }, dependencies: [] };
+                const facts = Object.entries(available).map(([agentId, installed]) => [`cli.${agentId}`, {
+                    ok: true, checkedAt: Date.now(), data: { agentId, title: agentId, installed: installed === true,
+                        ...baseFacts },
+                }]);
+                return { protocolVersion: 1, results: { ...Object.fromEntries(facts),
+                    'tool.acpAgentInventory': { ok: true, checkedAt: Date.now(), data: MachinesAgentsListOutputSchema.parse({
+                        items: settingsState.acpCatalogSettingsV1.backends.map(definition => ({
+                            agentId: 'custom-acp', definitionId: definition.id, title: definition.title,
+                            installed: true, managed: false, fit: { kind: 'can_run', via: definition.launch.kind }, ...baseFacts,
+                        })),
+                    }) },
+                    ...machineCapabilitiesResultsState.value } };
+            }
+            if (method === 'capabilities.invoke' && payload && typeof payload === 'object' && 'method' in payload && 'params' in payload) {
+                const params = payload.params;
+                const key = readBackendTargetKeyV2(params && typeof params === 'object' && 'backendTarget' in params ? params.backendTarget : null);
+                if (key === null) throw new Error('Invalid probe backend target');
+                if (payload.method === 'probeModels') return { ok: true, result: { source: 'dynamic',
+                    availableModels: (preflightModelOptionsByTargetKeyState.value[key] ?? []).map(model => ({
+                        id: model.value, name: model.label, ...(model.description ? { description: model.description } : {}),
+                    })), supportsFreeform: false } };
+                if (payload.method === 'probeModes') return { ok: true, result: { source: 'dynamic',
+                    availableModes: preflightSessionModeOptionsByTargetKeyState.value[key] ?? [] } };
+                if (payload.method === 'probeConfigOptions') return { ok: true, result: { source: 'dynamic',
+                    configOptions: preflightConfigOptionsByTargetKeyState.value[key] ?? [] } };
+            }
+            if (method === 'capabilities.invoke' || method === RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST) return machineRpcResult.value;
+            return { jobs: [] };
+        });
+        createdSessions.clear();
+        authoringMemoryHttp.reset();
+        promptLibraryHttp = createPromptLibraryCatalogBoundary();
+        network.setHttpResponder(async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            const memory = await authoringMemoryHttp.handle(input, init);
+            if (memory) return memory;
+            const promptLibrary = await promptLibraryHttp.handle(path, init);
+            if (promptLibrary) return promptLibrary;
+            const serverId = new URL(String(input)).origin === new URL(homeState.targetServerUrl).origin
+                ? homeState.targetServerId : creationHome.id;
+            const accountId = serverId === homeState.targetServerId ? homeState.targetAccountId : creationHome.accountId;
+            if (path === '/v1/account/profile') return Response.json({ id: accountId });
+            const machineAccess = /^\/v1\/machines\/([^/]+)\/access$/.exec(path);
+            if (machineAccess) return Response.json(MachineAccessGrantsListResponseV1Schema.parse({
+                machineId: decodeURIComponent(machineAccess[1]),
+                custodian: { accountId, displayName: 'Fixture Account' },
+                access: { custodian: { accountId, displayName: 'Fixture Account' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+                canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+            }));
+            if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json(V2SessionListResponseSchema.parse({
+                sessions: [...createdSessions].filter(([key]) => key.startsWith(`${serverId}|`)).map(([, session]) => session),
+                nextCursor: null, hasNext: false,
+            }));
+            const sessionRead = /^\/v2\/sessions\/([^/]+)$/.exec(path);
+            if (sessionRead) {
+                const session = createdSessions.get(`${serverId}|${decodeURIComponent(sessionRead[1])}`);
+                return session ? Response.json({ session }) : Response.json({ error: 'not_found' }, { status: 404 });
+            }
+            if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1,
+                content: { t: 'plain', v: AcpCatalogRecordV1Schema.parse({
+                    v: 1, definitions: settingsState.acpCatalogSettingsV1.backends,
+                }) },
+            });
+            const profileResponse = createProfileCatalogHttpResponse(path, settingsState);
+            if (profileResponse) return profileResponse;
+            if (path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+            if (path === '/v1/account/entity-rows/connected-accounts/purposes') {
+                const { ConnectedAccountCatalogRowReadResponseV1Schema, emptyConnectedAccountCatalogRecordV1 } = await import('@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1');
+                return Response.json(ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+                    content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') } }));
+            }
+            return createEmptyAccountBootstrapHttpResponse(path, init);
+        });
         const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
         await prepareSessionDraftPersistenceStorage();
         applySettingsMock.mockClear();
         modalShowMock.mockClear();
         modalAlertMock.mockClear();
-        ensureAgentInstallablesBackgroundMock.mockClear();
-        createSessionActionDraftMock.mockReset();
-        handleCreateSessionMock.mockReset();
         agentInputActionChipActionIdsState.value = [];
         settingsRuntimeState.current = settingsState;
+        Object.assign(settingsState, structuredClone(testSettingsDefaults));
         settingsState.useEnhancedSessionWizard = false;
         settingsState.newSessionDefaultPersistenceModeV1 = 'persisted';
         settingsState.newSessionDefaultPersistenceModeByTargetKeyV1 = {};
@@ -709,7 +763,8 @@ describe('useNewSessionScreenModel (installables)', () => {
         settingsState.experiments = false;
         settingsState.sessionDefaultPermissionModeByTargetKey = {};
         settingsState.backendEnabledByTargetKey = {};
-        storageStore.getState().activateProfileScope({ serverId: 's_active', accountId: 'acct_active' });
+        const activeScope = { serverId: homeState.activeServerId, accountId: 'acct_active' };
+        await activateAuthoringScope(activeScope);
         settingsState.acpCatalogSettingsV1 = {
             v: 2,
             backends: [],
@@ -719,6 +774,9 @@ describe('useNewSessionScreenModel (installables)', () => {
         profileCompatibilityState.isProfileCompatibleWithAnyAgent = () => true;
         profileCompatibilityState.getProfileSupportedAgentIds = () => [];
         persistedDraft.agentType = 'codex';
+        persistedDraft.input = '';
+        persistedDraft.selectedMachineId = 'machine-1';
+        persistedDraft.selectedPath = '/repo';
         persistedDraft.selectedProfileId = null;
         persistedDraft.selectedSecretId = null;
         persistedDraft.permissionMode = 'default';
@@ -751,7 +809,6 @@ describe('useNewSessionScreenModel (installables)', () => {
             },
         };
         includeProjectedCodexAcpInstallableState.value = false;
-        includeLaunchSelectionMachinesState.value = false;
         pendingFireAndForget.length = 0;
         featureEnabledState.sessionsDirect = false;
         featureEnabledCalls.length = 0;
@@ -760,30 +817,28 @@ describe('useNewSessionScreenModel (installables)', () => {
         preflightConfigOptionsByTargetKeyState.value = {};
         chromeSafeAreaInsetsState.value = { top: 0, bottom: 0, left: 0, right: 0 };
         routeParamsState.value = {};
+        machineRpcResult.value = {};
     });
 
     it('enables workspace, native skill and slash suggestions before a session exists', async () => {
         routeParamsState.value = { machineId: 'machine-1', path: '/repo' };
-        includeLaunchSelectionMachinesState.value = true;
         cliAvailabilityState.value = {
             ...cliAvailabilityState.value,
             available: { codex: true, claude: true, opencode: null },
         };
-        machineRpcWithServerScopeMock.mockReset();
-        machineRpcWithServerScopeMock.mockResolvedValue({ ok: true, result: {
+        machineRpcResult.value = { ok: true, result: {
             commands: { supported: true, items: [{ command: 'project-check' }] },
             skills: { supported: true, items: [{
                 name: 'project-check', origin: 'codex_native', path: '/repo/.agents/skills/project-check/SKILL.md',
             }] },
-        } });
+        } };
         try {
             const hook = await renderNewSessionScreenModel();
             const model = hook.getCurrent();
             expect(model?.simpleProps?.selectedMachineId).toBe('machine-1');
             expect(model?.simpleProps?.selectedPath).toBe('/repo');
-            const nativeCalls = () => machineRpcWithServerScopeMock.mock.calls
-                .map(([params]) => params as { machineId: string; serverId: string; payload: { method?: string; params?: unknown } })
-                .filter((params) => params.payload?.method === 'probeCatalogs');
+            const nativeCalls = () => network.requests.filter(({ method, payload }) => method === 'capabilities.invoke'
+                && typeof payload === 'object' && payload !== null && 'method' in payload && payload.method === 'probeCatalogs');
             expect(nativeCalls()).toEqual([]);
             expect(model?.simpleProps?.emptyAutocompleteKinds).toEqual(['file', 'session', 'composerReference', 'skill', 'slashCommand']);
             await act(async () => {
@@ -799,13 +854,13 @@ describe('useNewSessionScreenModel (installables)', () => {
                 expect.objectContaining({ text: '/project-check' }),
             ]));
             expect(nativeCalls()).toEqual([expect.objectContaining({
-                machineId: 'machine-1', serverId: 's1',
+                targetId: 'machine-1', serverUrl: 'https://installables-target.example.test',
                 payload: expect.objectContaining({ params: expect.objectContaining({
                     cwd: '/repo', backendTarget: { kind: 'backend', backendId: 'codex' }, environmentVariables: {},
                 }) }),
             })]);
         } finally {
-            machineRpcWithServerScopeMock.mockReset();
+            machineRpcResult.value = {};
         }
     });
 
@@ -831,16 +886,16 @@ describe('useNewSessionScreenModel (installables)', () => {
 
         expect(featureEnabledCalls).toContainEqual({
             featureId: 'sessions.direct',
-            scope: { scopeKind: 'spawn', serverId: 's1' },
+            scope: { scopeKind: 'spawn', serverId: homeState.targetServerId },
         });
     });
 
-    it('installs a relevant missing codex-acp dependency only after explicit create intent', async () => {
+    it('defers dependency preparation to explicit daemon creation on the selected target', async () => {
         routeParamsState.value = { machineId: 'machine-1' };
         settingsState.experiments = true;
         includeProjectedCodexAcpInstallableState.value = true;
-        includeLaunchSelectionMachinesState.value = true;
         (persistedDraft as typeof persistedDraft & { resumeSessionId: string }).resumeSessionId = 'resume-session-1';
+        await restoreCreationAccount();
         const hook = await renderNewSessionScreenModel();
         let model = hook.getCurrent();
 
@@ -852,19 +907,21 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(model?.simpleProps?.agentType).toBe('codex');
         expect(model?.simpleProps?.selectedMachineId).toBe('machine-1');
         expect(model?.simpleProps?.machineName).toBe('Machine One');
-        expect(ensureAgentInstallablesBackgroundMock).not.toHaveBeenCalled();
+        expect(dependencyInstallRequests()).toEqual([]);
+        expect(spawnRequests()).toEqual([]);
 
         await invokeHookAction(() => model?.simpleProps?.handleCreateSession?.());
 
-        expect(ensureAgentInstallablesBackgroundMock).toHaveBeenCalledTimes(1);
-        expect(ensureAgentInstallablesBackgroundMock).toHaveBeenCalledWith({
-            agentId: 'codex',
-            machineId: 'machine-1',
-            serverId: 's1',
-            settings: settingsState,
-            resumeSessionId: 'resume-session-1',
+        await waitForHomeGovernance(() => expect(spawnRequests()).toHaveLength(1));
+        expect(spawnRequests()[0]).toMatchObject({
+            targetId: 'machine-1',
+            serverUrl: homeState.targetServerUrl,
+            payload: expect.objectContaining({
+                executionTarget: { serverId: homeState.targetServerId, machineId: 'machine-1' },
+                agentTarget: { kind: 'agent', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.codex },
+            }),
         });
-        expect(handleCreateSessionMock).toHaveBeenCalledTimes(1);
+        expect(dependencyInstallRequests()).toEqual([]);
     });
 
     it('falls back to default settings when settings are temporarily unavailable during startup', async () => {
@@ -903,7 +960,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             available: { claude: true, codex: false, opencode: true },
         };
 
-        const hook = await renderNewSessionScreenModel();
+        const hook = await renderNewSessionScreenModel({ openAgentPicker: true });
         let model = hook.getCurrent();
 
         expect(model?.simpleProps?.agentType).toBe('claude');
@@ -940,7 +997,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             ],
         };
 
-        const hook = await renderNewSessionScreenModel();
+        const hook = await renderNewSessionScreenModel({ openAgentPicker: true });
         let model = hook.getCurrent();
 
         const opencodeOption = model?.simpleProps?.agentPickerOptions?.find?.((option: { id: string }) =>
@@ -951,8 +1008,12 @@ describe('useNewSessionScreenModel (installables)', () => {
 
         const detailScreen = await renderScreen(<>{opencodeDetailContent}</>);
 
-        const previewItems = detailScreen.findAllByTestId('model-picker-overlay-option:opencode-fast');
-        expect(previewItems).toHaveLength(1);
+        const previewTestId = `model-picker-overlay-option:${sessionModelSelectionKey({
+            agentTargetKey: buildBuiltInBackendTargetKey('opencode'),
+            providerConnectionId: null,
+            modelId: 'opencode-fast',
+        })}`;
+        await waitForHomeGovernance(() => expect(detailScreen.findAllByTestId(previewTestId)).toHaveLength(1));
         const previewTexts = detailScreen.findAll((node) => typeof node.props?.children === 'string')
             .map((node) => node.props.children);
         expect(previewTexts).toContain('OpenCode Fast');
@@ -995,7 +1056,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             ],
         };
 
-        const hook = await renderNewSessionScreenModel();
+        const hook = await renderNewSessionScreenModel({ openAgentPicker: true });
         let model = hook.getCurrent();
 
         const customPresetOption = model?.simpleProps?.agentPickerOptions?.find?.((option: { id: string; onApply?: () => void; renderDetailContent?: () => React.ReactNode; detailContent?: React.ReactNode }) =>
@@ -1064,7 +1125,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                 { id: 'review', name: 'Review', description: 'Review and critique mode.' },
             ],
         };
-        const hook = await renderNewSessionScreenModel();
+        const hook = await renderNewSessionScreenModel({ openAgentPicker: true });
         let model = hook.getCurrent();
 
         expect(model?.simpleProps?.agentType).toBe('claude');
@@ -1088,7 +1149,7 @@ describe('useNewSessionScreenModel (installables)', () => {
 
         model = hook.getCurrent();
 
-        expect(model?.simpleProps?.agentType).toBe('claude');
+        expect(model?.simpleProps?.agentType).toBe(CUSTOM_ACP_AGENT_ID);
         expect(model?.simpleProps?.agentLabel).toBe('Custom Preset');
         expect(model?.simpleProps?.agentPickerSelectedOptionId).toBe(buildConfiguredAcpBackendTargetKey('custom-preset'));
         expect(model?.simpleProps?.modelMode).toBe('preset-fast');
@@ -1124,7 +1185,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             available: { claude: true, codex: false, opencode: null },
         } as any;
 
-        const hook = await renderNewSessionScreenModel();
+        const hook = await renderNewSessionScreenModel({ openAgentPicker: true });
         let model = hook.getCurrent();
 
         const customPresetOption = model?.simpleProps?.agentPickerOptions?.find?.((option: { id: string; renderDetailContent?: () => React.ReactNode }) =>
@@ -1133,11 +1194,11 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(typeof customPresetOption?.renderDetailContent).toBe('function');
 
         const firstDetailElement = customPresetOption?.renderDetailContent?.({ onRequestClose: vi.fn() }) as React.ReactElement<{
-            selectedModelId?: string;
+            selection: { modelId: string };
             onSelectionChange?: (selection: { modelId: string; sessionModeId: string; configOverrides?: Record<string, string> }) => void;
         }> | undefined;
 
-        expect(firstDetailElement?.props.selectedModelId).toBe('default');
+        expect(firstDetailElement?.props.selection.modelId).toBe('default');
 
         await invokeHookAction(() => firstDetailElement?.props.onSelectionChange?.({
             modelId: 'preset-fast',
@@ -1146,10 +1207,10 @@ describe('useNewSessionScreenModel (installables)', () => {
         }));
 
         const updatedDetailElement = customPresetOption?.renderDetailContent?.({ onRequestClose: vi.fn() }) as React.ReactElement<{
-            selectedModelId?: string;
+            selection: { modelId: string };
         }> | undefined;
 
-        expect(updatedDetailElement?.props.selectedModelId).toBe('preset-fast');
+        expect(updatedDetailElement?.props.selection.modelId).toBe('preset-fast');
     });
 
     it('renders backend picker options with ACP config previews when the backend exposes them', async () => {
@@ -1196,7 +1257,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             ],
         };
 
-        const hook = await renderNewSessionScreenModel();
+        const hook = await renderNewSessionScreenModel({ openAgentPicker: true });
         let model = hook.getCurrent();
 
         const customPresetOption = model?.simpleProps?.agentPickerOptions?.find?.((option: { id: string }) =>
@@ -1254,7 +1315,7 @@ describe('useNewSessionScreenModel (installables)', () => {
                 },
             ],
         };
-        const hook = await renderNewSessionScreenModel();
+        const hook = await renderNewSessionScreenModel({ openAgentPicker: true });
         let model = hook.getCurrent();
 
         expect(model?.simpleProps?.acpConfigOptionOverrides).toBeNull();
@@ -1277,7 +1338,7 @@ describe('useNewSessionScreenModel (installables)', () => {
 
         model = hook.getCurrent();
 
-        expect(model?.simpleProps?.agentType).toBe('claude');
+        expect(model?.simpleProps?.agentType).toBe(CUSTOM_ACP_AGENT_ID);
         expect(model?.simpleProps?.agentPickerSelectedOptionId).toBe(buildConfiguredAcpBackendTargetKey('custom-preset'));
         expect(model?.simpleProps?.acpConfigOptionOverrides).toEqual({
             v: 1,
@@ -1394,7 +1455,7 @@ describe('useNewSessionScreenModel (installables)', () => {
         const hook = await renderNewSessionScreenModel();
         let model = hook.getCurrent();
 
-        expect(model?.simpleProps?.agentType).toBe('claude');
+        expect(model?.simpleProps?.agentType).toBe(CUSTOM_ACP_AGENT_ID);
         expect(model?.simpleProps?.agentLabel).toBe('Custom Preset');
         expect(model?.simpleProps?.agentPickerSelectedOptionId).toBe(buildConfiguredAcpBackendTargetKey('custom-preset'));
         expect(model?.simpleProps?.permissionMode).toBe('safe-yolo');
@@ -1526,7 +1587,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             available: { claude: true, codex: true, opencode: true, gemini: true },
         } as any;
 
-        const hook = await renderNewSessionScreenModel();
+        const hook = await renderNewSessionScreenModel({ openAgentPicker: true });
         let model = hook.getCurrent();
 
         expect(model?.simpleProps?.agentType).toBe('claude');
@@ -1559,9 +1620,13 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(chips.some((chip: { key: string }) => chip.key === 'new-session-storage')).toBe(true);
     });
 
-    it('seeds execution-run action chips with UI-normalized permission defaults', async () => {
+    it('seeds execution-run action chips with canonical permission defaults', async () => {
         agentInputActionChipActionIdsState.value = ['review.start'];
+        await setActiveServerId(homeState.targetServerId);
+        const scope = { serverId: homeState.targetServerId, accountId: 'account-1' };
+        await activateAuthoringScope(scope);
 
+        await restoreCreationAccount();
         const hook = await renderNewSessionScreenModel();
         let model = hook.getCurrent();
 
@@ -1582,18 +1647,18 @@ describe('useNewSessionScreenModel (installables)', () => {
 
         await invokeHookAction(() => rendered.props.onPress?.());
 
-        expect(handleCreateSessionMock).toHaveBeenCalledTimes(1);
-        expect(createSessionActionDraftMock).toHaveBeenCalledWith(
-            { serverId: 's1', accountId: 'account-1' },
-            { serverId: 's1', sessionId: 'session-created' },
+        await waitForHomeGovernance(() => expect(spawnRequests()).toHaveLength(1));
+        await waitForHomeGovernance(() => expect(storageStore.getState().sessionActionDraftsByAddressKey[sessionAddressKey({
+            serverId: homeState.targetServerId, sessionId: 'session-created',
+        })]).toEqual([
             expect.objectContaining({
                 actionId: 'review.start',
                 input: expect.objectContaining({
-                    permissionMode: 'read-only',
+                    permissionMode: 'read_only',
                     changeType: 'uncommitted',
                 }),
             }),
-        );
+        ]));
     });
 
     it('defaults the storage chip from the global persistence setting', async () => {
@@ -1757,7 +1822,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             timestamp: 1,
             available: { codex: false, claude: false, opencode: null },
         } as any;
-        const hook = await renderNewSessionScreenModel();
+        const hook = await renderNewSessionScreenModel({ openAgentPicker: true });
         let model = hook.getCurrent();
 
         const renderStorageChipText = async () => {
@@ -1779,7 +1844,7 @@ describe('useNewSessionScreenModel (installables)', () => {
 
         model = hook.getCurrent();
 
-        expect(model?.simpleProps?.agentType).toBe('claude');
+        expect(model?.simpleProps?.agentType).toBe(CUSTOM_ACP_AGENT_ID);
         expect(model?.simpleProps?.agentLabel).toBe('Custom Preset B');
         expect(model?.simpleProps?.agentPickerSelectedOptionId).toBe(buildConfiguredAcpBackendTargetKey('custom-preset-b'));
         expect(await renderStorageChipText()).toContain('sessionsList.storageDirectTab');
@@ -1849,9 +1914,8 @@ describe('useNewSessionScreenModel (installables)', () => {
      */
     it('addresses the file search at the machine and folder the user picked', async () => {
         routeParamsState.value = { machineId: 'machine-1', path: '/repo' };
-        includeLaunchSelectionMachinesState.value = true;
-        machineRpcWithServerScopeMock.mockReset();
-        machineRpcWithServerScopeMock.mockResolvedValue({ success: true, stdout: 'README.md\nsrc/index.ts\n' });
+        machineRpcResult.value = DaemonWorkspaceFileListResponseSchema.parse({ ok: true,
+            paths: ['README.md', 'src/index.ts'], truncated: false });
         const { fileSearchCache } = await import('@/sync/domains/input/suggestionFile');
         // Whole-cache clear: the index is keyed by this workspace address, and a warm entry
         // from an earlier case would serve rows without issuing the RPC this asserts on.
@@ -1867,21 +1931,19 @@ describe('useNewSessionScreenModel (installables)', () => {
             // The addressing, not just the presence of rows: without an explicit machine and
             // cwd the daemon searches its OWN working directory and would offer files from a
             // tree the user never chose.
-            const ripgrep = machineRpcWithServerScopeMock.mock.calls
-                .map(([params]) => params as { machineId: string; method: string; serverId?: string | null; payload: { cwd?: string } })
-                .filter((params) => params.method === 'ripgrep');
-            expect(ripgrep).toHaveLength(1);
-            expect(ripgrep[0]?.machineId).toBe('machine-1');
-            expect(ripgrep[0]?.payload.cwd).toBe('/repo');
-            // `s1` is the declared spawn target and is deliberately not the active server.
-            expect(ripgrep[0]?.serverId).toBe('s1');
+            const fileList = network.requests.filter((request) => request.method === RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST);
+            expect(fileList).toHaveLength(1);
+            expect(fileList[0]?.targetId).toBe('machine-1');
+            expect(fileList[0]?.payload).toMatchObject({ rootPath: '/repo' });
+            // The declared spawn target is deliberately not the active Home.
+            expect(fileList[0]?.serverUrl).toBe('https://installables-target.example.test');
         } finally {
             fileSearchCache.clearCache();
         }
     });
 
     it('scopes the `@session` picker to the server this session will spawn on', async () => {
-        const row = (id: string) => ({
+        const row = (id: string) => createSessionListRenderableSessionFixture({
             id,
             seq: 1,
             createdAt: 1,
@@ -1890,11 +1952,11 @@ describe('useNewSessionScreenModel (installables)', () => {
             archivedAt: null,
             metadata: { name: `Session ${id}`, path: '/repo' },
         });
-        // `s1` is the mocked `targetServerId`; `s_active` is the activated profile scope,
-        // deliberately different, so scoping to the wrong one is observable.
+        // The target Home and active profile scope deliberately differ, so
+        // scoping to the wrong one is observable.
         storageState.sessionListRowsByServerId = {
-            s1: { peer: row('peer') },
-            s_active: { elsewhere: row('elsewhere') },
+            [homeState.targetServerId]: { peer: row('peer') },
+            [homeState.activeServerId]: { elsewhere: row('elsewhere') },
         };
 
         try {

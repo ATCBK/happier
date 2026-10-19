@@ -14,7 +14,7 @@ import {
   usePromptStackEntryPresentations,
 } from '@/components/settings/prompts/stacks/promptStackEntryPresentation';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Text } from '@/components/ui/text/Text';
@@ -147,35 +147,37 @@ export const NewSessionInstructions = React.memo(
             reason={t('bots.create.documentFailed')}
           />
         ) : null}
-        <View style={styles.row}>
-          <Text style={styles.label}>{t('sessionInstructions.title')}</Text>
-          {entry ? (
+        {entry ? (
+          <View style={styles.row}>
+            <Text style={styles.label}>{t('sessionInstructions.title')}</Text>
             <AttachedInstructions
               entry={entry}
               serverId={serverId}
               onEdit={edit}
               onDetach={detach}
             />
-          ) : (
-            <View style={styles.actions}>
-              <RoundButton
-                testID="new-session-instructions-create"
-                size="small"
-                display="secondary"
-                title={t('sessionInstructions.create')}
-                action={create}
-                disabled={createState === 'creating'}
-              />
-              <AttachExistingInstructions
-                testID="new-session-instructions-attach"
-                serverId={serverId}
-                title={t('sessionInstructions.attach')}
-                quiet
-                onAttach={attach}
-              />
-            </View>
-          )}
-        </View>
+          </View>
+        ) : (
+          // Two operations written on the purpose's line, not a pair of buttons that reads as a toggle.
+          <View style={styles.row}>
+            <TextLinkButton
+              testID="new-session-instructions-create"
+              tone="strong"
+              label={t('sessionInstructions.create')}
+              onPress={create}
+              disabled={createState === 'creating'}
+            />
+            <Text style={styles.separator} aria-hidden>·</Text>
+            <AttachExistingInstructions
+              testID="new-session-instructions-attach"
+              serverId={serverId}
+              title={t('sessionInstructions.attach')}
+              quiet
+              link
+              onAttach={attach}
+            />
+          </View>
+        )}
       </View>
     );
   },
@@ -224,30 +226,30 @@ function AttachedInstructions(
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
-  // The composer card follows on the page's section rhythm, like the draft header above it.
+  // The host places the line: under a Bot's name, or on the composer's edge above the card.
   root: {
-    gap: theme.space.s8,
-    paddingBottom: theme.space.s12,
+    gap: theme.space.s6,
   },
-  // One row height in every state: the label stays put while its choices become the document.
+  // One line height in every state, so choosing or detaching never moves the composer below.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    columnGap: theme.space.s12,
+    // A wrapping row packs its lines at the top; centre them so text sits mid-line in every state.
+    alignContent: 'center',
+    columnGap: theme.space.s8,
     rowGap: theme.space.s6,
-    minHeight: 32,
+    minHeight: 28,
+  },
+  separator: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowDescription'),
+    color: theme.colors.text.tertiary,
   },
   label: {
     ...Typography.default(),
-    ...happierPageTextMetrics('sectionDescription'),
+    ...happierPageTextMetrics('rowDescription'),
     color: theme.colors.text.secondary,
-  },
-  actions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: theme.space.s8,
   },
   attached: {
     flexDirection: 'row',
@@ -258,7 +260,7 @@ const stylesheet = StyleSheet.create((theme) => ({
   },
   document: {
     ...Typography.default('semiBold'),
-    ...happierPageTextMetrics('sectionDescription'),
+    ...happierPageTextMetrics('rowDescription'),
     color: theme.colors.text.primary,
     flexShrink: 1,
     minWidth: 0,

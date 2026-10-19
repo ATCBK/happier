@@ -1,3 +1,4 @@
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import * as React from 'react';
 import type { ManagedMachinePresetV1 } from '@happier-dev/protocol/machines/managed/managedMachinePresetV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -92,8 +93,8 @@ function CurrentManagedMachineSelectionOffers(props: OffersProps & Readonly<{ bi
         state: !binding?.isCurrent() || state?.loading !== false || !!state?.error ? 'pending' : 'available', rowCount: offers.length,
     }); }, [offers, binding, state?.loading, state?.error, props.serverId, props.onOffers]);
     return <>
-        {approval.approvalId ? <AttentionBanner title={t('approvals.title')} description={t('approvals.status.open')}
-            action={{ label: t('approvals.details'), onPress: () => router.push(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}` as never) }} /> : null}
+        {approval.approvalId ? <AttentionBanner testID="managed-machine-selection-approval" title={t('approvals.title')} description={t('approvals.status.open')}
+            action={{ label: t('approvals.details'), onPress: () => router.push(buildApprovalHref(approval.approvalId!, props.serverId) as never) }} /> : null}
         {state?.error ? <SurfaceStateCard kind="error" title={t('machinePresets.loadFailed')} diagnosticCode={state.error}
             action={{ label: t('common.retry'), onPress: presets.refresh }} /> : null}
     </>;

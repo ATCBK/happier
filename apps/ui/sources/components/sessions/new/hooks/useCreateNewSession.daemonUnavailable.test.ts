@@ -11,7 +11,7 @@ import { SessionSpawnNewInputV2Schema, createAccountScopedCryptoMaterialSnapshot
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { createDeferred, createPlainAccountEncryptionCurrentnessFixture, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
-import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
@@ -135,6 +135,7 @@ async function createHarness() {
   const respondMachineRpc = async (method: string, input: unknown) => {
     const additional = await additionalBoundary.rpc?.(method, input);
     if (additional !== undefined) return additional;
+    if (method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) return createExistingSessionDirectoryPreflightResult(input);
     if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
       return { protocolVersion: 1, projection: { v: 2, generation: 1, familiesById: {}, agentsById: {
         codex: { id: 'codex', title: 'Codex', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.codex },
@@ -149,7 +150,10 @@ async function createHarness() {
     return await sessionSpawnNewActionBoundarySpy(SessionSpawnNewInputV2Schema.parse(input));
   };
   socketRpcBoundary.respond = respondMachineRpc;
-  const machineRpcSpy = vi.spyOn(apiSocket, 'machineRPC').mockImplementation(async (_machineId, method, input) => await respondMachineRpc(method, input));
+  const machineRpcSpy = vi.spyOn(apiSocket, 'machineRPC').mockImplementation(async (_machineId, method, input, options) => {
+    options?.onIssued?.();
+    return await respondMachineRpc(method, input);
+  });
   const { sync } = await import('@/sync/syncEngine');
   syncSingletonBridge.current = sync;
   const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
@@ -352,7 +356,6 @@ function createRetryParams(settings: Settings, overrides: Partial<CreateSessionP
     allowedTargetServerIds: ['server-a'],
     setIsCreating: vi.fn(),
     setIsResumeSupportChecking: vi.fn(),
-    settings,
     useProfiles: false,
     selectedProfileId: null,
     profileMap: new Map(),
@@ -741,68 +744,45 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     await hook.unmount();
   });
 
-  it('links a reloaded Zen draft after accepted creation, preserves conflicting links and retries the same Session', async () => {
-    const { useCreateNewSession, sessionSpawnNewActionBoundarySpy, modalAlertSpy, storageState, todoKv, scope, machineRpcSpy } = await setupTaskHarness();
+  it('ignores retired Zen launch metadata and leaves task links with the Tasks orchestrator', async () => {
+    const { useCreateNewSession, sessionSpawnNewActionBoundarySpy, storageState, todoKv, scope } = await setupTaskHarness();
     const { storage } = await import('@/sync/domains/state/storageStore');
-    const { encodeBase64StoredJsonContentEnvelope, decodeBase64StoredJsonContentEnvelope } = await import('@/sync/encryption/base64StoredJsonContent');
+    const { encodeBase64StoredJsonContentEnvelope } = await import('@/sync/encryption/base64StoredJsonContent');
     const { seedNewSessionDraftV1 } = await import('@/components/sessions/new/newSessionDraftSeed');
     const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
     const source = { kind: 'zen_task', taskId: 'task-1', scope, title: 'Fix task' } as const;
-    const todo = { id: source.taskId, title: source.title, done: false, createdAt: 1, updatedAt: 1, linkedSessions: { existing: { title: 'Existing', linkedAt: 1 } } };
-    storage.getState().applyTodos({ todos: { [todo.id]: todo }, undoneOrder: [todo.id], doneOrder: [], versions: { 'todo.task-1': 4 } });
-    todoKv.items.set('todo.task-1', { key: 'todo.task-1', value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: todo }), version: 4 });
-    const draftId = seedNewSessionDraftV1({ scope, seed: { prompt: { text: 'Fix task', mode: 'replace' }, zenTaskSource: source, placement: { kind: 'exactTarget', serverId: scope.serverId, machineId: 'm1', directory: '/tmp' } }, createDraftId: () => 'linked-task-draft' })!;
-    const reloaded = readNewSessionDraftFromRepository({ scope, draftId });
+    const todo = { id: source.taskId, title: source.title, done: false, createdAt: 1, updatedAt: 1 };
+    storage.getState().applyTodos({ todos: { [todo.id]: todo }, undoneOrder: [todo.id], doneOrder: [], versions: {} });
+    todoKv.items.set('todo.task-1', { key: 'todo.task-1', value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: todo }), version: 1 });
+    const draftId = seedNewSessionDraftV1({
+      scope, seed: { prompt: { text: 'Fix task', mode: 'replace' },
+        placement: { kind: 'exactTarget', serverId: scope.serverId, machineId: 'm1', directory: '/tmp' } },
+      createDraftId: () => 'retired-task-draft',
+    })!;
     storage.setState({ sessions: { ...storage.getState().sessions, 'task-session': createSessionFixture({ id: 'task-session', serverId: scope.serverId }) } });
     sessionSpawnNewActionBoundarySpy.mockResolvedValue({ ...spawnSuccess('task-session'), executionTarget: { serverId: scope.serverId, machineId: 'm1' } });
-    todoKv.failWrite = true;
     const params = createRetryParams(storageState.settings, {
-      draftId, promptStore: createNewSessionPromptStore(reloaded!.input),
+      draftId, promptStore: createNewSessionPromptStore('Fix task'),
       draftScope: scope, targetServerId: scope.serverId, allowedTargetServerIds: [scope.serverId],
-      zenTaskSource: reloaded?.zenTaskSource, targetAccountScope: scope,
+      // Retained callers cannot revive the retired task-specific completion path.
+      ...{ zenTaskSource: source }, targetAccountScope: scope,
     });
     const hook = await renderHook(() => useCreateNewSession(params));
-    let createPromise: Promise<void> | void = undefined;
-    await act(async () => {
-      createPromise = hook.getCurrent().handleCreateSession();
-      await flushHookEffects({ cycles: 8, turns: 4 });
-    });
-    await flushHookEffects({ cycles: 8, turns: 4 });
-    expect(sessionSpawnNewActionBoundarySpy.mock.calls.length, JSON.stringify({ alerts: modalAlertSpy.mock.calls, rpc: machineRpcSpy.mock.calls })).toBe(1);
-    expect(todoKv.writes.length).toBeGreaterThan(0);
-    expect(readNewSessionDraftFromRepository({ scope, draftId })).not.toBeNull();
-    expect(Object.keys(storage.getState().todoState!.todos['task-1']!.linkedSessions!)).toEqual(['existing']);
-    const retry = alertRetry(modalAlertSpy);
-    todoKv.failWrite = false;
-    todoKv.conflictOnce = true;
-    await act(async () => { retry(); await createPromise; });
+    const afterCreated = vi.fn(async () => {});
+    await act(async () => { await hook.getCurrent().handleCreateSession({ afterCreated }); });
     await flushHookEffects({ cycles: 8, turns: 4 });
     expect(sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(1);
-    const envelope = decodeBase64StoredJsonContentEnvelope(todoKv.items.get('todo.task-1')!.value);
-    expect(envelope).toMatchObject({ t: 'plain', v: { done: false, linkedSessions: { existing: { title: 'Existing' }, concurrent: { title: 'Another session' } } } });
-    const { getSessionsForTask } = await import('@/sync/domains/todos/taskSessionLink');
-    expect(getSessionsForTask('task-1')).toEqual(expect.arrayContaining([expect.objectContaining({ sessionId: 'task-session', ...scope })]));
-    const { prepareSessionListAccountScope } = await import('@/sync/runtime/orchestration/concurrentSessionCache');
-    prepareSessionListAccountScope(scope);
-    const ready = createSessionListRenderableSessionFixture({ id: 'task-session', active: true, activeAt: Date.now(), latestTurnStatus: 'completed' });
-    storage.setState({ sessionListRowsByServerId: { [scope.serverId]: { 'task-session': ready } } });
-    const { TaskStatusPill } = await import('@/components/zen/views/TaskSessionStatusPill');
-    const statusView = await renderScreen(React.createElement(TaskStatusPill, { taskId: 'task-1' }));
-    await flushHookEffects({ cycles: 8, turns: 4 });
-    expect(statusView.findHostByTestId('zen-task-session-status')?.props.accessibilityLabel).toBe('inbox.readySessions');
-    expect(storage.getState().todoState!.todos['task-1']!.done).toBe(false);
-    await act(async () => {
-      storage.setState({ sessionListRowsByServerId: { [scope.serverId]: { 'task-session': { ...ready, latestTurnStatus: 'in_progress', thinking: true, thinkingAt: Date.now() } } } });
-    });
-    expect(statusView.findHostByTestId('zen-task-session-status')?.props.accessibilityLabel).toBe('workStatus.buckets.working');
-    await statusView.unmount();
+    expect(todoKv.writes).toEqual([]);
+    expect(storage.getState().todoState!.todos['task-1']).not.toHaveProperty('linkedSessions');
+    expect(afterCreated).toHaveBeenCalledTimes(1);
+    expect(readNewSessionDraftFromRepository({ scope, draftId })).toBeNull();
     await hook.unmount();
   });
 
   it('refuses a deleted task or a foreign Account/Home instead of recreating or retargeting it', async () => {
     const { todoKv, scope } = await setupTaskHarness();
     const { linkTaskToSession } = await import('@/sync/domains/todos/taskSessionLink');
-    const source = { kind: 'zen_task', taskId: 'deleted', scope, title: 'Deleted task' } as const;
+    const source = { taskId: 'deleted', scope, title: 'Deleted task' } as const;
     const link = { source, session: { scope, sessionId: 'accepted-session' } };
     // The new link contract is an intent, not a replacement map.
     const linkIntent = linkTaskToSession;
@@ -812,25 +792,22 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     expect(todoKv.writes).toEqual([]);
   });
 
-  it('links a materialized Temporary-computer Session through the same completion and retries without another activation', async () => {
+  it('retries a Temporary-computer follow-up without reviving retired task linking or another activation', async () => {
     const { useCreateNewSession, todoKv, scope, storageState, sessionSpawnNewActionBoundarySpy } = await setupTaskHarness();
     const { storage } = await import('@/sync/domains/state/storageStore');
     const { seedNewSessionDraftV1 } = await import('@/components/sessions/new/newSessionDraftSeed');
     const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
     const { buildNewSessionAuthoringDraftFromResolvedInputs } = await import('@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters');
-    const { encodeBase64StoredJsonContentEnvelope } = await import('@/sync/encryption/base64StoredJsonContent');
-    const { getSessionsForTask } = await import('@/sync/domains/todos/taskSessionLink');
     const source = { kind: 'zen_task', taskId: 'temporary-task', title: 'Temporary task', scope } as const;
     const todo = { id: source.taskId, title: source.title, done: false, createdAt: 1, updatedAt: 1 };
     storage.getState().applyTodos({ todos: { [todo.id]: todo }, undoneOrder: [todo.id], doneOrder: [], versions: {} });
-    todoKv.items.set(`todo.${todo.id}`, { key: `todo.${todo.id}`, value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: todo }), version: 1 });
-    const draftId = seedNewSessionDraftV1({ scope, seed: { prompt: { text: todo.title, mode: 'replace' }, zenTaskSource: source }, createDraftId: () => 'temporary-task-draft' })!;
+    const draftId = seedNewSessionDraftV1({ scope, seed: { prompt: { text: todo.title, mode: 'replace' } }, createDraftId: () => 'temporary-task-draft' })!;
     storage.setState({ sessions: { ...storage.getState().sessions, 'temporary-session': createSessionFixture({ id: 'temporary-session', serverId: scope.serverId }) } });
     const settlements: Array<import('./useCreateNewSession').TemporaryComputerCreatorSettlement> = [];
     const params = createRetryParams(storageState.settings, {
       draftScope: scope, draftId, targetServerId: scope.serverId, allowedTargetServerIds: [scope.serverId],
       temporaryComputerTargetScope: scope,
-      zenTaskSource: source, targetAccountScope: scope,
+      ...{ zenTaskSource: source }, targetAccountScope: scope,
       authoringDraft: buildNewSessionAuthoringDraftFromResolvedInputs({
         executionTarget: { kind: 'temporary_computer', serverId: scope.serverId, artifactTarget: 'linux-x64', workspace: { kind: 'choose_on_endpoint' } },
         directory: '', prompt: todo.title, connectedServices: null,
@@ -840,7 +817,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       temporaryComputerLaunch: async (_submission, settlement) => { settlements.push(settlement); },
     });
     const hook = await renderHook(() => useCreateNewSession(params));
-    const afterCreated = vi.fn(async () => {});
+    const afterCreated = vi.fn(async () => {}).mockRejectedValueOnce(new Error('follow_up_unavailable'));
     await act(async () => {
       await hook.getCurrent().handleCreateSession({
         afterCreated,
@@ -858,21 +835,18 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       });
     });
     expect(settlements).toHaveLength(1);
-    todoKv.failWrite = true;
     await act(async () => {
       await expect(settlements[0]!.complete('temporary-session', [])).rejects.toMatchObject({ stage: 'follow_up' });
     });
     expect(readNewSessionDraftFromRepository({ scope, draftId })).not.toBeNull();
-    expect(getSessionsForTask(todo.id)).toEqual([]);
-    expect(afterCreated).not.toHaveBeenCalled();
-    expect(readNewSessionDraftFromRepository({ scope, draftId })?.input).toBe(todo.title);
-    todoKv.failWrite = false;
-    await act(async () => { await settlements[0]!.complete('temporary-session', []); });
-    expect(getSessionsForTask(todo.id)).toEqual([expect.objectContaining({ ...scope, sessionId: 'temporary-session' })]);
-    const writes = todoKv.writes.length;
-    await act(async () => { await settlements[0]!.complete('temporary-session', []); });
-    expect(todoKv.writes).toHaveLength(writes);
+    expect(todoKv.writes).toEqual([]);
     expect(afterCreated).toHaveBeenCalledTimes(1);
+    expect(readNewSessionDraftFromRepository({ scope, draftId })?.input).toBe(todo.title);
+    await act(async () => { await settlements[0]!.complete('temporary-session', []); });
+    expect(todoKv.writes).toEqual([]);
+    await act(async () => { await settlements[0]!.complete('temporary-session', []); });
+    expect(todoKv.writes).toEqual([]);
+    expect(afterCreated).toHaveBeenCalledTimes(2);
     expect(settlements).toHaveLength(1);
     expect(sessionSpawnNewActionBoundarySpy).not.toHaveBeenCalled();
     // No successor edits exist, so acceptance retires the submitted authoring draft.
@@ -885,7 +859,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     const { storage } = await import('@/sync/domains/state/storageStore');
     const { encodeBase64StoredJsonContentEnvelope } = await import('@/sync/encryption/base64StoredJsonContent');
     const { linkTaskToSession, getSessionsForTask } = await import('@/sync/domains/todos/taskSessionLink');
-    const source = { kind: 'zen_task', taskId: 'task-1', scope, title: 'Task' } as const;
+    const source = { taskId: 'task-1', scope, title: 'Task' } as const;
     const todo = { id: source.taskId, title: source.title, done: false, createdAt: 1, updatedAt: 1 };
     storage.getState().applyTodos({ todos: { [todo.id]: todo }, undoneOrder: [todo.id], doneOrder: [], versions: {} });
     todoKv.items.set('todo.task-1', { key: 'todo.task-1', value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: todo }), version: 1 });
@@ -916,7 +890,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     const snapshot = createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: resolveAccountScopedCryptoMaterialFromCredentials(credentials) });
     todoKv.currentness = { mode: 'e2ee', version: 2, signingKeyFingerprint: 'signing-2', contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(snapshot.contentPublicKeyFingerprint), updatedAt: 2 };
     await sync.switchServer(credentials);
-    const source = { kind: 'zen_task', taskId: 'e2ee-task', scope, title: 'Private task' } as const;
+    const source = { taskId: 'e2ee-task', scope, title: 'Private task' } as const;
     const todo = { id: source.taskId, title: source.title, done: false, createdAt: 1, updatedAt: 1 };
     storage.getState().applyTodos({ todos: { [todo.id]: todo }, undoneOrder: [todo.id], doneOrder: [], versions: {} });
     // Raw ciphertext is the pinned 0.2-produced reader input; the real codec owns new writes.
@@ -1110,7 +1084,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: false, activeAt: Date.now() - 5 * 60_000, metadata: { host: 'devbox' } },
         setIsCreating,
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -1178,7 +1151,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
             : null,
           setIsCreating,
           setIsResumeSupportChecking: vi.fn(),
-          settings,
           useProfiles: false,
           selectedProfileId: null,
           profileMap: new Map(),
@@ -1242,7 +1214,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
           selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
           setIsCreating,
           setIsResumeSupportChecking: vi.fn(),
-          settings,
           useProfiles: false,
           selectedProfileId: null,
           profileMap: new Map(),
@@ -1313,7 +1284,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
         setIsCreating,
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -1372,7 +1342,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: false, activeAt: Date.now() - 5 * 60_000, metadata: { host: 'devbox' } },
         setIsCreating,
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -1443,7 +1412,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -1528,7 +1496,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -1582,6 +1549,58 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     }
   });
 
+  it('settles an accepted requester start without custodian-only operation pushes and ignores a mis-wired neighbor', async () => {
+    const context = await setupTaskHarness();
+    const { ACTION_OPERATION_RPC_METHODS_V2, ActionOperationGetV2RequestSchema } = await import('@happier-dev/protocol/actions/operations/v1');
+    const userAttemptId = 'requester-start-without-push';
+    const result = { ...spawnSuccess('requester-start-session'), executionTarget: { serverId: context.scope.serverId, machineId: 'm1' } };
+    const operation = {
+      version: 1 as const, operationId: 'requester-start-operation', revision: 1,
+      actionId: 'session.spawn_new' as const, state: 'running' as const,
+      scope: { accountId: context.scope.accountId, machineId: 'm1' },
+      requestId: userAttemptId, title: 'Create session', createdAt: 1, startedAt: 2,
+      cancellation: 'supported' as const,
+    };
+    const terminal = createDeferred<unknown>();
+    let waitingForTerminal = false;
+    context.additionalBoundary.rpc = async (method, input) => {
+      if (method === ACTION_OPERATION_RPC_METHODS_V2.list) return {
+        items: [{ ...operation, operationId: 'neighbor', requestId: 'another-click' }, operation], nextCursor: null,
+      };
+      if (method !== ACTION_OPERATION_RPC_METHODS_V2.get) return undefined;
+      expect(ActionOperationGetV2RequestSchema.parse(input)).toMatchObject({ operationId: operation.operationId, waitForTerminal: true });
+      waitingForTerminal = true;
+      return await terminal.promise;
+    };
+    context.sessionSpawnNewActionBoundarySpy.mockResolvedValueOnce({ type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' });
+    const router = { push: vi.fn(), replace: vi.fn() };
+    const settlement = vi.fn();
+    const hook = await renderHook(() => context.useCreateNewSession(createRetryParams(context.storageState.settings, {
+      draftScope: context.scope, targetAccountScope: context.scope, targetServerId: context.scope.serverId,
+      allowedTargetServerIds: [context.scope.serverId], draftId: 'requester-start-draft', launchUserAttemptId: userAttemptId,
+      promptStore: createNewSessionPromptStore('One requester prompt'), router,
+    })));
+    try {
+      await act(async () => {
+        hook.getCurrent().handleCreateSession({ onAfterCreatedSettled: settlement });
+        await flushHookEffects({ cycles: 8, turns: 4 });
+      });
+      await vi.waitFor(() => expect(waitingForTerminal).toBe(true));
+      expect(settlement).not.toHaveBeenCalled();
+      await act(async () => {
+        context.storageState.applySessions([createSessionFixture({ id: result.sessionId, serverId: context.scope.serverId, encryptionMode: 'plain' })]);
+        terminal.resolve({ kind: 'found', operation: { ...operation, state: 'succeeded', revision: 2, settledAt: 3, result } });
+      });
+      await vi.waitFor(() => expect(settlement).toHaveBeenCalledWith({ status: 'accepted', sessionId: result.sessionId }));
+      expect(router.replace).toHaveBeenCalledWith(expect.stringContaining('/session/requester-start-session'), expect.anything());
+      expect(context.modalAlertSpy).not.toHaveBeenCalled();
+      expect(context.sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      terminal.resolve({ kind: 'not_found' });
+      await hook.unmount();
+    }
+  });
+
   it.each(['succeeded', 'failed', 'cancelled', 'retired'] as const)('observes an accepted manual start through canonical %s settlement without warning or replay', async terminalState => {
     const context = await setupTaskHarness();
     const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
@@ -1596,6 +1615,15 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       scope: { accountId: context.scope.accountId, machineId: 'm1' },
       requestId: `manual:${userAttemptId}`, title: 'Create session', createdAt: 1, startedAt: 2,
       cancellation: 'supported' as const,
+    };
+    const { ACTION_OPERATION_RPC_METHODS_V2 } = await import('@happier-dev/protocol/actions/operations/v1');
+    const terminal = createDeferred<unknown>();
+    let operationDetailReads = 0;
+    context.additionalBoundary.rpc = async (method, input) => {
+      if (method !== ACTION_OPERATION_RPC_METHODS_V2.get) return undefined;
+      operationDetailReads += 1;
+      expect(input).toMatchObject({ operationId: operation.operationId, waitForTerminal: true });
+      return await terminal.promise;
     };
     context.sessionSpawnNewActionBoundarySpy.mockImplementationOnce(async () => {
       actionOperationStore.mergeSnapshots({ serverId: context.scope.serverId, snapshots: [operation] });
@@ -1620,24 +1648,17 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     expect(readDraftComposerText(getSessionDraftSnapshot(context.scope, { kind: 'newSession', draftId }))).toBe(prompt);
     if (terminalState === 'retired') {
       await hook.unmount();
+      terminal.resolve({ kind: 'not_found' });
       expect(router.replace).not.toHaveBeenCalled();
       expect(context.modalAlertSpy).not.toHaveBeenCalled();
       expect(readDraftComposerText(getSessionDraftSnapshot(context.scope, { kind: 'newSession', draftId }))).toBe(prompt);
       return;
     }
     const result = { ...spawnSuccess('accepted-start-session'), executionTarget: { serverId: context.scope.serverId, machineId: 'm1' } };
-    const { ACTION_OPERATION_RPC_METHODS_V2 } = await import('@happier-dev/protocol/actions/operations/v1');
     const observedDetailHttp: string[] = [];
-    let operationDetailReads = 0;
     context.additionalBoundary.http = async (url, init) => {
       observedDetailHttp.push(`${init?.method ?? 'GET'} ${url.pathname}`);
       return null;
-    };
-    context.additionalBoundary.rpc = async (method, input) => {
-      if (method !== ACTION_OPERATION_RPC_METHODS_V2.get) return undefined;
-      operationDetailReads += 1;
-      expect(input).toMatchObject({ operationId: operation.operationId });
-      return { kind: 'found', operation: { ...operation, state: 'succeeded', revision: 2, settledAt: 3, result } };
     };
     await act(async () => {
       context.storageState.applySessions([createSessionFixture({ id: result.sessionId, serverId: context.scope.serverId, encryptionMode: 'plain' })]);
@@ -1647,6 +1668,10 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         // qualified get owner retains the actual first-input disposition.
         ...(terminalState === 'failed' ? { error: { errorCode: 'spawn_failed', error: 'Runner failed' } } : {}),
       }] });
+      terminal.resolve({ kind: 'found', operation: { ...operation, state: terminalState, revision: 2, settledAt: 3,
+        ...(terminalState === 'succeeded' ? { result } : {}),
+        ...(terminalState === 'failed' ? { error: { errorCode: 'spawn_failed', error: 'Runner failed' } } : {}),
+      } });
       await flushHookEffects({ cycles: 8, turns: 4 });
     });
     await vi.waitFor(async () => {
@@ -1709,7 +1734,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -1842,7 +1866,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -1925,7 +1948,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -2007,7 +2029,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm-remount-prompt', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -2086,7 +2107,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
           selectedMachine: { id: 'm-mounted-prompt', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
           setIsCreating: vi.fn(),
           setIsResumeSupportChecking: vi.fn(),
-          settings,
           useProfiles: false,
           selectedProfileId: null,
           profileMap: new Map(),
@@ -2167,7 +2187,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: false, activeAt: Date.now() - 5 * 60_000, metadata: { host: 'devbox' } },
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -2262,7 +2281,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -2337,7 +2355,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
           selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
           setIsCreating,
           setIsResumeSupportChecking: vi.fn(),
-          settings,
           useProfiles: false,
           selectedProfileId: null,
           profileMap: new Map(),
@@ -2415,7 +2432,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
           },
           setIsCreating: vi.fn(),
           setIsResumeSupportChecking: vi.fn(),
-          settings,
           useProfiles: false,
           selectedProfileId: null,
           profileMap: new Map(),
@@ -2524,7 +2540,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
           selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
           setIsCreating: vi.fn(),
           setIsResumeSupportChecking: vi.fn(),
-          settings,
           useProfiles,
           selectedProfileId: null,
           profileMap: new Map(),
@@ -2598,7 +2613,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -2690,7 +2704,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         selectedMachine: { id: 'm1', active: false, activeAt: Date.now() - 5 * 60_000, metadata: { host: 'devbox' } },
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),

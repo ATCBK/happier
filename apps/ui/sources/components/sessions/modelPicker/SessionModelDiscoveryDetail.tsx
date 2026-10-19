@@ -4,6 +4,8 @@ import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
 import { getModelOptionsForSession, supportsFreeformModelSelectionForSession, type ModelOption, type SessionModelOptionsContext } from '@/sync/domains/models/modelOptions';
 import type { OptionPickerProbeState } from '@/components/sessions/pickers/OptionPickerOverlay';
 import { useNewSessionPreflightModelsState } from '@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModelsState';
+import { useSettings } from '@/sync/store/hooks';
+import type { Settings } from '@/sync/domains/settings/settings';
 
 export type SessionModelDiscoveryContext = Parameters<typeof useNewSessionPreflightModelsState>[0];
 export type SessionModelDetailState = Readonly<{
@@ -17,11 +19,12 @@ export type SessionModelDetailState = Readonly<{
 export function SessionModelDiscoveryDetail(props: Readonly<{
     agentId: string;
     composerOptionsInput: ComposerOptionsInputV1 | null;
-    discovery: () => SessionModelDiscoveryContext;
+    discovery: (settings: Settings) => SessionModelDiscoveryContext;
     selectedModelId?: string;
     renderDetail: (state: SessionModelDetailState) => React.ReactNode;
 }>) {
-    const discovery = React.useMemo(() => props.discovery(), [props.discovery]);
+    const settings = useSettings();
+    const discovery = React.useMemo(() => props.discovery(settings), [props.discovery, settings]);
     const { preflightModels, preflightModelsTargetKey, probe } = useNewSessionPreflightModelsState(discovery);
     const currentTargetKey = discovery.backendTarget ? resolveBackendTargetKeyV2(discovery.backendTarget) : null;
     const modelOptionsContext = React.useMemo<SessionModelOptionsContext>(() => ({

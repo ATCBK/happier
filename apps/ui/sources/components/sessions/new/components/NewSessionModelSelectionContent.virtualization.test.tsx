@@ -13,8 +13,9 @@ import {
 import type { SessionModelProjectionGroup } from '@/components/sessions/modelPicker/buildSessionModelPickerSections';
 import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
-import type { SelectionListBodyVirtualizedItem } from '@/components/ui/selectionList/SelectionListVirtualizedBody';
+import type { SelectionListOption } from '@/components/ui/selectionList';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
+import { reportPopoverContentLayout } from '@/dev/testkit/harness/popoverHarness';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -98,8 +99,15 @@ function providerGroup(count: number): SessionModelProjectionGroup {
 }
 
 function expectCompleteModelCatalog() {
-    const rows: readonly SelectionListBodyVirtualizedItem[] = legendListState.props?.data ?? [];
-    expect(rows.filter((row) => row.kind === 'option')).toHaveLength(5_000);
+    expect(legendListState.props).not.toBeNull();
+    const options: readonly SelectionListOption[] = legendListState.props?.data ?? [];
+    expect(options.map((option) => option.id)).toEqual(Array.from({ length: 5_000 }, (_, index) => (
+        sessionModelSelectionKey({
+            agentTargetKey: TARGET_KEY,
+            providerConnectionId: CONNECTION_ID,
+            modelId: `provider-model-${String(index).padStart(4, '0')}`,
+        })
+    )));
 }
 
 function LargeCatalogHarness(props: Readonly<{ count: number }>) {
@@ -133,9 +141,19 @@ describe('NewSessionModelSelectionContent canonical virtualized renderer', () =>
     it('opens the real compact picker, searches and selects an exact Provider ref, then reopens with cleared search and retained selection', async () => {
         await withPopoverWebGlobals(async () => {
             legendListState.reset();
-            const screen = await renderScreen(<LargeCatalogHarness count={5_000} />);
+            const screen = await renderScreen(<LargeCatalogHarness count={5_000} />, {
+                createNodeMock: () => ({
+                    measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(80, 120, 44, 44),
+                    getBoundingClientRect: () => ({ x: 80, y: 120, left: 80, top: 120, width: 44, height: 44, right: 124, bottom: 164 }),
+                    focus: () => {},
+                    blur: () => {},
+                    addEventListener: () => {},
+                    removeEventListener: () => {},
+                }),
+            });
 
             await screen.pressByTestIdAsync('new-session-model-dropdown-trigger');
+            await act(async () => { reportPopoverContentLayout(screen.tree, { width: 420, height: 400 }); });
 
             expect(screen.findByTestId('model-picker-overlay-selection-list')).toBeTruthy();
             expectCompleteModelCatalog();
@@ -156,6 +174,7 @@ describe('NewSessionModelSelectionContent canonical virtualized renderer', () =>
             expect(screen.findByTestId('model-picker-overlay-selection-list')).toBeNull();
 
             await screen.pressByTestIdAsync('new-session-model-dropdown-trigger');
+            await act(async () => { reportPopoverContentLayout(screen.tree, { width: 420, height: 400 }); });
 
             expectCompleteModelCatalog();
             expect(screen.findByTestId(

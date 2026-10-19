@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '@happier-dev/protocol/strings/maxCodeUnits';
 import {
     SessionServerStartSpawnDraftV1Schema,
     type SessionServerStartSpawnDraftV1,
@@ -11,26 +12,27 @@ import {
     type PluginUiSessionCheckoutIntentV1,
     type PluginUiSessionPlacementCandidateV1,
 } from '@happier-dev/protocol/plugins/ui';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { z as mini } from 'zod/mini';
 
 import { isPermissionMode, type PermissionMode } from '@/sync/domains/permissions/permissionTypes';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
-const SessionServerStartDraftSeedSchema = z.object({
+const SessionServerStartDraftSeedSchema = z.strictObject({
     existingDraft: mini.optional(SessionServerStartSpawnDraftV1Schema),
-    directory: z.string().trim().min(1).max(4_096).optional(),
+    directory: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(4_096))),
     // Host Agent routing id: qualified `<pluginId>/<localId>` for an installed
     // Agent, so the seed bound is that contract rather than a bare local id.
-    agentId: z.string().trim().min(1).max(MAX_AGENT_ROUTING_ID_BYTES).optional(),
-    permissionMode: z.string().trim().min(1).max(64).optional(),
-    profileId: z.string().trim().min(1).optional(),
-    executionTarget: z.object({
-        serverId: z.string().trim().min(1),
-        machineId: z.string().trim().min(1),
-    }).strict().optional(),
+    agentId: z.optional(z.string().check(z.trim(), z.minLength(1), maxCodeUnits(MAX_AGENT_ROUTING_ID_BYTES))),
+    permissionMode: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(64))),
+    profileId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    executionTarget: z.optional(z.strictObject({
+        serverId: z.string().check(z.trim(), z.minLength(1)),
+        machineId: z.string().check(z.trim(), z.minLength(1)),
+    })),
     checkoutIntent: mini.optional(PluginUiSessionCheckoutIntentV1Schema),
-    candidates: z.array(PluginUiSessionPlacementCandidateV1Schema).optional(),
-}).strict();
+    candidates: z.optional(z.array(PluginUiSessionPlacementCandidateV1Schema)),
+});
 
 export type SessionServerStartDraftSeed = Readonly<{
     existingDraft?: SessionServerStartSpawnDraftV1;
@@ -82,6 +84,10 @@ type ReadSeed = Readonly<{
     executionTarget?: SessionServerStartDraftTarget;
 }>;
 
+function resolveDraftTarget(target: SessionServerStartDraftTarget): SessionServerStartDraftTarget {
+    return { ...target, serverId: resolveServerProfileScopeIdForIdentifier(target.serverId) };
+}
+
 function readSeed(draft: PluginUiJsonObjectV1 | undefined): ReadSeed | null {
     const parsed = SessionServerStartDraftSeedSchema.safeParse(draft ?? {});
     if (!parsed.success) return null;
@@ -90,18 +96,28 @@ function readSeed(draft: PluginUiJsonObjectV1 | undefined): ReadSeed | null {
         return null;
     }
 
+    // A recipe can retain this device's pre-discovery Home id. Resolve only
+    // proven profile aliases, as New Session does, before any target-bound
+    // Machine, catalog or Folder reader receives the seed.
+    const existingDraft = parsed.data.existingDraft ? {
+        ...parsed.data.existingDraft,
+        executionTarget: resolveDraftTarget(parsed.data.existingDraft.executionTarget),
+    } : undefined;
+    const executionTarget = parsed.data.executionTarget ?? existingDraft?.executionTarget;
     return {
         seed: {
-            ...(parsed.data.existingDraft ? { existingDraft: parsed.data.existingDraft } : {}),
+            ...(existingDraft ? { existingDraft } : {}),
             ...(parsed.data.directory ? { directory: parsed.data.directory } : {}),
             ...(parsed.data.agentId ? { agentId: parsed.data.agentId } : {}),
             ...(parsed.data.permissionMode ? { permissionMode: parsed.data.permissionMode as PermissionMode } : {}),
             ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
             ...(parsed.data.checkoutIntent ? { checkoutIntent: parsed.data.checkoutIntent } : {}),
-            ...(parsed.data.candidates ? { candidates: parsed.data.candidates } : {}),
+            ...(parsed.data.candidates ? { candidates: parsed.data.candidates.map(candidate => ({
+                ...candidate, serverId: resolveServerProfileScopeIdForIdentifier(candidate.serverId),
+            })) } : {}),
         },
-        ...((parsed.data.executionTarget ?? parsed.data.existingDraft?.executionTarget)
-            ? { executionTarget: parsed.data.executionTarget ?? parsed.data.existingDraft!.executionTarget }
+        ...(executionTarget
+            ? { executionTarget: resolveDraftTarget(executionTarget) }
             : {}),
     };
 }
@@ -146,7 +162,7 @@ export async function composeSessionServerStartDraft(params: Readonly<{
     }
     const read = readSeed(params.draft);
     if (!read) return { kind: 'invalid', reason: 'draft_invalid' };
-    const target: SessionServerStartDraftTarget = read.executionTarget ?? params.target;
+    const target = read.executionTarget ?? resolveDraftTarget(params.target);
     if (params.signal?.aborted) return { kind: 'unavailable', reason: 'aborted' };
     if (!isCurrent(params.isCurrent)) return { kind: 'stale', reason: 'host_retired' };
 
@@ -177,7 +193,7 @@ export async function composeSessionServerStartDraft(params: Readonly<{
 
         const parsed = SessionServerStartSpawnDraftV1Schema.safeParse(settled);
         if (!parsed.success) return { kind: 'invalid', reason: 'settlement_invalid' };
-        const settledTarget = parsed.data.executionTarget;
+        const settledTarget = resolveDraftTarget(parsed.data.executionTarget);
         const targetWasOffered = sameTarget(settledTarget, target)
             || read.seed.candidates?.some((candidate) => sameTarget(settledTarget, {
                 serverId: candidate.serverId,
@@ -186,10 +202,11 @@ export async function composeSessionServerStartDraft(params: Readonly<{
         if (!targetWasOffered) {
             return { kind: 'invalid', reason: 'settlement_invalid' };
         }
-        if (!isWithinDraftByteLimit(parsed.data)) {
+        const draft = { ...parsed.data, executionTarget: settledTarget };
+        if (!isWithinDraftByteLimit(draft)) {
             return { kind: 'unavailable', reason: 'draft_too_large' };
         }
-        return { kind: 'submitted', draft: parsed.data };
+        return { kind: 'submitted', draft };
     } catch {
         if (aborted || params.signal?.aborted) {
             return { kind: 'unavailable', reason: 'aborted' };

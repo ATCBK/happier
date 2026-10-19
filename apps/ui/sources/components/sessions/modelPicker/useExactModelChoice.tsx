@@ -1,12 +1,15 @@
 import * as React from 'react';
-import { getAgentStaticModels } from '@happier-dev/agents';
 import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import type { DaemonProviderCurrentSelectionRecoveryV1 } from '@happier-dev/protocol/rpc';
+import { BackendTargetKeyV2Schema, parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 
 import {
   SessionModelPicker,
   type SessionModelPickerExperimentalConfirmationController,
+  type SessionModelPickerProps,
 } from '@/components/sessions/modelPicker/SessionModelPicker';
+import { useNewSessionPreflightModelsState } from '@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModelsState';
+import { resolveOperationalBackendTargetForAgentSelection } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import {
   buildSessionModelSelectedTriggerPresentation,
   hiddenModelVisibilityKeys,
@@ -33,6 +36,10 @@ function ExactModelChoiceModal(
     }[];
     providerGroups: ProjectionGroups;
     providerProjectionAuthoritative: boolean;
+    projectionError: SessionModelPickerProps['projectionError'];
+    projectionFailures: SessionModelPickerProps['projectionFailures'];
+    retryProjection: SessionModelPickerProps['retryProjection'];
+    probe: SessionModelPickerProps['probe'];
     currentSelectionRecovery?: DaemonProviderCurrentSelectionRecoveryV1 | null;
     hiddenNativeModelKeys: ReadonlySet<string>;
     selected: ProviderBoundModelRef | null;
@@ -48,6 +55,10 @@ function ExactModelChoiceModal(
       nativeModels={props.nativeModels}
       providerGroups={props.providerGroups}
       providerProjectionAuthoritative={props.providerProjectionAuthoritative}
+      projectionError={props.projectionError}
+      projectionFailures={props.projectionFailures}
+      retryProjection={props.retryProjection}
+      probe={props.probe}
       currentSelectionRecovery={props.currentSelectionRecovery}
       hiddenNativeModelKeys={props.hiddenNativeModelKeys}
       selected={props.selected}
@@ -87,6 +98,20 @@ export function useExactModelChoice(
     serverId: params.serverId,
   });
   const enabled = params.enabled !== false;
+  const backendTarget = React.useMemo(() => {
+    const key = BackendTargetKeyV2Schema.safeParse(params.agentTargetKey);
+    return key.success ? resolveOperationalBackendTargetForAgentSelection({
+      backendTarget: parseBackendTargetKeyV2(key.data),
+      selectedEntry: params.agentId ? { agentId: params.agentId } : null,
+    }) : null;
+  }, [params.agentId, params.agentTargetKey]);
+  const nativeCatalog = useNewSessionPreflightModelsState({
+    backendTarget,
+    runtimeCarrierAgentId: params.agentId,
+    selectedMachineId: params.machineId,
+    capabilityServerId: params.serverId ?? '',
+    enabled: enabled && params.agentId !== null && backendTarget !== null && params.machineId !== null,
+  });
   const providerSettings = useProviderSettingsForServer(params.serverId);
   const projection = useProviderModelProjection({
     enabled: providersEnabled && enabled,
@@ -108,16 +133,8 @@ export function useExactModelChoice(
     const clear = params.clearOptionLabel ? [{ value: 'default', label: params.clearOptionLabel,
       ...(params.clearOptionDescription ? { description: params.clearOptionDescription } : {}) }] : [];
     if (!params.agentId) return clear;
-    try {
-      return [...clear, ...getAgentStaticModels(params.agentId).map((model) => ({
-        value: model.id,
-        label: model.name || model.id,
-        ...(model.description ? { description: model.description } : {}),
-      }))];
-    } catch {
-      return clear;
-    }
-  }, [params.agentId, params.clearOptionDescription, params.clearOptionLabel]);
+    return [...clear, ...nativeCatalog.modelOptions.filter((model) => !params.clearOptionLabel || model.value !== 'default')];
+  }, [nativeCatalog.modelOptions, params.agentId, params.clearOptionDescription, params.clearOptionLabel]);
   const hiddenNativeModelKeys = React.useMemo(
     () =>
       hiddenModelVisibilityKeys(providerSettings, {
@@ -133,6 +150,18 @@ export function useExactModelChoice(
     : null;
   const providerProjectionAuthoritative =
     providersEnabled && projection.status === 'success';
+  // The picker's header refresh owns both catalogs; its error line deliberately
+  // omits a duplicate retry when that header action is available.
+  const refreshCatalogs = React.useCallback(() => {
+    nativeCatalog.probe.onRefresh?.();
+    if (providersEnabled) void projection.refresh();
+  }, [nativeCatalog.probe.onRefresh, projection.refresh, providersEnabled]);
+  const probe = React.useMemo<SessionModelPickerProps['probe']>(() => ({
+    ...nativeCatalog.probe,
+    phase: nativeCatalog.probe.phase !== 'idle' ? nativeCatalog.probe.phase
+      : providersEnabled && projection.loading ? projection.data ? 'refreshing' : 'loading' : 'idle',
+    ...(nativeCatalog.probe.onRefresh || providersEnabled ? { onRefresh: refreshCatalogs } : {}),
+  }), [nativeCatalog.probe, projection.data, projection.loading, providersEnabled, refreshCatalogs]);
   const presentation = React.useMemo(
     () =>
       buildSessionModelSelectedTriggerPresentation({
@@ -166,6 +195,10 @@ export function useExactModelChoice(
       nativeModels,
       providerGroups,
       providerProjectionAuthoritative,
+      projectionError: providersEnabled ? projection.error : null,
+      projectionFailures: providersEnabled ? projection.refreshFailures : undefined,
+      retryProjection: providersEnabled ? projection.refresh : null,
+      probe,
       currentSelectionRecovery,
       hiddenNativeModelKeys,
       selected: params.selected,
@@ -177,10 +210,15 @@ export function useExactModelChoice(
       currentSelectionRecovery,
       hiddenNativeModelKeys,
       nativeModels,
+      probe,
       params.fallbackLabel,
       params.selected,
       providerGroups,
       providerProjectionAuthoritative,
+      projection.error,
+      projection.refreshFailures,
+      projection.refresh,
+      providersEnabled,
     ],
   );
   const openDialog = React.useRef<Readonly<{
@@ -188,6 +226,10 @@ export function useExactModelChoice(
     agentTargetKey: string;
     onSelect: (selection: ProviderBoundModelRef | null) => void;
   }> | null>(null);
+  // Popovers may retain an opener while its catalogs settle before any modal
+  // exists. Read current owner data on invocation as well as while open.
+  const openState = React.useRef({ agentTargetKey: params.agentTargetKey, title: params.title, live });
+  openState.current = { agentTargetKey: params.agentTargetKey, title: params.title, live };
   React.useEffect(() => {
     const dialog = openDialog.current;
     if (dialog) {
@@ -196,7 +238,7 @@ export function useExactModelChoice(
   }, [live]);
   const open = React.useCallback(
     (onSelect: (selection: ProviderBoundModelRef | null) => void) => {
-      const agentTargetKey = params.agentTargetKey;
+      const { agentTargetKey, title, live: currentLive } = openState.current;
       if (!agentTargetKey) return;
       const selectAndRelease = (selection: ProviderBoundModelRef | null) => {
         openDialog.current = null;
@@ -204,10 +246,10 @@ export function useExactModelChoice(
       };
       const id = Modal.show({
         component: ExactModelChoiceModal,
-        props: { agentTargetKey, onSelect: selectAndRelease, ...live },
+        props: { agentTargetKey, onSelect: selectAndRelease, ...currentLive },
         chrome: {
           kind: 'card',
-          title: params.title,
+          title,
           dimensions: { size: 'lg' },
         },
         closeOnBackdrop: true,
@@ -217,14 +259,23 @@ export function useExactModelChoice(
       });
       openDialog.current = id ? { id, agentTargetKey, onSelect: selectAndRelease } : null;
     },
-    [live, params.agentTargetKey, params.title],
+    [],
   );
 
   return {
     presentation,
     open,
+    pickerProps: params.agentTargetKey ? { agentTargetKey: params.agentTargetKey, ...live } : null,
     loading: projection.loading,
     error: providersEnabled ? projection.error : null,
     refresh: projection.refresh,
   };
+}
+
+/** The same exact-model owner in an Agent popover's existing detail pane. */
+export function ExactModelChoicePicker(props: Parameters<typeof useExactModelChoice>[0] & Readonly<{
+  onSelect: (selection: ProviderBoundModelRef | null) => void;
+}>) {
+  const { pickerProps } = useExactModelChoice(props);
+  return pickerProps ? <SessionModelPicker {...pickerProps} multiColumn fillAvailableSpace onSelect={props.onSelect} /> : null;
 }

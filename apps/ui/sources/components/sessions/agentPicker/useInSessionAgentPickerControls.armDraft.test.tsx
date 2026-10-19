@@ -25,6 +25,16 @@ import type {
 } from './resolveSessionAgentContinuationEligibility';
 import { prepareArmedAgentContinuation } from '@/sync/domains/session/input/continueSessionWithArmedAgent';
 import { MetadataSchema } from '@happier-dev/session-core/state';
+import 'fake-indexeddb/auto';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { standardCleanup } from '@/dev/testkit';
+
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 
 const announceAccessibilityMessage = vi.hoisted(() => vi.fn());
 const machineRpcWithServerScope = vi.hoisted(() => vi.fn());
@@ -66,7 +76,9 @@ vi.mock('@/agents/registry/registryUi', () => ({
     getAgentPickerIconScale: () => 1,
 }));
 
-const SCOPE: ServerAccountScope = { serverId: 'server-1', accountId: 'account-1' };
+let SCOPE: ServerAccountScope = { serverId: 'server-1', accountId: 'account-1' };
+let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+let syncBridge: Awaited<ReturnType<typeof loadSyncSingletonForTests>>;
 
 function entry(
     backendId: string,
@@ -74,7 +86,6 @@ function entry(
 ): ResolvedBackendCatalogEntry {
     const resolved = getResolvedBackendCatalogEntries({
         enabledAgentIds: [backendId],
-        acpCatalogSettingsV1: { v: 2, backends: [] },
     }).find((candidate) => candidate.agentId === backendId);
     if (!resolved) throw new Error(`Missing Agent catalog fixture for ${backendId}`);
     return {
@@ -132,7 +143,6 @@ async function renderControls(props: HookProps = {}) {
         source: hookProps.source ?? supportedSource,
         machine: hookProps.machine ?? onlineMachine,
         detail: {
-            settings: {} as never,
             capabilityServerId: 'server-1',
             machineId: 'machine-1',
             cwd: '/repo',
@@ -197,7 +207,16 @@ function createDeferred<T>() {
 }
 
 describe('useInSessionAgentPickerControls arm draft', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        syncBridge = await loadSyncSingletonForTests();
+        const purposes = createConnectedPurposeCatalogHttpBoundary();
+        const http = createHomeHubArtifactHttpBoundary('account-1');
+        accountConnection = await restoreServerAccountForTest({
+            serverUrl: 'https://session-arm-draft.test', accountId: 'account-1',
+            request: async (input, init) => await purposes.handle(input, init) ?? http.request(input, init),
+        });
+        SCOPE = { serverId: accountConnection.home.id, accountId: 'account-1' };
+        await purposes.hydrate(SCOPE);
         resetSessionDraftValueCachesForTests();
         announceAccessibilityMessage.mockClear();
         machineRpcWithServerScope.mockReset();
@@ -209,8 +228,11 @@ describe('useInSessionAgentPickerControls arm draft', () => {
         ));
     });
 
-    afterEach(() => {
+    afterEach(async () => {
+        await standardCleanup();
         resetSessionDraftValueCachesForTests();
+        await accountConnection.dispose();
+        syncBridge.dispose();
     });
 
     it('keeps the armed Agent across a remount, exactly as the draft text already survives one', async () => {

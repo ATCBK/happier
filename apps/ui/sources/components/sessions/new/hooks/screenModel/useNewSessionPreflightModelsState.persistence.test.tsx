@@ -1,20 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
-import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { installNewSessionPreflightHarness } from '@/dev/testkit/harness/newSessionPreflightHarness';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { PreflightModelList } from '@/sync/domains/models/modelOptions';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildDynamicModelProbeCacheKey } from '@/sync/domains/models/dynamicModelProbeCacheKey';
 
 const target = { kind: 'backend', backendId: 'codex' } as const;
-const storageEntries = new Map<string, string>();
-const localStorageBoundary = {
-    getItem: (key: string) => storageEntries.get(key) ?? null,
-    setItem: (key: string, value: string) => { storageEntries.set(key, value); },
-    removeItem: (key: string) => { storageEntries.delete(key); },
-};
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
+let localStorageBoundary: Storage;
 const thinkingOption = {
     id: 'reasoning_effort', name: 'Thinking', type: 'select', currentValue: 'medium',
     options: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }],
@@ -29,30 +25,29 @@ const legacySpeedOption = {
 } as const;
 let probeResult: Readonly<Record<string, unknown>>;
 const capabilityRpc = vi.fn(async () => ({ ok: true, result: probeResult }));
-let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>> | undefined;
+let network: Awaited<ReturnType<typeof installNewSessionPreflightHarness>> | undefined;
 let serverId: string;
 
 async function loadOwnerGraph() {
     await network?.dispose();
     vi.resetModules();
     // Keep Home credential admission, RPC schemas, discovery and persisted cache real.
-    network = await installSessionOpsNetworkBoundary();
-    serverId = (await network.addHome('https://model-probe-persistence.test', 'account-a')).id;
-    network.setRpcResponder(async (request) => {
-        expect(request.targetId).toBe('machine-1');
-        expect(request.method).toBe(RPC_METHODS.CAPABILITIES_INVOKE);
+    network = await installNewSessionPreflightHarness(async machineId => {
+        expect(machineId).toBe('machine-1');
         return capabilityRpc();
-    });
-    await loadSyncSingletonForTests();
+    }, { installBrowser: false });
+    serverId = network.serverId;
     return import('./useNewSessionPreflightModelsState');
 }
 
 async function mountOwner(providerConnectionId: string | null = null) {
     const { useNewSessionPreflightModelsState } = await import('./useNewSessionPreflightModelsState');
-    return renderHook(() => useNewSessionPreflightModelsState({
+    const hook = await renderHook(() => useNewSessionPreflightModelsState({
         backendTarget: target, providerConnectionId, selectedMachineId: 'machine-1',
         capabilityServerId: serverId, cwd: '/repo',
     }));
+    await waitForHomeGovernance(() => expect(hook.getCurrent().probe.phase).toBe('idle'));
+    return hook;
 }
 
 function expectModelFields(list: PreflightModelList | null, modelId: string, option: typeof thinkingOption | typeof speedOption | typeof legacySpeedOption) {
@@ -63,22 +58,27 @@ function expectModelFields(list: PreflightModelList | null, modelId: string, opt
     expect(list?.availableModels).toHaveLength(1);
 }
 
+browser = await installBrowserRuntimeForTests({ url: 'https://model-probe-persistence.test/' });
+localStorageBoundary = browser.storage;
+await loadOwnerGraph();
+
 describe('useNewSessionPreflightModelsState persistence through scoped daemon transport', () => {
     beforeEach(async () => {
-        storageEntries.clear();
+        browser?.restore();
+        browser = await installBrowserRuntimeForTests({ url: 'https://model-probe-persistence.test/' });
+        localStorageBoundary = browser.storage;
+        await network?.reset();
         capabilityRpc.mockClear();
         probeResult = { availableModels: [{ id: 'm1', name: 'm1', modelOptions: [thinkingOption] }], supportsFreeform: false };
         // Browser storage is a genuine persistence boundary and survives module reloads.
-        vi.stubGlobal('window', { localStorage: localStorageBoundary });
-        vi.stubGlobal('document', {});
-        await loadOwnerGraph();
         const { resetDynamicModelProbeCacheForTests } = await import('@/sync/domains/models/dynamicModelProbeCache');
         resetDynamicModelProbeCacheForTests();
     });
-    afterEach(async () => {
-        await standardCleanup();
+    afterEach(standardCleanup);
+    afterAll(async () => {
         await network?.dispose();
         network = undefined;
+        browser?.restore();
         vi.unstubAllGlobals();
     });
 
@@ -102,7 +102,7 @@ describe('useNewSessionPreflightModelsState persistence through scoped daemon tr
     });
 
     it('does not persist static fallback probe results across module reloads', async () => {
-        probeResult = { provider: 'codex', source: 'static', availableModels: [{ id: 'm1', name: 'm1' }], supportsFreeform: false };
+        probeResult = { agentId: 'codex', source: 'static', availableModels: [{ id: 'm1', name: 'm1' }], supportsFreeform: false };
         const first = await mountOwner();
         expect(first.getCurrent().preflightModels?.availableModels.map((model) => model.id)).toEqual(['m1']);
         await first.unmount();

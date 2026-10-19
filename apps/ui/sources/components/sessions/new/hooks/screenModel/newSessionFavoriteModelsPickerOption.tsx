@@ -2,7 +2,7 @@ import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
-import { NewSessionFavoriteModelsDetail } from '@/components/sessions/new/components/NewSessionFavoriteModelsDetail';
+import { NewSessionFavoriteModelsDetail, type NewSessionFavoriteModelsDetailProps } from '@/components/sessions/new/components/NewSessionFavoriteModelsDetail';
 import type { OptionPickerProbeState } from '@/components/sessions/pickers/OptionPickerOverlay';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import type { Settings } from '@/sync/domains/settings/settings';
@@ -17,6 +17,7 @@ import {
 import { buildFavoriteBackendIdentity } from '@/sync/domains/models/favoriteModelBackendIdentity';
 import { t } from '@/text';
 import { Icon } from '@/components/ui/icons/Icon';
+import { useSettings } from '@/sync/store/hooks';
 
 export const FAVORITE_MODELS_AGENT_PICKER_OPTION_ID = 'favorite-models';
 
@@ -26,6 +27,13 @@ export type FavoriteModelTogglePayload = Readonly<{
     modelSelection?: SessionModelSelectionV1;
     providerDisplaySnapshot?: FavoriteProviderDisplaySnapshot;
 }>;
+
+function NewSessionFavoriteModelsPickerDetail(props: Omit<NewSessionFavoriteModelsDetailProps, 'settings'>
+    & Readonly<{ readSettings: () => Settings }>) {
+    useSettings();
+    const { readSettings, ...detail } = props;
+    return <NewSessionFavoriteModelsDetail {...detail} settings={readSettings()} />;
+}
 
 function FavoriteModelsPickerIcon(props: Readonly<{ size?: number }>) {
     const { theme } = useUnistyles();
@@ -51,7 +59,7 @@ export function buildNewSessionFavoriteModelsPickerOption(params: Readonly<{
     capabilityServerId: string;
     projectionCurrent: boolean;
     selectedPath: string | null;
-    settings: Settings;
+    readSettings: () => Settings;
     refreshProbe?: OptionPickerProbeState | null;
     onSelectFavoriteModel: (
         entry: ResolvedBackendCatalogEntry,
@@ -102,7 +110,7 @@ export function buildNewSessionFavoriteModelsPickerOption(params: Readonly<{
             params.onRememberAgentPickerView?.({ kind: 'favoriteModels' });
         },
         renderDetailContent: ({ onRequestClose }) => (
-            <NewSessionFavoriteModelsDetail
+            <NewSessionFavoriteModelsPickerDetail
                 favoriteModelSelections={params.favoriteModelSelections}
                 resolvedBackendEntries={compatibleResolvedBackendEntries}
                 selectedBackendTargetKey={params.selectedBackendTargetKey}
@@ -113,7 +121,7 @@ export function buildNewSessionFavoriteModelsPickerOption(params: Readonly<{
                 capabilityServerId={params.capabilityServerId}
                 projectionCurrent={params.projectionCurrent}
                 cwd={params.selectedPath}
-                settings={params.settings}
+                readSettings={params.readSettings}
                 refreshProbe={params.refreshProbe ?? null}
                 onSelectFavoriteModel={(entry, modelSelection, configOverrides) => {
                     params.onSelectFavoriteModel(entry, modelSelection, configOverrides);

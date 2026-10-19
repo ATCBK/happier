@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -48,7 +49,7 @@ type BuildNewSessionAgentPickerOptionsParams = Readonly<{
     selectedModelId: string;
     selectedModelSelection?: SessionModelSelectionV1 | null;
     selectedConfigOverrides?: Readonly<Record<string, string>>;
-    settings: Settings;
+    readSettings: () => Settings;
     refreshProbe?: OptionPickerProbeState | null;
     favoriteModelSelections?: readonly FavoriteModelSelectionV1[];
     favoriteBackendTargetKeys?: ReadonlyArray<string>;
@@ -70,6 +71,7 @@ type BuildNewSessionAgentPickerOptionsParams = Readonly<{
     providerProjection?: NewSessionEngineOptionDetailProps['providerProjection'];
     /** Known only for the selected Agent: the hook that resolves it follows the selection. */
     selectedNativeSourceLabel?: string | null;
+    selectedConnectedServices?: ConnectedServiceBindingsV2 | null;
     experimentalConfirmation?: SessionModelPickerExperimentalConfirmationController;
     /** The agent on the composer's machine, from the one inventory owner (null: nothing known yet). */
     getBackendEntryMachineAgent?: (entry: ResolvedBackendCatalogEntry) => MachineAgent | null;
@@ -136,7 +138,7 @@ export function buildNewSessionAgentPickerOptions(
             capabilityServerId: params.capabilityServerId,
             projectionCurrent: params.projectionCurrent,
             selectedPath: params.selectedPath,
-            settings: params.settings,
+            readSettings: params.readSettings,
             refreshProbe: params.refreshProbe,
             onSelectFavoriteModel: params.onSelectFavoriteModel,
             onSelectFavoriteModelOptionValue: params.onSelectFavoriteModelOptionValue,
@@ -209,7 +211,7 @@ export function buildNewSessionAgentPickerOptions(
                 selectedMachineId: params.selectedMachineId,
                 capabilityServerId: params.capabilityServerId,
                 selectedPath: params.selectedPath,
-                settings: params.settings,
+                readSettings: params.readSettings,
                 refreshProbe: params.refreshProbe,
                 favoriteModelSelections: params.favoriteModelSelections ?? [],
                 onToggleFavoriteModel: params.onToggleFavoriteModel,
@@ -221,6 +223,8 @@ export function buildNewSessionAgentPickerOptions(
                 } : undefined,
                 ...(params.providerProjection ? { providerProjection: params.providerProjection } : {}),
                 nativeSourceLabel: entry.backendTargetKey === params.selectedBackendTargetKey ? params.selectedNativeSourceLabel : null,
+                ...(entry.backendTargetKey === params.selectedBackendTargetKey && 'selectedConnectedServices' in params
+                    ? { connectedServices: params.selectedConnectedServices } : {}),
                 experimentalConfirmation: params.experimentalConfirmation,
                 onRememberAgentPickerView: params.onRememberAgentPickerView,
                 getEngineSelectionForTargetKey: params.getEngineSelectionForTargetKey,

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, renderHook } from '@/dev/testkit';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createExistingSessionDirectoryPreflightResult, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { AutomationDefinitionCreateRequestSchema, AutomationDefinitionDetailSchema, type AutomationDefinitionDetail } from '@happier-dev/protocol/automations/automationApiV3';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
@@ -200,6 +200,9 @@ const runtime = installSessionPaneRuntimeTestHarness({
                 throw new Error('Malformed daemon RPC');
             }
             const method = payload.method.slice(payload.method.indexOf(':') + 1);
+            if (method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) {
+                return { ok: true, result: createExistingSessionDirectoryPreflightResult(payload.params) };
+            }
             projectionBoundaryRequests.push(method);
             if (method === ACTION_OPERATION_RPC_METHODS_V2.get && managedMachine) {
                 await managedOperationWait;
@@ -273,7 +276,6 @@ async function mount(inputs: DaemonMergedProjectionInputs | null, authoringCommi
         router: { push: vi.fn(), replace: vi.fn() },
         selectedMachineId: machine.id, selectedPath: '/tmp', selectedMachine: machine,
         setIsCreating: vi.fn(), setIsResumeSupportChecking: vi.fn(),
-        settings: storage.getState().settings,
         useProfiles: false, selectedProfileId: null, profileMap: new Map(),
         recentMachinePaths: [],
         agentType: agentId, staticAgentId: null, runtimeCarrierAgentId: agentId,
@@ -326,6 +328,20 @@ async function createManagedDraft(archiveEffect: 'keep' | 'stop' | 'delete' = 'k
 }
 
 describe('useCreateNewSession (projection currentness admission)', () => {
+    it('keeps a retained managed draft readable before its Account scope and operation hydrate', async () => {
+        const selection = await createManagedDraft();
+        const hook = await mount(null, false, {
+            managedMachineSelection: selection,
+            managedMachineAcquisition: { requestId: 'retained-send', selection: selection.selection,
+                managedId: 'paid', operation: { operationId: 'not-yet-hydrated' } },
+            draftScope: undefined, targetAccountScope: undefined,
+        });
+        try {
+            expect(hook.getCurrent().managedMachineCreationProgress).toEqual({ kind: 'idle' });
+            expect(managedAcquireRequests).toEqual([]);
+            expect(spawnRequests).toEqual([]);
+        } finally { await hook.unmount(); }
+    });
     it('sends the reopened connected selection after configuration seeding and a controlled editor change', async () => {
         const inputs = await readCurrentProjection();
         const scope = { serverId: runtime.serverId, accountId: 'account-a' };
@@ -361,7 +377,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
                 connectedServices: SessionAuthoringValueV1Schema.shape.connectedServices.parse(seededBindings),
             }), machineId: 'm1',
         });
-        const draftId = seedNewSessionDraftV1({ scope, createDraftId: () => 'connected-seam',
+        const draftId = seedNewSessionDraftV1({ scope, createDraftId: () => '6bf41279-7890-4da1-b94a-037a176c1975',
             seed: { prompt: { text: 'Keep my connected selection', mode: 'replace' },
                 placement: { kind: 'exactTarget', serverId: scope.serverId, machineId: 'm1', directory: '/tmp' } },
             configurationDraft: buildNewSessionConfigurationDraft(configuration),
@@ -397,7 +413,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
             const reopened = readNewSessionDraftFromRepository({ scope, draftId });
             if (!reopened) throw new Error('Expected retained editor draft');
             const authoringDraft = buildNewSessionAuthoringDraftFromPersistedDraft(reopened);
-            expect(authoringDraft.connectedServices).toEqual(editedBindings);
+            expect(ConnectedServiceBindingsV2Schema.parse(authoringDraft.connectedServices)).toEqual(editedBindings);
             const recoveredOptions = reopened.backendNewSessionOptionStateByTargetKey ?? {};
             const recovered = await renderHook(() => useNewSessionConnectedServicesAgentOptions({
                 runtimeCarrierAgentId: agentId, selectedMachineId: 'm1', targetServerId: runtime.serverId,
@@ -655,6 +671,36 @@ describe('useCreateNewSession (projection currentness admission)', () => {
             expect(hook.getCurrent().managedMachineCreationProgress.kind).not.toBe('failed');
         } finally { await hook.unmount(); }
     });
+    it('keeps post-create follow-up alive across route unmount and retires it with the captured Account', async () => {
+        const hook = await mount(await readCurrentProjection(), false);
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        let cancelled = false;
+        try {
+            await act(async () => { hook.getCurrent().handleCreateSession({ initialMessage: 'skip',
+                afterCreated: async created => {
+                    created.signal?.addEventListener('abort', () => { cancelled = true; release.resolve(); }, { once: true });
+                    entered.resolve();
+                    await release.promise;
+                },
+            }); });
+            await vi.waitFor(() => expect(spawnRequests).toHaveLength(1));
+            const { storage } = await import('@/sync/domains/state/storageStore');
+            storage.getState().applySessions([createSessionFixture({ id: 'created-session', serverId: runtime.serverId,
+                metadata: { machineId: 'm1', path: '/tmp', host: 'test' } })]);
+            spawnResult.resolve({ type: 'success', disposition: 'created', sessionId: 'created-session',
+                executionTarget: { serverId: runtime.serverId, machineId: 'm1' },
+                organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } });
+            await entered.promise;
+            await hook.unmount();
+            expect(cancelled).toBe(false);
+            const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+            const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-a', jti: 'retired-follow-up' })).toString('base64url')}.signature`;
+            await TokenStorage.setCredentialsForServerUrl('https://session-pane.test', { serverId: runtime.serverId }, { token });
+            expect(cancelled).toBe(true);
+        } finally { release.resolve(); await hook.unmount(); }
+    });
+
     it('retires the pending managed continuation synchronously on local Cancel without mutating the native resource', async () => {
         const selection = await createManagedDraft();
         managedMachine = {
@@ -707,11 +753,13 @@ describe('useCreateNewSession (projection currentness admission)', () => {
         const attempts: NewSessionLaunchAttempt[] = [];
         const completedCallbacks: string[] = [];
         const settlements: unknown[] = [];
+        const setIsCreating = vi.fn();
         const hook = await mount(await readCurrentProjection(), false, {
             managedMachineSelection: selection,
             managedMachineAcquisition: { requestId: 'credential-send', selection: selection.selection, managedId: 'credential-paid' },
             onManagedMachineAcquisitionChange: () => {}, onManagedMachineEnrolled: async () => {},
             onLaunchAttemptChange: attempt => { if (attempt) attempts.push(attempt); },
+            setIsCreating,
         });
         let send: Promise<void> | undefined;
         try {
@@ -745,6 +793,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
 
             expect(attempts.at(-1)).toMatchObject({ createdSessionId: 'created-session', status: 'failed_fatal',
                 phaseErrors: { uploading_attachments: { message: 'continuation_retired', retryable: false } } });
+            expect(setIsCreating).toHaveBeenLastCalledWith(false);
             expect(scopeRules.size).toBe(0);
             expect(managedMachine).toEqual(originalMachine);
             expect(completedCallbacks).toEqual([]);
@@ -880,12 +929,13 @@ describe('useCreateNewSession (projection currentness admission)', () => {
         const reopened = readNewSessionDraftFromRepository({ scope, draftId });
         if (!reopened) throw new Error('Expected managed Bot draft');
         const projection = await readCurrentProjection();
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        storage.getState().applySettingsLocal({ memoryUpkeepInNewBots: false });
         let hook: Awaited<ReturnType<typeof mount>>;
         hook = await mount(projection, false, {
             draftId, authoringDraft: buildNewSessionAuthoringDraftFromPersistedDraft(reopened),
             managedMachineSelection: selection, managedMachineAcquisition: acquisition,
             selectedMachineId: null, selectedMachine: null,
-            settings: { ...(await import('@/sync/domains/state/storageStore')).storage.getState().settings, memoryUpkeepInNewBots: false },
             onManagedMachineAcquisitionChange: () => {},
             onManagedMachineEnrolled: async machineId => {
                 await hook.rerender({ ...hook.params, selectedMachineId: machineId,

@@ -33,10 +33,14 @@ export function useNewSessionOrganizationPlacement(params: Readonly<{
     /** `managed`: a no-folder draft, placed in its machine's Chats scope. */
     directoryKind?: 'path' | 'managed';
     initialPlacement?: SessionOrganizationPlacementV1 | null;
+    /** A retained recipe keeps its authored placement until its target or directory is edited. */
+    reconcileWorkspace?: boolean;
 }>): Readonly<{
     enabled: boolean;
     valid: boolean;
     placement: SessionOrganizationPlacementV1;
+    /** The folders this draft's workspace may be placed in, for a host that shows the folder as a field. */
+    folderTargets: readonly Readonly<{ folderId: string; title: string; depth: number }>[];
     actionChips: readonly AgentInputExtraActionChip[];
     setFolderId: (folderId: string | null) => void;
     setTagIds: (tagIds: readonly string[]) => void;
@@ -72,7 +76,7 @@ export function useNewSessionOrganizationPlacement(params: Readonly<{
 
     React.useEffect(() => {
         setPlacement((current) => {
-            if (!enabled) return current;
+            if (!enabled || params.reconcileWorkspace === false) return current;
             return reconcileNewSessionOrganizationPlacementForWorkspace({
                 placement: current,
                 executionTarget: params.executionTarget,
@@ -81,7 +85,7 @@ export function useNewSessionOrganizationPlacement(params: Readonly<{
                 folders: folders.map((folder) => ({ folderId: folder.id, workspace: folder.workspace })),
             });
         });
-    }, [enabled, folders, params.directory, params.directoryKind, params.executionTarget]);
+    }, [enabled, folders, params.directory, params.directoryKind, params.executionTarget, params.reconcileWorkspace]);
 
     const setFolderId = React.useCallback((folderId: string | null) => {
         setPlacement((current) => normalizeNewSessionOrganizationPlacement({ ...current, folderId }));
@@ -133,5 +137,5 @@ export function useNewSessionOrganizationPlacement(params: Readonly<{
         placement,
     });
 
-    return { enabled, valid, placement, actionChips, setFolderId, setTagIds };
+    return { enabled, valid, placement, folderTargets, actionChips, setFolderId, setTagIds };
 }

@@ -16,6 +16,7 @@ import { SessionModelApplyTimingContext } from './SessionModelSourceBrowseHandof
 import { SelectionList } from '@/components/ui/selectionList/SelectionList';
 import { t } from '@/text';
 import { router as expoRouter } from 'expo-router';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 
 /**
  * Committing a freeform model id is a SUBMIT, not a keystroke: the overlay's custom
@@ -247,7 +248,7 @@ describe('SessionModelPicker', () => {
     it('keeps an experimental confirmation waiting for approval reviewable in place without a second request', async () => {
         const { connectionId, selected, providerGroups } = experimentalProviderGroup('pc_experimental_approval');
         const confirm = vi.fn<SessionModelPickerExperimentalConfirmationController['confirm']>(async () => false);
-        const href = '/(app)/inbox/approval-artifact-1?server=srv_picker';
+        const href = buildApprovalHref('approval-artifact-1', 'srv_picker');
         const screen = await renderScreen(
             <SessionModelPicker
                 agentTargetKey="agent:happier.agent.codex/codex"
@@ -365,7 +366,7 @@ describe('SessionModelPicker', () => {
         };
     };
 
-    it('describes the native custom entry by its source or purpose, never the "Built-in" fallback heading', async () => {
+    it('keeps the selected native account heading even when it is the only source', async () => {
         const render = (nativeSourceLabel?: string) => renderScreen(
             <SessionModelPicker
                 agentTargetKey="agent:happier.agent.codex/codex"
@@ -386,9 +387,11 @@ describe('SessionModelPicker', () => {
                 .map((child) => String(child.props.children)).join(' ');
         };
         const bare = await render();
+        expect(bare.findByType(SelectionList).props.rootStep.sections[0].title).toBeUndefined();
         expect(customText(bare)).not.toContain(t('settingsProviders.models.builtIn'));
         expect(customText(bare)).toContain(t('agentInput.model.customDescription'));
         const sourced = await render('Codex · Work pool');
+        expect(sourced.findByType(SelectionList).props.rootStep.sections[0].title).toBe('Codex · Work pool');
         expect(customText(sourced)).toContain('Codex · Work pool');
     });
 
@@ -554,6 +557,28 @@ describe('SessionModelPicker', () => {
         expect(retryProjection).toHaveBeenCalledOnce();
     });
 
+    it('names the failing source on its failure line, never a bare "Provider is unreachable"', async () => {
+        const { connectionId, providerGroups } = experimentalProviderGroup('pc_gateway_work');
+        const screen = await renderScreen(
+            <SessionModelPicker
+                agentTargetKey="agent:happier.agent.codex/codex"
+                nativeModels={[]}
+                providerGroups={providerGroups}
+                providerProjectionAuthoritative
+                projectionFailures={[{
+                    connectionId,
+                    error: createProviderErrorV1('provider_endpoint_unavailable', { machineId: 'machine-a', connectionId }),
+                }]}
+                retryProjection={vi.fn(async () => {})}
+                selected={null}
+                effectiveLabel="Automatic"
+                onSelect={() => {}}
+            />,
+        );
+
+        expect(screen.getTextContent()).toContain('Gateway · Work');
+    });
+
     it('leaves retry to the header refresh when the picker already has one', async () => {
         const headerRefresh = vi.fn();
         const screen = await renderScreen(
@@ -660,9 +685,7 @@ describe('SessionModelPicker', () => {
             const screen = await renderScreen(renderPicker(false));
             const rootStepBefore = screen.findByType(SelectionList).props.rootStep;
 
-            await act(async () => {
-                screen.tree.update(renderPicker(true));
-            });
+            await screen.update(renderPicker(true));
 
             expect(screen.findByType(SelectionList).props.rootStep).toBe(rootStepBefore);
         });

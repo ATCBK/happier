@@ -39,6 +39,8 @@ export type NewSessionInstructionsCreationModel = Readonly<{
 export type NewSessionBotCreationModel = Readonly<{
     nameStore: ComposerTextStore;
     onSessionNameChange: (value: string) => void;
+    /** The draft's Instructions line, shown under the Bot's name (lab `b-new`). */
+    instructions?: React.ReactNode;
 }>;
 
 /** Non-visual managed configurator transaction; CUI owns its accessory/picker presentation. */

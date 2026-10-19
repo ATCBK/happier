@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
     captureSessionDraftLaunchCurrentness,
-    getSessionDraftSnapshot,
+    getSessionComposerDraftSnapshot,
     resetSessionDraftRepositoryForTests,
     writeNewSessionDraft,
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
@@ -42,17 +42,17 @@ describe('embedded new-chat successor draft', () => {
 
         preserveCreatedSessionSuccessorDraft({ scope, draftId, launchUserAttemptId: 'attempt', sessionId: 'created' });
 
-        const composer = getSessionDraftSnapshot(scope, { kind: 'session', sessionId: 'created' })?.document.composer;
+        const composer = getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId: 'created' })?.composer;
         expect(composer?.text.value).toBe('What about next week?');
         expect(composer?.mentions.value).toEqual([{ ref: 'next' }]);
         expect(composer?.attachments.value).toEqual([]);
-        expect(getSessionDraftSnapshot(scope, address)?.document.composer.text.value).toBe('What about next week?');
+        expect(getSessionComposerDraftSnapshot(scope, address)?.composer.text.value).toBe('What about next week?');
     });
 
     it('does not carry the accepted first turn into the successor composer', () => {
         writeNewSessionDraft({ scope, draftId, patch: { text: 'Submitted first turn' }, materializationIntent: 'seeded' });
         captureSessionDraftLaunchCurrentness({ scope, address, userAttemptId: 'attempt' });
         preserveCreatedSessionSuccessorDraft({ scope, draftId, launchUserAttemptId: 'attempt', sessionId: 'created' });
-        expect(getSessionDraftSnapshot(scope, { kind: 'session', sessionId: 'created' })).toBeNull();
+        expect(getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId: 'created' })).toBeNull();
     });
 });

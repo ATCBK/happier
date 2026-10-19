@@ -354,6 +354,18 @@ export function buildWorktreeReuseOrCreateStep(params: Readonly<{
     };
 }
 
+function buildWorktreeBranchRow(branch: ScmBranchListEntry) {
+    return {
+        id: `branch:${branch.type}:${branch.name}`,
+        label: branch.name,
+        subtitle: branch.upstream
+            ? t('files.branchMenu.branch.upstream', { upstream: branch.upstream })
+            : branch.type === 'remote'
+                ? t('files.branchMenu.category.remote')
+                : undefined,
+    };
+}
+
 /**
  * Build a single branch row option. Exposed so unit tests can validate the
  * reuse-vs-create routing without invoking the live dynamic resolver.
@@ -395,24 +407,15 @@ export function buildWorktreeBranchOption(params: Readonly<{
             params.machinePlatform,
         );
 
-    const subtitle = willReuse
-        ? t('newSession.worktree.branchRow.reuseSubtitle', { path: existingWorktree!.path })
-        : params.branch.upstream
-            ? t('files.branchMenu.branch.upstream', { upstream: params.branch.upstream })
-            : params.branch.type === 'remote'
-                ? t('files.branchMenu.category.remote')
-                : undefined;
-
     const base = {
-        id: `branch:${params.branch.type}:${params.branch.name}`,
-        label: params.branch.name,
-        subtitle,
+        ...buildWorktreeBranchRow(params.branch),
         icon: <Icon name="git-branch" size={WORKTREE_ROW_ICON_SIZE} color={params.rowIconColor} />,
     } as const;
 
     if (willReuse && existingWorktree !== null) {
         return {
             ...base,
+            subtitle: t('newSession.worktree.branchRow.reuseSubtitle', { path: existingWorktree.path }),
             // A "Worktree" badge flags that this branch already has a worktree;
             // the row still navigates to the reuse-or-create choice step, so we
             // keep the chevron visible alongside the badge (the badge alone read
@@ -457,7 +460,6 @@ type WorktreeCreationBuilderParams = WorktreeSelectionListBuilderParams & Readon
 }>;
 
 function buildBranchesResolver(params: WorktreeCreationBuilderParams, opts: Readonly<{ includeRemotes: boolean }>) {
-    const remoteNames = resolveRemoteNamesFromSnapshot(params.snapshot);
     const mainWorktreeBranch = params.snapshot?.repo.worktrees
         ?.find((worktree) => worktree.isMain === true)
         ?.branch ?? null;
@@ -487,20 +489,45 @@ function buildBranchesResolver(params: WorktreeCreationBuilderParams, opts: Read
             }
         }
         return {
+            // The cross-mount cache retains branch data, while the current
+            // descriptor binds the picker's callbacks and nested steps.
             options: [...mainWorktreeBranches, ...currentBranches, ...remainingBranches]
-                .map((branch) => buildWorktreeBranchOption({
-                    branch,
-                    snapshot: params.snapshot,
-                    currentDirPath: params.currentDirPath,
-                    machineHomeDir: params.machineHomeDir,
-                    machinePlatform: params.machinePlatform,
-                    remoteNames,
-                    rowIconColor: params.rowIconColor,
-                    worktreeNameSuggestion: params.worktreeNameSuggestion,
-                    onCreateWorktreeWithName: params.onCreateWorktreeWithName,
-                    onReuseExistingWorktreeForBranch: params.onReuseExistingWorktreeForBranch,
-                })),
+                .map(buildWorktreeBranchRow),
         };
+    };
+}
+
+function buildBranchesProjector(params: WorktreeCreationBuilderParams) {
+    const remoteNames = resolveRemoteNamesFromSnapshot(params.snapshot);
+    let previousOptions: ReadonlyArray<SelectionListOption> | undefined;
+    let previousProjection: ReadonlyArray<SelectionListOption> = [];
+    return (options: ReadonlyArray<SelectionListOption>): ReadonlyArray<SelectionListOption> => {
+        if (options === previousOptions) return previousProjection;
+        previousOptions = options;
+        previousProjection = options.map((option) => {
+            const projected = buildWorktreeBranchOption({
+                branch: {
+                    name: option.label,
+                    type: option.id.startsWith('branch:remote:') ? 'remote' : 'local',
+                    upstream: null,
+                },
+                snapshot: params.snapshot,
+                currentDirPath: params.currentDirPath,
+                machineHomeDir: params.machineHomeDir,
+                machinePlatform: params.machinePlatform,
+                remoteNames,
+                rowIconColor: params.rowIconColor,
+                worktreeNameSuggestion: params.worktreeNameSuggestion,
+                onCreateWorktreeWithName: params.onCreateWorktreeWithName,
+                onReuseExistingWorktreeForBranch: params.onReuseExistingWorktreeForBranch,
+            });
+            // Upstream presentation belongs to the resolved branch data; reuse
+            // presentation and nested actions belong to the current picker.
+            return projected.openStep?.id === 'worktree-reuse-or-create'
+                ? projected
+                : { ...projected, subtitle: option.subtitle };
+        });
+        return previousProjection;
     };
 }
 
@@ -548,6 +575,7 @@ function buildCreateWorktreeStep(params: WorktreeCreationBuilderParams): Selecti
             resolverKey: branchResolverKey,
             seedFromInput: stableEmptySeed,
             resolve: localResolver,
+            projectOptions: buildBranchesProjector(params),
         },
         {
             kind: 'dynamic',
@@ -562,6 +590,7 @@ function buildCreateWorktreeStep(params: WorktreeCreationBuilderParams): Selecti
             resolverKey: branchResolverKey,
             seedFromInput: stableEmptySeed,
             resolve: remoteResolver,
+            projectOptions: buildBranchesProjector(params),
         },
     ];
 

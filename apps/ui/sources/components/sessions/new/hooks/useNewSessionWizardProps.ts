@@ -36,6 +36,7 @@ function tNoParams(key: string): string {
 }
 
 export function useNewSessionWizardProps(params: Readonly<{
+    focused?: boolean;
     // Layout
     theme: any;
     styles: any;
@@ -163,12 +164,14 @@ export function useNewSessionWizardProps(params: Readonly<{
     launchPendingPreviewVisible?: NewSessionWizardFooterProps['launchPendingPreviewVisible'];
     providerLaunchError?: NewSessionWizardFooterProps['providerLaunchError'];
     retryProviderLaunch?: NewSessionWizardFooterProps['retryProviderLaunch'];
+    launchApproval?: NewSessionWizardFooterProps['launchApproval'];
     submitAccessibilityLabel?: NewSessionWizardFooterProps['submitAccessibilityLabel'];
     emptyAutocompleteKinds: readonly ComposerSuggestionKindId[];
     emptyAutocompleteSuggestions: ActiveSuggestionsHandler;
     connectionStatus?: any;
     statusBadges?: NewSessionWizardFooterProps['statusBadges'];
     composerTopContent?: NewSessionWizardFooterProps['composerTopContent'];
+    composerBottomContent?: NewSessionWizardFooterProps['composerBottomContent'];
     statusTrailingActions?: NewSessionWizardFooterProps['statusTrailingActions'];
     machinePopover?: NewSessionWizardFooterProps['machinePopover'];
     pathPopover?: NewSessionWizardFooterProps['pathPopover'];
@@ -310,6 +313,19 @@ export function useNewSessionWizardProps(params: Readonly<{
         getSecretMachineEnvOverride,
     ]);
 
+    const installableRefreshLifetime = React.useMemo(() => ({ controller: new AbortController() }), [params.selectedMachineId, params.targetServerId, params.focused]);
+    React.useEffect(() => {
+        if (params.focused === false) { installableRefreshLifetime.controller.abort(); return; }
+        if (installableRefreshLifetime.controller.signal.aborted) installableRefreshLifetime.controller = new AbortController();
+        const controller = installableRefreshLifetime.controller;
+        return () => controller.abort();
+    }, [installableRefreshLifetime, params.focused]);
+    const refreshInstallableCapabilities = React.useCallback((request: Parameters<typeof prefetchMachineCapabilities>[0]['request'], timeoutMs?: number) => {
+        if (!params.selectedMachineId || installableRefreshLifetime.controller.signal.aborted) return;
+        void prefetchMachineCapabilities({ machineId: params.selectedMachineId, serverId: params.targetServerId,
+            request, timeoutMs, signal: installableRefreshLifetime.controller.signal });
+    }, [installableRefreshLifetime, params.selectedMachineId, params.targetServerId]);
+
     const installableDepInstallers = React.useMemo((): InstallableDepInstallerProps[] => {
         if (!params.selectedMachineId) return [];
         if (params.wizardInstallableDeps.length === 0) return [];
@@ -338,22 +354,13 @@ export function useNewSessionWizardProps(params: Readonly<{
                 description: entry.installModal.description,
             },
             refreshStatus: () => {
-                void prefetchMachineCapabilities({
-                    machineId: params.selectedMachineId!,
-                    serverId: params.targetServerId,
-                    request: CAPABILITIES_REQUEST_NEW_SESSION,
-                });
+                refreshInstallableCapabilities(CAPABILITIES_REQUEST_NEW_SESSION);
             },
             refreshLatestVersion: () => {
-                void prefetchMachineCapabilities({
-                    machineId: params.selectedMachineId!,
-                    serverId: params.targetServerId,
-                    request: entry.buildLatestVersionDetectRequest(),
-                    timeoutMs: 12_000,
-                });
+                refreshInstallableCapabilities(entry.buildLatestVersionDetectRequest(), 12_000);
             },
         }));
-    }, [params.selectedMachineCapabilities.status, params.selectedMachineId, params.targetServerId, params.wizardInstallableDeps]);
+    }, [params.selectedMachineCapabilities.status, params.selectedMachineId, params.targetServerId, params.wizardInstallableDeps, refreshInstallableCapabilities]);
 
     const wizardAgentProps = React.useMemo((): NewSessionWizardAgentProps => {
         const agentPickerProbe: NewSessionWizardAgentProps['agentPickerProbe'] =
@@ -531,12 +538,14 @@ export function useNewSessionWizardProps(params: Readonly<{
             launchPendingPreviewVisible: params.launchPendingPreviewVisible,
             providerLaunchError: params.providerLaunchError,
             retryProviderLaunch: params.retryProviderLaunch,
+            launchApproval: params.launchApproval,
             submitAccessibilityLabel: params.submitAccessibilityLabel,
             emptyAutocompleteKinds: params.emptyAutocompleteKinds,
             emptyAutocompleteSuggestions: params.emptyAutocompleteSuggestions,
             connectionStatus: params.connectionStatus,
             statusBadges: params.statusBadges,
             composerTopContent: params.composerTopContent,
+            composerBottomContent: params.composerBottomContent,
             statusTrailingActions: params.statusTrailingActions,
             machinePopover: params.machinePopover,
             pathPopover: params.pathPopover,
@@ -561,6 +570,7 @@ export function useNewSessionWizardProps(params: Readonly<{
         params.canCreate,
         params.connectionStatus,
         params.composerTopContent,
+        params.composerBottomContent,
         params.emptyAutocompleteKinds,
         params.emptyAutocompleteSuggestions,
         params.handleCreateSession,
@@ -577,6 +587,7 @@ export function useNewSessionWizardProps(params: Readonly<{
         params.resumePopover,
         params.resumeSessionId,
         params.retryProviderLaunch,
+        params.launchApproval,
         params.composerDocument,
         params.composerReferenceHost,
         params.composerFileScope,

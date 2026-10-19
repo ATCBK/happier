@@ -30,6 +30,35 @@ afterEach(async () => {
 afterAll(() => network.dispose());
 
 describe('machine launch readiness', () => {
+    it('keeps current cached Agent resume facts without probing a passive embedded composer', async () => {
+        const { PluginProjectionV2Schema } = await import('@happier-dev/protocol');
+        const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+        const { useDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/useDaemonMergedProjectionInputs');
+        const home = await network.addHome('https://passive-availability.example.test', 'passive-owner');
+        const machine = createMachineFixture({ id: 'passive-availability', active: true, activeAt: Date.now() });
+        storage.getState().applyMachines([machine], false, { sourceServerId: home.id });
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {}, agentsById: {
+            'acme.resume/resume': { id: 'acme.resume/resume', identity: { pluginId: 'acme.resume', localId: 'resume' },
+                capabilities: { surfaces: ['terminal'], sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } } },
+        } });
+        network.respond(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, { protocolVersion: 1, projection });
+        const warmer = await renderHook(() => useDaemonMergedProjectionInputs({ machineId: machine.id, serverId: home.id }));
+        await vi.waitFor(() => expect(warmer.getCurrent().phase).toBe('ready'));
+        expect(warmer.getCurrent().inputs?.pluginProjectionV2?.agentsById['acme.resume/resume']?.capabilities?.sessions?.open).toContain('resume');
+        const requestsBefore = network.requests.length;
+        const hook = await renderHook(() => useNewSessionAvailabilityState({
+            selectedMachineId: machine.id, selectedMachine: machine, capabilityServerId: home.id,
+            machineProbesEnabled: false, runtimeCarrierAgentId: 'acme.resume/resume',
+            externalSessionsFeatureEnabled: false, settings: settingsDefaults, resumeSessionId: null,
+            backendNewSessionOptionStateByTargetKey: {}, resolvedBackendEntries: [], selectedBackendEntry: null,
+            setBackendTarget: vi.fn(), machines: [machine], allProfiles: [],
+        }));
+        expect(hook.getCurrent().showResumePicker).toBe(true);
+        expect(network.requests.slice(requestsBefore)).toEqual([]);
+        await hook.unmount();
+        await warmer.unmount();
+    });
+
     it('checks the new registry namespace after hydration without rechecking unrelated publications', async () => {
         vi.useFakeTimers();
         network.respond('capabilities.detect', { protocolVersion: 1, results: {

@@ -23,6 +23,9 @@ vi.mock('@/scm/repository/repoScmBranchService', () => {
 });
 
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
+import { synthesizeSelectionListRenderPlan } from '@/components/ui/selectionList/SelectionListRenderPlan';
+import { activateSelectionListRow } from '@/components/ui/selectionList/SelectionListRowActivation';
+import type { WorktreeCreateSelection } from './buildWorktreeSelectionListSteps';
 import {
     renderSelectionListAccessory,
     type SelectionListDynamicSection,
@@ -134,6 +137,79 @@ function requireDynamicSection(step: SelectionListStep, sectionId: string): Sele
 }
 
 describe('buildWorktreeSelectionListSteps', () => {
+    it('rebinds cached branch reuse and nested creation to the current picker while refreshing', async () => {
+        const { buildWorktreeBranchOption, buildWorktreeSelectionListSteps } = await import('./buildWorktreeSelectionListSteps');
+        const snapshot = makeSnapshot({
+            worktrees: [
+                { path: '/repo', branch: 'main', isCurrent: true, isMain: true },
+                { path: '/repo/.worktrees/feature', branch: 'feature', isCurrent: false },
+            ],
+        });
+        const retiredSelections: unknown[] = [];
+        const currentReuseSelections: Array<{ worktreePath: string; branch: string }> = [];
+        const currentCreateSelections: WorktreeCreateSelection[] = [];
+        // Produce the cached row through the real branch builder, preserving the
+        // old picker's nested steps rather than recreating their shape in a fixture.
+        const cachedOptions = [buildWorktreeBranchOption({
+            branch: { name: 'feature', type: 'local', isCurrent: false, upstream: null },
+            snapshot,
+            currentDirPath: '/repo',
+            rowIconColor: TEST_ROW_ICON_COLOR,
+            worktreeNameSuggestion: 'previous-name',
+            onCreateWorktreeWithName: (selection) => retiredSelections.push(selection),
+            onReuseExistingWorktreeForBranch: (selection) => retiredSelections.push(selection),
+        })];
+        const currentStep = requireCreateWorktreeStep(buildWorktreeSelectionListSteps({
+            snapshot,
+            currentDirPath: '/repo',
+            serverId: 'server-a',
+            machineId: 'machine-a',
+            machinePath: '/repo',
+            rowIconColor: TEST_ROW_ICON_COLOR,
+            nowMs: 1_700_000_000_000,
+            worktreeNameSuggestion: 'current-name',
+            onSelectCurrentDir: () => {},
+            onSelectExistingWorktree: () => {},
+            onCreateWorktreeWithName: (selection) => currentCreateSelections.push(selection),
+            onReuseExistingWorktreeForBranch: (selection) => currentReuseSelections.push(selection),
+        }));
+        const section = requireDynamicSection(currentStep, 'worktree:branches:local');
+        const plan = synthesizeSelectionListRenderPlan({
+            sections: currentStep.sections,
+            inputValue: '',
+            filterQuery: '',
+            dynamicSectionStates: new Map([[section.id, {
+                status: 'loading',
+                options: [],
+                lastSuccessOptions: cachedOptions,
+                seed: '',
+            }]]),
+        });
+        const branchSection = plan.find((entry) => entry.id === section.id);
+        if (!branchSection) throw new Error('cached branch section must remain visible during refresh');
+        const branchRow = requireOption(branchSection, 'branch:local:feature');
+        const pushedSteps: SelectionListStep[] = [];
+        const activate = (option: SelectionListOption) => activateSelectionListRow({
+            option,
+            onSelect: () => {},
+            onPushStep: (step) => pushedSteps.push(step),
+        });
+
+        activate(branchRow);
+        const choiceStep = pushedSteps[0];
+        if (!choiceStep) throw new Error('cached branch must open its reuse-or-create step');
+        const choices = requireStaticSection(choiceStep, 'worktree:reuse-or-create');
+        activate(requireOption(choices, 'worktree-reuse-existing'));
+        activate(requireOption(choices, 'worktree-create-from-branch'));
+        const nameStep = pushedSteps[1];
+        if (!nameStep) throw new Error('create choice must open its name step');
+        activate(requireSuggestedNameRow(nameStep));
+
+        expect(currentReuseSelections).toEqual([{ worktreePath: '/repo/.worktrees/feature', branch: 'feature' }]);
+        expect(currentCreateSelections).toEqual([{ baseRef: 'feature', sourceKind: 'local', name: 'current-name' }]);
+        expect(retiredSelections).toEqual([]);
+    });
+
     it('carries the selected server and Home into branch reads', async () => {
         const { buildWorktreeSelectionListSteps } = await import('./buildWorktreeSelectionListSteps');
         const repoScmBranchServiceModule = await import('@/scm/repository/repoScmBranchService');
@@ -1153,7 +1229,10 @@ describe('buildWorktreeSelectionListSteps', () => {
         const ac = new AbortController();
         const result = await remoteSection.resolve('', ac.signal);
         expect(result.options.length).toBe(1);
-        requireReuseExistingRow(result.options[0]!).onSelect?.();
+        expect(result.options[0]?.openStep).toBeUndefined();
+        expect(result.options[0]?.onSelect).toBeUndefined();
+        const projectedOptions = remoteSection.projectOptions?.(result.options) ?? result.options;
+        requireReuseExistingRow(projectedOptions[0]!).onSelect?.();
         expect(onReuseExistingWorktreeForBranch).toHaveBeenCalledWith({
             worktreePath: '/repo/.worktrees/feature',
             branch: 'feature',
@@ -1221,7 +1300,8 @@ describe('buildWorktreeSelectionListSteps', () => {
         const ac = new AbortController();
         const result = await remoteSection.resolve('', ac.signal);
         expect(result.options.length).toBe(1);
-        requireReuseExistingRow(result.options[0]!).onSelect?.();
+        const projectedOptions = remoteSection.projectOptions?.(result.options) ?? result.options;
+        requireReuseExistingRow(projectedOptions[0]!).onSelect?.();
         expect(onReuseExistingWorktreeForBranch).toHaveBeenCalledWith({
             worktreePath: '/repo/.worktrees/feature',
             branch: 'feature',

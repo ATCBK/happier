@@ -313,6 +313,34 @@ describe('useNewSessionCheckoutActionChip', () => {
         expect(getOptionIconColor(releaseOption)).toBe('#123ABC');
     });
 
+    it('parks the checkout clock while retained and refreshes its current labels on presentation', async () => {
+        const { useNewSessionCheckoutActionChip } = await import('./useNewSessionCheckoutActionChip');
+        const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-05-12T00:00:00.000Z'));
+        const params = makeDefaultParams({ checkoutPickerOpen: false });
+        const roots: (SelectionListStep | undefined)[] = [];
+        function Probe() {
+            roots.push(getCheckoutChipRootStepFromChip(useNewSessionCheckoutActionChip(params)));
+            return null;
+        }
+        const tree = (active: boolean) => <PluginSurfaceFocusEligibilityProvider active={active}><Probe /></PluginSurfaceFocusEligibilityProvider>;
+        const screen = await renderScreen(tree(false));
+        try {
+            const before = roots.length;
+            const held = roots.at(-1);
+            await act(async () => { vi.advanceTimersByTime(180_000); });
+            expect(roots.length - before).toBe(0);
+            expect(roots.at(-1)).toBe(held);
+            await act(async () => screen.update(tree(true)));
+            expect(roots.at(-1)).not.toBe(held);
+            const visible = roots.length;
+            await act(async () => { vi.advanceTimersByTime(60_000); });
+            expect(roots.length - visible).toBe(1);
+            expect(roots.at(-1)?.id).toBe(held?.id);
+        } finally { await act(async () => screen.unmount()); vi.useRealTimers(); }
+    });
+
     it('rebuilds rootStep on the next minute tick (nowMs ticks via useNowMs)', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-05-12T00:00:00.000Z'));

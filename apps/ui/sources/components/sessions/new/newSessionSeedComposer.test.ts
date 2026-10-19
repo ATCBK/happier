@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginUiNewSessionSeedV1Schema } from '@happier-dev/protocol/plugins/ui';
+import { ComposerAttachmentAuthorValueV1Schema, MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1 } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
 import {
     readNewSessionDraftFromRepository,
     writeNewSessionAuthoringDraftToRepository,
@@ -166,36 +167,35 @@ describe('seedAndOpenNewSession', () => {
         expect(snapshot?.document).toMatchObject({ composer: { attachments: { value: [] } } });
     });
 
-    it('carries a host-admitted Zen source through reopening and target edits without admitting it from plugin input', () => {
-        const zenTaskSource = { kind: 'zen_task', taskId: 'task-1', scope, title: 'Fix the task' } as const;
-        const rejected = harness({
-            seed: { prompt: 'Work on this task', zenTaskSource },
+    it('accepts the same typed current-screen context from the authoring Action without plugin caller authority', () => {
+        const currentUiContext = { navigation: { area: 'sessions', screen: 'sessions', title: 'Sessions' }, commands: [] };
+        const { outcome } = harness({ seed: { currentUiContext }, pluginId: undefined });
+        expect(outcome.kind).toBe('opened');
+        expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
+            input: '',
+            composerAttachmentSeeds: [{
+                pluginId: 'happier.app-context', attachmentLocalId: 'current-screen',
+                value: { value: currentUiContext, presentation: { label: 'Sessions' } },
+            }],
         });
+        expect(readPluginNewSessionSeedV1({ currentUiContext: { ...currentUiContext, execute: true } })).toBeNull();
+    });
+
+    it('keeps a long screen title admissible through the attachment boundary without truncating its snapshot', () => {
+        const titlePrefix = '界'.repeat(MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1 - 1);
+        const currentUiContext = { navigation: { area: 'sessions', screen: 'sessions', title: `${titlePrefix} details` }, commands: [] };
+        expect(harness({ seed: { currentUiContext }, pluginId: undefined }).outcome.kind).toBe('opened');
+        const request = readNewSessionDraftFromRepository({ scope, draftId })?.composerAttachmentSeeds?.[0];
+        expect(request?.value.value).toEqual(currentUiContext);
+        expect(ComposerAttachmentAuthorValueV1Schema.safeParse(request?.value).success).toBe(true);
+    });
+
+    it('refuses retired Zen provenance from plugin input', () => {
+        const zenTaskSource = { kind: 'zen_task', taskId: 'task-1', scope, title: 'Fix the task' } as const;
+        const rejected = harness({ seed: { prompt: 'Work on this task', zenTaskSource } });
         expect(rejected.outcome).toEqual({ kind: 'invalid', reason: 'seed_invalid' });
         expect(rejected.navigate).not.toHaveBeenCalled();
         expect(readNewSessionDraftFromRepository({ scope, draftId })).toBeNull();
-
-        const opened = harness({
-            seed: { prompt: 'Work on this task' },
-            zenTaskSource,
-        });
-        expect(opened.outcome).toEqual({ kind: 'opened', dataId: null, draftId });
-        const recovered = readNewSessionDraftFromRepository({ scope, draftId });
-        expect(recovered).toMatchObject({ input: 'Work on this task', zenTaskSource });
-        if (!recovered) throw new Error('Expected the host-admitted task draft');
-        writeNewSessionAuthoringDraftToRepository({
-            scope,
-            draftId,
-            draft: { ...recovered, selectedPath: '/edited', selectedProfileId: 'profile-edited' },
-        });
-        expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
-            input: 'Work on this task',
-            selectedPath: '/edited',
-            selectedProfileId: 'profile-edited',
-            zenTaskSource,
-        });
-        expect(JSON.stringify(getSessionDraftSnapshot(scope, { kind: 'newSession', draftId })?.document))
-            .not.toContain('zen_task');
     });
 
     it('keeps the one durable draft and its pending attachment custody recoverable on navigation refusal', () => {

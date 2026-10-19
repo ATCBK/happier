@@ -1,3 +1,6 @@
+import * as React from 'react';
+import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
+
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import type { OptionPickerProbeState } from '@/components/sessions/pickers/OptionPickerOverlay';
@@ -10,6 +13,7 @@ import type { NewSessionEngineOptionDetailProps } from '@/components/sessions/ne
 import type { SessionAgentPickerSelection } from '@/components/sessions/agentPicker/buildSessionAgentPickerDetailContent';
 import { buildSessionAgentPickerDetailContent } from '@/components/sessions/agentPicker/buildSessionAgentPickerDetailContent';
 import type { FavoriteModelTogglePayload } from './newSessionFavoriteModelsPickerOption';
+import { useSettings } from '@/sync/store/hooks';
 
 type BuildNewSessionAgentPickerOptionInteractionsParams = Readonly<{
     entry: ResolvedBackendCatalogEntry;
@@ -17,7 +21,7 @@ type BuildNewSessionAgentPickerOptionInteractionsParams = Readonly<{
     selectedMachineId: string | null;
     capabilityServerId: string;
     selectedPath: string | null;
-    settings: Settings;
+    readSettings: () => Settings;
     refreshProbe?: OptionPickerProbeState | null;
     favoriteModelSelections?: readonly FavoriteModelSelectionV1[];
     onToggleFavoriteModel?: (entry: ResolvedBackendCatalogEntry, model: FavoriteModelTogglePayload) => void;
@@ -27,11 +31,21 @@ type BuildNewSessionAgentPickerOptionInteractionsParams = Readonly<{
     }>;
     providerProjection?: NewSessionEngineOptionDetailProps['providerProjection'];
     nativeSourceLabel?: NewSessionEngineOptionDetailProps['nativeSourceLabel'];
+    connectedServices?: ConnectedServiceBindingsV2 | null;
     experimentalConfirmation?: SessionModelPickerExperimentalConfirmationController;
     onRememberAgentPickerView?: (view: NewSessionAgentPickerViewV1) => void;
     getEngineSelectionForTargetKey: (targetKey: string) => SessionAgentPickerSelection;
     selectEngineSelection: (entry: ResolvedBackendCatalogEntry, selection: SessionAgentPickerSelection) => void;
 }>;
+
+function NewSessionAgentPickerDetailContent(props: Omit<
+    Parameters<typeof buildSessionAgentPickerDetailContent>[0], 'settings'
+> & Readonly<{ readSettings: () => Settings }>) {
+    // Only the mounted detail follows arbitrary Agent-owned Account settings.
+    useSettings();
+    const { readSettings, ...detail } = props;
+    return buildSessionAgentPickerDetailContent({ ...detail, settings: readSettings() });
+}
 
 export function buildNewSessionAgentPickerOptionInteractions(
     params: BuildNewSessionAgentPickerOptionInteractionsParams,
@@ -64,7 +78,7 @@ export function buildNewSessionAgentPickerOptionInteractions(
         },
         renderDetailContent: () => {
             const selection = params.getEngineSelectionForTargetKey(params.entry.backendTargetKey);
-            return buildSessionAgentPickerDetailContent({
+            return React.createElement(NewSessionAgentPickerDetailContent, {
                 backendTarget: params.entry.backendTarget,
                 agentCatalogEntry: params.entry.agentCatalogEntry,
                 // The OPERATIONAL Agent identity, not the closed built-in
@@ -76,7 +90,7 @@ export function buildNewSessionAgentPickerOptionInteractions(
                 selectedMachineId: params.selectedMachineId,
                 capabilityServerId: params.capabilityServerId,
                 cwd: params.selectedPath,
-                settings: params.settings,
+                readSettings: params.readSettings,
                 refreshProbe: params.refreshProbe,
                 selection,
                 favoriteModelSelections: params.favoriteModelSelections ?? [],
@@ -86,6 +100,7 @@ export function buildNewSessionAgentPickerOptionInteractions(
                 favoriteEngine: params.favoriteEngine,
                 ...(params.providerProjection ? { providerProjection: params.providerProjection } : {}),
                 nativeSourceLabel: params.nativeSourceLabel,
+                ...('connectedServices' in params ? { connectedServices: params.connectedServices } : {}),
                 experimentalConfirmation: params.experimentalConfirmation,
                 onSelectionChange: (nextSelection) => {
                     params.selectEngineSelection(params.entry, nextSelection);

@@ -50,6 +50,7 @@ export function useNewSessionScreenSimplePanelProps(params: Readonly<{
         | 'launchPendingPreviewVisible'
         | 'providerLaunchError'
         | 'retryProviderLaunch'
+        | 'launchApproval'
         | 'submitAccessibilityLabel'
         | 'emptyAutocompleteKinds'
         | 'emptyAutocompleteSuggestions'

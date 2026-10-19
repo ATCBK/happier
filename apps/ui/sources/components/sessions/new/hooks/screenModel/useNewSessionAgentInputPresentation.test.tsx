@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook, renderScreen, flushHookEffects } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -25,8 +25,10 @@ const sessionAgentInputTheme = {
 
 const network = await installSessionOpsNetworkBoundary();
 const scope = { serverId: 'srv', accountId: 'presentation-account' };
-beforeAll(async () => { await network.addHome('https://srv', scope.accountId); });
-beforeEach(() => network.resetRequests());
+beforeEach(async () => {
+    network.resetRequests();
+    await network.addHome('https://srv', scope.accountId);
+});
 afterAll(() => network.dispose());
 
 // Load the real graph during collection, not inside the first hook's timeout.

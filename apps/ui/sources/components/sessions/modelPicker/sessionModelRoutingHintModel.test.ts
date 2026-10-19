@@ -7,7 +7,7 @@ import {
   buildSessionModelRoutingHint,
   sessionModelRoutingHintPoolKey,
   type SessionModelRoutingHintTarget,
-} from './sessionModelRoutingHint';
+} from './sessionModelRoutingHintModel';
 
 const service = {
   pluginId: 'happier.agent.claude',

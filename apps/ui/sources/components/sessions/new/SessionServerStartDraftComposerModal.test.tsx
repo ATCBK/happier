@@ -78,15 +78,17 @@ describe('mounted Session server-start recipe composer', () => {
     let serverId: string;
     let serverAlias: string;
     let otherServerId: string;
+    let foldersEnabled = true;
     let homeSequence = 0;
     beforeEach(async () => {
+        foldersEnabled = true;
         network.resetRequests();
         storage.setState(storage.getInitialState(), true);
         const profilesByOrigin = new Map<string, ReturnType<typeof AccountProfileSchema.parse>>();
         network.setHttpResponder(async input => {
             const url = new URL(String(input));
             if (url.pathname === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({
-                features: { sessions: { folders: { enabled: true } } },
+                features: { sessions: { folders: { enabled: foldersEnabled } } },
             }));
             // This fixture restores the real Sync singleton. Its core bootstrap
             // must settle before a later restoration can acquire Machine data.
@@ -159,13 +161,13 @@ describe('mounted Session server-start recipe composer', () => {
                 if (chrome?.kind !== 'card') throw new Error('Missing card');
                 const footer = chrome.footer as React.ReactElement<{ children: React.ReactNode }>;
                 const button = React.Children.toArray(footer.props.children).find(child =>
-                    React.isValidElement<{ title: string }>(child) && child.type === RoundButton && child.props.title === 'common.create');
+                    React.isValidElement<{ title: string }>(child) && child.type === RoundButton && child.props.title === 'newSession.recipeComposerSubmit');
                 if (!React.isValidElement<{ disabled: boolean }>(button)) throw new Error('Missing submit');
                 expect(button.props.disabled).toBe(false);
             });
             if (chrome?.kind !== 'card') throw new Error('Missing card');
             const footer = await renderScreen(<>{chrome.footer}</>);
-            await act(async () => { footer.findAllByType(RoundButton).find(node => node.props.title === 'common.create')!.props.onPress(); });
+            await act(async () => { footer.findAllByType(RoundButton).find(node => node.props.title === 'newSession.recipeComposerSubmit')!.props.onPress(); });
             await footer.unmount();
             expect(onResolve).toHaveBeenCalledTimes(1);
             return SessionServerStartSpawnDraftV1Schema.parse(onResolve.mock.calls[0]![0]);
@@ -252,7 +254,7 @@ describe('mounted Session server-start recipe composer', () => {
                 if (chrome.current?.kind !== 'card') throw new Error('Missing composer card');
                 const footer = await renderScreen(<>{chrome.current.footer}</>);
                 try {
-                    const submit = footer.findAllByType(RoundButton).find(node => node.props.title === 'common.create')!;
+                    const submit = footer.findAllByType(RoundButton).find(node => node.props.title === 'newSession.recipeComposerSubmit')!;
                     expect(submit.props.disabled).toBe(false);
                     await act(async () => { submit.props.onPress(); });
                 } finally { await footer.unmount(); }
@@ -296,5 +298,58 @@ describe('mounted Session server-start recipe composer', () => {
         expect(otherHome.screen.findAllByType(DropdownMenu).some(node => node.props.items?.some((item: { id: string }) => item.id === 'intake'))).toBe(false);
         expect((await otherHome.submit()).organizationPlacement).toEqual({ folderId: null, tagIds: ['mail'] });
         await otherHome.screen.unmount();
+    });
+
+    it.each(['cold', 'unavailable', 'different workspace'] as const)(
+        'roundtrips an unchanged managed recipe when its Folder projection is %s', async (projectionState) => {
+            const draft = SessionServerStartSpawnDraftV1Schema.parse({
+                ...recipe(), directory: { kind: 'managed' },
+            });
+            if (projectionState === 'cold') storage.getState().clearSessionOrganizationForServer(serverId);
+            if (projectionState === 'unavailable') {
+                foldersEnabled = false;
+                storage.getState().applySettingsLocal({ featureToggles: { 'sessions.folders': false } });
+            }
+            // The saved recipe is the authoring authority. A local projection may be cold,
+            // unavailable, or still describe the folder's former workspace.
+            const mounted = await mount(draft);
+            const emitted = await mounted.submit();
+            expect(emitted).toEqual(draft);
+            // The retained Folder stays in view and never reads as the workspace root.
+            if (projectionState === 'unavailable') {
+                // Folders are off: the saved one is shown read-only, as kept.
+                const folderRow = mounted.screen.findAllByType(Item).find(node => node.props.testID === 'server-start-draft-folder');
+                expect(folderRow?.props.detail).toBe('common.unavailable');
+                expect(folderRow?.props.subtitle).toBe('newSession.recipeComposerFolderRetained');
+            } else {
+                // A cold or foreign projection still offers the choice, naming the kept Folder as kept.
+                const trigger = mounted.screen.findAllByType(DropdownMenu)
+                    .find(node => node.props.testID === 'server-start-draft-folder')?.props.itemTrigger;
+                expect(trigger?.detailFormatter?.(null)).toBe('common.unavailable');
+                expect(trigger?.subtitleFormatter?.(null)).toBe('newSession.recipeComposerFolderRetained');
+            }
+            await mounted.screen.unmount();
+            const reopened = await mount(emitted);
+            expect(await reopened.submit()).toEqual(draft);
+            await reopened.screen.unmount();
+        },
+    );
+
+    it('applies explicit Folder removal and directory changes to a managed recipe', async () => {
+        const draft = SessionServerStartSpawnDraftV1Schema.parse({ ...recipe(), directory: { kind: 'managed' } });
+        const editingFolder = await mount(draft);
+        await waitForHomeGovernance(() => expect(editingFolder.screen.findAllByType(SessionAuthoringControls).length).toBeGreaterThan(0));
+        await act(async () => {
+            editingFolder.screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'server-start-draft-folder')!.props.onSelect('root');
+        });
+        expect(await editingFolder.submit()).toEqual({ ...draft, organizationPlacement: { folderId: null, tagIds: ['mail'] } });
+        await editingFolder.screen.unmount();
+
+        const editingDirectory = await mount(draft);
+        await act(async () => { editingDirectory.screen.findByType(PathSelectionList).props.onChangeDraftPath('/elsewhere'); });
+        expect(await editingDirectory.submit()).toEqual({
+            ...draft, directory: { kind: 'path', path: '/elsewhere' }, organizationPlacement: { folderId: null, tagIds: ['mail'] },
+        });
+        await editingDirectory.screen.unmount();
     });
 });

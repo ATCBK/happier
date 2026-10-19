@@ -12,7 +12,7 @@ import {
     captureSessionDraftLaunchCurrentness,
     clearSessionDraftCurrentness,
     clearSessionDraftLaunchCurrentness,
-    getSessionDraftSnapshot,
+    getSessionComposerDraftSnapshot,
     readSessionDraftLaunchCapture,
     readSessionDraftLaunchCurrentness,
     writeExistingSessionDraft,
@@ -38,10 +38,10 @@ export function preserveCreatedSessionSuccessorDraft(params: Readonly<{
     }
     const address = addressFor(params.draftId);
     const captured = readSessionDraftLaunchCurrentness({ scope: params.scope, address, userAttemptId: params.launchUserAttemptId });
-    const snapshot = getSessionDraftSnapshot(params.scope, address);
+    const snapshot = getSessionComposerDraftSnapshot(params.scope, address);
     if (!captured || !snapshot) return;
     const current = captureSessionDraftCurrentness({ scope: params.scope, address });
-    const composer = snapshot.document.composer;
+    const composer = snapshot.composer;
     const changed = (field: 'text' | 'mentions' | 'attachments') =>
         current.mutationIds[`composer.${field}`] !== captured.mutationIds[`composer.${field}`];
     const textChanged = changed('text');
@@ -93,7 +93,7 @@ export function readCapturedNewSessionFirstTurnText(params: Readonly<{
     if (current.mutationIds['composer.text'] !== capturedTextMutationId) {
         return null;
     }
-    const textValue = getSessionDraftSnapshot(params.scope, address)?.document.composer.text?.value;
+    const textValue = getSessionComposerDraftSnapshot(params.scope, address)?.composer.text?.value;
     if (typeof textValue !== 'string') return null;
     const text = textValue.trim();
     return text.length > 0 ? text : null;

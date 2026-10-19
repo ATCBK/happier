@@ -1,3 +1,4 @@
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import * as React from 'react';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import { act } from 'react-test-renderer';
@@ -168,12 +169,6 @@ vi.mock('expo-linear-gradient', () => ({
         React.createElement('LinearGradient', props, props.children),
 }));
 
-vi.mock('color', () => ({
-    default: () => ({
-        alpha: () => ({ rgb: () => ({ string: () => 'rgba(0,0,0,0.08)' }) }),
-    }),
-}));
-
 afterEach(() => {
     standardCleanup();
     mockEnv.keyboardListeners.clear();
@@ -228,26 +223,7 @@ function buildWizard() {
         <NewSessionWizard
             popoverBoundaryRef={{ current: null } as any}
             layout={{
-                theme: {
-                    colors: {
-                        divider: '#ddd',
-                        background: { canvas: '#fff' },
-                        shadow: { color: '#000' },
-                        groupped: { background: '#fff' },
-                        text: '#000',
-                        textSecondary: '#666',
-                        input: { background: '#fff' },
-                        border: { default: '#ddd' },
-                        button: { secondary: { tint: '#000' } },
-                        warning: '#d97706',
-                        state: {
-                            warning: { icon: '#d97706', text: '#92400e', background: '#fff8e1', border: '#f5d38f' },
-                            neutral: { icon: '#666', text: '#333', background: '#f5f5f5', border: '#ddd' },
-                            danger: { icon: '#dc2626', text: '#991b1b', background: '#fee2e2', border: '#fecaca' },
-                        },
-                        box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                    },
-                } as any,
+                theme: createThemeFixture() as any,
                 styles: {
                     container: { flex: 1 },
                 } as any,

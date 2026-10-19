@@ -29,6 +29,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { buildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { followUpSpawnedSessionWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/followUpSpawnedSession';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { runWithHomeCredentialRequestSignal } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
 import { persistCreatedSessionAuthoringOrigin } from '@/components/sessions/new/modules/newSessionAuthoringOrigin';
 import { sync } from '@/sync/sync';
 
@@ -287,10 +288,11 @@ export async function settlePersistedMaterializedTemporaryComputerSession(
         ]);
         const frozenReviewComments = preparedAuthoring.reviewComments;
         const resolvedFrozenReviewComments = frozenReviewComments
-            ? await resolveReviewCommentDraftAnchorsForPrompt({
+            ? await runWithHomeCredentialRequestSignal(input.scope.serverId, signal => resolveReviewCommentDraftAnchorsForPrompt({
                 drafts: frozenReviewComments.comments,
                 reviewScope: frozenReviewComments.workspace,
-            })
+                signal,
+            }))
             : [];
         let promptAdmitted = false;
         const admitInitialPrompt = async (uploaded: readonly ReviewedRunnerAttachmentUpload[]): Promise<void> => {

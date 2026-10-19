@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { z } from 'zod/mini';
 
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { createReviewCommentsActionChip } from '@/components/sessions/agentInput/definitions/createReviewCommentsActionChip';
@@ -311,7 +312,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         const frozenReviewComments = hasReviewCommentDrafts && discoverableReviewCommentsScope
             ? {
                 workspace: discoverableReviewCommentsScope,
-                comments: ReviewCommentDraftMessageV1Schema.array().parse(includedReviewCommentDrafts),
+                comments: z.array(ReviewCommentDraftMessageV1Schema).parse(includedReviewCommentDrafts),
             }
             : null;
         const submitAfterCreated = async (input: Readonly<{
@@ -342,11 +343,12 @@ export function useNewSessionAttachmentsController(params: Readonly<{
                     ? await resolveReviewCommentDraftAnchorsForPrompt({
                         drafts: frozenReviewComments.comments,
                         reviewScope: frozenReviewComments.workspace,
+                        signal: params.composerDocument?.scopeSignal,
                     })
                     : [];
                 const reviewComments = resolvedReviewCommentDrafts.length > 0
                     ? {
-                        comments: ReviewCommentDraftMessageV1Schema.array().parse(normalizeReviewCommentDrafts(resolvedReviewCommentDrafts)),
+                        comments: z.array(ReviewCommentDraftMessageV1Schema).parse(normalizeReviewCommentDrafts(resolvedReviewCommentDrafts)),
                         displayText: buildReviewCommentsDisplayText({ drafts: resolvedReviewCommentDrafts }),
                     }
                     : undefined;
@@ -381,7 +383,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
                 ...(temporaryComputerSubmission ? { temporaryComputerSubmission } : {}),
                 // Generic file upload and Temporary Computer need an existing
                 // Session ID; their prepared first turn still enters Message admission.
-                afterCreated: async ({ sessionId, effectiveSpawnServerId, launchAttempt, preuploadedAttachments }) => {
+                afterCreated: async ({ sessionId, effectiveSpawnServerId, launchAttempt, preuploadedAttachments, signal }) => {
                     const attachmentMessageLocalId = launchAttempt.attachmentMessageLocalId;
                     // Temporary Computer persists this first-turn id before
                     // materialization; its mounted send and recovery must agree
@@ -399,6 +401,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
                     if (hasAttachments) {
                         const uploaded = preuploadedAttachments ?? (await uploadAttachmentDraftsToSession({
                             sessionId,
+                            signal,
                             drafts: draftSnapshot,
                             config: attachmentsUploadConfig,
                             applyDraftPatch,
@@ -412,6 +415,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
                         ? await resolveReviewCommentDraftAnchorsForPrompt({
                             drafts: includedReviewCommentDrafts,
                             reviewScope: discoverableReviewCommentsScope,
+                            signal,
                         })
                         : [];
 
@@ -484,6 +488,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
             }
             fireAndForget(submitComposerSnapshot({
                 snapshot: composerSnapshot,
+                signal: composerDocument.scopeSignal,
                 route: {
                     kind: 'newSession',
                     ref: composerSnapshot.ref,

@@ -1,10 +1,22 @@
+import { installNewSessionPreflightHarness } from '@/dev/testkit/harness/newSessionPreflightHarness';
+import { standardCleanup } from '@/dev/testkit';
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, afterAll, afterEach, beforeEach } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 
-import { installCapabilitiesOpsModuleMock, renderScreen } from '@/dev/testkit';
+import { renderScreen } from '@/dev/testkit';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+const capabilityRpc = vi.fn();
+const preflight = await installNewSessionPreflightHarness((...args) => capabilityRpc(...args));
+const probeCache = await import('@/sync/domains/sessionModes/dynamicSessionModeProbeCache');
+beforeEach(async () => {
+    await preflight.reset();
+    probeCache.resetDynamicSessionModeProbeCacheForTests();
+});
+afterEach(standardCleanup);
+afterAll(() => preflight.dispose());
 
 describe('useNewSessionPreflightSessionModesState (installed Agent)', () => {
     it('probes session modes for an installed Agent that has no bundled core', async () => {
@@ -13,18 +25,12 @@ describe('useNewSessionPreflightSessionModesState (installed Agent)', () => {
         // kind. Requiring one makes the mode probe structurally unreachable for
         // every installed Agent; an Agent with no bundled declaration probes
         // through its own contribution, exactly as the models probe does.
-        vi.resetModules();
 
-        const machineCapabilitiesInvokeMock = vi.fn(async (_machineId: string, _request: unknown) => ({
-            supported: true as const,
-            response: {
+        const capabilityRpc = vi.fn(async (_machineId: string, _request: unknown) => ({
                 ok: true as const,
                 result: { availableModes: [{ id: 'plan', name: 'Plan' }] },
-            },
-        }));
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
+            }));
+        preflight.setCapabilityResponder(capabilityRpc);
 
         const { useNewSessionPreflightSessionModesState } = await import('./useNewSessionPreflightSessionModesState');
 
@@ -33,7 +39,7 @@ describe('useNewSessionPreflightSessionModesState (installed Agent)', () => {
                 backendTarget: { kind: 'backend', backendId: 'acme.review' },
                 runtimeCarrierAgentId: 'acme.review',
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo',
             } as any);
             return null;
@@ -46,8 +52,8 @@ describe('useNewSessionPreflightSessionModesState (installed Agent)', () => {
             root.unmount();
         });
 
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(1);
-        const firstCall = machineCapabilitiesInvokeMock.mock.calls[0] as unknown as [unknown, unknown] | undefined;
+        expect(capabilityRpc).toHaveBeenCalledTimes(1);
+        const firstCall = capabilityRpc.mock.calls[0] as unknown as [unknown, unknown] | undefined;
         expect(firstCall?.[1]).toMatchObject({
             id: 'cli.acme.review',
             method: 'probeModes',
@@ -58,27 +64,12 @@ describe('useNewSessionPreflightSessionModesState (installed Agent)', () => {
         // The bundled declaration stays authoritative: a bundled Agent with
         // static modes must not start probing just because the unknown-core
         // path opened up.
-        vi.resetModules();
 
-        const machineCapabilitiesInvokeMock = vi.fn(async (_machineId: string, _request: unknown) => ({
-            supported: true as const,
-            response: {
+        const capabilityRpc = vi.fn(async (_machineId: string, _request: unknown) => ({
                 ok: true as const,
                 result: { availableModes: [{ id: 'plan', name: 'Plan' }] },
-            },
-        }));
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
-        vi.doMock('@/agents/catalog/catalog', async (importOriginal) => {
-            const actual = await importOriginal<typeof import('@/agents/catalog/catalog')>();
-            return {
-                ...actual,
-                getAgentCore: () => ({
-                    sessionModes: { kind: 'staticAgentModes', staticOptions: [] },
-                }),
-            };
-        });
+            }));
+        preflight.setCapabilityResponder(capabilityRpc);
 
         const { useNewSessionPreflightSessionModesState } = await import('./useNewSessionPreflightSessionModesState');
 
@@ -86,7 +77,7 @@ describe('useNewSessionPreflightSessionModesState (installed Agent)', () => {
             useNewSessionPreflightSessionModesState({
                 backendTarget: { kind: 'backend', backendId: 'claude' },
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo',
             } as any);
             return null;
@@ -99,6 +90,6 @@ describe('useNewSessionPreflightSessionModesState (installed Agent)', () => {
             root.unmount();
         });
 
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(0);
+        expect(capabilityRpc).toHaveBeenCalledTimes(0);
     });
 });

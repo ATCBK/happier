@@ -20,16 +20,12 @@ import { getMissingRequiredConfigEnvVarNames } from '@/utils/profiles/profileCon
 import type { SecretChoiceByProfileIdByEnvVarName } from '@/utils/secrets/secretRequirementApply';
 import { getBuiltInProfile } from '@/sync/domains/profiles/profileUtils';
 import { isProfileCompatibleWithBackendTarget, type AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
-import type { Settings } from '@/sync/domains/settings/settings';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { SavedSecretReferenceResolution } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { getPromptLibraryCatalogValue } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { refreshPromptLibraryCatalog } from '@/sync/engine/settings/promptLibraryCatalogEngine';
-import type { ZenTaskSource } from '@/sync/domains/todos/todoStoredContent';
-import { linkTaskToSession } from '@/sync/domains/todos/taskSessionLink';
-import { TodoSessionLinkError } from '@/sync/domains/todos/todoOps';
 import { resolveEffectiveWindowsRemoteSessionLaunchMode } from '@/sync/domains/session/spawn/windowsRemoteSessionLaunchMode';
 import { getAgentCore, isBundledAgentId, type AgentId } from '@/agents/catalog/catalog';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
@@ -98,6 +94,7 @@ import {
     normalizeLaunchScopePart,
 } from '@/components/sessions/new/modules/newSessionLaunchScope';
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
+import { runWithHomeCredentialRequestSignal } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
 import {
     buildNewSessionAuthoringDraftFromResolvedInputs,
     buildSessionServerStartSpawnDraftV1FromAuthoringDraft,
@@ -164,6 +161,7 @@ import { SessionPromptStackV1Schema, writeSessionContextIntentV1ToMetadata, type
 import { buildSessionInstructionsContextIntentV1 } from '@happier-dev/protocol/actions/sessionStateFieldActions';
 import { readNewSessionDraftFromRepository, writeNewSessionInstructionsToRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
+import type { Settings } from '@/sync/domains/settings/settings';
 
 type MutableSettingsDelta = {
     -readonly [TKey in keyof Settings]?: Settings[TKey];
@@ -171,6 +169,8 @@ type MutableSettingsDelta = {
 
 export type CreatedSessionFollowUpContext = Readonly<{
     sessionId: string;
+    /** Accepted creation follow-up borrows Account custody beyond route presentation. */
+    signal?: AbortSignal;
     effectiveSpawnServerId: string | null;
     launchAttempt: NewSessionLaunchAttempt;
     /**
@@ -336,7 +336,6 @@ export function useCreateNewSession(params: Readonly<{
      * New-session checkout materialization is now driven exclusively by `checkoutCreationDraft`.
      */
     checkoutCreationDraft?: NewSessionCheckoutCreationDraft | null;
-    settings: Settings;
     useProfiles: boolean;
     selectedProfileId: string | null;
     profileMap: Map<string, AIBackendProfile>;
@@ -416,7 +415,6 @@ export function useCreateNewSession(params: Readonly<{
         'mergedBackendProjectionById' | 'mergedProviderProjectionById'
     > | null;
     draftScope?: ServerAccountScope | null;
-    zenTaskSource?: ZenTaskSource | null;
     authoringOrigin?: NewSessionDraft['authoringOrigin'];
     /** Qualified target Account captured by the creator, including cross-Home launches. */
     targetAccountScope?: ServerAccountScope | null;
@@ -573,6 +571,7 @@ export function useCreateNewSession(params: Readonly<{
             return;
         }
         let current = latestParamsRef.current;
+        const settings = storage.getState().settings;
         let managedCreation: SessionManagedCreationV1 | undefined;
         const submittedSessionName = current.getSessionName?.() ?? current.authoringDraft?.sessionName;
         const submittedInstructionsDraft = current.getInstructionsDraft
@@ -880,11 +879,12 @@ export function useCreateNewSession(params: Readonly<{
                         publishLaunchAttempt(launchAttempt);
                     }
                     createdSessionCompletion ??= createCreatedNewSessionCompletion({
-                        ...(current.zenTaskSource || current.authoringOrigin || opts.afterCreated
+                        ...(current.authoringOrigin || opts.afterCreated
                             ? { followUp: async (): Promise<void> => {
                                 if (verifiedUploadedAttachments === null) {
                                     throw new Error('runner_creator_attachments_not_verified');
                                 }
+                                const preuploadedAttachments = verifiedUploadedAttachments;
                                 if (current.authoringOrigin) {
                                     await persistCreatedSessionAuthoringOrigin({
                                         sessionId,
@@ -894,17 +894,14 @@ export function useCreateNewSession(params: Readonly<{
                                         updateSessionMetadataWithRetry: sync.patchSessionMetadataWithRetry,
                                     });
                                 }
-                                if (current.zenTaskSource) {
-                                    await linkTaskToSession({
-                                        source: current.zenTaskSource,
-                                        session: { scope: capturedTargetScope, sessionId },
+                                await runWithHomeCredentialRequestSignal(capturedTargetScope.serverId, async signal => {
+                                    await opts.afterCreated?.({
+                                        sessionId,
+                                        effectiveSpawnServerId: resolvedTargetServerId,
+                                        launchAttempt,
+                                        preuploadedAttachments,
+                                        signal,
                                     });
-                                }
-                                await opts.afterCreated?.({
-                                    sessionId,
-                                    effectiveSpawnServerId: resolvedTargetServerId,
-                                    launchAttempt,
-                                    preuploadedAttachments: verifiedUploadedAttachments,
                                 });
                             } }
                             : {}),
@@ -1223,7 +1220,7 @@ export function useCreateNewSession(params: Readonly<{
             if (spawnBehaviorAgentId) {
                 environmentVariables = buildSpawnEnvironmentVariablesFromUiState({
                     agentId: spawnBehaviorAgentId,
-                    settings: current.settings,
+                    settings,
                     pluginSettings: current.pluginSettings,
                     machineId: selectedMachineId,
                     environmentVariables,
@@ -1236,7 +1233,7 @@ export function useCreateNewSession(params: Readonly<{
             const connectedServices = (current.agentNewSessionOptions as any)?.connectedServices;
 
             const terminal = resolveTerminalSpawnOptions({
-                settings: storage.getState().settings,
+                settings,
                 machineId: selectedMachineId,
             });
 
@@ -1245,7 +1242,7 @@ export function useCreateNewSession(params: Readonly<{
             const preflightIssues = spawnBehaviorAgentId
                 ? getNewSessionPreflightIssues({
                     agentId: spawnBehaviorAgentId,
-                    experiments: getAgentResumeExperimentsFromSettings(spawnBehaviorAgentId, current.settings, selectedMachineId, current.pluginSettings),
+                    experiments: getAgentResumeExperimentsFromSettings(spawnBehaviorAgentId, settings, selectedMachineId, current.pluginSettings),
                     resumeSessionId: current.resumeSessionId,
                     results: machineCapsResults,
                     machineId: selectedMachineId,
@@ -1339,17 +1336,17 @@ export function useCreateNewSession(params: Readonly<{
                     : null;
             const windowsRemoteSessionLaunchMode = resolveEffectiveWindowsRemoteSessionLaunchMode({
                 machineMetadata: current.selectedMachine?.metadata,
-                settings: current.settings,
+                settings,
                 sessionOverride: current.windowsRemoteSessionLaunchModeOverride ?? undefined,
             }).mode;
-            const windowsTerminalWindowName = typeof current.settings.sessionWindowsTerminalWindowName === 'string'
-                ? current.settings.sessionWindowsTerminalWindowName.trim()
+            const windowsTerminalWindowName = typeof settings.sessionWindowsTerminalWindowName === 'string'
+                ? settings.sessionWindowsTerminalWindowName.trim()
                 : '';
             const normalizedSessionPrompt = sessionPrompt.trim();
             const spawnSessionExtras: ReturnType<typeof buildSpawnSessionExtrasFromUiState> = spawnBehaviorAgentId
                 ? buildSpawnSessionExtrasFromUiState({
                     agentId: spawnBehaviorAgentId,
-                    settings: current.settings,
+                    settings,
                     pluginSettings: current.pluginSettings,
                     machineId: selectedMachineId,
                     resumeSessionId: current.resumeSessionId,
@@ -1634,13 +1631,43 @@ export function useCreateNewSession(params: Readonly<{
                     }
                 })();
                 if (actionResult === null) return;
-                if (!isLaunchScopeStillActive() || sourceDraftCancellation.signal.aborted) return;
+                // A received creation fact transfers completion to the original
+                // Account, even when route presentation has already unmounted.
+                const canCompleteReceivedCreation = actionResult.ok && actionResult.result.type === 'success'
+                    && isLaunchScopeStillCurrent()
+                    && (capturedOrdinarySourceAccount != null || capturedOrdinaryTargetAccount != null)
+                    && capturedOrdinarySourceAccount?.accountOnlyLifetime.isCurrent() !== false
+                    && capturedOrdinaryTargetAccount?.accountOnlyLifetime.isCurrent() !== false;
+                if ((!isLaunchScopeStillActive() || sourceDraftCancellation.signal.aborted) && !canCompleteReceivedCreation) {
+                    // Retiring the local observer cannot reject an attempt the
+                    // canonical daemon operation already owns.
+                    const canonicalSettlementAdopted = adoptCanonicalActionOperationSettlement();
+                    if (!canonicalSettlementAdopted && isLaunchScopeStillActive()
+                        && actionResult.ok && actionResult.result.type === 'success') {
+                        // A direct receipt still proves creation. Retire its local
+                        // follow-up without borrowing replacement Account authority.
+                        launchAttempt = markNewSessionLaunchAttemptCreated(launchAttempt, {
+                            createdSessionId: actionResult.result.sessionId,
+                        });
+                        launchAttempt = markNewSessionLaunchAttemptFailed(launchAttempt, {
+                            phase: 'uploading_attachments',
+                            error: new Error('continuation_retired'),
+                            retryable: false,
+                        });
+                        publishLaunchAttempt(launchAttempt);
+                        current.setIsCreating(false);
+                    }
+                    return;
+                }
                 let observedCanonicalSettlement = false;
                 if (actionResult.ok && actionResult.result.type === 'pending' && actionResult.result.outcome === 'accepted') {
                     const operation = await awaitManualSessionSpawnOperation(
-                        executionAccountScope, launchAttempt.attemptId, sourceDraftCancellation.signal,
+                        executionAccountScope, launchAttempt.attemptId, sourceDraftCancellation.signal, spawnInput.executionTarget.machineId,
                     );
-                    if (!operation || !isLaunchScopeStillActive() || sourceDraftCancellation.signal.aborted) return;
+                    if (!operation || !isLaunchScopeStillActive() || sourceDraftCancellation.signal.aborted) {
+                        adoptCanonicalActionOperationSettlement();
+                        return;
+                    }
                     observedCanonicalSettlement = true;
                     actionResult = projectManualSessionSpawnOperationResult(operation);
                 }
@@ -1735,6 +1762,19 @@ export function useCreateNewSession(params: Readonly<{
                                 scopeKey: failureScopeKey,
                             });
                         }
+                        current.setIsCreating(false);
+                        return;
+                    }
+                    if (actionResult.result.code === 'spawn_failed' && actionResult.result.launchError?.code === 'connected_service_credential_reconnect_required') {
+                        Modal.alert(
+                            t('connectedServices.diagnostics.title.connected_service_credential_reconnect_required'),
+                            resolveSessionSpawnNewResultFailureMessage(actionResult.result),
+                            [
+                                { text: t('common.cancel'), style: 'cancel' },
+                                { text: t('connectedServices.detail.actions.reconnect'),
+                                    onPress: () => current.router.push('/(app)/settings/connected-services') },
+                            ],
+                        );
                         current.setIsCreating(false);
                         return;
                     }
@@ -1890,7 +1930,20 @@ export function useCreateNewSession(params: Readonly<{
                 };
 
                 const runAfterCreatedFollowUp = async (): Promise<void> => {
+                    const cancellation = new AbortController();
+                    const accounts = [capturedOrdinarySourceAccount, capturedOrdinaryTargetAccount].filter(
+                        (account): account is LazyActionAccountContext => account != null,
+                    );
+                    const retirements = accounts.map(account => account.accountOnlyLifetime.onRetire(() => cancellation.abort()));
+                    // Pre-Session embedded creation has host-owned authority in
+                    // place of UI Account custody and remains bound to that host.
+                    const abortFromHost = () => cancellation.abort();
+                    if (accounts.length === 0) {
+                        sourceDraftCancellation.signal.addEventListener('abort', abortFromHost, { once: true });
+                        if (sourceDraftCancellation.signal.aborted) cancellation.abort();
+                    }
                     try {
+                        cancellation.signal.throwIfAborted();
                         // This is the incumbent post-create setup checkpoint. A
                         // retained retry must not replay a completed built-in action.
                         postSpawnFailurePhase = 'uploading_attachments';
@@ -1903,18 +1956,9 @@ export function useCreateNewSession(params: Readonly<{
                                 updateSessionMetadataWithRetry: sync.patchSessionMetadataWithRetry,
                             });
                         }
-                        if (current.zenTaskSource) {
-                            const targetScope = current.targetAccountScope ?? current.draftScope;
-                            if (!targetScope || !areServerProfileIdentifiersEquivalent(targetScope.serverId, resolvedTargetServerId)) {
-                                throw new TodoSessionLinkError('task_scope_mismatch');
-                            }
-                            await linkTaskToSession({
-                                source: current.zenTaskSource,
-                                session: { scope: targetScope, sessionId: createdSessionId },
-                            });
-                        }
                         await opts?.afterCreated?.({
                             sessionId: createdSessionId,
+                            signal: cancellation.signal,
                             effectiveSpawnServerId: resolvedTargetServerId,
                             launchAttempt,
                         });
@@ -1922,10 +1966,13 @@ export function useCreateNewSession(params: Readonly<{
                         postSpawnFollowUpError = error;
                         postSpawnFollowUpRetryRef.current = runAfterCreatedFollowUp;
                         throw error;
+                    } finally {
+                        for (const retirement of retirements) retirement.dispose();
+                        sourceDraftCancellation.signal.removeEventListener('abort', abortFromHost);
                     }
                 };
                 const createdSessionCompletion = createCreatedNewSessionCompletion({
-                    ...(current.zenTaskSource || current.authoringOrigin || opts?.afterCreated ? { followUp: runAfterCreatedFollowUp } : {}),
+                    ...(current.authoringOrigin || opts?.afterCreated ? { followUp: runAfterCreatedFollowUp } : {}),
                     present: () => presentCreatedSessionRoute(),
                     ...(!opts?.deferAcceptedDraftClearToDocument
                         ? { clearCapturedDraft: async () => {
@@ -1998,7 +2045,7 @@ export function useCreateNewSession(params: Readonly<{
                     storage.getState().updateSessionModelMode(createdSessionId, current.modelMode);
                 }
 
-                if (!postSpawnFollowUpError && (current.zenTaskSource || current.authoringOrigin || opts?.afterCreated)) {
+                if (!postSpawnFollowUpError && (current.authoringOrigin || opts?.afterCreated)) {
                     try {
                         await createdSessionCompletion.followUp();
                     } catch (error) {
@@ -2006,13 +2053,7 @@ export function useCreateNewSession(params: Readonly<{
                     }
                 }
 
-                const classifyCurrentPostSpawnFailure = (failure: unknown) => failure instanceof TodoSessionLinkError && failure.code === 'task_link_failed'
-                    ? {
-                        kind: 'retryable' as const,
-                        titleKey: 'common.error' as const,
-                        bodyKey: 'inbox.actionOperations.followUpNeedsAttention' as const,
-                    }
-                    : classifyLaunchRetryFailure({
+                const classifyCurrentPostSpawnFailure = (failure: unknown) => classifyLaunchRetryFailure({
                     phase: postSpawnFailurePhase === 'uploading_attachments' ? 'upload' : 'send',
                     failure,
                 });

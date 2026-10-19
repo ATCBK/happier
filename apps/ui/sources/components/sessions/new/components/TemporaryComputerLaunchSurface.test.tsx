@@ -57,10 +57,14 @@ function controller(
 describe('TemporaryComputerLaunchSurface', () => {
     beforeEach(() => {
         platformMock.os = 'web';
+        // This surface's target-size cases exercise touch on web and native.
+        // Browser hardware is separate from the React Native platform name.
+        vi.stubGlobal('navigator', { ...globalThis.navigator, maxTouchPoints: 1 });
         announceForAccessibilityMock.mockClear();
     });
     afterEach(() => {
         platformMock.os = 'web';
+        vi.unstubAllGlobals();
     });
     it('states the exact localized expiry the Home actually froze for this package', async () => {
         const expiresAt = new Date(2031, 4, 17, 6, 42).getTime();

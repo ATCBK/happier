@@ -7,6 +7,7 @@ import { isFirstPartyGitScmBackendId } from '@/scm/registry/firstPartyScmBackend
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 import { generateWorktreeName } from '@/utils/worktree/generateWorktreeName';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import {
     buildWorktreeSelectionListSteps,
@@ -36,13 +37,18 @@ export type CheckoutSelectionPicker = Readonly<{
 }>;
 
 function useWorktreePickerNowMs(): number {
+    const presented = useLayoutPresentationActive();
     const [nowMs, setNowMs] = React.useState(() => Date.now());
     React.useEffect(() => {
+        if (!presented) return;
+        // Catch up once when the retained destination returns, then keep its
+        // relative labels current only while someone can see them.
+        setNowMs(Date.now());
         const intervalId = setInterval(() => {
             setNowMs(Date.now());
         }, WORKTREE_RELATIVE_TIME_TICK_MS);
         return () => clearInterval(intervalId);
-    }, []);
+    }, [presented]);
     return nowMs;
 }
 

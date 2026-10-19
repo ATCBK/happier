@@ -156,7 +156,6 @@ function createRetryParams(settings: Settings, overrides: Partial<CreateSessionP
     allowedTargetServerIds: ['server-a'],
     setIsCreating: vi.fn(),
     setIsResumeSupportChecking: vi.fn(),
-    settings,
     useProfiles: false,
     selectedProfileId: null,
     profileMap: new Map(),

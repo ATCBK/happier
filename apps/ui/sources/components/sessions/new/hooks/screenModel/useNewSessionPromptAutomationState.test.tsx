@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { array } from 'zod/mini';
 
 import { flushHookEffects, renderHook } from '@/dev/testkit';
 import { act } from 'react-test-renderer';
@@ -25,7 +26,7 @@ vi.mock('@/sync/domains/state/storage', () => ({
 describe('useNewSessionPromptAutomationState', () => {
     it('keeps authored initial triggers over stale hydration and replaces them on draft reentry', async () => {
         const { useNewSessionPromptAutomationState } = await import('./useNewSessionPromptAutomationState');
-        const original = SessionInitialTriggerV1Schema.array().parse([{
+        const original = array(SessionInitialTriggerV1Schema).parse([{
             trigger: { kind: 'sessionLifecycle', enabled: true, events: ['sessionStarted'], policy: { kind: 'everyMatch' } },
             target: { kind: 'workflow', ref: 'builtin:review-and-converge' },
         }]);

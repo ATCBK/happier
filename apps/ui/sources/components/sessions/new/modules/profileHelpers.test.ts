@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 import { AIBackendProfileSchema, type SavedSecret } from '@happier-dev/protocol/profiles/backendProfileSchema';
 import { resolveSavedSecretReference, applySavedSecretCatalogPage, getMaterializedSavedSecrets, resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { createProfileOperations } from '@happier-dev/protocol/profiles/profileOperations';
@@ -91,7 +93,7 @@ describe('New Session launch Profile materialization', () => {
             const current = await readCurrentLaunchProfileForReview({ context,
                 reviewedProfile, profileId: reviewedProfile.id });
             expect(current.profile).toEqual(reviewedProfile);
-            expect(current.profile.secretBindings).toEqual({ RUNNER_PROFILE_TOKEN: '00000000-0000-4000-8000-000000000001' });
+            expect(current.profile).toMatchObject({ secretBindings: { RUNNER_PROFILE_TOKEN: '00000000-0000-4000-8000-000000000001' } });
         });
     });
 

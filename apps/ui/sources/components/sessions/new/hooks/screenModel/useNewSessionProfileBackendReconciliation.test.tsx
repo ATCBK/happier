@@ -111,7 +111,6 @@ function useHarness(props: HarnessProps) {
     );
     const hasUserSelectedPermissionModeRef = React.useRef(false);
     const permissionModeRef = React.useRef<PermissionMode>('default');
-    const hasUserTouchedProfileSelectionRef = React.useRef(false);
 
     const profileBackendReconciliation = useNewSessionProfileBackendReconciliation({
         useProfiles: props.useProfiles ?? true,
@@ -130,7 +129,6 @@ function useHarness(props: HarnessProps) {
         },
         resolveDefaultPermissionMode: props.resolveDefaultPermissionMode,
         prepareSecretPromptForProfileSelection: props.prepareSecretPromptForProfileSelectionSpy,
-        hasUserTouchedProfileSelectionRef,
         agentType: 'codex',
         resolveProfileAuthoringIntent: props.resolveProfileAuthoringIntent,
         setModelSelectionForBackendTarget: props.setModelSelectionForBackendTargetSpy,
@@ -302,7 +300,7 @@ describe('useNewSessionProfileBackendReconciliation', () => {
         { stale: true, state: 'ready' },
         { stale: false, state: 'needsSignIn' },
     ] satisfies ReadonlyArray<Pick<MachineAgent, 'stale' | 'state'>>)(
-        'reconciles stale inventory but retains an installed signed-out target for credential selection (%s)', async (unavailable) => {
+        'retains a compatible authored Agent while inventory is stale or sign-in is required (%s)', async (unavailable) => {
         const applyPermissionModeSpy = vi.fn<(mode: PermissionMode, source: 'user' | 'auto') => void>();
         const prepareSecretPromptForProfileSelectionSpy = vi.fn<(prevProfileId: string | null) => void>();
         const profile = createProfile('profile-a');
@@ -340,6 +338,6 @@ describe('useNewSessionProfileBackendReconciliation', () => {
             },
         });
 
-        expect(hook.getCurrent().backendTarget).toEqual({ kind: 'backend', backendId: unavailable.stale ? 'codex' : 'claude' });
+        expect(hook.getCurrent().backendTarget).toEqual({ kind: 'backend', backendId: 'claude' });
     });
 });

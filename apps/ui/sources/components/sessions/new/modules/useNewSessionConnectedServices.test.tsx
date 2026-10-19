@@ -463,15 +463,19 @@ describe('New Session purpose catalog authority', () => {
         { native: 'signedIn' as const, connected: true, selected: 'native', ready: true },
         { native: 'signedOut' as const, connected: true, selected: 'connected', ready: true },
         { native: 'signedOut' as const, connected: false, selected: 'native', ready: false },
+        { native: 'signedOut' as const, connected: true, selected: 'connected', ready: true, status: 'refresh_failed_retryable' as const },
+        { native: 'signedOut' as const, connected: true, selected: 'connected', ready: false, status: 'needs_reauth' as const },
     ])('launch readiness follows the selected credential and offers a one-tap binding recovery: %j', async (scenario) => {
         const bridge = await loadSyncSingletonForTests();
         const accountId = 'selected-launch-credential';
+        const status = 'status' in scenario ? scenario.status : 'connected';
+        const push = vi.fn();
         const features = buildServerFeaturesResponse();
         features.capabilities.connectedServices.qualifiedAccounts = { protocolVersion: 4 };
         const value = { v: 1 as const, bindings: [] };
         const profile = AccountProfileSchema.parse({ id: accountId, connectedAccountsV4: scenario.connected
             ? [{ ...v4Account({ ...CLAUDE_CONNECTED_ACCOUNTS[0]!.service, accountId: 'work', displayName: 'Work', kind: 'token' }),
-                revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`, authenticationModeId: 'api-key' }] : [] });
+                revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`, authenticationModeId: 'api-key', status }] : [] });
         const http = createHomeHubArtifactHttpBoundary(accountId, profile);
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://selected-launch-credential.test', accountId,
             request: (input, init) => {
@@ -502,18 +506,23 @@ describe('New Session purpose catalog authority', () => {
                 targetServerId: connection.home.id, selectedBackendTargetKey: 'agent:happier.agent.claude/claude',
                 connectedAccounts: CLAUDE_CONNECTED_ACCOUNTS, agentIdentity: { pluginId: 'happier.agent.claude', localId: 'claude' }, machineAgent,
                 settings: { connectedServicesDefaultProfileByServiceId: {} }, agentOptionState: options['agent:happier.agent.claude/claude'] ?? null,
-                setBackendNewSessionOptionStateByTargetKey: setOptions, router: { push() {} } });
+                setBackendNewSessionOptionStateByTargetKey: setOptions, router: { push } });
         });
         try {
             await waitForHomeGovernance(() => expect(hook.getCurrent().connectedAccountDefaultsStatus).toBe('ready'));
             expect(isMachineAgentReady(hook.getCurrent().selectedCredentialMachineAgent)).toBe(scenario.ready);
             // Aggregate Machine/Agent rows retain their "any usable credential" contract.
-            expect(isMachineAgentReady(machineAgent)).toBe(scenario.connected || scenario.native === 'signedIn');
+            expect(isMachineAgentReady(machineAgent)).toBe((scenario.connected && status !== 'needs_reauth') || scenario.native === 'signedIn');
             const line = resolveAgentSessionStartBlockLine({ agent: hook.getCurrent().selectedCredentialMachineAgent,
                 machineName: 'Devbox', onSetUp: () => {}, connectedServicesRecoveryAction: hook.getCurrent().connectedServicesRecoveryAction });
             expect(line !== null).toBe(!scenario.ready);
             const canRecover = scenario.native === 'signedOut' && scenario.connected && scenario.selected === 'native';
             expect(line?.action.testID === 'new-session-agent-blocker.connected').toBe(canRecover);
+            if (status === 'needs_reauth') {
+                expect(line?.action.testID).toBe('new-session-agent-blocker.reconnect');
+                await act(async () => { line?.action.onPress(); });
+                expect(push).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ accountId: 'work' }) }));
+            }
             if (line && canRecover) {
                 expect(line.secondaryAction?.testID).toBe('new-session-agent-blocker.action');
                 await act(async () => { line.action.onPress(); });
@@ -920,6 +929,7 @@ describe('useNewSessionConnectedServices', () => {
             .toBe('Runs through Anthropic API key · Work');
         // "Runs through <account>": the account is the route's native source.
         expect(hook.getCurrent().routePresentation.applied).toMatchObject({ kind: 'native', sourceLabel: 'Anthropic API key · Work' });
+        expect(hook.getCurrent().nativeSourceLabel).toBe('Anthropic API key · Work');
 
         const reopenedPopoverRenderer = requireCollapsedContentPopover(
             hook.getCurrent().connectedServicesAuthChip,
@@ -1268,6 +1278,19 @@ describe('useNewSessionConnectedServices', () => {
             .toBe('Runs through Codex · Primary pool');
         // "Runs through <account>": the account is the route's native source.
         expect(hook.getCurrent().routePresentation.applied).toMatchObject({ kind: 'native', sourceLabel: 'Codex · Primary pool' });
+        const { SessionModelPicker } = await import('@/components/sessions/modelPicker/SessionModelPicker');
+        const { SelectionList } = await import('@/components/ui/selectionList/SelectionList');
+        const picker = await renderScreen(<SessionModelPicker
+            agentTargetKey="agent:happier.agent.codex/codex"
+            nativeModels={[{ value: 'gpt-6-luna', label: 'GPT 6 Luna' }]}
+            providerGroups={[]}
+            providerProjectionAuthoritative={false}
+            selected={null}
+            effectiveLabel="Default"
+            nativeSourceLabel={hook.getCurrent().nativeSourceLabel}
+            onSelect={() => {}}
+        />);
+        expect(picker.findByType(SelectionList).props.rootStep.sections[0].title).toBe('Codex · Primary pool');
 
         await hook.unmount();
     });

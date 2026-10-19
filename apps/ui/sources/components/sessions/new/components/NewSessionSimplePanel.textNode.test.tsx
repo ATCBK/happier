@@ -51,35 +51,6 @@ installNewSessionComponentsCommonModuleMocks({
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock().module;
     },
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        return createPartialStorageModuleMock(importOriginal, {
-            storage: createStorageStoreMock({ settings: settingsDefaults }),
-            useActiveServerAccountScope: () => null,
-            useSetting: (key: string) => {
-                if (key === 'profiles') return [];
-                if (key === 'agentInputEnterToSend') return true;
-                if (key === 'agentInputActionBarLayout') return 'wrap';
-                if (key === 'agentInputChipDensity') return 'labels';
-                if (key === 'sessionPermissionModeApplyTiming') return 'immediate';
-                return null;
-            },
-            useSettings: () => ({
-                profiles: [],
-                agentInputEnterToSend: true,
-                agentInputActionBarLayout: 'wrap',
-                agentInputChipDensity: 'labels',
-                sessionPermissionModeApplyTiming: 'immediate',
-            }),
-            useWorkspaceReviewCommentsDrafts: () => [],
-            useSessionMessages: () => ({ messages: [], isLoaded: true }),
-            useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
-            useSessionMessagesById: () => ({}),
-            useSessionMessagesVersion: () => 0,
-            useSessionMessagesReducerState: () => null,
-        });
-    },
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
@@ -213,14 +184,6 @@ vi.mock('@/sync/domains/sessionControl/sessionModeControl', () => ({
 
 vi.mock('@/sync/domains/sessionControl/configOptionsControl', () => ({
     computeAcpConfigOptionControls: () => null,
-}));
-
-vi.mock('@/sync/domains/state/storageStore', () => ({
-    getStorage: () => (selector: any) => selector({ sessionMessages: {} }),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
 }));
 
 vi.mock('@/agents/catalog/catalog', () => ({
@@ -407,7 +370,8 @@ describe('NewSessionSimplePanel', () => {
         const composer = screen.findByType('AgentInput' as React.ElementType);
         if (!notice) throw new Error('Expected composer notice');
         const siblings = notice.parent?.children.filter((child) => typeof child === 'object') ?? [];
-        expect(notice.parent).toBe(composer.parent);
+        // Compare identity without asking Vitest to diff the complete React fiber graphs on failure.
+        expect(notice.parent === composer.parent).toBe(true);
         expect(siblings.indexOf(composer)).toBe(siblings.indexOf(notice) + 1);
         // The host's actions reach the composer's status row (beside the floating composer's own capsules).
         expect(screen.findByTestId('status-actions')).toBeTruthy();

@@ -1,5 +1,5 @@
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import * as React from 'react';
 import { View } from 'react-native';
@@ -9,10 +9,13 @@ import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
 import { installLocalStorageMock, type LocalStorageMockHandle } from '@/auth/storage/tokenStorage.web.testHelpers';
 import type { SessionSpawnNewResultV1, SessionAuthoringCheckoutCreationDraftV1 } from '@happier-dev/protocol';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import type { HomeViewStateV1, ServerProfile } from '@/sync/domains/server/serverProfiles';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -132,6 +135,36 @@ vi.mock('socket.io-client', async () => {
                     event,
                     payload,
                 });
+                if (typeof payload === 'object' && payload !== null
+                    && 'method' in payload && typeof payload.method === 'string'
+                    && 'params' in payload) {
+                    if (payload.method.endsWith(`:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`)) {
+                        return { ok: true, result: createExistingSessionDirectoryPreflightResult(payload.params) };
+                    }
+                    if (payload.method.includes('contributionRegistryProjection.describe')) {
+                        const { BUNDLED_CANONICAL_AGENT_DECLARATIONS } = await import('@/agents/registry/generatedBundledPluginEntries');
+                        return { ok: true, result: { protocolVersion: 1, projection: PluginProjectionV2Schema.parse({
+                            v: 2, generation: 1, installedPackagesById: {},
+                            agentsById: Object.fromEntries(Object.entries(BUNDLED_AGENT_CONTRIBUTION_IDENTITIES).map(([id, identity]) => [id, {
+                                id, identity, title: id,
+                                connectedAccounts: BUNDLED_CANONICAL_AGENT_DECLARATIONS[id as keyof typeof BUNDLED_CANONICAL_AGENT_DECLARATIONS]?.connectedAccounts ?? [],
+                                capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+                            }])),
+                            actionsById: {}, familiesById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
+                        }) } };
+                    }
+                    if (payload.method.endsWith(`:${RPC_METHODS.CAPABILITIES_DETECT}`)) {
+                        return { ok: true, result: { protocolVersion: 1,
+                            results: Object.fromEntries(Object.keys(BUNDLED_AGENT_CONTRIBUTION_IDENTITIES).map(agentId => [`cli.${agentId}`, {
+                                ok: true, checkedAt: Date.now(), data: { agentId, title: agentId, installed: true,
+                                    version: '1', latestVersion: null, update: { supported: false, command: null },
+                                    signIn: { status: 'signedIn', loginSupport: 'status_only' }, platform: { supported: true },
+                                    install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [] },
+                            }])),
+                        } };
+                    }
+                    if (payload.method.includes('agentInstallJobs.list')) return { ok: true, result: { jobs: [] } };
+                }
                 return {
                     ok: true,
                     result: socketBoundary.result ?? { type: 'error', code: 'spawn_failed', retryable: false },
@@ -156,6 +189,12 @@ vi.mock('socket.io-client', async () => {
 function tokenFor(accountId: string): string {
     const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
     return `${encode({ alg: 'none' })}.${encode({ sub: accountId })}.signature`;
+}
+
+function sessionSpawnCalls() {
+    return socketBoundary.emits.mock.calls.filter(([request]) => (
+        request.payload?.method?.endsWith(`:${RPC_METHODS.SESSION_SPAWN_NEW}`)
+    ));
 }
 
 // Collect the real cold module graph after installing its platform boundaries.
@@ -213,6 +252,12 @@ async function selectHomeView(state: HomeViewStateV1): Promise<void> {
 }
 
 describe('multi-Home Session creation composition', () => {
+
+    afterEach(() => {
+        // This file owns the real Sync singleton, including background bootstrap.
+        // Retire the previous Account before the next case replaces Home HTTP.
+        sync?.disconnectServer();
+    });
 
     beforeEach(async () => {
         pendingSpawnCustodyLock = null;
@@ -283,7 +328,7 @@ describe('multi-Home Session creation composition', () => {
                 });
             }
             if (url.endsWith('/v1/machines/pools/list')) return Response.json({ pools: [] });
-            if (url.endsWith('/v1/machines')) return Response.json((machineHttpSnapshots.get(new URL(url).origin) ?? []).map((machine) => ({
+            if (new URL(url).pathname === '/v1/machines') return Response.json((machineHttpSnapshots.get(new URL(url).origin) ?? []).map((machine) => ({
                 ...machine, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
                 metadata: encodePlainMachineStoredContent(machine.metadata),
                 daemonState: machine.daemonState ? encodePlainMachineStoredContent(machine.daemonState) : null,
@@ -291,6 +336,11 @@ describe('multi-Home Session creation composition', () => {
             if (url.endsWith('/v1/account/encryption')) return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.endsWith('/v1/account/encryption/currentness')) return Response.json({ mode: 'plain', version: 1,
                 signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+            if (url.endsWith('/v1/account/entity-rows/connected-accounts/purposes')) {
+                const { ConnectedAccountCatalogRowReadResponseV1Schema, emptyConnectedAccountCatalogRecordV1 } = await import('@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1');
+                return Response.json(ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+                    content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') } }));
+            }
             if (url.endsWith('/v1/account/entity-rows/prompt-library')) return Response.json({ rows: [] });
             if (url.endsWith('/v2/account/settings') && (!init?.method || init.method === 'GET')) return Response.json({
                 content: accountHttpSettings ? { t: 'plain', v: accountHttpSettings } : null, version: 1 });
@@ -374,7 +424,6 @@ describe('multi-Home Session creation composition', () => {
         };
     }
 
-    let draftSequence = 0;
     async function renderProductionCreateCaller(params: Readonly<{
         activeServerId: string;
         accountId?: string;
@@ -391,6 +440,7 @@ describe('multi-Home Session creation composition', () => {
             const machines = [
                 createMachineFixture({
                     id: 'machine-b',
+                    activeAt: Date.now(),
                     metadata: {
                         host: 'home-b-machine',
                         platform: 'linux',
@@ -405,7 +455,7 @@ describe('multi-Home Session creation composition', () => {
             machineHttpSnapshots.set(new URL(targetProfile.serverUrl).origin, machines);
             storage.getState().applyMachines(machines, true, { sourceServerId: params.targetServerId });
         }
-        const draftId = params.draftId ?? `multi-home-composed-draft-${++draftSequence}`;
+        const draftId = params.draftId ?? crypto.randomUUID();
         const activeProfile = profiles.getServerProfileById(params.activeServerId);
         if (!activeProfile) throw new Error('Creation fixture has no active Home profile');
         const credentials = await TokenStorage.getCredentialsForServerUrl(activeProfile.serverUrl, { serverId: params.activeServerId });
@@ -551,6 +601,7 @@ describe('multi-Home Session creation composition', () => {
 
     it.each([false, true])('admits a fresh New Session without Account-wide draft readiness and retains its generated route identity (seeded=%s)', async (seeded) => {
         const heldList = createDeferred<void>();
+        let listRequested = false;
         const readAddresses: unknown[] = [];
         const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
         const features = createRootLayoutFeaturesResponse({ features: { sessions: { drafts: { enabled: true } } } });
@@ -560,7 +611,7 @@ describe('multi-Home Session creation composition', () => {
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json({ ...features,
                 capabilities: { ...features.capabilities,
                     serverIdentity: { serverIdentityId: profiles.getActiveServerSnapshot().serverId } } });
-            if (path === '/v2/account/session-drafts/list') { await heldList.promise; return Response.json({ items: [] }); }
+            if (path === '/v2/account/session-drafts/list') { listRequested = true; await heldList.promise; return Response.json({ items: [] }); }
             if (path === '/v2/account/session-drafts/read') {
                 readAddresses.push(JSON.parse(String(init?.body)).address);
                 return Response.json({ status: 'absent' });
@@ -581,6 +632,7 @@ describe('multi-Home Session creation composition', () => {
         const screen = await renderScreen(element());
         try {
             await vi.waitFor(() => expect(routeBoundary.params.draftId).toEqual(expect.any(String)));
+            await vi.waitFor(() => expect(listRequested).toBe(true));
             expect(storage.getState().isSessionDraftsReady).toBe(false);
             expect(readAddresses).toEqual([]);
             const draftId = routeBoundary.params.draftId;
@@ -670,6 +722,7 @@ describe('multi-Home Session creation composition', () => {
 
     it.each(['disabled', 'waived', 'defaultApproved', 'defaultRejected', 'retargeted', 'pointerChanged'] as const)('routes the composer delete through the %s Action policy', async policy => {
         const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol');
+        const { SessionDraftMutateRequestV2Schema, SessionDraftMutateResponseV2Schema } = await import('@happier-dev/protocol/drafts/sessionDraftsV2');
         const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
         const features = createRootLayoutFeaturesResponse({ features: { sessions: { drafts: { enabled: true } } } });
         const coreHttp = await createDraftSurfaceCoreHttpBoundary();
@@ -686,13 +739,18 @@ describe('multi-Home Session creation composition', () => {
                     serverIdentity: { serverIdentityId: profiles.getActiveServerSnapshot().serverId } } });
             if (path === '/v2/account/session-drafts/list') return Response.json({ items: [] });
             if (path === '/v2/account/session-drafts/read') return Response.json({ status: 'absent' });
-            if (path === '/v2/account/session-drafts/mutate') {
-                const input: unknown = JSON.parse(String(init?.body));
-                mutations.push(input);
-                if (holdDeletion) await heldDelete.promise;
-                return Response.json({ status: 'updated', record: {
-                    address, revision: 1, createdAt: 1, updatedAt: 2, content: null,
-                } });
+            if (path === '/v1/account/session-drafts/mutate' || path === '/v2/account/session-drafts/mutate') {
+                const input = SessionDraftMutateRequestV2Schema.parse(JSON.parse(String(init?.body)));
+                // A draft autosave and its later tombstone share this endpoint.
+                // Preserve normal saves and hold only the deletion this case owns.
+                if (input.content === null) {
+                    mutations.push(input);
+                    if (holdDeletion) await heldDelete.promise;
+                }
+                return Response.json(SessionDraftMutateResponseV2Schema.parse({ status: 'updated', record: {
+                    address: input.address, revision: input.expectedRevision === 'absent' ? 1 : input.expectedRevision + 1,
+                    createdAt: 1, updatedAt: 2, content: input.content,
+                } }));
             }
             return coreHttp(path);
         };
@@ -717,10 +775,10 @@ describe('multi-Home Session creation composition', () => {
             await vi.waitFor(() => expect(screen.root.findAllByType(AgentInput)).toHaveLength(1));
             const scope = { serverId: homeAScopeId, accountId: 'account-a' };
             await act(async () => { writeNewSessionDraft({ scope, draftId, materializationIntent: 'userEdit', patch: { text: 'Keep exact composer scope' } }); });
-            await vi.waitFor(() => expect(screen.root.findAllByType(NewSessionDraftComposerActions)).toHaveLength(1));
+            await vi.waitFor(() => expect(screen.findAllByType(NewSessionDraftComposerActions)).toHaveLength(1));
             if (holdDeletion) {
                 let deletion!: Promise<void>;
-                await act(async () => { deletion = screen.root.findByType(NewSessionDraftComposerActions).props.onDelete(); });
+                await act(async () => { deletion = screen.findByType(NewSessionDraftComposerActions).props.onDelete(); });
                 await vi.waitFor(() => expect(mutations).toHaveLength(1));
                 await act(async () => {
                     storage.getState().applySettingsLocal({ newSessionOrdinaryEntryDraftId: replacementDraftId });
@@ -739,7 +797,7 @@ describe('multi-Home Session creation composition', () => {
                 expect(getSessionDraftSnapshot(scope, address)).toBeNull();
                 return;
             }
-            await act(async () => { await screen.root.findByType(NewSessionDraftComposerActions).props.onDelete(); });
+            await act(async () => { await screen.findByType(NewSessionDraftComposerActions).props.onDelete(); });
             if (policy === 'disabled' || policy === 'waived') expect(modalBoundary.confirm).not.toHaveBeenCalled();
             else expect(modalBoundary.confirm).toHaveBeenCalledTimes(1);
             if (policy === 'disabled' || policy === 'defaultRejected') {
@@ -773,11 +831,49 @@ describe('multi-Home Session creation composition', () => {
         }
     }
 
+    it('changes the authoring model when an existing surface reopens a different Bot draft', async () => {
+        const coreHttp = await createDraftSurfaceCoreHttpBoundary();
+        sessionHttpBoundary = url => {
+            const path = new URL(url).pathname;
+            return path === '/v1/machines' ? Response.json([]) : coreHttp(path);
+        };
+        ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA('reopen-bot-identity', { applyConnectionManager: true }));
+        const scope = { serverId: homeAScopeId, accountId: 'account-a' };
+        const firstId = '00000000-0000-4000-8000-000000000931';
+        const botId = '00000000-0000-4000-8000-000000000932';
+        const { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+        const baseDraft = { selectedMachineId: null, selectedPath: null, selectedProfileId: null, selectedSecretId: null,
+            agentType: 'codex' as const, permissionMode: 'default' as const, acpSessionModeId: null, updatedAt: 1 };
+        writeNewSessionDraftToRepository({ scope, draftId: firstId, materializationIntent: 'seeded', draft: { ...baseDraft, input: 'An ordinary question' } });
+        writeNewSessionDraftToRepository({ scope, draftId: botId, materializationIntent: 'seeded', draft: { ...baseDraft,
+            input: 'Look after releases', sessionName: 'Release captain', initialSessionFacts: { bot: { kind: 'bot' }, createdAsBot: true } } });
+        const { NewSessionScreen } = await import('../NewSessionScreen');
+        const { AgentInput } = await import('@/components/sessions/agentInput');
+        const { NewBotDraftHeader } = await import('@/components/sessions/bots/NewBotDraftHeader');
+        routeBoundary.params = { draftId: firstId };
+        const element = () => React.createElement(InjectedAuthProvider, { credentials: { token: homeAToken },
+            children: React.createElement(NewSessionScreen, { presentation: 'screen' }) });
+        const screen = await renderScreen(element());
+        try {
+            await vi.waitFor(() => expect(screen.root.findAllByType(AgentInput)).toHaveLength(1));
+            expect(screen.root.findByType(AgentInput).props.value).toBe('An ordinary question');
+            expect(screen.findAllByType(NewBotDraftHeader)).toHaveLength(0);
+            routeBoundary.params = { draftId: botId };
+            await screen.update(element());
+            await vi.waitFor(() => expect(screen.root.findByType(AgentInput).props.value).toBe('Look after releases'));
+            expect(screen.root.findAllByType(AgentInput)).toHaveLength(1);
+            expect(screen.findByType(NewBotDraftHeader).props.botCreation.nameStore.getPrompt()).toBe('Release captain');
+            await act(async () => { screen.root.findByType(AgentInput).props.onChangeText('Keep the release notes current'); });
+            expect(readNewSessionDraftFromRepository({ scope, draftId: botId })?.input).toBe('Keep the release notes current');
+            expect(readNewSessionDraftFromRepository({ scope, draftId: firstId })?.input).toBe('An ordinary question');
+        } finally { await screen.unmount(); }
+    });
+
     it('exposes a leaf-local Bot name editor that persists edits and reopens an automatic empty title', async () => {
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA());
         routeBoundary.params = {};
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
-        const draftId = `bot-name-composed-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         const { resetSessionDraftRepositoryForTests } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
         writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: {
@@ -813,7 +909,7 @@ describe('multi-Home Session creation composition', () => {
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA());
         routeBoundary.params = {};
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
-        const draftId = `instructions-consumer-composed-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: {
             input: '', sessionName: 'Caretaker', initialSessionFacts: { bot: { kind: 'bot' }, createdAsBot: true },
@@ -829,7 +925,7 @@ describe('multi-Home Session creation composition', () => {
         const hook = await renderProductionCreateCaller({ activeServerId: homeAScopeId, draftId });
         const model = hook.getCurrent();
         if (model.variant !== 'simple') throw new Error('Bot creation must use the ordinary composer');
-        const screen = await renderScreen(<View>{model.simpleProps.composerTopContent}</View>);
+        const screen = await renderScreen(<View>{model.botCreation?.instructions}</View>);
         try {
             expect(artifacts.list()).toHaveLength(0);
             expect(screen.findByTestId('new-session-instructions-attach')).not.toBeNull();
@@ -851,7 +947,7 @@ describe('multi-Home Session creation composition', () => {
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA());
         routeBoundary.params = {};
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
-        const draftId = `instructions-local-composed-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         const { resetSessionDraftRepositoryForTests } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
         writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: {
@@ -887,7 +983,7 @@ describe('multi-Home Session creation composition', () => {
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA());
         routeBoundary.params = {};
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
-        const draftId = `instructions-approval-${decision}-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: {
             input: '', sessionName: 'Reviewed caretaker', initialSessionFacts: { bot: { kind: 'bot' }, createdAsBot: true },
@@ -910,7 +1006,7 @@ describe('multi-Home Session creation composition', () => {
         }), 2); });
         const model = hook.getCurrent();
         if (model.variant !== 'simple') throw new Error('Expected ordinary Bot composer');
-        const screen = await renderScreen(<View>{model.simpleProps.composerTopContent}</View>);
+        const screen = await renderScreen(<View>{model.botCreation?.instructions}</View>);
         const { decodePlainArtifactStoredContent } = await import('@happier-dev/protocol/storage/artifactStoredContent');
         const rowsOfKind = (kind: string) => artifacts.list().filter(row => {
             const header = decodePlainArtifactStoredContent(row.header);
@@ -951,7 +1047,7 @@ describe('multi-Home Session creation composition', () => {
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA());
         routeBoundary.params = {};
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
-        const draftId = `instructions-late-${intent}-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository, writeNewSessionInstructionsToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: {
             input: '', sessionName: 'Caretaker', initialSessionFacts: { bot: { kind: 'bot' }, createdAsBot: true },
@@ -969,7 +1065,7 @@ describe('multi-Home Session creation composition', () => {
         const hook = await renderProductionCreateCaller({ activeServerId: homeAScopeId, draftId });
         const model = hook.getCurrent();
         if (model.variant !== 'simple') throw new Error('Expected Bot composer');
-        const screen = await renderScreen(<View>{model.simpleProps.composerTopContent}</View>);
+        const screen = await renderScreen(<View>{model.botCreation?.instructions}</View>);
         let creating: Promise<unknown> | undefined;
         try {
             act(() => { creating = screen.findByTestId('new-session-instructions-create')!.props.onPress(); });
@@ -1005,8 +1101,8 @@ describe('multi-Home Session creation composition', () => {
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA());
         routeBoundary.params = {};
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
-        const firstId = `instructions-save-first-${++draftSequence}`;
-        const secondId = `instructions-save-second-${++draftSequence}`;
+        const firstId = crypto.randomUUID();
+        const secondId = crypto.randomUUID();
         const { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         const blank = { input: '', selectedMachineId: null, selectedPath: null, selectedProfileId: null, selectedSecretId: null,
             agentType: 'codex', permissionMode: 'default', acpSessionModeId: null, updatedAt: 1 } as const;
@@ -1054,7 +1150,7 @@ describe('multi-Home Session creation composition', () => {
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA());
         routeBoundary.params = {};
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
-        const draftId = `instructions-account-retired-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const authored = { title: 'Private A remit', markdown: 'Only Account A may create this document.' };
         const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-b', encryptionMode: 'plain' });
@@ -1094,7 +1190,7 @@ describe('multi-Home Session creation composition', () => {
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA());
         routeBoundary.params = { machineId: 'machine-b', directory: '/workspace/project', spawnServerId: homeAScopeId };
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
-        const draftId = `instructions-send-account-retired-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const { writeNewSessionDraftToRepository, readNewSessionDraftFromRepository } =
             await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: {
@@ -1137,7 +1233,7 @@ describe('multi-Home Session creation composition', () => {
         await arrangeHomeB();
         await selectHomeView({ version: 1, activeTargetKind: 'server', activeTargetId: homeBScopeId, groups: [] });
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
-        const draftId = `routed-source-admission-${sourceState}-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const { writeNewSessionDraftToRepository, readNewSessionDraftFromRepository } =
             await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: {
@@ -1204,7 +1300,7 @@ describe('multi-Home Session creation composition', () => {
         const { storeTempData } = await import('@/utils/sessions/tempDataStore');
         routeBoundary.params = { dataId: storeTempData({ instructionsDraft: { title: 'Old draft', markdown: 'Old unsaved body' } }) };
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
-        const draftId = `instructions-clear-handoff-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const { writeNewSessionDraftToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: {
             input: '', instructionsDraft: null, promptStack: [{ id: 'session.instructions',
@@ -1224,7 +1320,7 @@ describe('multi-Home Session creation composition', () => {
         // The first genuine Home baseline owns this preference. Re-publishing
         // changed bytes at the same Settings revision would correctly be ignored.
         accountHttpSettings = { useEnhancedSessionWizard: true };
-        ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA('temporary-account-capture'));
+        ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA('temporary-account-capture', { applyConnectionManager: true }));
         // Account replacement during first-use acquisition is independent of
         // cross-Home selection. Keep this journey on its initiating Home; the
         // borrowed-Home material preparation contract is covered separately.
@@ -1238,13 +1334,13 @@ describe('multi-Home Session creation composition', () => {
         const { bindHomeDomainActionHttpRequestV1 } = await import('@happier-dev/protocol/actions/homeDomainActionFamily');
         const { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowReadResponseV1Schema }
             = await import('@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1');
-        const { TeamsPageV1Schema, TeamCredentialResourceEntitledPageV1Schema,
+        const { TeamsPageV1Schema, TeamCredentialResourceEntitledPageV1Schema, TEAM_DIRECTORY_PAGE_LIMIT_DEFAULT_V1,
             NO_TEAM_CAPABILITIES_V1, resolveTeamAdmissionProjectionV1 } = await import('@happier-dev/protocol/teams');
         const { RunnerArtifactAvailabilityProjectionV1Schema } = await import('@happier-dev/protocol/ephemeralRunner/runnerArtifact');
         const { EPHEMERAL_RUNNER_ARTIFACTS_PATH_V1, EPHEMERAL_RUNNER_ACTIVATIONS_PATH_V1 } = await import('@happier-dev/protocol/ephemeralRunner/routes');
         const { writeNewSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
         const scope = { serverId: homeBScopeId, accountId: 'account-a' };
-        const draftId = `temporary-account-capture-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         routeBoundary.params = { spawnServerId: homeBScopeId, draftServerId: homeBScopeId, draftAccountId: scope.accountId,
             backendTargetKey: 'agent:happier.agent.codex/codex' };
         writeNewSessionDraft({ scope, draftId, materializationIntent: 'userEdit', patch: {
@@ -1276,14 +1372,18 @@ describe('multi-Home Session creation composition', () => {
             url: 'https://runner-publication.test/happier-runner-v0.3.0-linux-x64.zip',
             checksumsUrl: 'https://runner-publication.test/checksums.txt', checksumsSignatureUrl: 'https://runner-publication.test/checksums.txt.minisig',
             sizeBytes: 1, entries: [{ path: 'happier-runner', kind: 'file', sizeBytes: 1, mode: 0o755 }] }] });
-        const teamPath = bindHomeDomainActionHttpRequestV1('teams.list', { v: 1, scope: 'member', archived: 'active', cursor: null }).path;
+        const teamPath = bindHomeDomainActionHttpRequestV1('teams.list', {
+            v: 1, scope: 'member', archived: 'active', limit: TEAM_DIRECTORY_PAGE_LIMIT_DEFAULT_V1,
+        }).path;
         const resourcesPath = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: 'runner-team' }).path;
         const initiatingAccountReads: string[] = [];
         const activationEffects: string[] = [];
+        const observedHomePaths = new Set<string>();
         sessionHttpBoundary = (url, init) => {
             const parsed = new URL(url);
+            observedHomePaths.add(`${parsed.pathname}${parsed.search}`);
             if (parsed.pathname === '/v1/features' || parsed.pathname === '/v1/features/authenticated') return Response.json({ ...features,
-                capabilities: { ...features.capabilities, accountStoredContentCompatibility: { v: 1,
+                capabilities: { ...features.capabilities, serverIdentity: { serverIdentityId: homeBScopeId }, accountStoredContentCompatibility: { v: 1,
                     minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
                     currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
                     declarationTransport: 'http-header-and-socket-auth-v1' } } });
@@ -1308,6 +1408,13 @@ describe('multi-Home Session creation composition', () => {
             }
             return null;
         };
+        // The Home's earlier public descriptor is persisted as well as cached.
+        // Read this case's new HTTP response through the canonical refresh owner.
+        const { resetServerFeaturesClientForTests, getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        resetServerFeaturesClientForTests();
+        expect(await getServerFeaturesSnapshot({ serverId: homeBScopeId, force: true })).toMatchObject({
+            status: 'ready', features: { features: { teams: { enabled: true } } },
+        });
         const checksums = createDeferred<Response>();
         let checksumRequested = false;
         const publicationFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
@@ -1326,7 +1433,9 @@ describe('multi-Home Session creation composition', () => {
             await vi.waitFor(() => {
                 const model = hook.getCurrent();
                 expect(model.variant).toBe('wizard');
-                if (model.variant === 'wizard') expect(model.wizardProps.agent.teamCredentialResources).toHaveLength(1);
+                if (model.variant === 'wizard') expect(model.wizardProps.agent.teamCredentialResources, JSON.stringify({
+                    observedHomePaths: [...observedHomePaths], teamPath, resourcesPath,
+                })).toHaveLength(1);
             });
             await vi.waitFor(() => {
                 const model = hook.getCurrent();
@@ -1343,7 +1452,9 @@ describe('multi-Home Session creation composition', () => {
             await hook.rerender();
             await vi.waitFor(() => {
                 const model = hook.getCurrent();
-                expect(model.variant === 'wizard' ? model.wizardProps.footer.canCreate : model.simpleProps.canCreate).toBe(true);
+                const composer = model.variant === 'wizard' ? model.wizardProps.footer : model.simpleProps;
+                expect(composer.canCreate, JSON.stringify({ connectionStatus: composer.connectionStatus,
+                    statusBadges: composer.statusBadges })).toBe(true);
             });
             initiatingAccountReads.length = 0;
             await act(async () => { sending = Promise.resolve(readProductionCreateAction(hook.getCurrent())({ initialMessage: 'send',
@@ -1394,7 +1505,7 @@ describe('multi-Home Session creation composition', () => {
     it('reopens a Temporary computer draft without selecting or dispatching to an available Machine', async () => {
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA());
         routeBoundary.params = {};
-        const draftId = `temporary-composed-draft-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
         const executionTarget = {
             kind: 'temporary_computer',
@@ -1446,7 +1557,7 @@ describe('multi-Home Session creation composition', () => {
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA());
         await act(async () => { await arrangeHomeB(); });
         routeBoundary.params = {};
-        const draftId = `temporary-cross-home-ref-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const sourceScope = { serverId: homeAScopeId, accountId: 'account-a' };
         const { writeNewSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
         writeNewSessionDraft({
@@ -1539,8 +1650,8 @@ describe('multi-Home Session creation composition', () => {
             expect(socketBoundary.fetches.mock.calls
                 .filter(([url]) => new URL(String(url)).pathname.startsWith('/v1/machines/machine-b'))
                 .every(([url]) => new URL(String(url)).origin === new URL(homeB.serverUrl).origin)).toBe(true);
-            expect(socketBoundary.emits).toHaveBeenCalledTimes(1);
-            expect(socketBoundary.emits.mock.calls[0]?.[0]).toMatchObject({
+            expect(sessionSpawnCalls()).toHaveLength(1);
+            expect(sessionSpawnCalls()[0]?.[0]).toMatchObject({
                 serverUrl: homeB.serverUrl,
                 token: homeBToken,
                 payload: {
@@ -1574,7 +1685,7 @@ describe('multi-Home Session creation composition', () => {
             socketBoundary.emits.mockClear();
             await act(async () => { await readProductionCreateAction(createHook.getCurrent())({ initialMessage: 'skip' }); });
             const { SessionSpawnNewInputV2Schema } = await import('@happier-dev/protocol');
-            const first = SessionSpawnNewInputV2Schema.parse(socketBoundary.emits.mock.calls[0]?.[0]?.payload?.params);
+            const first = SessionSpawnNewInputV2Schema.parse(sessionSpawnCalls()[0]?.[0]?.payload?.params);
             expect(first).toMatchObject({
                 executionTarget: { serverId: homeBScopeId, machineId: 'machine-b' },
                 directory: { kind: 'path', path: '/workspace/project/packages/app' },
@@ -1585,8 +1696,8 @@ describe('multi-Home Session creation composition', () => {
             const pendingProps = pendingModel.variant === 'simple' ? pendingModel.simpleProps : pendingModel.wizardProps.footer;
             expect(pendingProps.pendingLaunchAttempt?.status).toBe('failed_retryable');
             await act(async () => { await readProductionCreateAction(createHook.getCurrent())({ initialMessage: 'skip' }); });
-            expect(socketBoundary.emits).toHaveBeenCalledTimes(2);
-            const retry = SessionSpawnNewInputV2Schema.parse(socketBoundary.emits.mock.calls[1]?.[0]?.payload?.params);
+            expect(sessionSpawnCalls()).toHaveLength(2);
+            const retry = SessionSpawnNewInputV2Schema.parse(sessionSpawnCalls()[1]?.[0]?.payload?.params);
             expect(retry.creationKey).toBe(first.creationKey);
             expect(retry.checkoutCreationDraft).toEqual(checkoutDraft);
             expect(retry.executionTarget).toEqual(first.executionTarget);
@@ -1772,7 +1883,7 @@ describe('multi-Home Session creation composition', () => {
         const { createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1,
             SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } = await import('@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1');
         const scope = { serverId: homeAScopeId, accountId: 'account-a' };
-        const draftId = `origin-send-composed-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const origin = { kind: 'project', purpose: 'session', accountId: scope.accountId, page: 'overview', comparisonId: 'original-comparison',
             layoutId: 'release-dashboard', surface: 'tabs', companion: 'files', resource: { kind: 'file', path: 'src/original.ts' },
             workspace: { serverId: homeAScopeId, workspaceId: 'original-workspace', machineId: 'original-machine', rootPath: '/original/project' } } as const;
@@ -1901,7 +2012,7 @@ describe('multi-Home Session creation composition', () => {
         const { createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1,
             SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } = await import('@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1');
         const scope = { serverId: homeBScopeId, accountId: 'account-b' };
-        const draftId = `origin-cold-materialized-${++draftSequence}`;
+        const draftId = crypto.randomUUID();
         const activationId = '00000000-0000-4000-8000-000000000095';
         const origin = { kind: 'project', accountId: 'account-a', page: 'scripts',
             workspace: { serverId: homeAScopeId, workspaceId: 'original-scripts', machineId: 'original-machine', rootPath: '/original/scripts' } } as const;
@@ -2029,7 +2140,7 @@ describe('multi-Home Session creation composition', () => {
             await act(async () => {
                 await readProductionCreateAction(createHook.getCurrent())({ initialMessage: 'skip', afterCreated });
             });
-            expect(socketBoundary.emits).toHaveBeenCalledOnce();
+            expect(sessionSpawnCalls()).toHaveLength(1);
             expect(afterCreated).toHaveBeenCalledOnce();
             expect(routeBoundary.replace).not.toHaveBeenCalled();
             const model = createHook.getCurrent();
@@ -2114,11 +2225,70 @@ describe('multi-Home Session creation composition', () => {
             });
             socketBoundary.emits.mockClear();
             await act(async () => { await readProductionCreateAction(createHook.getCurrent())({ initialMessage: 'skip' }); });
-            expect(socketBoundary.emits).toHaveBeenCalledOnce();
+            expect(sessionSpawnCalls()).toHaveLength(1);
             await vi.waitFor(() => expect(storage.getState().authoringMemory.recentMachinePaths[0]).toEqual({ machineId: 'machine-b', path: '/same-home/project' }));
         } finally {
             await createHook.unmount();
         }
+    });
+
+    it('keeps a pending screen attachment through Machine picker autosave and ordinary removal', async () => {
+        ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA('pending-screen-picker'));
+        const { seedAndOpenNewSession } = await import('../newSessionSeedComposer');
+        const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+        const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const scope = { serverId: homeAScopeId, accountId: 'account-a' };
+        const draftId = crypto.randomUUID();
+        const currentUiContext = { navigation: { area: 'sessions', screen: 'tab.sessions', title: 'Sessions' }, commands: [] };
+        expect(seedAndOpenNewSession({ scope, seed: { currentUiContext }, createDraftId: () => draftId,
+            isCurrent: () => true, navigateToNewSession: () => {},
+        }).kind).toBe('opened');
+        const seeds = readNewSessionDraftFromRepository({ scope, draftId })?.composerAttachmentSeeds;
+        expect(seeds).toHaveLength(1);
+        const machines = ['first-machine', 'other-machine'].map(id => createMachineFixture({ id,
+            metadata: { host: id, platform: 'linux', homeDir: '/workspace' } }));
+        machineHttpSnapshots.set(new URL(homeA.serverUrl).origin, machines);
+        storage.getState().applyMachines(machines, true, { sourceServerId: homeAScopeId });
+        routeBoundary.params = { draftId, spawnServerId: homeAScopeId, machineId: 'first-machine' };
+        const hook = await renderProductionCreateCaller({ activeServerId: homeAScopeId, draftId });
+        const readProps = () => {
+            const model = hook.getCurrent();
+            return model.variant === 'simple' ? model.simpleProps : model.wizardProps.footer;
+        };
+        const readComposer = () => {
+            const composer = readProps().composerDocument;
+            if (!composer) throw new Error('Missing mounted Composer');
+            return composer;
+        };
+        const selectMachine = async (machine: Machine) => {
+            const renderPicker = readProps().machinePopover?.renderContent;
+            if (!renderPicker) throw new Error('Missing Machine picker');
+            const picker = renderPicker({ maxHeight: 560, requestClose: () => {} });
+            type PickerProps = React.ComponentProps<typeof import('../components/NewSessionMachineSelectionContent').NewSessionMachineSelectionContent>;
+            if (!React.isValidElement<PickerProps>(picker)) throw new Error('Missing Machine picker element');
+            await act(async () => picker.props.onSelectScopedMachine({ ...machine, serverId: homeAScopeId, serverName: 'Home A' }));
+            await hook.rerender();
+            await vi.waitFor(() => expect(readNewSessionDraftFromRepository({ scope, draftId })?.selectedMachineId).toBe(machine.id));
+        };
+        try {
+            expect(readComposer().attachmentRowItems).toMatchObject([{ kind: 'badge', label: 'Sessions' }]);
+            expect(readComposer().readCurrentDocumentSnapshot()?.attachments).toMatchObject([{ availability: { status: 'unavailable' } }]);
+            const otherMachine = machines[1];
+            if (!otherMachine) throw new Error('Missing other Machine');
+            // Observe the actual debounced write before checking pending custody.
+            await selectMachine(otherMachine);
+            expect(readNewSessionDraftFromRepository({ scope, draftId })?.composerAttachmentSeeds).toEqual(seeds);
+            expect(readComposer().attachmentRowItems).toMatchObject([{ kind: 'badge', label: 'Sessions' }]);
+            await act(async () => readComposer().attachmentRowItems[0]?.onRemove?.());
+            expect(readNewSessionDraftFromRepository({ scope, draftId })?.composerAttachmentSeeds).toBeUndefined();
+            expect(readComposer().attachmentRowItems).toEqual([]);
+            const firstMachine = machines[0];
+            if (!firstMachine) throw new Error('Missing first Machine');
+            await selectMachine(firstMachine);
+            expect(readNewSessionDraftFromRepository({ scope, draftId })?.composerAttachmentSeeds).toBeUndefined();
+            expect(readComposer().attachmentRowItems).toEqual([]);
+        } finally { await hook.unmount(); }
     });
 
     it('places an embedded surface from its host\'s own params and writes placement back to the host, never the route', async () => {
@@ -2158,8 +2328,9 @@ describe('multi-Home Session creation composition', () => {
                 metadata: { host: 'home-b-machine', platform: 'linux', happyCliVersion: '0.0.0-test', happyHomeDir: '/workspace/.happy', homeDir: '/workspace' },
             }),
         ], true, { sourceServerId: homeBScopeId });
+        const draftId = crypto.randomUUID();
         const createHook = await renderHook(
-            () => useNewSessionScreenModel({ draftId: `multi-home-composed-draft-${++draftSequence}` }),
+            () => useNewSessionScreenModel({ draftId }),
             { wrapper: EmbeddedHost },
         );
         try {
@@ -2345,7 +2516,7 @@ describe('multi-Home Session creation composition', () => {
             },
             machineListStatusByServerId: { [homeAScopeId]: 'idle', [homeBScopeId]: 'idle' },
         });
-        routeBoundary.params = { draftId: 'multiple-rendered-machines' };
+        routeBoundary.params = { draftId: crypto.randomUUID() };
         routeBoundary.replace.mockClear();
 
         const { useMachinePickerScreenModel } = await import('./machines/useMachinePickerScreenModel');
@@ -2446,7 +2617,7 @@ describe('multi-Home Session creation composition', () => {
             machinePoolListStatusByServerId: { [homeAScopeId]: 'idle' },
             machinePoolAccountIdByServerId: cachedPools === undefined ? {} : { [homeAScopeId]: 'account-a' },
         });
-        routeBoundary.params = { draftId: `pending-pool-${cachedPools === undefined ? 'cold' : 'cached'}` };
+        routeBoundary.params = { draftId: crypto.randomUUID() };
         routeBoundary.replace.mockClear();
         const { invalidateMachinePoolProjection } = await import('@/sync/engine/machines/machinePoolProjection');
         const refresh = invalidateMachinePoolProjection(homeAScopeId);

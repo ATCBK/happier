@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import { resolveMachineAgentState } from '@/agents/machineAgents/resolveMachineAgentState';
@@ -11,8 +11,12 @@ import {
     resolveNextSelectableAgentForNewSession,
     resolveBackendEntryUnavailabilityReasonForNewSession,
     resolveProfileAvailabilityForNewSession,
+    resolveAgentLaunchBlockedReasonForNewSession,
     type NewSessionSelectableBackendEntry,
 } from './newSessionAgentSelection';
+import { beginAcpCatalogLoad, getAcpCatalogSnapshot, applyAcpCatalogSnapshot } from '@/sync/store/settings/acpCatalogSnapshot';
+
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 
 function createMachineAgent(agentId: MachineAgent['agentId'], overrides: Partial<MachineAgent> = {}): MachineAgent {
     const agent: MachineAgent = {
@@ -41,6 +45,51 @@ const configuredEntry: NewSessionSelectableBackendEntry = {
 };
 
 describe('newSessionAgentSelection', () => {
+    it('keeps a known installed Agent selectable while required sign-in is unknown', () => {
+        const agent = createMachineAgent('codex', { state: 'unknown',
+            signIn: { status: 'unknown', via: null, nativeLogin: 'terminal', connectedServices: [] } });
+        expect(isAgentSelectableForNewSession({ agentId: 'codex', machineAgentsById: { codex: agent } })).toBe(true);
+        expect(resolveAgentLaunchBlockedReasonForNewSession({ backendTarget: codexEntry.backendTarget,
+            selectedBackendEntry: codexEntry, projectionPhase: 'ready', acpCatalog: null, agentLabel: 'Codex',
+            selectedCredentialMachineAgent: agent, machineAgentsStatus: 'ready', agentStartBlock: null })).not.toBeNull();
+    });
+    it.each(['external', 'configured', 'legacyConfigured'] as const)('keeps an unresolved %s target checking only while its catalog is loading', (kind) => {
+        const scope = { serverId: `new-session-${kind}`, accountId: 'readiness-test' };
+        beginAcpCatalogLoad(scope);
+        const backendTarget = kind === 'external'
+            ? { kind: 'agent' as const, identity: { pluginId: 'acme.review', localId: 'review' } }
+            : kind === 'configured'
+                ? { kind: 'agent' as const, identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'review' }
+                : { kind: 'backend' as const, backendId: 'review', configuredBackendId: 'review' };
+        const params = {
+            backendTarget, selectedBackendEntry: null,
+            projectionPhase: kind === 'external' ? 'loading' as const : 'ready' as const,
+            acpCatalog: getAcpCatalogSnapshot(scope)!.catalog,
+            agentLabel: 'Review', selectedCredentialMachineAgent: null,
+            machineAgentsStatus: 'ready' as const, agentStartBlock: null,
+        };
+        expect(resolveAgentLaunchBlockedReasonForNewSession(params)).toBe('machineAgents.checking');
+        applyAcpCatalogSnapshot(scope, { status: 'unavailable', reason: 'unauthorized' }, true);
+        expect(resolveAgentLaunchBlockedReasonForNewSession({
+            ...params, projectionPhase: 'error', acpCatalog: getAcpCatalogSnapshot(scope)!.catalog,
+        })).toBe('newSession.selectAiBackendTitle');
+        // Loading the other catalog cannot turn a settled missing target into
+        // a check in progress: each target has one availability authority.
+        expect(resolveAgentLaunchBlockedReasonForNewSession({
+            ...params,
+            projectionPhase: kind === 'external' ? 'ready' : 'loading',
+            acpCatalog: kind === 'external' ? { status: 'loading' } : getAcpCatalogSnapshot(scope)!.catalog,
+        })).toBe('newSession.selectAiBackendTitle');
+    });
+
+    it('does not withdraw a ready bundled target while unrelated catalogs load', () => {
+        expect(resolveAgentLaunchBlockedReasonForNewSession({
+            backendTarget: codexEntry.backendTarget, selectedBackendEntry: codexEntry,
+            projectionPhase: 'loading', acpCatalog: { status: 'loading' },
+            agentLabel: 'Codex', selectedCredentialMachineAgent: createMachineAgent('codex'),
+            machineAgentsStatus: 'ready', agentStartBlock: null,
+        })).toBeNull();
+    });
     it('fails closed before the selected machine has been checked', () => {
         expect(isAgentSelectableForNewSession({ agentId: 'codex', machineAgentsById: {} })).toBe(false);
     });

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useIsFocused } from '@react-navigation/native';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { AppHeaderCloseButton } from '@/components/navigation/AppHeaderCloseButton';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
@@ -89,6 +90,7 @@ function useMachinePickerScreenOptions(params: Readonly<{
 }
 
 export function useMachinePickerScreenModel() {
+    const isFocused = useIsFocused();
     const reachabilityRevision = useMachineReachabilityRevision();
     const { theme } = useUnistyles();
     const router = useRouter();
@@ -280,8 +282,17 @@ export function useMachinePickerScreenModel() {
         return machinesForSelectedServer.find((machine) => machine.id === selectedMachineId) ?? null;
     }, [machinesForSelectedServer, selectedMachineId]);
 
+    const refreshLifetime = React.useMemo(() => ({ controller: new AbortController() }), [selectedMachineId, selectedServerId, isFocused]);
+    React.useEffect(() => {
+        setIsRefreshing(false);
+        if (!isFocused) { refreshLifetime.controller.abort(); return; }
+        if (refreshLifetime.controller.signal.aborted) refreshLifetime.controller = new AbortController();
+        const controller = refreshLifetime.controller;
+        return () => controller.abort();
+    }, [isFocused, refreshLifetime]);
     const handleRefresh = React.useCallback(async (refreshPools: boolean) => {
-        if (isRefreshing) return;
+        if (isRefreshing || refreshLifetime.controller.signal.aborted) return;
+        const controller = refreshLifetime.controller;
         setIsRefreshing(true);
         try {
             await Promise.allSettled([
@@ -291,21 +302,23 @@ export function useMachinePickerScreenModel() {
                     : []),
             ]);
 
+            if (controller.signal.aborted) return;
             if (selectedMachineId && selectedServerId) {
                 invalidateMachineEnvPresence({ machineId: selectedMachineId, serverId: selectedServerId });
                 await Promise.all([
                     prefetchMachineCapabilities({
                         machineId: selectedMachineId,
                         serverId: selectedServerId,
+                        signal: controller.signal,
                         request: CAPABILITIES_REQUEST_NEW_SESSION,
                     }),
                 ]);
             }
-            setRefreshToken((value) => value + 1);
+            if (!controller.signal.aborted) setRefreshToken((value) => value + 1);
         } finally {
-            setIsRefreshing(false);
+            if (!controller.signal.aborted) setIsRefreshing(false);
         }
-    }, [destinationServerIds, isRefreshing, selectedMachineId, selectedServerId]);
+    }, [destinationServerIds, isRefreshing, selectedMachineId, selectedServerId, refreshLifetime]);
     // Recovery is a direct call into the existing owners: the canonical Pool projection refresh and
     // the existing Machine Pool settings route. No recovery queue, retry timer or status store.
     const handleRefreshPools = React.useCallback((serverId: string) => {

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { createMachineFixture, renderScreen } from '@/dev/testkit';
 import { createCapturingLegendListMock } from '@/dev/testkit/mocks/legendList';
 import type { ServerScopedMachine } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 
@@ -48,6 +48,7 @@ vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
 function createScopedMachine(index: number): ServerScopedMachine {
     const id = `m-${index}`;
     return {
+        ...createMachineFixture(),
         id,
         seq: 1,
         createdAt: 1,

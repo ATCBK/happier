@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
 import { renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -36,6 +37,7 @@ vi.mock(
 );
 
 const AGENT = 'agent:happier.agent.codex/codex';
+const GATEWAY = ProviderConnectionIdSchema.parse('pc_gateway');
 const account = createProviderSettingsAccountHarness();
 const { SelectionList } = await import('@/components/ui/selectionList/SelectionList');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
@@ -43,7 +45,7 @@ let serverId = '';
 
 function gatewayRow(modelId: string, name: string) {
   return {
-    ref: { agentTargetKey: AGENT, providerConnectionId: 'pc_gateway', modelId },
+    ref: { agentTargetKey: AGENT, providerConnectionId: GATEWAY, modelId },
     descriptor: { id: modelId, name },
     sources: { manual: false, static: true, probe: false },
     confidence: 'verified_static',
@@ -134,10 +136,10 @@ describe('SessionModelPicker source browsing', () => {
             connectionId: 'pc_gateway', rows: [gatewayRow('fable-5.1', 'Fable 5.1')],
           })]}
           providerProjectionAuthoritative
-          selected={{ agentTargetKey: AGENT, providerConnectionId: 'pc_gateway', modelId: 'fable-5.1' }}
+          selected={{ agentTargetKey: AGENT, providerConnectionId: GATEWAY, modelId: 'fable-5.1' }}
           effectiveLabel="Fable 5.1"
           sourceBrowse={providerBrowsing ? { machineId: 'machine-a', serverId } : undefined}
-          favoriteEntries={[{ ref: { agentTargetKey: AGENT, providerConnectionId: 'pc_gateway', modelId: 'fable-5.1' }, label: 'Fable 5.1' }]}
+          favoriteEntries={[{ ref: { agentTargetKey: AGENT, providerConnectionId: GATEWAY, modelId: 'fable-5.1' }, label: 'Fable 5.1' }]}
           onSelect={onSelect}
         />
       </SessionModelSourceBrowseHandoffContext.Provider>,
@@ -177,7 +179,7 @@ describe('SessionModelPicker source browsing', () => {
     };
     const onSelect = vi.fn();
     const onToggleFavorite = vi.fn();
-    const favoriteRef = { agentTargetKey: AGENT, providerConnectionId: 'pc_gateway', modelId: 'fable-5.1' };
+    const favoriteRef = { agentTargetKey: AGENT, providerConnectionId: GATEWAY, modelId: 'fable-5.1' };
     const screen = await renderScreen(
       <SessionModelPicker
         multiColumn
@@ -189,7 +191,7 @@ describe('SessionModelPicker source browsing', () => {
         effectiveLabel="GPT-6.1 Sol"
         hiddenSources={[
           {
-            connectionId: 'pc_gateway',
+            connectionId: GATEWAY,
             providerName: 'Main gateway',
             connectionName: 'Main gateway',
             connectionRole: 'default',
@@ -292,7 +294,7 @@ describe('SessionModelPicker source browsing', () => {
         effectiveLabel="GPT-6.1 Sol"
         hiddenSources={[
           {
-            connectionId: 'pc_gateway',
+            connectionId: GATEWAY,
             providerName: 'Main gateway',
             connectionName: 'Main gateway',
             connectionRole: 'default',

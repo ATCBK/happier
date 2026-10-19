@@ -47,7 +47,8 @@ import {
     readNewSessionOrdinaryEntryDraftId,
     setNewSessionOrdinaryEntryDraftId,
 } from '@/sync/domains/settings/localOnlyAccountSettings';
-import { useActiveServerAccountScope, useActiveServerAccountScopeLifetime, useSetting, useSettingMutable } from '@/sync/store/hooks';
+import { useActiveServerAccountScope, useActiveServerAccountScopeLifetime, useSetting } from '@/sync/store/hooks';
+import { useApplySettings } from '@/sync/store/settingsWriters';
 import {
     getSessionDraftSnapshot,
     subscribeSessionDraft,
@@ -84,6 +85,7 @@ function NewSessionScreenInner(props: Readonly<{
     automationExactTurnRetarget?: ExactTurnAutomationPrefill | null;
     fixedDirectoryIntent?: SessionDirectoryIntentV1;
     inputPlaceholder?: string;
+    composerControlPreset?: 'full' | 'compact';
 }>) {
     const model = useNewSessionScreenModel(props);
     // A host that fixes part of the creation (the embed's new chat) narrows this same composer.
@@ -110,7 +112,8 @@ function NewSessionScreenInner(props: Readonly<{
                 {props.presentation === 'embedded'
                     ? <NewSessionEmbeddedComposerCard
                         panelProps={embeddedPanelProps ?? model.simpleProps}
-                        creationProfile={creationProfile} />
+                        creationProfile={creationProfile}
+                        controlPreset={props.composerControlPreset} />
                     : <NewSessionSimplePanel {...withBotDraftPresentation(model.simpleProps, model.botCreation)} />}
             </NewSessionLaunchSurface>
         );
@@ -164,12 +167,14 @@ function withBotDraftPresentation(
 function NewSessionEmbeddedComposerCard(props: Readonly<{
     panelProps: React.ComponentProps<typeof NewSessionSimplePanel>;
     creationProfile: NewSessionCreationProfile | undefined;
+    controlPreset: 'full' | 'compact' | undefined;
 }>) {
     const panelProps = useNewSessionPanelPropsForCreationProfile(props.panelProps, props.creationProfile);
     return (
         <NewSessionComposerCard
             panelProps={panelProps}
             layout="embedded"
+            {...(props.controlPreset ? { controlPreset: props.controlPreset } : {})}
             {...(props.creationProfile ? {
                 attachments: props.creationProfile.attachments !== false,
                 voiceAffordance: 'none' as const,
@@ -191,6 +196,7 @@ function NewSessionContent(props: Readonly<{
     automationExactTurnRetarget?: ExactTurnAutomationPrefill | null;
     fixedDirectoryIntent?: SessionDirectoryIntentV1;
     inputPlaceholder?: string;
+    composerControlPreset?: 'full' | 'compact';
 }>) {
     const shouldBlock = useShouldBlockNewSessionWithGettingStartedGuidance();
     // With no route card around it, the floating composer seats Look in its own status row,
@@ -231,6 +237,8 @@ type NewSessionScreenProps = Readonly<{
     fixedDirectoryIntent?: SessionDirectoryIntentV1;
     /** An embedding page's own question for the empty composer ("Ask about edge-1…"). */
     inputPlaceholder?: string;
+    /** `compact`: an embedding page's ask box keeps only machine and model (see `AgentInput`). */
+    composerControlPreset?: 'full' | 'compact';
 }>;
 
 export function NewSessionScreen(props: NewSessionScreenProps) {
@@ -320,7 +328,7 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
     const { draftScope, onDraftIdentityResolved } = props;
     const draftAction = useMountedActionExecution(draftScope, { openOnRequest: true });
     const resolveOrdinaryEntry = useResolveNewSessionOrdinaryEntryRoute();
-    const [ordinaryEntryDraftId, setOrdinaryEntryDraftId] = useSettingMutable('newSessionOrdinaryEntryDraftId');
+    const applySettings = useApplySettings();
     const draftIdentity = React.useMemo(() => {
         const explicitIdentity = resolveNewSessionDraftRouteIdentity({ routeDraftId });
         if (!explicitIdentity.shouldWriteRouteParam) {
@@ -337,7 +345,9 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
             shouldWriteRouteParam: true,
         };
     }, [draftOrigin, resolveOrdinaryEntry, routeDraftId]);
+    const committedDraftIdRef = React.useRef(draftIdentity.draftId);
     React.useLayoutEffect(() => {
+        committedDraftIdRef.current = draftIdentity.draftId;
         onDraftIdentityResolved(draftIdentity.draftId);
     }, [draftIdentity.draftId, onDraftIdentityResolved]);
     React.useEffect(() => {
@@ -358,10 +368,11 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
     React.useEffect(() => {
         if (draftIdentity.draftOrigin !== 'ordinary' || exactDraft?.materialized !== true) return;
         const pointerDelta = setNewSessionOrdinaryEntryDraftId(draftIdentity.draftId);
-        if (pointerDelta && pointerDelta.newSessionOrdinaryEntryDraftId !== ordinaryEntryDraftId) {
-            setOrdinaryEntryDraftId(pointerDelta.newSessionOrdinaryEntryDraftId);
-        }
-    }, [draftIdentity.draftId, draftIdentity.draftOrigin, exactDraft?.materialized, ordinaryEntryDraftId, setOrdinaryEntryDraftId]);
+        if (!pointerDelta) return;
+        applySettings(current => current.newSessionOrdinaryEntryDraftId !== pointerDelta.newSessionOrdinaryEntryDraftId
+            ? pointerDelta
+            : null);
+    }, [applySettings, draftIdentity.draftId, draftIdentity.draftOrigin, exactDraft?.materialized]);
     const launchUserAttemptId = exactDraft?.localSupplement.launchUserAttemptId ?? null;
     const launchOperation = useActionOperationByRequestId(
         launchUserAttemptId,
@@ -374,7 +385,7 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
         operation: launchOperation,
     }));
     const startAnother = React.useCallback(() => {
-        openDraft(resolveOrdinaryEntry({ forceFresh: true }), 'push');
+        openDraft(resolveOrdinaryEntry({ forceFresh: true }));
     }, [openDraft, resolveOrdinaryEntry]);
     const deleteDraft = React.useCallback(async () => {
         if (!draftScope || launchInCustody) return;
@@ -382,12 +393,13 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
         if (!outcome.ok || !draftAction.isCurrent()) return;
         const deleted = AppShellActionOutputSchemas['session.draft.delete'].safeParse(outcome.result);
         if (!deleted.success || deleted.data.status !== 'deleted') return;
-        const pointerDelta = clearNewSessionOrdinaryEntryDraftIdExact(
-            { newSessionOrdinaryEntryDraftId: ordinaryEntryDraftId },
+        applySettings(current => clearNewSessionOrdinaryEntryDraftIdExact(
+            current,
             draftIdentity.draftId,
-        );
-        if (pointerDelta) setOrdinaryEntryDraftId(pointerDelta.newSessionOrdinaryEntryDraftId);
-        openDraft(resolveOrdinaryEntry({ forceFresh: true }), 'replace');
+        ));
+        if (committedDraftIdRef.current === draftIdentity.draftId) {
+            openDraft(resolveOrdinaryEntry({ forceFresh: true }));
+        }
     }, [
         draftAction.execute,
         draftAction.isCurrent,
@@ -395,9 +407,8 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
         draftScope,
         launchInCustody,
         openDraft,
-        ordinaryEntryDraftId,
+        applySettings,
         resolveOrdinaryEntry,
-        setOrdinaryEntryDraftId,
     ]);
 
     const tempData = React.useMemo(() => {
@@ -465,6 +476,8 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
 
     return (
         <NewSessionContent
+            // The model and its Composer custody are initialized for one exact draft.
+            key={draftIdentity.draftId}
             presentation={props.presentation}
             // Embedded, the page around the composer owns getting started (Home swaps to the
             // guidance itself while no machine can run a session).
@@ -477,6 +490,7 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
             automationExactTurnRetarget={props.automationExactTurnRetarget ?? null}
             fixedDirectoryIntent={props.fixedDirectoryIntent}
             inputPlaceholder={props.inputPlaceholder}
+            composerControlPreset={props.composerControlPreset}
         />
     );
 }

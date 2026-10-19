@@ -149,7 +149,6 @@ describe('New Session Send on a Temporary computer with an unresolvable Profile'
                 allowedTargetServerIds: [SCOPE.serverId],
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings: storage.getState().settings,
                 useProfiles: true,
                 selectedProfileId: 'work',
                 profileMap: new Map(),

@@ -1,4 +1,6 @@
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import { describe, expect, it, vi } from 'vitest';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
@@ -56,12 +58,6 @@ vi.mock('react-native-keyboard-controller', () => ({
 vi.mock('expo-linear-gradient', () => ({
     LinearGradient: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
         React.createElement('LinearGradient', props, props.children),
-}));
-
-vi.mock('color', () => ({
-    default: () => ({
-        alpha: () => ({ rgb: () => ({ string: () => 'rgba(0,0,0,0.08)' }) }),
-    }),
 }));
 
 vi.mock('@/components/ui/lists/Item', () => ({
@@ -133,7 +129,6 @@ vi.mock('@/sync/sync', () => ({
 
 describe('NewSessionWizard submit deferral', () => {
     it('defers web submission by one animation frame before invoking handleCreateSession', async () => {
-        vi.useFakeTimers();
         const { renderScreen } = await import('@/dev/testkit');
         const { NewSessionWizard } = await import('./NewSessionWizard');
         const { Platform } = await import('react-native');
@@ -142,22 +137,12 @@ describe('NewSessionWizard submit deferral', () => {
         delete (globalThis as any).requestAnimationFrame;
         (Platform as any).OS = 'web';
 
-        const screen = await renderScreen(<NewSessionWizard
+        let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        try {
+        screen = await renderScreen(<NewSessionWizard
                     popoverBoundaryRef={{ current: null } as any}
                     layout={{
-                        theme: {
-                            colors: {
-                                divider: '#ddd',
-                                shadow: { color: '#000' },
-                                groupped: { background: '#fff' },
-                                text: '#000',
-                                textSecondary: '#666',
-                                input: { background: '#fff' },
-                                button: { secondary: { tint: '#000' } },
-                                warning: '#d97706',
-                                box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                            },
-                        } as any,
+                        theme: createThemeFixture() as any,
                         styles: {} as any,
                         safeAreaBottom: 0,
                         headerHeight: 44,
@@ -230,18 +215,18 @@ describe('NewSessionWizard submit deferral', () => {
                         agentInputExtraActionChips: [],
                     }}
                 />);
-        try {
-            await screen.pressByTestIdAsync('wizard-send');
+            vi.useFakeTimers();
+            act(() => screen?.pressByTestId('wizard-send'));
 
             expect(handleCreateSession).not.toHaveBeenCalled();
 
-            await vi.runOnlyPendingTimersAsync();
+            await act(async () => { await vi.runOnlyPendingTimersAsync(); });
 
             expect(handleCreateSession).toHaveBeenCalledTimes(1);
         } finally {
             vi.useRealTimers();
             (globalThis as any).requestAnimationFrame = prevRaf;
-            await screen.unmount();
+            await screen?.unmount();
         }
     });
 });

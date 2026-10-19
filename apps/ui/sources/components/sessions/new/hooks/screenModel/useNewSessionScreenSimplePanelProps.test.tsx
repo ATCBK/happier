@@ -94,7 +94,8 @@ describe('useNewSessionScreenSimplePanelProps destination naming', () => {
 
     it('preserves the naming owner distinction between locked and unnamed Machine records', async () => {
         const rendered = await renderHook((params: Params) => useNewSessionScreenSimplePanelProps(params), {
-            initialProps: buildParams({ selectedMachine: { id: 'machine-a', metadata: null } }),
+            initialProps: buildParams({ selectedMachine: { id: 'machine-a', metadata: null,
+                availability: { kind: 'locked', reason: 'encryption_material_unavailable' } } }),
         });
 
         expect(rendered.getCurrent().machineName).toBe('machine.lockedMachine');

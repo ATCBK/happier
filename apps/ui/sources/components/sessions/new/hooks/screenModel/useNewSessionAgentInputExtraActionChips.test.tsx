@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { describe, expect, it, vi } from 'vitest';
+import { array } from 'zod/mini';
 
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import { renderScreen } from '@/dev/testkit';
@@ -27,9 +28,11 @@ vi.mock('@/components/ui/popover', async (importOriginal) => {
     return createInlinePopoverModuleMock(importOriginal, { maxHeight: 640, maxWidth: 380, placement: 'bottom' });
 });
 
+// Resolve the shared editor graph before measuring the interactions below.
+const { createNewSessionTriggersActionChip } = await import('../../components/NewSessionTriggersActionChip');
+
 describe('useNewSessionAgentInputExtraActionChips', () => {
     it('shows a saved-workflow prerequisite when the session targets another Home while still allowing an inline trigger', async () => {
-        const { createNewSessionTriggersActionChip } = await import('../../components/NewSessionTriggersActionChip');
         let draft: SessionInitialTriggerV1[] = [];
         function Probe() {
             const [initialTriggers, setInitialTriggers] = React.useState<SessionInitialTriggerV1[]>([]);
@@ -45,10 +48,9 @@ describe('useNewSessionAgentInputExtraActionChips', () => {
         expect(draft).toMatchObject([{ target: { kind: 'inline' }, trigger: { events: ['sessionStarted'] } }]);
     });
     it('edits a trigger locally through the shared popover without losing its policy or execution context', async () => {
-        const { createNewSessionTriggersActionChip } = await import('../../components/NewSessionTriggersActionChip');
         const { buildTriggerTarget } = await import('@/components/workflows/triggers/sessionTriggerForm');
         let draft: SessionInitialTriggerV1[] = [];
-        const initial = SessionInitialTriggerV1Schema.array().parse([{
+        const initial = array(SessionInitialTriggerV1Schema).parse([{
             trigger: { kind: 'sessionLifecycle', enabled: true, events: ['sessionStarted'], policy: { kind: 'firstMatch' } },
             target: buildTriggerTarget({ kind: 'sendPrompt', prompt: 'Prepare workspace' }), executionTarget: { kind: 'session' },
         }]);

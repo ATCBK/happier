@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
+import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
+import { clearAllNewSessionAttachmentDrafts, readNewSessionAttachmentDrafts, writeNewSessionAttachmentDrafts } from '../attachments/newSessionAttachmentDraftStore';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -11,13 +13,6 @@ import { installNewSessionComponentsCommonModuleMocks } from './newSessionCompon
 const AgentInputMock = vi.fn((_props: any) => null);
 const mockEnv = vi.hoisted(() => ({
     iconsRenderAsText: false,
-}));
-const attachmentDraftState = vi.hoisted(() => ({
-    drafts: [] as Array<{ id: string }>,
-    hasSendableAttachments: false,
-    agentInputAttachments: [] as Array<unknown>,
-    clearDrafts: vi.fn(),
-    applyDraftPatch: vi.fn(),
 }));
 const uploadAttachmentDraftsToSessionSpy = vi.hoisted(() => vi.fn());
 const formatAttachmentsBlockSpy = vi.hoisted(() => vi.fn(() => ''));
@@ -106,9 +101,6 @@ vi.mock('@/components/sessions/attachments/AttachmentFilePicker', () => ({
     AttachmentFilePicker: () => null,
 }));
 
-const addWebFilesSpy = vi.fn();
-const addPickedAttachmentsSpy = vi.fn();
-
 vi.mock('@/components/sessions/attachments/useAttachmentsUploadConfig', () => ({
     useAttachmentsUploadConfig: () => ({
         uploadLocation: 'workspace',
@@ -116,21 +108,6 @@ vi.mock('@/components/sessions/attachments/useAttachmentsUploadConfig', () => ({
         vcsIgnoreStrategy: 'git_info_exclude',
         vcsIgnoreWritesEnabled: true,
         maxFileBytes: 25 * 1024 * 1024,
-    }),
-}));
-
-vi.mock('@/components/sessions/attachments/useAttachmentDraftManager', () => ({
-    useAttachmentDraftManager: () => ({
-        filePickerRef: { current: null },
-        drafts: attachmentDraftState.drafts,
-        getDraftsSnapshot: () => attachmentDraftState.drafts,
-        hasSendableAttachments: attachmentDraftState.hasSendableAttachments,
-        agentInputAttachments: attachmentDraftState.agentInputAttachments,
-        addWebFiles: addWebFilesSpy,
-        addPickedAttachments: addPickedAttachmentsSpy,
-        removeDraft: vi.fn(),
-        clearDrafts: attachmentDraftState.clearDrafts,
-        applyDraftPatch: attachmentDraftState.applyDraftPatch,
     }),
 }));
 
@@ -167,6 +144,7 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
 afterEach(() => {
     workspaceReviewDraftsState.draftsByRootPath.clear();
     standardCleanup();
+    clearAllNewSessionAttachmentDrafts();
 });
 
 describe('NewSessionSimplePanel (attachments.uploads)', () => {
@@ -388,11 +366,10 @@ describe('NewSessionSimplePanel (attachments.uploads)', () => {
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
 
         AgentInputMock.mockClear();
-        attachmentDraftState.drafts = [{ id: 'draft-1' }];
-        attachmentDraftState.hasSendableAttachments = true;
-        attachmentDraftState.agentInputAttachments = [{ key: 'draft-1', label: 'notes.txt' }];
-        attachmentDraftState.clearDrafts.mockReset();
-        attachmentDraftState.applyDraftPatch.mockReset();
+        const drafts: AttachmentDraft[] = [{ id: 'draft-1', status: 'pending', source: {
+            kind: 'memory', bytes: new Uint8Array(12), name: 'notes.txt', mimeType: 'text/plain',
+        } }];
+        writeNewSessionAttachmentDrafts('panel-follow-up', drafts);
         uploadAttachmentDraftsToSessionSpy.mockReset();
         formatAttachmentsBlockSpy.mockReset();
         followUpSpawnedSessionWithServerScopeSpy.mockReset();
@@ -422,6 +399,7 @@ describe('NewSessionSimplePanel (attachments.uploads)', () => {
                     promptStore: createNewSessionPromptStore('Investigate this bug'),
                     setSessionPrompt: () => {},
                     handleCreateSession,
+                    attachmentFlowId: 'panel-follow-up',
                     canCreate: true,
                     isCreating: false,
                     emptyAutocompleteKinds: [],
@@ -468,9 +446,9 @@ describe('NewSessionSimplePanel (attachments.uploads)', () => {
 
         expect(uploadAttachmentDraftsToSessionSpy).toHaveBeenCalledWith({
             sessionId: 'sess_target',
-            drafts: attachmentDraftState.drafts,
+            drafts,
             config: expect.any(Object),
-            applyDraftPatch: attachmentDraftState.applyDraftPatch,
+            applyDraftPatch: expect.any(Function),
             messageLocalId: 'new-session-attachment-local-1',
         });
         expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith({
@@ -495,7 +473,7 @@ describe('NewSessionSimplePanel (attachments.uploads)', () => {
                 },
             },
         });
-        expect(attachmentDraftState.clearDrafts).toHaveBeenCalledTimes(1);
+        expect(readNewSessionAttachmentDrafts('panel-follow-up')).toEqual([]);
     });
 
     it('shows review comments saved for the selected home-relative workspace', async () => {

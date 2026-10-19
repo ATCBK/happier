@@ -108,24 +108,25 @@ export function useSessionContinuationInspections(
         if (pending.length === 0) return;
         // Claim before awaiting so a re-render mid-flight cannot ask twice.
         for (const selection of pending) scope.asked.add(selectionKey(selection));
+        const controller = new AbortController();
+        let completed = false;
 
         // The daemon reads and decrypts the source Session once, then evaluates
         // every target against that canonical source. Publishing the ordered
         // result once also prevents one picker recomputation per Agent row. The
         // adapter falls back to the single-target RPC only for an older daemon.
         //
-        // No cancellation on cleanup: closing the picker mid-flight must still
-        // record the answers, or the claims above would strand the rows on
-        // checking for the rest of the connection.
         void inspectSessionContinuationsOnMachine({
                 machineId,
                 serverId,
                 sessionId,
                 selections: pending,
+                signal: controller.signal,
             })
                 .catch(() => pending.map(() => INDETERMINATE))
                 .then((results) => {
-                    if (scopeRef.current !== scope) return;
+                    if (controller.signal.aborted || scopeRef.current !== scope) return;
+                    completed = true;
                     setAnswers((current) => {
                         const next = new Map(current);
                         pending.forEach((selection, index) => {
@@ -134,6 +135,12 @@ export function useSessionContinuationInspections(
                         return next;
                     });
                 });
+        return () => {
+            controller.abort();
+            // A cancelled read supplied no answer. Release its claims so opening
+            // the same picker can inspect those targets again.
+            if (!completed) for (const selection of pending) scope.asked.delete(selectionKey(selection));
+        };
     }, [demanded, machineId, offline, scopeKey, serverId, sessionId, targetsKey]);
 
     const read = React.useCallback((selection: SessionAgentTransitionSelectionV1): SessionAgentContinuationInspectionState => {

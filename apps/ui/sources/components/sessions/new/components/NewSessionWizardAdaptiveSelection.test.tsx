@@ -1,7 +1,9 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -15,6 +17,9 @@ installNewSessionComponentsCommonModuleMocks({
 });
 
 describe('NewSessionWizardAdaptiveSelection', () => {
+    let restorePopoverGlobals: () => void;
+    beforeEach(() => { restorePopoverGlobals = withPopoverWebGlobals(); });
+    afterEach(() => restorePopoverGlobals());
     it('resolves explicit wizard presentation before auto presentation', async () => {
         const { resolveWizardAdaptivePresentation } = await import('./NewSessionWizardAdaptiveSelection');
 
@@ -51,6 +56,7 @@ describe('NewSessionWizardAdaptiveSelection', () => {
     it('retires pending work when the mounted wizard popover closes', async () => {
         const { AgentInputContentPopover } = await import('@/components/sessions/agentInput/components/AgentInputContentPopover');
         const { NewSessionWizardPopoverItem } = await import('./NewSessionWizardAdaptiveSelection');
+        const { OverlayPortalHost, OverlayPortalProvider } = await import('@/components/ui/popover/OverlayPortal');
         const retirePendingWork = vi.fn();
         const screen = await renderScreen(<NewSessionWizardPopoverItem
             testID="trigger"
@@ -61,12 +67,13 @@ describe('NewSessionWizardAdaptiveSelection', () => {
                 renderContent: () => null,
                 onRequestClose: retirePendingWork,
             }}
-        />);
+        />, { wrapper: ({ children }) => <OverlayPortalProvider>{children}<OverlayPortalHost /></OverlayPortalProvider> });
 
         await screen.pressByTestIdAsync('trigger');
         const popover = screen.findByType(AgentInputContentPopover);
-        popover.props.onRequestClose();
+        await act(async () => { popover.props.onRequestClose(); });
 
         expect(retirePendingWork).toHaveBeenCalledOnce();
+        await screen.unmount();
     });
 });

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMachineFixture, renderScreen, standardCleanup, flushHookEffects } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { ManagedMachineDestinationProjection } from './machineSelection/managedMachineSelection';
+import type { Machine } from '@/sync/domains/state/storageTypes';
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -36,7 +37,7 @@ describe('New Session open Machine picker publication', () => {
             const [current, setCurrent] = React.useState<ManagedMachineDestinationProjection | null>(null);
             const machines = useMachineListForServer(serverId) ?? [];
             projection = current;
-            return <NewSessionMachineSelectionContent groups={[{ serverId, serverName: 'Studio', loading: false, signedOut: false,
+            return <NewSessionMachineSelectionContent<Machine> groups={[{ serverId, serverName: 'Studio', loading: false, signedOut: false,
                 machines: machines.map(row => ({ ...row, serverId, serverName: 'Studio' })) }]}
                 selectedMachine={null} selectedServerId={serverId}
                 recentMachines={[]} favoriteMachines={[]} onSelectMachine={() => {}} onSelectScopedMachine={() => {}}

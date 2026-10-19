@@ -2,6 +2,13 @@ import type { AgentId } from '@/agents/catalog/catalog';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import { isMachineAgentReady, resolveMachineAgentState } from '@/agents/machineAgents/resolveMachineAgentState';
+import type { MachineAgentsSnapshot } from '@/agents/machineAgents/machineAgentInventoryStore';
+import type { DaemonMergedProjectionPhase } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
+import type { PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { isMachineAgentUnchecked, resolveMachineAgentStatus } from '@/components/machines/agents/machineAgentPresentation';
+import { formatMachineAgentStatus } from '@/components/machines/agents/machineAgentCopy';
+import { t } from '@/text';
 
 export type NewSessionSelectableBackendEntry = Pick<
     ResolvedBackendCatalogEntry,
@@ -11,6 +18,35 @@ export type NewSessionSelectableBackendEntry = Pick<
 type BaseSelectionParams = Readonly<{
     machineAgentsById: Readonly<Record<string, MachineAgent | undefined>>;
 }>;
+
+/** Launch admission is separate from picker eligibility and retains unresolved draft intent. */
+export function resolveAgentLaunchBlockedReasonForNewSession(params: Readonly<{
+    backendTarget: PersistedBackendTargetRefV2;
+    selectedBackendEntry: NewSessionSelectableBackendEntry | null;
+    projectionPhase: DaemonMergedProjectionPhase;
+    acpCatalog: AcpCatalogSnapshotV1 | null;
+    agentLabel: string;
+    selectedCredentialMachineAgent: MachineAgent | null | undefined;
+    machineAgentsStatus: MachineAgentsSnapshot['status'];
+    agentStartBlock: Readonly<{ text: string }> | null;
+}>): string | null {
+    if (params.selectedBackendEntry === null) {
+        const configuredTarget = params.backendTarget.kind === 'agent'
+            ? params.backendTarget.definitionId !== undefined
+            : Boolean(params.backendTarget.configuredBackendId);
+        const catalogLoading = configuredTarget
+            ? params.acpCatalog === null || params.acpCatalog.status === 'loading'
+            : params.projectionPhase === 'loading';
+        return catalogLoading ? t('machineAgents.checking') : t('newSession.selectAiBackendTitle');
+    }
+    return params.selectedBackendEntry.capabilities?.session?.supported === false ? `${params.agentLabel} · ${t('common.unavailable')}`
+        : params.selectedBackendEntry.kind === 'configuredBackend' || isMachineAgentReady(params.selectedCredentialMachineAgent) ? null
+        // An unused embedded composer waits for the check without claiming one is running.
+        : isMachineAgentUnchecked(params.selectedCredentialMachineAgent ?? null, params.machineAgentsStatus) ? ''
+        : params.agentStartBlock?.text ?? `${params.agentLabel} · ${formatMachineAgentStatus(resolveMachineAgentStatus(
+            params.selectedCredentialMachineAgent ?? null, undefined, params.machineAgentsStatus,
+        ))}`;
+}
 
 export type NewSessionProfileAvailabilityReason =
     | 'no-supported-cli'
@@ -24,7 +60,8 @@ export type NewSessionProfileAvailabilityReason =
 /** Choosing an executable is not credential admission; Start checks the exact binding. */
 function isAgentExecutableSelectable(agent: MachineAgent | undefined): boolean {
     if (isMachineAgentReady(agent)) return true;
-    if (!agent || agent.stale || agent.state !== 'needsSignIn') return false;
+    if (!agent || agent.stale || (agent.state !== 'needsSignIn'
+        && !(agent.state === 'unknown' && agent.signIn.status === 'unknown'))) return false;
     return isMachineAgentReady({ ...agent, state: resolveMachineAgentState({ ...agent, authenticationRequired: false }) });
 }
 

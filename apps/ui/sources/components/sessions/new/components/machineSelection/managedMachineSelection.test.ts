@@ -40,7 +40,10 @@ describe('managed machine selection draft', () => {
     });
     it('counts new-machine offers and waits for their projection before taking a sole-machine shortcut', () => {
         const machine = { ...createMachineFixture({ id: 'host' }), active: true, activeAt: Date.now() };
-        const params = { groups: [{ serverId: 'home-a', machines: [machine], loading: false, signedOut: false }] };
+        const params = {
+            groups: [{ serverId: 'home-a', machines: [machine], loading: false, signedOut: false }],
+            scopesByServerId: new Map([['home-a', { serverId: 'home-a', accountId: 'account-a' }]]),
+        };
         const available = buildMachineDestinationModel({ ...params,
             managedMachineProjection: { state: 'available', rowCount: 2 } });
         expect(available.managedMachineRowCount).toBe(2);

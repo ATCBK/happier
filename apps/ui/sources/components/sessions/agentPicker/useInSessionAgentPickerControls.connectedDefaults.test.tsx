@@ -1,15 +1,15 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountProfileSchema, ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol';
 
-import { renderHook, renderScreen } from '@/dev/testkit';
+import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installAgentInputCommonModuleMocks } from '../agentInput/agentInputTestHelpers';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { applyConnectedAccountCatalogSnapshot } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
-import { storage } from '@/sync/domains/state/storage';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 
 installDisconnectedServerSocketBoundary();
 
@@ -17,6 +17,7 @@ installAgentInputCommonModuleMocks({ text: async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock();
 } });
+const { storage } = await import('@/sync/domains/state/storage');
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn<(_request: unknown) => Promise<unknown>>(async (_request) => ({
     ok: true, result: { availableModels: [{ id: 'probed-model', name: 'Probed model' }], supportsFreeform: false },
@@ -38,6 +39,13 @@ const [{ useInSessionAgentPickerControls }, { getResolvedBackendCatalogEntries }
     import('@/sync/domains/settings/settings'),
 ]);
 const { resetDynamicModelProbeCacheForTests } = await import('@/sync/domains/models/dynamicModelProbeCache');
+const account = createProviderSettingsAccountHarness();
+let probeServerId: string;
+
+beforeEach(async () => {
+    probeServerId = (await account.restore()).serverId;
+});
+afterEach(async () => { await standardCleanup(); await account.reset(); });
 
 describe('continuation target account discovery', () => {
     it('does not issue New Session authentication probes while inherited purpose authority is unread', async () => {
@@ -46,8 +54,8 @@ describe('continuation target account discovery', () => {
         const { useNewSessionScreenPreflightState } = await import('../new/hooks/screenModel/useNewSessionScreenPreflightState');
         const hook = await renderHook((ready: boolean) => useNewSessionScreenPreflightState({
             backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
-            settings: settingsDefaults, selectedMachineId: 'unread-purpose-probe-machine',
-            capabilityServerId: 'unread-purpose-probe-server', cwd: '/repo', connectedAccountDefaultsReady: ready,
+            selectedMachineId: 'unread-purpose-probe-machine',
+            capabilityServerId: probeServerId, cwd: '/repo', connectedAccountDefaultsReady: ready,
         }), { initialProps: false });
         try {
             await act(async () => { await Promise.resolve(); });
@@ -85,12 +93,11 @@ describe('continuation target account discovery', () => {
         applyConnectedAccountCatalogSnapshot(accountScope, 'purposes', profileId === 'unavailable'
             ? { status: 'unavailable', reason: 'account-mode-mismatch' }
             : { status: 'ready', revision: 3, record: { key: 'purposes', value } }, true);
-        const settings = settingsDefaults;
         const hook = await renderHook(() => useInSessionAgentPickerControls({
             sessionId: 'qualified-account-discovery', accountScope,
             currentAgentId: 'claude', currentAgentLabel: 'Claude', projectionCurrent: true,
             entries: getResolvedBackendCatalogEntries({
-                enabledAgentIds: ['claude', 'codex'], acpCatalogSettingsV1: settings.acpCatalogSettingsV1,
+                enabledAgentIds: ['claude', 'codex'],
                 // The real Codex manifest declares this qualified launch purpose;
                 // a bare bundled presentation fallback has no daemon declarations.
                 mergedProviderProjectionById: { codex: {
@@ -102,7 +109,7 @@ describe('continuation target account discovery', () => {
             featureDecision: { state: 'enabled' },
             source: { currentBackendTargetKey: 'agent:happier.agent.claude/claude', storageKind: 'persisted', canEditSession: true, machinePresence: 'online', hasConversationToCarry: true },
             machine: { machineId: 'machine-1', serverId: connection.home.id, connectionGeneration: 1, daemonGeneration: 1 },
-            detail: { settings, capabilityServerId: connection.home.id, machineId: 'machine-1', cwd: '/repo' },
+            detail: { capabilityServerId: connection.home.id, machineId: 'machine-1', cwd: '/repo' },
         }));
         let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
         try {
@@ -150,7 +157,7 @@ describe('continuation target account discovery', () => {
                 : { configOptions: [] } };
         });
         const detail = (connectedServices: ReturnType<typeof ConnectedServiceBindingsV2Schema.parse>) => React.createElement(NewSessionEngineOptionDetail, {
-            backendTarget: target, selectedMachineId: 'machine-1', capabilityServerId: 'server-1',
+            backendTarget: target, selectedMachineId: 'machine-1', capabilityServerId: probeServerId,
             selectedModelId: 'default',
             capabilityProbeContext: resolveNewSessionCapabilityProbeContext({ backendTarget: target, settings: settingsDefaults, connectedServices }),
         });
@@ -166,7 +173,7 @@ describe('continuation target account discovery', () => {
         } });
         await act(async () => { screen.tree.update(detail(team)); await Promise.resolve(); });
         expect(JSON.stringify(screen.tree.toJSON())).not.toContain('Personal account model');
-        expect(JSON.stringify(screen.tree.toJSON())).toContain('agentInput.model.unavailable');
+        expect(screen.findByTestId('provider-error:agent_error')).not.toBeNull();
         expect(invoke.mock.calls.map(([request]) => request)).toContainEqual(expect.objectContaining({
             method: 'probeModels', params: expect.objectContaining({ connectedServices: team }),
         }));
@@ -198,8 +205,8 @@ describe('continuation target account discovery', () => {
         function Harness({ bindings }: { bindings: typeof team }) {
             current = useNewSessionScreenPreflightState({
                 backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
-                settings: settingsDefaults, selectedMachineId: 'team-observation-machine',
-                capabilityServerId: 'team-observation-server', cwd: '/repo', connectedServicesBindingsPayload: bindings,
+                selectedMachineId: 'team-observation-machine',
+                capabilityServerId: probeServerId, cwd: '/repo', connectedServicesBindingsPayload: bindings,
             });
             return null;
         }

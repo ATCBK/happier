@@ -96,6 +96,8 @@ export type NewSessionComposerDocument = Readonly<{
     ref: Extract<ComposerRefV1, Readonly<{ kind: 'newSession' }>>;
     /** Exact live-scope/account currentness for host adapters; no global focus registry. */
     isCurrent: () => boolean;
+    /** Lifetime of this exact mounted composer and its execution target. */
+    scopeSignal?: AbortSignal;
     /** Reference search additionally retires when this concrete input loses focus. */
     isReferenceSearchCurrent: () => boolean;
     /** Semantic draft revision for persistence/currentness consumers. */
@@ -365,7 +367,9 @@ export function useNewSessionComposerDocument(params: Readonly<{
         };
     }, [composerPluginPresentation.scopeSignal, isNewSessionComposerCurrent, params.composerPluginProjection]);
 
-    React.useLayoutEffect(() => {
+    // Suspense may disconnect layout effects for a hidden retained composer. Its draft
+    // lifetime remains mounted until passive cleanup, just like its document subscriptions.
+    React.useEffect(() => {
         mountedRef.current = true;
         return () => {
             mountedRef.current = false;
@@ -903,6 +907,7 @@ export function useNewSessionComposerDocument(params: Readonly<{
     return React.useMemo(() => ({
         ref,
         isCurrent: isNewSessionComposerCurrent,
+        scopeSignal: composerPluginPresentation.scopeSignal,
         isReferenceSearchCurrent: isNewSessionReferenceSearchCurrent,
         revision: documentOwner.read().revision,
         attachments: documentState.attachments,
@@ -938,6 +943,7 @@ export function useNewSessionComposerDocument(params: Readonly<{
         composerPluginPresentation.afterComposer,
         composerPluginPresentation.beforeComposer,
         composerPluginPresentation.extraActionChips,
+        composerPluginPresentation.scopeSignal,
         documentState.attachments,
         documentState.mentions,
         onComposerActionBarLayoutChange,
