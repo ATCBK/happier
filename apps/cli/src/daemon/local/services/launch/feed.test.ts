@@ -82,14 +82,14 @@ describe('createLocalServiceLauncherFeed', () => {
                 requester: { serverId: 'home', accountId: 'owner', machineId: 'machine-a', installationId: 'installation' },
                 processSpec: { mode: { kind: 'managedSpawn', host: '127.0.0.1' } },
                 authorizeLaunch: async input => ({ command: process.execPath,
-                    args: ['-e', `require('node:http').createServer((req,res)=>res.end('ok')).listen(${input.port},'127.0.0.1')`],
+                    args: ['-e', `require('node:http').createServer((req,res)=>res.end('ok')).listen(${input.endpoint!.port},'127.0.0.1')`],
                     env: {}, release: async () => undefined }),
             });
             const root = owner.readProcessRoots()[0];
             if (!root) throw new Error('Managed native process root is missing');
             const port = Number(new URL(handle.snapshot().baseUrl!).port);
             const direct = inventoryEntry({ id: 'owned-loopback', port, provenance: {
-                process: { pid: root.pid, command: 'http server', cwd: process.cwd(), redacted: true },
+                process: { pid: root.pid, lineagePids: [root.pid], command: 'http server', cwd: process.cwd(), redacted: true },
             } });
             const child = inventoryEntry({ id: 'owned-wildcard', port,
                 address: { kind: 'wildcard', host: '0.0.0.0', family: 'ipv4' },
@@ -99,7 +99,7 @@ describe('createLocalServiceLauncherFeed', () => {
             const unrelated = inventoryEntry({ id: 'unrelated', port,
                 address: { kind: 'lan', host: '192.168.1.20', family: 'ipv4' },
                 endpoint: { scheme: 'http', host: '192.168.1.20', port, probeState: 'ready', probedAt: 2_000 },
-                provenance: { process: { pid: root.pid + 2, command: 'http server', cwd: process.cwd(), redacted: true } },
+                provenance: { process: { pid: root.pid + 2, lineagePids: [root.pid + 2], command: 'http server', cwd: process.cwd(), redacted: true } },
             });
             inventoryRegistry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 2_000,
                 refreshState: 'idle', entries: [direct, child, unrelated], diagnostics: [] });

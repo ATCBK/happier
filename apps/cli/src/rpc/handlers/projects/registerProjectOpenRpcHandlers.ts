@@ -79,9 +79,7 @@ export function registerProjectOpenRpcHandlers(registrar: RpcHandlerRegistrar, i
     }
     const result = OpenProjectResultV1Schema.safeParse(await withRequesterContext(context, async (admitted, signing) => {
       const runtime = { ...input.runtime!, ...(signing ? { requesterMachineRpcSigning: signing } : {}) };
-      // The receiving host's existing observer owns the original attempt. An
-      // already observed local Action must not acquire a second operation.
-      if (!input.observeExecution || !admitted || admitted.localActionContext?.operationAcceptance?.actionId === 'projects.open') {
+      if (!input.observeExecution || !admitted) {
         return openProject(parsed.data, runtime, admitted);
       }
       const observed = await input.observeExecution({ actionId: 'projects.open', input: parsed.data,

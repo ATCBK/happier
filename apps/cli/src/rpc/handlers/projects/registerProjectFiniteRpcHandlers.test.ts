@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
-import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcHandlerMap, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { registerProjectFiniteRpcHandlers } from './registerProjectFiniteRpcHandlers';
 
 describe('finite Project RPC receiver', () => {
     it('refuses malformed authority and unavailable runtime before work enters any process owner', async () => {
-        const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+        const handlers: RpcHandlerMap = new Map();
         const registrar: RpcHandlerRegistrar = { registerHandler(method, handler) { handlers.set(method, handler); } };
         registerProjectFiniteRpcHandlers(registrar, { serverId: 'home', machineId: 'machine' });
         const handler = handlers.get(PROJECT_FINITE_ACTION_RPC_METHODS_V1['projects.prepare'])!;

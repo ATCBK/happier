@@ -7,6 +7,25 @@ async function loadPreviewRegistryModule(): Promise<PreviewRegistryModule | null
 }
 
 describe("daemon local service preview registry", () => {
+    it("keeps the managed service binding on the browser target it publishes", async () => {
+        const mod = await import("./registry");
+        const serviceTarget = {
+            kind: "managed_service", machineId: "machine_123", managedServiceId: "service_123", cwd: "/repo/web",
+            declaration: { workspaceRefId: "workspace_123", selection: { kind: "manifest", name: "web" } },
+        } as const;
+        const result = mod.registerLocalServicePreview(mod.createLocalServicePreviewRegistry(), {
+            previewId: "preview_123", machineId: "machine_123", serviceTarget,
+            owner: { kind: "user", id: "account_123" },
+            target: { scheme: "http", host: "127.0.0.1", port: 5173 },
+            initialPath: { pathname: "/", search: "" },
+            display: { title: "Web", addressLabel: "localhost:5173" }, originMode: "host",
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.resource.browserTarget?.serviceTarget).toEqual(serviceTarget);
+        expect(result.resource.browserTarget?.sessionId).toBeUndefined();
+    });
+
     it("registers preview resources with preserved query and browser target", async () => {
         const mod = await loadPreviewRegistryModule();
         const registry = mod!.createLocalServicePreviewRegistry();

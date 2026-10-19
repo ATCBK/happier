@@ -1,4 +1,5 @@
 import { resolveCliFeatureDecision, type CliServerFeaturesSnapshot } from '@/features/featureDecisionService';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 
 /**
  * The local-service execution gates enforced at the daemon execution boundary. These mirror the
@@ -27,7 +28,7 @@ export type LocalServicesDaemonFeatureGate = Readonly<{
 }>;
 
 export function createLocalServicesDaemonFeatureGate(params: {
-  env: NodeJS.ProcessEnv;
+  env: ProcessEnvInput;
   // The SAME async provider shape already used for local-services inventory + connected-services
   // quotas + the browser daemon gate. The gate (not the call site) owns caching the snapshot.
   resolveServerFeaturesSnapshot: () => Promise<CliServerFeaturesSnapshot | undefined> | CliServerFeaturesSnapshot | undefined;

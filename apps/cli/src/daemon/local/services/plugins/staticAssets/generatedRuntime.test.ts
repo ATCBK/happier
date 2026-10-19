@@ -9,6 +9,7 @@ import {
     computePluginUiArtifactFileSetSha256DigestV1,
     computePluginUiArtifactSha256DigestV1,
     PluginUiArtifactIntegrityBindingV1Schema,
+    PluginUiArtifactsManifestV2Schema,
     verifyPluginUiArtifactFileSetIntegrityV1,
 } from '@happier-dev/protocol/plugins/ui';
 
@@ -33,7 +34,7 @@ afterEach(async () => {
 });
 
 async function installGeneratedUiPlugin(input?: Readonly<{
-    platform?: 'web' | 'android';
+    legacyPlatform?: 'android';
 }>): Promise<Readonly<{
     happyHomeDir: string;
     installedRoot: string;
@@ -79,12 +80,11 @@ async function installGeneratedUiPlugin(input?: Readonly<{
         },
     });
     await writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
-    await writeFile(join(artifactsRoot, 'ui-artifacts.json'), JSON.stringify({
-        version: 1,
+    const artifacts = PluginUiArtifactsManifestV2Schema.parse({
+        version: 2,
         entries: [{
-            contributionId: artifactId,
+            artifactId,
             tier: 'hostedWeb',
-            platform: input?.platform ?? 'web',
             entry: entryPath,
             files: emitted.map((file) => ({
                 relativePath: file.relativePath,
@@ -92,11 +92,14 @@ async function installGeneratedUiPlugin(input?: Readonly<{
                 byteSize: file.bytes.byteLength,
             })),
             digest,
-            builtWith: { bundler: 'vite', version: '7.0.0' },
-            hostUiApiVersion: PLUGIN_UI_HOST_API_VERSION_V1,
-            compat: {},
+            builtWith: { staging: 'staticDirectory' },
+            hostUiApiRange: String(PLUGIN_UI_HOST_API_VERSION_V1),
         }],
-    }), 'utf8');
+    });
+    // Filesystem fault: V2 is universal and rejects obsolete platform metadata.
+    const published = input?.legacyPlatform ? { ...artifacts,
+        entries: artifacts.entries.map(entry => ({ ...entry, platform: input.legacyPlatform })) } : artifacts;
+    await writeFile(join(artifactsRoot, 'ui-artifacts.json'), JSON.stringify(published), 'utf8');
     await writeFile(join(artifactsRoot, entryPath), html, 'utf8');
     await writeFile(join(artifactsRoot, assetPath), app, 'utf8');
 
@@ -203,7 +206,7 @@ function createLifecycle() {
 }
 
 describe('generated V2 UI installed runtime', () => {
-    it('serves a generated artifact from the committed generation and rejects stale or wrong-platform bytes', async () => {
+    it('serves a generated artifact from the committed generation and rejects stale bytes or legacy platform metadata', async () => {
         const installed = await installGeneratedUiPlugin();
         expect(installed.installedRoot).toContain('/generations/');
         const source = await resolveGeneratedLifecycleSource(installed.happyHomeDir);
@@ -242,14 +245,14 @@ describe('generated V2 UI installed runtime', () => {
         ]);
         await staleLifecycle.stop();
 
-        const wrongPlatform = await installGeneratedUiPlugin({ platform: 'android' });
-        const rejected = await resolveGeneratedLifecycleSource(wrongPlatform.happyHomeDir);
+        const legacyPlatform = await installGeneratedUiPlugin({ legacyPlatform: 'android' });
+        const rejected = await resolveGeneratedLifecycleSource(legacyPlatform.happyHomeDir);
         expect(rejected.contributions).toEqual([]);
         expect(rejected.diagnostics).toEqual([
             expect.objectContaining({
                 pluginId,
                 contributionId: rendererId,
-                code: 'hosted_web_static_artifact_platform_mismatch',
+                code: 'hosted_web_static_artifact_missing',
             }),
         ]);
     });

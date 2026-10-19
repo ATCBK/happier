@@ -4,7 +4,7 @@ import { AxiosError, AxiosHeaders } from 'axios';
 import { createLocalServicePreviewRoutes as createRoutes } from './routes';
 import type { LocalServicePreviewResourceV1 } from '@happier-dev/protocol';
 import { LocalServicePreviewResourceV1Schema } from '@happier-dev/protocol/local/services/preview/v1';
-import { createLocalServicePreviewRegistry } from './registry';
+import { createLocalServicePreviewRegistry, registerLocalServicePreview } from './registry';
 import { createLocalServiceInventoryRegistry } from '../inventory/registry';
 import type { NormalizedLocalServiceInventoryEntry } from '../inventory/scanner';
 import type { LocalServicePreviewServerInput } from './serverRoutes';
@@ -148,7 +148,7 @@ describe('createLocalServicePreviewRoutes lifecycle', () => {
         const ownContext: RpcHandlerContext = { ...context,
             machineAdmission: { ...context.machineAdmission!, actorAccountId: 'account-1' },
             verifyMachineAdmissionCurrent: async () => true };
-        expect((await routes.getSnapshot(ownContext)).previews[0]?.accessUrl).toContain('previewToken=custodian');
+        expect((await routes.getSnapshot(ownContext)).previews?.[0]?.accessUrl).toContain('previewToken=custodian');
         await expect(routes.getSnapshot({ ...ownContext, verifyMachineAdmissionCurrent: async () => false }))
             .rejects.toThrow('requester_credentials_unavailable');
     });
@@ -373,6 +373,31 @@ describe('createLocalServicePreviewRoutes lifecycle', () => {
         const navigated = await routes.openOrCreate({ machineId: MACHINE_ID, sessionId: 'session-1', inventoryEntryId: 'entry-vite', initialPath: { pathname: '/new', search: '?tab=3' } });
         expect(navigated.ok).toBe(true);
         if (navigated.ok) expect(new URL(navigated.response.preview.accessUrl ?? '').pathname).toBe('/new');
+    });
+
+    it('reuses an existing Session preview for an unscoped inventory Open without changing its ownership or policy', async () => {
+        const registry = createLocalServicePreviewRegistry();
+        const registration = registerLocalServicePreview(registry, {
+            previewId: 'fixture-preview', machineId: MACHINE_ID, sessionId: 'session-1',
+            owner: { kind: 'session', id: 'session-1' },
+            target: { scheme: 'http', host: 'localhost', port: 5173 },
+            initialPath: { pathname: '/dashboard', search: '?view=fixture' },
+            display: { title: 'Fixture', addressLabel: 'localhost:5173' }, originMode: 'host',
+            policy: { allowedMethods: ['GET'], cookiePolicy: 'drop', compressionPolicy: 'identity',
+                redirectPolicy: 'preserve_host_origin', maxRequestBodyBytes: 1024, maxResponseBodyBytes: 1024 },
+        });
+        expect(registration.ok).toBe(true);
+        if (!registration.ok) return;
+        const routes = createLocalServicePreviewRoutes({ machineId: MACHINE_ID, registry,
+            inventoryRegistry: inventoryRegistryWith([inventoryEntry()]) });
+
+        const opened = await routes.openOrCreate({ machineId: MACHINE_ID, inventoryEntryId: 'entry-vite' });
+
+        expect(opened).toMatchObject({ ok: true, response: {
+            status: 'existing', preview: { previewId: 'fixture-preview', resource: registration.resource },
+            snapshot: { resources: [registration.resource] },
+        } });
+        expect(registry.previewsById.size).toBe(1);
     });
 
     it('openOrCreate registers a loopback inventory entry and mints its accessUrl', async () => {

@@ -2,7 +2,7 @@ import axios from 'axios';
 import { mkdtemp, mkdir, writeFile, access, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProjectAccountRowMutationRequestV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { readProjectAccountRows, withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
 import type { RpcHandlerContext } from '@/api/rpc/types';
@@ -49,6 +49,7 @@ import { resolveCurrentCliHomeTarget } from '@/server/homeTarget';
 import { resolvePublishedMachineEncryptionContext } from '@/api/machine/machineDataEncryptionKey';
 import { ApiMachineClient } from '@/api/apiMachine';
 import { writeCredentialsTokenOnlyForServerId } from '@/persistence';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
 
 const socketIo = vi.hoisted(() => vi.fn());
 vi.mock('socket.io-client', () => ({ io: socketIo }));
@@ -64,7 +65,7 @@ async function plainMachineRead(url: string) {
 }
 
 function register(method: string = RPC_METHODS.PROJECTS_OPEN, runtime?: ProjectOpenRuntime,
-  target = { serverId: runtime?.serverId ?? 'home', machineId: runtime?.machineId ?? 'machine' }) {
+  target = { serverId: runtime?.serverId ?? 'srv_test_home', machineId: runtime?.machineId ?? 'machine' }) {
   const handlers = new Map<string, RpcHandler<unknown, unknown>>();
   // The RPC transport receives untyped JSON; the real registered owner validates it.
   const registrar: RpcHandlerRegistrar = { registerHandler: (method, handler) => { handlers.set(method, handler as RpcHandler<unknown, unknown>); } };
@@ -75,6 +76,9 @@ function register(method: string = RPC_METHODS.PROJECTS_OPEN, runtime?: ProjectO
 }
 
 describe('Project Open RPC', () => {
+  beforeEach(async () => {
+    await seedTestServerProfile({ id: 'srv_test_home', homeId: 'srv_test_home', serverUrl: 'https://home.example' });
+  });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); socketIo.mockReset(); withdrawActiveProjectAccountRowsSnapshot(); });
 
   it.each(['opened', 'refused', 'outcomeUnknown'] as const)('retains the original Open settlement in Action Operations (%s)', async settlement => {
@@ -84,15 +88,21 @@ describe('Project Open RPC', () => {
       transportRequestId: 'original-open-request',
       machineAdmission: { actorAccountId: 'account', custodianAccountId: 'account', machineId: 'machine',
         installationId: 'installation', role: 'manage', encryptionMode: 'plain' }, verifyMachineAdmissionCurrent: async () => true };
-    const operations = createHostActionOperationRuntime({ serverId: 'home', machineId: 'machine',
+    const operations = createHostActionOperationRuntime({ serverId: 'srv_test_home', machineId: 'machine',
       resolveAccountId: async () => 'account', generateOperationId: () => 'original-open-operation' });
-    const runtime: ProjectOpenRuntime = { serverId: 'home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine',
+    const runtime: ProjectOpenRuntime = { serverId: 'srv_test_home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine',
       accountId: 'account', readCredentials: async () => ({ token, encryption: null }) };
     const rows: ProjectAccountRowV1[] = [];
     let mutations = 0;
     vi.spyOn(axios, 'get').mockImplementation(plainMachineRead);
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
-      if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+      if (url.endsWith('/list')) {
+        expect(await operations.handlers.getV2({ operationId: 'original-open-operation' }, context))
+          .toMatchObject({ kind: 'found', operation: { requestId: 'original-open-request', state: 'running',
+            cancellation: 'unsupported' } });
+        expect(await operations.handlers.cancel({ operationId: 'original-open-operation' }, context)).toEqual({ kind: 'unsupported' });
+        return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+      }
       mutations += 1;
       const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
       const changed = request.mutations.map(mutation => ({ key: mutation.key, revision: 0, content: mutation.content }));
@@ -102,16 +112,27 @@ describe('Project Open RPC', () => {
     });
     const handlers = new Map<string, RpcHandler<unknown, unknown>>();
     const registrar: RpcHandlerRegistrar = { registerHandler: (method, handler) => { handlers.set(method, handler as RpcHandler<unknown, unknown>); } };
-    const registration = { serverId: 'home', machineId: 'machine', runtime, observeExecution: operations.observeExecution };
+    const registration = { serverId: 'srv_test_home', machineId: 'machine', runtime, observeExecution: operations.observeExecution };
     registerProjectOpenRpcHandlers(registrar, registration);
     try {
       const handler = handlers.get(RPC_METHODS.PROJECTS_OPEN)!;
-      const result = await handler({ serverId: 'home', machineId: 'machine', source: { kind: 'folder',
-        path: settlement === 'refused' ? join(root, 'missing') : root }, materialization: { kind: 'attach' } }, context);
+      const input = { serverId: 'srv_test_home', machineId: 'machine', source: { kind: 'folder' as const,
+        path: settlement === 'refused' ? join(root, 'missing') : root }, materialization: { kind: 'attach' as const } };
+      const observed = await operations.runActionOperation({ actionId: 'projects.open', input,
+        context: { actionRequestId: context.transportRequestId, signal: context.signal },
+        // Machine relay calls carry authenticated ingress, not the invoking
+        // adapter's private local Action context. Installed signed calls are
+        // exercised by the composed external Action approval keepers.
+        execute: async () => ({ ok: true, result: await handler(input, context) }),
+      });
+      expect(observed.ok).toBe(true);
+      if (!observed.ok) throw new Error(observed.errorCode);
+      const result = observed.result;
       expect(result).toMatchObject({ kind: settlement, ...(settlement === 'outcomeUnknown' ? { operationId: 'original-open-operation' } : {}) });
       const found = await operations.handlers.getV2({ operationId: 'original-open-operation' }, context);
       expect(found).toMatchObject({ kind: 'found', operation: { actionId: 'projects.open', scope: { accountId: 'account', machineId: 'machine' },
         result } });
+      expect((await operations.handlers.listV2({}, context)).items).toHaveLength(1);
       const beforeCheck = mutations;
       await operations.handlers.getV2({ operationId: 'original-open-operation' }, context);
       expect(mutations).toBe(beforeCheck);
@@ -183,7 +204,7 @@ describe('Project Open RPC', () => {
     expect(activated.diagnostics).toEqual([]);
     const registry = createScmBackendRegistry(activated.backends);
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`;
-    const runtime: ProjectOpenRuntime = { serverId: 'home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine',
+    const runtime: ProjectOpenRuntime = { serverId: 'srv_test_home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine',
       accountId: 'account', registry, readCredentials: async () => ({ token, encryption: null }) };
     const context: RpcHandlerContext = { signal: new AbortController().signal, callerAuthority: 'present_user',
       machineAdmission: { actorAccountId: 'account', custodianAccountId: 'account', machineId: 'machine',
@@ -203,7 +224,7 @@ describe('Project Open RPC', () => {
     });
     const diagnostic = vi.spyOn(logger, 'warnLocalFile');
     const handler = register(RPC_METHODS.PROJECTS_OPEN, runtime);
-    const input = { serverId: 'home', machineId: 'machine', source: { kind: 'source' as const, id: source.id, revision: 2,
+    const input = { serverId: 'srv_test_home', machineId: 'machine', source: { kind: 'source' as const, id: source.id, revision: 2,
       selector: source.repository, defaultRef: 'master', subdir: '.' },
       materialization: { kind: 'clone' as const, destinationParentPath: root, destinationDirectoryName: 'checkout' } };
     try {
@@ -243,7 +264,7 @@ describe('Project Open RPC', () => {
       scope.patch({ GIT_CONFIG_KEY_0: `url.${remote}.insteadOf` });
       const opened = await handler(input, context);
       expect(opened, JSON.stringify(diagnostic.mock.calls)).toMatchObject({ kind: 'opened', directory: join(root, 'checkout'),
-        workspace: { serverId: 'home', machineId: 'machine', rootPath: join(root, 'checkout') },
+        workspace: { serverId: 'srv_test_home', machineId: 'machine', rootPath: join(root, 'checkout') },
         facts: { source: { sourceId: source.id, revision: 2 } } });
       expect(rows.some(row => row.key.kind === 'workspace-ref')).toBe(true);
       await access(join(root, 'checkout', '.happier/project.json'));
@@ -302,6 +323,7 @@ describe('Project Open RPC', () => {
       const handler = register(RPC_METHODS.PROJECTS_OPEN, runtime, target);
       const folder = { serverId, machineId, source: { kind: 'folder' as const, path: root }, materialization: { kind: 'attach' as const } };
       expect(await handler(folder, context)).toEqual({ kind: 'refused', code: 'target_mismatch' });
+      expect(await handler({ ...folder, serverId: profileId }, context)).toEqual({ kind: 'refused', code: 'target_mismatch' });
       // Only the Home HTTP boundary is mocked. Start from the predecessor/Stack
       // URL-only profile and pass the provisioned credential through real startup verification.
       const features = FeaturesResponseSchema.parse({ features: {}, capabilities: { serverIdentity: { serverIdentityId: serverId } },
@@ -341,7 +363,7 @@ describe('Project Open RPC', () => {
         if (!(registeredHandlers instanceof Map)) throw new Error('Missing registered RPC handlers');
         const installed: RpcHandler<unknown, unknown> | undefined = registeredHandlers.get(`${machineId}:${RPC_METHODS.PROJECTS_OPEN}`);
         if (!installed) throw new Error('Project Open was not installed by the machine composition');
-        expect(OpenProjectResultV1Schema.parse(await installed(folder, context))).toMatchObject({ kind: 'opened',
+        expect(OpenProjectResultV1Schema.parse(await installed({ ...folder, serverId: profileId }, context))).toMatchObject({ kind: 'opened',
           workspace: { serverId, machineId, rootPath: root } });
       } finally { await registration.dispose(); }
       // Counterfactual wiring: the same exact Home without its Project runtime
@@ -352,6 +374,8 @@ describe('Project Open RPC', () => {
         workspace: { serverId, machineId, rootPath: root } });
       const workspaceRow = rows.find(row => row.key.kind === 'workspace-ref');
       if (!workspaceRow || workspaceRow.key.kind !== 'workspace-ref') throw new Error('Expected accepted checkout row');
+      expect(rows.filter(row => row.key.kind === 'workspace-ref')).toHaveLength(1);
+      expect(workspaceRow.key.serverId).toBe(serverId);
       const captured = { ...folder, source: { kind: 'source' as const, id: source.id, revision: source.revision,
         selector: source.repository, defaultRef: source.defaultRef, subdir: source.subdir,
         checkout: { serverId, workspaceId: workspaceRow.key.id, machineId, rootPath: root } } };
@@ -399,6 +423,7 @@ describe('Project Open RPC', () => {
         read.mockClear(); post.mockClear();
         expect(await handler(folder, context), scenario).toEqual({ kind: 'refused', code: 'target_mismatch' });
         expect(await openProject(folder, runtime, context), scenario).toEqual({ kind: 'refused', code: 'target_mismatch' });
+        expect(await handler({ ...folder, serverId: profileId }, context), scenario).toEqual({ kind: 'refused', code: 'target_mismatch' });
         expect(await sourceHandler(copy, context), scenario).toEqual({ kind: 'refused', code: 'target_mismatch' });
         expect(read).not.toHaveBeenCalled(); expect(post).not.toHaveBeenCalled();
       }
@@ -410,8 +435,8 @@ describe('Project Open RPC', () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
     const material = mode === 'e2ee' ? { type: 'legacy' as const, secret: new Uint8Array(32).fill(8) } : null;
     const cipher = createProjectAccountRowCipherV1({ mode, material, randomBytes: n => new Uint8Array(n) });
-    const key = { kind: 'workspace-ref' as const, serverId: 'home', id: 'bob-checkout' };
-    const workspace = { id: key.id, serverId: 'home', machineId: 'machine', rootPath: root, createdAtMs: 1 };
+    const key = { kind: 'workspace-ref' as const, serverId: 'srv_test_home', id: 'bob-checkout' };
+    const workspace = { id: key.id, serverId: 'srv_test_home', machineId: 'machine', rootPath: root, createdAtMs: 1 };
     const rows: ProjectAccountRowV1[] = [{ key, revision: 0, content: cipher.seal({ key, value: workspace }) }];
     const source: ProjectSourceV1 = { id: 'bob-source', revision: 1, name: 'Bob Source', createdByAccountId: 'bob', audience: [],
       repository: { provider: { id: 'forge', kind: 'github', displayName: 'Forge', baseUrl: 'https://forge.example' },
@@ -423,7 +448,7 @@ describe('Project Open RPC', () => {
       installationId: 'installation', actionId: 'projects.open', accountEncryptionMode: mode,
       authentication: { kind: 'terminal', tokenEpoch: 0 }, serverIdentityId: 'identity',
       requestId: 'requester-open', requestEnvelopeDigest: 'A'.repeat(43), target: { kind: 'machine', machineId: 'machine' } },
-      requesterAccountProjection: { accountId: 'bob', serverId: 'home', accountEncryptionMode: mode, projectAccountRowCipher: cipher,
+      requesterAccountProjection: { accountId: 'bob', serverId: 'srv_test_home', accountEncryptionMode: mode, projectAccountRowCipher: cipher,
         projectTrustRowCipher: createProjectSetupTrustRowCipher({ mode, material }),
         resolveMachineContentEncryptionContext: machine => {
           const context = resolvePublishedMachineEncryptionContext({ credentials: { token, encryption: material }, machineId: machine.id,
@@ -434,7 +459,7 @@ describe('Project Open RPC', () => {
             : { encryptionMode: 'e2ee' as const, encryptionKey: context.encryptionKey, encryptionVariant: context.encryptionVariant };
         },
         isCurrent: async () => current, readArtifact: async () => null },
-      requesterHttpProjection: { accountId: 'bob', serverId: 'home', serverIdentityId: 'identity', serverHttpBaseUrl: 'https://home.example',
+      requesterHttpProjection: { accountId: 'bob', serverId: 'srv_test_home', serverIdentityId: 'identity', serverHttpBaseUrl: 'https://home.example',
         accountEncryptionMode: mode, isCurrent: async () => current,
         createRequestHeaders: async () => current ? { 'x-requester-proof': 'bob' } : null },
     } satisfies ExternalActionExecutionAuthorizationV1;
@@ -464,16 +489,16 @@ describe('Project Open RPC', () => {
     const context: RpcHandlerContext = { signal: new AbortController().signal, callerAuthority: 'account_automation',
       callerInputAuthorization: authorization, machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'alice',
         machineId: 'machine', installationId: 'installation', role: 'use', encryptionMode: 'plain' }, verifyMachineAdmissionCurrent: async () => true };
-    const runtime: ProjectOpenRuntime = { serverId: 'home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'alice',
+    const runtime: ProjectOpenRuntime = { serverId: 'srv_test_home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'alice',
       readCredentials: async () => { throw new Error('Bob must not use Alice credentials'); } };
-    const input = { serverId: 'home', machineId: 'machine', source: { kind: 'source', id: source.id, revision: 1, selector: source.repository,
-      checkout: { serverId: 'home', workspaceId: key.id, machineId: 'machine', rootPath: root } }, materialization: { kind: 'attach' } };
+    const input = { serverId: 'srv_test_home', machineId: 'machine', source: { kind: 'source', id: source.id, revision: 1, selector: source.repository,
+      checkout: { serverId: 'srv_test_home', workspaceId: key.id, machineId: 'machine', rootPath: root } }, materialization: { kind: 'attach' } };
     try {
       await mkdir(join(root, '.happier'));
       await writeFile(join(root, '.happier/project.json'), JSON.stringify({ version: 1, workspace: { setup: [{ kind: 'command', command: 'touch not-executed' }] } }));
       const opened = await register(RPC_METHODS.PROJECTS_OPEN, runtime)(input, context);
       expect(opened, JSON.stringify(post.mock.calls.map(([url]) => url))).toMatchObject({ kind: 'opened', directory: root, setup: 'approvalRequired',
-        workspace: { serverId: 'home', machineId: 'machine', rootPath: root }, facts: { source: { sourceId: source.id, revision: 1 } } });
+        workspace: { serverId: 'srv_test_home', machineId: 'machine', rootPath: root }, facts: { source: { sourceId: source.id, revision: 1 } } });
       // Home binding is proved by the real projection/installed-ingress tests;
       // this consumer receives host-private ports only after that admission.
       current = false;
@@ -503,15 +528,15 @@ describe('Project Open RPC', () => {
       const context: RpcHandlerContext = { signal: new AbortController().signal, callerAuthority: 'present_user',
         machineAdmission: { actorAccountId: 'account', custodianAccountId: 'account', machineId: 'machine',
           installationId: 'installation', role: 'manage', encryptionMode: 'plain' }, verifyMachineAdmissionCurrent: async () => true };
-      const result = await register(RPC_METHODS.PROJECTS_OPEN, { serverId: 'home', serverHttpBaseUrl: 'https://home.example',
+      const result = await register(RPC_METHODS.PROJECTS_OPEN, { serverId: 'srv_test_home', serverHttpBaseUrl: 'https://home.example',
         machineId: 'machine', accountId: 'account', readCredentials: async () => ({ token, encryption: null }) })({
-        serverId: 'home', machineId: 'machine', source: { kind: 'folder', path: root }, materialization: { kind: 'attach' },
+        serverId: 'srv_test_home', machineId: 'machine', source: { kind: 'folder', path: root }, materialization: { kind: 'attach' },
       }, context);
       expect(result).toMatchObject({ kind: 'opened', directory: root,
-        workspace: { serverId: 'home', machineId: 'machine', rootPath: root } });
+        workspace: { serverId: 'srv_test_home', machineId: 'machine', rootPath: root } });
       expect(writes).toHaveLength(1);
       expect(ProjectAccountRowMutationRequestV1Schema.parse(writes[0]).mutations).toEqual([
-        expect.objectContaining({ key: expect.objectContaining({ kind: 'workspace-ref', serverId: 'home' }) }),
+        expect.objectContaining({ key: expect.objectContaining({ kind: 'workspace-ref', serverId: 'srv_test_home' }) }),
         { key: { kind: 'relationship-graph' }, expectedRevision: 'absent',
           content: { t: 'plain', v: { key: { kind: 'relationship-graph' }, value: { relationships: [] } } } },
       ]);
@@ -523,6 +548,7 @@ describe('Project Open RPC', () => {
   it('accepts the actual enrolled child root under its existing parent Project without realizing another child', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-admitted-child-open-'));
     const homeId = 'srv_qf4_child_owner';
+    await seedTestServerProfile({ id: homeId, homeId, serverUrl: 'https://home.example' });
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`;
     const observation = { nativeResourceId: 'native-child', user: 'coder', workspaceFolder: root,
       storage: { kind: 'bind' as const, hostPath: '/host/project', childPath: root } };
@@ -649,9 +675,9 @@ describe('Project Open RPC', () => {
     const current: ProjectSourceV1 = { ...source, revision: 9, name: 'Renamed', attachments: [],
       ...(change === 'override' ? { subdir: 'other' } : {}),
       ...(change === 'selector' ? { repository: { ...source.repository, repository: { nameWithOwner: 'group/other', cloneUrl: 'https://forge.example/group/other.git' } } } : {}) };
-    const key = { kind: 'workspace-ref' as const, serverId: 'home', id: 'checkout' };
+    const key = { kind: 'workspace-ref' as const, serverId: 'srv_test_home', id: 'checkout' };
     const rows: ProjectAccountRowV1[] = [{ key, revision: 0, content: { t: 'plain', v: { key,
-      value: { id: 'checkout', serverId: 'home', machineId: 'machine', rootPath: root, createdAtMs: 1 } } } }];
+      value: { id: 'checkout', serverId: 'srv_test_home', machineId: 'machine', rootPath: root, createdAtMs: 1 } } } }];
     const reads: string[] = [];
     vi.spyOn(axios, 'request').mockImplementation(async config => {
       reads.push(config.url ?? '');
@@ -675,14 +701,14 @@ describe('Project Open RPC', () => {
         installationId: 'installation', role: 'manage', encryptionMode: 'plain' }, verifyMachineAdmissionCurrent: async () => true };
     try {
       await mkdir(join(root, 'packages/app'), { recursive: true });
-      const result = await register(RPC_METHODS.PROJECTS_OPEN, { serverId: 'home', serverHttpBaseUrl: 'https://home.example',
+      const result = await register(RPC_METHODS.PROJECTS_OPEN, { serverId: 'srv_test_home', serverHttpBaseUrl: 'https://home.example',
         machineId: 'machine', accountId: 'account', readCredentials: async () => ({ token, encryption: null }) })({
-        serverId: 'home', machineId: 'machine', source: { kind: 'source', id: source.id, revision: source.revision,
-          selector: source.repository, subdir: source.subdir, checkout: { serverId: 'home', workspaceId: 'checkout', machineId: 'machine', rootPath: root } },
+        serverId: 'srv_test_home', machineId: 'machine', source: { kind: 'source', id: source.id, revision: source.revision,
+          selector: source.repository, subdir: source.subdir, checkout: { serverId: 'srv_test_home', workspaceId: 'checkout', machineId: 'machine', rootPath: root } },
         ...(change === 'override' ? { subdir: 'packages/app' } : {}), materialization: change === 'selector' || change === 'revoked'
           ? { kind: 'clone', destinationParentPath: root, destinationDirectoryName: 'must-not-exist' } : { kind: 'attach' },
       }, context);
-      expect(reads).toEqual(['https://home.example/v1/projects/sources/source?serverId=home']);
+      expect(reads).toEqual(['https://home.example/v1/projects/sources/source?serverId=srv_test_home']);
       if (change === 'metadata' || change === 'override') {
         expect(result).toMatchObject({ kind: 'opened', directory: join(root, 'packages/app'), facts: { source: { sourceId: 'source', revision: 9 } } });
         expect(writes.length).toBeGreaterThan(0);
@@ -720,13 +746,13 @@ describe('Project Open RPC', () => {
       await mkdir(join(root, '.happier'));
       await writeFile(join(root, '.happier/project.json'), JSON.stringify({ version: 1,
         workspace: { setup: [{ kind: 'command', command: 'touch should-not-exist' }] } }));
-      const runtime: ProjectOpenRuntime = { serverId: 'home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
+      const runtime: ProjectOpenRuntime = { serverId: 'srv_test_home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
         readCredentials: async () => ({ token, encryption: null }),
       };
-      const result = await register(RPC_METHODS.PROJECTS_OPEN, runtime)({ serverId: 'home', machineId: 'machine',
+      const result = await register(RPC_METHODS.PROJECTS_OPEN, runtime)({ serverId: 'srv_test_home', machineId: 'machine',
         source: { kind: 'folder', path: root }, materialization: { kind: 'attach' } }, context);
       if (outcome === 'accepted') expect(result).toMatchObject({ kind: 'opened', directory: root, setup: 'approvalRequired',
-        workspace: { serverId: 'home', machineId: 'machine', rootPath: root } });
+        workspace: { serverId: 'srv_test_home', machineId: 'machine', rootPath: root } });
       else expect(result).toEqual({ kind: 'outcomeUnknown' });
       expect(rows.some(row => row.key.kind === 'workspace-ref')).toBe(true);
       await expect(access(join(root, 'should-not-exist'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -737,19 +763,19 @@ describe('Project Open RPC', () => {
 
   it('refuses a missing canonical producer before inspecting or materializing a folder', async () => {
     const handler = register();
-    expect(await handler({ serverId: 'home', machineId: 'machine', source: { kind: 'folder', path: '/not-created' }, materialization: { kind: 'attach' } }))
+    expect(await handler({ serverId: 'srv_test_home', machineId: 'machine', source: { kind: 'folder', path: '/not-created' }, materialization: { kind: 'attach' } }))
       .toEqual({ kind: 'refused', code: 'project_open_unavailable' });
   });
 
   it.each(['foreign', 'restricted'] as const)('keeps %s Source Open refused before reading or materializing', async requester => {
     const request = vi.spyOn(axios, 'request');
-    const runtime: ProjectOpenRuntime = { serverId: 'home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
+    const runtime: ProjectOpenRuntime = { serverId: 'srv_test_home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
       readCredentials: async () => { throw new Error('Unauthorized caller cannot read stored credentials'); } };
     const context: RpcHandlerContext = { signal: new AbortController().signal,
       callerAuthority: requester === 'restricted' ? 'account_automation' : 'present_user',
       machineAdmission: { actorAccountId: requester === 'foreign' ? 'other' : 'account', custodianAccountId: 'account', machineId: 'machine',
         installationId: 'installation', role: 'manage', encryptionMode: 'plain' }, verifyMachineAdmissionCurrent: async () => true };
-    expect(await register(RPC_METHODS.PROJECTS_OPEN, runtime)({ serverId: 'home', machineId: 'machine',
+    expect(await register(RPC_METHODS.PROJECTS_OPEN, runtime)({ serverId: 'srv_test_home', machineId: 'machine',
       source: { kind: 'source', id: 'source', revision: 1, selector: {
         provider: { id: 'forge', kind: 'github', displayName: 'Forge', baseUrl: 'https://forge.example' },
         repository: { nameWithOwner: 'group/repo' }, protocol: 'https' } },
@@ -760,7 +786,7 @@ describe('Project Open RPC', () => {
 
   it('rejects malformed authority and another Home or Machine at the real receiver', async () => {
     const handler = register();
-    const input = { serverId: 'home', machineId: 'machine', source: { kind: 'folder', path: '/not-created' }, materialization: { kind: 'attach' } };
+    const input = { serverId: 'srv_test_home', machineId: 'machine', source: { kind: 'folder', path: '/not-created' }, materialization: { kind: 'attach' } };
     expect(await handler({ ...input, actorAccountId: 'other' })).toEqual({ kind: 'refused', code: 'invalid_input' });
     expect(await handler({ ...input, serverId: 'other' })).toEqual({ kind: 'refused', code: 'target_mismatch' });
     expect(await handler({ ...input, machineId: 'other' })).toEqual({ kind: 'refused', code: 'target_mismatch' });
@@ -768,36 +794,36 @@ describe('Project Open RPC', () => {
 
   it('registers the private source route without treating target Home input as source authority', async () => {
     const source = register(RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN);
-    const input = { serverId: 'home', machineId: 'target', source: { kind: 'folder', path: '/not-created' }, materialization: { kind: 'attach' } };
+    const input = { serverId: 'srv_test_home', machineId: 'target', source: { kind: 'folder', path: '/not-created' }, materialization: { kind: 'attach' } };
     expect(await source({ ...input, serverId: 'other' })).toEqual({ kind: 'refused', code: 'target_mismatch' });
     expect(await source({ ...input, custodianAccountId: 'forged' })).toEqual({ kind: 'refused', code: 'invalid_input' });
     expect(await source(input)).toEqual({ kind: 'refused', code: 'project_open_unavailable' });
   });
 
   it('does not interpret an absent verified source installation as personal owner authority', async () => {
-    const runtime: ProjectOpenRuntime = { serverId: 'home', serverHttpBaseUrl: 'http://127.0.0.1', machineId: 'machine', accountId: 'account',
-      readCredentials: () => readStoredCredentialsForServerId('home'),
+    const runtime: ProjectOpenRuntime = { serverId: 'srv_test_home', serverHttpBaseUrl: 'http://127.0.0.1', machineId: 'machine', accountId: 'account',
+      readCredentials: () => readStoredCredentialsForServerId('srv_test_home'),
     };
-    const input = { serverId: 'home', machineId: 'machine', source: { kind: 'folder', path: '/not-created' }, materialization: { kind: 'attach' } };
+    const input = { serverId: 'srv_test_home', machineId: 'machine', source: { kind: 'folder', path: '/not-created' }, materialization: { kind: 'attach' } };
     expect(await register(RPC_METHODS.PROJECTS_OPEN, runtime)(input)).toEqual({ kind: 'refused', code: 'machine_admission_unavailable' });
     expect(await register(RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN, runtime)(input)).toEqual({ kind: 'refused', code: 'invalid_materialization' });
   });
 
   it('binds a private source call to the exact qualified accepted source before Sync effects', async () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`;
-    const value = { id: 'source', serverId: 'home', machineId: 'other-source-machine', rootPath: '/source', createdAtMs: 1 };
-    const key = { kind: 'workspace-ref' as const, serverId: 'home', id: 'source' };
+    const value = { id: 'source', serverId: 'srv_test_home', machineId: 'other-source-machine', rootPath: '/source', createdAtMs: 1 };
+    const key = { kind: 'workspace-ref' as const, serverId: 'srv_test_home', id: 'source' };
     const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete',
       rows: [{ key, revision: 0, content: { t: 'plain', v: { key, value } } }] } });
     vi.spyOn(axios, 'get').mockImplementation(plainMachineRead);
-    const runtime: ProjectOpenRuntime = { serverId: 'home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
+    const runtime: ProjectOpenRuntime = { serverId: 'srv_test_home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
       readCredentials: async () => ({ token, encryption: null }) };
     const context: RpcHandlerContext = { signal: new AbortController().signal, callerAuthority: 'present_user',
       machineAdmission: { actorAccountId: 'account', custodianAccountId: 'account', machineId: 'machine', installationId: 'installation', role: 'manage', encryptionMode: 'plain' },
       verifyMachineAdmissionCurrent: async () => true };
     const fields = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
-    const input = { serverId: 'home', machineId: 'target', source: { kind: 'workspace', workspaceId: 'source',
-      checkout: { serverId: 'home', workspaceId: 'source', machineId: 'other-source-machine', rootPath: '/source' } },
+    const input = { serverId: 'srv_test_home', machineId: 'target', source: { kind: 'workspace', workspaceId: 'source',
+      checkout: { serverId: 'srv_test_home', workspaceId: 'source', machineId: 'other-source-machine', rootPath: '/source' } },
       materialization: { kind: 'sync', targetPath: '/target', workspaceAction: { kind: 'copy_once',
         contentPolicy: { ...fields, policyDigest: computeWorkspaceSyncPolicyDigest(fields) } } } };
     const source = register(RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN, runtime);
@@ -814,8 +840,8 @@ describe('Project Open RPC', () => {
   it('rechecks Source copy authority for a new destination without dereferencing an absent accepted target', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-source-copy-open-'));
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`;
-    const workspace = { id: 'checkout', serverId: 'home', machineId: 'machine', rootPath: root, createdAtMs: 1 };
-    const key = { kind: 'workspace-ref' as const, serverId: 'home', id: workspace.id };
+    const workspace = { id: 'checkout', serverId: 'srv_test_home', machineId: 'machine', rootPath: root, createdAtMs: 1 };
+    const key = { kind: 'workspace-ref' as const, serverId: 'srv_test_home', id: workspace.id };
     const source: ProjectSourceV1 = { id: 'source', revision: 9, name: 'Repository', createdByAccountId: 'account', audience: [],
       repository: { provider: { id: 'forge', kind: 'github', displayName: 'Forge', baseUrl: 'https://forge.example' },
         repository: { nameWithOwner: 'group/repo' }, protocol: 'https' } };
@@ -831,14 +857,14 @@ describe('Project Open RPC', () => {
     // Mutagen/process effects are the external boundary. The Sync controller,
     // handoff adapter and root custody remain real and must never reach it.
     const noEffect = async (): Promise<never> => { throw new Error('Retired copy must not launch a process or mutate bytes'); };
-    const sync = new WorkspaceSyncController({ localServerId: 'home', localMachineId: 'machine',
-      resolveWorkspaceRef: id => { const resolved = resolveWorkspaceRefV1([workspace], { serverId: 'home', id });
+    const sync = new WorkspaceSyncController({ localServerId: 'srv_test_home', localMachineId: 'machine',
+      resolveWorkspaceRef: id => { const resolved = resolveWorkspaceRefV1([workspace], { serverId: 'srv_test_home', id });
         return resolved.kind === 'resolved' ? resolved.ref : null; },
       rootOwnershipManager: createWorkspaceRootOwnershipManager({ lockDirectory: join(root, 'locks') }),
       lifecycle: { start: noEffect, stop: noEffect }, adapter: { discoverCopyOnceRecoveries: noEffect, rehydrate: noEffect,
         ensure: noEffect, copyOnce: noEffect, get: noEffect, list: noEffect, flush: noEffect, pause: noEffect,
         resume: noEffect, terminate: noEffect, listConflicts: noEffect, diagnoseSelection: noEffect } });
-    const runtime: ProjectOpenRuntime = { serverId: 'home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
+    const runtime: ProjectOpenRuntime = { serverId: 'srv_test_home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
       readCredentials: async () => ({ token, encryption: null }), workspaceSyncAdapter: createWorkspaceSyncHandoffAdapter({ sync, bootstrap: noEffect }) };
     const context: RpcHandlerContext = { signal: new AbortController().signal, callerAuthority: 'present_user',
       machineAdmission: { actorAccountId: 'account', custodianAccountId: 'account', machineId: 'machine', installationId: 'installation', role: 'manage', encryptionMode: 'plain' },
@@ -846,9 +872,9 @@ describe('Project Open RPC', () => {
     const fields = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
     const targetPath = join(root, 'not-created');
     try {
-      expect(await register(RPC_METHODS.PROJECTS_OPEN, runtime)({ serverId: 'home', machineId: 'machine',
+      expect(await register(RPC_METHODS.PROJECTS_OPEN, runtime)({ serverId: 'srv_test_home', machineId: 'machine',
         source: { kind: 'source', id: source.id, revision: 1, selector: source.repository,
-          checkout: { serverId: 'home', workspaceId: workspace.id, machineId: 'machine', rootPath: root } },
+          checkout: { serverId: 'srv_test_home', workspaceId: workspace.id, machineId: 'machine', rootPath: root } },
         materialization: { kind: 'sync', targetPath, workspaceAction: { kind: 'copy_once',
           contentPolicy: { ...fields, policyDigest: computeWorkspaceSyncPolicyDigest(fields) } } },
       }, context)).toEqual({ kind: 'refused', code: 'machine_access_denied' });
@@ -861,17 +887,17 @@ describe('Project Open RPC', () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`;
     vi.spyOn(axios, 'request').mockResolvedValue({ status: 404, data: { ok: false, error: 'source_unavailable' } });
     const post = vi.spyOn(axios, 'post');
-    const runtime: ProjectOpenRuntime = { serverId: 'home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
+    const runtime: ProjectOpenRuntime = { serverId: 'srv_test_home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
       readCredentials: async () => ({ token, encryption: null }) };
     const context: RpcHandlerContext = { signal: new AbortController().signal, callerAuthority: 'present_user',
       machineAdmission: { actorAccountId: 'account', custodianAccountId: 'account', machineId: 'machine', installationId: 'installation', role: 'manage', encryptionMode: 'plain' },
       verifyMachineAdmissionCurrent: async () => true };
     const fields = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
     const result = await register(RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN, runtime)({
-      serverId: 'home', machineId: 'target', source: { kind: 'source', id: 'source', revision: 1,
+      serverId: 'srv_test_home', machineId: 'target', source: { kind: 'source', id: 'source', revision: 1,
         selector: { provider: { id: 'forge', kind: 'github', displayName: 'Forge', baseUrl: 'https://forge.example' },
           repository: { nameWithOwner: 'group/repo' }, protocol: 'https' },
-        checkout: { serverId: 'home', workspaceId: 'checkout', machineId: 'machine', rootPath: '/source' } },
+        checkout: { serverId: 'srv_test_home', workspaceId: 'checkout', machineId: 'machine', rootPath: '/source' } },
       materialization: { kind: 'sync', targetPath: '/target', workspaceAction: { kind: 'copy_once',
         contentPolicy: { ...fields, policyDigest: computeWorkspaceSyncPolicyDigest(fields) } } },
     }, context);
@@ -888,12 +914,12 @@ describe('Project Open RPC', () => {
       snapshotRead = true;
       return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [] } };
     });
-    const runtime: ProjectOpenRuntime = { serverId: 'home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
+    const runtime: ProjectOpenRuntime = { serverId: 'srv_test_home', serverHttpBaseUrl: 'https://home.example', machineId: 'machine', accountId: 'account',
       readCredentials: async () => ({ token, encryption: null }) };
     const context: RpcHandlerContext = { signal: controller.signal, callerAuthority: 'present_user',
       machineAdmission: { actorAccountId: 'account', custodianAccountId: 'account', machineId: 'machine', installationId: 'installation', role: 'manage', encryptionMode: 'plain' },
       verifyMachineAdmissionCurrent: async () => { if (snapshotRead) controller.abort(); return !controller.signal.aborted; } };
-    expect(await register(RPC_METHODS.PROJECTS_OPEN, runtime)({ serverId: 'home', machineId: 'machine',
+    expect(await register(RPC_METHODS.PROJECTS_OPEN, runtime)({ serverId: 'srv_test_home', machineId: 'machine',
       source: { kind: 'folder', path: '/not-created' }, materialization: { kind: 'worktree',
         checkout: { kind: 'git_worktree', displayName: 'feature', baseRef: null } } }, context))
       .toEqual({ kind: 'refused', code: 'cancelled' });

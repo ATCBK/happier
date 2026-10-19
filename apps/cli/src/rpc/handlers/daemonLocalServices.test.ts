@@ -14,6 +14,7 @@ import type {
     LocalServicePublicPreviewSnapshotV1,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { isRuntimeActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import type { RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
@@ -29,6 +30,7 @@ import { createLocalServicesDaemonFeatureGate } from '@/daemon/local/services/fe
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import type { NormalizedLocalServiceInventorySnapshot } from '@/daemon/local/services/inventory/scanner';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { discoverLocalServiceRunTargets } from '@/daemon/local/services/launch/runTargets';
@@ -323,6 +325,7 @@ describe('daemon local services machine rpc handlers', () => {
         registerDaemonLocalServicesMachineRpcHandlers(rpc, { machineId: 'machine_1', localServicesLauncher: launcher,
             resolveLauncherActionExecutor: ({ ingress }) => {
                 const executor = createActionExecutor({
+                ...createUnavailableActionTransportDeps(),
                 isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId,
                     normalizeActionsSettingsV1(null), { surface: context.surface ?? null, authority: context.authority }),
                 // Artifact persistence is the external Account boundary. Policy and dispatch remain real.
@@ -330,7 +333,7 @@ describe('daemon local services machine rpc handlers', () => {
                     approvalAction = request.actionId;
                     return { artifactId: 'service-start-approval' };
                 },
-                approvalsUpdate: async () => {},
+                approvalsUpdate: async () => ({ ok: true }),
                 approvalsWaitForDecision: async ({ request }) => {
                     awaitingDecision = true;
                     await decision;
@@ -396,9 +399,10 @@ describe('daemon local services machine rpc handlers', () => {
                     const execute = createLocalServicesDaemonRuntimeActionExecutor({
                         routes: { launcherRoutes: launcher }, featureGate, ingress,
                     });
-                    return { execute: async (actionId, input, context = {}) => ({ ok: true,
-                        result: await execute({ actionId, input, context }),
-                    }) };
+                    return { execute: async (actionId, input, context = {}) => {
+                        if (!isRuntimeActionIdV1(actionId)) throw new Error('Fixture only dispatches runtime Actions');
+                        return { ok: true, result: await execute({ actionId, input, context }) };
+                    } };
                 };
         if (ingressKind === 'direct') registerDaemonLocalServicesMachineRpcHandlers(rpc, {
             machineId: 'machine_1', localServicesLauncher: launcher, resolveLauncherActionExecutor: resolveActionExecutor,

@@ -2,6 +2,7 @@ import { LocalServicePreviewResourceV1Schema } from '@happier-dev/protocol/local
 import type { LocalServicePreviewResourceV1, LocalServicePreviewSnapshotRowV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import type { BrowserLocalServicePreviewTargetV1 } from '@happier-dev/protocol';
 import { isLiteralLoopbackHostname, normalizeHostnameForLoopbackCheck } from '@happier-dev/protocol/server/urls/loopbackHostname';
+import type { NormalizedLocalServiceInventoryEntry } from '../inventory/scanner';
 
 export type LocalServicePreviewRegistry = Readonly<{
     previewsById: Map<string, LocalServicePreviewSnapshotRowV1>;
@@ -23,6 +24,7 @@ function toBrowserTarget(resource: RegisterLocalServicePreviewInput): BrowserLoc
         targetId: resource.previewId,
         sessionId: resource.sessionId,
         machineId: resource.machineId,
+        serviceTarget: resource.serviceTarget,
         display: {
             title: resource.display.title,
             addressLabel: resource.display.addressLabel,
@@ -84,4 +86,26 @@ export function listLocalServicePreviewResources(
     registry: LocalServicePreviewRegistry,
 ): readonly LocalServicePreviewResourceV1[] {
     return Array.from(registry.previewsById.values(), (preview) => preview.resource);
+}
+
+/** Inventory Open and launcher projection must select the same existing listener registration.
+ * An explicit Session remains a separate scope; a Machine view may use a Session-owned preview
+ * without transferring its ownership or creating another registration for the same listener.
+ */
+export function selectLocalServicePreviewForInventoryEntry(
+    resources: readonly LocalServicePreviewResourceV1[],
+    entry: NormalizedLocalServiceInventoryEntry,
+    sessionId?: string,
+): LocalServicePreviewResourceV1 | undefined {
+    const entryHost = normalizeHostnameForLoopbackCheck(entry.endpoint?.host ?? entry.address.host);
+    return resources.filter((resource) => {
+        if (resource.machineId !== entry.machineId || resource.target.port !== entry.port) return false;
+        if (sessionId !== undefined && resource.sessionId !== sessionId) return false;
+        if (entry.endpoint && entry.endpoint.scheme !== 'unknown' && resource.target.scheme !== entry.endpoint.scheme) return false;
+        const host = normalizeHostnameForLoopbackCheck(resource.target.host);
+        return host === entryHost
+            || (entry.address.kind === 'wildcard' && isLiteralLoopbackHostname(host))
+            || (entry.address.kind === 'loopback' && (host === 'localhost' || entryHost === 'localhost'));
+    }).sort((a, b) => Number(a.sessionId !== sessionId) - Number(b.sessionId !== sessionId)
+        || a.previewId.localeCompare(b.previewId))[0];
 }

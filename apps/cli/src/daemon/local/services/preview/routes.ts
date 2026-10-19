@@ -14,6 +14,7 @@ import { createLocalServicePreviewServerRoutes, type LocalServicePreviewServerIn
 import {
     listLocalServicePreviewResources,
     registerLocalServicePreview,
+    selectLocalServicePreviewForInventoryEntry,
     unregisterLocalServicePreview,
     type LocalServicePreviewRegistry,
     type RegisterLocalServicePreviewInput,
@@ -221,10 +222,8 @@ export function createLocalServicePreviewRoutes(input: Readonly<{
 
             // Already-registered target (managed/launch services register their own preview, or a
             // prior openOrCreate did): return it idempotently rather than double-registering.
-            const existingId = request.inventoryEntryId
-                ? previewIdForInventoryEntry(input.accountId ?? '', input.machineId, request.sessionId, request.inventoryEntryId)
-                : request.launchTargetId ?? request.managedServiceId ?? null;
-            if (existingId && !request.inventoryEntryId) {
+            const existingId = request.launchTargetId ?? request.managedServiceId;
+            if (existingId) {
                 const existing = input.registry.previewsById.get(existingId)?.resource;
                 if (existing) {
                     if (existing.sessionId !== request.sessionId) return { ok: false, reasonCode: 'preview_session_mismatch' };
@@ -275,6 +274,14 @@ export function createLocalServicePreviewRoutes(input: Readonly<{
                 && (!entry.endpoint || !buildLocalServiceEndpointUrl(entry.endpoint))
             ) {
                 return { ok: false, reasonCode: 'endpoint_scheme_unknown' };
+            }
+            const existing = selectLocalServicePreviewForInventoryEntry(
+                listLocalServicePreviewResources(input.registry), entry, request.sessionId,
+            );
+            if (existing) {
+                const published = await publish({ ...existing, initialPath: request.initialPath ?? existing.initialPath }, signal, context);
+                if (!published.ok) return published;
+                return { ok: true, response: { protocolVersion: 1, status: 'existing', preview: published.preview, snapshot: buildSnapshot() } };
             }
             const previewInput = buildInventoryPreviewInput({
                 entry,

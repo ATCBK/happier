@@ -88,8 +88,11 @@ describe('project definition Actions through registered Machine RPC', () => {
       expect(await h.handlers.get('daemon.projects.manifest.update.v1')!({ workspace: h.workspace, expectedBasis: { kind: 'absent' },
         bytes: '{"version":1}' })).toMatchObject({ status: 'saved' });
       for (const scenario of ['wrong', 'ambiguous', 'retired'] as const) {
-        await updateSettings(settings => ({ ...settings, servers: scenario === 'ambiguous'
-          ? { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } } : scenario === 'retired' ? {} : { [profileId]: profile } }));
+        await updateSettings(settings => {
+          const servers: NonNullable<typeof settings.servers> = scenario === 'ambiguous'
+            ? { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } } : scenario === 'retired' ? {} : { [profileId]: profile };
+          return { ...settings, servers };
+        });
         expect(await inspect({ workspace: { ...h.workspace, serverId: scenario === 'wrong' ? 'wrong-home' : homeId } }))
           .toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
       }

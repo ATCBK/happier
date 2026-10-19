@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
+import type { RpcHandler } from '@/api/rpc/types';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { createLocalServiceActionConfirmationNonceV1 } from '@happier-dev/protocol/local/services/actions/v1';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { registerDaemonLocalServicesMachineRpcHandlers } from '@/rpc/handlers/daemonLocalServices';
+import { DaemonLocalServicePreviewOpenOrCreateResponseV1Schema } from '@happier-dev/protocol/local/services/preview/v1';
 
 import { FeaturesResponseSchema, REDACTED_LOCAL_SERVICE_PUBLIC_PREVIEW_URL, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import type {
@@ -181,9 +188,11 @@ describe('daemon local-services runtime action executor', () => {
                     return { data: { resource, accessUrl: 'https://actual-preview.example.test/?previewToken=current', expiresAt: 61_000 } };
                 }, async delete() { return { data: { ok: true } }; } },
             } });
-            const execute = createLocalServicesDaemonRuntimeActionExecutor({ routes: { previewRoutes }, featureGate: enabledFeatureGate });
-            const opened = await execute(runtimeArgs({ actionId: 'localServices.preview.openOrCreate', input: {
-                machineId: 'machine_1', targetId: 'managed:web', serviceTarget } }));
+            const execute = createLocalServicesDaemonRuntimeActionExecutor({ routes: { previewRoutes,
+                actionRoutes: createLocalServiceActionRoutes({ machineId: 'machine_1', inventoryRegistry: createLocalServiceInventoryRegistry(), projectManagedServices: owner }) }, featureGate: enabledFeatureGate });
+            const opened = await execute(runtimeArgs({ actionId: 'localServices.actions.openPreview', input: {
+                requestId: 'open-managed-service', action: 'open_preview', target: serviceTarget }, context: { defaultSessionId: 'invoking-session' } }));
+            assertActionOutputContract('localServices.actions.openPreview', opened);
             expect(opened).toMatchObject({ status: 'existing', preview: { previewId: 'actual-preview',
                 accessUrl: 'https://actual-preview.example.test/?previewToken=current', resource: { serviceTarget } } });
             const wrong = await execute(runtimeArgs({ actionId: 'localServices.preview.revoke', input: {
@@ -226,13 +235,26 @@ describe('daemon local-services runtime action executor', () => {
         });
         const execute = createLocalServicesDaemonRuntimeActionExecutor({
             featureGate: enabledFeatureGate,
-            routes: { previewRoutes },
+            routes: { previewRoutes, actionRoutes: createLocalServiceActionRoutes({ machineId: 'machine_1', inventoryRegistry }) },
         });
-
-        const result = await execute(runtimeArgs({
-            actionId: 'localServices.preview.openOrCreate',
-            input: { machineId: 'machine_1', sessionId: 'session_1', targetId: 'entry_1' },
-        }));
+        const settings = normalizeActionsSettingsV1({ v: 1,
+            approvalWaivedSurfaces: { 'localServices.actions.openPreview': ['rpc'] } });
+        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), runtimeActionExecute: execute,
+            isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context) });
+        // Registration is the RPC boundary; each registered handler validates its own request schema.
+        const handlers = new Map<string, RpcHandler>();
+        registerDaemonLocalServicesMachineRpcHandlers({ registerHandler(method, handler) { handlers.set(method, handler); } }, {
+            machineId: 'machine_1',
+            localServicesActions: createLocalServiceActionRoutes({ machineId: 'machine_1', inventoryRegistry }),
+            resolveLauncherActionExecutor: () => executor,
+        });
+        const open = handlers.get(RPC_METHODS.DAEMON_LOCAL_SERVICES_ACTIONS_OPEN_PREVIEW);
+        expect(open).toBeTypeOf('function');
+        const result = await open!({ requestId: 'open-service', action: 'open_preview',
+            target: { kind: 'inventory_entry', inventoryEntryId: 'entry_1', machineId: 'machine_1', sessionId: 'session_1' } });
+        // Real RPC producer -> the exact preview lifecycle and Action readers.
+        expect(DaemonLocalServicePreviewOpenOrCreateResponseV1Schema.safeParse(result).success).toBe(true);
+        assertActionOutputContract('localServices.actions.openPreview', result);
 
         const snapshot = await previewRoutes.getSnapshot();
         expect(snapshot.resources).toHaveLength(1);
@@ -243,6 +265,16 @@ describe('daemon local-services runtime action executor', () => {
         expect(result).toMatchObject({
             status: 'created', preview: { resource: snapshot.resources[0], accessUrl: 'https://private.example.test/?previewToken=admission' },
         });
+        const reused = await execute(runtimeArgs({ actionId: 'localServices.preview.openOrCreate',
+            input: { machineId: 'machine_1', sessionId: 'session_1', targetId: 'entry_1' } }));
+        const parsedReuse = DaemonLocalServicePreviewOpenOrCreateResponseV1Schema.parse(reused);
+        expect(parsedReuse.status).toBe('existing');
+        expect(parsedReuse.preview.previewId).toBe(snapshot.resources[0]?.previewId);
+        expect(parsedReuse.snapshot.resources).toHaveLength(1);
+        const aggregate = handlers.get(RPC_METHODS.DAEMON_LOCAL_SERVICES_ACTIONS_EXECUTE);
+        await expect(aggregate!({ requestId: 'aggregate-open', action: 'open_preview',
+            target: { kind: 'inventory_entry', inventoryEntryId: 'entry_1', machineId: 'machine_1', sessionId: 'session_1' } })).rejects.toThrow();
+        expect((await previewRoutes.getSnapshot()).resources).toHaveLength(1);
         expect(await execute(runtimeArgs({
             actionId: 'localServices.preview.openOrCreate',
             input: { machineId: 'machine_1', sessionId: 'session_1', targetId: 'nope' },
@@ -251,6 +283,16 @@ describe('daemon local-services runtime action executor', () => {
             error: 'runtime_action_disabled:localServices:preview_unknown_inventory_entry',
         });
         expect((await previewRoutes.getSnapshot()).resources).toEqual(snapshot.resources);
+
+        const previewDisabled = createLocalServicesDaemonRuntimeActionExecutor({
+            featureGate: await gateWith({ 'localServices.preview': false }),
+            routes: { previewRoutes, actionRoutes: createLocalServiceActionRoutes({ machineId: 'machine_1', inventoryRegistry }) },
+        });
+        expect(await previewDisabled(runtimeArgs({ actionId: 'localServices.actions.openPreview', input: {
+            requestId: 'disabled-open', action: 'open_preview', target: {
+                kind: 'inventory_entry', inventoryEntryId: 'entry_1', machineId: 'machine_1', sessionId: 'session_1',
+            },
+        } }))).toMatchObject({ ok: false, error: 'runtime_action_disabled:localServices:feature_disabled:localServices.preview' });
     });
 
 
@@ -679,7 +721,7 @@ describe('daemon local-services runtime action executor', () => {
             routes: { publicPreviewRoutes },
         });
         let settings = normalizeActionsSettingsV1({ v: 1 });
-        const executor = createActionExecutor({ runtimeActionExecute: execute,
+        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), runtimeActionExecute: execute,
             isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context) });
         const request = {
                 machineId: 'machine_1',
@@ -713,7 +755,7 @@ describe('daemon local-services runtime action executor', () => {
             }) } });
         const settings = normalizeActionsSettingsV1({ v: 1,
             approvalWaivedSurfaces: { 'localServices.actions.terminateDetected': ['cli'] } });
-        const executor = createActionExecutor({ runtimeActionExecute: execute,
+        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), runtimeActionExecute: execute,
             isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context) });
         const result = await executor.execute('localServices.actions.terminateDetected', {
             requestId: 'waived-process-control', action: 'terminate_detected', force: false,
