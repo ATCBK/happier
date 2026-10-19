@@ -713,6 +713,15 @@ describe('OpenAI Realtime protocol adapter', () => {
     }));
   });
 
+  it('encodes response instructions through the public neutral Voice schema', () => {
+    const event = {
+      type: 'response.create',
+      response: { instructions: 'Greet briefly in French, then wait for the user.' },
+    };
+
+    expect(encodeOpenAiRealtimeClientEvent(event)).toEqual(event);
+  });
+
   it('strict-validates provider-owned outbound session, tool, and control shapes', () => {
     expect(() => createOpenAiToolSessionUpdate([{
       name: '',

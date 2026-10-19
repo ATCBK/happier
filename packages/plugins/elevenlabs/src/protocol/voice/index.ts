@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
   compilePluginJsonSchema,
   isValidPluginJsonSchemaValue,
@@ -47,40 +47,42 @@ export const DEFAULT_ELEVENLABS_VOICE_ID = readDefaultElevenLabsVoiceId();
  * which encodes the path placeholder — a character rule here would only refuse ids ElevenLabs
  * itself issues and fail the whole provider response as `provider_response_invalid`.
  */
-export const ElevenLabsAgentIdSchema = z.string().trim().min(1).max(256);
-export const ElevenLabsVoiceIdSchema = z.string().trim().min(1).max(256);
-export const ElevenLabsModelIdSchema = z.string().trim().min(1).max(256);
+export const ElevenLabsAgentIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
+export const ElevenLabsVoiceIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
+export const ElevenLabsModelIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
 
-const ElevenLabsUnitIntervalSchema = z.number().min(0).max(1);
-const ElevenLabsTtsSpeedSchema = z.number().min(0.7).max(1.2);
+const ElevenLabsUnitIntervalSchema = z.number().check(z.minimum(0), z.maximum(1));
+const ElevenLabsTtsSpeedSchema = z.number().check(z.minimum(0.7), z.maximum(1.2));
 // Tool parameters describe JSON Schema metadata, not a live tool argument value.
 const ElevenLabsProvisionToolParametersSchema = createVoiceRecordSchema(
   z.json(),
 );
+// Keep the exported legacy parser's declaration independent of the SDK's Zod copy.
+const ElevenLabsLegacyApiKeySchema: z.ZodMiniType<z.infer<typeof SecretStringV1Schema> | null> = z.nullable(SecretStringV1Schema);
 
 export const ElevenLabsVoiceProviderSettingsLegacySchema = z.object({
-  assistantLanguage: z.string().nullable().default(null),
-  billingMode: z.enum(['happier', 'byo']).default('happier'),
-  welcome: z.object({
-    enabled: z.boolean().default(false),
-    mode: z.enum(['immediate', 'on_first_turn']).default('immediate'),
-    templateId: z.string().nullable().default(null),
-  }).default({ enabled: false, mode: 'immediate', templateId: null }),
-  tts: z.object({
-    voiceId: z.string().default(DEFAULT_ELEVENLABS_VOICE_ID),
-    modelId: z.string().nullable().default(null),
-    voiceSettings: z.object({
-      stability: z.number().min(0).max(1).nullable().default(null),
-      similarityBoost: z.number().min(0).max(1).nullable().default(null),
-      style: z.number().min(0).max(1).nullable().default(null),
-      useSpeakerBoost: z.boolean().nullable().default(null),
-      speed: z.number().min(0.5).max(2).nullable().default(null),
-    }).prefault({}),
-  }).prefault({}),
-  byo: z.object({
-    agentId: z.string().nullable().default(null),
-    apiKey: SecretStringV1Schema.nullable().default(null),
-  }).default({ agentId: null, apiKey: null }),
+  assistantLanguage: z._default(z.nullable(z.string()), null),
+  billingMode: z._default(z.enum(['happier', 'byo']), 'happier'),
+  welcome: z._default(z.object({
+    enabled: z._default(z.boolean(), false),
+    mode: z._default(z.enum(['immediate', 'on_first_turn']), 'immediate'),
+    templateId: z._default(z.nullable(z.string()), null),
+  }), { enabled: false, mode: 'immediate', templateId: null }),
+  tts: z.prefault(z.object({
+    voiceId: z._default(z.string(), DEFAULT_ELEVENLABS_VOICE_ID),
+    modelId: z._default(z.nullable(z.string()), null),
+    voiceSettings: z.prefault(z.object({
+      stability: z._default(z.nullable(z.number().check(z.minimum(0), z.maximum(1))), null),
+      similarityBoost: z._default(z.nullable(z.number().check(z.minimum(0), z.maximum(1))), null),
+      style: z._default(z.nullable(z.number().check(z.minimum(0), z.maximum(1))), null),
+      useSpeakerBoost: z._default(z.nullable(z.boolean()), null),
+      speed: z._default(z.nullable(z.number().check(z.minimum(0.5), z.maximum(2))), null),
+    }), {}),
+  }), {}),
+  byo: z._default(z.object({
+    agentId: z._default(z.nullable(z.string()), null),
+    apiKey: z._default(ElevenLabsLegacyApiKeySchema, null),
+  }), { agentId: null, apiKey: null }),
 });
 
 export type ElevenLabsVoiceProviderSettings = Readonly<{
@@ -168,56 +170,56 @@ export function parseElevenLabsConversationAuthAudience(value: string): Readonly
   return Object.freeze({ kind: match[1] as 'conversation_token' | 'signed_url', agentId: agentId.data });
 }
 
-const ElevenLabsProvisionToolBaseSchema = z.object({
-  name: z.string().trim().min(1).max(128),
-  description: z.string().trim().min(1).max(2_000),
-  parameters: z.unknown().nonoptional(),
-}).strict();
+const ElevenLabsProvisionToolBaseSchema = z.strictObject({
+  name: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+  description: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
+  parameters: z.nonoptional(z.unknown()),
+});
 export const ElevenLabsProvisionToolSchema = withVoiceSchemaField(
   ElevenLabsProvisionToolBaseSchema,
   'parameters',
   ElevenLabsProvisionToolParametersSchema,
 );
 
-export const ElevenLabsTtsConfigSchema = z.object({
+export const ElevenLabsTtsConfigSchema = z.strictObject({
   voiceId: ElevenLabsVoiceIdSchema,
-  modelId: ElevenLabsModelIdSchema.nullable(),
-  voiceSettings: z.object({
-    stability: ElevenLabsUnitIntervalSchema.nullable(),
-    similarityBoost: ElevenLabsUnitIntervalSchema.nullable(),
-    speed: ElevenLabsTtsSpeedSchema.nullable(),
-  }).strict(),
-}).strict();
+  modelId: z.nullable(ElevenLabsModelIdSchema),
+  voiceSettings: z.strictObject({
+    stability: z.nullable(ElevenLabsUnitIntervalSchema),
+    similarityBoost: z.nullable(ElevenLabsUnitIntervalSchema),
+    speed: z.nullable(ElevenLabsTtsSpeedSchema),
+  }),
+});
 
 const ElevenLabsProvisionRequestBaseSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('list'), tools: z.never().optional() }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('list'), tools: z.optional(z.never()) }),
+  z.strictObject({
     kind: z.literal('create'),
-    prompt: z.string().min(1).max(100_000),
-    tools: z.array(z.unknown()).max(100),
+    prompt: z.string().check(z.minLength(1), z.maxLength(100_000)),
+    tools: z.array(z.unknown()).check(z.maxLength(100)),
     tts: ElevenLabsTtsConfigSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('update'),
     agentId: ElevenLabsAgentIdSchema,
-    prompt: z.string().min(1).max(100_000),
-    tools: z.array(z.unknown()).max(100),
+    prompt: z.string().check(z.minLength(1), z.maxLength(100_000)),
+    tools: z.array(z.unknown()).check(z.maxLength(100)),
     tts: ElevenLabsTtsConfigSchema,
-  }).strict(),
+  }),
 ]);
 export const ElevenLabsProvisionRequestSchema = withVoiceSchemaField(
   ElevenLabsProvisionRequestBaseSchema,
   'tools',
-  ElevenLabsProvisionToolSchema.array(),
+  z.array(ElevenLabsProvisionToolSchema),
 );
 export type ElevenLabsProvisionRequest = ReturnType<
   typeof ElevenLabsProvisionRequestSchema.parse
 >;
 
 export const ElevenLabsProvisionResponseSchema = z.union([
-  z.object({ ok: z.literal(true), agents: z.array(z.object({ agentId: ElevenLabsAgentIdSchema, name: z.string().min(1).max(256) }).strict()).max(50) }).strict(),
-  z.object({ ok: z.literal(true), agentId: ElevenLabsAgentIdSchema }).strict(),
-  z.object({ ok: z.literal(true), updated: z.literal(true) }).strict(),
-  z.object({ ok: z.literal(false), errorCode: z.enum(['invalid_parameters', 'credential_unavailable', 'request_timeout', 'cancelled', 'provider_response_invalid', 'internal_error']) }).strict(),
+  z.strictObject({ ok: z.literal(true), agents: z.array(z.strictObject({ agentId: ElevenLabsAgentIdSchema, name: z.string().check(z.minLength(1), z.maxLength(256)) })).check(z.maxLength(50)) }),
+  z.strictObject({ ok: z.literal(true), agentId: ElevenLabsAgentIdSchema }),
+  z.strictObject({ ok: z.literal(true), updated: z.literal(true) }),
+  z.strictObject({ ok: z.literal(false), errorCode: z.enum(['invalid_parameters', 'credential_unavailable', 'request_timeout', 'cancelled', 'provider_response_invalid', 'internal_error']) }),
 ]);
 export type ElevenLabsProvisionResponse = z.infer<typeof ElevenLabsProvisionResponseSchema>;

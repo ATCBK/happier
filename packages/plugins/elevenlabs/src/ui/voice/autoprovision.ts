@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { throwIfAborted } from '@happier-dev/plugin-sdk/async';
 import {
   buildVoiceClientToolAgentPrompt,
@@ -48,7 +49,7 @@ export function createElevenLabsAutoprovision(input: Readonly<{
       initialConversationContextPlaceholder: ELEVENLABS_INITIAL_CONVERSATION_CONTEXT_VARIABLE,
       sessionIdPlaceholder: ELEVENLABS_SESSION_ID_VARIABLE,
     });
-    const tools = ElevenLabsProvisionToolSchema.array().parse(input.tools.map((tool) => Object.freeze({
+    const tools = z.array(ElevenLabsProvisionToolSchema).parse(input.tools.map((tool) => Object.freeze({
       name: tool.name,
       description: tool.description,
       parameters: tool.parameters,

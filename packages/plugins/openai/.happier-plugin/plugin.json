@@ -84,6 +84,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -631,6 +632,7 @@
       }
     ],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "displayName": "OpenAI Realtime Voice",

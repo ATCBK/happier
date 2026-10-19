@@ -80,12 +80,9 @@ export const buildVoiceClientToolAgentPrompt: (
     options?: VoiceClientToolAgentPromptOptions,
 ) => string = /* @__PURE__ */ projectProtocolValue(canonicalBuildVoiceClientToolAgentPrompt);
 
-export const VoiceRealtimeJsonValueSchema: VoiceSchema<VoiceRealtimeJsonValue> =
-    canonicalVoiceRealtimeJsonValueSchema;
-export const VoiceRealtimeToolCallV1Schema: VoiceSchema<VoiceRealtimeToolCall> =
-    canonicalVoiceRealtimeToolCallV1Schema;
-export const VoiceRealtimeToolResultV1Schema: VoiceSchema<VoiceRealtimeToolResult> =
-    canonicalVoiceRealtimeToolResultV1Schema;
+export const VoiceRealtimeJsonValueSchema: VoiceSchema<VoiceRealtimeJsonValue> = canonicalVoiceRealtimeJsonValueSchema;
+export const VoiceRealtimeToolCallV1Schema: VoiceSchema<VoiceRealtimeToolCall> = canonicalVoiceRealtimeToolCallV1Schema;
+export const VoiceRealtimeToolResultV1Schema: VoiceSchema<VoiceRealtimeToolResult> = canonicalVoiceRealtimeToolResultV1Schema;
 
 export type {
     VoiceClientAuthArtifact,
@@ -114,8 +111,7 @@ export const HAPPIER_VOICE_BINDING_NONCE_DYNAMIC_VARIABLE: string =
     canonicalHappierVoiceBindingNonceDynamicVariable;
 export const HAPPIER_VOICE_LEASE_ID_DYNAMIC_VARIABLE: string =
     canonicalHappierVoiceLeaseIdDynamicVariable;
-export const VoiceTranscriptCanonicalEventV1Schema: VoiceSchema<VoiceTranscriptCanonicalEvent> =
-    canonicalVoiceTranscriptCanonicalEventV1Schema;
+export const VoiceTranscriptCanonicalEventV1Schema: VoiceSchema<VoiceTranscriptCanonicalEvent> = canonicalVoiceTranscriptCanonicalEventV1Schema;
 export type {
     VoiceRealtimeJsonValue,
     VoiceRealtimeToolCallV1 as VoiceRealtimeToolCall,

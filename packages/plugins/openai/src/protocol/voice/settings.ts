@@ -1,21 +1,21 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 const ModelSelectionSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('pinned'), id: z.string().trim().min(1).max(128) }).strict(),
-  z.object({ kind: z.literal('moving_alias'), id: z.literal('gpt-realtime') }).strict(),
+  z.strictObject({ kind: z.literal('pinned'), id: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)) }),
+  z.strictObject({ kind: z.literal('moving_alias'), id: z.literal('gpt-realtime') }),
 ]);
 
-const LegacyConnectedServiceProfileBindingSchema = z.object({
+const LegacyConnectedServiceProfileBindingSchema = z.strictObject({
   source: z.literal('connected'),
   selection: z.literal('profile'),
-  profileId: z.string().trim().min(1),
-}).strict();
+  profileId: z.string().check(z.trim(), z.minLength(1)),
+});
 
-const LegacyConnectedServiceGroupBindingSchema = z.object({
+const LegacyConnectedServiceGroupBindingSchema = z.strictObject({
   source: z.literal('connected'),
   selection: z.literal('group'),
-  groupId: z.string().trim().min(1),
-}).strict();
+  groupId: z.string().check(z.trim(), z.minLength(1)),
+});
 
 const LegacyConnectedServiceBindingSchema = z.discriminatedUnion('selection', [
   LegacyConnectedServiceProfileBindingSchema,
@@ -23,15 +23,15 @@ const LegacyConnectedServiceBindingSchema = z.discriminatedUnion('selection', [
 ]);
 
 const LegacyOpenAiRealtimeAuthenticationSourceV1Schema = z.discriminatedUnion('source', [
-  z.object({ source: z.literal('voice_saved_secret') }).strict(),
-  z.object({
+  z.strictObject({ source: z.literal('voice_saved_secret') }),
+  z.strictObject({
     source: z.literal('connected_service_api_key'),
-    binding: LegacyConnectedServiceBindingSchema.optional(),
-  }).strict(),
-  z.object({
+    binding: z.optional(LegacyConnectedServiceBindingSchema),
+  }),
+  z.strictObject({
     source: z.literal('connected_service_oauth'),
-    binding: LegacyConnectedServiceBindingSchema.optional(),
-  }).strict(),
+    binding: z.optional(LegacyConnectedServiceBindingSchema),
+  }),
 ]);
 
 /**
@@ -51,13 +51,13 @@ export const OPENAI_REALTIME_DEFAULT_SETTINGS = Object.freeze({
   inputTranscriptionModel: '',
 });
 
-const OpenAiRealtimeSettingsV1CanonicalSchema = z.object({
-  model: ModelSelectionSchema.default(OPENAI_REALTIME_DEFAULT_SETTINGS.model),
-  voice: z.string().trim().min(1).max(128).default(OPENAI_REALTIME_DEFAULT_SETTINGS.voice),
-  instructions: z.string().trim().max(10_000).default(''),
-  turnDetection: z.enum(['server_vad', 'semantic_vad', 'manual']).default('server_vad'),
-  inputTranscriptionModel: z.string().trim().max(128).default(''),
-}).strict();
+const OpenAiRealtimeSettingsV1CanonicalSchema = z.strictObject({
+  model: z._default(ModelSelectionSchema, OPENAI_REALTIME_DEFAULT_SETTINGS.model),
+  voice: z._default(z.string().check(z.trim(), z.minLength(1), z.maxLength(128)), OPENAI_REALTIME_DEFAULT_SETTINGS.voice),
+  instructions: z._default(z.string().check(z.trim(), z.maxLength(10_000)), ''),
+  turnDetection: z._default(z.enum(['server_vad', 'semantic_vad', 'manual']), 'server_vad'),
+  inputTranscriptionModel: z._default(z.string().check(z.trim(), z.maxLength(128)), ''),
+});
 
 /**
  * Read-only compatibility contraction for settings written before qualified
@@ -65,7 +65,7 @@ const OpenAiRealtimeSettingsV1CanonicalSchema = z.object({
  * any predecessor-local binding are accepted only at ingress, then removed;
  * the runtime sees no provider-local credential authority.
  */
-export const OpenAiRealtimeSettingsV1Schema = z.preprocess((value) => {
+export const OpenAiRealtimeSettingsV1Schema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const record = value as Readonly<Record<string, unknown>>;
   const authentication = record.authentication;
@@ -77,6 +77,6 @@ export const OpenAiRealtimeSettingsV1Schema = z.preprocess((value) => {
     ...(current.instructions === null ? { instructions: '' } : {}),
     ...(current.inputTranscriptionModel === null ? { inputTranscriptionModel: '' } : {}),
   };
-}, OpenAiRealtimeSettingsV1CanonicalSchema);
+}), OpenAiRealtimeSettingsV1CanonicalSchema);
 
 export type OpenAiRealtimeSettingsV1 = z.infer<typeof OpenAiRealtimeSettingsV1Schema>;

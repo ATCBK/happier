@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { readFileSync } from 'node:fs';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
@@ -23,6 +24,11 @@ import {
   type VoiceTranscriptLadderMode as CanonicalVoiceTranscriptLadderMode,
   type VoiceTranscriptLadderObservation as CanonicalVoiceTranscriptLadderObservation,
 } from '@happier-dev/protocol/voice/realtime';
+import {
+  VoiceRealtimeToolCallV1Schema as CanonicalVoiceRealtimeToolCallV1Schema,
+  VoiceRealtimeToolResultV1Schema as CanonicalVoiceRealtimeToolResultV1Schema,
+  VoiceTranscriptCanonicalEventV1Schema as CanonicalVoiceTranscriptCanonicalEventV1Schema,
+} from '@happier-dev/protocol/voice/realtime/events';
 import type {
   VoiceSpeechOperationContext as ProtocolVoiceSpeechOperationContext,
   VoiceSpeechSynthesizeRequest as ProtocolVoiceSpeechSynthesizeRequest,
@@ -75,6 +81,9 @@ import {
   isVoiceSdkSafeActionSpec,
   listVoiceSdkSafeToolActionSpecs,
   VoiceRealtimeJsonValueSchema,
+  VoiceRealtimeToolCallV1Schema,
+  VoiceRealtimeToolResultV1Schema,
+  VoiceTranscriptCanonicalEventV1Schema,
   type VoiceClientToolDefinition,
   type RealtimeVoiceProviderRuntime,
   type PluginVoiceAgentSessionRealtimeService,
@@ -101,7 +110,7 @@ import type {
 } from './speech.js';
 
 describe('Voice author source contract', () => {
-  it('publishes neutral Voice composition from the actual /voice package entry', () => {
+  it('publishes native Mini Voice composition from the actual /voice package entry', () => {
     const voiceBarrel = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
 
     expect(voiceBarrel).not.toMatch(/@(?:preview|experimental|stable|incubating)\b/u);
@@ -127,6 +136,44 @@ describe('Voice author source contract', () => {
     expect(packageWithField.parse({ kind: 'list' })).toEqual({ kind: 'list' });
     expect(packageWithField.safeParse({ parameters: { value: 'x' } }).success).toBe(true);
     expect(packageWithField.safeParse({ parameters: ['invalid'] }).success).toBe(false);
+  });
+
+  it('composes helper-produced Voice schemas through native Mini with canonical issue paths', () => {
+    const record = createVoiceRecordSchema(VoiceRealtimeJsonValueSchema);
+    const tool = withVoiceSchemaField(record, 'parameters', record);
+    const schema = z.strictObject({
+      credential: z.optional(VoiceCredentialSlotIdSchema),
+      tools: z.optional(z.array(tool)),
+    });
+
+    expect(schema.parse({})).toEqual({});
+    expect(schema.parse({ tools: [{ kind: 'list' }, { parameters: { count: 2 } }] }))
+      .toEqual({ tools: [{ kind: 'list' }, { parameters: { count: 2 } }] });
+    const invalid = schema.safeParse({ tools: [{ parameters: ['invalid'] }] });
+    expect(invalid.success).toBe(false);
+    if (invalid.success) throw new Error('Expected invalid Voice tool parameters');
+    expect(invalid.error.issues).toMatchObject([{
+      code: 'invalid_type', expected: 'record', path: ['tools', 0, 'parameters'],
+    }]);
+    expect(z.optional(record).parse(undefined)).toBeUndefined();
+    expect(Object.isFrozen(record.parse({ count: 2 }))).toBe(true);
+  });
+
+  it('preserves own Voice record keys and plain or null-prototype admission', () => {
+    const record = createVoiceRecordSchema(VoiceRealtimeJsonValueSchema);
+    const withPrototypeKey = JSON.parse('{"__proto__":{"value":1}}');
+    const parsed = record.parse(withPrototypeKey);
+    expect(Object.hasOwn(parsed, '__proto__')).toBe(true);
+    expect(parsed).toEqual(withPrototypeKey);
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
+    expect(Object.hasOwn(Object.prototype, 'value')).toBe(false);
+
+    const nullPrototype = Object.assign(Object.create(null), { count: 2 });
+    expect(record.parse(nullPrototype)).toEqual({ count: 2 });
+    class VoiceRecord { count = 2; }
+    expect(record.safeParse(new VoiceRecord()).success).toBe(false);
+    const invalidPrototypeKey = Object.fromEntries([['__proto__', () => 1]]);
+    expect(record.safeParse(invalidPrototypeKey).success).toBe(false);
   });
 
   it('owns conversation types under /voice/client instead of activation aliases', () => {
@@ -296,6 +343,12 @@ describe('Voice author source contract', () => {
 
     expect(VoiceCredentialSlotIdSchema).toBe(CanonicalVoiceCredentialSlotIdSchema);
     expect(VoiceProviderContributionSchema).toBe(CanonicalVoiceProviderContributionSchema);
+    expect(credentialSlotId).toEqual(CanonicalVoiceCredentialSlotIdSchema.parse('api_key'));
+    expect(z.array(VoiceCredentialSlotIdSchema).parse(['api_key'])).toEqual([credentialSlotId]);
+    expect(z.optional(VoiceCredentialSlotIdSchema).safeParse(' ').success).toBe(false);
+    expect(z.optional(VoiceProviderContributionSchema).parse(undefined)).toBeUndefined();
+    expect(VoiceProviderContributionSchema.safeParse({}).success)
+      .toBe(CanonicalVoiceProviderContributionSchema.safeParse({}).success);
     expect(credentialSlotId).toBe('api_key');
     expectTypeOf(credentialSlotId).toEqualTypeOf<VoiceCredentialSlotId>();
   });
@@ -354,6 +407,12 @@ describe('Voice author source contract', () => {
 
   it('exports the browser-safe conversation value codec and SDK-safe tool catalog', () => {
     expect(VoiceRealtimeJsonValueSchema).toBe(CanonicalVoiceRealtimeJsonValueSchema);
+    const conversationValue = { tools: [{ name: 'read_file', enabled: true }] };
+    expect(VoiceRealtimeJsonValueSchema.parse(conversationValue))
+      .toEqual(CanonicalVoiceRealtimeJsonValueSchema.parse(conversationValue));
+    expect(z.array(VoiceRealtimeJsonValueSchema).parse([conversationValue]))
+      .toEqual([CanonicalVoiceRealtimeJsonValueSchema.parse(conversationValue)]);
+    expect(VoiceRealtimeJsonValueSchema.safeParse({ unsupported: undefined }).success).toBe(false);
     expect(isVoiceSdkSafeActionSpec).toBe(canonicalIsVoiceSdkSafeActionSpec);
     expect(listVoiceSdkSafeToolActionSpecs).toBe(canonicalListVoiceSdkSafeToolActionSpecs);
     expectTypeOf<Parameters<typeof isVoiceSdkSafeActionSpec>[0]>()
@@ -363,11 +422,13 @@ describe('Voice author source contract', () => {
     expectTypeOf<VoiceRealtimeJsonValue>().toEqualTypeOf<CanonicalVoiceRealtimeJsonValue>();
     expectTypeOf<typeof VoiceRealtimeJsonValueSchema>()
       .toEqualTypeOf<VoiceSchema<VoiceRealtimeJsonValue>>();
-    expectTypeOf<ReturnType<typeof VoiceRealtimeJsonValueSchema.optional>>()
-      .toEqualTypeOf<VoiceSchema<VoiceRealtimeJsonValue | undefined>>();
-    expectTypeOf<ReturnType<typeof VoiceRealtimeJsonValueSchema.array>>()
-      .toEqualTypeOf<VoiceSchema<VoiceRealtimeJsonValue[]>>();
-    expect(VoiceRealtimeJsonValueSchema.optional().parse(undefined)).toBeUndefined();
+    const optionalJsonSchema = z.optional(VoiceRealtimeJsonValueSchema);
+    const jsonArraySchema = z.array(VoiceRealtimeJsonValueSchema);
+    expectTypeOf<z.output<typeof optionalJsonSchema>>()
+      .toEqualTypeOf<VoiceRealtimeJsonValue | undefined>();
+    expectTypeOf<z.output<typeof jsonArraySchema>>()
+      .toEqualTypeOf<VoiceRealtimeJsonValue[]>();
+    expect(optionalJsonSchema.parse(undefined)).toBeUndefined();
     expectTypeOf<keyof VoiceRealtimeToolResultV1>()
       .toEqualTypeOf<keyof CanonicalVoiceRealtimeToolResultV1>();
     expectTypeOf<VoiceRealtimeToolResultV1['output']>()
@@ -381,6 +442,9 @@ describe('Voice author source contract', () => {
   });
 
   it('preserves canonical realtime event and tool DTO identity', () => {
+    expect(VoiceRealtimeToolCallV1Schema).toBe(CanonicalVoiceRealtimeToolCallV1Schema);
+    expect(VoiceRealtimeToolResultV1Schema).toBe(CanonicalVoiceRealtimeToolResultV1Schema);
+    expect(VoiceTranscriptCanonicalEventV1Schema).toBe(CanonicalVoiceTranscriptCanonicalEventV1Schema);
     expectTypeOf<VoiceTranscriptCanonicalEventV1>().toMatchTypeOf<
       Extract<VoiceRealtimeCanonicalEvent, { type: 'transcript' }>['event']
     >();

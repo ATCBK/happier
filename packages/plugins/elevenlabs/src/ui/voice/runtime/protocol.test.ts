@@ -1,4 +1,4 @@
-import type { VoiceCredentialAccess } from '@happier-dev/plugin-sdk/voice';
+import type { VoiceAccountOperationService, VoiceCredentialAccess } from '@happier-dev/plugin-sdk/voice';
 import type { VoiceHostedConversationService } from '@happier-dev/plugin-sdk/voice/client';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -7,27 +7,35 @@ import { createElevenLabsProtocolAdapter } from './protocol.js';
 import { createElevenLabsEventMapper } from './eventMapper.js';
 import { createElevenLabsSessionLifecycle } from './sessionLifecycle.js';
 import { createElevenLabsSessionPreparationService } from './sessionPreparation.js';
+import { provisionElevenLabsWithAccountOperations } from '../operations.js';
 
-function createFixture(billingMode: 'byo' | 'happier' = 'byo') {
+async function createFixture(billingMode: 'byo' | 'happier' = 'byo') {
   // Only mediated HTTP and hosted-conversation operations replace system
   // boundaries; preparation, lifecycle and event decoding stay real.
-  const request = vi.fn(async (input: Readonly<{ operationId: string }>) => ({
+  let provisionedAgent: Readonly<Record<string, unknown>> = {};
+  const request = vi.fn<VoiceAccountOperationService['request']>(async input => {
+    if (input.operationId === 'create-agent') {
+      const body = input.parameters?.body;
+      if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected provisioned Agent body');
+      provisionedAgent = { ...body, agent_id: 'agent-1' };
+    }
+    return {
     status: 200,
     finalUrl: input.operationId === 'agent'
       ? 'https://api.elevenlabs.io/v1/convai/agents/agent-1'
       : 'https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=agent-1',
     headers: { 'content-type': 'application/json' },
-    body: new TextEncoder().encode(JSON.stringify(input.operationId === 'agent' ? {
-      agent_id: 'agent-1', tags: ['happier_voice_config_v1'],
-      platform_settings: {
-        auth: { enable_auth: true },
-        overrides: { conversation_config_override: {
-          agent: { first_message: true, language: true, prompt: { prompt: true } },
-          conversation: { text_only: true },
-        } },
-      },
-    } : { token: 'ephemeral-token' })),
-  }));
+    body: new TextEncoder().encode(JSON.stringify(input.operationId === 'agent' ? provisionedAgent
+      : input.operationId === 'create-agent' ? { agent_id: 'agent-1' }
+      : input.operationId === 'voices' ? { voices: [{ voice_id: ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts.voiceId, name: 'Fixture voice' }] }
+      : { token: 'ephemeral-token' })),
+    };
+  });
+  await provisionElevenLabsWithAccountOperations({
+    accountOperations: { request },
+    request: { kind: 'create', prompt: 'Fixture prompt', tools: [], tts: ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts },
+    signal: new AbortController().signal,
+  });
   const credentials = {
     phase: 'prepare', mediated: { request }, raw: null,
   } satisfies VoiceCredentialAccess<'prepare'>;
@@ -73,14 +81,15 @@ function createFixture(billingMode: 'byo' | 'happier' = 'byo') {
 
 describe('createElevenLabsProtocolAdapter', () => {
   it('maps controller preparation into provider-owned session config and lifecycle metadata', async () => {
-    const { runtime, prepare, hostedConversation } = createFixture();
+    const { runtime, prepare, hostedConversation } = await createFixture();
     await expect(prepare(1)).resolves.toEqual({
       kind: 'prepared',
       session: {
         config: {
           conversationToken: 'ephemeral-token', connectionType: 'webrtc', textOnly: false,
           dynamicVariables: { sessionId: 'control-1', initialConversationContext: 'context' },
-          overrides: { conversation: { textOnly: false }, agent: {} },
+          overrides: { conversation: { textOnly: false }, agent: {},
+            tts: { voiceId: ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts.voiceId } },
         },
         initialContextDelivery: 'prepared',
         safeMetadata: { billingMode: 'byo', expiresAtMs: null },
@@ -98,7 +107,7 @@ describe('createElevenLabsProtocolAdapter', () => {
   });
 
   it('keeps raw ElevenLabs event semantics in the provider leaf and emits canonical transcript events', async () => {
-    const { runtime, prepare } = createFixture();
+    const { runtime, prepare } = await createFixture();
     await prepare(1);
     expect(runtime.adapter.decodeControl({ type: 'elevenlabs.mode', mode: 'speaking' }))
       .toEqual([{ type: 'assistant_output_started' }]);
@@ -110,15 +119,15 @@ describe('createElevenLabsProtocolAdapter', () => {
     })).toEqual([]);
   });
 
-  it('preserves the exact-message text payload for the SDK connection', () => {
-    const { runtime } = createFixture();
+  it('preserves the exact-message text payload for the SDK connection', async () => {
+    const { runtime } = await createFixture();
     expect(runtime.adapter.encodeTurnControl('send_exact_message', { text: 'Keep this exact message.' }))
       .toEqual({ type: 'voice.user_text', text: 'Keep this exact message.' });
     expect(runtime.adapter.encodeTurnControl('send_exact_message', {})).toBeNull();
   });
 
   it('retires only the replaced hosted attempt when a delayed release precedes current identity', async () => {
-    const { runtime, prepare, hostedConversation } = createFixture('happier');
+    const { runtime, prepare, hostedConversation } = await createFixture('happier');
     await expect(prepare(1)).resolves.toMatchObject({
       kind: 'prepared', session: { safeMetadata: { billingMode: 'happier', expiresAtMs: 60_000 } },
     });
@@ -133,7 +142,7 @@ describe('createElevenLabsProtocolAdapter', () => {
   });
 
   it('settles the current hosted provider identity through the real lifecycle', async () => {
-    const { runtime, prepare, hostedConversation } = createFixture('happier');
+    const { runtime, prepare, hostedConversation } = await createFixture('happier');
     const prepared = await prepare(1);
     if (prepared.kind !== 'prepared') throw new Error('Expected a prepared hosted session');
     expect(prepared.session.safeMetadata).toEqual({ billingMode: 'happier', expiresAtMs: 60_000 });
@@ -144,7 +153,7 @@ describe('createElevenLabsProtocolAdapter', () => {
   });
 
   it('discards prepared provider state when the controller tears down before session identity', async () => {
-    const { runtime, prepare, hostedConversation } = createFixture('happier');
+    const { runtime, prepare, hostedConversation } = await createFixture('happier');
     await expect(prepare(1)).resolves.toMatchObject({
       kind: 'prepared', session: { safeMetadata: { billingMode: 'happier', expiresAtMs: 60_000 } },
     });

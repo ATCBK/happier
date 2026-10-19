@@ -1,5 +1,5 @@
 /** ElevenLabs Voice account operations with bounded response parsing. */
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { VoiceRealtimeJsonValue } from '@happier-dev/plugin-sdk/voice/client';
 import { pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
 import {

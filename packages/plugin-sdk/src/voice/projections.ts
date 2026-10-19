@@ -33,6 +33,8 @@ import type {
     VoiceRealtimeJsonValue,
 } from '@happier-dev/protocol/voice/realtime';
 
+import * as z from 'zod/mini';
+
 import type { PluginCancellationOptions } from '../lifecycle.js';
 import type { InteractionsService } from '../interactions.js';
 import type {
@@ -52,40 +54,8 @@ export type { ConnectedAccountHttpHeadersRequest } from '../connectedAccounts.js
 /** Service-declared presentation facts, validated by the canonical contribution schema. */
 export type VoicePrivacyFacts = NonNullable<VoiceProviderSettings['privacyFacts']>;
 
-export type VoiceSchema<TOutput> = Readonly<{
-    parse(value: unknown): TOutput;
-    safeParse(value: unknown):
-        | Readonly<{ success: true; data: TOutput }>
-        | Readonly<{ success: false; error: unknown }>;
-    optional(): VoiceSchema<TOutput | undefined>;
-    array(): VoiceSchema<TOutput[]>;
-}>;
-
-function createVoiceSchema<TOutput>(
-    parse: (value: unknown) => TOutput,
-): VoiceSchema<TOutput> {
-    return Object.freeze({
-        parse,
-        safeParse(value: unknown):
-            | Readonly<{ success: true; data: TOutput }>
-            | Readonly<{ success: false; error: unknown }> {
-            try {
-                return Object.freeze({ success: true as const, data: parse(value) });
-            } catch (error) {
-                return Object.freeze({ success: false as const, error });
-            }
-        },
-        optional(): VoiceSchema<TOutput | undefined> {
-            return createVoiceSchema((value) => value === undefined ? undefined : parse(value));
-        },
-        array(): VoiceSchema<TOutput[]> {
-            return createVoiceSchema((value) => {
-                if (!Array.isArray(value)) throw new Error('invalid_voice_schema_array');
-                return value.map((item) => parse(item));
-            });
-        },
-    });
-}
+/** Native Mini schema; exported Protocol schemas retain their exact runtime identity. */
+export type VoiceSchema<TOutput> = z.ZodMiniType<TOutput>;
 
 function isVoiceRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -96,11 +66,23 @@ function isVoiceRecord(value: unknown): value is Readonly<Record<string, unknown
 export function createVoiceRecordSchema<TOutput>(
     valueSchema: VoiceSchema<TOutput>,
 ): VoiceSchema<Readonly<Record<string, TOutput>>> {
-    return createVoiceSchema((value) => {
-        if (!isVoiceRecord(value)) throw new Error('invalid_voice_schema_record');
-        return Object.freeze(Object.fromEntries(
-            Object.entries(value).map(([key, entry]) => [key, valueSchema.parse(entry)]),
-        ));
+    return z.transform((value, context) => {
+        if (!isVoiceRecord(value)) {
+            context.issues.push({ code: 'invalid_type', expected: 'record', input: value });
+            return z.NEVER;
+        }
+        const entries: [string, TOutput][] = [];
+        for (const [key, entry] of Object.entries(value)) {
+            const parsed = valueSchema.safeParse(entry);
+            if (parsed.success) entries.push([key, parsed.data]);
+            // Normalized issues are forwarded through Mini's raw-issue boundary.
+            else context.issues.push(...parsed.error.issues.map(issue => ({
+                ...issue,
+                input: entry,
+                path: [key, ...issue.path],
+            } as z.core.$ZodRawIssue)));
+        }
+        return context.issues.length > 0 ? z.NEVER : Object.freeze(Object.fromEntries(entries));
     });
 }
 
@@ -128,15 +110,24 @@ export function withVoiceSchemaField(
     fieldName: string,
     fieldSchema: VoiceSchema<unknown>,
 ): VoiceSchema<Readonly<Record<string, unknown>>> {
-    return createVoiceSchema((value) => {
-        const parsed = baseSchema.parse(value);
-        if (!isVoiceRecord(parsed)) throw new Error('invalid_voice_schema_field_base');
+    return z.pipe(baseSchema, z.transform((parsed, context) => {
+        if (!isVoiceRecord(parsed)) {
+            context.issues.push({ code: 'custom', input: parsed, message: 'invalid_voice_schema_field_base' });
+            return z.NEVER;
+        }
         if (!Object.hasOwn(parsed, fieldName)) return parsed;
-        return Object.freeze({
-            ...parsed,
-            [fieldName]: fieldSchema.parse(parsed[fieldName]),
-        });
-    });
+        const field = fieldSchema.safeParse(parsed[fieldName]);
+        if (!field.success) {
+            // Normalized issues are forwarded through Mini's raw-issue boundary.
+            context.issues.push(...field.error.issues.map(issue => ({
+                ...issue,
+                input: parsed[fieldName],
+                path: [fieldName, ...issue.path],
+            } as z.core.$ZodRawIssue)));
+            return z.NEVER;
+        }
+        return Object.freeze({ ...parsed, [fieldName]: field.data });
+    }));
 }
 
 export type {

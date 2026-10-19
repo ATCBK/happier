@@ -55,6 +55,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -414,6 +415,7 @@
       }
     ],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "description": "Google Gemini speech-to-text and Google Cloud text-to-speech.",
