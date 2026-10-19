@@ -52,6 +52,7 @@ const protocolComposerReferenceProviders = resolve(
 );
 
 const expectedProtocolExports = [
+    'CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1',
     'MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1',
     'MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1',
     'TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1',
@@ -68,6 +69,7 @@ const expectedProtocolExports = [
     'ProtocolComposerRefV1',
     'ProtocolComposerRefV1Schema',
     'ProtocolComposerReferenceResolutionV1Schema',
+    'ProtocolCurrentUiContextSnapshotV1Schema',
     'ProtocolJsonValue',
     'ProtocolJsonValueOptions',
     'ProtocolLaunchProfileIdV2Schema',
@@ -77,11 +79,13 @@ const expectedProtocolExports = [
     'ProtocolSchemaInput',
     'ProtocolSchemaOutput',
     'ProtocolSchemaSafeParseResult',
+    'ProtocolStoredReadSchema',
     'ProtocolStringOptions',
     'ProtocolUtf8StringOptions',
     'ProtocolUniqueJsonArrayOptions',
     'ProtocolValidationError',
     'ProtocolValidationIssue',
+    'createProtocolStoredReadSchema',
     'defineProtocolArray',
     'defineProtocolJsonValue',
     'defineProtocolLiteral',

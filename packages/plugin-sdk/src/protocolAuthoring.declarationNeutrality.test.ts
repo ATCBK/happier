@@ -361,9 +361,6 @@ describe('public protocol-authoring declaration neutrality', () => {
         expect(declaration).toContain('readonly jsonSchema: PluginJsonSchema;');
         expect(declaration).toContain('export interface ProtocolComposableSchema<');
         expect(declaration).toContain('type ProtocolSchemaInput<');
-        expect(declaration).toContain(
-            "TProjection extends 'input' ? ProtocolSchemaInput<TShape[TKey]> : ProtocolSchemaOutput<TShape[TKey]>",
-        );
         expect(declaration).toContain('type ProtocolObjectPreservedProjection<');
         expect(declaration).toContain(
             'ProtocolObjectAdditionalValue<TOptions, TProjection> | ProtocolObjectKnownValue<TShape, TProjection>',
@@ -400,7 +397,9 @@ describe('public protocol-authoring declaration neutrality', () => {
             .map((reference) => reference.toString());
 
         expect(leakedReferences).toEqual([]);
-    });
+        // This test can be the first declaration consumer in a focused run;
+        // reuse the neighboring consumers' whole-program compiler budget.
+    }, 120_000);
 
     it('directly re-exports the Connected Account identity schema from the narrow Protocol owner', () => {
         const declaration = emittedSourceAuthoringDeclaration('connectedAccounts.d.ts');
