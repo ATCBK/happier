@@ -111,7 +111,12 @@ external Agent plugins without a provider-specific retry path.
 
 Bootstrap HTTP 5xx failures from Account-mode/currentness reads, Machine and
 Session admission, and Session/Machine access-key lookup or binding retain their
-Home status through the same canonical issue classifier and command reporter.
+Home evidence through the same canonical issue classifier and command reporter.
+Access-key preparation also retains timeout and network failures. During runner
+creation it reuses Session creation's existing retry budget and backoff. Every
+attempt rejoins the same creation tag and Session/Machine tuple;
+a lost binding receipt never overwrites an established key. Exhaustion preserves
+the preparation failure rather than reporting that no durable Session exists.
 After Session custody exists, construction publishes `preparation_pending` before
 cleanup; the runner preserves a nonzero exit for existing daemon recovery.
 Account-mode bootstrap does not reinterpret Home unavailability as missing keys.
@@ -125,6 +130,12 @@ Session HTTP read timeout does not shorten a metadata mutation. CLI and UI Stop
 both reach the owning daemon's physical Stop owner; persisting an explicit Stop
 hold must succeed before the CLI issues that physical operation. A lost receipt
 or cancellation after emission remains uncertain and does not prove retirement.
+The daemon uses the admitted runner's matching Account credentials for its own
+Stop metadata and retirement, without rebuilding requester execution services.
+Foreign Account custody retains its existing requester authority checks. Local
+control binds preparation and metadata writes to the request connection; an
+unsettled explicit Stop returns `incomplete / explicit_stop_failed` rather than
+claiming that its runner retired.
 
 Admitted Follow originals retain their server-validated input admission receipt
 through canonical and legacy message projections. A required original's transient
@@ -768,6 +779,13 @@ The daemon's [managed activity inventory](../apps/cli/src/daemon/lifecycle/manag
 Concurrent readers share an in-flight inventory observation at the same owner
 invalidation edge. A new edge still captures immediately, invalidated snapshots
 cannot confirm idle, and completed observations are never cached.
+
+In 0.3 development source, the daemon's Workspace Sync runtime compares Project
+scope, WorkspaceRefs and relationships with its successful reconciliation input.
+Equal refreshes advance Project graph settlement without enqueueing material
+Sync work or resetting the Machine's idle interval. Changed inputs retain normal
+busy admission. Project withdrawal, failed or partial recovery, and supervised
+sidecar replacement require reconciliation even when desired inputs are equal.
 
 Publisher reconnect reads this same inventory through the reserved server-origin
 Machine access-loss receiver. Only attribution matching the current Home, Machine
@@ -1607,9 +1625,11 @@ Native settlement failures may carry the closed, content-free
 `goalControlFailure.phase` receipt through the SDK, host router, Action result
 and UI Goal operation reader. CLI JSON failure envelopes retain the same facet
 under `error.goalControlFailure` in generic `actions invoke` and the shared
-friendly-command presenter. The daemon's inactive native-control adapter retains
-the same receipt when a live Session method is unavailable, including before a
-native thread exists. Each projection validates the same closed facet
+friendly-command presenter. The standalone CLI's daemon HTTP reader uses the
+canonical Action failure projection to preserve the same strict facets while
+excluding daemon-private top-level fields. The daemon's inactive native-control
+adapter retains the same receipt when a live Session method is unavailable,
+including before a native thread exists. Each projection validates the same closed facet
 and drops malformed diagnostics without discarding the refusal. The runner's
 existing RPC completion record logs that phase once; vendor error text, objective
 content and local paths are excluded from this diagnostic facet.
