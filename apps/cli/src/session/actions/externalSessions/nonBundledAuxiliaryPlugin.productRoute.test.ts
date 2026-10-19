@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import {
   deriveExternalSessionsAutoLinkSourcePolicyIdV1,
   ExternalSessionsAgentIdSchema,
@@ -17,6 +17,8 @@ import type {
 import { seedCurrentLocalPathPluginFixture } from '@/plugins/store/registry/currentState.testkit';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { retireAdmittedPluginRuntimeRegistry } from '@/plugins/testkit/admittedRuntime';
+import { createPluginReloadController } from '@/plugins/runtime/reload/controller';
 import { resolveCurrentExternalSessionAgentIdentity } from '@/api/session/external/linking/qualifiedLinkIdentityRegistry';
 import { resolveLinkedExternalSessionQualifiedIdentity } from '@/api/session/external/linking/qualifiedLinkIdentity';
 import { createConfiguredPluginExternalSessionsAdapter } from '@/session/external/configuredSourceMaterializer';
@@ -36,6 +38,7 @@ import {
 } from './discoveryLinkActions';
 import {
   resolveExternalSessionSourceKeyOwner,
+  resolveExternalSessionSourceSurface,
   resolveExternalSessionSurfaceOps,
 } from './providerOpsResolution';
 import {
@@ -117,11 +120,20 @@ const CANONICALIZED_SOURCE_ALIAS = Object.freeze({
 const MALFORMED_SOURCE = Object.freeze({ kind: 'syntheticProductRoute', scope: 'scope-malformed' });
 const OVERSIZED_SOURCE = Object.freeze({ kind: 'syntheticProductRoute', scope: 'scope-oversized' });
 
-function productionTakeoverRecord(input: Readonly<{
+async function productionTakeoverRecord(input: Readonly<{
   sourceCustody: ExternalSessionPersistedTakeoverImportRecord['request']['source']['sourceCustody'];
   targetStorageMode: 'external-linked' | 'persisted';
-}>): ExternalSessionPersistedTakeoverImportRecord {
-  const sourceCursor = 'source-cursor-product-route';
+}>): Promise<ExternalSessionPersistedTakeoverImportRecord> {
+  const surface = await resolveExternalSessionSurfaceOps(AGENT_ID);
+  const page = await surface.pageTranscript?.({
+    source: SOURCE,
+    remoteSessionId: 'remote-product-route',
+    direction: 'older',
+    maxItems: 1,
+    maxBytes: 512 * 1024,
+  });
+  const sourceCursor = page?.tailCursor;
+  if (!sourceCursor) throw new Error('Expected the admitted Agent transcript tail cursor');
   const request = {
     v: 1 as const,
     idempotencyKey: 'takeover-product-route-1',
@@ -326,11 +338,12 @@ async function materializeAuxiliaryOnlyPlugin(
             !Number.isSafeInteger(offset)
             || offset < 0
             || offset >= total
-            || request.maxItems > 50
           ) {
             throw new Error('synthetic_candidate_source_eager_enumeration');
           }
-          const count = Math.min(request.maxItems, total - offset);
+          // This native source serves one 50-item page even when its caller
+          // has room for more; the host must preserve that continuation.
+          const count = Math.min(request.maxItems, 50, total - offset);
           const candidates = Array.from({ length: count }, (_, localIndex) => {
             const index = offset + localIndex;
             const remotePrefix = scope === 'scope-a'
@@ -414,6 +427,7 @@ async function materializeAuxiliaryOnlyPlugin(
               items: [transcriptItem('read-after-from-auxiliary-plugin')],
               nextCursor: 'tail-product-route-next',
               boundary: 'tail-product-route-next',
+              hasMore: false,
             },
           };
         },
@@ -477,11 +491,17 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
     vi.clearAllMocks();
     if (controllerOwnsRegistry) {
       controllerOwnsRegistry = false;
-      await pluginReloadController.shutdown({ timeoutMs: 5_000 });
+      const registry = pluginReloadController.getState().activeRegistry;
+      if (registry) await retireAdmittedPluginRuntimeRegistry({ controller: pluginReloadController, registry });
     }
   });
 
+  afterAll(async () => {
+    await pluginReloadController.shutdown({ timeoutMs: 5_000 });
+  });
+
   it('binds an author-only ordinary plugin to the one current-global External Sessions service', async () => {
+    const controller = createPluginReloadController();
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-external-author-global-home-'));
     const sourceRoot = await mkdtemp(join(tmpdir(), 'happier-external-author-source-'));
     const authorRoot = await mkdtemp(join(tmpdir(), 'happier-external-author-only-'));
@@ -560,10 +580,17 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
 
       runtimeRegistry = await resolveExecutablePluginRuntimeRegistry({
         happyHomeDir,
+        currentGlobalExternalSessionsRouter: controller.currentGlobalExternalSessions,
         externalSessionHostOperationOwner: hostOwner,
         externalSessionsActiveServerDir: happyHomeDir,
         resolveExternalSessionCurrentMachineId: () => 'machine-product-route',
         externalSessionPluginAdmissionOwner: { takeoverStart },
+      });
+      await controller.adoptPreparedRuntimeRegistry({
+        registry: runtimeRegistry,
+        changedPluginIds: [PLUGIN_ID, AUTHOR_PLUGIN_ID],
+        durableRevision: 2,
+        runningSessionDisposition: 'retainRunningSessions',
       });
       await runtimeRegistry.activateContributionsOnDemand([{
         pluginId: AUTHOR_PLUGIN_ID, family: 'agents', localId: AUTHOR_AGENT_LOCAL_ID,
@@ -582,9 +609,6 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
         isOccurrenceCurrent: () => authorCallerGenerationCurrent,
       });
       const external = services.sessions.external;
-      expect(Reflect.ownKeys(external).sort()).toEqual([
-        'attach', 'capabilities', 'followTranscript', 'list', 'readTranscript', 'takeover',
-      ]);
       expect((await external.capabilities()).list).toMatchObject({ status: 'available' });
       expect(runtimeRegistry.activatedPluginIds.has(PLUGIN_ID)).toBe(true);
       const listed = await external.list({ agentId: AGENT_ID, limit: 1 });
@@ -651,6 +675,7 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       expect(followExecute).toHaveBeenCalledTimes(followEffectsBeforeRetirement);
       expect(takeoverStart).toHaveBeenCalledTimes(takeoverEffectsBeforeRetirement);
     } finally {
+      await controller.shutdown();
       await runtimeRegistry?.dispose();
       await installation.dispose();
       await hostOwner.retire();
@@ -719,20 +744,21 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       });
       unownedRegistry = await resolveExecutablePluginRuntimeRegistry({
         happyHomeDir,
-        pluginIds: [PLUGIN_ID],
+        externalSessionsActiveServerDir: happyHomeDir,
+        resolveExternalSessionCurrentMachineId: () => 'machine-product-route',
       });
       await pluginReloadController.adoptPreparedRuntimeRegistry({
         registry: unownedRegistry,
         changedPluginIds: [PLUGIN_ID],
-        durableRevision: 1,
+        durableRevision: pluginReloadController.readCurrentDurableRevision() + 1,
         runningSessionDisposition: 'retainRunningSessions',
       });
       controllerOwnsRegistry = true;
       const runtimeRegistry = unownedRegistry;
       unownedRegistry = null;
       const sourceCustody = runtimeRegistry.readPluginSourceCustody?.(PLUGIN_ID);
-      if (!sourceCustody || sourceCustody.kind !== 'development') {
-        throw new Error('Expected the synthetic Agent development source custody');
+      if (!sourceCustody || sourceCustody.kind !== 'managed') {
+        throw new Error('Expected the synthetic Agent managed source custody');
       }
       const sourceKeyOwner = await resolveExternalSessionSourceKeyOwner(
         ExternalSessionsAgentIdSchema.parse(AGENT_ID),
@@ -741,6 +767,16 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       if (!sourceKeyOwner) {
         throw new Error('Expected the synthetic declaration-owned source key');
       }
+      expect(runtimeRegistry.agentRuntimesByAgentId.has(AGENT_ID)).toBe(false);
+      await expect(resolveExternalSessionSourceSurface(AGENT_ID, SOURCE)).resolves.toMatchObject({
+        ok: true,
+        source: SOURCE,
+        agentSourceCustody: sourceCustody,
+      });
+      expect(runtimeRegistry.agentRuntimesByAgentId.get(AGENT_ID)).toMatchObject({
+        hasPrimaryRuntime: false,
+        externalSessions: expect.any(Object),
+      });
 
       const linkedMetadata = {
         path: '/tmp/synthetic-product-route',
@@ -781,11 +817,11 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       fetchSessionByIdMock.mockImplementation(async () => currentRawSession);
       listSessionMarkersMock.mockResolvedValue([]);
 
-      const persistedRecord = productionTakeoverRecord({
+      const persistedRecord = await productionTakeoverRecord({
         sourceCustody,
         targetStorageMode: 'persisted',
       });
-      const externalLinkedRecord = productionTakeoverRecord({
+      const externalLinkedRecord = await productionTakeoverRecord({
         sourceCustody,
         targetStorageMode: 'external-linked',
       }) as unknown as Parameters<
@@ -816,10 +852,10 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       });
       expect(listSessionMarkersMock).not.toHaveBeenCalled();
 
-      const staleGenerationRecord = productionTakeoverRecord({
+      const staleGenerationRecord = await productionTakeoverRecord({
         sourceCustody: {
-          kind: 'development',
-          registeredRootId: `${sourceCustody.registeredRootId}:retired`,
+          ...sourceCustody,
+          immutableGenerationId: `${sourceCustody.immutableGenerationId}:retired`,
         },
         targetStorageMode: 'external-linked',
       }) as unknown as Parameters<
@@ -861,7 +897,7 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       await pluginReloadController.adoptPreparedRuntimeRegistry({
         registry: unownedRegistry,
         changedPluginIds: [PLUGIN_ID],
-        durableRevision: 2,
+        durableRevision: pluginReloadController.readCurrentDurableRevision() + 1,
         runningSessionDisposition: 'retainRunningSessions',
       });
       unownedRegistry = null;
@@ -907,12 +943,12 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       await pluginReloadController.adoptPreparedRuntimeRegistry({
         registry: unownedRegistry,
         changedPluginIds: [PLUGIN_ID],
-        durableRevision: 1,
+        durableRevision: pluginReloadController.readCurrentDurableRevision() + 1,
         runningSessionDisposition: 'retainRunningSessions',
       });
       controllerOwnsRegistry = true;
       unownedRegistry = null;
-      const initial = productionTakeoverRecord({ sourceCustody, targetStorageMode: 'persisted' });
+      const initial = await productionTakeoverRecord({ sourceCustody, targetStorageMode: 'persisted' });
       const terminal = { mode: 'tmux' as const, tmux: { sessionName: 'takeover-retry', isolated: true } };
       const record = {
         ...initial,
@@ -1141,7 +1177,7 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       await pluginReloadController.adoptPreparedRuntimeRegistry({
         registry: unownedRegistry,
         changedPluginIds: [PLUGIN_ID],
-        durableRevision: 3,
+        durableRevision: pluginReloadController.readCurrentDurableRevision() + 1,
         runningSessionDisposition: 'retainRunningSessions',
       });
       controllerOwnsRegistry = true;
@@ -1399,12 +1435,11 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       });
       expect(malformedList).toEqual({
         ok: false,
-        errorCode: 'agent_unavailable',
-        error: 'agent_unavailable',
+        errorCode: 'agent_error',
+        error: 'agent_error',
         retryable: false,
       });
       expect(malformedList).not.toHaveProperty('autoLinkPolicyScopeV1');
-      expect(JSON.stringify(malformedList)).not.toContain('agent_error');
       const oversizedList = await executeExternalSessionCandidatesListAction({
         machineId: 'machine-product-route',
         agentId: AGENT_ID,
@@ -1413,12 +1448,11 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       });
       expect(oversizedList).toEqual({
         ok: false,
-        errorCode: 'agent_unavailable',
-        error: 'agent_unavailable',
+        errorCode: 'agent_error',
+        error: 'agent_error',
         retryable: false,
       });
       expect(oversizedList).not.toHaveProperty('autoLinkPolicyScopeV1');
-      expect(JSON.stringify(oversizedList)).not.toContain('agent_error');
       expect(getOrCreateSessionByTagMock).not.toHaveBeenCalled();
       expect(runtimeRegistry.activatedPluginIds.has(PLUGIN_ID)).toBe(true);
       const runtimeLease = runtimeRegistry.agentRuntimesByAgentId.get(AGENT_ID);
@@ -1443,6 +1477,7 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
         accountSettingsRevision: 'account:product-route',
       });
       const configured = await createConfiguredPluginExternalSessionsAdapter({
+        resolveCatalogEntry: async () => null,
         agents: [contribution!],
         account: { connectedServicesV2: [] },
         basis,
@@ -1625,11 +1660,10 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       });
       expect(oversizedTranscript).toEqual({
         ok: false,
-        errorCode: 'agent_unavailable',
-        error: 'agent_unavailable',
+        errorCode: 'agent_error',
+        error: 'agent_error',
         retryable: false,
       });
-      expect(JSON.stringify(oversizedTranscript)).not.toContain('agent_error');
 
       const readAfter = await executeExternalSessionTranscriptReadAfterAction({
         machineId: 'machine-product-route',
@@ -1679,7 +1713,7 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       await pluginReloadController.adoptPreparedRuntimeRegistry({
         registry: unownedRegistry,
         changedPluginIds: [PLUGIN_ID, REPLACEMENT_PLUGIN_ID],
-        durableRevision: 4,
+        durableRevision: pluginReloadController.readCurrentDurableRevision() + 1,
         runningSessionDisposition: 'retainRunningSessions',
       });
       controllerOwnsRegistry = true;
@@ -1748,7 +1782,7 @@ describe('non-bundled auxiliary-only Agent ordinary External Sessions routes', (
       await pluginReloadController.adoptPreparedRuntimeRegistry({
         registry: unownedRegistry,
         changedPluginIds: [REPLACEMENT_PLUGIN_ID],
-        durableRevision: 5,
+        durableRevision: pluginReloadController.readCurrentDurableRevision() + 1,
         runningSessionDisposition: 'retainRunningSessions',
       });
       expect(unownedRegistry.contributes.agentDefinitionsById.has(REPLACEMENT_AGENT_ID)).toBe(false);

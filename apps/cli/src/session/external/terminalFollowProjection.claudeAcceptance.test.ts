@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { projectRuntimeTranscriptEvent } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import { createExternalSessionTerminalFollowProjector } from './terminalFollowProjection';
+import { AgentRuntimeDaemonExternalSessionFollowEventV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonFacetProtocol';
+import type { HostExternalTranscriptFollowEvent } from './privateContract';
 
 type TerminalOperationsFixture = Readonly<{
     operations: Readonly<{
@@ -147,8 +149,9 @@ describe('Claude terminal acceptance and host transcript ordering', () => {
             const fresh = await contribution.readAfterTranscript({ ...invocation(), source: identity.value.source,
                 remoteSessionId: providerSessionId, cursor: page.value.tailCursor, maxItems: 200, projection: 'terminal' });
             if (!fresh.ok || fresh.value.outcome !== 'advanced') throw new Error('Missing fresh native rows');
-            const event = { kind: 'data' as const, providerSessionId, fromCursor: page.value.tailCursor,
-                nextCursor: fresh.value.nextCursor, items: fresh.value.items.map(mapPluginExternalTerminalSourceItem) };
+            const event = { kind: 'data', providerSessionId,
+                fromCursor: page.value.tailCursor, nextCursor: fresh.value.nextCursor,
+                items: fresh.value.items.map(mapPluginExternalTerminalSourceItem) } satisfies HostExternalTranscriptFollowEvent;
             if (slowHome) {
                 const { createRunnerAgentDaemonFacets } = await import('@/agent/runtime/session/process/runnerAgentDaemonFacets');
                 const { createAgentSessionRunnerFactoryBinding } = await import('@/plugins/runtime/runner/agentSessionRunnerFactoryBinding');
@@ -175,12 +178,13 @@ describe('Claude terminal acceptance and host transcript ordering', () => {
                             kind: 'voice.authority.snapshot', agentSourceCustody: retainedAgent.sourceCustody, providers: [] } };
                         if (operation.kind === 'external_session.follow.open') return { ok: true, result: {
                             kind: 'external_session.follow.open', followId: operation.followId,
-                            result: { status: 'following', startingCursor: page.value.tailCursor } } };
+                            result: { status: 'following', startingCursor: page.value.tailCursor ?? null } } };
                         if (operation.kind === 'external_session.follow.close') return { ok: true, result: {
                             kind: 'external_session.follow.closed', followId: operation.followId } };
                         if (operation.kind === 'external_session.follow.next') {
                             if (!sent) { sent = true; return { ok: true, result: {
-                                kind: 'external_session.follow.event', followId: operation.followId, eventId: 'native-batch', event } }; }
+                                kind: 'external_session.follow.event', followId: operation.followId, eventId: 'native-batch',
+                                event: AgentRuntimeDaemonExternalSessionFollowEventV1Schema.parse(event) } }; }
                             await new Promise<void>((_resolve, reject) => {
                                 const signal = input.signal!;
                                 const abort = () => reject(signal.reason);

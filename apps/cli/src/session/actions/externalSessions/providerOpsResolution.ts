@@ -4,6 +4,7 @@ import type {
     PluginSourceCustodyV1,
 } from '@happier-dev/protocol';
 import { activateAgentRuntimeContributionOnDemand } from '@/agent/runtime/registry/activationDemand';
+import { readRegistryCatalogHook } from '@/agent/catalog/runtimeEntry';
 import { createAgentExternalSessionsExecutionSurface } from '@/agent/runtime/registry/agentExternalSessionsExecutionSurface';
 import { readCurrentExternalSessionAgentIdentity } from '@/api/session/external/linking/qualifiedLinkIdentityRegistry';
 import type { ExternalSessionFollowResource } from '@/api/session/external/leases/createExternalSessionFollowLeaseManager';
@@ -92,15 +93,24 @@ export async function resolveExternalSessionSourceSurface(
             source,
         );
         if (!projected.ok) return projected;
+        // Connected-home admission consumes executable native-home facts from
+        // this lease. Auxiliary-only Agents have no primary runtime catalog
+        // entry; the source admission owner decides whether that source needs one.
+        const catalogEntry = await readRegistryCatalogHook(runtimeRegistryLease.registry, agentId, entry => entry);
+        if (!catalogEntry) {
+            // Catalog acquisition cannot activate an auxiliary-only Agent.
+            await activateAgentRuntimeContributionOnDemand(runtimeRegistryLease.registry, agentId);
+        }
         // Raw machine calls go through the one host-owned connected-profile
         // materialization: the request receives the daemon's materialized home
         // and may not name a different one. Sources outside that family come
         // back unchanged.
-        const materialized = resolveConfiguredExternalSessionSourceAtAdmission({
+        const materialized = await resolveConfiguredExternalSessionSourceAtAdmission({
             agents: runtimeRegistryLease.registry.contributes.agents,
             ...(options.activeServerDir ? { activeServerDir: options.activeServerDir } : {}),
             agentId,
             source: projected.source,
+            catalogEntry,
         });
         if (!materialized.ok) return materialized;
         const currentAgent = readCurrentExternalSessionAgentIdentity(
@@ -114,7 +124,6 @@ export async function resolveExternalSessionSourceSurface(
         if (!currentAgent || !sourceKeyOwner) {
             return { ok: false, code: 'agent_unavailable' };
         }
-        await activateAgentRuntimeContributionOnDemand(runtimeRegistryLease.registry, agentId);
         let providerOps: ExternalSessionExecutionSurface;
         try {
             providerOps = await resolveExternalSessionSurfaceOpsAfterDemand(

@@ -245,6 +245,10 @@ describe('executeExternalSessionStatusGetAction observation reconciliation', () 
         });
         mocks.acquireRuntimeRegistryLease.mockResolvedValue({
             registry: {
+                readPluginOccurrenceId: () => 'plugin-occurrence-1',
+                readPluginSourceCustody: () => ({
+                    kind: 'development', registeredRootId: 'opencode-fixture',
+                }),
                 contributes: {
                     agentDefinitionsById: new Map([[
                         'opencode',
@@ -299,7 +303,7 @@ describe('executeExternalSessionStatusGetAction observation reconciliation', () 
                     {
                         pluginId: 'happier.opencode',
                         agentId: 'opencode',
-                        generation: 'plugin-generation-1',
+                        occurrenceId: 'plugin-occurrence-1',
                         isCurrent: () => true,
                         externalSessions: {
                             resolveSource: mocks.resolveSource,
@@ -652,7 +656,7 @@ describe('executeExternalSessionStatusGetAction observation reconciliation', () 
             resource: {
                 pluginId: 'happier.opencode',
                 agentLocalId: 'opencode',
-                pluginOccurrenceId: 'plugin-generation-1',
+                occurrenceId: 'plugin-occurrence-1',
                 resourceKey: 'endpoint-default',
             },
             link: {
@@ -669,6 +673,7 @@ describe('executeExternalSessionStatusGetAction observation reconciliation', () 
                 qualifiedLinkIdentity,
                 linkGeneration: '1000',
             },
+            sourceCustody: { kind: 'development', registeredRootId: 'opencode-fixture' },
         });
         expect(mocks.updateSessionMetadataWithRetry).not.toHaveBeenCalled();
         const runtime = (

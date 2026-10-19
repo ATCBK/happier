@@ -6,6 +6,7 @@ import type {
 
 import type { ExternalSessionExecutionSurface } from '@/session/external/providerOps';
 import type { ResolvedAgentContribution } from '@/plugins/projection/registry/types';
+import { createManifestAgentCatalogEntry } from '@/plugins/projection/registry/agentCliMetadata';
 
 const {
   resolveExecutionSurfacesMock,
@@ -71,12 +72,11 @@ describe('resolveExternalSessionSurfaceOps', () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it('projects source, operations, Agent identity, and source-key ownership from one held registry snapshot', async () => {
+  it('projects an auxiliary-only Agent source and operations without requiring a primary runtime catalog entry', async () => {
     const definition = {
       id: 'opencode',
-      displayName: 'OpenCode G',
-      description: 'Generation G',
-      runtime: { kind: 'cli' },
+      title: 'OpenCode G',
+      capabilities: { surfaces: ['externalSessions'] },
       surfaces: {
         externalSession: {
           sources: [{
@@ -90,7 +90,7 @@ describe('resolveExternalSessionSurfaceOps', () => {
           }],
         },
       },
-    } as unknown as PluginAgentContributionV2;
+    } satisfies PluginAgentContributionV2;
     const agent = {
       id: 'opencode',
       identity: { pluginId: 'acme.generation-g', localId: 'opencode' },
@@ -98,10 +98,15 @@ describe('resolveExternalSessionSurfaceOps', () => {
       source: { kind: 'path' },
       definition: { id: 'opencode', displayName: 'OpenCode G' },
       richDefinition: { provenance: 'external', definition },
+      catalogEntry: createManifestAgentCatalogEntry({
+        agentId: 'opencode', pluginId: 'acme.generation-g',
+        definition, cli: null, provenance: 'external',
+      }),
     } as unknown as ResolvedAgentContribution;
     const retirement = new AbortController();
     const runtimeLease = {
       occurrenceId: 'plugin-occurrence-g',
+      sourceCustody: { kind: 'development', registeredRootId: 'projection-g' },
       retirementSignal: retirement.signal,
       isCurrent: () => true,
       externalSessions: {},
@@ -183,6 +188,15 @@ describe('resolveExternalSessionSurfaceOps', () => {
       isCurrent: () => true,
     };
     const registry = {
+      contributes: {
+        agentDefinitionsById: new Map([['opencode', {
+          identity: { pluginId: 'acme.opencode', localId: 'opencode' },
+        }]]),
+      },
+      readPluginOccurrenceId: () => 'plugin-occurrence-1',
+      readPluginSourceCustody: () => ({
+        kind: 'development', registeredRootId: 'follow-fixture',
+      }),
       agentRuntimesByAgentId: new Map([['opencode', runtimeLease]]),
     };
     acquireAuthoritativePluginRuntimeRegistryLeaseMock.mockResolvedValue({
@@ -282,6 +296,7 @@ describe('resolveExternalSessionSurfaceOps', () => {
       readPluginSourceCustody: () => ({
         kind: 'managed',
         immutableGenerationId: 'immutable-plugin-generation-1',
+        installSource: 'localPath',
       }),
     };
     acquireAuthoritativePluginRuntimeRegistryLeaseMock.mockResolvedValue({
@@ -308,6 +323,7 @@ describe('resolveExternalSessionSurfaceOps', () => {
     expect(resolved.sourceCustody).toEqual({
       kind: 'managed',
       immutableGenerationId: 'immutable-plugin-generation-1',
+      installSource: 'localPath',
     });
     expect(resolved).not.toHaveProperty('immutablePluginGenerationId');
     expect(activateAgentRuntimeContributionOnDemandMock).toHaveBeenCalledWith(

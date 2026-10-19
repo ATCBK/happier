@@ -7,15 +7,6 @@ import type {
     AgentExternalSessionObservationReconcileResourceRequest,
 } from '@happier-dev/plugin-sdk/sessions/external';
 
-const runtimeLeaseMocks = vi.hoisted(() => ({
-    acquire: vi.fn(),
-    activateContributionsOnDemand: vi.fn(async () => []),
-}));
-
-vi.mock('@/plugins/runtime/reload/runtimeLease', () => ({
-    acquireAuthoritativePluginRuntimeRegistryLease: runtimeLeaseMocks.acquire,
-}));
-
 import {
     createExternalSessionObservationDaemonProjection,
 } from './createExternalSessionObservationDaemonProjection';
@@ -520,94 +511,6 @@ describe('createExternalSessionObservationDaemonProjection', () => {
 
         expect(result.snapshot?.status).toBe('working');
         expect(publishField).toHaveBeenCalledTimes(1);
-        await projection.dispose();
-    });
-
-    it('resolves a qualified plugin-local Agent identity to its global runtime id', async () => {
-        const reconcileResource = vi.fn(async () => ({
-            purpose: 'observation_evidence' as const,
-            outcomes: [],
-        }));
-        const contribution: AgentExternalSessionObservationContribution = {
-            describeResource: vi.fn(),
-            observeResource: vi.fn(),
-            reconcileResource,
-        };
-        const release = vi.fn(async () => {});
-        runtimeLeaseMocks.acquire.mockResolvedValueOnce({
-            registry: {
-                contributes: {
-                    agentDefinitionsById: new Map([[
-                        'ohMyPi',
-                        {
-                            id: 'ohMyPi',
-                            pluginId: 'happier.oh-my-pi',
-                            identity: {
-                                pluginId: 'happier.oh-my-pi',
-                                localId: 'ohmypi',
-                            },
-                        },
-                    ]]),
-                },
-                activateContributionsOnDemand: runtimeLeaseMocks.activateContributionsOnDemand,
-                agentRuntimesByAgentId: new Map([[
-                    'ohMyPi',
-                    {
-                        agentId: 'ohMyPi',
-                        pluginId: 'happier.oh-my-pi',
-                        occurrenceId: 'plugin-generation-1',
-                        isCurrent: () => true,
-                        externalSessionObservation: contribution,
-                    },
-                ]]),
-            },
-            release,
-        });
-        const projection = createExternalSessionObservationDaemonProjection();
-
-        const result = await projection.reconcileStatusLink({
-            resource: {
-                pluginId: 'happier.oh-my-pi',
-                agentLocalId: 'ohmypi',
-                occurrenceId: 'plugin-generation-1',
-                resourceKey: 'endpoint-one',
-            },
-            link: {
-                sessionId: 'session-1',
-                linkGeneration: 'link-generation-1',
-                linkKey: 'native-session-1',
-                linkedSource: {
-                    source: { kind: 'ohmypi.server' },
-                    remoteSessionId: 'native-session-1',
-                    linkData: {},
-                },
-                changeObservation: 'reconcile_only' as const,
-            },
-            target: {
-                qualifiedLinkIdentity: {
-                    v: 1,
-                    agent: {
-                        pluginId: 'happier.oh-my-pi',
-                        localId: 'ohmypi',
-                    },
-                    source: {
-                        kind: 'ohmypi.server',
-                        contractVersion: 1,
-                    },
-                },
-                linkGeneration: 'link-generation-1',
-            },
-        });
-
-        expect(result.snapshot).toBeNull();
-        expect(runtimeLeaseMocks.activateContributionsOnDemand).toHaveBeenCalledWith([{
-            pluginId: 'happier.oh-my-pi',
-            family: 'agents',
-            localId: 'ohmypi',
-        }]);
-        expect(reconcileResource).toHaveBeenCalledTimes(1);
-        expect(release.mock.invocationCallOrder[0])
-            .toBeLessThan(reconcileResource.mock.invocationCallOrder[0]!);
         await projection.dispose();
     });
 

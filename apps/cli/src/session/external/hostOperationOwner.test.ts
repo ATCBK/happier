@@ -657,9 +657,9 @@ describe('external-session daemon host-operation owner', () => {
                 listener: healthyListener,
             });
 
-            const heldDelivery = operationListeners[0]!({
+            const heldDelivery = Promise.resolve(operationListeners[0]!({
                 kind: 'resyncRequired', reason: 'bufferOverflow', cursor: 'cursor-1',
-            });
+            }));
             let deliverySettled = false;
             void heldDelivery.then(() => { deliverySettled = true; }, () => { deliverySettled = true; });
             const heldDeliveryAssertion = kind === 'terminal'

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,57 +8,42 @@ import { accountSettingsParse } from '@happier-dev/protocol';
 
 import { configuration } from '@/configuration';
 import { resolveConnectedServiceMaterializedHomeRoot } from '@/daemon/connectedServices/catalogHooks';
+import { readCurrentCatalogHook } from '@/agent/catalog/runtimeEntry';
 import {
   resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
-import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import {
-  resolveExecutablePluginRuntimeRegistry,
-  type ResolvedExecutablePluginRuntimeRegistry,
-} from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 
 import { validateExternalMachineSource } from './validateExternalMachineSource';
 
 describe('validateExternalMachineSource', () => {
-  let controllerOwnsRegistry = false;
+  let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
 
   beforeAll(async () => {
-    let unownedRegistry: ResolvedExecutablePluginRuntimeRegistry | null =
-      await resolveExecutablePluginRuntimeRegistry({
-        contributes: getResolvedContributionRegistry(),
+    runtime = await createAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      runtimeOptions: {
         pluginIds: [
           'happier.agent.claude',
           'happier.agent.codex',
           'happier.agent.ohmypi',
           'happier.agent.opencode',
         ],
-      });
-    try {
-      await pluginReloadController.adoptPreparedRuntimeRegistry({
-        registry: unownedRegistry,
-        changedPluginIds: [
-          'happier.agent.claude',
-          'happier.agent.codex',
-          'happier.agent.ohmypi',
-          'happier.agent.opencode',
-        ],
-        durableRevision: 1,
-        runningSessionDisposition: 'retainRunningSessions',
-      });
-      controllerOwnsRegistry = true;
-      unownedRegistry = null;
-    } finally {
-      await unownedRegistry?.dispose();
-    }
+      },
+    });
+    const materializedRoot = await readCurrentCatalogHook('codex', entry => resolveConnectedServiceMaterializedHomeRoot('codex', {
+      activeServerDir: configuration.activeServerDir, serviceId: 'openai-codex', profileId: 'profile-1',
+    }, entry));
+    if (!materializedRoot) throw new Error('Expected the admitted Codex home');
+    // vitestSetup owns this worker's default Home and removes it after the suite.
+    mkdirSync(join(materializedRoot, 'sessions'), { recursive: true });
   });
 
   afterAll(async () => {
-    if (!controllerOwnsRegistry) return;
-    controllerOwnsRegistry = false;
-    await pluginReloadController.shutdown({ timeoutMs: 5_000 });
+    await runtime?.dispose();
   });
 
   afterEach(() => {
@@ -81,7 +66,9 @@ describe('validateExternalMachineSource', () => {
     const server = createServer((request, response) => {
       received.push(`${request.method ?? 'GET'} ${request.url ?? ''}`);
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end('[]');
+      // Auto attach requires the V1 health marker; a successful array response
+      // is not an OpenCode readiness contract.
+      response.end(request.url === '/global/health' ? JSON.stringify({ healthy: true }) : '[]');
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
@@ -91,7 +78,10 @@ describe('validateExternalMachineSource', () => {
       get received(): readonly string[] {
         return received;
       },
-      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+      close: () => new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
     });
   }
 
@@ -117,11 +107,10 @@ describe('validateExternalMachineSource', () => {
         },
         env: {},
       }),
-    ).rejects.toMatchObject({
-      name: 'ExternalSessionProviderFailureError',
-      code: 'source_invalid',
-      operation: 'resolveSource',
-      retryable: false,
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'invalid_request',
+      error: 'external_session_source_invalid',
     });
   });
 
@@ -133,6 +122,7 @@ describe('validateExternalMachineSource', () => {
           kind: 'codexHome',
           home: 'connectedService',
           connectedServiceId: 'openai-codex',
+          connectedServiceProfileId: 'profile-1',
         },
         env: {},
       }),
@@ -147,11 +137,11 @@ describe('validateExternalMachineSource', () => {
   });
 
   it('stamps the host-materialized connected home onto a raw machine call that omits homePath', async () => {
-    const materializedRoot = resolveConnectedServiceMaterializedHomeRoot('codex', {
+    const materializedRoot = await readCurrentCatalogHook('codex', entry => resolveConnectedServiceMaterializedHomeRoot('codex', {
       activeServerDir: configuration.activeServerDir,
       serviceId: 'openai-codex',
       profileId: 'profile-1',
-    });
+    }, entry));
     if (!materializedRoot) {
       throw new Error('Codex connected-service materialized home is unavailable in the test catalog');
     }

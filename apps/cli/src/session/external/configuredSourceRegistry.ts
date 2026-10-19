@@ -205,7 +205,7 @@ export async function buildConfiguredExternalSessionSourceSnapshot(params: Reado
   resolveSource: (
     agentId: string,
     source: unknown,
-  ) => ResolvedExternalSessionSourceProjection;
+  ) => ResolvedExternalSessionSourceProjection | Promise<ResolvedExternalSessionSourceProjection>;
   resolveProviderOps: (agentId: string) => Promise<Pick<ExternalSessionProviderOps, 'validateSource'> | null> | Pick<ExternalSessionProviderOps, 'validateSource'> | null;
   /** Private follow-admission cancellation propagated to provider validation. */
   signal?: AbortSignal;
@@ -319,7 +319,14 @@ export async function buildConfiguredExternalSessionSourceSnapshot(params: Reado
         `Configured external-session source for agent '${agentId}' was rejected by its provider`,
       );
     }
-    const canonical = params.resolveSource(agentId, safeValidation.source);
+    const canonical = await params.resolveSource(agentId, safeValidation.source);
+    assertBuildCurrent();
+    if (!occurrence.isCurrent()) {
+      throw new ConfiguredExternalSessionSourceRegistryError(
+        'retired_occurrence',
+        `Configured external-session source for Agent '${agentId}' belongs to a retired occurrence`,
+      );
+    }
     if (!canonical.ok) {
       throw projectionError(agentId, 'canonical', canonical);
     }
@@ -368,7 +375,14 @@ export async function buildConfiguredExternalSessionSourceSnapshot(params: Reado
         'malformed_source',
         `Configured external-session source for agent '${agentId}' is malformed`,
       );
-      const parsed = params.resolveSource(agentId, candidateSource);
+      const parsed = await params.resolveSource(agentId, candidateSource);
+      assertBuildCurrent();
+      if (!occurrence.isCurrent()) {
+        throw new ConfiguredExternalSessionSourceRegistryError(
+          'retired_occurrence',
+          `Configured external-session source for Agent '${agentId}' belongs to a retired occurrence`,
+        );
+      }
       if (!parsed.ok) throw projectionError(agentId, 'configured', parsed);
       admitted = await admitThroughProviderLeaf(agentId, occurrence, parsed);
     } catch (error) {

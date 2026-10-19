@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { HttpStatusError } from '@/api/client/httpStatusError';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { ExternalSessionFollowFailureError } from '@/session/external/externalSessionFollowFailure';
+import { ExternalSessionProviderFailureError } from '@/session/external/providerOps';
+import { logger } from '@/utils/logger';
+
 import { createExternalSessionFollowLeaseManager } from './createExternalSessionFollowLeaseManager';
 
 type FollowStatusWriteInput = Parameters<
@@ -28,6 +34,7 @@ describe('createExternalSessionFollowLeaseManager', () => {
 
     afterEach(() => {
         vi.useRealTimers();
+        vi.restoreAllMocks();
     });
 
     it('renews an existing viewer lease id for the same session and detaches it cleanly', async () => {
@@ -1595,9 +1602,41 @@ describe('createExternalSessionFollowLeaseManager', () => {
         expect(backgroundRelease).not.toHaveBeenCalled();
     });
 
-    it('publishes a bounded issue when replacing the source generation fails to acquire', async () => {
+    it.each([
+        [Object.defineProperty(new TypeError('secret failure'), 'message', { get: () => { throw new Error('secret diagnostic getter'); } }),
+            { errorKind: 'diagnostic_unavailable' }],
+        [Object.assign(new Error('secret Agent failure'), { name: 'secret-name', code: 'secret-code', stack: 'secret-stack' }),
+            { errorKind: 'error', errorName: 'Error', message: 'Follow lease acquisition failed' }],
+        [new HttpStatusError(503, 'secret Agent failure'), { errorKind: 'http_status', httpStatus: 503 }],
+        [new ExternalSessionFollowFailureError('source_changed', 'secret Agent failure'), { errorKind: 'host_follow', errorCode: 'source_changed' }],
+        [new ExternalSessionProviderFailureError({ code: 'source_unreachable', message: 'secret Agent failure', operation: 'secret-operation' }),
+            { errorKind: 'agent_failure', errorCode: 'source_unreachable' }],
+        [Object.assign(new TypeError('External Agent observation descriptor requested an unauthorized file set'), {
+            stack: [
+                'TypeError: secret header',
+                '    at secretFunction (' + new URL('./createExternalSessionFollowLeaseManager.ts', import.meta.url).href + ':17:29)',
+                '    at secretFrame (/secret/location.ts:31:47)',
+            ].join('\n'),
+        }), { errorKind: 'type_error', typeErrorCode: 'observation_file_set_unauthorized',
+            sourceFrame: { file: 'createExternalSessionFollowLeaseManager.ts', line: 17, column: 29 } }],
+        [Object.assign(new TypeError('secretSchema.optional is not a function'), {
+            stack: [
+                'TypeError: secret header',
+                '    at secretFunction (file:///secret/location.ts:31:47)',
+                '    at hiddenCaller (' + new URL('./createExternalSessionFollowLeaseManager.ts', import.meta.url).href + ':17:29)',
+            ].join('\n'),
+        }), { errorKind: 'type_error', typeErrorCode: 'schema_method_unavailable', missingSchemaMethod: 'optional' }],
+        [Object.assign(new TypeError('secretSchema.secretMethod is not a function'), {
+            stack: 'TypeError: secret header\n    at secretFunction (' + new URL('./createExternalSessionFollowLeaseManager.ts', import.meta.url).href + '?secret-query:17:29)',
+        }), { errorKind: 'type_error' }],
+        [Object.assign(new TypeError('secret External Agent observation descriptor requested an unauthorized file set'), {
+            stack: 'TypeError: secret header\n    at secretFunction (file:///secret/location.ts:31:47)',
+        }), { errorKind: 'type_error' }],
+    ] as const)('publishes a bounded issue and original diagnostic when replacing the source generation fails to acquire (%#)', async (failure, diagnostic) => {
         let nowMs = 30_000;
-        const writeFollowStatus = vi.fn(async () => {});
+        const writeFollowStatus = vi.fn(async (_input: FollowStatusWriteInput) => {});
+        // The file-log sink and metadata transport are genuine process boundaries.
+        const debug = vi.spyOn(logger, 'debug').mockImplementation(() => {});
         const manager = createExternalSessionFollowLeaseManager({
             now: () => nowMs,
             randomId: () => 'lease-reacquire-error',
@@ -1615,7 +1654,10 @@ describe('createExternalSessionFollowLeaseManager', () => {
         });
 
         nowMs = 31_000;
-        await expect(manager.setBackgroundFollowEnabled({
+        writeFollowStatus.mockImplementation(async (input) => {
+            if (input.followStatusV1.reason === 'lease_acquire_failed') throw new Error('secret status-write failure');
+        });
+        await expect(runWithServerHttpBaseUrl('https://name:secret-origin@follow.example.test/private?token=secret-query', () => manager.setBackgroundFollowEnabled({
             sessionId: 'session-reacquire-error',
             enabled: true,
             resource: {
@@ -1623,9 +1665,17 @@ describe('createExternalSessionFollowLeaseManager', () => {
                 occurrenceId: 'plugin-2',
             },
             acquireFollowLease: async () => {
-                throw new Error('secret Agent failure');
+                throw failure;
             },
-        })).rejects.toThrow('secret Agent failure');
+        }))).rejects.toBe(failure);
+
+        expect(debug).toHaveBeenCalledWith('[externalSessions.follow] Lease acquisition failed', expect.objectContaining({
+            sessionId: 'session-reacquire-error',
+            phase: 'acquire',
+            httpOrigin: 'https://follow.example.test',
+            ...diagnostic,
+        }));
+        expect(JSON.stringify(debug.mock.calls)).not.toContain('secret');
 
         expect(writeFollowStatus).toHaveBeenLastCalledWith({
             sessionId: 'session-reacquire-error',

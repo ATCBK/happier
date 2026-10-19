@@ -8,15 +8,15 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { accountSettingsParse, type ExternalSessionTranscriptInvalidationV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SpawnSessionOptions, SpawnSessionResult } from '@/rpc/handlers/registerSessionHandlers';
-import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { resolveBuiltInContributions } from '@/plugins/projection/registry/resolveBuiltInContributions';
+import { loadCurrentBundledPluginLocatorResult } from '@/plugins/projection/registry/builtIn/locators';
+import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import { resolveBackendExecutionSurfaces } from '@/agent/runtime/registry/engineRegistry';
 import { removeTempDir } from '@/testkit/fs/tempDir';
 import { logger } from '@/ui/logger';
-import { pruneLogsByCount } from '@/utils/logs/pruneLogsByCount';
+import { pruneLogs } from '@/utils/logs/pruneLogs';
 import {
   resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot,
@@ -61,6 +61,7 @@ vi.mock('@/api/session/external/secureRefresh/resolveExternalSessionTranscriptRe
 vi.mock('@/configuration', () => ({
   configuration: {
     activeServerDir: '/tmp/happier-test-active-server',
+    activeServerId: 'external-session-follow-test',
     happyHomeDir: '/tmp/happier-test-home',
     logsDir: privateLogsDir,
     publicReleaseRing: 'stable',
@@ -115,7 +116,7 @@ describe('external-session follow fixture log isolation', () => {
 
     expect(dirname(logger.getLogPath())).toBe(privateLogsDir);
     expect(await readFile(logger.getLogPath(), 'utf8')).toContain('private follow fixture log witness');
-    await pruneLogsByCount({ dir: privateLogsDir, suffix: '.log', keepCount: 0, keepPath: logger.getLogPath() });
+    await pruneLogs({ dir: privateLogsDir, suffix: '.log', keepCount: 0, keepPath: logger.getLogPath() });
     await expect(stat(obsoleteLogPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(foreignLogPath, 'utf8')).toBe('outside logger custody');
   });
@@ -181,44 +182,39 @@ async function waitForExpectation(assertion: () => void | Promise<void>, timeout
 }
 
 describe('registerMachineExternalSessionsRpcHandlers', () => {
-  let runtimeRegistryLease: PluginRuntimeRegistryLease | null = null;
+  let runtimeFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
 
   beforeAll(async () => {
-    const contributes = createResolvedContributionRegistry(resolveBuiltInContributions());
-    const externalSessionAgentIds = new Set(['claude', 'opencode']);
-    const pluginIds = contributes.agents
-      .filter((agent) => externalSessionAgentIds.has(agent.id))
-      .map((agent) => agent.pluginId)
-      .filter((pluginId): pluginId is string => typeof pluginId === 'string');
-    runtimeRegistryLease = await pluginReloadController.acquireRuntimeRegistry({
-      resolveRuntimeRegistry: async () => await resolveExecutablePluginRuntimeRegistry({
-        happyHomeDir: '/tmp/happier-test-home',
-        contributes,
-        pluginIds,
-        generationAuthority: {
-          commit: null,
-          generations: new Map(),
-          rejectedGenerations: new Map(),
-          isCurrent: async () => true,
-        },
-        resolveDevelopmentSourceAuthority: ({ pluginId, rootPath }) => ({
-          kind: 'development',
-          registeredRootId: `external-session-follow:${pluginId}`,
-          canonicalRoot: rootPath,
-          observedRevision: 1,
-        }),
-      }),
+    const pluginIds = new Set([
+      'happier.agent.claude',
+      'happier.agent.opencode',
+      // OpenCode declares these Connected Account descriptor dependencies.
+      'happier.agent.codex',
+      'happier.voice.openai',
+    ]);
+    const bundled = loadCurrentBundledPluginLocatorResult();
+    const inputs = projectLoadedPluginContributes({
+      loadResult: {
+        loadedPlugins: bundled.loadedPlugins.filter((plugin) => pluginIds.has(plugin.pluginId)),
+        diagnosticsByPluginId: {},
+      },
+      provenance: 'first_party',
     });
-    for (const agentId of externalSessionAgentIds) {
-      const surfaces = await resolveBackendExecutionSurfaces(agentId);
-      if (!surfaces.externalSession) {
-        throw new Error(`Expected authoritative ${agentId} external-session execution surface`);
-      }
-    }
+    const contributes = createResolvedContributionRegistry({
+      ...inputs,
+      agents: resolveBuiltInContributions().agents.filter((agent) => pluginIds.has(agent.pluginId ?? '')),
+    });
+    runtimeFixture = await createAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      runtimeOptions: { contributes },
+    });
+
   });
 
   afterAll(async () => {
-    await runtimeRegistryLease?.release();
+    readCredentialsMock.mockReset();
+    await runtimeFixture?.dispose();
+    await pluginReloadController.shutdown();
     resetActiveAccountSettingsSnapshotForTests();
   });
 

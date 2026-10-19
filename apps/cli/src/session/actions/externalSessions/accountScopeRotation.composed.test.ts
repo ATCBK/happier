@@ -161,8 +161,10 @@ function configureDefaultLinkedSource(): void {
   });
   defaultDependencies.resolveGenerationBoundSurface.mockResolvedValue({
     providerOps: { pageTranscript },
+    sourceCustody: { kind: 'development', registeredRootId: 'rotation-fixture' },
+    occurrenceId: 'plugin-current',
     resource: {
-      pluginOccurrenceId: 'plugin-current',
+      occurrenceId: 'plugin-current',
       retirementSignal: new AbortController().signal,
     },
   });

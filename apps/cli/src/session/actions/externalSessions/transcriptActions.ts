@@ -16,17 +16,39 @@ import {
     externalSessionsError,
     internalErrorResponse,
     mapExternalSessionProviderFailureToExternalSessionsError,
+    logExternalSessionSourceDiscontinuity,
+    logExternalSessionUnsupportedTranscriptRecord,
+    logExternalSessionTranscriptPageFailure,
 } from './responseErrors';
 import { resolveExternalSessionTranscriptRefreshCurrentness } from '@/api/session/external/secureRefresh/resolveExternalSessionTranscriptRefreshBinding';
 import { loadLinkedExternalSession } from '@/api/session/external/takeover/loadLinkedExternalSession';
 import { readStoredCredentials } from '@/persistence';
+import type { ExternalSessionTranscriptReadAfter } from '@/session/external/providerOps';
+
+function logReadAfterDiscontinuity(result: ExternalSessionTranscriptReadAfter, cursor: string): void {
+    if (result.outcome === 'advanced') {
+        if (result.nextCursor === cursor) {
+            logExternalSessionSourceDiscontinuity([{ code: 'external_sessions_frontier_anchor' }]);
+        } else if (result.diagnostics?.some(diagnostic => diagnostic.severity === 'required')) {
+            logExternalSessionSourceDiscontinuity(result.diagnostics);
+        } else {
+            logExternalSessionUnsupportedTranscriptRecord(result.diagnostics);
+        }
+    } else if (result.outcome === 'source_replaced' || result.outcome === 'gap_or_cursor_expired') {
+        logExternalSessionSourceDiscontinuity([{ code: result.outcome === 'source_replaced'
+            ? 'external_sessions_source_identity_changed' : 'external_sessions_frontier_anchor' }]);
+    }
+}
 
 export async function executeExternalSessionTranscriptPageAction(
     raw: unknown,
     context?: Pick<ExternalSessionActionContext, 'transientMediaReadAllowance'>,
 ): Promise<ExternalSessionTranscriptPageResponse> {
     const parsed = ExternalSessionTranscriptPageRequestSchema.safeParse(raw);
-    if (!parsed.success) return externalSessionsError('invalid_request') satisfies ExternalSessionTranscriptPageResponse;
+    if (!parsed.success) {
+        logExternalSessionTranscriptPageFailure('external_sessions_transcript_request_invalid');
+        return externalSessionsError('invalid_request') satisfies ExternalSessionTranscriptPageResponse;
+    }
     let validatedSource: Awaited<ReturnType<typeof validateExternalMachineSource>>;
     try {
         validatedSource = await validateExternalMachineSource({
@@ -37,6 +59,7 @@ export async function executeExternalSessionTranscriptPageAction(
     } catch (error) {
         const providerFailure = mapExternalSessionProviderFailureToExternalSessionsError(error);
         if (providerFailure) return providerFailure satisfies ExternalSessionTranscriptPageResponse;
+        logExternalSessionTranscriptPageFailure('external_sessions_transcript_source_validation');
         return internalErrorResponse(
             'external_session_transcript_page.validate_source',
             error,
@@ -44,6 +67,7 @@ export async function executeExternalSessionTranscriptPageAction(
         ) satisfies ExternalSessionTranscriptPageResponse;
     }
     if (!validatedSource.ok) {
+        logExternalSessionTranscriptPageFailure('external_sessions_transcript_source_validation');
         return externalSessionsError(validatedSource.errorCode ?? 'invalid_request', validatedSource.error) satisfies ExternalSessionTranscriptPageResponse;
     }
     const { agentId, remoteSessionId, direction, cursor } = parsed.data;
@@ -56,6 +80,7 @@ export async function executeExternalSessionTranscriptPageAction(
     try {
         const providerOps = validatedSource.providerOps;
         if (!providerOps.pageTranscript) {
+            logExternalSessionTranscriptPageFailure('external_sessions_transcript_page_unsupported');
             return externalSessionsError('agent_unavailable', 'transcript_page_not_supported') satisfies ExternalSessionTranscriptPageResponse;
         }
         const res = await providerOps.pageTranscript({
@@ -66,6 +91,8 @@ export async function executeExternalSessionTranscriptPageAction(
             maxBytes,
             maxItems,
         });
+        if (res.truncated) logExternalSessionSourceDiscontinuity(res.diagnostics);
+        else logExternalSessionUnsupportedTranscriptRecord(res.diagnostics);
         const transientMediaReadFiles = collectTransientSessionMediaReadFiles(res.items, {
             allowedRoots: validatedSource.transcriptMediaReadRoots,
         });
@@ -82,6 +109,7 @@ export async function executeExternalSessionTranscriptPageAction(
     } catch (error) {
         const providerFailure = mapExternalSessionProviderFailureToExternalSessionsError(error);
         if (providerFailure) return providerFailure satisfies ExternalSessionTranscriptPageResponse;
+        logExternalSessionTranscriptPageFailure('external_sessions_transcript_read_failed');
         return internalErrorResponse(
             'external_session_transcript_page',
             error,
@@ -172,6 +200,7 @@ export async function executeExternalSessionTranscriptReadAfterAction(
                 maxBytes: EXTERNAL_SESSIONS_INVOCATION_POLICY.readAfterTranscript.maxSerializedBytes,
                 maxItems: EXTERNAL_SESSIONS_INVOCATION_POLICY.readAfterTranscript.maxItems,
             });
+            logReadAfterDiscontinuity(res, request.cursor);
             const currentAfterRead = await resolveExternalSessionTranscriptRefreshCurrentness({
                 sessionId: request.binding.sessionId,
                 cursor: request.cursor,
@@ -269,6 +298,7 @@ export async function executeExternalSessionTranscriptReadAfterAction(
             maxBytes,
             maxItems,
         });
+        logReadAfterDiscontinuity(res, cursor);
         if (res.outcome === 'source_unavailable') {
             return externalSessionsError('agent_unavailable', 'transcript_source_unavailable') satisfies ExternalSessionTranscriptReadAfterResponse;
         }

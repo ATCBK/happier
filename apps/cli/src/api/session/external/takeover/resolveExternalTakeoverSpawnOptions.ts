@@ -279,6 +279,7 @@ export async function resolveExternalTakeoverSpawnOptions(params: Readonly<{
   const accountDefaults = await resolveSessionSpawnConnectedServicesDefaultsPayload({
     agentId: params.linked.agentId,
     credentials,
+    signal,
     ...(resolveTeamCredentialResourceCatalog
       ? { resolveTeamCredentialResourceCatalog }
       : {}),

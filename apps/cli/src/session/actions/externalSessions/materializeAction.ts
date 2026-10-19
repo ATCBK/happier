@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { canCancelExternalSessionOperationV1, EXTERNAL_SESSION_REQUIRED_ITEM_DIAGNOSTIC_CAP_V1, ExternalSessionOperationSemanticRequestV1Schema, projectExternalSessionOperationProgressV1, resolveExternalSessionOperationTimelineV1 } from '@happier-dev/protocol/sessions/external/operationV1';
 import { ExternalSessionOperationCancelInputV1Schema, ExternalSessionOperationDiscardInputV1Schema, ExternalSessionOperationResumeInputV1Schema, ExternalSessionOperationRetryInputV1Schema, ExternalSessionOperationStatusInputV1Schema } from '@happier-dev/protocol/sessions/external/operationActionSchemasV1';
@@ -2669,9 +2669,9 @@ export function createExternalSessionMaterializeActionExecutor(
     },
 
     async start(raw, context) {
-      const parsed = z.object({
+      const parsed = z.strictObject({
         request: ExternalSessionOperationSemanticRequestV1Schema,
-      }).strict().safeParse(raw);
+      }).safeParse(raw);
       if (!parsed.success || parsed.data.request.plan !== 'materialize') {
         return failure('invalid_state', 'Invalid materialization request.');
       }

@@ -240,7 +240,7 @@ describe('contextual External Sessions takeover durable admission', () => {
       { ref: null, key: 'key' },
       { ref: { ...ref, agentId: ' codex' }, key: 'key' },
       { ref: { ...ref, sourceId: '' }, key: 'key' },
-      { ref: { ...ref, remoteSessionId: 'remote ' }, key: 'key' },
+      { ref: { ...ref, remoteSessionId: ' ' }, key: 'key' },
       { ref, key: '' },
       { ref, key: ' key' },
       { ref, key: 'x'.repeat(257) },

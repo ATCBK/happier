@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   FeaturesResponseSchema,
@@ -19,13 +19,9 @@ import {
 } from '@happier-dev/protocol';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import {
-  ExternalSessionProviderFailureError,
-  type ExternalSessionProviderOps,
-} from '@/session/external/providerOps';
-import type {
-  AgentExternalSessionsContribution,
-} from '@happier-dev/plugin-sdk/sessions/external';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import type { RpcActionExecutor } from '@/rpc/handlers/_actionDispatchAdapter';
 import type { ExternalSessionHostOperationSet } from '@/session/external/hostOperationOwner';
 import type {
@@ -33,63 +29,27 @@ import type {
 } from '@/api/session/external/leases/startExternalSessionPassiveObservation';
 
 const {
-  resolveExecutionSurfacesMock,
   observationProjectionParams,
-  authoritativeRuntimeRegistryLeaseOverride,
-  resolveTranscriptRefreshBindingMock,
+  fixtureCredentials,
+  readStoredCredentialsMock,
   writeFollowStatusMock,
 } = vi.hoisted(() => {
-  const resolveExecutionSurfacesMock = vi.fn();
   return {
-    resolveExecutionSurfacesMock,
     observationProjectionParams: {
       current: null as unknown,
     },
-    authoritativeRuntimeRegistryLeaseOverride: {
-      current: null as null | Readonly<{
-        registry: unknown;
-        release(): Promise<void>;
-      }>,
-    },
-    resolveTranscriptRefreshBindingMock: vi.fn(),
+    fixtureCredentials: { current: false },
+    readStoredCredentialsMock: vi.fn(),
     writeFollowStatusMock: vi.fn(async (_input: unknown) => {}),
-  };
-});
-
-vi.mock('@/agent/runtime/bridges/session/SessionHostBridge', () => ({
-  getSessionHostBridge: () => ({
-    resolveExecutionSurfaces: resolveExecutionSurfacesMock,
-  }),
-}));
-
-vi.mock('@/plugins/runtime/reload/runtimeLease', async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import('@/plugins/runtime/reload/runtimeLease')
-  >();
-  return {
-    ...actual,
-    acquireAuthoritativePluginRuntimeRegistryLease: (
-      ...args: Parameters<typeof actual.acquireAuthoritativePluginRuntimeRegistryLease>
-    ) => authoritativeRuntimeRegistryLeaseOverride.current
-      ?? actual.acquireAuthoritativePluginRuntimeRegistryLease(...args),
   };
 });
 
 vi.mock('@/persistence', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/persistence')>();
-  const resolveFixtureCredentials = () => authoritativeRuntimeRegistryLeaseOverride.current
-    ? Promise.resolve({
-        token: 'fixture-token',
-        encryption: {
-          type: 'legacy' as const,
-          secret: new Uint8Array(),
-        },
-      })
-    : null;
   return {
     ...actual,
-    readCredentials: () => resolveFixtureCredentials() ?? actual.readCredentials(),
-    readStoredCredentials: () => resolveFixtureCredentials() ?? actual.readStoredCredentials(),
+    readCredentials: () => readStoredCredentialsMock(),
+    readStoredCredentials: () => readStoredCredentialsMock(),
   };
 });
 
@@ -110,18 +70,6 @@ vi.mock('@/api/session/external/leases/createExternalSessionObservationDaemonPro
 
 vi.mock('@/api/session/external/backgroundFollow/externalSessionBackgroundFollowMetadata', () => ({
   writeExternalSessionFollowStatus: (input: unknown) => writeFollowStatusMock(input),
-}));
-
-vi.mock('@/api/session/external/secureRefresh/resolveExternalSessionTranscriptRefreshBinding', () => ({
-  resolveExternalSessionTranscriptRefreshBinding: (...args: unknown[]) =>
-    resolveTranscriptRefreshBindingMock(...args),
-}));
-
-// This host-composition test does not invoke bundled SCM behavior. Treat the
-// concurrently edited plugin manifest as the package boundary it is, so its
-// unrelated loading error cannot prevent this lifecycle contract from running.
-vi.mock('@happier-dev/plugins-scm-azure-devops/manifest', () => ({
-  PLUGIN_MANIFEST: {},
 }));
 
 import { registerMachineExternalSessionsRpcHandlers } from './rpcHandlers.externalSessions';
@@ -208,17 +156,22 @@ function createServerFeaturesSnapshot(
 }
 
 describe('registerMachineExternalSessionsRpcHandlers execution-surface seam', () => {
+  afterAll(async () => {
+    await pluginReloadController.shutdown();
+  });
+
   beforeEach(() => {
-    resolveExecutionSurfacesMock.mockReset();
     observationProjectionParams.current = null;
-    authoritativeRuntimeRegistryLeaseOverride.current = null;
-    resolveTranscriptRefreshBindingMock.mockReset();
+    fixtureCredentials.current = false;
+    readStoredCredentialsMock.mockReset();
+    readStoredCredentialsMock.mockImplementation(async () => fixtureCredentials.current
+      ? { token: 'fixture-token', encryption: { type: 'legacy' as const, secret: new Uint8Array() } }
+      : null);
     writeFollowStatusMock.mockReset();
     writeFollowStatusMock.mockResolvedValue(undefined);
   });
 
   it('injects daemon device-local custody into secure transcript read-after validation', async () => {
-    resolveTranscriptRefreshBindingMock.mockResolvedValue(null);
     const deviceLocalSecretStorage = {
       sealJson: vi.fn(() => 'sealed'),
       openJson: vi.fn(() => null),
@@ -268,11 +221,17 @@ describe('registerMachineExternalSessionsRpcHandlers execution-surface seam', ()
       binding,
       result: { outcome: 'source_unavailable' },
     });
-    expect(resolveTranscriptRefreshBindingMock).toHaveBeenCalledWith({
-      sessionId: 'session-1',
+    expect(readStoredCredentialsMock).toHaveBeenCalledOnce();
+
+    readStoredCredentialsMock.mockClear();
+    const noCustodyRpc = createRpcHandlerManager();
+    registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager: noCustodyRpc as never });
+    await expect(noCustodyRpc.handlers.get(RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_READ_AFTER)?.({
+      v: 1,
+      binding,
       cursor,
-      deviceLocalSecretStorage,
-    });
+    })).resolves.toEqual({ v: 1, binding, result: { outcome: 'source_unavailable' } });
+    expect(readStoredCredentialsMock).not.toHaveBeenCalled();
   });
 
   it('installs and retires daemon-scoped host operations with machine RPC composition', async () => {
@@ -827,268 +786,92 @@ describe('registerMachineExternalSessionsRpcHandlers execution-surface seam', ()
     expect(actionExecutor.execute).toHaveBeenCalledOnce();
   });
 
-  it.each(['claude', 'codex', 'opencode', 'ohMyPi'] as const)(
-    'resolves direct-session candidates through the held authoritative runtime registry for %s',
-    async (agentId) => {
-    const externalSessions = {
-      resolveSource: vi.fn(async ({ source }) => ({ ok: true as const, value: { source } })),
-      listCandidates: vi.fn(async () => ({
-        ok: true as const,
-        value: {
-          candidates: [],
-          nextCursor: null,
-        },
-      })),
-      resolveLinkIdentity: vi.fn(async ({ source, remoteSessionId }) => ({
-        ok: true as const,
-        value: { source, remoteSessionId, linkData: {} },
-      })),
-      resolveLinkedIdentity: vi.fn(async ({ source, remoteSessionId, linkData }) => ({
-        ok: true as const,
-        value: { source, remoteSessionId, linkData },
-      })),
-      pageTranscript: vi.fn(async () => ({
-        ok: true as const,
-        value: {
-          items: [],
-          nextCursor: null,
-        },
-      })),
-      readAfterTranscript: vi.fn(async () => ({
-        ok: true as const,
-        value: { outcome: 'already_current' as const },
-      })),
-    } satisfies AgentExternalSessionsContribution;
-    const pluginId = agentId === 'ohMyPi'
-      ? 'happier.agent.ohmypi'
-      : `fixture.${agentId}`;
-    const localId = agentId === 'ohMyPi' ? 'ohmypi' : agentId;
-    const source = agentId === 'ohMyPi'
-      ? { kind: 'ohMyPiAgentDir' as const, agentDir: '/tmp/oh-my-pi-agent' }
-      : { kind: 'codexHome' as const, home: 'user' as const };
-    const sourceDeclaration = agentId === 'ohMyPi'
-      ? {
-          sourceKind: 'ohMyPiAgentDir',
-          schema: {
-            fields: [
-              { name: 'kind', kind: 'literal', value: 'ohMyPiAgentDir' },
-              {
-                name: 'agentDir',
-                kind: 'string',
-                min: 1,
-                max: 10_000,
-                nullish: true,
-              },
-            ],
-          },
-          key: {
-            segments: [
-              { kind: 'literal', value: 'ohMyPiAgentDir' },
-              { kind: 'field', field: 'agentDir' },
-            ],
-          },
-          instances: [{ kind: 'default', constants: {} }],
-        } as const
-      : {
-          sourceKind: 'codexHome',
-          schema: {
-            fields: [
-              { name: 'kind', kind: 'literal', value: 'codexHome' },
-              { name: 'home', kind: 'enum', values: ['user', 'connectedService'] },
-            ],
-          },
-          key: {
-            segments: [
-              { kind: 'literal', value: 'codexHome' },
-              { kind: 'homeMode', field: 'home' },
-            ],
-          },
-          instances: [{ kind: 'default', constants: { home: 'user' } }],
-        } as const;
-    const agentContribution = {
-      id: agentId,
-      pluginId,
-      identity: { pluginId, localId },
-      richDefinition: {
-        definition: {
-          surfaces: {
-            externalSession: {
-              sources: [sourceDeclaration],
-            },
-          },
-        },
-      },
-    };
-    const retirement = new AbortController();
-    const registry = {
-      contributes: {
-        agents: [agentContribution],
-        agentDefinitionsById: new Map([[agentId, agentContribution]]),
-      },
-      agentRuntimesByAgentId: new Map([[agentId, {
-        pluginId,
-        pluginVersion: '1.0.0',
+  it.each([true, false])('routes candidates and typed unavailable results through the admitted registry (available: %s)', async (available) => {
+    const runtime = await createAuthoredAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      coldStart: true,
+      plugins: [{
+        manifest: createPluginManifestV2Fixture({
+          id: 'acme.registry-candidates',
+          contributes: { agents: [{
+            id: 'history', title: 'Registry history',
+            capabilities: { surfaces: ['externalSessions'] },
+            surfaces: { externalSession: {
+              sources: [{
+                sourceKind: 'registryHistory',
+                schema: { fields: [{ name: 'kind', kind: 'literal', value: 'registryHistory' }] },
+                key: { segments: [{ kind: 'literal', value: 'registryHistory' }] },
+                instances: [{ kind: 'default', constants: {} }],
+              }],
+            } },
+          }] },
+        }),
+        files: { 'daemon.mjs': `
+          export function activate(api) {
+            api.agents.registerExternalSessions('history', {
+              resolveSource: async ({ source }) => ({ ok: true, value: { source } }),
+              listCandidates: async () => (${JSON.stringify(available
+                ? { ok: true, value: { candidates: [], nextCursor: null } }
+                : { ok: false, code: 'agent_unavailable', message: 'private fixture detail', retryable: true })}),
+              resolveLinkIdentity: async ({ source, remoteSessionId }) => ({ ok: true, value: { source, remoteSessionId, linkData: {} } }),
+              resolveLinkedIdentity: async ({ source, remoteSessionId, linkData }) => ({ ok: true, value: { source, remoteSessionId, linkData } }),
+              pageTranscript: async () => ({ ok: true, value: { items: [], nextCursor: null } }),
+              readAfterTranscript: async () => ({ ok: true, value: { outcome: 'already_current' } }),
+            });
+          }
+        ` },
+      }],
+    });
+    fixtureCredentials.current = true;
+    try {
+      const agentId = runtime.registry.contributes.agents
+        .find((agent) => agent.pluginId === 'acme.registry-candidates')?.id;
+      expect(agentId).toBeDefined();
+      const rpcHandlerManager = createRpcHandlerManager();
+      registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager: rpcHandlerManager as never });
+      const handler = rpcHandlerManager.handlers.get(RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST);
+      const legacyHandler = rpcHandlerManager.handlers.get(RPC_METHODS.DAEMON_DIRECT_SESSIONS_CANDIDATES_LIST_LEGACY);
+      expect(handler).toBeDefined();
+      expect(legacyHandler).toBeDefined();
+      const response = await handler!({
+        machineId: 'machine-1',
         agentId,
-        generation: 'fixture-generation',
-        hasPrimaryRuntime: false as const,
-        externalSessions,
-        retirementSignal: retirement.signal,
-        isCurrent: () => true,
-      }]]),
-      activateContributionsOnDemand: vi.fn(async () => []),
-    };
-    const release = vi.fn(async () => {});
-    authoritativeRuntimeRegistryLeaseOverride.current = {
-      registry,
-      release,
-    };
-
-    const rpcHandlerManager = createRpcHandlerManager();
-    registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager: rpcHandlerManager as never });
-
-    const handler = rpcHandlerManager.handlers.get(RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST);
-    const legacyHandler = rpcHandlerManager.handlers.get(RPC_METHODS.DAEMON_DIRECT_SESSIONS_CANDIDATES_LIST_LEGACY);
-    expect(handler).toBeDefined();
-    expect(legacyHandler).toBeDefined();
-
-    const response = await handler!({
-      machineId: 'machine-1',
-      agentId,
-      source,
-      limit: 10,
-    });
-    // A caller-chosen Oh My Pi directory must be compared with the separately
-    // resolved declaration-default directory. The other fixtures request the
-    // declaration's exact authorized instance and reuse its first resolution.
-    expect(externalSessions.resolveSource).toHaveBeenCalledTimes(
-      agentId === 'ohMyPi' ? 2 : 1,
-    );
-    expect(externalSessions.listCandidates).toHaveBeenCalledTimes(1);
-    expect(response).toEqual({
-      ok: true,
-      candidates: [],
-      nextCursor: null,
-      autoLinkPolicyScopeV1: expect.any(Object),
-    });
-
-    expect(resolveExecutionSurfacesMock).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalled();
-    },
-  );
-
-  it('returns a protocol-shaped candidates error when execution-surface resolution fails', async () => {
-    resolveExecutionSurfacesMock.mockRejectedValueOnce(
-      Object.assign(new Error('Cannot find providerOps chunk'), { code: 'ERR_MODULE_NOT_FOUND' }),
-    );
-
-    const rpcHandlerManager = createRpcHandlerManager();
-    registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager: rpcHandlerManager as never });
-
-    const handler = rpcHandlerManager.handlers.get(RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST);
-    expect(handler).toBeDefined();
-
-    const response = await handler!({
-      machineId: 'machine-1',
-      agentId: 'codex',
-      source: {
-        kind: 'codexHome',
-        home: 'user',
-      },
-      limit: 10,
-    });
-
-    expect(response).toEqual({
-      ok: false,
-      errorCode: 'internal_error',
-      error: 'external_sessions_candidates_list_failed',
-    });
-    expect(ExternalSessionsCandidatesListResponseSchema.safeParse(response).success).toBe(true);
-  });
-
-  it('returns a typed provider-unavailable candidates error when the provider cannot list candidates', async () => {
-    const externalSessions = {
-      validateSource: vi.fn(async ({ source }) => ({ ok: true as const, source })),
-      listCandidates: vi.fn(async () => {
-        throw new ExternalSessionProviderFailureError({
-          operation: 'externalSession.listCandidates',
-          code: 'agent_unavailable',
-          message: 'external_session_candidate_service_unavailable',
-          retryable: true,
-        });
-      }),
-      pageTranscript: vi.fn(async () => ({
-        items: [],
+        source: { kind: 'registryHistory' },
+        limit: 10,
+      });
+      expect(response).toMatchObject(available ? {
+        ok: true,
+        candidates: [],
         nextCursor: null,
-        tailCursor: null,
-        hasMore: false,
-        truncated: false,
-      })),
-      readAfterTranscript: vi.fn(async () => ({ outcome: 'already_current' as const })),
-    } satisfies ExternalSessionProviderOps;
-
-    resolveExecutionSurfacesMock.mockResolvedValue({
-      externalSession: externalSessions,
-      terminalRuntime: null,
-      attach: null,
-      handoff: null,
-      fork: null,
-      checkpoint: null,
-    });
-
-    const rpcHandlerManager = createRpcHandlerManager();
-    registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager: rpcHandlerManager as never });
-
-    const handler = rpcHandlerManager.handlers.get(RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST);
-    expect(handler).toBeDefined();
-
-    const response = await handler!({
-      machineId: 'machine-1',
-      agentId: 'codex',
-      source: {
-        kind: 'codexHome',
-        home: 'user',
-      },
-      limit: 10,
-    });
-
-    expect(response).toEqual({
-      ok: false,
-      errorCode: 'internal_error',
-      error: 'external_sessions_candidates_list_failed',
-    });
-    expect(ExternalSessionsCandidatesListResponseSchema.safeParse(response).success).toBe(true);
-  });
-
-  it('returns a protocol-shaped link.ensure error when execution-surface validation throws', async () => {
-    resolveExecutionSurfacesMock.mockRejectedValueOnce(
-      Object.assign(new Error('Cannot find providerOps chunk'), { code: 'ERR_MODULE_NOT_FOUND' }),
-    );
-
-    const rpcHandlerManager = createRpcHandlerManager();
-    registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager: rpcHandlerManager as never });
-
-    const handler = rpcHandlerManager.handlers.get(RPC_METHODS.DAEMON_EXTERNAL_SESSION_LINK_ENSURE);
-    expect(handler).toBeDefined();
-
-    const response = await handler!({
-      machineId: 'machine-1',
-      agentId: 'codex',
-      remoteSessionId: 'remote-session-1',
-      source: {
-        kind: 'codexHome',
-        home: 'user',
-      },
-    });
-
-    expect(response).toEqual({
-      ok: false,
-      errorCode: 'internal_error',
-      error: 'external_session_link_ensure_failed',
-    });
-    expect(ExternalSessionLinkEnsureResponseSchema.safeParse(response).success).toBe(true);
+        autoLinkPolicyScopeV1: expect.any(Object),
+      } : { ok: false, errorCode: 'agent_unavailable' });
+      expect(JSON.stringify(response)).not.toContain('private fixture detail');
+    } finally {
+      await runtime.dispose();
+    }
   });
 
   it.each([
+    [
+      RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST,
+      {
+        machineId: 'machine-1',
+        agentId: 'codex',
+        source: { kind: 'codexHome', home: 'user' },
+        limit: 10,
+      },
+      ExternalSessionsCandidatesListResponseSchema,
+    ],
+    [
+      RPC_METHODS.DAEMON_EXTERNAL_SESSION_LINK_ENSURE,
+      {
+        machineId: 'machine-1',
+        agentId: 'codex',
+        remoteSessionId: 'remote-session-1',
+        source: { kind: 'codexHome', home: 'user' },
+      },
+      ExternalSessionLinkEnsureResponseSchema,
+    ],
     [
       RPC_METHODS.DAEMON_EXTERNAL_SESSION_ATTACH,
       {
@@ -1099,7 +882,6 @@ describe('registerMachineExternalSessionsRpcHandlers execution-surface seam', ()
         source: { kind: 'codexHome', home: 'user' },
         leaseId: 'lease-1',
       },
-      'external_session_attach_failed',
       ExternalSessionAttachResponseSchema,
     ],
     [
@@ -1112,7 +894,6 @@ describe('registerMachineExternalSessionsRpcHandlers execution-surface seam', ()
         source: { kind: 'codexHome', home: 'user' },
         enabled: true,
       },
-      'follow_policy_set_failed',
       ExternalSessionFollowPolicySetResponseSchema,
     ],
     [
@@ -1124,7 +905,6 @@ describe('registerMachineExternalSessionsRpcHandlers execution-surface seam', ()
         remoteSessionId: 'remote-session-1',
         source: { kind: 'codexHome', home: 'user' },
       },
-      'external_session_status_get_failed',
       ExternalSessionStatusGetResponseSchema,
     ],
     [
@@ -1136,7 +916,6 @@ describe('registerMachineExternalSessionsRpcHandlers execution-surface seam', ()
         source: { kind: 'codexHome', home: 'user' },
         direction: 'older',
       },
-      'external_session_transcript_page_failed',
       ExternalSessionTranscriptPageResponseSchema,
     ],
     [
@@ -1148,16 +927,11 @@ describe('registerMachineExternalSessionsRpcHandlers execution-surface seam', ()
         source: { kind: 'codexHome', home: 'user' },
         cursor: 'cursor-1',
       },
-      'external_session_transcript_read_after_failed',
       ExternalSessionTranscriptReadAfterResponseSchema,
     ],
   ] as const)(
-    'returns a protocol-shaped %s precondition or source-validation outcome',
-    async (method, input, expectedError, responseSchema) => {
-      resolveExecutionSurfacesMock.mockRejectedValueOnce(
-        Object.assign(new Error('Cannot find providerOps chunk'), { code: 'ERR_MODULE_NOT_FOUND' }),
-      );
-
+    'returns a protocol-shaped %s precondition or missing-Agent outcome',
+    async (method, input, responseSchema) => {
       const rpcHandlerManager = createRpcHandlerManager();
       registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager: rpcHandlerManager as never });
 
@@ -1192,50 +966,13 @@ describe('registerMachineExternalSessionsRpcHandlers execution-surface seam', ()
               }
             : {
                 ok: false,
-                errorCode: 'internal_error',
-                error: expectedError,
+                errorCode: 'agent_unavailable',
+                error: 'external_session_agent_unavailable',
               },
       );
-      if (expectsAuthenticatedPersistedLink || expectsPassiveUnknownStatus) {
-        expect(resolveExecutionSurfacesMock).not.toHaveBeenCalled();
-      }
       expect(responseSchema.safeParse(response).success).toBe(true);
     },
   );
-
-  it('returns an internal candidates error when no authoritative Agent runtime registry is installed', async () => {
-    resolveExecutionSurfacesMock.mockResolvedValue({
-      externalSession: null,
-      terminalRuntime: null,
-      attach: null,
-      handoff: null,
-      fork: null,
-      checkpoint: null,
-    });
-
-    const rpcHandlerManager = createRpcHandlerManager();
-    registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager: rpcHandlerManager as never });
-
-    const handler = rpcHandlerManager.handlers.get(RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST);
-    expect(handler).toBeDefined();
-
-    const response = await handler!({
-      machineId: 'machine-1',
-      agentId: 'codex',
-      source: {
-        kind: 'codexHome',
-        home: 'user',
-      },
-      limit: 10,
-    });
-
-    expect(response).toEqual({
-      ok: false,
-      errorCode: 'internal_error',
-      error: 'external_sessions_candidates_list_failed',
-    });
-    expect(ExternalSessionsCandidatesListResponseSchema.safeParse(response).success).toBe(true);
-  });
 
   it('routes canonical and safe legacy RPCs while retiring both unphased legacy takeovers before domain execution', async () => {
     const calls: Array<Readonly<{ actionId: string; input: unknown }>> = [];

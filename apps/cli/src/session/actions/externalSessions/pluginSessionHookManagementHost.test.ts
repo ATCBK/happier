@@ -277,7 +277,7 @@ function createFixture(input: Readonly<{
         pluginId: agent.pluginId,
         pluginVersion: '1.0.0',
         agentId,
-        generation: 'generation-1',
+        occurrenceId: 'generation-1',
         hasPrimaryRuntime: false as const,
         externalSessions: {} as AgentExternalSessionsContribution,
         externalSessionHooks: hooks,

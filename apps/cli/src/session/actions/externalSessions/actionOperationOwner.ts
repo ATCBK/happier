@@ -9,6 +9,7 @@ import {
   listExternalSessionOperationStoredEntries,
   readExternalSessionOperationStoredEntry,
   resolveExternalSessionOperationRecordsDirectory,
+  resolveExternalSessionOperationAdmissionAccountScope,
   subscribeExternalSessionOperationRecords,
   type ExternalSessionOperationStoredEntry,
 } from './operationRecordStore';
@@ -71,16 +72,25 @@ export function createExternalSessionActionOperationOwner(deps: Readonly<{
   activeServerDir: string;
   execute: RpcActionExecutor['execute'];
 }>): ActionOperationDomainOwner {
-  const directoryForScope = async (scope: ActionOperationQueryScope) => await resolveExternalSessionOperationRecordsDirectory(
-    deps.activeServerDir, 'activity', { activeServerDir: deps.activeServerDir, accountSubject: scope.accountId },
-  );
-  const read = async (scope: ActionOperationQueryScope, operationId: string) => await readExternalSessionOperationStoredEntry(
-    await directoryForScope(scope), operationId,
-  );
+  const directoryForScope = async (scope: ActionOperationQueryScope) => {
+    const admitted = await resolveExternalSessionOperationAdmissionAccountScope(deps.activeServerDir);
+    // This durable domain belongs to the installed Account. Foreign requesters
+    // may still inspect their host-owned Browser and other in-memory operations.
+    if (admitted && admitted.accountSubject !== scope.accountId) return null;
+    return await resolveExternalSessionOperationRecordsDirectory(
+      deps.activeServerDir, 'activity', { activeServerDir: deps.activeServerDir, accountSubject: scope.accountId },
+    );
+  };
+  const read = async (scope: ActionOperationQueryScope, operationId: string) => {
+    const directory = await directoryForScope(scope);
+    return directory ? await readExternalSessionOperationStoredEntry(directory, operationId) : null;
+  };
   return Object.freeze<ActionOperationDomainOwner>({
     actionIds: ACTION_IDS,
     async list(scope) {
-      return (await listExternalSessionOperationStoredEntries(await directoryForScope(scope)))
+      const directory = await directoryForScope(scope);
+      if (!directory) return [];
+      return (await listExternalSessionOperationStoredEntries(directory))
         .flatMap((entry) => {
           const snapshot = projectExternalSessionActionOperation(entry, scope);
           return snapshot ? [snapshot] : [];

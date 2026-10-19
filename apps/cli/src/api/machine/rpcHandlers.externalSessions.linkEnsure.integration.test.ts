@@ -10,7 +10,7 @@ import {
   deriveBoxPublicKeyFromSeed,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
@@ -391,18 +391,18 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: createdSession,
     });
-    const parsedMeta = z.object({
-      tag: z.string().min(1),
+    const parsedMeta = z.looseObject({
+      tag: z.string().check(z.minLength(1)),
       path: z.string(),
-      summary: z.object({
+      summary: z.looseObject({
         text: z.string(),
-      }).passthrough(),
-      externalSessionV1: z.object({
-        agentId: z.string().min(1),
-        remoteSessionId: z.string().min(1),
-        machineId: z.string().min(1),
-      }).passthrough(),
-    }).passthrough().safeParse(meta);
+      }),
+      externalSessionV1: z.looseObject({
+        agentId: z.string().check(z.minLength(1)),
+        remoteSessionId: z.string().check(z.minLength(1)),
+        machineId: z.string().check(z.minLength(1)),
+      }),
+    }).safeParse(meta);
     if (!parsedMeta.success) {
       throw new Error('Expected direct session metadata payload');
     }
@@ -449,18 +449,18 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: createdSession,
     });
-    const parsedMeta = z.object({
-      runtimeDescriptorV1: z.object({
+    const parsedMeta = z.looseObject({
+      runtimeDescriptorV1: z.looseObject({
         v: z.literal(1),
         agentId: z.literal('codex'),
-      }).passthrough(),
-      externalSessionV1: z.object({
+      }),
+      externalSessionV1: z.looseObject({
         agentId: z.literal('codex'),
-        linkData: z.object({
+        linkData: z.looseObject({
           codexBackendMode: z.literal('appServer'),
-        }).passthrough(),
-      }).passthrough(),
-    }).passthrough().safeParse(meta);
+        }),
+      }),
+    }).safeParse(meta);
     if (!parsedMeta.success) {
       throw new Error('Expected codex direct session metadata payload');
     }
@@ -552,12 +552,12 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: updatedSession,
     });
-    const parsedMeta = z.object({
+    const parsedMeta = z.looseObject({
       path: z.string(),
-      summary: z.object({
+      summary: z.looseObject({
         text: z.string(),
-      }).passthrough(),
-    }).passthrough().safeParse(meta);
+      }),
+    }).safeParse(meta);
     if (!parsedMeta.success) {
       throw new Error('Expected updated direct session metadata payload');
     }
@@ -609,12 +609,12 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: updatedSession,
     });
-    const parsedMeta = z.object({
+    const parsedMeta = z.looseObject({
       path: z.string(),
-      summary: z.object({
+      summary: z.looseObject({
         text: z.string(),
-      }).passthrough(),
-    }).passthrough().safeParse(meta);
+      }),
+    }).safeParse(meta);
     if (!parsedMeta.success) {
       throw new Error('Expected preserved direct session metadata payload');
     }
@@ -656,11 +656,11 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: firstSession,
     });
-    const firstParsedMeta = z.object({
-      summary: z.object({
+    const firstParsedMeta = z.looseObject({
+      summary: z.looseObject({
         text: z.string(),
-      }).passthrough(),
-    }).passthrough().safeParse(firstMeta);
+      }),
+    }).safeParse(firstMeta);
     if (!firstParsedMeta.success) {
       throw new Error('Expected initial direct session metadata payload');
     }
@@ -684,11 +684,11 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: updatedSession,
     });
-    const updatedParsedMeta = z.object({
-      summary: z.object({
+    const updatedParsedMeta = z.looseObject({
+      summary: z.looseObject({
         text: z.string(),
-      }).passthrough(),
-    }).passthrough().safeParse(updatedMeta);
+      }),
+    }).safeParse(updatedMeta);
     if (!updatedParsedMeta.success) {
       throw new Error('Expected refreshed direct session metadata payload');
     }

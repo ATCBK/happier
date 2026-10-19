@@ -186,6 +186,8 @@ export function createExternalSessionFollowTargetHostOperation(params: Readonly<
                         });
                         return await resolveConfiguredExternalSessionFollowTarget({
                             agents: [runtimeContext.agent],
+                            resolveCatalogEntry: async agentId => agentId === runtimeContext.agentId
+                                ? runtimeContext.agent.catalogEntry ?? null : null,
                             account,
                             agentSettings: dependencies.readAgentSettings(),
                             activeServerId: dependencies.readActiveServerId(),

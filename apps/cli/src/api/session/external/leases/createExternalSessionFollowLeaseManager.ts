@@ -1,17 +1,86 @@
 import { randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
 
 import type {
     ExternalSessionFollowIssueV1,
     ExternalSessionFollowStatusV1,
 } from '@happier-dev/protocol';
+import { isAgentExternalSessionsFailureCode } from '@happier-dev/plugin-sdk/sessions/external';
 
+import { readHttpStatus } from '@/api/client/httpStatusError';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { logger } from '@/utils/logger';
+import { isExternalSessionProviderFailureError } from '@/session/external/providerOps';
 import {
     ExternalSessionFollowFailureError,
 } from '@/session/external/externalSessionFollowFailure';
 
 
 const MAX_ACTIVE_VIEWER_LEASES_PER_SESSION = 64;
+
+function describeAcquisitionTypeError(error: TypeError) {
+    const message = typeof error.message === 'string' ? error.message : '';
+    const missingMethod = /(?:^|\.)(array|optional|nullable|nullish|default|omit|extend|strict|passthrough|pick|partial|required|refine|superRefine|transform|merge) is not a function$/u.exec(message)?.[1];
+    const category = message === 'External Agent observation descriptor requested an unauthorized file set'
+        ? { typeErrorCode: 'observation_file_set_unauthorized' }
+        : missingMethod
+            ? { typeErrorCode: 'schema_method_unavailable', missingSchemaMethod: missingMethod }
+            : {};
+    // Only an exact own-module TypeError location is diagnostic data.
+    const firstFrame = typeof error.stack === 'string'
+        ? error.stack.split('\n').find((line) => /^\s+at /u.test(line))
+        : undefined;
+    const location = firstFrame?.trim().slice(3).replace(/^[^()\r\n]+ \(([^()\r\n]+)\)$/u, '$1');
+    const coordinates = location?.startsWith(import.meta.url + ':')
+        ? /^:([1-9]\d*):([1-9]\d*)$/u.exec(location.slice(import.meta.url.length))
+        : null;
+    const line = Number(coordinates?.[1]);
+    const column = Number(coordinates?.[2]);
+    return coordinates && Number.isSafeInteger(line) && Number.isSafeInteger(column)
+        ? { ...category, sourceFrame: { file: basename(new URL(import.meta.url).pathname), line, column } }
+        : category;
+}
+
+function describeAcquisitionFailure(error: unknown) {
+    try {
+        if (error instanceof ExternalSessionFollowFailureError
+            && (error.kind === 'agent_unavailable' || error.kind === 'source_changed'
+                || error.kind === 'follow_unavailable' || error.kind === 'daemon_unavailable')) {
+            return { errorKind: 'host_follow', errorName: 'ExternalSessionFollowFailureError',
+                errorCode: error.kind, message: 'Host follow lease acquisition failed' };
+        }
+        if (isExternalSessionProviderFailureError(error) && isAgentExternalSessionsFailureCode(error.code)) {
+            return { errorKind: 'agent_failure', errorName: 'ExternalSessionProviderFailureError',
+                errorCode: error.code, message: 'Agent follow lease acquisition failed' };
+        }
+        const status = readHttpStatus(error);
+        if (status !== null && Number.isInteger(status) && status >= 100 && status <= 599) {
+            return { errorKind: 'http_status', errorName: 'HttpStatusError', httpStatus: status,
+                message: 'Follow lease HTTP request failed' };
+        }
+        if (error instanceof TypeError) {
+            const detail = describeAcquisitionTypeError(error);
+            return { errorKind: 'type_error', errorName: 'TypeError', ...detail,
+                message: detail.typeErrorCode === 'schema_method_unavailable'
+                    ? 'Follow lease schema method is unavailable'
+                    : detail.typeErrorCode === 'observation_file_set_unauthorized'
+                        ? 'Follow lease observation file set was rejected'
+                        : 'Follow lease acquisition raised a TypeError' };
+        }
+        return error instanceof Error
+            ? { errorKind: 'error', errorName: 'Error', message: 'Follow lease acquisition failed' }
+            : { errorKind: 'non_error', message: 'Follow lease acquisition threw a non-Error value' };
+    } catch { return { errorKind: 'diagnostic_unavailable' }; }
+}
+
+function readAcquisitionHttpOrigin(): string {
+    try {
+        const url = new URL(resolveServerHttpBaseUrl());
+        return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : 'unavailable';
+    } catch {
+        return 'unavailable';
+    }
+}
 
 export class ExternalSessionViewerLeaseCapacityExceededError extends Error {
     readonly name = 'ExternalSessionViewerLeaseCapacityExceededError';
@@ -404,6 +473,12 @@ export function createExternalSessionFollowLeaseManager(params?: ExternalSession
                 ? await source.acquireFollowLease(state.reacquisitionCursor)
                 : await source.acquireFollowLease();
         } catch (error) {
+            logger.debug('[externalSessions.follow] Lease acquisition failed', {
+                sessionId,
+                phase: 'acquire',
+                httpOrigin: readAcquisitionHttpOrigin(),
+                ...describeAcquisitionFailure(error),
+            });
             await publishFollowFailure(sessionId, source.resource, 'acquire');
             if (options.propagateAcquisitionError) throw error;
             return { acquired: false };

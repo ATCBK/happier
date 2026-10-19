@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import {
   buildLinkedExternalSessionQualifiedIdentityV1,
   createSessionOwnerMetadataV1,
-  EXTERNAL_SESSIONS_AGENT_IDS,
 } from '@happier-dev/protocol';
 import { describe, expect, it } from 'vitest';
 
@@ -13,7 +12,7 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBuiltInContributions } from '@/plugins/projection/registry/resolveBuiltInContributions';
-import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { resolveExternalSessionSourceFromAgentProjection } from '@/plugins/projection/registry/externalSessionSources';
 import { resolveBackendEngineAdapterResolution } from '@/agent/runtime/registry/engineRegistry';
 import { buildExternalSessionMetadata } from './ensureExternalSessionLink';
@@ -28,8 +27,8 @@ import { buildExternalSessionMetadata } from './ensureExternalSessionLink';
  * host-owned, and the Agent's payload reaches persistence only on its own
  * `externalSessionV1.linkData` carrier.
  *
- * The fixture list is bound to the generated External Sessions census below, so
- * a newly registered Agent cannot silently escape the guard.
+ * The fixture list is bound to registered link-capable sources below. Agents
+ * declaring only resume discovery cannot produce persisted linked identities.
  */
 const ENV_KEYS = [
   'HOME',
@@ -302,31 +301,36 @@ const FIRST_PARTY_AGENT_LINK_FIXTURES: readonly FirstPartyAgentLinkFixture[] = [
 ];
 
 describe('first-party Agent link identities and host owner metadata', () => {
-  it('covers every Agent in the registered External Sessions census', () => {
+  it('covers every Agent declaring a link-capable External Sessions source', () => {
+    const contributes = createResolvedContributionRegistry(resolveBuiltInContributions());
+    const linkCapableAgentIds = contributes.agents
+      .filter((agent) => agent.richDefinition?.definition.surfaces?.externalSession
+        ?.sources.some((source) => source.resumeOnly !== true))
+      .map((agent) => agent.id);
     expect([...FIRST_PARTY_AGENT_LINK_FIXTURES.map((fixture) => fixture.agentId)].sort())
-      .toEqual([...EXTERNAL_SESSIONS_AGENT_IDS].sort());
+      .toEqual(linkCapableAgentIds.sort());
   });
 
   it('keeps every registered Agent link identity out of the host-owned persisted envelope', async () => {
     await withTempDir('happier-first-party-link-owner-metadata-', async (root) => {
       const envScope = createEnvKeyScope([...ENV_KEYS]);
-      let runtimeRegistry: Awaited<
-        ReturnType<typeof resolveExecutablePluginRuntimeRegistry>
-      > | null = null;
+      let runtimeFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
       const rejectedByAgentId: Record<string, readonly string[]> = {};
       const persistedByAgentId: Record<string, Record<string, unknown>> = {};
       const resolvedSourceAdmissionByAgentId: Record<string, string> = {};
       const contributes = createResolvedContributionRegistry(resolveBuiltInContributions());
       try {
-        runtimeRegistry = await resolveExecutablePluginRuntimeRegistry({
-          contributes,
+        runtimeFixture = await createAdmittedPluginRuntimeFixture({
           happyHomeDir: join(root, 'happy-home'),
-          pluginIds: FIRST_PARTY_AGENT_LINK_FIXTURES.map((fixture) => fixture.pluginId),
+          runtimeOptions: {
+            contributes,
+            pluginIds: FIRST_PARTY_AGENT_LINK_FIXTURES.map((fixture) => fixture.pluginId),
+          },
         });
 
         for (const fixture of FIRST_PARTY_AGENT_LINK_FIXTURES) {
           const resolution = await resolveBackendEngineAdapterResolution(fixture.agentId, {
-            runtimeRegistry,
+            runtimeRegistry: runtimeFixture.registry,
           });
           const externalSession = resolution?.executionSurfaces.externalSession;
           if (!externalSession?.resolveLinkIdentity) {
@@ -392,7 +396,7 @@ describe('first-party Agent link identities and host owner metadata', () => {
             : ownerMetadata.unsupportedFields;
         }
       } finally {
-        await runtimeRegistry?.dispose();
+        await runtimeFixture?.dispose();
         await openCodeAttachStub?.close();
         openCodeAttachStub = null;
         envScope.restore();

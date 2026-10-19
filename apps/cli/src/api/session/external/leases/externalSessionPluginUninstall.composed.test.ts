@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ExternalAgentObservationSnapshotV1 } from '@happier-dev/protocol';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { createDaemonPluginChangeService } from '@/plugins/daemon/changeService';
 import { createDaemonPathPluginChangePreparer } from '@/plugins/daemon/pathChangePreparer';
@@ -22,6 +22,7 @@ import { startExternalSessionPassiveObservation } from './startExternalSessionPa
 
 const PLUGIN_ID = 'acme.external-session-uninstall';
 const AGENT_ID = 'external-session-uninstall-agent';
+const AGENT_ROUTING_ID = `${PLUGIN_ID}/${AGENT_ID}`;
 const SESSION_ID = 'linked-session';
 const SOURCE = Object.freeze({
     kind: 'syntheticUninstallSource',
@@ -49,7 +50,7 @@ type FixtureState = {
 const roots: string[] = [];
 let controllerOwnsRegistry = false;
 
-afterEach(async () => {
+afterAll(async () => {
     if (controllerOwnsRegistry) {
         controllerOwnsRegistry = false;
         await pluginReloadController.shutdown({ timeoutMs: 5_000 });
@@ -239,14 +240,14 @@ export function activate(api) {
 }
 
 const linkedSession = Object.freeze({
-    agentId: AGENT_ID,
+    agentId: AGENT_ROUTING_ID,
     remoteSessionId: 'native-session',
     linkGeneration: '1000',
     source: SOURCE,
     metadata: {
         externalSessionV1: {
             v: 1,
-            agentId: AGENT_ID,
+            agentId: AGENT_ROUTING_ID,
             machineId: 'machine-1',
             remoteSessionId: 'native-session',
             source: SOURCE,
@@ -307,8 +308,9 @@ describe('installed path plugin External Session uninstall lifecycle', () => {
                 happyHomeDir,
                 runtimeLifecycle,
                 runManagedPluginPnpm: successfulManagedPluginPnpmBoundary,
+                // The server inventory for this isolated plugin has no retained resources.
+                readManagedResources: async () => ({ resources: [], reviewed: true }),
             }),
-            createPendingChangeId: () => 'external-uninstall-install-review',
         });
         const install = async () => {
             const request = await changeService.requestPluginChange({
@@ -319,14 +321,16 @@ describe('installed path plugin External Session uninstall lifecycle', () => {
             if (request.kind !== 'reviewRequired') {
                 throw new Error(`Expected review, received ${request.kind}`);
             }
-            await expect(changeService.decidePluginChange({
+            const committed = await changeService.decidePluginChange({
                 pendingChangeId: request.pendingChangeId,
                 decision: 'installAndTrust',
-            })).resolves.toMatchObject({
+            });
+            expect(committed).toMatchObject({
                 kind: 'committed',
                 pluginId: PLUGIN_ID,
             });
             controllerOwnsRegistry = true;
+            return committed;
         };
         await install();
 
@@ -422,16 +426,7 @@ describe('installed path plugin External Session uninstall lifecycle', () => {
                 pluginRoot,
                 'generation-two',
             );
-            const reloaded = await changeService.requestPluginChange({
-                kind: 'development',
-                pluginId: PLUGIN_ID,
-                sourceRootPath: pluginRoot,
-                changedPaths: ['daemon.mjs'],
-            });
-            expect(reloaded).toMatchObject({
-                kind: 'committed',
-                pluginId: PLUGIN_ID,
-            });
+            const reloaded = await install();
             if (reloaded.kind !== 'committed') {
                 throw new Error(`Expected committed reload, received ${reloaded.kind}`);
             }
@@ -447,10 +442,11 @@ describe('installed path plugin External Session uninstall lifecycle', () => {
             });
             await projection.flush();
 
-            await expect(changeService.requestPluginChange({
+            const uninstalled = await changeService.requestPluginChange({
                 kind: 'uninstall',
                 pluginId: PLUGIN_ID,
-            })).resolves.toMatchObject({
+            });
+            expect(uninstalled, JSON.stringify(uninstalled)).toMatchObject({
                 kind: 'committed',
                 pluginId: PLUGIN_ID,
                 desiredGeneration: null,
@@ -465,7 +461,7 @@ describe('installed path plugin External Session uninstall lifecycle', () => {
             });
             expect(latestObservation).toBeNull();
             expect(linkedSession.metadata.externalSessionV1).toMatchObject({
-                agentId: AGENT_ID,
+                agentId: AGENT_ROUTING_ID,
                 remoteSessionId: 'native-session',
                 linkedAtMs: 1_000,
             });

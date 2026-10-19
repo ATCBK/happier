@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import { hostname } from 'node:os';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { evaluateVendorResumeEligibility } from '@happier-dev/agents';
 import { buildTestCodexRuntimeDescriptorV1 as buildCodexAgentRuntimeDescriptorV1 } from '@/testkit/runtimeDescriptorFixtures';
 import {
@@ -189,11 +191,21 @@ type MutableLinkedMetadataFixture = Record<string, unknown> & {
 };
 
 describe('ensureExternalSessionLink', () => {
+  let connectedCodexHome: string;
+
+  beforeAll(async () => {
+    connectedCodexHome = await realpath(await createTempDir('happier-link-codex-home-'));
+  });
+
+  afterAll(async () => {
+    await removeTempDir(connectedCodexHome);
+  });
+
   const legacyCodexBackendMode = '  mcp_resume  ' as unknown as CodexBackendMode;
   const connectedServices = {
-    v: 1 as const,
+    v: 2 as const,
     bindingsByServiceId: {
-      'openai-codex': {
+      'happier.agent.codex/openai-codex': {
         source: 'connected' as const,
         selection: 'group' as const,
         groupId: 'codex-main',
@@ -340,9 +352,9 @@ describe('ensureExternalSessionLink', () => {
         home: 'connectedService',
         connectedServiceId: 'openai-codex',
         connectedServiceProfileId: 'work',
-        homePath: '/tmp/connected-codex-home',
+        homePath: connectedCodexHome,
       }),
-      source: { kind: 'codexHome', home: 'connectedService', connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work', homePath: '/tmp/connected-codex-home' },
+      source: { kind: 'codexHome', home: 'connectedService', connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work', homePath: connectedCodexHome },
       titleHint: 'Codex linked session',
       directoryHint: '/repo',
       nowMs: () => 123,
@@ -367,13 +379,13 @@ describe('ensureExternalSessionLink', () => {
           home: 'connectedService',
           connectedServiceId: 'openai-codex',
           connectedServiceProfileId: 'work',
-          homePath: '/tmp/connected-codex-home',
+          homePath: connectedCodexHome,
         },
       },
       externalSessionV1: {
         remoteSessionId: 'thread_runtime',
         linkData: { codexBackendMode: 'appServer' },
-        source: { kind: 'codexHome', home: 'connectedService', connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work', homePath: '/tmp/connected-codex-home' },
+        source: { kind: 'codexHome', home: 'connectedService', connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work', homePath: connectedCodexHome },
         qualifiedIdentity: {
           v: 1,
           agent: { pluginId: 'happier.agent.codex', localId: 'codex' },
@@ -388,7 +400,7 @@ describe('ensureExternalSessionLink', () => {
             home: 'connectedService',
             connectedServiceId: 'openai-codex',
             connectedServiceProfileId: 'work',
-            homePath: '/tmp/connected-codex-home',
+            homePath: connectedCodexHome,
           },
         },
       },
@@ -402,9 +414,9 @@ describe('ensureExternalSessionLink', () => {
   });
 
   it('reuses the group-proven Remote predecessor tag for the current member and upgrades it to canonical Dev identity', async () => {
-    const removedMemberTag = `direct:v1:${sha256Hex('machine_1|codex|thread_group|codexHome:connectedService:openai-codex:member-a:/tmp/connected-codex-home')}`;
-    const legacyTag = `direct:v1:${sha256Hex('machine_1|codex|thread_group|codexHome:connectedService:openai-codex:member-b:/tmp/connected-codex-home')}`;
-    const canonicalTag = `direct:v1:${sha256Hex('machine_1|codex|thread_group|codexHome:connectedService:openai-codex:group%3Aprimary-pool:/tmp/connected-codex-home')}`;
+    const removedMemberTag = `direct:v1:${sha256Hex(`machine_1|codex|thread_group|codexHome:connectedService:openai-codex:member-a:${connectedCodexHome}`)}`;
+    const legacyTag = `direct:v1:${sha256Hex(`machine_1|codex|thread_group|codexHome:connectedService:openai-codex:member-b:${connectedCodexHome}`)}`;
+    const canonicalTag = `direct:v1:${sha256Hex(`machine_1|codex|thread_group|codexHome:connectedService:openai-codex:group%3Aprimary-pool:${connectedCodexHome}`)}`;
     const existingMetadata = {
       tag: legacyTag,
       path: '/repo',
@@ -421,7 +433,7 @@ describe('ensureExternalSessionLink', () => {
           connectedServiceId: 'openai-codex',
           connectedServiceProfileId: 'member-b',
           connectedServiceGroupId: 'primary-pool',
-          homePath: '/tmp/connected-codex-home',
+          homePath: connectedCodexHome,
         },
         linkedAtMs: 1,
       },
@@ -453,7 +465,7 @@ describe('ensureExternalSessionLink', () => {
         connectedServiceId: 'openai-codex',
         connectedServiceProfileId: 'member-b',
         connectedServiceGroupId: 'primary-pool',
-        homePath: '/tmp/connected-codex-home',
+        homePath: connectedCodexHome,
       }),
       source: {
         kind: 'codexHome',
@@ -461,7 +473,7 @@ describe('ensureExternalSessionLink', () => {
         connectedServiceId: 'openai-codex',
         connectedServiceProfileId: 'member-b',
         connectedServiceGroupId: 'primary-pool',
-        homePath: '/tmp/connected-codex-home',
+        homePath: connectedCodexHome,
       },
       directoryHint: '/repo',
       nowMs: () => 123,
@@ -513,7 +525,7 @@ describe('ensureExternalSessionLink', () => {
         connectedServiceId: 'openai-codex',
         connectedServiceProfileId: 'member-b',
         connectedServiceGroupId: 'primary-pool',
-        homePath: '/tmp/connected-codex-home',
+        homePath: connectedCodexHome,
       },
       requireIndexedTagLookup: true,
       nowMs: () => 123,
@@ -527,7 +539,7 @@ describe('ensureExternalSessionLink', () => {
   });
 
   it('retains explicit Browse recovery for a removed Codex connected-service member', async () => {
-    const removedMemberTag = `direct:v1:${sha256Hex('machine_1|codex|thread_group|codexHome:connectedService:openai-codex:member-a:/tmp/connected-codex-home')}`;
+    const removedMemberTag = `direct:v1:${sha256Hex(`machine_1|codex|thread_group|codexHome:connectedService:openai-codex:member-a:${connectedCodexHome}`)}`;
     const existingMetadata = {
       tag: removedMemberTag,
       path: '/repo',
@@ -544,7 +556,7 @@ describe('ensureExternalSessionLink', () => {
           connectedServiceId: 'openai-codex',
           connectedServiceProfileId: 'member-a',
           connectedServiceGroupId: 'primary-pool',
-          homePath: '/tmp/connected-codex-home',
+          homePath: connectedCodexHome,
         },
         linkedAtMs: 1,
       },
@@ -575,7 +587,7 @@ describe('ensureExternalSessionLink', () => {
         connectedServiceId: 'openai-codex',
         connectedServiceProfileId: 'member-b',
         connectedServiceGroupId: 'primary-pool',
-        homePath: '/tmp/connected-codex-home',
+        homePath: connectedCodexHome,
       },
       nowMs: () => 123,
     })).resolves.toMatchObject({
@@ -608,10 +620,10 @@ describe('ensureExternalSessionLink', () => {
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: 'member-b',
       connectedServiceGroupId: 'primary-pool',
-      homePath: '/tmp/connected-codex-home',
+      homePath: connectedCodexHome,
     };
     const removedMemberTag = `direct:v1:${sha256Hex(
-      'machine_1|codex|thread_split_group|codexHome:connectedService:openai-codex:member-a:/tmp/connected-codex-home',
+      `machine_1|codex|thread_split_group|codexHome:connectedService:openai-codex:member-a:${connectedCodexHome}`,
     )}`;
     const sharedMetadata = {
       v: 1 as const,
@@ -717,7 +729,7 @@ describe('ensureExternalSessionLink', () => {
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: 'member-b',
       connectedServiceGroupId: 'primary-pool',
-      homePath: '/tmp/connected-codex-home',
+      homePath: connectedCodexHome,
     };
     const sharedMetadata = {
       v: 1 as const,
@@ -785,7 +797,7 @@ describe('ensureExternalSessionLink', () => {
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: 'member-b',
       connectedServiceGroupId: 'primary-pool',
-      homePath: '/tmp/connected-codex-home',
+      homePath: connectedCodexHome,
     };
     const canonicalTag = `direct:v1:${sha256Hex(
       `machine_1|codex|thread_group_import|${resolveExternalSessionsSourceKey(currentSource)}`,
@@ -1075,7 +1087,7 @@ describe('ensureExternalSessionLink', () => {
       home: 'connectedService',
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: 'work',
-      homePath: '/tmp/connected-codex-home',
+      homePath: connectedCodexHome,
     });
     const linkInput = {
       credentials,
@@ -1084,7 +1096,7 @@ describe('ensureExternalSessionLink', () => {
       remoteSessionId: 'thread_runtime',
       linkData: { codexBackendMode: 'mcp' },
       runtimeDescriptor,
-      source: { kind: 'codexHome' as const, home: 'connectedService' as const, connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work', homePath: '/tmp/connected-codex-home' },
+      source: { kind: 'codexHome' as const, home: 'connectedService' as const, connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work', homePath: connectedCodexHome },
       titleHint: 'Codex linked session',
       directoryHint: '/repo',
       nowMs: () => 123,
@@ -1166,7 +1178,7 @@ describe('ensureExternalSessionLink', () => {
           home: 'connectedService',
           connectedServiceId: 'openai-codex',
           connectedServiceProfileId: 'work',
-          homePath: '/tmp/connected-codex-home',
+          homePath: connectedCodexHome,
         },
       },
       externalSessionV1: {
@@ -1186,7 +1198,7 @@ describe('ensureExternalSessionLink', () => {
             home: 'connectedService',
             connectedServiceId: 'openai-codex',
             connectedServiceProfileId: 'work',
-            homePath: '/tmp/connected-codex-home',
+            homePath: connectedCodexHome,
           },
         },
         linkData: {
@@ -1200,7 +1212,7 @@ describe('ensureExternalSessionLink', () => {
               home: 'connectedService',
               connectedServiceId: 'openai-codex',
               connectedServiceProfileId: 'work',
-              homePath: '/tmp/connected-codex-home',
+              homePath: connectedCodexHome,
             },
           },
         },
@@ -1535,11 +1547,12 @@ describe('ensureExternalSessionLink', () => {
               providerSessionId: 'thread_runtime',
               home: 'connectedService',
               connectedServiceId: 'openai-codex',
+              homePath: connectedCodexHome,
             },
           },
         },
       },
-      source: { kind: 'codexHome', home: 'connectedService', connectedServiceId: 'openai-codex' },
+      source: { kind: 'codexHome', home: 'connectedService', connectedServiceId: 'openai-codex', homePath: connectedCodexHome },
       titleHint: 'Codex linked session',
       directoryHint: '/repo',
       nowMs: () => 123,
@@ -1590,7 +1603,7 @@ describe('ensureExternalSessionLink', () => {
         home: 'connectedService',
         connectedServiceId: 'openai-codex',
         connectedServiceProfileId: 'work',
-        homePath: '/tmp/connected-codex-home',
+        homePath: connectedCodexHome,
       },
       titleHint: 'Codex linked session',
       directoryHint: '/repo',
@@ -1603,7 +1616,7 @@ describe('ensureExternalSessionLink', () => {
       home: 'connectedService',
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: 'work',
-      homePath: '/tmp/connected-codex-home',
+      homePath: connectedCodexHome,
     });
   });
 
@@ -2667,7 +2680,7 @@ describe('ensureExternalSessionLink', () => {
       home: 'connectedService' as const,
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: 'work',
-      homePath: '/tmp/connected-codex-home',
+      homePath: connectedCodexHome,
     };
     const tag = `direct:v1:${sha256Hex(
       `machine_1|codex|thread_imported|${resolveExternalSessionsSourceKey(source)}`,
