@@ -110,11 +110,9 @@ export const SkillDetailScreen = React.memo(function SkillDetailScreen(
   );
 });
 
-/** Why a host-owned skill cannot be edited here: whose it is, and that it follows their version. */
-function hostOwnedNote(provenance: SkillProvenanceV1): string {
-  return provenance.kind === 'plugin'
-    ? t('capabilities.skillDetail.instructions.readOnlyPlugin')
-    : t('capabilities.skillDetail.instructions.readOnly');
+/** Why a plugin's skill cannot be edited here. A built-in one says it once, in its Source row. */
+function hostOwnedNote(provenance: SkillProvenanceV1): string | undefined {
+  return provenance.kind === 'plugin' ? t('capabilities.skillDetail.instructions.readOnlyPlugin') : undefined;
 }
 
 function SavedSkill(props: Readonly<{ skillId: string }>) {

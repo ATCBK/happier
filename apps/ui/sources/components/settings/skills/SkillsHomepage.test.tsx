@@ -131,6 +131,8 @@ it('shows a few addable skills found on the machines from the last known scan, w
             unavailableItems: [{ skillId: 'broken', title: 'broken-skill', reason: 'skill_content_unavailable' },
                 { skillId: '736cb1a6-6067-4fe9-bce1-cb7a33e4feaf', title: null, reason: 'skill_content_unavailable' }] })} />);
         await vi.waitFor(() => expect(screen.findByTestId('skills.home.needs.masked')).not.toBeNull());
+        // One message per state: the mask is said by the row's description, not again by a status chip.
+        expect(screen.getTextContent().match(/copy wins/g) ?? []).toHaveLength(1);
         await act(async () => screen.pressByTestId('skills.home.needs.masked'));
         expect(navigation.push).toHaveBeenLastCalledWith('/settings/skills/found');
         expect(screen.findByTestId('skills.home.needs.broken')).not.toBeNull();

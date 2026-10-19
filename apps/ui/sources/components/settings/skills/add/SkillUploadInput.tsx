@@ -272,7 +272,7 @@ export function SkillUploadInput(
         ) : null}
         {state.kind === 'ready' ? (
           state.items.length > 1 ? (
-            <ItemGroup title={t('capabilities.skillAdd.link.found', { count: state.items.length })} surface="none">
+            <ItemGroup title={t('capabilities.skillAdd.upload.found', { count: state.items.length })} surface="none">
               {previewRows(state.items, ticked)}
             </ItemGroup>
           ) : (

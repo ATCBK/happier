@@ -91,6 +91,13 @@ describe('SkillSourceSection', () => {
     expect(screen.getTextContent()).toContain('Acme Skills');
   });
 
+  it('a built-in skill says it follows Happier once, in its source row', async () => {
+    const screen = await renderScreen(
+      <SkillSourceSection {...common} read={read({ kind: 'first_party' })} updatePolicy="manual" />,
+    );
+    expect(screen.getTextContent().match(/follows its version|updates with Happier/g) ?? []).toHaveLength(1);
+  });
+
   it('a written skill says "Written by you" and offers no update controls', async () => {
     const screen = await renderScreen(
       <SkillSourceSection

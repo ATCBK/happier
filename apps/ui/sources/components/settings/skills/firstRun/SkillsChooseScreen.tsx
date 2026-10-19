@@ -111,8 +111,11 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
             testID="skills.choose.nothingWaits"
             size="page"
             kind="empty"
-            title={t('capabilities.skillsUpdates.choose.nothingWaits')}
-            action={{ label: t('capabilities.skills.allSkills'), onPress: home, testID: 'skills.choose.nothingWaits.back' }}
+            scene="inboxZero"
+            title={t('capabilities.skillsUpdates.updates.nothingToChoose')}
+            reason={t('capabilities.skillsUpdates.choose.nothingWaits')}
+            // Nothing to decide here, so the way back is a quiet button, not an invitation.
+            secondaryAction={{ label: t('capabilities.skills.allSkills'), onPress: home, testID: 'skills.choose.nothingWaits.back' }}
           />
         ) : (
           <>

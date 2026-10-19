@@ -102,7 +102,8 @@ function buildFacts(
     facts.push({
       key: 'tools',
       text: t('capabilities.facts.toolCount', {
-        count: formatCapabilityCount(cost.toolCount),
+        count: cost.toolCount,
+        shown: formatCapabilityCount(cost.toolCount),
       }),
     });
   if (cost?.tokensPerTurn !== undefined)

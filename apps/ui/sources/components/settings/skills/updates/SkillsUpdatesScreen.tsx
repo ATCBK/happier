@@ -193,14 +193,12 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
           testID="skills.updates.upToDate"
           size="page"
           kind="empty"
-          title={
-            !sourced
-              ? t('capabilities.skillsUpdates.updates.noSources')
-              : updates.check.checkedAt !== null
-              ? t('capabilities.skillsUpdates.updates.upToDateChecked', {
-                  time: formatTime(updates.check.checkedAt),
-                })
-              : t('capabilities.skillsUpdates.updates.upToDate')
+          scene="checksPassed"
+          title={!sourced ? t('capabilities.skillsUpdates.updates.noSources') : t('capabilities.skillsUpdates.updates.upToDate')}
+          reason={
+            sourced && updates.check.checkedAt !== null
+              ? t('capabilities.skillsUpdates.updates.checkedAt', { time: formatTime(updates.check.checkedAt) })
+              : undefined
           }
         />
       ) : null}

@@ -162,11 +162,10 @@ export function SkillSourceSection(
   if (!source) return null;
 
   const description =
-    read.provenance.kind === 'plugin'
+    // Built-in and plugin skills say who ships them in the source row, once.
+    read.provenance.kind === 'plugin' || read.provenance.kind === 'first_party'
       ? undefined
-      : read.provenance.kind === 'first_party'
-        ? t('capabilities.skillDetail.source.descriptionFirstParty')
-        : !tracked
+      : !tracked
           ? t('capabilities.skillDetail.source.descriptionOwn')
           : policy === 'pinned'
             ? t('capabilities.skillDetail.source.descriptionPinned')

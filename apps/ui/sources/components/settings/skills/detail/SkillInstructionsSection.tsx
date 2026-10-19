@@ -188,7 +188,7 @@ export function SkillInstructionsSection(
     skillId: string;
     skillMd: string;
     /** Host-owned (built in or from a plugin): never edited here; its note says whose it is. */
-    readOnly: false | Readonly<{ note: string }>;
+    readOnly: false | Readonly<{ note?: string }>;
     /** The draft page starts in the editor and never autosaves (the person adds it once). */
     draft?: Readonly<{ text: string; onChange: (text: string) => void }>;
     onSave: (text: string) => Promise<SkillChangeResult>;

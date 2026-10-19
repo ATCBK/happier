@@ -853,36 +853,6 @@ function SkillAddDetail(
           references={stillOutside}
           testID={`${TEST_ID}.detail.outsideReferences`}
         />
-        {offered?.siblings.map((sibling) => (
-          <CapabilityRow
-            key={sibling.path}
-            testID={`${TEST_ID}.detail.sibling.${sibling.name}`}
-            title={sibling.name}
-            description={sibling.description}
-            facts={{
-              presentation: 'row',
-              trust: sibling.trust,
-              cost: { tokensWhenUsed: sibling.cost.bodyTokens },
-            }}
-            checked={keptSiblings.has(sibling.path)}
-            note={
-              keptSiblings.has(sibling.path) ? (
-                <SkillAlsoAddsNote
-                  name={sibling.name}
-                  skill={offered.primary.name}
-                  testID={`${TEST_ID}.detail.sibling.${sibling.name}.alsoAdds`}
-                />
-              ) : undefined
-            }
-            onPress={() =>
-              setUnticked((previous) => {
-                const next = new Set(previous);
-                if (!next.delete(sibling.path)) next.add(sibling.path);
-                return next;
-              })
-            }
-          />
-        ))}
         {cost ? (
           <Item
             icon={
@@ -916,6 +886,36 @@ function SkillAddDetail(
             })}
           />
         ) : null}
+        {offered?.siblings.map((sibling) => (
+          <CapabilityRow
+            key={sibling.path}
+            testID={`${TEST_ID}.detail.sibling.${sibling.name}`}
+            title={sibling.name}
+            description={sibling.description}
+            facts={{
+              presentation: 'row',
+              trust: sibling.trust,
+              cost: { tokensWhenUsed: sibling.cost.bodyTokens },
+            }}
+            checked={keptSiblings.has(sibling.path)}
+            note={
+              keptSiblings.has(sibling.path) ? (
+                <SkillAlsoAddsNote
+                  name={sibling.name}
+                  skill={offered.primary.name}
+                  testID={`${TEST_ID}.detail.sibling.${sibling.name}.alsoAdds`}
+                />
+              ) : undefined
+            }
+            onPress={() =>
+              setUnticked((previous) => {
+                const next = new Set(previous);
+                if (!next.delete(sibling.path)) next.add(sibling.path);
+                return next;
+              })
+            }
+          />
+        ))}
       </ItemGroup>
       ) : null}
       <ItemGroup

@@ -248,7 +248,7 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
         />
       )}
       {loading || unavailable ? null : (
-        <PresentSentence present={present} />
+        <PresentSentence present={present} agentName={names.agentName} />
       )}
       {firstVisit && !empty ? (
         <View style={styles.acts}>
@@ -389,11 +389,8 @@ function NeedsALookRow(
         source: skillSource(item, props.names.machineName, props.installedPlugins),
         trust: item.trust,
       }}
-      status={
-        entry.kind === 'masked'
-          ? { kind: 'masked', machineName: entry.machineName }
-          : pickMostBlockingCapabilityStatus(skillStatus(item), 'row')
-      }
+      // A masked row says it once, in its description; the chip would repeat it.
+      status={entry.kind === 'masked' ? undefined : pickMostBlockingCapabilityStatus(skillStatus(item), 'row')}
       action={<RoundButton size="small" display="secondary" title={fix} onPress={props.onOpen} />}
       onPress={props.onOpen}
     />
@@ -558,16 +555,17 @@ function useReachTravel(
 }
 
 /** One quiet line of the present: what reaches whom, what needs a look, who catches up later. */
-function PresentSentence(props: Readonly<{ present: SkillsPresent }>) {
-  const { present } = props;
+function PresentSentence(props: Readonly<{ present: SkillsPresent; agentName: (agentId: string) => string }>) {
+  const { present, agentName } = props;
   const named = present.kind === 'reach'
     ? present.agentIds
     : present.kind === 'unsupported'
       ? present.agentIds
       : NO_AGENTS;
   const unsupported = present.kind === 'reach' ? present.unsupportedAgentIds : NO_AGENTS;
-  const agents = useAgentTitles(named);
-  const unsupportedNames = useAgentTitles(unsupported);
+  // The names the legend and Where it's on show, from the page's own places: an Agent instance reads by title, never by its runtime id.
+  const agents = React.useMemo(() => named.map(agentName), [named, agentName]);
+  const unsupportedNames = React.useMemo(() => unsupported.map(agentName), [unsupported, agentName]);
   let text: string;
   // The part of the sentence that needs the person (amber, as the lab's "2 need a look").
   let attention = '';
@@ -646,16 +644,6 @@ function withEmphasizedCounts(text: string, key: string): React.ReactNode[] {
     ),
   );
 }
-
-function useAgentTitles(agentIds: readonly string[]): string[] {
-  const { names } = useWhereItsOnNames({
-    agentIds,
-    machines: NO_MACHINES,
-  });
-  return React.useMemo(() => agentIds.map(names.agentName), [agentIds, names]);
-}
-const NO_MACHINES: readonly Readonly<{ machineId: string; name: string }>[] =
-  Object.freeze([]);
 
 const styles = StyleSheet.create((theme) => ({
   inset: { paddingHorizontal: resolveItemGroupContentHorizontalInsetPx() },

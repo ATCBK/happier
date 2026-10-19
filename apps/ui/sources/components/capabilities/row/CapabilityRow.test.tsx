@@ -41,6 +41,15 @@ describe('CapabilityRow', () => {
         expect(texts(ready)).toContain('anthropics/skills');
     });
 
+    it('counts one tool in the singular and several in the plural', async () => {
+        const { CapabilityRow } = await import('./CapabilityRow');
+        const one = await renderScreen(<CapabilityRow title="fetch" facts={{ presentation: 'row', cost: { toolCount: 1 } }} testID="row" />);
+        expect(texts(one)).toContain('1 tool');
+        expect(texts(one)).not.toContain('1 tools');
+        const many = await renderScreen(<CapabilityRow title="fetch" facts={{ presentation: 'row', cost: { toolCount: 2 } }} testID="row" />);
+        expect(texts(many)).toContain('2 tools');
+    });
+
     it('draws the scope as its own column before the action in menu density, not on the title line', async () => {
         const { CapabilityRow } = await import('./CapabilityRow');
         const { Text } = await import('@/components/ui/text/Text');
