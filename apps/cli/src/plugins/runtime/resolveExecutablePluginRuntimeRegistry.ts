@@ -2480,10 +2480,14 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 contribution: { family: 'resources', localId },
                 requestIds: resource.definition.hostAccess,
             }),
-            runtime: cold ? {
+            // Activation facts also include unavailable plugins. Resolve at
+            // the Resource callback boundary so admission can contain the
+            // failure and preserve activation's plugin-scoped diagnostic.
+            // Eager resolution here would reject the entire daemon registry.
+            runtime: {
                 async read(options) { return await readRegisteredRuntime().read(options); },
                 observe(invalidate, options) { return readRegisteredRuntime().observe(invalidate, options); },
-            } : readRegisteredRuntime(),
+            },
             ...(cold ? { async prepareRuntime() {
                 const previousFacts = activatedRegistry.targetActivationFacts;
                 await activatedRegistry.activateContributionsOnDemand([{ pluginId, family: 'resources', localId }]);
