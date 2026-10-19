@@ -58,16 +58,17 @@ const FAMILIES = [
   },
 ];
 
-/** Walk a zod discriminated union without depending on one library version's internals. */
+/** Classic and Mini share Zod Core's union, object and literal definitions. */
 export function readDiscriminatedMembers(schema) {
-  const discriminator = schema?._def?.discriminator;
-  const options = schema?._def?.options ?? [];
+  const { discriminator, options } = schema._zod.def;
   return options.map((option) => {
-    const shape = option.shape ?? option._def?.shape ?? {};
+    const shape = option._zod.def.shape;
     const field = shape[discriminator];
-    const value = field?._def?.value ?? field?.value ?? field?._zod?.def?.values?.[0];
-    if (value === undefined) throw new Error(`could not read the "${discriminator}" literal of a union member`);
-    return value;
+    const definition = field?._zod.def;
+    if (definition?.type !== 'literal' || definition.values.length !== 1 || typeof definition.values[0] !== 'string') {
+      throw new Error(`could not read the "${discriminator}" literal of a union member`);
+    }
+    return definition.values[0];
   });
 }
 
@@ -82,8 +83,7 @@ function table(headers, rows) {
 export async function renderRuntimeEventReferenceMarkdown({ schemaPath = SCHEMA } = {}) {
   const module = await import(`file://${schemaPath}`);
   const root = module.AgentSessionRuntimeEventV1Schema;
-  const core = root?._def?.schema ?? root;
-  const parts = core?._def?.options ?? [];
+  const parts = root._zod.def.options ?? [];
   if (parts.length !== 2) {
     throw new Error(`expected a two-part runtime event union, found ${parts.length}`);
   }
