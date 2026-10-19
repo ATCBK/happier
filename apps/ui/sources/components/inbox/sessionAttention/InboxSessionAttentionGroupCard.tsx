@@ -120,6 +120,7 @@ export const InboxSessionAttentionGroupCard = React.memo(function InboxSessionAt
             if (!options) throw new Error('resume_unavailable');
             const result = await resumeSession({
                 ...options,
+                executionAuthority: 'present_user',
                 serverId: props.serverId ?? undefined,
                 ...(props.serverId ? { preferRequestedMachineTarget: true, preferScopedMachineRpc: true } : {}),
             });

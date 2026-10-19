@@ -34,6 +34,7 @@ import {
 } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
 import { prepareAccountSettingsForDaemonSpawnIfNeeded } from './accountSettingsDaemonSpawnPreparation';
 import type {
+    ActionExecutorContext,
     BackendTargetRefV1,
     CheckpointCodeRollbackRequest,
     CheckpointCodeRollbackResult,
@@ -251,6 +252,8 @@ export interface ResumeSessionOptions {
      */
     initialTranscriptAfterSeq?: number;
     executionAuthorization?: SpawnSessionExecutionAuthorization;
+    /** Action callers retain their admitted authority when requesting explicit Resume. */
+    executionAuthority?: ActionExecutorContext['authority'];
     /** Explicit consent from private-folder recovery; never inferred by automatic wake. */
     approvedNewDirectoryCreation?: boolean;
     initialGoal?: SessionInitialGoalRequestV1;
@@ -570,7 +573,15 @@ async function runResumeSession(
  * to the existing Happy session and resumes the agent.
  */
 export async function resumeSession(options: ResumeSessionOptions): Promise<ResumeSessionResult> {
-    return await runResumeSession(options, 'explicit_resume');
+    return await runResumeSession({
+        ...options,
+        executionAuthorization: options.executionAuthority === 'present_user'
+            ? options.executionAuthorization ?? {
+                provenance: 'user_request',
+                requestId: options.spawnNonce ?? randomUUID(),
+            }
+            : undefined,
+    }, 'explicit_resume');
 }
 
 /**

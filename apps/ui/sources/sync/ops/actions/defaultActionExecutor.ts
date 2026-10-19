@@ -1769,7 +1769,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       runUsageLimitRecovery(sessionId, serverId, options => sessionUsageLimitConsumeResetCredit(sessionId, {
         provider: agentId, issueFingerprint, ...options,
       })),
-    sessionOpen: async ({ sessionId, serverId, intent, resumeRequest, approvedNewDirectoryCreation, actionRequestId, tabId, destination, signal }) => {
+    sessionOpen: async ({ sessionId, serverId, intent, resumeRequest, approvedNewDirectoryCreation, actionRequestId, tabId, destination, signal }, context) => {
       const comparison = destination ? scmReviewComparisonOfSource(destination.comparison, destination.comparisonId) : null;
       if (destination && !comparison) return { ok: false, errorCode: 'invalid_parameters', error: 'comparison_selector_unavailable' };
       const unavailableReason = destination ? scmReviewViewUnavailableReason(destination.view, comparison) : null;
@@ -1841,9 +1841,9 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         }
         const resumed = await resumeSession({
           ...base, ...(resumeRequest ? resumeRequest : {}), serverId: accountContext.serverId, accountLifetime: accountContext.accountLifetime,
-          ...(approvedNewDirectoryCreation === true ? { approvedNewDirectoryCreation: true,
-            executionAuthorization: { provenance: 'user_request' as const, requestId: actionRequestId ?? randomUUID() },
-          } : {}),
+          executionAuthority: context?.authority ?? 'account_automation',
+          executionAuthorization: { provenance: 'user_request', requestId: actionRequestId ?? randomUUID() },
+          ...(approvedNewDirectoryCreation === true ? { approvedNewDirectoryCreation: true } : {}),
           ...(target?.defaultAgentId ? buildResumeSessionExtrasFromUiState({
             agentId: target.defaultAgentId, settings, pluginSettings, session,
           }) : {}),
