@@ -282,6 +282,7 @@ export function MachineSelector({
                     variant="selectable"
                     search={showSearch}
                     searchPlaceholder={searchPlaceholder}
+                    emptyLabel={noItemsMessage}
                     showCategoryTitles={showFavorites || showRecent || visibleAllMachines.some((machine) => machine.isShared)}
                     matchTriggerWidth
                     connectToTrigger

@@ -4,6 +4,11 @@ import { createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/
 import { AccessibleMachineAccessV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { createPlainSessionByIdResponseFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { buildConnectedAccountPurposeTargetChoices } from '@/sync/domains/connectedServices/connectedAccountPurposeTargetChoices';
 
 const network = await installSessionOpsNetworkBoundary();
 const { storage } = await import('@/sync/domains/state/storageStore');
@@ -13,6 +18,108 @@ const { createUiSessionStatusGet } = await import('@/sync/ops/actions/sessionSta
 
 afterEach(() => { standardCleanup(); storage.setState(storage.getInitialState(), true); network.resetRequests(); });
 afterAll(() => network.dispose());
+
+it('demands the operation Account purpose and observes reconnect acknowledgement without changing conversation readiness', async () => {
+    const home = await network.addHome('https://readiness-credential.test', 'alice');
+    const scope = { serverId: home.id, accountId: 'alice' };
+    const accountLifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+    const service = { pluginId: 'acme.external', localId: 'account' };
+    const purpose = { consumer: { pluginId: 'acme.external', localId: 'helper' }, purpose: 'outside-write' };
+    const account = { service, accountId: 'work' };
+    const teamSelection = { source: 'team_resource' as const, resourceId: 'shared-resource', deliveryMode: 'direct' as const, disclosedMember: account };
+    const teamResource = TeamCredentialResourceCatalogEntryV1Schema.parse({ id: teamSelection.resourceId, teamId: 'team', displayName: 'Shared Acme',
+        resourceRevision: 1, readiness: { kind: 'limit_reached', metric: 'inference_requests', resetsAtUtc: '2026-10-20T00:00:00Z' },
+        recoveryAction: 'source_owner_action', mayBroker: false, mayReceiveDirect: true, directMaterialState: 'current',
+        sessionUsePolicy: 'personal_allowed', providerModels: [], connectedServiceSelections: [teamSelection], sourcePresentation: { kind: 'connected_service', service } });
+    const choice = buildConnectedAccountPurposeTargetChoices({ declaration: { purpose: purpose.purpose, service, required: true },
+        selectedTarget: null, accounts: [], groups: [], labelsByKey: {}, serviceTitle: 'Acme', resolveAuthentication: () => null,
+        teamResources: [{ ...teamResource, readiness: { kind: 'available' } }] }).find(candidate => candidate.teamResource);
+    if (!choice?.teamResource) throw new Error('Expected the existing setup owner to offer the Team binding');
+    const credentialTeamSelection = { purpose, ...choice.teamResource };
+    const teamPath = new URL(bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: 'team' }).path, 'https://readiness-credential.test').pathname;
+    let useTeamResource = false;
+    let sharedInvoker = false;
+    let legacySharedLocality = false;
+    const session = createSessionFixture({ id: 'credential-bot', serverId: home.id, encryptionMode: 'plain',
+        metadata: { machineId: 'credential-machine', path: '/work', host: 'server', flavor: 'codex' }, access: createSessionAccessFixture('owner') });
+    const machine = createMachineFixture({ id: 'credential-machine', active: true, activeAt: Date.now(),
+        access: AccessibleMachineAccessV1Schema.parse({ custodian: { accountId: 'alice', displayName: 'Alice' },
+            role: 'manage', resourceMode: 'plain', accessState: 'ready' }) });
+    storage.setState({ machineListByServerId: { [home.id]: [machine] } });
+    let connected = false;
+    const profile = () => AccountProfileSchema.parse({ id: 'alice', connectedAccountsV4: [{ ref: account, status: 'connected',
+        revisionSemantics: 'revisioned', credentialRevision: `csr_${'a'.repeat(22)}`, authenticationModeId: 'manual',
+        configurationReady: true, configurationRevision: null, expiresAt: connected ? null : 1 }] });
+    network.resetRequests();
+    network.setHttpResponder(async input => {
+        const path = new URL(String(input)).pathname;
+        if (path === `/v2/sessions/${session.id}`) {
+            const response = createPlainSessionByIdResponseFixture(sharedInvoker
+                ? { ...session, access: createSessionAccessFixture('edit') } : session);
+            // Retained layout-0 Sessions expose locality in shared metadata; layout-1 recipients do not.
+            return Response.json(legacySharedLocality ? { session: { ...response.session,
+                metadataLayoutVersion: 0, metadata: JSON.stringify(session.metadata) } } : response);
+        }
+        if (path === '/v1/account/profile') return Response.json(profile());
+        if (path === teamPath) return Response.json({ resources: [teamResource], nextCursor: null });
+        if (path.endsWith('/connected-accounts/purposes')) return Response.json({ status: 'present', revision: 1,
+            content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [{ purpose, target: { kind: 'account', account } }] } } } });
+        return null;
+    });
+    const native = createReadyMachineAgentInventoryFixture([{ agentId: 'codex', title: 'Codex' }]);
+    const projection = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection: {
+        ...native.projection,
+        installedPackagesById: { ...native.projection.installedPackagesById, 'acme.external': {
+            id: 'acme.external', displayName: 'Acme', enabled: true, source: { kind: 'builtin', locator: 'acme.external' } } },
+        resourcesById: { ...native.projection.resourcesById, helper: { id: 'helper', pluginId: 'acme.external', resourceKind: 'config', path: 'helper.json',
+            connectedAccountPurposes: [{ purpose: purpose.purpose, serviceRefs: [service] }] } },
+        familiesById: { ...native.projection.familiesById, connectedAccounts: { family: 'connectedAccounts', entriesById: { account: {
+            id: service.localId, serviceId: service.localId, pluginId: service.pluginId, provenance: 'external', sourceKind: 'test', title: 'Acme',
+            authentication: { defaultModeId: 'manual', modes: [{ id: 'manual', kind: 'manual', outcomeReconciliation: 'none', fields: [] }] },
+            capabilities: [], availability: { state: 'available', reason: 'enabled' }, diagnostics: [],
+        } } } },
+    } });
+    network.setRpcAckResponder(async request => {
+        if (request.method.includes('contributionRegistryProjection.describe')) return { ok: true, result: projection };
+        if (request.method === 'daemon.agents.install.list') return { ok: true, result: { jobs: [] } };
+        if (request.method === 'capabilities.detect') return { ok: true, result: native.capabilities };
+        throw new Error(`Unexpected credential diagnostic effect ${request.method}`);
+    });
+    const hook = await renderHook(({ operation }: { operation: 'conversation' | 'credential' }) => useSessionReadiness({
+        accountLifetime, sessionId: session.id, enabled: true, operation, credentialPurpose: purpose,
+        ...(useTeamResource ? { credentialTeamSelection } : {}),
+    }), { initialProps: { operation: 'credential' } });
+    await vi.waitFor(() => expect(hook.getCurrent().readiness).toMatchObject({ operation: 'credential', status: 'unavailable', cause: 'credential',
+        credential: { kind: 'personal', purpose, usable: false } }));
+    expect(hook.getCurrent().repair).toEqual({ actionId: 'connectedServices.authentication.beginReconnect',
+        input: { machineId: machine.id, account } });
+    connected = true; // Acknowledgement at the authentication boundary; the same owner must be reread.
+    await act(async () => { await hook.getCurrent().refresh(); });
+    await vi.waitFor(() => expect(hook.getCurrent().readiness).toMatchObject({ operation: 'credential', status: 'ready',
+        credential: { kind: 'personal', usable: true, repair: null } }));
+    connected = false;
+    await hook.rerender({ operation: 'conversation' });
+    await vi.waitFor(() => expect(hook.getCurrent().readiness).toMatchObject({ operation: 'conversation', status: 'ready', credential: { kind: 'not_required' } }));
+    useTeamResource = true;
+    await hook.rerender({ operation: 'credential' });
+    await vi.waitFor(() => expect(hook.getCurrent().readiness).toMatchObject({ operation: 'credential', status: 'unavailable', cause: 'credential',
+        credential: { kind: 'team', teamId: teamResource.teamId, resourceId: teamResource.id,
+            readiness: teamResource.readiness, recoveryAction: teamResource.recoveryAction } }));
+    expect(hook.getCurrent().repair).toBeNull(); // Team source repair stays at its own resource owner.
+    sharedInvoker = true;
+    const privateReads = network.httpRequests.filter(request => request.url.endsWith('/v1/account/profile') || request.url.endsWith('/connected-accounts/purposes')).length;
+    await act(async () => { await hook.getCurrent().refresh(); });
+    await vi.waitFor(() => expect(hook.getCurrent().readiness?.credential).toEqual({ kind: 'unknown' }));
+    legacySharedLocality = true;
+    await act(async () => { await hook.getCurrent().refresh(); });
+    await vi.waitFor(() => expect(hook.getCurrent().readiness?.credential).toMatchObject({ kind: 'team', readiness: teamResource.readiness }));
+    expect(network.httpRequests.filter(request => request.url.endsWith('/v1/account/profile') || request.url.endsWith('/connected-accounts/purposes'))).toHaveLength(privateReads);
+    useTeamResource = false;
+    await hook.rerender({ operation: 'conversation' });
+    await hook.rerender({ operation: 'credential' });
+    await vi.waitFor(() => expect(hook.getCurrent().readiness?.credential).toEqual({ kind: 'unknown' }));
+    expect(network.httpRequests.filter(request => request.url.endsWith('/v1/account/profile') || request.url.endsWith('/connected-accounts/purposes'))).toHaveLength(privateReads);
+});
 
 it('demands the exact Session only while open and keeps an offline Bot visible with its cause', async () => {
     const home = await network.addHome('https://readiness-row.test', 'alice');

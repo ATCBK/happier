@@ -6,7 +6,7 @@ import type { QualifiedConnectedAccountPurposeBindingTargetV1 } from '@happier-d
 import type { TeamResourceConnectedServiceSelectionV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
 import type { TeamCredentialResourceCatalogEntryV1 } from '@happier-dev/protocol/teams';
 
-import { areTeamResourceConnectedServiceSelectionsEqual } from './connectedServicesAgentOptionStateBindings';
+import { resolveTeamResourceConnectedServiceSelectionV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 
 function sameService(
   left: PluginContributionIdentityV1,
@@ -117,11 +117,7 @@ export function resolveConnectedAccountPurposeTeamResourceEligibility(input: Rea
     candidate.id === teamResource.selection.resourceId && candidate.teamId === teamResource.teamId
   ));
   return resource?.readiness.kind === 'available'
-    && resource.sourcePresentation?.kind === 'connected_service'
-    && sameService(resource.sourcePresentation.service, input.service)
-    && resource.connectedServiceSelections.some((selection) => (
-      areTeamResourceConnectedServiceSelectionsEqual(selection, teamResource.selection)
-    ))
+    && resolveTeamResourceConnectedServiceSelectionV1({ resource, ...teamResource, services: [input.service] })
     ? 'usable'
     : 'unusable';
 }

@@ -22,7 +22,9 @@ import { t } from '@/text';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { ConnectedAccountActionApprovalNotice } from '../ConnectedAccountActionApprovalNotice';
 import type { QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
-import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
+import { useMachineAdministrationTargetSelection, type MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
+import { readMachineAdministrationTargetRouteParams } from '@/sync/domains/machines/administration/targetSelection';
+import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { projectConnectedServiceRegistryEntries, type ConnectedServiceRegistrySnapshot } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { useConnectedAccountIdentityPrivacy } from '@/hooks/ui/useConnectedAccountIdentityPrivacy';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -39,10 +41,17 @@ export function ConnectedServiceSetupPage(props: Readonly<{
 }> = {}) {
     const router = useRouter();
     const params = useLocalSearchParams<{ service?: string; accountId?: string; purpose?: string;
+        machineId?: string; serverIdentityId?: string; expectedAccountId?: string;
         purposeConsumerPlugin?: string; purposeConsumerId?: string; purposeServerId?: string; purposeAccountId?: string; purposeMachineId?: string }>();
     const request = React.useMemo(() => props.purposeRequest ?? readConnectedAccountPurposeSetupRequest(params), [props.purposeRequest, params.purpose,
         params.purposeConsumerPlugin, params.purposeConsumerId, params.purposeServerId, params.purposeAccountId, params.purposeMachineId]);
     const viewer = useActiveServerAccountScope();
+    const explicitTarget = params.machineId !== undefined || params.serverIdentityId !== undefined;
+    const routeTarget = React.useMemo(() => readMachineAdministrationTargetRouteParams(params), [params.machineId, params.serverIdentityId]);
+    const routeTargetSelection = useMachineAdministrationTargetSelection(MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.connectedAccounts, {
+        enabled: props.targetSelection === undefined && (params.expectedAccountId === undefined || params.expectedAccountId === viewer?.accountId),
+        ...(explicitTarget ? { initialTarget: routeTarget } : {}),
+    });
     const profile = useProfile();
     const { present } = useConnectedAccountIdentityPrivacy();
     const { catalog: purposeCatalog, mutateDefaults, execution } = useConnectedAccountPurposeDefaults();
@@ -84,7 +93,8 @@ export function ConnectedServiceSetupPage(props: Readonly<{
             Modal.alert(t('common.error'), t('widgetAdd.inputsUnavailable'));
         }
     };
-    if ((props.purposeRequest || params.purpose !== undefined) && (!request || !declaration || profile.id !== request.scope.accountId
+    if (params.expectedAccountId !== undefined && params.expectedAccountId !== viewer?.accountId
+        || (props.purposeRequest || params.purpose !== undefined) && (!request || !declaration || profile.id !== request.scope.accountId
         || declaration.consumerKind === 'machineProvisioner' && !props.onSelected)) return <ItemList>
         {props.onClose ? <Item testID="connected-service-setup:close" title={t('common.cancel')} onPress={close} /> : null}
         <SurfaceStateCard testID="connected-account-purpose-unavailable" kind={purposeRuntime.phase === 'establishing' ? 'loading' : 'unavailable'}
@@ -111,7 +121,7 @@ export function ConnectedServiceSetupPage(props: Readonly<{
             disabledReason={props.onSelected || purposeCatalog.status === 'ready' && !purposeCatalog.stale ? undefined
                 : t(purposeCatalog.status === 'loading' ? 'common.loading' : 'common.unavailable')}
             onChange={next => { void select(next); }} />)}
-        <ConnectedServiceSetupPanel chrome="page" target={target} catalog={catalog} registry={registry} targetSelection={props.targetSelection}
+        <ConnectedServiceSetupPanel chrome="page" target={target} catalog={catalog} registry={registry} targetSelection={props.targetSelection ?? routeTargetSelection}
         targetLocked={Boolean(props.purposeRequest)}
         onTargetChange={setTarget} onClose={close}
         onConnected={(account, serviceKey) => {
