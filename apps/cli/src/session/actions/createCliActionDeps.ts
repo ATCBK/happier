@@ -272,7 +272,7 @@ import { createWorkflowRunPushNotificationClient } from '@/daemon/workflows/prod
 import { createWorkflowRunReviewEntryNotificationHandler } from '@/notifications/activity/dispatchWorkflowRunUpdateNotification';
 import type { WorkflowAccountRunActionDeps } from '@happier-dev/protocol';
 import { isWorkflowRuntimeEnabled } from '@/daemon/automation/workflowFeatureGate';
-import { listCurrentAccountMachines, resolveCurrentAccountMachineTarget } from '@/api/machine/resolveCurrentAccountMachineTarget';
+import { listCurrentAccountMachines, resolveCurrentAccountAdministrationMachine, resolveCurrentAccountMachineTarget } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { resolveFilesystemTransferCustodyFailure } from './filesystemTransferCustody';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { prepareWorkflowAcceptedWorkspaceTarget, restoreRecordedWorkflowWorkspace } from '@/daemon/workflows/resolveWorkflowWorkspace';
@@ -1828,12 +1828,31 @@ export function createCliActionDeps(params: Readonly<{
     }
     return transport;
   };
+  // Home, Project and plugin-area widgets belong to the Account, not to a Session or this process's
+  // Machine. A host with neither (a standalone CLI replaying an approved Action) reads the plugin
+  // projection from a reachable Account daemon, the selection Account administration already uses.
+  let accountWidgetMachineId: Promise<string> | undefined;
+  const readAccountWidgetMachineId = async (signal?: AbortSignal): Promise<string | null> => {
+    if (!accountWidgetMachineId) {
+      const selected = resolveCurrentAccountAdministrationMachine({ token: params.token,
+        ...(params.serverHttpBaseUrl ? { serverHttpBaseUrl: params.serverHttpBaseUrl } : {}) })
+        .then(machineId => machineId ?? Promise.reject(new Error('widget_account_machine_unavailable')));
+      accountWidgetMachineId = selected;
+      // Only a selected Machine is kept; an unreachable Account is asked again by the next read.
+      void selected.catch(() => { if (accountWidgetMachineId === selected) accountWidgetMachineId = undefined; });
+    }
+    signal?.throwIfAborted();
+    const machineId = await accountWidgetMachineId.catch(() => null);
+    signal?.throwIfAborted();
+    return machineId;
+  };
   const readWidgetProjection = async (signal?: AbortSignal, sessionRef?: Readonly<{ serverId: string; sessionId: string }>) => {
     signal?.throwIfAborted();
     const transport = sessionRef ? await resolveWidgetSessionTransport(sessionRef, signal) : null;
     const machineId = transport?.ok
       ? normalizeStringValue(readTransportSessionOwnerMetadata(transport)?.machineId)
-      : params.machineActionDirectTargetTransport?.machineId ?? normalizeStringValue(await resolveCurrentSessionValue('machineId'));
+      : params.machineActionDirectTargetTransport?.machineId ?? normalizeStringValue(await resolveCurrentSessionValue('machineId'))
+        ?? await readAccountWidgetMachineId(signal);
     if (!machineId) return null;
     const result = DaemonContributionRegistryProjectionDescribeResponseSchema.safeParse(await callMachineAction({
       machineId, serverId: params.serverId ?? configuration.activeServerId,
