@@ -100,7 +100,7 @@ export function parseCooperativeNavigationState(value: unknown, config: Cooperat
     const message = value as Record<string, unknown>;
     const identity = cooperativeCollectorIdentity(config);
     if (message.v !== 1 || message.kind !== COOPERATIVE_NAVIGATION_STATE_KIND
-        || Object.keys(message).length !== Object.keys(identity).length + 5
+        || Object.keys(message).length !== Object.keys(identity).length + 6
         || !Object.entries(identity).every(([key, expected]) => message[key] === expected)) return null;
     const { loading, canGoBack, canGoForward, url } = message;
     if (typeof loading !== 'boolean' || typeof canGoBack !== 'boolean' || typeof canGoForward !== 'boolean' || typeof url !== 'string') return null;
