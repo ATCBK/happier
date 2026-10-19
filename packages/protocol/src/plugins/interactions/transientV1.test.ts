@@ -34,6 +34,15 @@ const appScopeStamp = {
 } as const;
 
 describe('transient interaction contract', () => {
+  it('preserves a native tool identity while keeping interaction custody host-owned', () => {
+    const normalized = normalizeInteractionTransientRequestV1({ kind: 'approval', title: 'Run command?',
+      subject: { kind: 'tool', toolCallId: 'exec-native-command', name: 'Bash', input: { command: 'pwd' } },
+    }, stamp);
+    expect(normalized).toMatchObject({ ok: true, value: {
+      requestId: stamp.requestId, scope: stamp.scope,
+      subject: { toolCallId: 'exec-native-command' },
+    } });
+  });
   it('uses one opaque process-local occurrence requester fence and rejects generation custody aliases', () => {
     expect(InteractionTransientRequestV1Schema.safeParse({
       ...appScopeStamp,

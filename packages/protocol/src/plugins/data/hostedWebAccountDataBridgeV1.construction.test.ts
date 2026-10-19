@@ -16,7 +16,7 @@ it('admits the hosted Account Data declarations without constructing unused oper
     session.post('Debugger.resume');
   });
   const globalKey = '__hostedDataConstructionTest';
-  Reflect.set(globalThis, globalKey, z.object);
+  Reflect.set(globalThis, globalKey, z.strictObject);
   try {
     await new Promise<void>((resolve, reject) => session.post('Debugger.enable', error => error ? reject(error) : resolve()));
     const evaluated = await new Promise<inspector.Runtime.EvaluateReturnType>((resolve, reject) =>

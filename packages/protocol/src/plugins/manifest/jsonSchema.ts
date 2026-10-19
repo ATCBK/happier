@@ -1,4 +1,4 @@
-import * as z from 'zod/mini';
+import { forEachJsonSchemaChild, zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 import type { core } from 'zod/mini';
 
 import { PluginManifestV2Schema } from './v2.js';
@@ -16,7 +16,7 @@ function completeStrictObjectTypes(value: unknown): void {
   if (schema.properties !== undefined && schema.type === undefined) {
     schema.type = 'object';
   }
-  Object.values(schema).forEach(completeStrictObjectTypes);
+  forEachJsonSchemaChild(schema, completeStrictObjectTypes);
 }
 
 /**
@@ -26,8 +26,7 @@ function completeStrictObjectTypes(value: unknown): void {
  */
 export function createPluginManifestJsonSchemaV2(): Readonly<core.JSONSchema.JSONSchema> {
   const schema: core.JSONSchema.JSONSchema = {
-    ...z.toJSONSchema(PluginManifestV2Schema, {
-      io: 'input',
+    ...zodSchemaToJsonSchemaObject(PluginManifestV2Schema, {
       target: 'draft-2020-12',
       unrepresentable: 'any',
       override: ({ zodSchema, jsonSchema }) => {

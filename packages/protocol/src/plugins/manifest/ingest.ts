@@ -23,6 +23,7 @@ import {
 } from '../../automations/automationEventHistoryGapResetActionV1.js';
 import { createPluginEventAutomationSetupResultV1JsonSchema } from '../../automations/automationEventSetupResultV1.js';
 import { normalizeStrictJsonValue } from '../../json/strictJsonValue.js';
+import type { core } from 'zod/mini';
 
 export type PluginManifestIngestionDiagnostic = Readonly<{
   code:
@@ -125,10 +126,13 @@ function readJsonInput(input: unknown): DecodeResult {
       const serialized = JSON.stringify(normalizeStrictJsonValue(input));
       if (serialized === undefined) throw new TypeError('Value is not JSON serializable.');
       bytes = new TextEncoder().encode(serialized);
-    } catch {
+    } catch (error) {
       return {
         ok: false,
-        result: { ok: false, diagnostics: [{ code: 'plugin_manifest_invalid_json', message: 'Bundled plugin manifest must be JSON serializable.' }] },
+        result: { ok: false, diagnostics: [{
+          code: 'plugin_manifest_invalid_json',
+          message: `Plugin manifest must be JSON serializable.${error instanceof Error ? ` ${error.message}` : ''}`,
+        }] },
       };
     }
   }
@@ -176,6 +180,37 @@ function isContributionLocalIdIssuePath(path: readonly PropertyKey[]): boolean {
     if (!familyPath.every((segment, index) => path[index + 1] === segment)) return false;
     return typeof path[familyPath.length + 1] === 'number'
       && path[familyPath.length + 2] === catalogEntry.identityField;
+  });
+}
+
+/** Keep union alternatives visible instead of discarding their field errors. */
+function readSchemaDiagnostics(
+  issues: readonly core.$ZodIssue[],
+  parentPath: readonly (string | number)[] = [],
+  alternatives: readonly number[] = [],
+): PluginManifestIngestionDiagnostic[] {
+  return issues.flatMap((issue) => {
+    const path = [...parentPath, ...issue.path.filter((part): part is string | number => typeof part !== 'symbol')];
+    if (issue.code === 'invalid_union' && issue.errors.length > 0) {
+      return issue.errors.flatMap((branch, index) => readSchemaDiagnostics(branch, path, [...alternatives, index + 1]));
+    }
+    // Union arms can impose different field requirements. Label their errors
+    // so an author does not read them as simultaneous requirements.
+    const alternative = alternatives.length > 0 ? `Union alternative ${alternatives.join('.')}: ` : '';
+    if (issue.code === 'unrecognized_keys') {
+      return issue.keys.map((key) => ({
+        code: 'plugin_manifest_invalid' as const,
+        path: [...path, key],
+        message: `${alternative}Unrecognized key: ${JSON.stringify(key)}`,
+      }));
+    }
+    return [{
+      code: isContributionLocalIdIssuePath(path)
+        ? 'plugin_manifest_invalid_contribution_id' as const
+        : 'plugin_manifest_invalid' as const,
+      path,
+      message: `${alternative}${issue.message}`,
+    }];
   });
 }
 
@@ -983,26 +1018,9 @@ export function ingestPluginManifestV2(input: unknown): PluginManifestIngestionR
   }
   const parsed = PluginManifestV2Schema.safeParse(decoded.value);
   if (!parsed.success) {
-    const diagnostics = parsed.error.issues.flatMap((issue) => {
-      if (issue.code === 'unrecognized_keys') {
-        return issue.keys.map((key) => ({
-          code: 'plugin_manifest_invalid' as const,
-          path: [...issue.path.filter((part): part is string | number => typeof part !== 'symbol'), key],
-          message: `Unrecognized key: ${JSON.stringify(key)}`,
-        }));
-      }
-      const invalidContributionId = isContributionLocalIdIssuePath(issue.path);
-      return [{
-        code: invalidContributionId
-            ? 'plugin_manifest_invalid_contribution_id' as const
-            : 'plugin_manifest_invalid' as const,
-        path: issue.path.filter((part): part is string | number => typeof part !== 'symbol'),
-        message: issue.message,
-      }];
-    });
     return {
       ok: false,
-      diagnostics,
+      diagnostics: readSchemaDiagnostics(parsed.error.issues),
     };
   }
   let manifest = parsed.data;

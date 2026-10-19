@@ -128,11 +128,11 @@ const PluginUiHostApiSurfaceThemeTypographyV1Schema = lazyZodSchema(() => z.stri
 export const PluginUiHostApiSurfaceThemeV1Schema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
   /** Optional host presentation choices. Unknown ids use the shared renderer's defaults. */
-  spinner: z.object({
+  spinner: z.optional(z.strictObject({
     style: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     speed: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     pause: PluginUiHostApiSurfaceNonBlankStringV1Schema,
-  }).strict().optional(),
+  })),
   // Presentation-only V1 addition. The map, gradient and coordinates drop unknown fields;
   // the surrounding identity/authority context remains closed.
   surfaceFinish: z.optional(z.object({
@@ -154,6 +154,8 @@ export const PluginUiHostApiSurfaceThemeV1Schema = lazyZodSchema(() => z.strictO
     focus: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     accent: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     onAccent: PluginUiHostApiSurfaceNonBlankStringV1Schema,
+    /** The one accent data marks are drawn in (series, meters); the ramp of its tones tells series apart. Older snapshots omit it. */
+    dataAccent: z.optional(PluginUiHostApiSurfaceNonBlankStringV1Schema),
     success: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     warning: PluginUiHostApiSurfaceNonBlankStringV1Schema,
     /** "Needs you": the host's one attention ink (its Brand amber), distinct from a caution warning. */
@@ -212,6 +214,15 @@ export const PluginUiHostApiSurfaceContextV1Schema = lazyZodSchema(() => z.stric
   target: PluginUiHostApiSurfaceTargetV1Schema,
   /** Host page chrome for app pages; absent on other surface placements. */
   page: z.optional(z.strictObject({ columnVisible: z.boolean() })),
+  /** The mount's existing approval presenter fact, not an approval or effect authority. */
+  pendingApproval: z.optional(z.nullable(z.strictObject({
+    artifactId: PluginUiHostApiSurfaceNonBlankStringV1Schema,
+    href: PluginUiHostApiSurfaceNonBlankStringV1Schema,
+  }))),
+  /** Presentation-only: the host is establishing its selected Machine capabilities. */
+  machineConnectionPending: z.optional(z.boolean()),
+  /** Read-only exact-target availability; a positive edge can resume a refused read, never authorize an effect. */
+  machineExecutionReady: z.optional(z.boolean()),
   accountEncryptionMode: z.enum(['plain', 'e2ee']),
   platform: PluginUiPlatformV1Schema,
   locale: PluginUiHostApiSurfaceNonBlankStringV1Schema,

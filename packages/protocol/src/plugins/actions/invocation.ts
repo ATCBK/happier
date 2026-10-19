@@ -168,7 +168,7 @@ const invalidInput = Object.freeze({
 
 function invalidInputFromParserIssues(
   issues: readonly PluginActionInputParserIssue[],
-): PluginActionInvocationResult {
+): Extract<PluginActionInvocationResult, { status: 'invalid' }> {
   const capturedIssues = Object.freeze(issues.map((issue) => Object.freeze({
     path: Object.freeze([...issue.path]),
     code: issue.code,
@@ -218,7 +218,7 @@ function unavailable(code: string, message: string): PluginActionInvocationResul
   return Object.freeze({ status: 'unavailable', code, message });
 }
 
-function unavailableBeforeHandler(code: string, message: string): PluginActionInvocationResult {
+function unavailableBeforeHandler(code: string, message: string): Extract<PluginActionInvocationResult, { status: 'unavailable' }> {
   return Object.freeze({
     status: 'unavailable',
     code,
@@ -608,6 +608,18 @@ export function pluginActionRequiresPresentUserIntent(
   if (typeof policy.approvalRequiredByActionSettings === 'boolean') {
     return policy.approvalRequiredByActionSettings;
   }
+  return invocationSurface !== 'plugin'
+    && invocationSurface !== 'background'
+    && pluginActionDeclarationRequiresConfirmationForInput(policy, invocationSurface, input, invocationAuthority);
+}
+
+/** Declaration/input semantics, independent of the invoking realm's prompt exemption. */
+export function pluginActionDeclarationRequiresConfirmationForInput(
+  policy: Pick<PluginActionPresentUserGatePolicy, 'dangerLevel' | 'confirmation' | 'confirmationWhen'>,
+  invocationSurface: string,
+  input?: unknown,
+  invocationAuthority?: ActionRequiredAuthority,
+): boolean {
   const condition = policy.confirmationWhen;
   if (condition !== undefined) {
     // A scoped declaration cannot turn a UI route into human authority. Every
@@ -622,14 +634,7 @@ export function pluginActionRequiresPresentUserIntent(
       && !evaluateInputPredicate(predicate, input))) return false;
   }
 
-  // Plugin/background execution otherwise has no present user to ask. Every
-  // other execution realm must bind a non-safe Action to one live decision.
-  return invocationSurface !== 'plugin'
-    && invocationSurface !== 'background'
-    && (
-      policy.dangerLevel !== 'safe'
-      || policy.confirmation !== undefined
-    );
+  return policy.dangerLevel !== 'safe' || policy.confirmation !== undefined;
 }
 
 function evaluatePresentUserPolicy(
@@ -841,7 +846,7 @@ type PluginActionInvocationInputOptions = Readonly<{
 }>;
 
 type PluginActionInvocationPreparation = Readonly<
-  | { kind: 'settled'; result: PluginActionInvocationResult }
+  | { kind: 'settled'; result: Exclude<PluginActionInvocationResult, { status: 'executed' }> }
   | {
     kind: 'ready';
     input: StrictJsonValue;
@@ -892,7 +897,7 @@ export function createPluginActionInvocation(params: Readonly<{
   };
 
   const prepare = (input: unknown, options: PluginActionInvocationInputOptions = {}): PluginActionInvocationPreparation => {
-      const settled = (result: PluginActionInvocationResult): PluginActionInvocationPreparation => ({ kind: 'settled', result });
+      const settled = (result: Exclude<PluginActionInvocationResult, { status: 'executed' }>): PluginActionInvocationPreparation => ({ kind: 'settled', result });
       if (!params.isCurrent() || params.occurrenceSignal.aborted) {
         return settled(unavailableBeforeHandler('plugin_action_generation_retired', 'Plugin action occurrenceId is no longer current'));
       }

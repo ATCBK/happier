@@ -16,6 +16,7 @@ import { PluginTargetedContributionSelectionV1Schema } from '../ui/targetedContr
 import * as protocolComposableKernel from './jsonSchemaValidation.js';
 import { createProtocolComposableSchema, createProtocolStoredReadSchema } from './protocolComposableSchema.js';
 import { LaunchProfileIdV2ProtocolSchema } from '../../profiles/v2/profileId.js';
+import { compileProtocolJsonSchema } from './jsonSchemaCompiler.js';
 import {
   compilePluginJsonSchema,
   createPluginJsonSchemaZodObjectAdapter,
@@ -46,6 +47,71 @@ function deepSortObjectKeys(value: unknown): unknown {
 }
 
 describe('plugin JSON Schema validation policy', () => {
+  it('shares one compiled validator across preparations of an admitted immutable schema', () => {
+    const schema = {
+      type: 'object', properties: { authority: { type: 'integer', minimum: 1 } },
+      required: ['authority'], additionalProperties: false,
+    };
+    const first = preparePluginJsonSchema(schema);
+    const repeated = preparePluginJsonSchema(schema);
+
+    expect(repeated.validate).toBe(first.validate);
+    expect(repeated.jsonSchema).toBe(first.jsonSchema);
+    expect(compilePluginJsonSchema(schema)).toBe(first.validate);
+    expect(compileProtocolJsonSchema(first.jsonSchema, 'draft-07')).toBe(first.validate);
+    const native = compileProtocolJsonSchema(first.jsonSchema, 'draft-2020-12');
+    expect(native).not.toBe(first.validate);
+    expect(compileProtocolJsonSchema(first.jsonSchema, 'draft-2020-12')).toBe(native);
+    for (const validate of [first.validate, repeated.validate, native]) {
+      expect(isValidPluginJsonSchemaValue(validate, { authority: 1 })).toBe(true);
+      expect(isValidPluginJsonSchemaValue(validate, { authority: 0 })).toBe(false);
+      expect(isValidPluginJsonSchemaValue(validate, { authority: 1, extra: true })).toBe(false);
+    }
+  });
+
+  it('preserves a valid authority union arm instead of projecting it into a narrower arm', () => {
+    const epoch = { type: 'integer' as const, minimum: 1 };
+    const authorityArms = [
+      { type: 'object', properties: { connectionAuthorityEpoch: epoch },
+        required: ['connectionAuthorityEpoch'], additionalProperties: false },
+      { type: 'object', properties: { connectionAuthorityEpoch: epoch, bindingRevision: epoch, bindingAuthorityEpoch: epoch },
+        required: ['connectionAuthorityEpoch', 'bindingRevision', 'bindingAuthorityEpoch'], additionalProperties: false },
+    ];
+    const schema = protocolComposableKernel.createPluginJsonSchemaZodValueAdapter({ oneOf: authorityArms });
+    const binding = { connectionAuthorityEpoch: 1, bindingRevision: 2, bindingAuthorityEpoch: 3 };
+    expect(schema.parse(binding)).toEqual(binding);
+    expect(createStoredReadSchema(schema).parse(binding)).toEqual(binding);
+    expect(createStoredReadSchema(schema).parse({ connectionAuthorityEpoch: 1 })).toEqual({ connectionAuthorityEpoch: 1 });
+    expect(createStoredReadSchema(schema).parse({ ...binding, retired: true })).toEqual(binding);
+    expect(createStoredReadSchema(schema).safeParse({ ...binding, bindingRevision: 'invalid', retired: true }).success).toBe(false);
+    const nested = createStoredReadSchema(protocolComposableKernel.createPluginJsonSchemaZodValueAdapter({ oneOf: authorityArms.map(authority => ({
+      type: 'object', properties: { route: authority }, required: ['route'], additionalProperties: false,
+    })) }));
+    expect(nested.parse({ route: { ...binding, retired: true }, retired: true })).toEqual({ route: binding });
+    expect(nested.safeParse({ route: { ...binding, bindingRevision: 'invalid', retired: true }, retired: true }).success).toBe(false);
+    const ambiguous = protocolComposableKernel.createPluginJsonSchemaZodValueAdapter({ oneOf: [
+      { ...authorityArms[0], additionalProperties: true }, authorityArms[1],
+    ] });
+    expect(ambiguous.safeParse(binding).success).toBe(false);
+    expect(createStoredReadSchema(ambiguous).safeParse(binding).success).toBe(false);
+  });
+  it('refuses invalid known union fields when no arm survives a root object projection', () => {
+    const arms = [
+      { type: 'object', properties: { a: { type: 'string' } }, additionalProperties: false },
+      { type: 'object', properties: { b: { type: 'string' } }, additionalProperties: false },
+    ];
+    const root = protocolComposableKernel.createPluginJsonSchemaZodValueAdapter({ type: 'object', anyOf: arms });
+    expect(createStoredReadSchema(root).safeParse({ a: 123, retired: true }).success).toBe(false);
+    const shared = { shared: { type: 'string' } };
+    const withShared = protocolComposableKernel.createPluginJsonSchemaZodValueAdapter({ type: 'object', properties: shared,
+      anyOf: arms.map(arm => ({ ...arm, properties: { ...shared, ...arm.properties } })),
+    });
+    const invalid = { shared: 'kept', a: 123, retired: true };
+    expect(withShared.safeParse(invalid).success).toBe(false);
+    expect(createStoredReadSchema(withShared).safeParse(invalid).success).toBe(false);
+    expect(createStoredReadSchema(withShared).parse({ shared: 'kept', a: 'valid', retired: true }))
+      .toEqual({ shared: 'kept', a: 'valid' });
+  });
   it('reads nullable Launch Profile references through the canonical stored projection and retains profile normalization', () => {
     const schema = defineProtocolObject({
       profileId: LaunchProfileIdV2ProtocolSchema.nullable(),
@@ -343,7 +409,7 @@ describe('plugin JSON Schema validation policy', () => {
     const separatelyNormalized = normalizePluginJsonSchema(source);
 
     expect(prepared.jsonSchema).toBe(normalized);
-    expect(separatelyNormalized).not.toBe(normalized);
+    expect(separatelyNormalized).toBe(normalized);
     expect(separatelyNormalized).toEqual(normalized);
     expect(Object.isFrozen(normalized)).toBe(true);
     expect(Object.isFrozen(normalized.properties)).toBe(true);
@@ -357,6 +423,16 @@ describe('plugin JSON Schema validation policy', () => {
     expect(Reflect.set(normalized.properties.items.items, 'minLength', 1)).toBe(false);
     expect(prepared.validate({ items: ['ok'] })).toBe(true);
     expect(prepared.validate({ items: ['x'] })).toBe(false);
+    const changed = preparePluginJsonSchema(source);
+    expect(changed.validate).not.toBe(prepared.validate);
+    expect(changed.validate({ items: ['x'] })).toBe(true);
+    let accessorReads = 0;
+    Object.defineProperty(source.properties.items.items, 'minLength', {
+      enumerable: true,
+      get() { accessorReads += 1; return 1; },
+    });
+    expect(() => preparePluginJsonSchema(source)).toThrow();
+    expect(accessorReads).toBe(0);
   });
 });
 

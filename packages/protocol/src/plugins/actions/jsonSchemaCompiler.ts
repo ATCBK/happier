@@ -120,9 +120,22 @@ function createAjv(dialect: 'draft-07' | 'draft-2020-12'): Ajv {
   return ajv;
 }
 
+// Both dialect owners supply admitted immutable snapshots. Keep generated code
+// with that schema identity, without a process-lifetime AJV/schema registry that
+// would retain retired installed-plugin generations.
+const compiledSchemas = {
+  'draft-07': new WeakMap<object, PluginJsonSchemaValidator>(),
+  'draft-2020-12': new WeakMap<object, PluginJsonSchemaValidator>(),
+};
+
 export function compileProtocolJsonSchema(
   jsonSchema: object,
   dialect: 'draft-07' | 'draft-2020-12',
 ): PluginJsonSchemaValidator {
-  return createAjv(dialect).compile(jsonSchema);
+  const validators = compiledSchemas[dialect];
+  const existing = validators.get(jsonSchema);
+  if (existing) return existing;
+  const validate = createAjv(dialect).compile(jsonSchema);
+  validators.set(jsonSchema, validate);
+  return validate;
 }

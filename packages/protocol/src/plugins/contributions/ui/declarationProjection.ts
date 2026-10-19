@@ -500,6 +500,7 @@ function projectGeneratedUiSettingsPages(
     registry: PluginUiPresentationRegistryV1,
     entriesById: Record<string, PluginUiProjectedEntryCandidate>,
     declarativeHostRuntime?: DeclarativeProjectionHostRuntimeContext,
+    hostRuntime?: PluginUiPresentationResourceContextV1,
 ): void {
     const renderersByKey = new Map<string, ResolvedUiRendererV2Contribution>();
     for (const renderer of registry.uiRenderersV2 ?? []) {
@@ -554,6 +555,7 @@ function projectGeneratedUiSettingsPages(
             binding,
             renderer: rendererProjection.rendererRef,
             availability: rendererAvailability,
+            runtime: projectSurfaceResourceRuntime(pluginId, hostRuntime),
         });
     }
 }
@@ -812,7 +814,7 @@ export function projectPluginUiPresentationEntriesV1(params: Readonly<{
     projectGeneratedUiViews(registry, entriesById, declarative, params);
     projectOpenableContentViewers(registry, entriesById);
     projectGeneratedUiSettingsGroups(registry, entriesById);
-    projectGeneratedUiSettingsPages(registry, entriesById, declarative);
+    projectGeneratedUiSettingsPages(registry, entriesById, declarative, params);
 }
 export function projectPluginUiDeclarationEntriesV1(params: Readonly<{
     registry: PluginUiPresentationRegistryV1;

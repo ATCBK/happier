@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   PluginContributionIdentityV1Schema,
@@ -116,9 +116,7 @@ export const PluginUiContainerV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type PluginUiContainerV1 = z.infer<typeof PluginUiContainerV1Schema>;
 
-export const PluginUiDestinationContainerV1Schema = lazyZodSchema(() => PluginUiContainerV1Schema.exclude(
-  PLUGIN_UI_INLINE_SURFACE_ROLE_IDS_V1,
-));
+export const PluginUiDestinationContainerV1Schema = lazyZodSchema(() => (<const Values extends readonly string[], const Excluded extends readonly Values[number][]>(values: Values, excluded: Excluded) => { for (const value of excluded) if (!values.includes(value)) throw new Error(`Key ${value} not found in enum`); return z.enum(values.filter((value): value is Exclude<Values[number], Excluded[number]> => !excluded.some(item => item === value))); })(PluginUiContainerV1Schema.options, PLUGIN_UI_INLINE_SURFACE_ROLE_IDS_V1));
 export type PluginUiDestinationContainerV1 = z.infer<
   typeof PluginUiDestinationContainerV1Schema
 >;
@@ -152,7 +150,7 @@ const PLUGIN_UI_NON_AUTHORED_VIEW_INLINE_SURFACE_ROLE_IDS_V1 = Object.freeze(
  * views. Its parsed binding arm, rather than this input vocabulary, decides
  * whether a view is navigable.
  */
-export const PluginUiViewContainerV1Schema = lazyZodSchema(() => PluginUiContainerV1Schema.exclude([
+export const PluginUiViewContainerV1Schema = lazyZodSchema(() => (<const Values extends readonly string[], const Excluded extends readonly Values[number][]>(values: Values, excluded: Excluded) => { for (const value of excluded) if (!values.includes(value)) throw new Error(`Key ${value} not found in enum`); return z.enum(values.filter((value): value is Exclude<Values[number], Excluded[number]> => !excluded.some(item => item === value))); })(PluginUiContainerV1Schema.options, [
   'settingsPage' as const,
   ...PLUGIN_UI_NON_AUTHORED_VIEW_INLINE_SURFACE_ROLE_IDS_V1,
 ]));
@@ -471,21 +469,21 @@ export function resolvePluginUiDestinationBindingSlotV1(
   ) ?? null;
 }
 
-export const PluginUiDestinationBindingInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiDestinationBindingInputV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   destinationId: asProtocolZod(PluginContributionLocalIdSchema),
   rendererId: asProtocolZod(PluginContributionLocalIdSchema),
   /** Ordered fallback candidates after the primary renderer. */
-  fallbackRendererIds: z.array(asProtocolZod(PluginContributionLocalIdSchema)).optional(),
+  fallbackRendererIds: z.optional(z.array(asProtocolZod(PluginContributionLocalIdSchema))),
   /**
    * Projection-time renderer inventory. It is deliberately input-only: the
    * normalized binding carries qualified identities, never a second registry.
    */
-  availableRendererIds: z.array(asProtocolZod(PluginContributionLocalIdSchema)).optional(),
+  availableRendererIds: z.optional(z.array(asProtocolZod(PluginContributionLocalIdSchema))),
   container: PluginUiDestinationContainerV1Schema,
   target: PluginSurfaceTargetV1Schema,
-  instancePolicy: PluginUiDestinationInstancePolicyV1Schema.default('singleton'),
-}).strict());
+  instancePolicy: z._default(PluginUiDestinationInstancePolicyV1Schema, 'singleton'),
+}));
 export type PluginUiDestinationBindingInputV1 =
   z.input<typeof PluginUiDestinationBindingInputV1Schema>;
 
@@ -655,23 +653,23 @@ export function normalizePluginUiDestinationBindingV1(
  * slot. Platform and method lists may be conservative predecessor subsets, but
  * can never advertise a value outside the current registry slot.
  */
-export const PluginUiDestinationBindingV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiDestinationBindingV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('destination'),
   destination: asProtocolZod(PluginContributionIdentityV1Schema),
-  rendererChain: z.array(asProtocolZod(PluginContributionIdentityV1Schema)).min(1),
+  rendererChain: z.array(asProtocolZod(PluginContributionIdentityV1Schema)).check(z.minLength(1)),
   renderer: asProtocolZod(PluginContributionIdentityV1Schema),
   container: PluginUiDestinationContainerV1Schema,
   target: PluginSurfaceTargetV1Schema,
   targetKind: PluginUiTargetKindV1Schema,
   surfaceContextPlacement: PluginUiSurfacePlacementV1Schema,
   instancePolicy: PluginUiDestinationInstancePolicyV1Schema,
-  platforms: z.array(PluginUiPlatformV1Schema).min(1),
-  rightSidebarScope: PluginUiRightSidebarScopeV1Schema.optional(),
-}).strict().superRefine((binding, ctx) => {
+  platforms: z.array(PluginUiPlatformV1Schema).check(z.minLength(1)),
+  rightSidebarScope: z.optional(PluginUiRightSidebarScopeV1Schema),
+}).check(z.superRefine((binding, ctx) => {
   const slot = resolvePluginUiDestinationBindingSlotV1(binding.container, binding.targetKind);
   if (!slot) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['container'],
       message: 'Plugin UI binding container and target kind do not identify an admitted slot.',
     });
@@ -679,21 +677,21 @@ export const PluginUiDestinationBindingV1Schema = lazyZodSchema(() => z.object({
   }
   if (binding.target.kind !== binding.targetKind) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['targetKind'],
       message: 'Plugin UI binding target kind must match its target selector.',
     });
   }
   if (!slot.instancePolicies.includes(binding.instancePolicy)) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['instancePolicy'],
       message: 'Plugin UI binding instance policy must be admitted by its registry slot.',
     });
   }
   if (binding.renderer.pluginId !== binding.destination.pluginId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['renderer', 'pluginId'],
       message: 'Plugin UI binding destination and renderer must have the same plugin owner.',
     });
@@ -702,7 +700,7 @@ export const PluginUiDestinationBindingV1Schema = lazyZodSchema(() => z.object({
     binding.rendererChain.some((renderer) => renderer.pluginId !== binding.destination.pluginId)
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['rendererChain'],
       message: 'Plugin UI binding renderer chain must have the same plugin owner as its destination.',
     });
@@ -712,7 +710,7 @@ export const PluginUiDestinationBindingV1Schema = lazyZodSchema(() => z.object({
     !== binding.rendererChain.length
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['rendererChain'],
       message: 'Plugin UI binding renderer chain must not repeat a renderer.',
     });
@@ -722,21 +720,21 @@ export const PluginUiDestinationBindingV1Schema = lazyZodSchema(() => z.object({
     && renderer.localId === binding.renderer.localId
   ))) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['renderer'],
       message: 'Plugin UI binding selected renderer must be a member of its renderer chain.',
     });
   }
   if (binding.surfaceContextPlacement !== slot.surfaceContextPlacement) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['surfaceContextPlacement'],
       message: 'Plugin UI binding surface context placement must be registry-derived.',
     });
   }
   if (binding.rightSidebarScope !== slot.rightSidebarScope) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['rightSidebarScope'],
       message: 'Plugin UI binding right-sidebar scope must be registry-derived.',
     });
@@ -746,27 +744,27 @@ export const PluginUiDestinationBindingV1Schema = lazyZodSchema(() => z.object({
     || binding.platforms.some((platform) => !slot.platforms.includes(platform))
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['platforms'],
       message: 'Plugin UI binding platforms must be a unique registry-admitted subset.',
     });
   }
-}));
+})));
 
 /**
  * Inline bindings are physical mounts, not destinations. In particular they
  * carry a qualified surface identity and exact role but no destination,
  * collision domain, instance policy, pane state, or restoration identity.
  */
-export const PluginUiInlineSurfaceBindingInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiInlineSurfaceBindingInputV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   surfaceId: asProtocolZod(PluginContributionLocalIdSchema),
   rendererId: asProtocolZod(PluginContributionLocalIdSchema),
-  fallbackRendererIds: z.array(asProtocolZod(PluginContributionLocalIdSchema)).optional(),
-  availableRendererIds: z.array(asProtocolZod(PluginContributionLocalIdSchema)).optional(),
+  fallbackRendererIds: z.optional(z.array(asProtocolZod(PluginContributionLocalIdSchema))),
+  availableRendererIds: z.optional(z.array(asProtocolZod(PluginContributionLocalIdSchema))),
   role: PluginUiInlineSurfaceRoleV1Schema,
   target: PluginSurfaceTargetV1Schema,
-}).strict());
+}));
 export type PluginUiInlineSurfaceBindingInputV1 = z.input<
   typeof PluginUiInlineSurfaceBindingInputV1Schema
 >;
@@ -814,43 +812,43 @@ export function normalizePluginUiInlineSurfaceBindingV1(
   });
 }
 
-export const PluginUiInlineSurfaceBindingV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiInlineSurfaceBindingV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('inline'),
   surface: asProtocolZod(PluginContributionIdentityV1Schema),
   role: PluginUiInlineSurfaceRoleV1Schema,
-  rendererChain: z.array(asProtocolZod(PluginContributionIdentityV1Schema)).min(1),
+  rendererChain: z.array(asProtocolZod(PluginContributionIdentityV1Schema)).check(z.minLength(1)),
   renderer: asProtocolZod(PluginContributionIdentityV1Schema),
   target: PluginSurfaceTargetV1Schema,
   targetKind: z.enum(['session', 'app']),
   surfaceContextPlacement: z.enum(['sessionPane', 'appSurface']),
-  platforms: z.array(PluginUiPlatformV1Schema).min(1),
-}).strict().superRefine((binding, ctx) => {
+  platforms: z.array(PluginUiPlatformV1Schema).check(z.minLength(1)),
+}).check(z.superRefine((binding, ctx) => {
   const slot = PLUGIN_UI_INLINE_SURFACE_SLOTS_V1[binding.role];
   const placement = (slot.targets as Partial<Record<PluginUiTargetKindV1, PluginUiSurfacePlacementV1>>)[binding.targetKind];
   if (binding.target.kind !== binding.targetKind || !placement) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['targetKind'],
       message: 'Plugin inline surface binding target kind must match its role.',
     });
   }
   if (binding.surfaceContextPlacement !== placement) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['surfaceContextPlacement'],
       message: 'Plugin inline surface binding context placement must be registry-derived.',
     });
   }
   if (binding.renderer.pluginId !== binding.surface.pluginId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['renderer', 'pluginId'],
       message: 'Plugin inline surface and renderer must have the same plugin owner.',
     });
   }
   if (binding.rendererChain.some((renderer) => renderer.pluginId !== binding.surface.pluginId)) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['rendererChain'],
       message: 'Plugin inline surface renderer chain must have the same plugin owner.',
     });
@@ -860,7 +858,7 @@ export const PluginUiInlineSurfaceBindingV1Schema = lazyZodSchema(() => z.object
       !== binding.rendererChain.length
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['rendererChain'],
       message: 'Plugin inline surface renderer chain must not repeat a renderer.',
     });
@@ -870,7 +868,7 @@ export const PluginUiInlineSurfaceBindingV1Schema = lazyZodSchema(() => z.object
       && renderer.localId === binding.renderer.localId
   ))) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['renderer'],
       message: 'Plugin inline surface selected renderer must be a member of its renderer chain.',
     });
@@ -880,12 +878,12 @@ export const PluginUiInlineSurfaceBindingV1Schema = lazyZodSchema(() => z.object
       || binding.platforms.some((platform) => !slot.platforms.includes(platform))
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['platforms'],
       message: 'Plugin inline surface platforms must be a unique registry-admitted subset.',
     });
   }
-}));
+})));
 
 /** One physical-host binding grammar; its `kind` closes the two ownership arms. */
 export const PluginUiSurfaceBindingV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
@@ -913,12 +911,12 @@ export function isPluginUiInlineSurfaceBindingForSurfaceV1(
  * projected renderer. It accepts no legacy placement name and does not infer
  * either identity from an id prefix.
  */
-export const PluginUiDestinationBindingSelectorV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiDestinationBindingSelectorV1Schema = lazyZodSchema(() => z.strictObject({
   container: PluginUiDestinationContainerV1Schema,
   targetKind: PluginUiTargetKindV1Schema,
   pluginId: asProtocolZod(PluginIdSchema),
   rendererId: asProtocolZod(PluginContributionLocalIdSchema),
-}).strict());
+}));
 export type PluginUiDestinationBindingSelectorV1 =
   z.infer<typeof PluginUiDestinationBindingSelectorV1Schema>;
 
@@ -950,7 +948,7 @@ export function selectPluginUiRendererChainMemberV1(
   rendererChain: unknown,
   eligibleRendererIds: unknown,
 ): PluginContributionIdentityV1 | null {
-  const parsedRendererChain = z.array(asProtocolZod(PluginContributionIdentityV1Schema)).min(1).safeParse(rendererChain);
+  const parsedRendererChain = z.array(asProtocolZod(PluginContributionIdentityV1Schema)).check(z.minLength(1)).safeParse(rendererChain);
   if (!parsedRendererChain.success || !Array.isArray(eligibleRendererIds)) return null;
 
   const rendererKeys = new Set<string>();
@@ -1015,11 +1013,11 @@ export function selectPluginUiInlineSurfaceBindingRendererV1(
  * container. Keep that fixed target/container composition at the registry
  * boundary so Settings catalog code cannot invent a second binding normalizer.
  */
-export const PluginUiSettingsPageBindingInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiSettingsPageBindingInputV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   pageId: asProtocolZod(PluginContributionLocalIdSchema),
   rendererId: asProtocolZod(PluginContributionLocalIdSchema),
-}).strict());
+}));
 export type PluginUiSettingsPageBindingInputV1 =
   z.input<typeof PluginUiSettingsPageBindingInputV1Schema>;
 

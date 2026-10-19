@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import {
   PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1,
@@ -159,6 +160,35 @@ describe('Collection migration Artifact ownership', () => {
 });
 
 describe('Plugin Account Collection contracts', () => {
+  it('requires a versioned migration for Channels freshness widening inside the retained state union', () => {
+    // Actual v5 declaration published at 6386879ac0, not reconstructed from
+    // current types. Compare against the projection the CLI actually consumes.
+    const historical = JSON.parse(readFileSync(new URL('../../../../plugins/channels/src/testkit/fixtures/channelStateV5.json', import.meta.url), 'utf8'));
+    const manifest = JSON.parse(readFileSync(new URL('../../../../../apps/cli/assets/bundled-plugin-manifests/channels.json', import.meta.url), 'utf8'));
+    const declarations: readonly unknown[] = manifest.contributes.accountCollections;
+    const source = normalizePluginAccountCollectionContractV1({ pluginId: manifest.id,
+      contribution: PluginAccountCollectionContributionV1Schema.parse(historical.collection) });
+    const target = normalizePluginAccountCollectionContractsV1({ pluginId: manifest.id,
+      contributions: declarations.map((value: unknown) => PluginAccountCollectionContributionV1Schema.parse(value)) })
+      .find(collection => collection.collectionId === source.collectionId)!;
+    expect(target.contractDigest).not.toBe(source.contractDigest);
+    // This is the server's exact equal-version admission predicate. Changes
+    // inside allOf/oneOf deliberately require the existing migration path.
+    expect(isPluginCollectionSchemaWideningV1({ source, target: { ...target, schemaVersion: source.schemaVersion } })).toBe(false);
+    expect(target.schemaVersion).toBeGreaterThan(source.schemaVersion);
+    expect(resolvePluginCollectionMigrationChainV1({
+      sourceSchemaVersion: source.schemaVersion,
+      targetSchemaVersion: target.schemaVersion,
+      readableSchemaVersions: target.readableSchemaVersions,
+      migrations: target.migrations,
+    })).toEqual([
+      { id: 'channel-state-v5-to-v6', fromSchemaVersion: 5, toSchemaVersion: 6 },
+      { id: 'channel-state-v6-to-v7', fromSchemaVersion: 6, toSchemaVersion: 7 },
+      { id: 'channel-state-v7-to-v8', fromSchemaVersion: 7, toSchemaVersion: 8 },
+      { id: 'channel-state-v8-to-v9', fromSchemaVersion: 8, toSchemaVersion: 9 },
+    ]);
+  });
+
   it('admits same-version nested schema widenings without granting a retained reader write authority', () => {
     const source = normalizePluginAccountCollectionContractV1({
       pluginId: 'example.compat',

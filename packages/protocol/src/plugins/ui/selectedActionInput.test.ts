@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
   pluginUiSelectedActionInputMatchesOperation,
   reconstructPluginUiSelectedActionInput,
+  type PluginUiSelectedActionInputForReconstructionV1,
+  type PluginUiSelectedActionInputV1,
 } from './selectedActionInput.js';
+import type { PluginUiJsonValueV1 } from '../contributions/ui/json.js';
 
 describe('selected Action input reconstruction', () => {
   const account = {
@@ -12,6 +15,10 @@ describe('selected Action input reconstruction', () => {
   } as const;
 
   it('passes through zero-field selections and restores only one non-colliding selected Account field', () => {
+    expectTypeOf<PluginUiSelectedActionInputForReconstructionV1['input']>()
+      .toEqualTypeOf<PluginUiSelectedActionInputV1['input']>();
+    expectTypeOf<Parameters<typeof reconstructPluginUiSelectedActionInput>[0]['input']>()
+      .toEqualTypeOf<PluginUiJsonValueV1>();
     const input = { repository: 'happier-dev/happier' } as const;
 
     expect(reconstructPluginUiSelectedActionInput({
@@ -40,6 +47,24 @@ describe('selected Action input reconstruction', () => {
     expect(reconstructPluginUiSelectedActionInput({
       input: { repository: 'happier-dev/happier' },
       connectedAccount: { kind: 'selected', fieldPath: '__proto__.credentialRef', ref: account },
+    })).toBeNull();
+  });
+
+  it('allows an existing matching Account only for retained-input reconstruction', () => {
+    const reconstruct = (input: Parameters<typeof reconstructPluginUiSelectedActionInput>[0]['input'], fieldPath = 'auth.account') => reconstructPluginUiSelectedActionInput({
+      input,
+      connectedAccount: { kind: 'selected', fieldPath, ref: account },
+    }, { allowMatchingConnectedAccount: true });
+    const input = { repository: 'acme/project', auth: { account } };
+
+    expect(reconstruct(input)).toEqual(input);
+    expect(reconstruct({ repository: 'acme/project' })).toEqual(input);
+    expect(reconstruct({ ...input, auth: { account: { ...account, accountId: 'account-b' } } })).toBeNull();
+    expect(reconstruct({ repository: 'acme/project', auth: null })).toBeNull();
+    expect(reconstruct({}, 'auth.__proto__.account')).toBeNull();
+    expect(reconstructPluginUiSelectedActionInput({
+      input,
+      connectedAccount: { kind: 'selected', fieldPath: 'auth.account', ref: account },
     })).toBeNull();
   });
 

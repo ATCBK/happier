@@ -86,7 +86,7 @@ describe('plugin manifest v2 root contract', () => {
       id: 'security-reviewer', name: 'Security reviewer', instructions: 'Review security boundaries.',
       engine: { agentTargetKey: 'agent:codex', modelId: 'review-model', effort: 'high' },
       runsAs: { kind: 'background_run', intent: 'review' },
-      workspaceWrites: 'deny', secondOpinion: 'encouraged', enabled: true,
+      workspaceWrites: 'deny', secondOpinion: 'encouraged', canDelegateToOtherRoles: true, enabled: true,
     };
     const parse = (value: unknown) => PluginManifestV2Schema.safeParse(manifest({ contributes: { roles: [value] } }));
     const result = parse(role);
@@ -95,6 +95,7 @@ describe('plugin manifest v2 root contract', () => {
     for (const invalid of [
       { ...role, id: 'plugin:com.acme.fixture/security-reviewer' },
       { ...role, unexpected: true },
+      { ...role, canDelegateToOtherRoles: 'yes' },
       { ...role, engine: { ...role.engine, fallback: 'other' } },
       { ...role, runsAs: { kind: 'background_run' } },
     ]) expect(parse(invalid).success).toBe(false);

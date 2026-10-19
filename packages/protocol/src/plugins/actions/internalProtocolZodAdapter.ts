@@ -1,6 +1,6 @@
 /** Protocol-internal Mini projection of the neutral composable schema. */
 import * as mini from 'zod/mini';
-import { createProtocolStoredReadSchema } from './protocolComposableSchema.js';
+import { createProtocolStoredReadSchema, projectProtocolStoredReadJsonSchema } from './protocolComposableSchema.js';
 import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
 import type {
@@ -31,43 +31,39 @@ export function asProtocolZod<TInput, TOutput>(
   // Each definition identity fixes the input/output projections of its adapter.
   if (existing) return existing as mini.ZodMiniType<TOutput, TInput>;
   const facade = mini.lazy(() => {
-    // Keep refinement-before-transform: parent refinements explicitly opting
-    // into failed admission must observe the original input, not NEVER.
-    const createAdapter = (safeParse: (value: unknown) => ProtocolSchemaSafeParseResult<TOutput>) => {
-      const admitted = mini.custom<TInput>().check(mini.superRefine((value, context) => {
+    const createAdapter = (safeParse: (value: unknown) => ProtocolSchemaSafeParseResult<TOutput>, projectJsonSchema: () => object) => {
+      // A native transform alone advertises optional input. The custom input
+      // boundary retains requiredness; only the final transform can refuse.
+      const adapter = mini.pipe(mini.custom<TInput>(), mini.transform<TInput, TOutput>((value, context) => {
         const parsed = safeParse(value);
-        if (!parsed.success) {
-          context.addIssue({
-            code: 'custom',
-            message: parsed.error.issues[0]?.message ?? 'Value does not match the canonical Protocol schema',
-          });
-        }
+        if (parsed.success) return parsed.data;
+        context.issues.push({
+          code: 'custom',
+          input: value,
+          message: parsed.error.issues[0]?.message ?? 'Value does not match the canonical Protocol schema',
+        });
+        // Admission has failed. Preserve its original input for parent checks
+        // explicitly opting in; no rejected value can become a parsed output.
+        return value as unknown as TOutput;
       }));
-      const adapter = mini.pipe(admitted, mini.transform((value: TInput): TOutput => {
-        const parsed = safeParse(value);
-        if (!parsed.success) throw parsed.error;
-        return parsed.data;
-      }));
+      // Each native adapter projects its own canonical write or stored-read
+      // document only when a JSON exporter actually traverses it.
+      adapter._zod.processJSONSchema = (_context, jsonSchema) => {
+        // This is a fragment of the parent's document. Its exporter owns the
+        // root dialect; the neutral owner stays an unchanged draft-07 document.
+        const fragment = Object.fromEntries<unknown>(Object.entries(projectJsonSchema())
+          .filter(([keyword]) => keyword !== '$schema'));
+        Object.assign(jsonSchema, fragment);
+      };
       return adapter;
     };
-    const adapter = createAdapter((value) => schema.safeParse(value));
-
-    // Zod cannot infer the portable schema hidden behind this neutral adapter.
-    // Project the canonical Protocol-owned JSON Schema into exporters so public
-    // authoring schemas retain the same admission constraints as runtime.
-    adapter._zod.processJSONSchema = (_context, jsonSchema) => {
-      // This is a fragment of the parent's document. Its exporter owns the root
-      // dialect; the neutral schema remains an unchanged draft-07 document.
-      const fragment = Object.fromEntries<unknown>(Object.entries(structuredClone(schema.jsonSchema))
-        .filter(([keyword]) => keyword !== '$schema'));
-      Object.assign(jsonSchema, fragment);
-    };
+    const adapter = createAdapter((value) => schema.safeParse(value), () => structuredClone(schema.jsonSchema));
 
     return defineStoredReadProjection<mini.core.$ZodType<TOutput, TInput>>(adapter, () => {
       // The incumbent portable-schema owner already derives additive-open/drop
       // readers; keep its constraints rather than introducing another validator.
       const stored = createProtocolStoredReadSchema(schema);
-      return createAdapter((value) => stored.safeParse(value));
+      return createAdapter((value) => stored.safeParse(value), () => projectProtocolStoredReadJsonSchema(schema.jsonSchema).document);
     });
   });
   protocolZodFacades.set(schema, facade);

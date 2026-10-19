@@ -11,7 +11,7 @@ function isPluginUiArtifactDigestV1(value: string): value is PluginUiArtifactDig
   return SHA256_HEX_DIGEST_PATTERN.test(value);
 }
 
-export const PluginUiArtifactDigestV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.refine(isPluginUiArtifactDigestV1)));
+export const PluginUiArtifactDigestV1Schema = lazyZodSchema(() => z.string().apply((base) => base.check(z.trim(), z.refine<z.output<typeof base>>(isPluginUiArtifactDigestV1)) as typeof base & z.ZodMiniType<PluginUiArtifactDigestV1, z.input<typeof base>>));
 
 type TypeEqual<Left, Right> = (
   <Value>() => Value extends Left ? 1 : 2

@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   cloneStrictPluginJsonValue,
+  cloneStrictPluginJsonValueWithTraversalLimits,
   measureSerializedStrictPluginJsonUtf8Bytes,
 } from './strictJsonValue.js';
 
@@ -20,6 +21,42 @@ function serializedUtf8Bytes(value: unknown): number {
 }
 
 describe('cloneStrictPluginJsonValue', () => {
+  it('reuses only its own deeply frozen snapshots without walking them again', () => {
+    const authored = { identity: { pluginId: 'acme.agent', localId: 'review' }, values: [1, 2] };
+    const normalized = cloneStrictPluginJsonValue(authored, 'catalog');
+    const descriptors = vi.spyOn(Object, 'getOwnPropertyDescriptors');
+    try {
+      const before = performance.now();
+      for (let index = 0; index < 1_000; index += 1) cloneStrictPluginJsonValue(authored, 'catalog');
+      const unnormalizedMs = performance.now() - before;
+      const unnormalizedWalks = descriptors.mock.calls.length;
+      descriptors.mockClear();
+      let sameIdentity = true;
+      const after = performance.now();
+      for (let index = 0; index < 1_000; index += 1) {
+        const cloned = cloneStrictPluginJsonValue(normalized, 'option');
+        sameIdentity = cloned === normalized && sameIdentity;
+      }
+      const normalizedMs = performance.now() - after;
+      const walks = descriptors.mock.calls.length;
+      console.info('FX84 strict JSON work', { iterations: 1_000, unnormalizedMs, unnormalizedWalks, normalizedMs, walks });
+      expect(sameIdentity).toBe(true);
+      expect(walks).toBe(0);
+      // Frozen caller objects are not an admission proof: their children can mutate.
+      const callerFrozen = Object.freeze({ identity: authored.identity });
+      const copy = cloneStrictPluginJsonValue(callerFrozen, 'external');
+      expect(copy).not.toBe(callerFrozen);
+      authored.identity.localId = 'changed';
+      expect(copy).toMatchObject({ identity: { localId: 'review' } });
+      const invalidFrozen = Object.freeze({ value: undefined });
+      expect(() => cloneStrictPluginJsonValue(invalidFrozen, 'external')).toThrow();
+      expect(() => cloneStrictPluginJsonValueWithTraversalLimits(normalized, 'bounded', { maxDepth: 1, maxValues: 100 }))
+        .toThrow('depth limit');
+      expect(() => cloneStrictPluginJsonValueWithTraversalLimits(normalized, 'bounded', { maxDepth: 100, maxValues: 1 }))
+        .toThrow('values limit');
+    } finally { descriptors.mockRestore(); }
+  });
+
   it('accepts valid deep JSON without imposing a traversal-depth quota', () => {
     const deep = nested(12_000);
 

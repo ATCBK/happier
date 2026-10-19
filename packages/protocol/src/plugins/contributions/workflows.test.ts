@@ -4,6 +4,8 @@ import { PLUGIN_CONTRIBUTION_CATALOG_V2, derivePluginDaemonContributionRegistrat
 import { WorkflowDefinitionV1Schema } from '../../workflows/workflowV1.js';
 import { walkWorkflowBlocks } from '../../workflows/workflowDefinitionEditV1.js';
 import { PluginManifestV2Schema } from '../manifest/v2.js';
+import { materializeWorkflowAcceptedSnapshotV1 } from '../../workflows/materializeWorkflowAcceptedSnapshotV1.js';
+import { WorkflowAcceptedSnapshotV1Schema } from '../../workflows/workflowDefinitionV1.js';
 
 const definition = WorkflowDefinitionV1Schema.parse({ version: 1, blocks: [{
   kind: 'wait', id: 'review', document: { text: 'Review the result.', references: [], attachments: [] },
@@ -11,6 +13,25 @@ const definition = WorkflowDefinitionV1Schema.parse({ version: 1, blocks: [{
 }] });
 
 describe('declarative plugin workflows', () => {
+  it('admits an external input-bound engine through the same declaration and snapshot owners', async () => {
+    const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'external.agent', localId: 'assistant' } };
+    const family = PLUGIN_CONTRIBUTION_CATALOG_V2.find(entry => entry.manifestKey === 'workflows')!;
+    const declaration = family.canonicalize({ id: 'answer', title: 'Answer', definition: {
+      version: 1, inputs: [{ name: 'engine', valueType: 'json', required: true }], defaults: {}, blocks: [{
+        kind: 'step', id: 'answer', document: { text: 'Answer the question.', references: [], attachments: [] },
+        execution: { engine: { kind: 'input', name: 'engine' }, conversation: { kind: 'fresh' } },
+      }],
+    } }, { pluginId: 'external.patterns' });
+    const contribution = PluginContributesV2Schema.parse({ workflows: [declaration] }).workflows[0]!;
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition: contribution.definition,
+      context: { source: { kind: 'inline' }, inputs: { engine: { agentTarget } }, machineId: 'machine',
+        executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: 'machine', directory: '/project', checkoutRootPath: '/project' } },
+        origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } } },
+      admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
+    expect(accepted).toMatchObject({ ok: true });
+    if (!accepted.ok) throw new Error(JSON.stringify(accepted.error));
+    expect(WorkflowAcceptedSnapshotV1Schema.parse(accepted.snapshot).materializedLeaves[0]?.selection.agentTarget).toEqual(agentTarget);
+  });
   it('qualifies local Actions in every block position while preserving host and qualified references', () => {
     const family = PLUGIN_CONTRIBUTION_CATALOG_V2.find((entry) => entry.manifestKey === 'workflows')!;
     const authored = { id: 'post', title: 'Post', definition: { version: 1, blocks: [{

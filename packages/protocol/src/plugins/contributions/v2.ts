@@ -4,10 +4,12 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { isPortableRelativePath } from '../../filesystem/portablePathSegment.js';
 import { AcpRegistryAgentV1Schema } from '../../registries/registryItemsV1.js';
 import { PluginAgentAcpStderrRulesV2Schema } from './agentAcpStderrRules.js';
+import { PluginAgentAcpPermissionModeMappingV2Schema } from './agentAcpPermissionModeMapping.js';
 import { PluginCaptureSourceContributionV1Schema } from './captureSources.js';
 import { MachineProvisionerContributionV1Schema, validateMachineProvisionerContributionsV1 } from './machineProvisioners.js';
 export * from './machineProvisioners.js';
 import { PluginProjectNativeAdapterContributionV1Schema } from './projectNativeAdapters.js';
+import { PluginWorkItemsContributionV1Schema } from './workItems.js';
 export { PluginProjectNativeAdapterContributionV1Schema, type PluginProjectNativeAdapterContributionV1 } from './projectNativeAdapters.js';
 export { PluginCaptureSourceContributionV1Schema, type PluginCaptureSourceContributionV1 } from './captureSources.js';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
@@ -115,6 +117,8 @@ import { PluginWorkflowContributionV1Schema } from './workflows.js';
 import { PluginInputTypeContributionV1Schema } from './inputTypes.js';
 import { PluginAtmospherePictureContributionV1Schema } from './atmospherePictures.js';
 import { PluginRegistrySourceContributionV1Schema } from './registrySources.js';
+import { PluginSkillContributionV1Schema } from './skills.js';
+export { PluginSkillContributionV1Schema, type PluginSkillContributionV1, projectPluginSkillDeclarationV1 } from './skills.js';
 export { PluginInputTypeContributionV1Schema, type PluginInputTypeContributionV1 } from './inputTypes.js';
 export { PluginAtmospherePictureContributionV1Schema, type PluginAtmospherePictureContributionV1 } from './atmospherePictures.js';
 export { PluginRegistrySourceContributionV1Schema, type PluginRegistrySourceContributionV1 } from './registrySources.js';
@@ -176,15 +180,6 @@ const PluginHookRegistrationFilterV1Schema = lazyZodSchema(() => z.strictObject(
   cwdPrefix: z.optional(z.string().check(z.trim(), z.minLength(1))),
   machineId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   eventNames: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
-}));
-
-// Retain concrete identity for the shared permission map in raw draft-7 Manifest JSON.
-const PluginAgentAcpPermissionModeMappingV2Schema = lazyZodSchema(() => z.strictObject({
-  default: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
-  'read-only': z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
-  'safe-yolo': z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
-  yolo: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
-  plan: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
 }));
 
 const PluginAgentAcpPermissionModeArgvV2Schema = lazyZodSchema(() => z.strictObject({
@@ -866,7 +861,9 @@ export const PLUGIN_CORE_CONTRIBUTION_FAMILIES_V2 = [
   definePluginContributionFamilyV2({ family: 'inputTypes', schema: PluginInputTypeContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'atmospherePictures', schema: PluginAtmospherePictureContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'registrySources', schema: PluginRegistrySourceContributionV1Schema }),
+  definePluginContributionFamilyV2({ family: 'skills', schema: PluginSkillContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'dragSources', schema: PluginDragSourceContributionV1Schema }),
+  definePluginContributionFamilyV2({ family: 'workItems', schema: PluginWorkItemsContributionV1Schema, maxItems: 1 }),
   definePluginContributionFamilyV2({ family: 'dropTargets', schema: PluginDropTargetContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'transcriptActivities', schema: PluginTranscriptActivityContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'sessionInfoSections', schema: PluginSessionInfoSectionContributionV1Schema }),
@@ -914,13 +911,15 @@ const PluginContributesV2BaseSchema = lazyZodSchema(() => buildPluginContributio
   PLUGIN_CORE_CONTRIBUTION_FAMILIES_V2,
 ));
 
-type PluginContributesV2BaseShape = (typeof PluginContributesV2BaseSchema)['shape'];
-export type PluginContributesV2Shape = PluginContributesV2BaseShape & {
-  mcp: typeof PluginMcpContributesV1Schema;
-  ui: typeof PluginUiContributionsV2Schema;
-};
+type PluginContributesV2ExtendedShape = z.core.util.Extend<
+  (typeof PluginContributesV2BaseSchema)['shape'],
+  { mcp: typeof PluginMcpContributesV1Schema; ui: typeof PluginUiContributionsV2Schema }
+>;
 
-function createPluginContributesV2SchemaWithoutDefault(): z.ZodMiniObject<PluginContributesV2Shape> {
+function createPluginContributesV2SchemaWithoutDefault(): z.ZodMiniObject<
+  PluginContributesV2ExtendedShape,
+  (typeof PluginContributesV2BaseSchema)['_zod']['config']
+> {
   return lazyZodSchema(() => z.extend(PluginContributesV2BaseSchema, {
   mcp: PluginMcpContributesV1Schema,
   ui: PluginUiContributionsV2Schema,
@@ -960,6 +959,8 @@ function createPluginContributesV2SchemaWithoutDefault(): z.ZodMiniObject<Plugin
   validateTargetedContributionEnvelopeBoundsV1(value, ctx);
 })));
 }
+type PluginContributesV2ShapeDefinition = ReturnType<typeof createPluginContributesV2SchemaWithoutDefault>['shape'];
+export interface PluginContributesV2Shape extends PluginContributesV2ShapeDefinition {}
 const PluginContributesV2SchemaWithoutDefault: z.ZodMiniObject<PluginContributesV2Shape> =
   lazyZodSchema(createPluginContributesV2SchemaWithoutDefault);
 

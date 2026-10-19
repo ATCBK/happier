@@ -1,8 +1,15 @@
-import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
+import { normalizePluginJsonSchema } from '../actions/protocolComposableSchema.js';
 
 import { PluginUiJsonValueV1Schema } from '../contributions/ui/json.js';
 import { PluginUiSemanticCommandV1Schema } from './semanticCommands.js';
+
+/** The standard composer attachment that carries one captured app screen. */
+export const CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1 = Object.freeze({
+  pluginId: 'happier.app-context', localId: 'current-screen',
+} as const);
 
 /**
  * Explicitly tells a reader that this surface withheld invalid context.
@@ -62,3 +69,10 @@ export const CurrentUiContextSnapshotV1Schema = lazyZodSchema(() => z.strictObje
   commands: z.array(CurrentUiCommandDescriptorV1Schema),
 }));
 export type CurrentUiContextSnapshotV1 = z.infer<typeof CurrentUiContextSnapshotV1Schema>;
+
+/** Standalone attachment declaration; document-local JSON references stay at this root. */
+export const CurrentUiContextSnapshotV1AttachmentSchema = lazyDefinition(() => Object.freeze({
+  jsonSchema: normalizePluginJsonSchema(zodSchemaToJsonSchemaObject(CurrentUiContextSnapshotV1Schema, { target: 'draft-7' })),
+  parse: (value: unknown) => CurrentUiContextSnapshotV1Schema.parse(value),
+  safeParse: (value: unknown) => CurrentUiContextSnapshotV1Schema.safeParse(value),
+}));

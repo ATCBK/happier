@@ -23,6 +23,21 @@ const localized = { key: 'plugin.title', fallback: 'Title' };
 const daemonExecution = { target: 'daemon' } as const;
 
 describe('plugin executable contribution target grammar', () => {
+  it('accepts closed Session target declarations only for declared object operands', () => {
+    const action = {
+      id: 'inspect-target', title: localized, scopes: ['session'], surfaces: ['agent'],
+      execution: daemonExecution, dangerLevel: 'safe',
+      inputSchema: { type: 'object', properties: { sessionId: { type: 'string' } }, additionalProperties: false },
+      sessionTarget: { field: 'sessionId', cardinality: 'many' },
+    };
+    expect(PluginActionContributionV2Schema.parse(action).sessionTarget).toEqual(action.sessionTarget);
+    expect(PluginActionContributionV2Schema.safeParse({ ...action,
+      sessionTarget: { ...action.sessionTarget, fallback: 'self' },
+    }).success).toBe(false);
+    expect(PluginActionContributionV2Schema.safeParse({ ...action,
+      sessionTarget: { field: 'missing', cardinality: 'one' },
+    }).success).toBe(false);
+  });
   it('exposes the closed Action execution parser through the root Protocol import', () => {
     expect(RootPluginActionExecutionV2Schema).toBe(PluginActionExecutionV2Schema);
     expect(RootPluginActionExecutionV2Schema.parse({ target: 'daemon' })).toEqual({ target: 'daemon' });

@@ -1,5 +1,9 @@
 const textEncoder = new TextEncoder();
 
+// Only snapshots created and recursively frozen by this owner are proofs of
+// strict JSON. A caller's Object.freeze is shallow and cannot provide that proof.
+const normalizedStrictJsonObjects = new WeakSet<object>();
+
 function isWellFormedUnicode(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const codeUnit = value.charCodeAt(index);
@@ -68,6 +72,7 @@ type StrictJsonWalkTask =
   | Readonly<{
     kind: 'visit';
     input: unknown;
+    path: string;
     depth: number;
     assign?: (value: unknown) => void;
   }>
@@ -197,6 +202,7 @@ function walkStrictPluginJsonValue(
   const tasks: StrictJsonWalkTask[] = [{
     kind: 'visit',
     input: value,
+    path,
     depth: 1,
     ...(rootAssign === undefined ? {} : { assign: rootAssign }),
   }];
@@ -208,19 +214,24 @@ function walkStrictPluginJsonValue(
     if (task.kind === 'finish-array') {
       ancestors.delete(task.input);
       if (task.assign !== undefined && task.output !== undefined) {
-        task.assign(Object.freeze(task.output));
+        Object.freeze(task.output);
+        normalizedStrictJsonObjects.add(task.output);
+        task.assign(task.output);
       }
       continue;
     }
     if (task.kind === 'finish-object') {
       ancestors.delete(task.input);
       if (task.assign !== undefined && task.output !== undefined) {
-        task.assign(Object.freeze(task.output));
+        Object.freeze(task.output);
+        normalizedStrictJsonObjects.add(task.output);
+        task.assign(task.output);
       }
       continue;
     }
 
     const input = task.input;
+    const path = task.path;
     if (limits && task.depth > limits.maxDepth) {
       throw new StrictPluginJsonTraversalLimitError('depth');
     }
@@ -238,6 +249,11 @@ function walkStrictPluginJsonValue(
       continue;
     }
     if (typeof input !== 'object') throw new Error(`${path} must contain strict JSON data`);
+    // Bounded walks must still count every value and depth at their own boundary.
+    if (!limits && normalizedStrictJsonObjects.has(input)) {
+      task.assign?.(input);
+      continue;
+    }
     if (ancestors.has(input)) throw new Error(`${path} must not contain cyclic data`);
     ancestors.add(input);
 
@@ -261,6 +277,7 @@ function walkStrictPluginJsonValue(
         tasks.push({
           kind: 'visit',
           input: descriptor.value,
+          path: `${path}[${index}]`,
           depth: task.depth + 1,
           ...(output === undefined ? {} : { assign: (cloned: unknown) => {
             output[index] = cloned;
@@ -293,6 +310,7 @@ function walkStrictPluginJsonValue(
       tasks.push({
         kind: 'visit',
         input: descriptor.value,
+        path: `${path}.${key}`,
         depth: task.depth + 1,
         ...(output === undefined ? {} : { assign: (cloned: unknown) => {
           Object.defineProperty(output, key, {

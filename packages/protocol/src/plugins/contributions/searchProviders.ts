@@ -137,6 +137,14 @@ export type PluginSearchItemV1 = ProtocolSchemaOutput<typeof PluginSearchItemV1S
 export const PluginSearchResultV1Schema = defineProtocolObject({
   items: defineProtocolArray(PluginSearchItemV1Schema),
   truncated: protocolBoolean,
+  /** Transient failure facts only. No paths, diagnostics, or plugin-supplied UI copy. */
+  failure: defineProtocolObject({
+    code: defineProtocolUnion([
+      defineProtocolLiteral('root_not_found'),
+      defineProtocolLiteral('unavailable'),
+      defineProtocolLiteral('auth_required'),
+    ]),
+  }, { policy: 'closed' }).optional(),
 }, { policy: 'closed' });
 export type PluginSearchResultV1 = ProtocolSchemaOutput<typeof PluginSearchResultV1Schema>;
 

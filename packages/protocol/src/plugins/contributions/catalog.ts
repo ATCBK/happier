@@ -1,3 +1,4 @@
+import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 import type { z } from 'zod/mini';
 
 import {
@@ -199,7 +200,9 @@ const FAMILY_POLICIES = {
   inputTypes: { identityField: 'id', disposition: 'retained', activationDemand: 'none', projectionFamily: 'inputTypes', allowedRuntimeRegistration: null, consumer: 'input-fields', platforms: ALL_PLATFORMS },
   atmospherePictures: { identityField: 'id', disposition: 'retained', activationDemand: 'none', projectionFamily: 'atmospherePictures', allowedRuntimeRegistration: null, consumer: 'atmosphere-picture-catalog', platforms: ALL_PLATFORMS },
   registrySources: { identityField: 'id', disposition: 'retained', activationDemand: 'none', projectionFamily: 'registrySources', allowedRuntimeRegistration: null, consumer: 'registry-source-list', platforms: ALL_PLATFORMS },
+  skills: { identityField: 'id', disposition: 'retained', activationDemand: 'none', projectionFamily: 'skills', allowedRuntimeRegistration: null, consumer: 'skill-library', platforms: ALL_PLATFORMS },
   dragSources: { identityField: 'id', disposition: 'retained', activationDemand: 'registration', projectionFamily: 'dragSources', allowedRuntimeRegistration: 'dragSources', registrationHost: 'client', consumer: 'entity-drag-drop', platforms: ALL_PLATFORMS },
+  workItems: { identityField: 'id', disposition: 'retained', activationDemand: 'registration', projectionFamily: 'workItems', allowedRuntimeRegistration: 'workItems', registrationHost: 'client', consumer: 'work-board', platforms: ALL_PLATFORMS },
   dropTargets: { identityField: 'id', disposition: 'retained', activationDemand: 'registration', projectionFamily: 'dropTargets', allowedRuntimeRegistration: 'dropTargets', registrationHost: 'client', consumer: 'entity-drag-drop', platforms: ALL_PLATFORMS },
   transcriptActivities: { identityField: 'id', disposition: 'reshaped', activationDemand: 'none', projectionFamily: 'pluginUi', allowedRuntimeRegistration: null, consumer: 'transcript-tail-host', platforms: ALL_PLATFORMS },
   sessionInfoSections: { identityField: 'id', disposition: 'reshaped', activationDemand: 'none', projectionFamily: 'pluginUi', allowedRuntimeRegistration: null, consumer: 'session-info-host', platforms: ALL_PLATFORMS },
@@ -263,11 +266,12 @@ function extractNestedReferences(family: string, value: Readonly<Record<string, 
       allowQualifiedCrossPlugin: false,
     }));
   }
-  if (family === 'dragSources' || family === 'dropTargets') {
+  if (family === 'dragSources' || family === 'dropTargets' || family === 'workItems') {
     const client = value.client as Readonly<{ artifactId?: unknown }> | undefined;
     const actions = Array.isArray(value.actions) ? value.actions : [];
     const kinds = Array.isArray(value.acceptedKinds) ? value.acceptedKinds : [];
     return [
+      ...(family !== 'workItems' || value.transitionAction === undefined ? [] : [{ targetFamily: 'actions', reference: value.transitionAction, path: ['transitionAction'] }]),
       ...(client?.artifactId === undefined ? [] : [{ targetFamily: 'generated.uiArtifacts', reference: client.artifactId, path: ['client', 'artifactId'] }]),
       ...(family !== 'dragSources' || value.composerAttachment === undefined ? [] : [{ targetFamily: 'composerAttachments', reference: value.composerAttachment, path: ['composerAttachment'] }]),
       ...actions.flatMap((action, index) => action?.kind === 'plugin' ? [{ targetFamily: 'actions', reference: action.action, path: ['actions', index, 'action'] }] : []),
@@ -884,8 +888,7 @@ function createCatalogAdapters(input: Readonly<{
     canonicalize: (value, context) => input.manifestKey === 'workflows'
       ? normalizePluginWorkflowContributionV1(value, context.pluginId)
       : input.schema.parse(value),
-    projectJsonSchema: () => Object.freeze(input.schema.toJSONSchema({
-      io: 'input',
+    projectJsonSchema: () => Object.freeze(zodSchemaToJsonSchemaObject(input.schema, {
       unrepresentable: 'any',
     })),
     conflictKey,
@@ -973,7 +976,7 @@ export const PLUGIN_CONTRIBUTION_CATALOG_V2: readonly PluginContributionCatalogE
               });
             },
           }
-        : descriptor.family === 'voiceProviders' || descriptor.family === 'dragSources' || descriptor.family === 'dropTargets'
+        : descriptor.family === 'voiceProviders' || descriptor.family === 'dragSources' || descriptor.family === 'dropTargets' || descriptor.family === 'workItems'
         ? {
             runtimeRegistrationTarget: (value: Readonly<Record<string, unknown>>) => {
               if (value.kind === 'speech') return Object.freeze({ realm: 'daemon' as const });

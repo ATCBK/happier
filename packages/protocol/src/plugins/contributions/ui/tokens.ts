@@ -53,6 +53,8 @@ export const PLUGIN_UI_ICON_TOKENS_V1 = [
   // The two arrangements of one collection (a segmented View control): rows, and status columns.
   'list',
   'board',
+  // What narrows and orders a collection, folded behind one round toolbar button on a phone.
+  'filter',
 ] as const;
 
 export const PluginUiIconTokenV1Schema = lazyZodSchema(() => z.enum(PLUGIN_UI_ICON_TOKENS_V1));

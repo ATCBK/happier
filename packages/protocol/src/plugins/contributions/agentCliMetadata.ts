@@ -88,6 +88,8 @@ export const PluginAgentCliManagedInstallSchema = lazyZodSchema(() => z.discrimi
   z.strictObject({
     kind: z.literal('github_release_binary'),
     githubRepo: NonEmptyStringSchema,
+    /** Omit to track latest; a declared tag is required and never falls back to latest. */
+    releaseTag: z.optional(NonEmptyStringSchema),
     binaryName: NonEmptyStringSchema,
     assetNameByPlatform: z.optional(PluginAgentCliAssetNameByPlatformSchema),
     archiveEntriesByPlatform: z.optional(PluginAgentCliArchiveEntriesByPlatformSchema),
