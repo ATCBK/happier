@@ -110,7 +110,12 @@ export function resolveUsageHowYouWork(input: Readonly<{
         }),
         ...(retained?.autopsy === undefined ? {} : { autopsy: retained.autopsy }),
         detailStatus: !detail ? retained?.detailStatus ?? 'unknown' : detail.status === 'partial' || intervals?.coverage === 'partial' ? 'partial' : 'available',
-        intervals, todayInParallel: todayIntervals && today ? { date: today.date, ...todayIntervals.period,
+        // An empty historical subset cannot establish that no work ran today.
+        // Keep complete observed emptiness distinct from missing lifecycle coverage.
+        intervals, todayInParallel: todayIntervals && today && (
+            detail?.status === 'available' && todayIntervals.coverage === 'complete_for_supplied_facts'
+            || todayIntervals.lanes.some(lane => lane.busy.length > 0 || lane.waits.length > 0))
+            ? { date: today.date, ...todayIntervals.period,
             agentTimeMs: todayIntervals.agentTimeMs, elapsedBusyMs: todayIntervals.elapsedBusyMs,
             parallelBusyMs: todayIntervals.parallelBusyMs, maxParallel: todayIntervals.maxParallel } : retained?.todayInParallel ?? null,
         nightShift, activity: input.accounting?.activity ?? null, footprint: input.accounting ? projectUsageFootprint(input.accounting) : null,
@@ -163,7 +168,7 @@ export function resolveUsageHowYouWork(input: Readonly<{
             inputs.byDeliveryKind[fact.deliveryKind] += 1;
             if (fact.deliveryKind === 'steer') inputs.steeringCount += 1;
         }
-        if (detail.permissions !== undefined) result.permissions = permissions;
+        if (detail.permissions !== undefined && (detail.status === 'available' || permissions.requestCount > 0)) result.permissions = permissions;
         if (detail.acceptedInputs !== undefined) result.inputs = inputs;
     }
     return result;
