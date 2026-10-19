@@ -119,10 +119,11 @@ export type WorkflowLoopTrailingCountReference = z.infer<typeof WorkflowLoopTrai
 
 export type WorkflowValueReference =
   | Readonly<{ kind: 'literal'; value: JsonValue }>
-  | Readonly<{ kind: 'input'; name: string }>
+  | Readonly<{ kind: 'input'; name: string; path?: (string | number)[] }>
   | WorkflowAuthoredResultReference
   | WorkflowAuthoredWorkspaceReference
   | WorkflowLoopTrailingCountReference
+  | Readonly<{ kind: 'discussion_context'; scope: 'addressing_message' | 'so_far' }>
   | Readonly<{ kind: 'session_context'; recentTurns: number }>
   | Readonly<{ kind: 'session_context_field'; field: 'usage.tokensUsed' | 'goal.tokenBudget' }>
   | Readonly<{ kind: 'item'; field: 'value' | 'index' | 'position' | 'count'; path?: (string | number)[] }>
@@ -141,12 +142,17 @@ export function readWorkflowValuePathV1(value: JsonValue, path: readonly (string
   return selected;
 }
 
+export const WorkflowInputReferenceV1Schema = z.strictObject({
+  kind: z.literal('input'), name: WorkflowInputNameSchema, path: z.optional(WorkflowResultPathSchema),
+});
+
 export const WorkflowValueReferenceSchema: z.ZodMiniType<WorkflowValueReference> = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('literal'), value: StrictJsonValueSchema }),
-  z.strictObject({ kind: z.literal('input'), name: WorkflowInputNameSchema }),
+  WorkflowInputReferenceV1Schema,
   WorkflowAuthoredResultReferenceSchema,
   WorkflowAuthoredWorkspaceReferenceSchema,
   WorkflowLoopTrailingCountReferenceSchema,
+  z.strictObject({ kind: z.literal('discussion_context'), scope: z.enum(['addressing_message', 'so_far']) }),
   z.strictObject({ kind: z.literal('session_context'), recentTurns: z.number().check(z.int(), z.nonnegative(), z.int()) }),
   z.strictObject({ kind: z.literal('session_context_field'), field: z.enum(['usage.tokensUsed', 'goal.tokenBudget']) }),
   z.strictObject({ kind: z.literal('item'), field: z.enum(['value', 'index', 'position', 'count']),
@@ -215,7 +221,7 @@ function createWorkflowConditionSchema(stored = false): z.ZodMiniType<WorkflowCo
       const parsed = shallow.safeParse(task.value);
       if (!parsed.success) {
         failed = true;
-        for (const issue of parsed.error.issues) context.issues.push({ ...issue, path: [...issuePath(task.path), ...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) });
+        for (const issue of parsed.error.issues) context.issues.push({ ...issue, path: [...issuePath(task.path), ...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) } as z.core.$ZodRawIssue);
         continue;
       }
       const node = parsed.data;
@@ -261,6 +267,7 @@ export const WorkflowConversationSelectionSchema = lazyZodSchema(() => z.discrim
   z.strictObject({ kind: z.literal('shared_run') }),
   z.strictObject({ kind: z.literal('fresh') }),
   z.strictObject({ kind: z.literal('origin_session') }),
+  z.strictObject({ kind: z.literal('input'), name: WorkflowInputNameSchema }),
   z.strictObject({ kind: z.literal('from_step'), producer: WorkflowAuthoredProducerRefSchema }),
   z.strictObject({
     kind: z.literal('existing_session'),

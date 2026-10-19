@@ -70,6 +70,20 @@ export function writeInputPath(
   return write(input, 0);
 }
 
+/** Seeds a new form once; explicit values and subsequent draft replacements remain authoritative. */
+export function seedInputByFieldHints(
+  spec: Readonly<{ inputHints?: InputHints }>,
+  input: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  let seeded = { ...input };
+  for (const field of spec.inputHints?.fields ?? []) {
+    if (field.defaultValue !== undefined && readInputPath(seeded, field.path) === undefined) {
+      seeded = writeInputPath(seeded, field.path, field.defaultValue);
+    }
+  }
+  return seeded;
+}
+
 function normalizeFieldMaxSelections(
   input: Record<string, unknown>,
   field: InputFieldHint,

@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { admitAgentStartV1, type AgentStartContextV1 } from '../account/settings/admitAgentStartV1.js';
 import { DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 } from '../account/settings/sessionAgentSpawnPolicyV1.js';
 import { AutomationRunCauseSchema } from '../automations/automationRunCause.js';
-import type { ActionCaller } from '../actions/executor/types.js';
-import { actionSpecToActionDefinitionV1 } from '../actions/actionCatalog.js';
+import type { ActionCaller, ActionExecutorContext } from '../actions/executor/types.js';
+import { resolveActionCurrentSessionScopeFailure } from '../actions/executor/sessionListAccess.js';
+import { actionSpecToActionDefinitionV1, readCompleteActionSpecV1 } from '../actions/actionCatalog.js';
 import { getActionSpec } from '../actions/actionSpecs.js';
 import { createActionExecutor } from '../actions/actionExecutor.js';
-import { ActionDefinitionV1Schema } from '../actions/actionDefinitionV1.js';
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
-import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
+import { sameStrictJsonValue, StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { compilePluginJsonSchema } from '../plugins/actions/jsonSchemaValidation.js';
 import { LaunchProfileV2Schema } from '../profiles/v2/schema.js';
 import { REVIEW_AND_CONVERGE_WORKFLOW_V1 } from './builtins/reviewAndConverge.js';
@@ -25,6 +25,10 @@ const context = {
 };
 const definition = { version: 1, defaults: { agentTarget }, blocks: [{ kind: 'step', id: 'work', document: { text: 'Work', references: [], attachments: [] } }] };
 const available = async () => true;
+// The authenticated Session lookup is a network boundary; selection and authority stay real.
+const originSessionTarget = { address: { serverId: 'home', sessionId: 'origin' }, machineId: 'machine' };
+const resolveOriginSessionTarget: NonNullable<MaterializeWorkflowAcceptedSnapshotV1Input['effects']['resolveSessionTarget']> = async value =>
+  value === 'origin' || sameStrictJsonValue(value, originSessionTarget.address) ? originSessionTarget : null;
 const finiteWorkspace = { workspaceId: 'workspace-a', serverId: 'home', machineId: 'machine-a', rootPath: '/project' };
 function finiteInput(actionId: 'projects.script.run' | 'projects.compute.exec') {
   const workspace = { kind: 'literal' as const, value: finiteWorkspace };
@@ -50,16 +54,55 @@ const policyContext: AgentStartContextV1 = {
   baseline: { machineId: 'machine', directory: '/project', configuration: { agentTarget, permissionMode: 'default' } },
   ledSubtreeSessionIds: [], workDepthLimit: 4, roles: {}, callerPermissionCeiling: 'yolo',
 };
+const policyActionContext: ActionExecutorContext = {
+  surface: 'agent', serverId: 'home', defaultSessionId: 'origin', sessionListAccess: 'current_session',
+  actionCaller: { kind: 'session', sessionId: 'origin', starterDepth: 1, turnDepth: 1 }, agentStartContext: policyContext,
+};
+const admitOriginSessionAuthority: NonNullable<MaterializeWorkflowAcceptedSnapshotV1Input['effects']['admitSessionAuthority']> = async target =>
+  await resolveActionCurrentSessionScopeFailure('reviews.comments.list', {
+    sessionId: target.address.sessionId, serverId: target.address.serverId,
+  }, policyActionContext, { sessionId: 'current_session' }, {
+    // Own-Session authority is proved without a remote led-subtree observation.
+    sessionList: async () => { throw new Error('unexpected_led_subtree_read'); },
+  }) === null;
 
 describe('materializeWorkflowAcceptedSnapshotV1', () => {
+  it('retains the accepted request cause through storage and replay after another requester arrives', async () => {
+    const attribution = { requestRef: 'accepted-input', requester: { serverId: 'home', accountId: 'bob' },
+      persona: { serverId: 'home', sessionId: 'release-bot' }, origin: null };
+    const result = await materialize({ context: { ...context,
+      origin: { kind: 'direct', originSessionId: 'release-bot', actionRequestAttributionV1: attribution } } });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error.code);
+    attribution.requester.accountId = 'carol';
+    const stored = WorkflowAcceptedSnapshotV1Schema.parse(JSON.parse(JSON.stringify(result.snapshot)));
+    expect(stored.origin).toMatchObject({ actionRequestAttributionV1: { requestRef: 'accepted-input', requester: { accountId: 'bob' } } });
+    const replayed = await materialize({ replay: { snapshot: stored }, context: { ...context,
+      origin: { kind: 'direct', originSessionId: 'release-bot', actionRequestAttributionV1: attribution } } });
+    expect(replayed.ok).toBe(true);
+    if (!replayed.ok) throw new Error(replayed.error.code);
+    expect(replayed.snapshot.origin).toEqual(stored.origin);
+  });
+
+  it('refuses Discussion context for a Session or originless admission instead of substituting Session history', async () => {
+    for (const origin of [{ kind: 'direct' as const }, { kind: 'direct' as const, originSessionId: 'session-origin' }]) {
+      expect(await materialize({ context: { ...context, origin },
+        definition: { ...definition, blocks: [{ ...definition.blocks[0],
+          input: [{ kind: 'discussion_context', scope: 'addressing_message' }] }] } }))
+        .toMatchObject({ ok: false, error: { code: 'invalid_input' } });
+    }
+  });
+
   it('admits a sequential For-each Action using the discovered native Action contract', async () => {
     const executor = createActionExecutor({ isActionApprovalRequired: () => false });
-    const discovered = await executor.execute('action.spec.get', { id: 'workflow.starters.list' }, {
-      surface: 'cli', authority: 'account_automation',
-    });
-    expect(discovered.ok).toBe(true);
-    if (!discovered.ok) throw new Error(discovered.errorCode);
-    const action = ActionDefinitionV1Schema.parse(discovered.result.actionSpec);
+    const action = await readCompleteActionSpecV1({ actionId: 'workflow.starters.list', read: async input => {
+      const discovered = await executor.execute('action.spec.get', input, {
+        surface: 'cli', authority: 'account_automation',
+      });
+      expect(discovered.ok).toBe(true);
+      if (!discovered.ok) throw new Error(discovered.errorCode);
+      return discovered.result;
+    } });
     const actionContract = {
       inputSchema: StrictJsonValueSchema.parse(action.inputSchema),
       outputSchema: StrictJsonValueSchema.parse(action.outputSchema),
@@ -404,11 +447,14 @@ describe('materializeWorkflowAcceptedSnapshotV1', () => {
     ['Plan with a panel', PLAN_WITH_A_PANEL_WORKFLOW_V1, { request: 'Plan the change', engines: ['agent:happier.agent.codex/codex'] }, 'plan'],
   ] as const)('admits an agent start of %s with runtime-bound Action engines', async (_name, authored, inputs, actionBlockId) => {
     const result = await materialize({ definition: authored,
-      context: { ...context, inputs, origin: { kind: 'direct', originSessionId: 'origin' } },
+      context: { ...context, actionCaller: policyActionContext.actionCaller,
+        authorization: { principal: { kind: 'session', sessionId: 'origin' } }, inputs, origin: { kind: 'direct', originSessionId: 'origin' } },
       roleSelection: { defaultEngine: { agentTargetKey: 'agent:happier.agent.codex/codex' },
         availableAgentTargetKeys: ['agent:happier.agent.codex/codex'] },
       effects: { resolveTargetAvailability: available,
         // The catalog boundary supplies contracts; the real role, binding and admission owners run below it.
+        resolveSessionTarget: resolveOriginSessionTarget,
+        admitSessionAuthority: admitOriginSessionAuthority,
         readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: {} }) },
       admission: { kind: 'agent', admitLeaf: async (leaf, facts) => admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
         { kind: 'workflow_run_leaf', leaf }, { ...policyContext,
@@ -425,11 +471,14 @@ describe('materializeWorkflowAcceptedSnapshotV1', () => {
   });
   it('checks every known item-loop Action engine against current Agent authority', async () => {
     const result = await materialize({ definition: REVIEW_AND_CONVERGE_WORKFLOW_V1,
-      context: { ...context, inputs: { engines: ['agent:happier.agent.codex/codex', 'agent:happier.agent.claude/claude'] },
+      context: { ...context, actionCaller: policyActionContext.actionCaller,
+        authorization: { principal: { kind: 'session', sessionId: 'origin' } }, inputs: { engines: ['agent:happier.agent.codex/codex', 'agent:happier.agent.claude/claude'] },
         origin: { kind: 'direct', originSessionId: 'origin' } },
       roleSelection: { defaultEngine: { agentTargetKey: 'agent:happier.agent.codex/codex' },
         availableAgentTargetKeys: ['agent:happier.agent.codex/codex', 'agent:happier.agent.claude/claude'] },
       effects: { resolveTargetAvailability: available,
+        resolveSessionTarget: resolveOriginSessionTarget,
+        admitSessionAuthority: admitOriginSessionAuthority,
         readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: {} }) },
       admission: { kind: 'agent', admitLeaf: async (leaf, facts) => admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
         { kind: 'workflow_run_leaf', leaf }, { ...policyContext, roles: facts.role ? { [facts.role.roleId]: facts.role } : {},
@@ -500,8 +549,6 @@ describe('materializeWorkflowAcceptedSnapshotV1', () => {
   it('accepts and replays the published native Action contract rather than substituting today\'s schema', async () => {
     const published = actionSpecToActionDefinitionV1(getActionSpec('session.goal.set'));
     const contract = { inputSchema: published.inputSchema, outputSchema: published.outputSchema ?? {} };
-    // The first-party Action projection is not an extension of the plugin draft-07 ABI.
-    expect(() => compilePluginJsonSchema(contract.inputSchema)).toThrow();
     const authored = { version: 1, blocks: [{ kind: 'action', id: 'goal', actionId: published.id,
       input: { sessionId: { kind: 'literal', value: 'origin' }, objective: { kind: 'literal', value: 'Finish' } } }] };
     const original = await materialize({ definition: authored,

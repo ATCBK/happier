@@ -122,6 +122,8 @@ export const WorkflowRunSourceV1Schema = lazyZodSchema(() => z.discriminatedUnio
     visibleTeamId: zMini.optional(preservedBoundedNfcString(191, 'Team ids')),
     /** Replay reopens this Run at the owner; the reviewed carrier cannot replace its frozen graph. */
     replay: z.optional(z.strictObject({ runId: WorkflowRunIdV1Schema,
+      /** Explicit new-run continuation; the owner reads prior outcomes into the declared previousRoundContext input. */
+      intent: z.optional(z.literal('another_round')),
       agentOverride: zMini.optional(WorkflowReplayAgentOverrideV1Schema) })),
   })).check(zMini.superRefine((source, context) => {
     if (source.visibleTeamId !== undefined && source.sourceArtifactId === undefined) {
@@ -129,6 +131,9 @@ export const WorkflowRunSourceV1Schema = lazyZodSchema(() => z.discriminatedUnio
     }
     if (source.replay && (source.sourceArtifactId !== undefined || source.visibleTeamId !== undefined)) {
       context.addIssue({ code: 'custom', path: ['replay'], message: 'Replay retains the accepted source and Team visibility' });
+    }
+    if (source.replay?.intent === 'another_round' && source.replay.agentOverride !== undefined) {
+      context.addIssue({ code: 'custom', path: ['replay', 'agentOverride'], message: 'Another round retains every accepted participant' });
     }
   })),
   z.strictObject({ kind: z.literal('saved'), definitionId: WorkflowDefinitionIdV1Schema, revision: WorkflowArtifactRevisionV1Schema,

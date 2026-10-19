@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import Ajv from 'ajv';
 
 import {
-  applyWorkflowDefinitionEditsV1, createWorkflowBlock, createWorkflowLeafBlock, duplicateWorkflowBlock, insertWorkflowBlock, moveWorkflowBlock,
+  applyWorkflowDefinitionEditsV1, copyWorkflowBlocks, createWorkflowBlock, createWorkflowLeafBlock, duplicateWorkflowBlock, insertWorkflowBlock, moveWorkflowBlock,
   removeWorkflowBlock, setWorkflowDefaultField, setWorkflowFinalOutput, setWorkflowInputs,
   setWorkflowStepExecutionField, setWorkflowStepText, setWorkflowStepTimeout, updateWorkflowBlock,
   setWorkflowBlockOnlyWhen, setWorkflowLeafPauseForReview, setWorkflowStepExecutionTarget, setWorkflowParallelBranchName,
@@ -20,6 +20,30 @@ function fixture(): WorkflowDefinitionDraftV1 {
 }
 
 describe('typed workflow definition edits', () => {
+  it('remaps copied Session conversation inputs and preserves their bound Action value paths', () => {
+    const block = WorkflowBlockSchema.parse({ kind: 'step', id: 'verify', document: { text: 'Verify', references: [], attachments: [] },
+      execution: { conversation: { kind: 'input', name: 'reviewSession' } },
+      input: [{ kind: 'input', name: 'reviewSession', path: ['sessionId'] }] });
+    const copied = copyWorkflowBlocks([block], new Set(['verify']), new Map([['reviewSession', 'reviewSession2']]));
+    expect(copied.blocks[0]).toMatchObject({ id: 'verify-2', execution: { conversation: { kind: 'input', name: 'reviewSession2' } },
+      input: [{ kind: 'input', name: 'reviewSession2', path: ['sessionId'] }] });
+  });
+  it('remaps a copied engine input binding without rewriting its JSON value path', () => {
+    const block = WorkflowBlockSchema.parse({ kind: 'step', id: 'answer', document: { text: 'Answer', references: [], attachments: [] },
+      execution: { engine: { kind: 'input', name: 'participant', path: ['participant'] } } });
+    const copied = copyWorkflowBlocks([block], new Set(['answer']), new Map([['participant', 'participant_2']]));
+    expect(copied.blocks[0]).toMatchObject({ id: 'answer-2', execution: {
+      engine: { kind: 'input', name: 'participant_2', path: ['participant'] },
+    } });
+    expect(block).toMatchObject({ execution: { engine: { name: 'participant' } } });
+  });
+  it('remaps a copied executable participant binding without changing its selected value path', () => {
+    const block = WorkflowBlockSchema.parse({ kind: 'step', id: 'answer', document: { text: 'Answer', references: [], attachments: [] },
+      execution: { participant: { kind: 'input', name: 'reviewer', path: ['choice'] } } });
+    const copied = copyWorkflowBlocks([block], new Set(['answer']), new Map([['reviewer', 'reviewer_2']]));
+    expect(copied.blocks[0]).toMatchObject({ execution: { participant: { kind: 'input', name: 'reviewer_2', path: ['choice'] } } });
+    expect(block).toMatchObject({ execution: { participant: { name: 'reviewer' } } });
+  });
   it('names a Side by side lane, keeps the name through the canonical schema, and clears a blank one (07 lane captions)', () => {
     const group = createWorkflowBlock('parallel', new Set());
     if (group.kind !== 'parallel') throw new Error('unreachable');

@@ -85,6 +85,7 @@ const InputHintCoreFieldSchema = lazyZodSchema(() => z.strictObject({
   requireExplicitSelection: z.optional(z.boolean()),
   listSeparator: z.optional(z.enum(['comma', 'newline'])),
   maxSelections: z.optional(z.number().check(z.int(), z.positive())),
+  defaultValue: z.optional(StrictJsonValueSchema),
   visibleWhen: z.optional(InputPredicateSchema),
   /** Surface-aware editors show this field only when the host declares the named context slot. */
   visibleWhenContextSlot: z.optional(InputPathSchema),
@@ -112,6 +113,8 @@ const InputHintStaticSourceShape = {};
 export type InputHintOptionDescriptor<TText, TValue = InputOptionValue> = Readonly<{
   value: TValue;
   label: TText;
+  /** Optional host localization key; the authored label remains the portable fallback. */
+  labelKey?: string;
   description?: TText;
   disabled?: boolean;
 }>;
@@ -131,6 +134,8 @@ export type InputFieldHintDescriptor<TText, TValue = InputOptionValue> = Readonl
   requireExplicitSelection?: boolean;
   listSeparator?: 'comma' | 'newline';
   maxSelections?: number;
+  /** Initial form value only; explicit draft values and later edits take precedence. */
+  defaultValue?: JsonValue;
   /** Choices restrict the type's admitted values; they cannot widen its schema. */
   options?: readonly InputHintOptionDescriptor<TText, TValue>[];
   optionsSourceId?: string;
@@ -365,6 +370,7 @@ function createInputHintsSchemasForSharedField<
   const optionSchema = z.strictObject({
     value: optionValueSchema,
     label: textSchema,
+    labelKey: z.optional(z.string().check(z.trim(), z.minLength(1))),
     description: z.optional(textSchema),
     disabled: z.optional(z.boolean()),
   });
@@ -473,10 +479,12 @@ export function normalizeInputHintsText<TText>(
       ...(field.requireExplicitSelection === undefined ? {} : { requireExplicitSelection: field.requireExplicitSelection }),
       ...(field.listSeparator === undefined ? {} : { listSeparator: field.listSeparator }),
       ...(field.maxSelections === undefined ? {} : { maxSelections: field.maxSelections }),
+      ...(field.defaultValue === undefined ? {} : { defaultValue: field.defaultValue }),
       ...(field.options === undefined ? {} : {
         options: field.options.map((option) => ({
           value: option.value,
           label: resolveText(option.label),
+          ...(option.labelKey === undefined ? {} : { labelKey: option.labelKey }),
           ...(option.description === undefined ? {} : { description: resolveText(option.description) }),
           ...(option.disabled === undefined ? {} : { disabled: option.disabled }),
         })),

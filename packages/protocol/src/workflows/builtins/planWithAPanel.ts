@@ -6,6 +6,7 @@ export const PLAN_WITH_A_PANEL_WORKFLOW_V1: WorkflowDefinitionV1 = {
   inputs: [
     { name: 'request', valueType: 'string', required: true },
     { name: 'engines', valueType: 'json', required: false, optionsSourceId: 'execution.backends.enabled' },
+    { name: 'previousRoundContext', valueType: 'json', required: false, default: null },
   ],
   blocks: [
     {
@@ -23,7 +24,7 @@ export const PLAN_WITH_A_PANEL_WORKFLOW_V1: WorkflowDefinitionV1 = {
     {
       ...agent('synthesis', 'Synthesize the plan', 'planner',
         'Produce the requested plan. Treat planner results as evidence, preserve failed or missing coverage, and resolve disagreements or list them as open questions. Return a document explaining why, risks and open questions, plus a proposed workflow only if valid.',
-        [input('request'), { ...result('planners'), optional: true }], true),
+        [input('request'), input('previousRoundContext'), { ...result('planners'), optional: true }], true),
       execution: { engine: { role: 'planner' }, executionTarget: { kind: 'detached_run' }, permissionMode: 'read-only' },
       pauseForReview: true,
       result: { kind: 'json', schema: {

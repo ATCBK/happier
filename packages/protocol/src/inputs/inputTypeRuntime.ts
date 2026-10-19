@@ -14,6 +14,7 @@ import { inputTypeOptionsSourceId } from './inputTypes.js';
 import { VoiceTrackedSessionAddressV1Schema } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import { WorkspaceRefV1Schema } from '../workspaces/workspaceRefV1.js';
 import { MachineTargetV1Schema } from '../machines/machineAccessV1.js';
+import { normalizeExecutableParticipantSelectionV1 } from '../discussions/executableParticipants.js';
 
 function isInputOptionAvailable(value: unknown, options: readonly Pick<InputOption, 'value' | 'disabled'>[]): boolean {
   return options.some(option => !option.disabled && pluginJsonValuesEqual(option.value, value));
@@ -35,6 +36,11 @@ export function validateHostInputTypeValue(reference: HostInputTypeReferenceV1, 
     return parsed.success ? { status: 'valid', value: projectNativeJsonValueForTransport(normalizeUsageQuery(parsed.data)) }
       : { status: 'invalid', reasonCode: 'input_type_value_invalid' };
   }
+  if (reference.hostType === 'agentParticipant') {
+    const participant = normalizeExecutableParticipantSelectionV1(value);
+    return participant ? { status: 'valid', value: projectNativeJsonValueForTransport(participant) }
+      : { status: 'invalid', reasonCode: 'input_type_value_invalid' };
+  }
   const parsed = reference.hostType === 'session'
     ? VoiceTrackedSessionAddressV1Schema.safeParse(value)
     : reference.hostType === 'machine' ? MachineTargetV1Schema.safeParse(value) : WorkspaceRefV1Schema.safeParse(value);
@@ -50,6 +56,9 @@ export type ResolvedInputTypeV1 = Readonly<{
 
 /** A consuming field narrows the type's values; it owns any explicitly declared source. */
 export function readInputFieldOptionsSourceId(field: Pick<InputFieldHint, 'inputType' | 'optionsSourceId'>): string | undefined {
+  if (field.inputType && 'hostType' in field.inputType && field.inputType.hostType === 'agentParticipant') {
+    return field.optionsSourceId;
+  }
   return field.optionsSourceId ?? (field.inputType ? inputTypeOptionsSourceId(field.inputType) : undefined);
 }
 

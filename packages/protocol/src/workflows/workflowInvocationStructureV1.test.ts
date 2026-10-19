@@ -29,6 +29,33 @@ function resolve(definition: WorkflowDefinitionV1, rows: readonly WorkflowInvoca
 }
 
 describe('frozen invocation structure owner', () => {
+  it('recovers the exact item from the frozen loop source for accepted selection after restart', async () => {
+    const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: {}, blocks: [{ kind: 'loop', id: 'panel',
+      repetition: { kind: 'items', items: { kind: 'literal', value: ['first', 'second'] }, execution: 'parallel', failurePolicy: 'collect_outcomes' },
+      body: [{ kind: 'step', id: 'answer', document }],
+    }] });
+    const rows = [row(0, null, '0', 'root', '$root'), row(1, 0, '0', 'loop', 'panel', { container: {
+      kind: 'loop', mode: 'items', nextMemberIndex: '0', nextBodyBlockOrdinal: '0',
+      source: { kind: 'definition', reference: { kind: 'literal', value: ['first', 'second'] } }, itemCount: '2',
+    } }), row(2, 1, '1', 'loop', 'panel', { frame: { ownerBlockId: 'panel', source: { kind: 'item', index: '1' } } }), row(3, 2, '0', 'step', 'answer')];
+    const result = await resolveWorkflowInvocationStructureV1({ definition, inputs: {}, invocation: rows[3]!,
+      readInvocation: async id => rows.find(candidate => candidate.index.id === id), keyOfInvocation: value => value.index.id });
+    expect(result).toMatchObject({ frame: { item: { value: 'second', index: 1, position: 2, count: 2 } } });
+  });
+  it('reopens the retained input field path instead of treating the entire input as the loop roster', async () => {
+    const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [{ name: 'panel', valueType: 'json', required: true }],
+      blocks: [{ kind: 'loop', id: 'reviewers',
+        repetition: { kind: 'items', items: { kind: 'input', name: 'panel', path: ['reviewers'] }, execution: 'parallel', failurePolicy: 'collect_outcomes' },
+        body: [{ kind: 'step', id: 'answer', document }] }] });
+    const rows = [row(0, null, '0', 'root', '$root'), row(1, 0, '0', 'loop', 'reviewers', { container: {
+      kind: 'loop', mode: 'items', nextMemberIndex: '0', nextBodyBlockOrdinal: '0',
+      source: { kind: 'definition', reference: { kind: 'input', name: 'panel', path: ['reviewers'] } }, itemCount: '2',
+    } }), row(2, 1, '1', 'loop', 'reviewers', { frame: { ownerBlockId: 'reviewers', source: { kind: 'item', index: '1' } } }),
+    row(3, 2, '0', 'step', 'answer')];
+    await expect(resolveWorkflowInvocationStructureV1({ definition, inputs: { panel: { reviewers: ['first', 'second'] } },
+      invocation: rows[3]!, readInvocation: async id => rows.find(candidate => candidate.index.id === id), keyOfInvocation: value => value.index.id }))
+      .resolves.toMatchObject({ frame: { item: { value: 'second', index: 1, position: 2, count: 2 } } });
+  });
   it.each(['action', 'wait'] as const)('resolves a %s leaf without a second block-id search', async kind => {
     const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: {}, blocks: [
       kind === 'action' ? { kind, id: 'leaf', actionId: 'notify_me', input: {}, pauseForReview: true }

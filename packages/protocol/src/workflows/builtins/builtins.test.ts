@@ -19,6 +19,7 @@ describe('built-in workflow catalog', () => {
     expect(catalog.getBuiltinWorkflowCatalogV1().map((entry) => entry.id)).toEqual([
       'builtin:keep-going',
       'builtin:review-and-converge', 'builtin:plan-with-a-panel', 'builtin:open-a-pull-request',
+      'builtin:fresh-opinions', 'builtin:answer-and-review', 'builtin:debate',
     ]);
   });
 
@@ -38,7 +39,8 @@ describe('built-in workflow catalog', () => {
     expect(WorkflowDefinitionBaseSchema.safeParse(definition).success).toBe(true);
   });
 
-  it.each(['keep-going', 'review-and-converge', 'plan-with-a-panel', 'open-a-pull-request'])('ships a strict, semantically valid %s definition', (id) => {
+  it.each(['keep-going', 'review-and-converge', 'plan-with-a-panel', 'open-a-pull-request',
+    'fresh-opinions', 'answer-and-review', 'debate'])('ships a strict, semantically valid %s definition', (id) => {
     const resolved = catalog.resolveBuiltinWorkflowDefinitionV1(id);
     expect(resolved).not.toBeNull();
     expect(WorkflowDefinitionBaseSchema.safeParse(resolved?.definition).success).toBe(true);

@@ -3,12 +3,14 @@ import { resolveReviewEngineInventoryTarget } from '../actions/executor/reviewEn
 import type { ActionExecuteResult } from '../actions/actionExecutionResult.js';
 import type { ActionId } from '../actions/actionIds.js';
 import type { PublicActionResultById } from '../actions/actionSpecs.js';
+import { AgentInventoryProbeInputSchema } from '../actions/actionSpecs.js';
 import { parseWorkflowDefinitionRefV1, formatWorkflowDefinitionRefV1 } from '../workflows/workflowDefinitionRefV1.js';
 import { DaemonProviderModelProjectionResponseV1Schema } from '../rpc/providers.js';
 import { AgentExecutionTargetV1Schema } from '../agents/executionTargetV1.js';
 import { BackendTargetKeyV2InputSchema } from '../backends/targets/backendTargetRefV2.js';
 import { SessionDirectoryIntentV1Schema } from '../sessions/creation/sessionDirectoryIntentV1.js';
-import { readCapabilitySelectionCarrierV1 } from '../reach/sessionCapabilitySelectionV1.js';
+import { readCapabilitySelectionCarrierV1, SessionCapabilitySelectionAuthoringV1Schema, setSessionCapabilitySelectionItemV1 } from '../reach/sessionCapabilitySelectionV1.js';
+import { SpawnCapabilitiesPreviewOutputV1Schema } from '../actions/specs/sessionCapabilities.js';
 import { resolveReviewNarratorPolicy, ReviewEngineCapabilitiesSchema } from '../reviews/reviewEngines.js';
 import { resolveActionBackendTargetSelection, resolveExecutionBackendTargetSelectionForValue, type ActionBackendTargetSelection } from '../actions/resolveActionBackendTargetSelection.js';
 import { readRecord, readRecordListProperty, readNonEmptyString, isRecord, hasOwn } from './inputRecords.js';
@@ -44,13 +46,15 @@ export function normalizeResolvedOptions(value: unknown, options: Readonly<{ all
           ? item.value
           : typeof item?.id === 'string'
             ? item.id
-            : typeof item?.path === 'string'
-              ? item.path
-              : typeof item?.agentId === 'string'
-                ? item.agentId
-                : typeof item?.engineId === 'string'
-                  ? item.engineId
-                  : null;
+            : typeof item?.modelId === 'string'
+              ? item.modelId
+              : typeof item?.path === 'string'
+                ? item.path
+                : typeof item?.agentId === 'string'
+                  ? item.agentId
+                  : typeof item?.engineId === 'string'
+                    ? item.engineId
+                    : null;
       if (valueCandidate === null || (valueCandidate === '' && options.allowEmptyValue !== true)) return null;
       const labelCandidate =
         typeof item?.label === 'string'
@@ -332,7 +336,10 @@ export async function resolveInputOptions(params: Readonly<{
   }
 
   if (optionsSourceId === 'sessions') {
-    const sessionServerId = readNonEmptyString(ctx.serverId);
+    // The admitted consumer owns the qualified values it compares with a saved pin.
+    // Transport still uses ctx's captured profile; profile aliases are not input identity.
+    const sessionServerId = readNonEmptyString(params.consumer?.kind === 'widget'
+      ? params.consumer.selectedSession?.serverId ?? params.consumer.surface.serverId : ctx.serverId);
     if (!sessionServerId) return { ok: false, errorCode: 'server_not_selected', error: 'server_not_selected' };
     // Enter through the existing Action owner so credential grants, the caller's
     // admitted corpus and marked-query admission also govern option discovery.
@@ -491,14 +498,29 @@ export async function resolveInputOptions(params: Readonly<{
   if (optionsSourceId === 'agents.models.available') {
     const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
     if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    // Configured model inventory is selected by definition, as on direct reads.
+    // The installed routing id stays private to the host's probe adapter.
+    const modelInventorySelection = actionId === 'session.spawn_new' && readRecord(input.agentTarget).definitionId !== undefined
+      ? { backendTargetKey: selectionArgs.backendTargetKey } : selectionArgs;
+    // Use the native producer for this exact launch context, including the selected
+    // Connected Account. A generic inventory read has no such account binding.
+    const probe = AgentInventoryProbeInputSchema.safeParse({
+      ...readRecord(input.probe),
+      ...(directory ? { cwd: directory } : {}),
+      ...(hasOwn(input, 'profileId') && input.profileId != null ? { profileId: input.profileId } : {}),
+      ...(hasOwn(input, 'connectedServices') && input.connectedServices != null ? { connectedServices: input.connectedServices } : {}),
+      ...(hasOwn(input, 'runtimeDescriptorV1') && input.runtimeDescriptorV1 != null ? { runtimeDescriptorV1: input.runtimeDescriptorV1 } : {}),
+    });
+    if (!probe.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     const result = await deps.agentsModelsList({
-      ...selectionArgs,
+      ...modelInventorySelection,
       ...(machineId === undefined ? {} : { machineId }),
       ...(serverId === undefined ? {} : { serverId }),
       ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
       ...(params.includeSpawnModelCatalog ? { includeProviderProjection: true as const } : {}),
+      ...(machineId ? { probe: probe.data } : {}),
       ...(ctx.signal ? { signal: ctx.signal } : {}),
-    });
+    }, ctx);
     const failure = params.readFailure(result);
     if (failure) return failure;
     const options = normalizeResolvedOptions(result);
@@ -619,6 +641,32 @@ export async function resolveInputOptions(params: Readonly<{
     return { ok: true, result: normalizeResolvedOptions(result) };
   }
 
+  if (optionsSourceId === 'sessions.spawn.capabilities.preview') {
+    const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
+    const selection = SessionCapabilitySelectionAuthoringV1Schema.safeParse(input.capabilitySelection === undefined ? {} : input.capabilitySelection);
+    if (!selectionArgs?.agentId || !machineId || !selection.success) {
+      return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    }
+    // Preview owns Profile seed admission and the Machine projection. Options
+    // replace the whole field, so the draft item writer preserves other choices.
+    const { createActionExecutor } = await import('../actions/actionExecutor.js');
+    const result = await createActionExecutor(deps).execute('sessions.spawn.capabilities.preview', {
+      machineId,
+      agentId: selectionArgs.agentId,
+      ...(directory ? { directory } : {}),
+      ...(hasOwn(input, 'profileId') ? { profileId: input.profileId } : {}),
+      ...(hasOwn(input, 'capabilitySelection') ? { capabilitySelection: selection.data } : {}),
+    }, serverId ? { ...ctx, serverId } : ctx);
+    if (!result.ok) return result;
+    const preview = SpawnCapabilitiesPreviewOutputV1Schema.parse(result.result);
+    if (!preview.ok) return { ok: false, errorCode: preview.reason, error: preview.reason };
+    return { ok: true, result: [...preview.mcp.items, ...preview.skills.items].map(item => ({
+      value: setSessionCapabilitySelectionItemV1(selection.data, item.kind, item.id, 'on'),
+      label: item.title ?? item.name,
+      ...(item.selectable ? {} : { disabled: true }),
+    })) };
+  }
+
   if (optionsSourceId === 'sessions.spawn.mcp_servers.preview') {
     if (!deps.spawnMcpServersPreview) {
       return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:sessions.spawn.mcp_servers.preview' };
@@ -633,7 +681,7 @@ export async function resolveInputOptions(params: Readonly<{
         ? (hasOwn(input, 'capabilitySelection') ? { selection: readCapabilitySelectionCarrierV1(input)?.mcp } : {})
         : (hasOwn(input, 'selection') ? { selection: input.selection } : {})),
       ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
-    });
+    }, ctx);
     const failure = params.readFailure(result);
     if (failure) return failure;
     return { ok: true, result: normalizeResolvedOptions(result) };

@@ -31,7 +31,7 @@ import {
   type WorkflowValueReference,
 } from './workflowReferenceV1.js';
 import { readWorkflowWorkspaceProducerRef } from './workflowWorkspaceV1.js';
-import { walkWorkflowBlocks } from './workflowDefinitionEditV1.js';
+import { createWorkflowResultFieldLocator, walkWorkflowBlocks } from './workflowDefinitionEditV1.js';
 import { readWorkflowClosedResultFieldNames } from './workflowResultFieldsV1.js';
 import { resolveWorkflowStepSelectionV1 } from './workflowStepSelectionV1.js';
 import { WorkflowRoleV1Schema } from '../prompts/roles/rolesV1.js';
@@ -376,6 +376,7 @@ type WalkState = {
   readonly issues: WorkflowValidationIssue[];
   readonly seenIds: Map<string, string>;
   readonly inputNames: ReadonlySet<string>;
+  readonly workflowInputByName: ReadonlyMap<string, WorkflowInputDefinition>;
   readonly numberInputNames: ReadonlySet<string>;
   readonly workflowDefaults: WorkflowStepSelectionV1;
   readonly levels: ScopeLevel[];
@@ -383,6 +384,7 @@ type WalkState = {
   readonly positions: number[];
   /** Producers whose closed named-field result declares exactly these first path segments. */
   readonly closedResultFields: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly locateResultField: ReturnType<typeof createWorkflowResultFieldLocator>;
 };
 
 function recordId(state: WalkState, id: string, path: string): void {
@@ -429,6 +431,20 @@ function resolveReferenceScope(state: WalkState, scope: WorkflowReferenceScope):
   };
 }
 
+function validateClosedResultField(state: WalkState, reference: WorkflowValueReference, path: string, blockId?: string): void {
+  const location = state.locateResultField(reference);
+  if (location === null) return;
+  const declared = state.closedResultFields.get(location.producerBlockId);
+  if (declared !== undefined && !declared.has(location.field)) {
+    state.issues.push(issue(
+      'missing_reference',
+      joinPath(path, 'path', location.pathIndex),
+      `"${location.producerBlockId}" does not return a field named "${location.field}".`,
+      blockId,
+    ));
+  }
+}
+
 function validateValueReference(
   state: WalkState,
   reference: WorkflowValueReference,
@@ -441,9 +457,10 @@ function validateValueReference(
     return;
   }
   switch (reference.kind) {
+    case 'discussion_context':
     case 'session_context':
       if (!options?.allowSessionContext) state.issues.push(issue('invalid_reference_scope', path,
-        'Session context is only available in Agent or Action input bindings.', blockId));
+        'Conversation context is only available in Agent or Action input bindings.', blockId));
       return;
     case 'session_context_field':
       if (!options?.conditionOperand) state.issues.push(issue('invalid_reference_scope', path,
@@ -494,7 +511,9 @@ function validateValueReference(
         || !producerCandidatesAt(level, state.positions[levelIndex]!).has(reference.producer.blockId)) {
         state.issues.push(issue('invalid_reference_scope', path,
           'Trailing counts require a preceding producer in the nearest loop body.', blockId));
+        return;
       }
+      validateClosedResultField(state, reference, path, blockId);
       return;
     }
     case 'result':
@@ -527,16 +546,7 @@ function validateValueReference(
           ));
         return;
       }
-      const declared = reference.kind === 'result' ? state.closedResultFields.get(reference.producer.blockId) : undefined;
-      const field = reference.kind === 'result' ? reference.path[0] : undefined;
-      if (declared !== undefined && typeof field === 'string' && !declared.has(field)) {
-        state.issues.push(issue(
-          'missing_reference',
-          joinPath(path, 'path', 0),
-          `"${reference.producer.blockId}" does not return a field named "${field}".`,
-          blockId,
-        ));
-      }
+      if (reference.kind === 'result') validateClosedResultField(state, reference, path, blockId);
       return;
     }
   }
@@ -587,14 +597,41 @@ function validateStepExecution(state: WalkState, step: WorkflowLeafV1, path: str
   // Roles are resolved at admission. Static validation recognizes the role arm
   // without consulting mutable Account settings or choosing a target class.
   const engine = execution?.engine ?? state.workflowDefaults.engine;
+  const participant = execution?.participant ?? state.workflowDefaults.participant;
+  if (participant) {
+    validateValueReference(state, participant.kind === 'input' ? { kind: 'input', name: participant.name } : participant,
+      joinPath(path, 'execution', 'participant'), step.id);
+    if (step.kind !== 'step') state.issues.push(issue('invalid_input', joinPath(path, 'execution', 'participant'),
+      'Executable participants belong to Agent steps.', step.id));
+    const declaredType = participant.kind === 'input' ? state.workflowInputByName.get(participant.name)?.inputType : undefined;
+    if (participant.kind === 'input' && (!declaredType || !('hostType' in declaredType)
+      || declaredType.hostType !== 'agentParticipant')) {
+      state.issues.push(issue('invalid_input', joinPath(path, 'execution', 'participant'),
+        'Participant binding requires a declared executable participant input.', step.id));
+    }
+  }
+  if (engine && 'kind' in engine) {
+    validateValueReference(state, engine.kind === 'input' ? { kind: 'input', name: engine.name } : engine,
+      joinPath(path, 'execution', 'engine'), step.id);
+    // Actions bind their own published inputs. Dynamic execution choices are
+    // consumed by Agent leaves, not by the Action input projection.
+    if (step.kind === 'action') state.issues.push(issue('invalid_input', joinPath(path, 'execution', 'engine'),
+      'Bind the Action inputs directly, or use an Agent step for an engine binding.', step.id));
+  }
   const withoutEngine = (selection: WorkflowStepSelectionV1) => {
-    const { engine: _engine, executionTarget: _target, ...fields } = selection;
+    const { engine: _engine, participant: _participant, executionTarget: _target, ...fields } = selection;
     return fields;
   };
   const effective = resolveWorkflowStepSelectionV1({ defaults: withoutEngine(state.workflowDefaults),
     step: execution === undefined ? undefined : withoutEngine(execution) }).selection;
-  const boundConversation = effective.conversation?.kind === 'origin_session' || effective.conversation?.kind === 'existing_session';
-  if (step.kind === 'step' && effective.agentTarget == null && !engine && !boundConversation) {
+  const boundConversation = effective.conversation?.kind === 'origin_session' || effective.conversation?.kind === 'existing_session'
+    || effective.conversation?.kind === 'input';
+  if (effective.conversation?.kind === 'input') {
+    validateValueReference(state, { kind: 'input', name: effective.conversation.name }, joinPath(path, 'execution', 'conversation'), step.id);
+    if (step.kind !== 'step') state.issues.push(issue('invalid_input', joinPath(path, 'execution', 'conversation'),
+      'Bind Action or Workflow inputs directly; a Session conversation belongs to an Agent step.', step.id));
+  }
+  if (step.kind === 'step' && effective.agentTarget == null && !engine && !participant && !boundConversation) {
     state.issues.push(issue(
       'target_unavailable',
       joinPath(path, 'execution', 'agentTarget'),
@@ -622,7 +659,7 @@ function validateStepExecution(state: WalkState, step: WorkflowLeafV1, path: str
         joinPath(path, 'execution', field), 'Agent launch configuration requires a fresh or existing Session conversation.', step.id));
     }
   }
-  if ((effectiveConversation?.kind === 'existing_session' || effectiveConversation?.kind === 'origin_session')
+  if (boundConversation
     && execution?.workspace?.kind === 'new_worktree') {
     state.issues.push(issue(
       'conversation_workspace_mismatch',
@@ -1102,7 +1139,9 @@ function validateFinalOutput(state: WalkState, definition: WorkflowDefinitionV1)
         joinPath(path, 'producer', 'blockId'),
         `No block named "${finalOutput.producer.blockId}" exists in this workflow.`,
       ));
+    return;
   }
+  validateClosedResultField(state, finalOutput, path);
 }
 
 export type ValidateWorkflowDefinitionOptions = Readonly<{
@@ -1173,10 +1212,12 @@ function collectSemanticIssues(definition: WorkflowDefinitionV1): WorkflowValida
     issues: [],
     seenIds: new Map<string, string>(),
     inputNames: new Set(definition.inputs.map((declared) => declared.name)),
+    workflowInputByName: new Map(definition.inputs.map((declared) => [declared.name, declared])),
     numberInputNames: new Set(definition.inputs.filter((declared) => declared.valueType === 'number').map((declared) => declared.name)),
     workflowDefaults: definition.defaults,
     levels: [],
     positions: [],
+    locateResultField: createWorkflowResultFieldLocator(definition.blocks),
     closedResultFields: new Map(walkWorkflowBlocks(definition.blocks).flatMap((block) => {
       const fields = block.kind === 'step' || block.kind === 'wait' ? readWorkflowClosedResultFieldNames(block.result) : null;
       return fields === null ? [] : [[block.id, fields] as const];

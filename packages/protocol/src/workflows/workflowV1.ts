@@ -17,6 +17,7 @@ import {
   WorkflowConditionSchema,
   WorkflowConversationSelectionSchema,
   WorkflowInputNameSchema,
+  WorkflowResultPathSchema,
   WorkflowValueReferenceSchema,
   type WorkflowCondition,
   type WorkflowValueReference,
@@ -31,6 +32,7 @@ import { createStoredReadSchema, defineStoredReadProjection } from '../json/stor
 import { isWorkflowActionLiteralFieldV1 } from './stepActionsV1.js';
 import { AgentLaunchEnvironmentV1Schema, AgentSessionProviderResumeV1Schema } from '../runtime/agentSessionV1.js';
 import { readCapabilitySelectionCarrierV1 } from '../reach/sessionCapabilitySelectionV1.js';
+import { findInvalidWorkflowResultFieldName } from './workflowResultFieldsV1.js';
 
 export {
   WorkflowStepComposerDocumentSchema,
@@ -49,13 +51,24 @@ export {
 export const WorkflowInputDefinitionSchema = lazyZodSchema(() => z.strictObject({
   name: WorkflowInputNameSchema,
   valueType: z.enum(['string', 'number', 'boolean', 'json']),
+  multiple: z.optional(z.boolean()),
   enum: z.optional(z.array(z.string()).check(z.minLength(1))),
   required: z.boolean(),
   default: zMini.optional(StrictJsonValueSchema),
+  /** Bind the real source Session at admission; never a fabricated origin. */
+  defaultFrom: z.optional(z.literal('origin_session')),
   description: z.optional(z.string()),
   optionsSourceId: z.optional(z.string().check(z.minLength(1))),
   inputType: zMini.optional(InputTypeReferenceV1Schema),
 }).check(z.superRefine((value, ctx) => {
+  if (value.multiple && (value.valueType !== 'json' || !value.inputType || !('hostType' in value.inputType)
+    || value.inputType.hostType !== 'agentParticipant')) {
+    ctx.addIssue({ code: 'custom', path: ['multiple'], message: 'Participant lists require the executable participant input type' });
+  }
+  if (value.defaultFrom && (value.default !== undefined || value.valueType !== 'json'
+    || !value.inputType || !('hostType' in value.inputType) || value.inputType.hostType !== 'session')) {
+    ctx.addIssue({ code: 'custom', path: ['defaultFrom'], message: 'A Session context default requires a typed Session input without a literal default' });
+  }
   if (value.inputType && (value.optionsSourceId || value.enum)) {
     ctx.addIssue({ code: 'custom', path: ['inputType'], message: 'A typed input uses its declared options owner' });
   }
@@ -100,7 +113,7 @@ export function workflowInputToFieldHint(
     path: definition.name,
     title: workflowInputTitle(definition, presentation),
     ...(definition.description === undefined ? {} : { description: definition.description }),
-    widget: hasChoices ? definition.valueType === 'json' && !definition.inputType ? 'multiselect' : 'select'
+    widget: hasChoices ? definition.multiple || definition.valueType === 'json' && !definition.inputType ? 'multiselect' : 'select'
       : definition.valueType === 'string' ? 'text' : definition.valueType,
     required: definition.required,
     ...(definition.inputType ? { inputType: definition.inputType } : {}),
@@ -189,24 +202,38 @@ function projectStoredCapabilitySelection(raw: unknown): unknown {
   };
 }
 
-defineStoredReadProjection(WorkflowSessionAuthoringSelectionSchema, () => z.pipe(z.transform(projectStoredCapabilitySelection), createStoredReadSchema(lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(WorkflowSessionAuthoringSelectionSchema)))));
-defineStoredReadProjection(WorkflowStepExecutionSelectionSchema, () => z.pipe(z.transform(projectStoredCapabilitySelection), createStoredReadSchema(lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(WorkflowStepExecutionSelectionSchema)))));
+defineStoredReadProjection(WorkflowSessionAuthoringSelectionSchema, () => (<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform(projectStoredCapabilitySelection), createStoredReadSchema(lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(WorkflowSessionAuthoringSelectionSchema)))));
+defineStoredReadProjection(WorkflowStepExecutionSelectionSchema, () => (<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform(projectStoredCapabilitySelection), createStoredReadSchema(lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(WorkflowStepExecutionSelectionSchema)))));
 
 export const WorkflowLeafExecutionTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('session') }),
   z.strictObject({ kind: z.literal('detached_run') }),
 ]));
 export type WorkflowLeafExecutionTargetV1 = z.infer<typeof WorkflowLeafExecutionTargetV1Schema>;
-export const WorkflowEngineSelectionV1Schema = lazyZodSchema(() => z.union([
+/** Executable identities can bind only immutable inputs or the current admitted item. */
+export const WorkflowSelectionBindingV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ kind: z.literal('input'), name: WorkflowInputNameSchema, path: z.optional(WorkflowResultPathSchema) }),
+  z.strictObject({ kind: z.literal('item'), field: z.literal('value'), path: z.optional(WorkflowResultPathSchema) }),
+]));
+export type WorkflowSelectionBindingV1 = z.infer<typeof WorkflowSelectionBindingV1Schema>;
+export const WorkflowLiteralEngineSelectionV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ role: z.string().check(z.minLength(1)) }),
   z.strictObject({ agentTarget: AgentExecutionTargetV1Schema,
     modelSelection: zMini.optional(zMini.nullable(SessionModelSelectionV1Schema)), effort: z.optional(z.string().check(z.minLength(1))) }),
 ]));
+export const WorkflowEngineSelectionV1Schema = lazyZodSchema(() => z.union([
+  WorkflowLiteralEngineSelectionV1Schema, WorkflowSelectionBindingV1Schema,
+]));
 export type WorkflowEngineSelectionV1 = z.infer<typeof WorkflowEngineSelectionV1Schema>;
 export const WorkflowStepSelectionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WorkflowStepExecutionSelectionSchema, {
   engine: z.optional(WorkflowEngineSelectionV1Schema),
+  participant: z.optional(WorkflowSelectionBindingV1Schema),
   executionTarget: z.optional(WorkflowLeafExecutionTargetV1Schema),
 })).check(z.superRefine((selection, context) => {
+  if (selection.participant !== undefined && (selection.engine !== undefined || selection.conversation !== undefined
+    || selection.agentTarget !== undefined || selection.modelSelection !== undefined || selection.executionTarget?.kind === 'detached_run')) {
+    context.addIssue({ code: 'custom', path: ['participant'], message: 'A participant owns its Session and launch selection' });
+  }
   if (selection.engine === undefined) return;
   for (const field of ['agentTarget', 'modelSelection'] as const) {
     if (selection[field] !== undefined) context.addIssue({ code: 'custom', path: [field], message: 'An engine arm cannot also set a flat engine field' });
@@ -216,7 +243,7 @@ export const WorkflowStepSelectionV1Schema = lazyZodSchema(() => (<T extends z.Z
   }
 })));
 export type WorkflowStepSelectionV1 = z.infer<typeof WorkflowStepSelectionV1Schema>;
-defineStoredReadProjection(WorkflowStepSelectionV1Schema, () => z.pipe(z.transform(projectStoredCapabilitySelection), createStoredReadSchema(lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(WorkflowStepSelectionV1Schema)))));
+defineStoredReadProjection(WorkflowStepSelectionV1Schema, () => (<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform(projectStoredCapabilitySelection), createStoredReadSchema(lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(WorkflowStepSelectionV1Schema)))));
 
 /** An authored block title; blank input restores the derived presentation label. */
 export const WorkflowBlockNameV1Schema = lazyZodSchema(() => z.optional(z.pipe(z.string().check(z.trim()), z.transform((name) => name || undefined))));
@@ -494,12 +521,21 @@ function createWorkflowBlockSchema<T extends WorkflowIngressBlock | WorkflowInse
         ancestors.add(task.value);
         pending.push({ finish: task.value });
       }
+      // Admission uses the shared name rule before schema normalization; stored reads stay tolerant.
+      if (dialect !== 'stored' && isBlockRecord(task.value) && (task.value.kind === 'step' || task.value.kind === 'wait')) {
+        const invalidName = findInvalidWorkflowResultFieldName(task.value.result);
+        if (invalidName !== null) {
+          context.issues.push({ code: 'custom', path: [...task.path, 'result', 'schema', 'properties', invalidName], message: 'Invalid result field name', input: context.value });
+          failed = true;
+          continue;
+        }
+      }
       const parsed = allowShorthand && typeof task.value === 'string'
         ? z.string().check(z.minLength(1)).safeParse(task.value)
         : shallow.safeParse(task.value);
       if (!parsed.success) {
         failed = true;
-        for (const issue of parsed.error.issues) context.issues.push({ ...issue, path: [...task.path, ...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) });
+        for (const issue of parsed.error.issues) context.issues.push({ ...issue, path: [...task.path, ...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) } as zMini.core.$ZodRawIssue);
       } else {
         task.assign(parsed.data);
       }

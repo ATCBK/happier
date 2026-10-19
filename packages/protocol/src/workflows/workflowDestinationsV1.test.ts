@@ -3,8 +3,17 @@ import { WorkflowDefinitionV1Schema } from './workflowV1.js';
 import { deriveWorkflowDestinationsV1 } from './workflowDestinationsV1.js';
 import { listWorkflowBlockOrdinalsV1 } from './workflowStepLabel.js';
 import type { WorkflowStep, WorkflowDefinitionV1 } from './workflowV1.js';
+import { REVIEW_AND_CONVERGE_WORKFLOW_V1 } from './builtins/reviewAndConverge.js';
 
 describe('workflow destination presentation', () => {
+  it('projects a review Session context default and an explicit target without falling back from malformed input', () => {
+    const definition = REVIEW_AND_CONVERGE_WORKFLOW_V1;
+    expect(deriveWorkflowDestinationsV1({ definition, originSessionId: 'origin' }).targetSessionIds).toEqual(['origin']);
+    expect(deriveWorkflowDestinationsV1({ definition, originSessionId: 'origin',
+      inputs: { reviewSession: { serverId: 'home', sessionId: 'review-target' } } }).targetSessionIds).toEqual(['review-target']);
+    expect(deriveWorkflowDestinationsV1({ definition, originSessionId: 'origin', inputs: { reviewSession: null } }).targetSessionIds).toEqual([]);
+    expect(deriveWorkflowDestinationsV1({ definition }).targetSessionIds).toEqual([]);
+  });
   it('carries canonical visible ordinals across containers without changing the Session relation', () => {
     const definition = WorkflowDefinitionV1Schema.parse({ version: 1,
       defaults: { conversation: { kind: 'existing_session', sessionId: 'destination', machineId: 'machine-one' } },

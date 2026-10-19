@@ -177,6 +177,21 @@ describe('Workflow stored Account content', () => {
       envelope, runDataKey })).toEqual({ kind: 'bindingMismatch' });
     expect(openWorkflowCheckpointStoredEnvelopeV1({ mode: 'plain', binding: checkpointBinding, envelope }))
       .toEqual({ kind: 'modeMismatch' });
+    expect(openWorkflowCheckpointStoredEnvelopeV1({ mode: 'e2ee', binding: checkpointBinding, envelope,
+      runDataKey: new Uint8Array(31) })).toEqual({ kind: 'contentInvalid' });
+    // Outer validation cannot authenticate the inner binding or require keys,
+    // and must not expose the decoded bytes retained privately by the opener.
+    expect(validateWorkflowStoredEnvelopeOuterForModeV1({ mode: 'e2ee', binding: checkpointBinding, envelope }))
+      .toEqual({ kind: 'available', envelope });
+    if (envelope.t !== 'encrypted') throw new Error('Expected encrypted checkpoint');
+    for (const c of ['wfr1:AAAA', `${envelope.c}=`, `${envelope.c}\n`, envelope.c.replace('wfr1:', 'legacy:')]) {
+      const malformed = { t: 'encrypted', c };
+      expect(validateWorkflowStoredEnvelopeOuterForModeV1({ mode: 'e2ee', binding: checkpointBinding, envelope: malformed }))
+        .toEqual({ kind: 'contentInvalid' });
+      // Malformed content wins over missing material, as before the optimization.
+      expect(openWorkflowCheckpointStoredEnvelopeV1({ mode: 'e2ee', binding: checkpointBinding, envelope: malformed }))
+        .toEqual({ kind: 'contentInvalid' });
+    }
   });
   it('refuses pre-cut Account-derived workflow ciphertext without fallback', () => {
     const envelope = { t: 'encrypted', c: sealAccountScopedBlobCiphertext({

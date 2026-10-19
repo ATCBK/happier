@@ -2,6 +2,9 @@ import type { WorkflowLexicalScope } from './workflowReferenceV1.js';
 import type { WorkflowBlock, WorkflowDefinitionV1, WorkflowLeafV1 } from './workflowV1.js';
 import type { WorkflowProgressEnvelopeV1, WorkflowRunInvocationIndexV1 } from './workflowProgressV1.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
+import type { JsonValue } from '../json/strictJsonValue.js';
+import { readWorkflowValuePathV1 } from './workflowReferenceV1.js';
+import type { WorkflowResolvedInputsV1 } from './workflowDefinitionV1.js';
 
 /** Reconstructed interpreter context; never persisted as a second scope stack. */
 export type WorkflowScopeFrameV1 = {
@@ -10,6 +13,7 @@ export type WorkflowScopeFrameV1 = {
   blocks: readonly WorkflowBlock[];
   scope: WorkflowProgressEnvelopeV1['invocationPath']['scope'];
   loop?: NonNullable<WorkflowLexicalScope['loop']> & Readonly<{ ownerKey: string; index: number }>;
+  item?: Readonly<{ value: JsonValue; index: number; position: number; count: number }>;
 };
 
 export type WorkflowInvocationBindingRowV1 = Readonly<{
@@ -21,6 +25,7 @@ export type WorkflowInvocationBindingParamsV1 = Readonly<{
   frozenChildren?: Readonly<Record<string, WorkflowDefinitionV1>>;
   invocation: WorkflowInvocationBindingRowV1;
   readInvocation: (recordId: string) => Promise<WorkflowInvocationBindingRowV1 | undefined>;
+  inputs?: WorkflowResolvedInputsV1;
 }>;
 
 /** The retained correspondence belongs to this exact slot's same-conversation attempt lineage. */
@@ -65,6 +70,7 @@ export async function resolveWorkflowInvocationStructureV1(params: WorkflowInvoc
   frame: WorkflowScopeFrameV1;
   inheritedConversationOwnerRecordId: string;
   rootConversationOwnerRecordId: string;
+  inputs: WorkflowResolvedInputsV1;
 }> | undefined> {
   const ancestry: WorkflowInvocationBindingRowV1[] = [params.invocation];
   const seen = new Set([params.invocation.index.id]);
@@ -86,6 +92,8 @@ export async function resolveWorkflowInvocationStructureV1(params: WorkflowInvoc
   let rootConversationOwnerRecordId = root.index.id;
   let bodyOwner: Extract<WorkflowBlock, { kind: 'loop' | 'parallel' }> | undefined;
   let bodyOwnerKey: string | undefined;
+  let itemValues: readonly JsonValue[] | undefined;
+  let inputs = params.inputs ?? {};
   for (let position = 0; position < ancestry.length; position += 1) {
     const { index, progress } = ancestry[position]!;
     if (progress.frame) {
@@ -108,30 +116,47 @@ export async function resolveWorkflowInvocationStructureV1(params: WorkflowInvoc
             ...(bodyOwner.repetition.kind === 'items' ? { execution: bodyOwner.repetition.execution } : {}),
             ownerKey: bodyOwnerKey, index: Number(source.index) } : undefined;
       frame = { parent: frame, structuralKey: params.keyOfInvocation(ancestry[position]!),
-        blocks, scope: progress.invocationPath.scope, ...(loop ? { loop } : {}) };
+        blocks, scope: progress.invocationPath.scope, ...(loop ? { loop } : {}),
+        ...(source.kind === 'item' && itemValues?.[Number(source.index)] !== undefined
+          ? { item: { value: itemValues[Number(source.index)]!, index: Number(source.index),
+            position: Number(source.index) + 1, count: itemValues.length } }
+          : source.kind !== 'item' && frame.item ? { item: frame.item } : {}) };
       if (workflowBodyOwnsConversation(bodyOwner)) inheritedConversationOwnerRecordId = index.id;
       bodyOwner = undefined;
       bodyOwnerKey = undefined;
+      itemValues = undefined;
       continue;
     }
     if (bodyOwner) return undefined;
     const block = frame.blocks[Number(index.memberOrdinal)];
     if (!block || block.kind !== progress.blockKind || block.id !== progress.invocationPath.blockId) return undefined;
     if (position === ancestry.length - 1) return block.kind === 'step' || block.kind === 'action' || block.kind === 'wait' || block.kind === 'workflow'
-      ? { leaf: block, definition, sourceKey, frame, inheritedConversationOwnerRecordId, rootConversationOwnerRecordId } : undefined;
+      ? { leaf: block, definition, sourceKey, frame, inheritedConversationOwnerRecordId, rootConversationOwnerRecordId, inputs } : undefined;
     if (block.kind === 'if') {
       if (progress.container?.kind !== 'if') return undefined;
       frame = { parent: frame, structuralKey: params.keyOfInvocation(ancestry[position]!),
         blocks: progress.container.selected === 'then' ? block.then : block.otherwise,
-        scope: progress.invocationPath.scope };
+        scope: progress.invocationPath.scope, ...(frame.item ? { item: frame.item } : {}) };
     } else if (block.kind === 'parallel' || block.kind === 'loop') {
       bodyOwner = block;
       bodyOwnerKey = params.keyOfInvocation(ancestry[position]!);
+      if (params.inputs !== undefined && progress.container?.kind === 'loop' && progress.container.mode === 'items') {
+        const source = progress.container.source;
+        const reference = source.kind === 'definition' ? source.reference : undefined;
+        const result = source.kind === 'result' ? await params.readInvocation(source.recordId) : undefined;
+        const inputValue = reference?.kind === 'input' ? inputs[reference.name] : undefined;
+        const value = reference?.kind === 'literal' ? reference.value : reference?.kind === 'input' && inputValue !== undefined
+          ? readWorkflowValuePathV1(inputValue, reference.path ?? [])
+          : source.kind === 'result' && result?.progress.result !== undefined
+            ? readWorkflowValuePathV1(result.progress.result, source.path) : undefined;
+        itemValues = Array.isArray(value) ? value : undefined;
+      }
     } else if (block.kind === 'workflow') {
       const child = params.frozenChildren?.[block.workflowRef];
       if (!child) return undefined;
       definition = child;
       sourceKey = block.workflowRef;
+      inputs = progress.container?.kind === 'body' ? progress.container.frameInputs ?? {} : {};
       // A called definition has its own lexical root and conversation owner.
       frame = { structuralKey: params.keyOfInvocation(ancestry[position]!), blocks: child.blocks,
         scope: [...progress.invocationPath.scope, { kind: 'workflow', blockId: block.id }] };
