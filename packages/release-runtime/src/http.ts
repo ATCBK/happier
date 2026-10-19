@@ -71,10 +71,14 @@ function resolveRedirectHeaders(params: Readonly<{
   return dropCrossOriginSensitiveHeaders(params.headers);
 }
 
-function createHttpError(url: string, statusCode: number): Error {
+function createHttpError(url: string, statusCode: number, headers: import('node:http').IncomingHttpHeaders): Error {
   const error = new Error(`[http] request failed: ${url} (${statusCode})`);
   (error as Error & { statusCode: number }).statusCode = statusCode;
   Object.assign(error, { status: statusCode, code: `HTTP_${statusCode}` });
+  // Preserve only public rate-limit facts, never arbitrary response headers.
+  if ((statusCode === 403 || statusCode === 429) && headers['x-ratelimit-remaining'] === '0') {
+    Object.assign(error, { rateLimitRemaining: '0', rateLimitReset: headers['x-ratelimit-reset'] });
+  }
   return error;
 }
 
@@ -89,6 +93,9 @@ function readHttpStatusCode(error: unknown): number | null {
 }
 
 function isRetryableRequestError(error: unknown): boolean {
+  if (typeof error === 'object' && error !== null && 'rateLimitRemaining' in error && error.rateLimitRemaining === '0') {
+    return false;
+  }
   const statusCode = readHttpStatusCode(error);
   if (statusCode !== null) {
     return RETRYABLE_STATUS_CODES.has(statusCode);
@@ -146,7 +153,7 @@ async function requestBufferWithNode(params: RequestOptions & Readonly<{
 
         if (statusCode < 200 || statusCode >= 300) {
           res.resume();
-          reject(createHttpError(params.url, statusCode));
+          reject(createHttpError(params.url, statusCode, res.headers));
           return;
         }
 

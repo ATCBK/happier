@@ -11,7 +11,7 @@ import type { AgentInstallProgressCallback } from './installProgress.js';
 const MAX_REDIRECTS = 5;
 
 export class AgentCliDownloadError extends Error {
-  readonly errorCode: 'download-failed' | 'verification-failed';
+  readonly errorCode: 'download-failed' | 'verification-failed' | 'rate-limited';
 
   constructor(errorCode: AgentCliDownloadError['errorCode'], message: string, options?: ErrorOptions) {
     super(message, options);

@@ -30,7 +30,7 @@ export type AgentCliUpdateFacts = Readonly<{
 
 export type AgentCliLatestVersionSource =
   | Readonly<{ kind: 'npm'; packageName: string }>
-  | Readonly<{ kind: 'github_release'; githubRepo: string }>;
+  | Readonly<{ kind: 'github_release'; githubRepo: string; releaseTag?: string }>;
 
 const OTHER: AgentCliUpdateFacts = {
   installSource: 'other',
@@ -82,7 +82,11 @@ export function resolveAgentCliNpmPackageName(runtimeSpec: AgentCliRuntimeDescri
  */
 export function resolveAgentCliLatestVersionSource(runtimeSpec: AgentCliRuntimeDescriptor): AgentCliLatestVersionSource | null {
   if (runtimeSpec.managedInstall?.kind === 'github_release_binary') {
-    return { kind: 'github_release', githubRepo: runtimeSpec.managedInstall.githubRepo };
+    return {
+      kind: 'github_release',
+      githubRepo: runtimeSpec.managedInstall.githubRepo,
+      ...(runtimeSpec.managedInstall.releaseTag !== undefined ? { releaseTag: runtimeSpec.managedInstall.releaseTag } : {}),
+    };
   }
   const packageName = resolveAgentCliNpmPackageName(runtimeSpec);
   return packageName ? { kind: 'npm', packageName } : null;
@@ -225,9 +229,9 @@ function selectManagedPackageVersion(params: Readonly<{
 }
 
 /**
- * The newest version the owner of this install would install. A Happier-managed package follows
- * the managed installer's release-age rule; npm, native and other installs report the manifest's
- * latest-version source (GitHub latest release or the npm `latest` tag). Rejects on
+ * The newest version the owner of this install would install. Happier-managed installs follow
+ * their declared release tag or package release-age rule. Independently owned installs retain
+ * the vendor's GitHub latest release or npm `latest` tag. Rejects on
  * transport/registry failure so callers can decide what to cache.
  */
 export async function fetchAgentCliLatestVersion(params: Readonly<{
@@ -248,12 +252,18 @@ export async function fetchAgentCliLatestVersion(params: Readonly<{
   const env = params.env ?? process.env;
 
   if (source.kind === 'github_release') {
-    const release = await (params.deps?.fetchGitHubLatestRelease ?? fetchGitHubLatestRelease)({
+    // The managed installer follows this declaration, not GitHub's latest.
+    // Inventory refreshes need no network observation to rediscover that pin.
+    if (params.installSource === 'managed' && source.releaseTag !== undefined) {
+      return { latestVersion: extractVersion(source.releaseTag), heldVersion: null };
+    }
+    const releaseRequest = {
       githubRepo: source.githubRepo,
       userAgent: 'happier-cli',
       githubToken: env.GITHUB_TOKEN,
       signal: params.signal,
-    });
+    };
+    const release = await (params.deps?.fetchGitHubLatestRelease ?? fetchGitHubLatestRelease)(releaseRequest);
     const tag = isRecord(release) ? release.tag_name : null;
     return { latestVersion: extractVersion(tag), heldVersion: null };
   }
