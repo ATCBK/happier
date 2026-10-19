@@ -15,6 +15,7 @@ import type {
     AgentExternalSessionsResolvedIdentity,
 } from '@happier-dev/plugin-sdk/sessions/external';
 import type { Disposable } from '@happier-dev/plugin-sdk';
+import { dirname } from 'node:path';
 import {
     startDirectoryTopologyWatchers,
     type DirectoryTopologyWatchTarget,
@@ -137,6 +138,7 @@ type ResourceRecord = {
     linksByLinkKey: Map<ExternalAgentObservationLinkKeyV1, Set<LinkRecord>>;
     observer: ObserverRecord | null;
     fileWatchersByPath: Map<string, FileWatcherRecord>;
+    fileWatchDemandPromise: Promise<void> | null;
     topologyWatcherBatch: TopologyWatcherBatchRecord | null;
     topologyWatcherRecoveryPending: boolean;
     reconciliationAbortController: AbortController | null;
@@ -460,62 +462,61 @@ export function createExternalSessionObservationReconciler(
     const reconcileFileWatchDemand = async (
         resource: ResourceRecord,
     ): Promise<void> => {
-        if (
-            disposed
-            || !resource.active
-            || resourcesByKey.get(resource.key) !== resource
-        ) {
-            stopFileWatchers(resource);
-            return;
+        if (resource.fileWatchDemandPromise) {
+            await resource.fileWatchDemandPromise;
+            // A caller can add demand after an empty pass already settled but
+            // before its finally clears the promise. Re-read current demand.
+            return reconcileFileWatchDemand(resource);
         }
-        const desired = desiredFileWatchPaths(resource);
-        for (const [file, watcher] of resource.fileWatchersByPath) {
-            if (desired.has(file)) continue;
-            resource.fileWatchersByPath.delete(file);
-            releaseFileWatcher(watcher);
-        }
-        const readiness: Promise<void>[] = [];
-        for (const file of desired) {
-            const existing = resource.fileWatchersByPath.get(file);
-            if (existing) {
-                readiness.push(existing.ready);
-                continue;
-            }
-            const watcher: FileWatcherRecord = {
-                active: true,
-                file,
-                disposed: false,
-                dispose: () => {},
-                ready: Promise.resolve(),
-                resource,
-            };
-            resource.fileWatchersByPath.set(file, watcher);
-            const watched = watchFile(file, () => {
-                if (
-                    disposed
-                    || !watcher.active
-                    || watcher.disposed
-                    || resource.fileWatchersByPath.get(file) !== watcher
-                    || !resource.active
-                ) {
-                    return;
+        const isCurrent = () => !disposed && resource.active && resourcesByKey.get(resource.key) === resource;
+        const reconciliation = (async () => {
+            while (isCurrent()) {
+                const desired = desiredFileWatchPaths(resource);
+                for (const [file, watcher] of resource.fileWatchersByPath) {
+                    if (desired.has(file)) continue;
+                    resource.fileWatchersByPath.delete(file);
+                    releaseFileWatcher(watcher);
                 }
-                notifyAccounting(resource, { reason: 'file_changed', changedFile: file });
-                requestFileChangeRedescription(resource, file);
-            });
-            watcher.dispose = watched.dispose;
-            watcher.ready = watched.ready;
-            readiness.push(watcher.ready);
-            if (
-                disposed
-                || !watcher.active
-                || !resource.active
-                || resource.fileWatchersByPath.get(file) !== watcher
-            ) {
-                releaseFileWatcher(watcher);
+                for (const file of desired) {
+                    if (!isCurrent()) break;
+                    const existing = resource.fileWatchersByPath.get(file);
+                    if (existing) {
+                        await existing.ready;
+                        continue;
+                    }
+                    const watcher: FileWatcherRecord = {
+                        active: true, file, disposed: false, dispose: () => {},
+                        ready: Promise.resolve(), resource,
+                    };
+                    resource.fileWatchersByPath.set(file, watcher);
+                    const watched = watchFile(file, () => {
+                        if (!isCurrent() || !watcher.active || watcher.disposed
+                            || resource.fileWatchersByPath.get(file) !== watcher) return;
+                        notifyAccounting(resource, { reason: 'file_changed', changedFile: file });
+                        requestFileChangeRedescription(resource, file);
+                    });
+                    watcher.dispose = watched.dispose;
+                    watcher.ready = watched.ready;
+                    if (!isCurrent() || !watcher.active || resource.fileWatchersByPath.get(file) !== watcher) {
+                        releaseFileWatcher(watcher);
+                    }
+                    // Admission already requires attachment readiness. Consume
+                    // that existing I/O boundary per file instead of queuing
+                    // the whole corpus's sync stats and async allocations.
+                    await watcher.ready;
+                }
+                const current = desiredFileWatchPaths(resource);
+                if (isCurrent() && current.size === desired.size && [...current].every(file => desired.has(file))) return;
+                // Demand may change while attachment yields. Join one resource
+                // pass and converge on its current demand before acknowledging.
             }
+            stopFileWatchers(resource);
+        })();
+        resource.fileWatchDemandPromise = reconciliation;
+        try { await reconciliation; }
+        finally {
+            if (resource.fileWatchDemandPromise === reconciliation) resource.fileWatchDemandPromise = null;
         }
-        await Promise.all(readiness);
     };
 
     const desiredTopologyWatchPaths = (resource: ResourceRecord): Set<string> => {
@@ -554,7 +555,20 @@ export function createExternalSessionObservationReconciler(
             stopTopologyWatchers(resource);
             return;
         }
-        const desired = [...desiredTopologyWatchPaths(resource)].sort();
+        const paths = desiredTopologyWatchPaths(resource);
+        const desired = [...paths].filter(directory => {
+            // These attachments are recursive. A demanded ancestor already
+            // covers the descendant, including future directory creation.
+            // Walk parents (rather than testing string prefixes) so siblings
+            // and Windows drive roots retain independent observation.
+            let ancestor = directory;
+            while (true) {
+                const parent = dirname(ancestor);
+                if (parent === ancestor) return true;
+                if (paths.has(parent)) return false;
+                ancestor = parent;
+            }
+        }).sort();
         if (desired.length === 0) {
             stopTopologyWatchers(resource);
             return;
@@ -857,6 +871,7 @@ export function createExternalSessionObservationReconciler(
             linksByLinkKey: new Map(),
             observer: null,
             fileWatchersByPath: new Map(),
+            fileWatchDemandPromise: null,
             topologyWatcherBatch: null,
             topologyWatcherRecoveryPending: false,
             reconciliationAbortController: null,

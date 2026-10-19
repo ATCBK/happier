@@ -1,6 +1,6 @@
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import axios from 'axios';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -43,6 +43,17 @@ describe('memory worker native source readiness', () => {
     let observation: ReturnType<typeof import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection').createExternalSessionObservationDaemonProjection> | undefined;
     const fileChanges = new Map<string, (file: string) => void>();
     const topologyChanges = new Map<string, (file?: string) => void>();
+    const notifyTopology = (changedPath: string) => {
+      let watched = changedPath;
+      while (!topologyChanges.has(watched)) {
+        const parent = dirname(watched);
+        if (parent === watched) throw new Error('Synthetic change has no covering topology observer');
+        watched = parent;
+      }
+      // The real topology watcher is recursive: a demanded ancestor covers
+      // additions/deletions without a second watcher on each descendant.
+      topologyChanges.get(watched)!(changedPath);
+    };
     let releaseDisk = () => {};
     let pendingSync: Promise<void> | undefined;
     try {
@@ -116,7 +127,7 @@ describe('memory worker native source readiness', () => {
       const addedPath = join(project, 'added.jsonl');
       await writeFile(addedPath, row('added', 'topaz newly discovered message'));
       await writeFile(join(project, 'old.jsonl'), row('old', 'obsolete outside history window', nowMs - 8 * 86_400_000));
-      topologyChanges.get(project)!(addedPath);
+      notifyTopology(addedPath);
       await worker.ensureUpToDate();
       await worker.ensureUpToDate();
       expect(search('topaz')).toHaveLength(1);
@@ -135,7 +146,7 @@ describe('memory worker native source readiness', () => {
       disk.opens = 0;
       const secondPageEntered = new Promise<void>(resolve => { disk.entered = resolve; });
       disk.wait = new Promise<void>(resolve => { releaseDisk = resolve; });
-      topologyChanges.get(project)!(join(project, 'bulk-0.jsonl'));
+      notifyTopology(join(project, 'bulk-0.jsonl'));
       pendingSync = worker.ensureUpToDate();
       expect(await Promise.race([pendingSync.then(() => 'tick finished'), secondPageEntered.then(() => 'waiting on next page')]))
         .toBe('tick finished');
@@ -158,16 +169,15 @@ describe('memory worker native source readiness', () => {
       // A known file's rename/delete is owned by its file observer; topology
       // deliberately ignores it rather than scheduling duplicate observation.
       fileChanges.get(addedPath)!(addedPath);
-      topologyChanges.get(project)!(addedPath);
+      notifyTopology(addedPath);
       // Drain the existing source allowance after invalidating source freshness.
       for (let index = 0; index < Math.ceil((pageSize + 3) / worker.getSettings().worker.maxSessionsPerTick); index++) {
         await worker.ensureUpToDate();
       }
       expect(search('topaz')).toEqual([]);
       expect(nativeSources()[0]?.state).toBe('ready');
-      const removedProject = topologyChanges.get(project)!;
       await rm(project, { recursive: true });
-      removedProject(project);
+      notifyTopology(project);
       await worker.ensureUpToDate();
       expect(search('corundum')).toEqual([]);
       expect(nativeSources()[0]?.state).toBe('ready');

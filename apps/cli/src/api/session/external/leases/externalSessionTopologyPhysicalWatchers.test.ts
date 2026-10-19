@@ -13,7 +13,7 @@ import type {
     WatchOptions,
 } from 'node:fs';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
     createExternalSessionObservationReconciler,
@@ -23,13 +23,16 @@ import {
 
 const watchBoundary = vi.hoisted(() => ({
     watch: vi.fn(),
+    statSync: vi.fn(),
 }));
 
 vi.mock('node:fs', async () => {
     const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+    watchBoundary.statSync.mockImplementation(actual.statSync);
     return {
         ...actual,
         watch: watchBoundary.watch,
+        statSync: watchBoundary.statSync,
     };
 });
 
@@ -42,6 +45,11 @@ type PhysicalRegistration = Readonly<{
 }>;
 
 const fixtureRoots: string[] = [];
+
+beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+    watchBoundary.statSync.mockImplementation(actual.statSync);
+});
 
 function createFakeWatchBoundary(): PhysicalRegistration[] {
     const registrations: PhysicalRegistration[] = [];
@@ -156,6 +164,107 @@ afterEach(async () => {
 });
 
 describe('External Sessions topology physical watcher pooling', () => {
+    it('keeps concurrent accounting demand and independent disposal through yielding admission', async () => {
+        const home = await createHome('concurrent-admission');
+        const watched = new Set<string>();
+        const reconciler = createExternalSessionObservationReconciler({
+            acquireObserver: async () => { throw new Error('No passive observer is demanded'); },
+            // Native attachment lifetime is the substituted OS boundary.
+            watchFile: file => { watched.add(file); return () => { watched.delete(file); }; },
+        });
+        const demand = (files: readonly string[]) => ({
+            resource: resource('concurrent-accounting'),
+            source: { kind: 'codexHome', home: 'user', homePath: home.home },
+            changeObservation: 'watch_file_changes' as const,
+            watchFileChanges: { files }, onChange: () => {},
+        });
+        const first = join(home.sessions, 'first.jsonl');
+        const second = join(home.sessions, 'second.jsonl');
+        const subscriptions = await Promise.all([
+            reconciler.registerAccountingSource(demand([])),
+            reconciler.registerAccountingSource(demand([first])),
+            reconciler.registerAccountingSource(demand([second])),
+        ]);
+        try {
+            expect([...watched].sort()).toEqual([first, second].sort());
+            await subscriptions[1]!.dispose();
+            expect([...watched]).toEqual([second]);
+        } finally {
+            await Promise.all(subscriptions.map(subscription => subscription.dispose()));
+            await reconciler.dispose();
+        }
+    });
+
+    it('admits a large native file set without monopolizing the event loop', async () => {
+        createFakeWatchBoundary();
+        const home = await createHome('admission-yield');
+        // Missing native files remain valid watch demand: their later creation
+        // is observed by the same parent attachment. Real stat/I/O stays live.
+        const files = Array.from({ length: 20_000 }, (_, i) => join(home.sessions, `${i}.jsonl`));
+        const reconciler = createExternalSessionObservationReconciler({
+            acquireObserver: async () => { throw new Error('No passive observer is demanded'); },
+        });
+        watchBoundary.statSync.mockClear();
+        let registeredAtHeartbeat = 0;
+        const heartbeat = new Promise<void>(resolve => setImmediate(() => {
+            registeredAtHeartbeat = watchBoundary.statSync.mock.calls
+                .filter(([path]) => typeof path === 'string' && path.endsWith('.jsonl')).length;
+            resolve();
+        }));
+        const admission = reconciler.registerAccountingSource({
+            resource: resource('large-accounting'), source: { kind: 'codexHome', home: 'user', homePath: home.home },
+            changeObservation: 'watch_file_changes', watchFileChanges: { files }, onChange: () => {},
+        });
+        try {
+            await heartbeat;
+            // This is a yield contract, not a guessed millisecond cutoff: the
+            // daemon heartbeat must run during admission, before all 20k stats.
+            expect(registeredAtHeartbeat).toBeLessThan(files.length);
+        } finally {
+            await (await admission).dispose();
+            await reconciler.dispose();
+        }
+    });
+
+    it('covers nested native topology once and retains independent sibling roots', async () => {
+        const registrations = createFakeWatchBoundary();
+        const home = await createHome('nested-accounting');
+        const day = join(home.sessions, '2026', '10', '19');
+        const sibling = `${home.sessions}-other`;
+        await Promise.all([mkdir(day, { recursive: true }), mkdir(sibling)]);
+        const reconciler = createExternalSessionObservationReconciler({
+            acquireObserver: async () => { throw new Error('No passive observer is demanded'); },
+            watchFile: () => () => {},
+        });
+        const changed = vi.fn();
+        const source = { kind: 'codexHome', home: 'user', homePath: home.home } as const;
+        const nested = await reconciler.registerAccountingSource({
+            resource: resource('nested-accounting'), source, changeObservation: 'watch_file_changes',
+            watchFileChanges: { files: [], topologyDirectories: [day] }, onChange: changed,
+        });
+        const ancestor = await reconciler.registerAccountingSource({
+            resource: resource('nested-accounting'), source, changeObservation: 'watch_file_changes',
+            watchFileChanges: { files: [], topologyDirectories: [home.sessions, join(home.sessions, '2026'),
+                join(home.sessions, '2026', '10'), home.archivedSessions, sibling] }, onChange: changed,
+        });
+        try {
+            const liveRecursivePaths = () => registrations.filter(row => row.options.recursive === true && row.close.mock.calls.length === 0)
+                .map(row => row.path).sort();
+            expect(liveRecursivePaths()).toEqual([home.sessions, home.archivedSessions, sibling].sort());
+            const root = registrations.find(row => row.path === home.sessions && row.options.recursive === true)!;
+            root.listener('rename', join('2026', '10', '19', 'new.jsonl'));
+            expect(changed).toHaveBeenCalledWith({ reason: 'topology_changed' });
+            await ancestor.dispose();
+            // Removing the covering demand must restore the still-demanded
+            // nested watch, including its own deletion/recreation sentinel.
+            expect(liveRecursivePaths()).toEqual([day]);
+        } finally {
+            await ancestor.dispose();
+            await nested.dispose();
+            await reconciler.dispose();
+        }
+    });
+
     it.each(['target', 'parent'] as const)(
         'reacquires the complete watcher batch after a transient %s error only when demand re-enters',
         async (failedWatcherKind) => {

@@ -1,21 +1,26 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { createServer, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
+import axios from 'axios';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
 import {
   buildLinkedExternalSessionQualifiedIdentityV1,
   createSessionOwnerMetadataV1,
+  ExternalSessionsSourceSchema,
 } from '@happier-dev/protocol';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBuiltInContributions } from '@/plugins/projection/registry/resolveBuiltInContributions';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
-import { resolveExternalSessionSourceFromAgentProjection } from '@/plugins/projection/registry/externalSessionSources';
+import { createExternalSessionSourceKeyOwnerFromAgentProjection, resolveExternalSessionSourceFromAgentProjection } from '@/plugins/projection/registry/externalSessionSources';
 import { resolveBackendEngineAdapterResolution } from '@/agent/runtime/registry/engineRegistry';
-import { buildExternalSessionMetadata } from './ensureExternalSessionLink';
+import { createAccountEncryptionCurrentnessFixture, createSessionListResponseFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { buildExternalSessionMetadata, ensureExternalSessionLink } from './ensureExternalSessionLink';
 
 /**
  * Every first-party Agent that contributes External Sessions.
@@ -301,6 +306,90 @@ const FIRST_PARTY_AGENT_LINK_FIXTURES: readonly FirstPartyAgentLinkFixture[] = [
 ];
 
 describe('first-party Agent link identities and host owner metadata', () => {
+  it.each(['complete', 'cancel'] as const)('keeps native link creation under the admitted operation lifetime (%s)', async outcomeKind => {
+    await withTempDir('happier-native-link-lifetime-', async root => {
+      const env = createEnvKeyScope(ENV_KEYS);
+      const contributes = createResolvedContributionRegistry(resolveBuiltInContributions());
+      let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
+      let creationResponse: ServerResponse | undefined;
+      let creationTimeout: number | undefined;
+      let releaseCreation: (() => void) | undefined;
+      let completed: Promise<void> | undefined;
+      const interceptor = axios.interceptors.request.use(config => {
+        if (config.url?.endsWith('/v1/sessions')) creationTimeout = config.timeout;
+        return config;
+      });
+      const server = createServer((request, response) => {
+        response.setHeader('content-type', 'application/json');
+        request.resume();
+        if (request.url === '/v1/account/encryption/currentness') {
+          response.end(JSON.stringify(createAccountEncryptionCurrentnessFixture()));
+        } else if (request.url === '/v1/features') {
+          response.end(JSON.stringify(FeaturesResponseSchema.parse({ features: {}, capabilities: { encryption: {
+            storagePolicy: 'optional', defaultAccountMode: 'plain', allowAccountOptOut: true,
+          } } })));
+        } else if (request.url === '/v2/sessions/lookup-by-tags') {
+          response.end(JSON.stringify({ sessions: [] }));
+        } else if (request.url && ['/v2/sessions', '/v2/sessions/archived'].includes(new URL(request.url, 'http://fixture').pathname)) {
+          response.end(JSON.stringify(createSessionListResponseFixture([])));
+        } else if (request.url === '/v1/sessions') {
+          creationResponse = response;
+          releaseCreation = () => { if (!response.writableEnded) response.end(JSON.stringify({ created: true, session: createSessionRecordFixture({
+            id: 'native-linked-session', encryptionMode: 'plain', currentStorageState: 'machine_only', metadata: '{}',
+          }) })); };
+        } else {
+          response.statusCode = 404;
+          response.end('{}');
+        }
+      });
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing native-link HTTP fixture');
+      try {
+        runtime = await createAdmittedPluginRuntimeFixture({ happyHomeDir: join(root, 'happy-home'),
+          runtimeOptions: { contributes, pluginIds: ['happier.agent.claude'] } });
+        const resolution = await resolveBackendEngineAdapterResolution('claude', { runtimeRegistry: runtime.registry });
+        const surface = resolution?.executionSurfaces.externalSession;
+        if (!surface?.listCandidates || !surface.resolveLinkIdentity) throw new Error('Missing registered Claude source');
+        const fixture = FIRST_PARTY_AGENT_LINK_FIXTURES[0];
+        const probe = await fixture.prepare({ root, env, listCandidates: async source => {
+          const listed = await surface.listCandidates!({ source: ExternalSessionsSourceSchema.parse(source), limit: 5 });
+          return listed.candidates;
+        } });
+        const controller = new AbortController();
+        let outcome: unknown;
+        completed = runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, () => ensureExternalSessionLink({
+          credentials: { token: 'synthetic-link-account', encryption: null }, machineId: 'fixture-machine', agentId: 'claude',
+          source: ExternalSessionsSourceSchema.parse(probe.source), remoteSessionId: probe.remoteSessionId, linkData: probe.linkData, signal: controller.signal,
+        }, {
+          resolveExternalSessionProviderOps: async () => surface,
+          resolveCurrentAgent: async () => ({ identity: { pluginId: fixture.pluginId, localId: fixture.agentId }, sourceKinds: ['claudeConfig'] }),
+          resolveSourceKeyOwner: async (agentId, source) => createExternalSessionSourceKeyOwnerFromAgentProjection(contributes, agentId, source),
+        })).then(value => { outcome = value; }, error => { outcome = error; });
+        await vi.waitFor(() => expect(creationResponse, String(outcome)).toBeDefined());
+        // Axios is the real HTTP boundary: the containing operation owns cancellation,
+        // so this phase must not activate its standalone 60-second deadline.
+        expect(creationTimeout).toBe(0);
+        if (outcomeKind === 'cancel') {
+          controller.abort();
+          await vi.waitFor(() => expect(outcome).toMatchObject({ code: 'outcome_unknown', cause: { code: 'ERR_CANCELED' } }));
+        } else {
+          releaseCreation?.();
+          await completed;
+          expect(outcome).toMatchObject({ sessionId: 'native-linked-session', created: true });
+        }
+      } finally {
+        releaseCreation?.();
+        await completed;
+        axios.interceptors.request.eject(interceptor);
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+        await runtime?.dispose();
+        env.restore();
+      }
+    });
+  });
+
   it('covers every Agent declaring a link-capable External Sessions source', () => {
     const contributes = createResolvedContributionRegistry(resolveBuiltInContributions());
     const linkCapableAgentIds = contributes.agents

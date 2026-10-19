@@ -1259,6 +1259,7 @@ export async function ensureExternalSessionLink(params: Readonly<{
       metadata,
       agentState: null,
       currentStorageState: 'machine_only',
+      ...(params.signal ? { signal: params.signal } : {}),
       ...(params.shouldCommit
         ? { shouldCommit: params.shouldCommit }
         : {}),
@@ -1273,6 +1274,7 @@ export async function ensureExternalSessionLink(params: Readonly<{
     metadata,
     agentState: null,
     currentStorageState: 'machine_only',
+    ...(params.signal ? { signal: params.signal } : {}),
     ...(params.shouldCommit
       ? { shouldCommit: params.shouldCommit }
       : {}),
