@@ -710,6 +710,45 @@ describe('model-pack transfer intents from PR 560', () => {
     expect(attempts).toBe(1);
   });
 
+  it('reports verification progress after the transfer has delivered every byte', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const url = 'https://example.com/model.onnx';
+    memory.serveFile(url, bytes, { chunks: [bytes.slice(0, 2), bytes.slice(2, 4), bytes.slice(4)] });
+    const progress: Array<{ loaded: number; verified: number; filesDone: number }> = [];
+    await installModelPackWithHost({
+      host: { ...memory.host, openDownload: async (request) => {
+        // Native hosts finish the transfer before the core reads the file back to verify it.
+        request.onProgress?.(bytes.length);
+        return memory.host.openDownload(request);
+      } },
+      packId: 'example', manifest: manifestFor([{ path: 'model.onnx', url, sha256: sha256Hex(bytes), sizeBytes: bytes.length }]),
+      signal: new AbortController().signal,
+      onProgress: (p) => { progress.push({ loaded: p.loaded, verified: p.verified, filesDone: p.filesDone }); },
+    });
+    expect(progress.some((p) => p.loaded === bytes.length && p.verified > 0 && p.verified < bytes.length && p.filesDone === 0)).toBe(true);
+    expect(progress.at(-1)).toEqual({ loaded: bytes.length, verified: bytes.length, filesDone: 1 });
+  });
+
+  it('starts the largest files first so they transfer alongside the small ones', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const small = new Uint8Array([1]);
+    const medium = new Uint8Array(16).fill(2);
+    const large = new Uint8Array(64).fill(3);
+    const smallFiles = Array.from({ length: 8 }, (_, index) => ({
+      path: `espeak-ng-data/f${index}`, url: `https://example.com/f${index}`, sha256: sha256Hex(small), sizeBytes: small.length,
+    }));
+    for (const entry of smallFiles) memory.serveFile(entry.url, small);
+    memory.serveFile('https://example.com/large', large);
+    memory.serveFile('https://example.com/medium', medium);
+    await runInstall(memory, manifestFor([
+      ...smallFiles,
+      { path: 'model.onnx', url: 'https://example.com/large', sha256: sha256Hex(large), sizeBytes: large.length },
+      { path: 'voices.bin', url: 'https://example.com/medium', sha256: sha256Hex(medium), sizeBytes: medium.length },
+    ]));
+    expect(memory.requestedUrls().slice(0, 2)).toEqual(['https://example.com/large', 'https://example.com/medium']);
+  });
+
   it('reports file counts only after the file has verified', async () => {
     const memory = createMemoryModelPackInstallerHost();
     const bytes = new Uint8Array([1, 2, 3]);

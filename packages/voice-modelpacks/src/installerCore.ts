@@ -54,6 +54,8 @@ export type ModelPackCoreProgress = Readonly<{
   loaded: number;
   total: number;
   file?: string;
+  /** Bytes already checked against their manifest digest; trails `loaded` while transferred files are read back. */
+  verified: number;
   filesDone: number;
   filesTotal: number;
 }>;
@@ -294,7 +296,8 @@ async function downloadFileResumable(opts: {
   staging: ModelPackStagingHandle;
   entry: ModelPackManifest['files'][number];
   signal: AbortSignal;
-  onFileProgress: (loadedForFile: number) => void;
+  /** `verifiedForFile` is set once bytes are hashed; a restarted pass reports it from 0 again. */
+  onFileProgress: (loadedForFile: number, verifiedForFile?: number) => void;
   urlPolicy?: ModelPackUrlPolicy;
   transferUrl?: string;
 }): Promise<void> {
@@ -319,7 +322,7 @@ async function downloadFileResumable(opts: {
           throw new ModelPackInstallError('model_pack_size_mismatch');
         }
         hasher.update(chunk);
-        opts.onFileProgress(streamed);
+        opts.onFileProgress(streamed, streamed);
         throwIfAborted(signal);
       });
       throwIfAborted(signal);
@@ -412,7 +415,7 @@ async function consumeStream(opts: {
   startOffset: number;
   expectedSize: number;
   signal: AbortSignal;
-  onFileProgress: (loadedForFile: number) => void;
+  onFileProgress: (loadedForFile: number, verifiedForFile?: number) => void;
   finalize: (finalLoaded: number) => Promise<void>;
 }): Promise<void> {
   let loaded = opts.startOffset;
@@ -429,7 +432,7 @@ async function consumeStream(opts: {
     }
     opts.hasher.update(chunk);
     await opts.staging.appendDownloadedChunk(opts.entry.path, chunk);
-    opts.onFileProgress(loaded);
+    opts.onFileProgress(loaded, loaded);
   }
   await opts.finalize(loaded);
 }
@@ -508,10 +511,14 @@ export async function installModelPackWithHost(opts: {
     opts.signal.addEventListener('abort', forwardAbort, { once: true });
     if (opts.signal.aborted) pack.abort();
     let next = 0;
+    let verifiedTotal = 0;
     let filesDone = 0;
     const failures: unknown[] = [];
+    // Largest first: a pack's few big files dominate its transfer and verification time, so they start
+    // at once while the remaining workers drain the many small files, instead of starting alone at the end.
+    const files = [...opts.manifest.files].sort((left, right) => right.sizeBytes - left.sizeBytes);
     const report = (file: string) => opts.onProgress?.({
-      loaded: loadedTotal, total, file, filesDone, filesTotal: opts.manifest.files.length,
+      loaded: loadedTotal, total, file, verified: verifiedTotal, filesDone, filesTotal: files.length,
     });
     const installFile = async (entry: ModelPackManifest['files'][number]) => {
       const prior = priorFiles.get(entry.path);
@@ -522,6 +529,7 @@ export async function installModelPackWithHost(opts: {
         if (await staging.partialByteLength(entry.path) !== entry.sizeBytes) await staging.resetPartial(entry.path);
       }
       let loadedThisFile = 0;
+      let verifiedThisFile = 0;
       for (let attempt = 0; ; attempt += 1) {
         try {
           let transferUrl = entry.url;
@@ -532,10 +540,14 @@ export async function installModelPackWithHost(opts: {
           }
           await downloadFileResumable({
             host: opts.host, packId, staging, entry, signal: pack.signal, urlPolicy: opts.urlPolicy, transferUrl,
-            onFileProgress: (loadedForFile) => {
+            onFileProgress: (loadedForFile, verifiedForFile) => {
               const nextLoaded = Math.max(loadedThisFile, loadedForFile);
               loadedTotal += nextLoaded - loadedThisFile;
               loadedThisFile = nextLoaded;
+              if (verifiedForFile !== undefined) {
+                verifiedTotal += verifiedForFile - verifiedThisFile;
+                verifiedThisFile = verifiedForFile;
+              }
               report(entry.path);
             },
           });
@@ -549,12 +561,13 @@ export async function installModelPackWithHost(opts: {
         }
       }
       loadedTotal += Math.max(0, entry.sizeBytes - loadedThisFile);
+      verifiedTotal += entry.sizeBytes - verifiedThisFile;
       filesDone += 1;
       report(entry.path);
     };
     const worker = async () => {
-      while (!pack.signal.aborted && next < opts.manifest.files.length) {
-        const entry = opts.manifest.files[next++]!;
+      while (!pack.signal.aborted && next < files.length) {
+        const entry = files[next++]!;
         try { await installFile(entry); } catch (error) {
           failures.push(error);
           pack.abort();
@@ -562,7 +575,7 @@ export async function installModelPackWithHost(opts: {
       }
     };
     try {
-      await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL_FILE_DOWNLOADS, opts.manifest.files.length) }, worker));
+      await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL_FILE_DOWNLOADS, files.length) }, worker));
     } finally {
       opts.signal.removeEventListener('abort', forwardAbort);
     }

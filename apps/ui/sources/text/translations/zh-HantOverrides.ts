@@ -10471,6 +10471,10 @@ settingsSession: {
                 progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
                     `${loaded} / ${total} · ${filesDone} / ${filesTotal} 個檔案`,
                 progressAccessibilityLabel: "下載進度",
+                verifyingDetail: "正在驗證",
+                verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `已驗證 ${verified} / ${total} · ${filesDone} / ${filesTotal} 個檔案`,
+                verifyingAccessibilityLabel: "驗證進度",
                 failedDetail: "失敗",
                 failedSubtitle: "無法準備模型。輕點以重試。",
                 failedResumableSubtitle: ({ size }: { size: string }) => `下載未完成。已保留 ${size}，輕點即可繼續。`,

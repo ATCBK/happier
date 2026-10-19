@@ -12932,6 +12932,10 @@ settingsSession: {
                 progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
                     `${loaded} von ${total} · ${filesDone} von ${filesTotal} ${filesTotal === 1 ? 'Datei' : 'Dateien'}`,
                 progressAccessibilityLabel: "Download-Fortschritt",
+                verifyingDetail: "Wird geprüft",
+                verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `${verified} von ${total} geprüft · ${filesDone} von ${filesTotal} ${filesTotal === 1 ? 'Datei' : 'Dateien'}`,
+                verifyingAccessibilityLabel: "Prüffortschritt",
                 failedDetail: "Fehlgeschlagen",
                 failedSubtitle: "Das Modell konnte nicht vorbereitet werden. Tippe, um es erneut zu versuchen.",
                 failedResumableSubtitle: ({ size }: { size: string }) => `Der Download wurde nicht abgeschlossen. ${size} bleiben erhalten – tippe zum Fortsetzen.`,

@@ -4,11 +4,11 @@ import { formatDownloadProgressDetail, parseDownloadProgress } from './downloadP
 
 describe('parseDownloadProgress', () => {
   it('parses number fractions as percent', () => {
-    expect(parseDownloadProgress(0.25)).toEqual({ percent: 25, label: null, bytes: null, files: null });
+    expect(parseDownloadProgress(0.25)).toEqual({ percent: 25, label: null, bytes: null, files: null, verifiedBytes: null });
   });
 
   it('parses percent numbers directly', () => {
-    expect(parseDownloadProgress(42)).toEqual({ percent: 42, label: null, bytes: null, files: null });
+    expect(parseDownloadProgress(42)).toEqual({ percent: 42, label: null, bytes: null, files: null, verifiedBytes: null });
   });
 
   it('parses loaded/total into percent and byte counts', () => {
@@ -17,6 +17,7 @@ describe('parseDownloadProgress', () => {
       label: null,
       bytes: { loaded: 50, total: 200 },
       files: null,
+      verifiedBytes: null,
     });
   });
 
@@ -38,6 +39,7 @@ describe('parseDownloadProgress', () => {
       label: 'model_quantized.onnx',
       bytes: null,
       files: null,
+      verifiedBytes: null,
     });
   });
 
@@ -47,6 +49,7 @@ describe('parseDownloadProgress', () => {
       label: 'af_heart.bin',
       bytes: null,
       files: null,
+      verifiedBytes: null,
     });
   });
 });
