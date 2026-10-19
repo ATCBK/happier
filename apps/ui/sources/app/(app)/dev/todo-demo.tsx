@@ -24,7 +24,7 @@ export default function TodoDemoScreen() {
 
     const executeSampleReorder = React.useCallback(async (effect: EntityDropEffectV1): Promise<EntityDropOutcomeV1> => {
         const parsed = TodoReorderInputV1Schema.safeParse(effect.input);
-        if (effect.actionId !== 'todos.reorder' || !parsed.success || !entityDragScopesEqualV1(parsed.data.scope, SAMPLE_SCOPE)) {
+        if (effect.actionId !== 'tasks.internal.reorder' || !parsed.success || !entityDragScopesEqualV1(parsed.data.scope, SAMPLE_SCOPE)) {
             return { status: 'refused', reason: { code: 'sample_scope_mismatch', message: t('entityDragDrop.reasons.gone') } };
         }
         const undone = model.filter(todo => !todo.done);
