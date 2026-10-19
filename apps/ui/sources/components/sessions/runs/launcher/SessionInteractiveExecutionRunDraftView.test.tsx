@@ -61,9 +61,10 @@ import { ReviewEngineListItemSchema } from '@happier-dev/protocol/reviews/review
 // decisions, default Action executor and sync.submitMessage all run for real.
 // The common AgentInput installer deliberately supplies a small fake store. This journey needs
 // the whole real store, so install its canonical platform factories without that store override.
+const windowState = vi.hoisted(() => ({ width: 1024 }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+    return createReactNativeWebMock({ useWindowDimensions: () => ({ width: windowState.width, height: 800 }) });
 });
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
@@ -883,6 +884,24 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
             await act(async () => picker.props.onSelect(native));
             await send();
             expect(emittedStarts[0]).toMatchObject({ modelSelection: native });
+        });
+        it('on a phone says what the Run follows beside when it starts, so a scrolled-away chip never hides it', async () => {
+            windowState.width = 390;
+            try {
+                await mount();
+                const foot = () => screen.findByTestId('execution-run-start-foot')?.props.children as string;
+                expect(foot()).toContain(t('runPage.menu.selectionInherited'));
+                const picker = await chooseModelRow();
+                await act(async () => picker.props.onSelect({ agentTargetKey: claude(), providerConnectionId: 'pc_a', modelId: 'm' }));
+                expect(foot()).not.toContain(t('runPage.menu.selectionInherited'));
+            } finally {
+                windowState.width = 1024;
+            }
+        });
+        it('on a wide window keeps the route in its labelled chip and says it once', async () => {
+            await mount();
+            expect(screen.findByTestId('execution-run-start-foot')?.props.children)
+                .toBe(t('agentStart.startsWhenYouSend', { count: 1 }));
         });
         it('returns to following the session when Inherit is chosen again', async () => {
             await mount();

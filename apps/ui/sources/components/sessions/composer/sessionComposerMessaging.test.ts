@@ -29,7 +29,7 @@ installDisconnectedServerSocketBoundary();
 
 import type { ComposerSubmissionSnapshot } from './composerSubmissionCoordinator';
 const messaging = await import('./sessionComposerMessaging');
-const { readSessionComposerMessageIntent, readSessionComposerMessagingHandoff } = messaging;
+const { readSessionComposerMessageIntent, readSessionComposerMessagingHandoff, readSessionComposerMessagingOutcome } = messaging;
 
 afterEach(async () => { rpc.mockReset(); await homes.reset(); });
 
@@ -66,6 +66,14 @@ describe('Session composer messaging handoff', () => {
         const failure = ActionExecuteFailureSchema.parse({ ok: false, errorCode: 'session_target_unavailable', error: 'Target unavailable' });
         expect(readSessionComposerMessagingHandoff(fanout([accepted, failure]))).toBe('partial');
         expect(readSessionComposerMessagingHandoff(fanout([accepted, admitted('alreadyAccepted', 'request-b')]))).toBe('accepted');
+    });
+
+    it('tells the person how many targets took a partial send, from the frozen fanout itself', () => {
+        const accepted = admitted('accepted', 'request-a');
+        const failure = ActionExecuteFailureSchema.parse({ ok: false, errorCode: 'session_target_unavailable', error: 'Target unavailable' });
+        expect(readSessionComposerMessagingOutcome(fanout([accepted, failure, failure]))).toEqual({ kind: 'partial', accepted: 1, total: 3 });
+        expect(readSessionComposerMessagingOutcome(failure)).toEqual({ kind: 'unaccepted', error: 'Target unavailable' });
+        expect(readSessionComposerMessagingOutcome(fanout([accepted]))).toEqual({ kind: 'accepted' });
     });
 
     it('keeps rejected or uncertain input unaccepted, including an unresolved member of a fanout', () => {

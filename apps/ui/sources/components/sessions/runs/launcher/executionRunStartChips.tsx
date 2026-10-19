@@ -34,7 +34,7 @@ export function createExecutionRunStartContentChip(params: Readonly<{
     disabled?: boolean;
     /** Shared visible/keyboard/hover/overflow demand signal; never evaluated while closed and untouched. */
     onIntent?: () => void;
-    /** The chip draws its glyph alone (the reviewers' "+"); `title` still names it. */
+    /** The chip draws its glyph alone (the reviewers' "+", the route's glyph beside the start's foot); `title` and `label` still name it. */
     iconOnly?: boolean;
     /** The data the popover content reads, so an open popover redraws when it changes. */
     revision?: string;
@@ -59,7 +59,7 @@ export function createExecutionRunStartContentChip(params: Readonly<{
                 ref={ctx.chipAnchorRef}
                 testID={params.testID}
                 accessibilityRole="button"
-                accessibilityLabel={params.iconOnly ? params.title : `${params.title}: ${params.label}`}
+                accessibilityLabel={params.label === params.title ? params.title : `${params.title}: ${params.label}`}
                 accessibilityState={{ disabled: params.disabled === true }}
                 disabled={params.disabled}
                 onFocus={params.disabled ? undefined : params.onIntent}

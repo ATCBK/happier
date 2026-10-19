@@ -27,6 +27,8 @@ export type AgentInputPopoverContent =
 export type AgentInputContentPopoverHeader = Readonly<{
     title: string;
     description?: string;
+    /** `sheet`: only a phone sheet's band names it; the anchored popover leads with its own first control. */
+    placement?: 'sheet';
 }>;
 
 export type AgentInputContentPopoverConfig = Readonly<{
@@ -111,7 +113,7 @@ export function AgentInputContentPopover(props: AgentInputContentPopoverProps) {
         >
             {({ maxHeight, presentation }) => {
                 // On a phone sheet the shared band already shows the title and purpose.
-                const header = presentation === 'sheet' ? undefined : props.header;
+                const header = presentation === 'sheet' || props.header?.placement === 'sheet' ? undefined : props.header;
                 const contentMaxHeight = header ? Math.max(0, maxHeight - headerHeight) : maxHeight;
                 return (
                 <AgentInputPopoverSurface

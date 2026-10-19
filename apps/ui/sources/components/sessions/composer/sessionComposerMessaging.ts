@@ -94,12 +94,24 @@ function hasAdmittedInput(value: unknown): boolean {
     return parsed.success && parsed.data.status !== 'rejected' && parsed.data.status !== 'outcomeUnknown';
 }
 
+export type SessionComposerMessagingOutcome =
+    | Readonly<{ kind: 'accepted' }>
+    | Readonly<{ kind: 'partial'; accepted: number; total: number }>
+    | Readonly<{ kind: 'approval_pending' }>
+    | Readonly<{ kind: 'unaccepted'; error: string | null }>;
+
+/** What the person is told after Send/Ask: the frozen fanout's own counts, never inferred from wake intent. */
+export function readSessionComposerMessagingOutcome(result: ActionExecuteResult): SessionComposerMessagingOutcome {
+    if (!result.ok) return { kind: 'unaccepted', error: result.error };
+    if (ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) return { kind: 'approval_pending' };
+    const fanout = ActionSessionFanoutResultV1Schema.safeParse(result.result);
+    if (!fanout.success) return hasAdmittedInput(result.result) ? { kind: 'accepted' } : { kind: 'unaccepted', error: null };
+    const total = fanout.data.results.length;
+    const accepted = fanout.data.results.filter(entry => entry.result.ok && hasAdmittedInput(entry.result.result)).length;
+    return accepted === 0 ? { kind: 'unaccepted', error: null } : accepted === total ? { kind: 'accepted' } : { kind: 'partial', accepted, total };
+}
+
 /** Partial fanout keeps the draft and its retry identity rather than discarding an unaccepted target. */
 export function readSessionComposerMessagingHandoff(result: ActionExecuteResult): 'accepted' | 'partial' | 'unaccepted' | 'approval_pending' {
-    if (!result.ok) return 'unaccepted';
-    if (ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) return 'approval_pending';
-    const fanout = ActionSessionFanoutResultV1Schema.safeParse(result.result);
-    if (!fanout.success) return hasAdmittedInput(result.result) ? 'accepted' : 'unaccepted';
-    const accepted = fanout.data.results.filter(entry => entry.result.ok && hasAdmittedInput(entry.result.result)).length;
-    return accepted === 0 ? 'unaccepted' : accepted === fanout.data.results.length ? 'accepted' : 'partial';
+    return readSessionComposerMessagingOutcome(result).kind;
 }

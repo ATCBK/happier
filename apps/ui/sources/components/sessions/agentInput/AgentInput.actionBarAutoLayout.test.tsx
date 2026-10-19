@@ -831,7 +831,7 @@ describe('AgentInput (action bar auto layout)', () => {
         if (!shape) throw new Error('Expected the submit shape');
         expect(flattenStyle(shape.props.style)).toMatchObject({ flexShrink: 1, minWidth: 0 });
         const cluster = findNearestHostParent(shape);
-        expect(flattenStyle(cluster?.props.style)).toMatchObject({ flexShrink: 1, minWidth: 0, maxWidth: '60%' });
+        expect(flattenStyle(cluster?.props.style)).toMatchObject({ flexShrink: 1, minWidth: 0, maxWidth: '85%' });
         // The rail is still mounted beside it, scrolling.
         const rail = screen.tree.root.findAll((node) => typeof node.type === 'string' && String(node.type) === 'ScrollView' && node.props.horizontal === true);
         expect(rail.length).toBeGreaterThan(0);

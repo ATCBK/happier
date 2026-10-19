@@ -41,7 +41,7 @@ const CHIP = { left: 300, top: 420, width: 100, height: 32 } as const;
 async function renderChipPicker(
   placement: 'top' | 'bottom',
   withClearance: boolean,
-  options: Readonly<{ chip?: typeof CHIP; withinComposerWidth?: boolean }> = {},
+  options: Readonly<{ chip?: Readonly<{ left: number; top: number; width: number; height: number }>; withinComposerWidth?: boolean }> = {},
 ) {
   const { Popover } = await import('./Popover');
   const { OverlayPortalProvider, OverlayPortalHost } =
