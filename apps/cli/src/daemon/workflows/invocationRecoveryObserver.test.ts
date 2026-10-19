@@ -338,7 +338,7 @@ describe('exact Workflow recovery observation', () => {
   ('recovers strict no-effect setup review without settling or replaying the retained %s', async actionId => {
     const contract = freezeActionCompletionContractV1(projectCommandActionCompletionV1);
     const target = { key: 'command', serverId: 'home', machineId: 'worker', operationId: 'finite-op' };
-    const accepted = { version: 1 as const, operationId: target.operationId, revision: 1, actionId,
+    const accepted = { version: 1 as const, operationId: target.operationId, revision: 1, actionId, requestId: 'original',
       scope: { accountId: 'account', machineId: target.machineId }, title: 'Script', state: 'accepted' as const,
       cancellation: 'supported' as const, createdAt: 1, domainRef: { kind: 'projectCommand' as const,
         purpose: 'setup' as const, serverId: 'home', machineId: 'worker', workspaceRefId: 'workspace', cwd: '/workspace' } };
@@ -399,7 +399,7 @@ describe('exact Workflow recovery observation', () => {
   });
 
   it('does not turn a recovered cold Session startup into a completed Workflow input', async () => {
-    const operation = { version: 1, operationId: 'startup', revision: 3, actionId: 'session.spawn_new',
+    const operation = { version: 1, operationId: 'startup', revision: 3, actionId: 'session.spawn_new', requestId: 'original',
       scope: { accountId: 'account', machineId: 'worker' }, title: 'Create', state: 'succeeded',
       cancellation: 'supported', createdAt: 1, startedAt: 1, settledAt: 2, result: { sessionId: 'session' } };
     const observe = createWorkflowInvocationRecoveryObserver({ credentials: { token: 'token', encryption: null }, machineId: 'worker',

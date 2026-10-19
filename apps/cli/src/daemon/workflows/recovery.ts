@@ -376,7 +376,10 @@ async function recoverInvocationCustody(params: Readonly<{
   const reconciled: ReconciledInvocationTransition[] = [];
   let allResolved = true;
   let cancellationRequested = false;
-  const { readInvocation, commitObservation, commitFact, resolveFrozenActionContract, refreshRootStepProgress } = createWorkflowInvocationRecoveryFactWriter(params);
+  const { parentAttempt, ...writerParams } = params;
+  const { readInvocation, commitObservation, commitFact, resolveFrozenActionContract, refreshRootStepProgress } = createWorkflowInvocationRecoveryFactWriter({
+    ...writerParams, ...(params.run.state === 'interrupted' ? { expectedRevision: params.run.revision } : { parentAttempt }),
+  });
   let cursor: string | undefined;
   do {
     const pageBody = record(await params.storage.execute({
@@ -400,7 +403,8 @@ async function recoverInvocationCustody(params: Readonly<{
       if (currentLifecycle === 'cancel_requested' && exactIndex.parentRecordId === null) {
         cancellationRequested = true;
       }
-      if (currentLifecycle === 'pending' || currentLifecycle === 'waiting_for_capacity') {
+      if ((currentLifecycle === 'pending' || currentLifecycle === 'waiting_for_capacity')
+        && !(params.run.state === 'interrupted' && progress.blockKind === 'step')) {
         if (!TERMINAL_RUN_STATES.has(params.run.state)) {
           allResolved = false;
           continue;

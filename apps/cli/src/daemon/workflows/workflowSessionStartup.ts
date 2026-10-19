@@ -1,4 +1,4 @@
-import { ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
+import { ActionOperationGetV1ResponseSchema, ActionOperationSnapshotV1Schema, type ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
 import type { ActionCompletionOperation } from '@happier-dev/protocol/actions/actionCompletion';
 import type { HostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
 import type { ActionOperationRpcContext } from '@/daemon/actionOperations/actionOperationRpcHandlers';
@@ -31,6 +31,16 @@ export function deriveWorkflowSessionCreationTag(serverId: string, runId: string
   return deriveSessionCreationTagV1({ callerCreationNamespace: JSON.stringify(['workflow', serverId, runId]), creationKey });
 }
 
+/** Terminal startup failure remains a fact after its process-local owner retires. */
+export function readRetainedWorkflowSessionStartupFailure(
+  snapshot: unknown, address: ActionCompletionOperation, creationKey: string,
+): ActionOperationSnapshotV1 | undefined {
+  const parsed = ActionOperationSnapshotV1Schema.safeParse(snapshot);
+  return parsed.success && parsed.data.state === 'failed' && parsed.data.operationId === address.operationId
+    && parsed.data.actionId === 'session.spawn_new' && parsed.data.scope.machineId === address.machineId
+    && parsed.data.requestId === creationKey ? parsed.data : undefined;
+}
+
 /** The installed Workflow caller supplies its actual admitted host, not Account defaults. */
 export type WorkflowSessionStartupHost = Readonly<{
   serverId: string;
@@ -56,11 +66,14 @@ export async function runObservedWorkflowSessionStartup(
     const parsed = ActionOperationGetV1ResponseSchema.parse(await host.observeOperation(address!, {
       waitForTerminal, includeSetupReview, ...(readSignal ? { signal: readSignal } : {}),
     }));
-    if (parsed.kind !== 'found' || parsed.operation.operationId !== address!.operationId
-      || parsed.operation.actionId !== 'session.spawn_new' || parsed.operation.scope.machineId !== host.machineId) {
+    const operation = parsed.kind === 'found' ? parsed.operation
+      : readRetainedWorkflowSessionStartupFailure(input.retainedOperationSnapshot, address!, input.creationKey);
+    if (!operation || address!.serverId !== host.serverId || address!.machineId !== host.machineId
+      || operation.operationId !== address!.operationId || operation.requestId !== input.creationKey
+      || operation.actionId !== 'session.spawn_new' || operation.scope.machineId !== host.machineId) {
       throw new Error('workflow_invocation_fact_conflict');
     }
-    return parsed.operation;
+    return operation;
   };
   const rejectFromOriginalOperation = async (error: unknown): Promise<never> => {
     if (!address || signal?.aborted) throw error;

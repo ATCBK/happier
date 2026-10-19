@@ -121,6 +121,7 @@ export type CreateFreshWorkflowSessionConversation = (params: Readonly<{
   frozenRole?: ResolvedRoleV1;
   observationOnly?: boolean;
   retainedStartupOperation?: ActionCompletionOperation;
+  retainedStartupOperationSnapshot?: unknown;
   startupAuthorization?: Parameters<WorkflowStepExecutor>[0]['authorization'];
   onStartupObservation?: (operation: ActionOperationSnapshotV1, serverId: string) => Promise<void>;
   signal?: AbortSignal;
@@ -131,6 +132,7 @@ export type WorkflowSessionStartup = (input: Readonly<{
   creationKey: string;
   request: CreateSpawnedSessionParams;
   retainedOperation?: ActionCompletionOperation;
+  retainedOperationSnapshot?: unknown;
   authorization?: Parameters<WorkflowStepExecutor>[0]['authorization'];
   onObservation?: (operation: ActionOperationSnapshotV1) => Promise<void>;
 }>) => Promise<Readonly<{ sessionId: string }>>;
@@ -155,7 +157,7 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
   resolveTeamCredentialResourceCatalog?: ResolveSpawnConnectedServicesTeamResourceCatalog;
   sessionStartup?: WorkflowSessionStartup;
 }>): CreateFreshWorkflowSessionConversation {
-  return async ({ selection: authoredSelection, launch, workspace, creationKey, initialTitle, frozenRole, observationOnly, retainedStartupOperation, startupAuthorization, onStartupObservation, signal }) => {
+  return async ({ selection: authoredSelection, launch, workspace, creationKey, initialTitle, frozenRole, observationOnly, retainedStartupOperation, retainedStartupOperationSnapshot, startupAuthorization, onStartupObservation, signal }) => {
     signal?.throwIfAborted();
     if (workspace.machineId !== deps.machineId) {
       throw new WorkflowSessionCompositionError('target_unavailable');
@@ -213,6 +215,7 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
     if (retainedStartupOperation) {
       if (!deps.sessionStartup) throw new WorkflowSessionCompositionError('workflow_session_startup_observation_unavailable');
       const created = await deps.sessionStartup({ creationKey, retainedOperation: retainedStartupOperation,
+        retainedOperationSnapshot: retainedStartupOperationSnapshot,
         ...(startupAuthorization ? { authorization: startupAuthorization } : {}),
         request: { credentials: deps.credentials, serverId: deps.serverId, machineId: deps.machineId,
           directory: workspace.directory, spawnNonce: creationKey, ...(signal ? { signal } : {}) },
@@ -1139,7 +1142,10 @@ export function createProductionWorkflowConversationOwner(deps: Readonly<{
         startupAuthorization: params.authorization,
         ...(params.invocation.execution?.kind === 'action' && params.invocation.execution.actionId === 'session.spawn_new'
           && params.invocation.execution.awaitedOperations?.[0]
-          ? { retainedStartupOperation: params.invocation.execution.awaitedOperations[0] } : {}),
+          ? { retainedStartupOperation: params.invocation.execution.awaitedOperations[0],
+            retainedStartupOperationSnapshot: params.invocation.execution.output
+              && typeof params.invocation.execution.output === 'object' && !Array.isArray(params.invocation.execution.output)
+              ? params.invocation.execution.output.operation : undefined } : {}),
         onStartupObservation: async (operation, serverId) => {
           if (operation.actionId !== 'session.spawn_new' || operation.scope.machineId !== params.workspace.machineId) {
             throw new Error('workflow_invocation_fact_conflict');

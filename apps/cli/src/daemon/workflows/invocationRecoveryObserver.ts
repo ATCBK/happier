@@ -1,9 +1,11 @@
 import type { StoredCredentials } from '@/persistence';
+import { isAxiosError } from 'axios';
+import { discardPendingQueueV2Messages } from '@/api/session/pendingQueueV2Transport';
 import type { WorkflowConversationUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { SessionContinuationInspectionV1Schema } from '@happier-dev/protocol/sessions/agentTransition';
-import type { WorkflowAccountRunActionDeps, WorkflowProgressEnvelopeV1, WorkflowMaterializedLeafV1 } from '@happier-dev/protocol';
+import type { WorkflowAccountRunActionDeps, WorkflowProgressEnvelopeV1, WorkflowMaterializedLeafV1, WorkflowRunSummaryV1 } from '@happier-dev/protocol';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { resumeActionCompletionV1, readActionCompletionRunObservationV1, isActionCompletionRunObservationPendingV1 } from '@happier-dev/protocol/actions/actionCompletion';
 import { ProjectCommandActionOutputV1Schema } from '@happier-dev/protocol/actions/actionCompletion';
@@ -27,7 +29,7 @@ import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessi
 import { isSessionStopConfirmed } from '@happier-dev/protocol/sessions/control/contract';
 import { SessionCreationCorrespondenceV1ReadSchema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import type { SessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
-import { deriveWorkflowSessionCreationTag } from './workflowSessionStartup';
+import { deriveWorkflowSessionCreationTag, readRetainedWorkflowSessionStartupFailure } from './workflowSessionStartup';
 
 type WorkflowInvocationRecoveryEvidence = Awaited<ReturnType<NonNullable<WorkflowAccountRunActionDeps['observeRecovery']>>>;
 
@@ -208,7 +210,7 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
   const observeRun = params.observeRun ?? observeWorkflowDetachedExecutionRunInput;
   return async function observe(input: Readonly<{
     progress: import('@happier-dev/protocol').WorkflowProgressEnvelopeV1;
-    run?: Readonly<{ id: string }>;
+    run?: Readonly<{ id: string; state?: WorkflowRunSummaryV1['state'] }>;
     index?: Readonly<{ id: string }>;
     terminalParent: boolean;
     cancellationRequested: boolean;
@@ -218,6 +220,23 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
   }>): Promise<WorkflowInvocationRecoveryObservation> {
     const execution = input.progress.execution;
     const stopCreatedSession = async (sessionId: string): Promise<WorkflowInvocationRecoveryObservation> => {
+      if (!input.run || !input.index) return { kind: 'unresolved', code: 'workflow_execution_correspondence_missing' };
+      // Physical Stop cannot retire a durable queued input: it could otherwise
+      // be delivered when this Session resumes. Fence the exact admitted input
+      // first, including when its admission acknowledgement was lost.
+      try {
+        await discardPendingQueueV2Messages({ token: params.credentials.token, sessionId,
+          localIds: [deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation',
+            runId: input.run.id, invocationRecordId: input.index.id })], reason: 'session_input_cancelled' });
+      } catch (error) {
+        // Only this exact Pending owner's absence permits physical custody to
+        // decide settlement. Denied access and ambiguous delivery stay pending.
+        const body: unknown = isAxiosError(error) ? error.response?.data : undefined;
+        if (!isAxiosError(error) || error.response?.status !== 404 || !body || typeof body !== 'object'
+          || !('error' in body) || body.error !== 'not-found') {
+          return { kind: 'unresolved', code: 'session_input_cancel_unavailable' };
+        }
+      }
       // Stop owns both physical termination and the confirmed-already-stopped
       // receipt. Never use the interrupted claim's observation signal here.
       const stopped = await requestSessionStop({ credentials: params.credentials, idOrPrefix: sessionId,
@@ -238,15 +257,13 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
       if (!sessionId) return { kind: 'outcome_uncertain', code: 'workflow_startup_owner_absent' };
       const learned = { kind: 'session' as const, sessionId, localInputId: deriveWorkflowSessionInputLocalIdV2({
         purpose: 'invocation', runId: input.run.id, invocationRecordId: input.index.id }) };
-      const observed = await observe({ ...input, progress: { ...input.progress, execution: learned } });
-      if (observed.kind === 'unresolved' && input.terminalParent && !input.observationOnly) {
-        // After daemon replacement the exact birth census can find a Session
-        // whose startup operation is gone and whose input never materialized.
-        // Keep any observed input result; otherwise retire physical custody
-        // without claiming to know that lost input's effects.
+      const stopping = (input.terminalParent || input.cancellationRequested) && !input.observationOnly;
+      const observed = await observe({ ...input, ...(stopping ? { observationOnly: true } : {}),
+        progress: { ...input.progress, execution: learned } });
+      if (observed.kind === 'unresolved' && stopping) {
         const stopped = await stopCreatedSession(sessionId);
-        if (stopped.kind === 'cancelled') return { ...stopped, kind: 'stopped', code: 'workflow_startup_session_stopped' };
-        return { ...stopped, execution: learned };
+        return stopped.kind === 'cancelled' ? { ...stopped, kind: 'stopped', code: 'workflow_startup_session_stopped' }
+          : { ...stopped, execution: learned };
       }
       return { ...observed, execution: observed.execution ?? learned };
     };
@@ -254,12 +271,13 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
       // An in-flight startup can fail before the Workflow observes its
       // accepted reply. An absent original owner closes observation only after
       // Session discovery; it proves neither cancellation nor lack of effects.
-      if ((input.terminalParent || input.cancellationRequested) && input.progress.blockKind === 'step'
+      if ((input.terminalParent || input.cancellationRequested || input.run?.state === 'interrupted') && input.progress.blockKind === 'step'
         && input.run && input.index && params.nativeActionOperations?.findStartup) {
         const creationKey = `workflow:${input.run.id}:${input.index.id}`;
         try {
           const startup = await params.nativeActionOperations.findStartup(creationKey, input.signal);
-          if (startup?.kind === 'absent') return await recoverAbsentStartup();
+          if (startup?.kind === 'absent') return input.terminalParent || input.cancellationRequested
+            ? await recoverAbsentStartup() : { kind: 'unresolved', code: 'workflow_execution_correspondence_missing' };
           if (startup?.kind === 'found' && startup.operation.actionId === 'session.spawn_new' && startup.operation.requestId === creationKey
             && startup.operation.scope.machineId === params.machineId && startup.target.machineId === params.machineId
             && startup.target.operationId === startup.operation.operationId) {
@@ -294,7 +312,9 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
           const read = (raw: unknown, target: ActionCompletionOperation) => {
             const parsed = ActionOperationGetV1ResponseSchema.parse(raw);
             if (parsed.kind !== 'found' || parsed.operation.operationId !== target.operationId
-              || parsed.operation.scope.machineId !== target.machineId || parsed.operation.actionId !== execution.actionId) {
+              || parsed.operation.scope.machineId !== target.machineId || parsed.operation.actionId !== execution.actionId
+              || (input.progress.blockKind === 'step' && execution.actionId === 'session.spawn_new'
+                && parsed.operation.requestId !== execution.actionRequestId)) {
               throw new Error('action_operation_correspondence_mismatch');
             }
             return parsed.operation;
@@ -308,6 +328,11 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
             && input.run && input.index && execution.actionRequestId === `workflow:${input.run.id}:${input.index.id}`
             && snapshots.length === 1 && snapshots[0]!.target.machineId === params.machineId
             && ActionOperationGetV1ResponseSchema.parse(snapshots[0]!.raw).kind === 'not_found') {
+            const output = execution.output;
+            const failed = readRetainedWorkflowSessionStartupFailure(output && typeof output === 'object' && !Array.isArray(output)
+              ? output.operation : undefined, snapshots[0]!.target, execution.actionRequestId);
+            if (failed) return { kind: 'failed', code: failed.error?.errorCode ?? 'action_operation_failed',
+              ...(failed.error?.error ? { message: failed.error.error } : {}) };
             return await recoverAbsentStartup();
           }
           const observedOperations = snapshots.map(({ target, raw }) => ({ target, operation: read(raw, target) }));
@@ -340,7 +365,8 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
           // closed control must first handle any Session created by startup.
           if (input.progress.blockKind === 'step') {
             const failed = observedOperations.find(({ operation }) => operation.state === 'failed');
-            if (failed) return { kind: 'failed', code: failed.operation.error?.errorCode ?? 'action_operation_failed' };
+            if (failed) return { kind: 'failed', code: failed.operation.error?.errorCode ?? 'action_operation_failed',
+              ...(failed.operation.error?.error ? { message: failed.operation.error.error } : {}) };
             if (observedOperations.some(({ operation }) => operation.state === 'cancelled')) return { kind: 'cancelled', code: 'cancelled' };
             if (execution.actionId === 'session.spawn_new' && input.run && input.index
               && execution.actionRequestId === `workflow:${input.run.id}:${input.index.id}`

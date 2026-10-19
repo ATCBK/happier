@@ -1223,12 +1223,11 @@ export async function listWorkflowRunsForRecovery(params: PageOptions & Readonly
                             workflowInvocations: { some: { lifecycle: "cancel_requested" } },
                         },
                         {
-                            // Claim observation can end after an input was emitted.
-                            // Keep exact child observation reachable without resuming
-                            // the interrupted parent or admitting another attempt.
+                            // Child settlement and root publication are separate
+                            // writes. Retain interrupted custody after the final
+                            // child leaves the active index so projection can heal.
                             state: "interrupted",
                             workflowCustodyState: "pending",
-                            workflowInvocations: { some: { lifecycle: "outcome_uncertain" } },
                         },
                     ],
                     ...(pageAfterDate && pageAfterId ? {
