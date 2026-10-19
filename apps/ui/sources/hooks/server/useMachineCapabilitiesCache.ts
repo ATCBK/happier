@@ -365,17 +365,31 @@ function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, requ
 
     const results = snapshot.response.results;
     const requests = Array.isArray(request.requests) ? request.requests : [];
-    if (settledRequest) {
-        // An answered request may omit optional facts, but an actual failed
-        // latest-version probe still follows the existing failure retry policy.
-        return requests.some(entry => entry.id.startsWith('cli.')
-            && Boolean((entry.params as { includeLatestVersion?: unknown } | undefined)?.includeLatestVersion)
-            && results[entry.id]?.ok === false
-            && isAgentLatestVersionMissing(results, entry.id));
-    }
     const overrideEntries = isPlainObject(request.overrides)
         ? Object.entries(request.overrides as Record<string, { params?: Record<string, unknown> }>)
         : [];
+    const capabilityIdsNeedingLoginStatus = new Set<string>();
+    for (const entry of requests) {
+        if (entry.id.startsWith('cli.') && isPlainObject(entry.params) && entry.params.includeLoginStatus) {
+            capabilityIdsNeedingLoginStatus.add(entry.id);
+        }
+    }
+    for (const [capabilityId, override] of overrideEntries) {
+        if (capabilityId.startsWith('cli.') && override?.params?.includeLoginStatus) {
+            capabilityIdsNeedingLoginStatus.add(capabilityId);
+        }
+    }
+    if (settledRequest) {
+        // A failed readiness probe supplied no installation/login facts. A new
+        // demand must ask again; cache publication itself never starts a read.
+        // Successful answers may omit optional facts, while update-only failures
+        // retain the existing latest-version retry cadence.
+        return [...capabilityIdsNeedingLoginStatus].some(id => results[id as CapabilityId]?.ok !== true)
+            || requests.some(entry => entry.id.startsWith('cli.')
+                && Boolean((entry.params as { includeLatestVersion?: unknown } | undefined)?.includeLatestVersion)
+                && results[entry.id]?.ok === false
+                && isAgentLatestVersionMissing(results, entry.id));
+    }
 
     for (const entry of requests) {
         const capabilityId = typeof entry?.id === 'string' ? entry.id : '';
@@ -397,22 +411,6 @@ function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, requ
         if (Boolean((entry.params as { includeLatestVersion?: unknown } | undefined)?.includeLatestVersion)
             && isAgentLatestVersionMissing(results, entry.id)) {
             return true;
-        }
-    }
-
-    const capabilityIdsNeedingLoginStatus = new Set<string>();
-
-    for (const entry of requests) {
-        if (!entry?.id?.startsWith('cli.')) continue;
-        if (Boolean((entry.params as any)?.includeLoginStatus)) {
-            capabilityIdsNeedingLoginStatus.add(entry.id);
-        }
-    }
-
-    for (const [capabilityId, override] of overrideEntries) {
-        if (!capabilityId.startsWith('cli.')) continue;
-        if (Boolean(override?.params?.includeLoginStatus)) {
-            capabilityIdsNeedingLoginStatus.add(capabilityId);
         }
     }
 

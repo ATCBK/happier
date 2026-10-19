@@ -28,6 +28,29 @@ function lifetime(accountId: string) {
 afterEach(() => { boundary.rpc.mockReset(); vi.useRealTimers(); });
 
 describe('machine capabilities cache races at the RPC boundary', () => {
+    it.each([
+        { label: 'request', request: { requests: [{ id: 'cli.codex', params: { includeLoginStatus: true } }] } },
+        { label: 'override', request: { checklistId: CHECKLIST_IDS.MACHINE_DETAILS,
+            overrides: { 'cli.codex': { params: { includeLoginStatus: true } } } } },
+    ] satisfies ReadonlyArray<{ label: string; request: CapabilitiesDetectRequest }>)('retries a failed login probe from $label only on new demand, then reuses the successful answer with optional facts omitted', async ({ label, request: loginRequest }) => {
+        boundary.rpc.mockResolvedValueOnce({ protocolVersion: 1, results: {
+            'cli.codex': { ok: false, checkedAt: Date.now(), error: { code: 'probe_failed', message: 'Temporarily unavailable' } },
+        } }).mockResolvedValue(response('recovered'));
+        const target = { machineId: `failed-login-new-demand-${label}`, serverId: 'login-probe-home', request: loginRequest, enabled: true };
+        const first = await renderHook(() => useMachineCapabilitiesCache(target));
+        expect(first.getCurrent().state).toMatchObject({ status: 'loaded', snapshot: { response: { results: { 'cli.codex': { ok: false } } } } });
+        await flushHookEffects();
+        expect(boundary.rpc).toHaveBeenCalledTimes(1);
+        await first.unmount();
+        const reopened = await renderHook(() => useMachineCapabilitiesCache(target));
+        expect(reopened.getCurrent().state).toMatchObject({ status: 'loaded', snapshot: { response: { results: { 'cli.codex': { ok: true, data: { version: 'recovered' } } } } } });
+        await reopened.unmount();
+        const cached = await renderHook(() => useMachineCapabilitiesCache(target));
+        expect(cached.getCurrent().state).toMatchObject({ status: 'loaded', snapshot: { response: { results: { 'cli.codex': { ok: true } } } } });
+        expect(boundary.rpc).toHaveBeenCalledTimes(2);
+        await cached.unmount();
+    });
+
     it('settles one capability set across mounts even when the daemon omits a requested optional fact, and probes a new readiness epoch', async () => {
         const optionalRequest: CapabilitiesDetectRequest = { requests: [{ id: 'cli.codex', params: { includeLatestVersion: true } }] };
         boundary.rpc.mockResolvedValue({ protocolVersion: 1, results: {
