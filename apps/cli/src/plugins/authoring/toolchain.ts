@@ -32,6 +32,7 @@ import {
 } from '@happier-dev/cli-common/workspaces';
 import {
   assertResolvedRuntimeDependencyMatchesDeclaration,
+  collectBundledPrepublicationAuthorPackageNames,
   resolveInstalledRuntimePackage,
 } from '@happier-dev/cli-common/workspaceRuntimeDependencies';
 import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
@@ -162,7 +163,6 @@ function resolveProjectRoot(pathLike: string): string {
   return resolve(trimmed);
 }
 
-const PREPUBLICATION_AUTHOR_PACKAGE_VERSION = '0.0.0';
 const TRANSIENT_PNPM_WORKSPACE_FILE_NAME = 'pnpm-workspace.yaml';
 const PLUGIN_AUTHOR_TYPECHECK_BUILD_INFO_PATH =
   'node_modules/.cache/happier/plugin-author.typecheck.tsbuildinfo';
@@ -387,22 +387,7 @@ async function readRequestedBundledPrepublicationPackages(params: Readonly<{
   if (params.registryOrigin || params.args[0] !== 'install') return [];
   try {
     const packageJson = JSON.parse(await readFile(join(params.projectRoot, 'package.json'), 'utf8')) as unknown;
-    if (!isRecord(packageJson)) return [];
-    const requested = new Set<string>();
-    for (const field of ['dependencies', 'devDependencies', 'optionalDependencies'] as const) {
-      const dependencies = packageJson[field];
-      if (!isRecord(dependencies)) continue;
-      for (const [packageName, specifier] of Object.entries(dependencies)) {
-        if (
-          packageName.startsWith('@happier-dev/')
-          && typeof specifier === 'string'
-          && specifier.trim() === PREPUBLICATION_AUTHOR_PACKAGE_VERSION
-        ) {
-          requested.add(packageName);
-        }
-      }
-    }
-    return [...requested].sort((left, right) => left.localeCompare(right));
+    return collectBundledPrepublicationAuthorPackageNames(packageJson);
   } catch {
     // Let the managed package materializer report malformed or missing author
     // package metadata through its normal diagnostic path.

@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1 } from '@happier-dev/plugin-sdk/ui/build';
+import { collectBundledPrepublicationAuthorPackageNames } from '@happier-dev/cli-common/workspaceRuntimeDependencies';
 import { describe, expect, it } from 'vitest';
 import { scaffoldLocalPlugin } from './scaffold';
 
@@ -64,6 +65,7 @@ describe('scaffoldLocalPlugin',
       '@happier-dev/plugin-sdk': PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1.dependencies['@happier-dev/plugin-sdk'],
     });
     expect(packageJson.dependencies?.['@happier-dev/plugin-sdk']).not.toMatch(/^(?:file:|workspace:|link:|portal:)/u);
+    expect(collectBundledPrepublicationAuthorPackageNames(packageJson)).toEqual(['@happier-dev/plugin-sdk']);
     expect(packageJson.devDependencies).toMatchObject({
       '@types/node': PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1.devDependencies['@types/node'],
       '@typescript/native': PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1.devDependencies['@typescript/native'],
