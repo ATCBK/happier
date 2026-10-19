@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -21,6 +21,125 @@ const outcome = (schema, value) => {
     issues: result.error.issues.map(({ code, path, message }) => ({ code, path, message })),
   };
 };
+
+test('CLI accepts only source-proven native payload helper parameters in transform context flow', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-imported-native-payload-'));
+  try {
+    const producer = join(fixture, 'producer.ts'), barrel = join(fixture, 'barrel.ts'), consumer = join(fixture, 'consumer.ts');
+    const helper = `import { z } from 'zod/mini';
+export function report(value: unknown, context: z.core.ParsePayload): void {
+  if (value === 'bad') context.issues.push({ code: 'custom', message: 'bad value', path: ['value'], input: context.value, continue: true });
+}`;
+    const source = `import { z } from 'zod';
+import { check as inspect } from './barrel.js';
+export const S = z.unknown().transform((value, ctx) => { inspect(value, ctx); return value; });
+`;
+    writeFileSync(producer, helper);
+    writeFileSync(barrel, "export { report as check } from './producer.js';\n");
+    writeFileSync(consumer, source);
+    const run = () => JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', '--write', relative(repo, consumer)], { cwd: repo, encoding: 'utf8' }));
+    const report = run();
+    assert.deepEqual(report.failures, []);
+    assert.deepEqual(report.files.flatMap(file => file.unresolved), []);
+    const output = readFileSync(consumer, 'utf8');
+    assert.match(output, /from 'zod\/mini'/u);
+    assert.match(output, /inspect\(value, ctx\)/u);
+    const nativeHelper = evaluate(helper.replace(/\bexport /gu, ''), mini, 'report');
+    const consumerSchema = (text, z) => {
+      const js = ts.transpileModule(text.replace(/^import[^\n]+\n/gmu, '').replace(/\bexport /gu, ''), {
+        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+      }).outputText;
+      return new Function('z', 'inspect', `${js}\nreturn S;`)(z, nativeHelper);
+    };
+    for (const input of ['bad', 'good', { retained: true }]) assert.deepEqual(
+      outcome(consumerSchema(output, mini), input), outcome(consumerSchema(source, classic), input));
+    assert.deepEqual(run().files.flatMap(file => file.unresolved), []);
+    assert.equal(readFileSync(consumer, 'utf8'), output);
+
+    for (const [index, unsafe] of [
+      helper.replace('z.core.ParsePayload', 'z.core.$RefinementCtx').replace("context.issues.push({ code: 'custom', message: 'bad value', path: ['value'], input: context.value, continue: true })", "context.addIssue({ code: 'custom', message: 'bad value', path: ['value'] })"),
+      helper.replace("import { z } from 'zod/mini'", "import { z } from './ordinary'"),
+      helper.replace("context.issues.push({ code: 'custom', message: 'bad value', path: ['value'], input: context.value, continue: true })", "context.addIssue({ code: 'custom', message: 'bad value', path: ['value'] })"),
+      helper.replace("context.issues.push({ code: 'custom', message: 'bad value', path: ['value'], input: context.value, continue: true })", 'unknownHelper(context)'),
+      helper.replace('z.core.ParsePayload', 'z.core.ParsePayload<string>'),
+      helper.replace("context.issues.push({ code: 'custom', message: 'bad value', path: ['value'], input: context.value, continue: true })", "arguments[1].addIssue({ code: 'custom', message: 'bad value' })"),
+    ].entries()) {
+      writeFileSync(producer, unsafe); writeFileSync(consumer, source);
+      const refused = run();
+      assert.ok(refused.files.some(file => file.unresolved.some(issue => issue.method === 'context')), `Unsafe context helper ${index} must refuse`);
+      assert.equal(readFileSync(consumer, 'utf8'), source, 'Unknown or still-Classic helper must refuse atomically');
+    }
+    writeFileSync(producer, helper);
+    const shadowed = source.replace('export const S = ', 'export const S = (inspect => ')
+      .replace('return value; });', 'return value; }))(ordinary);');
+    writeFileSync(consumer, shadowed);
+    assert.ok(run().files.some(file => file.unresolved.some(issue => issue.method === 'context')));
+    assert.equal(readFileSync(consumer, 'utf8'), shadowed);
+    writeFileSync(consumer, source.replace('inspect(value, ctx)', 'inspect(ctx, value)'));
+    assert.ok(run().files.some(file => file.unresolved.some(issue => issue.method === 'context')));
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('for-of tuple schema columns convert only when every row proves the binding', () => {
+  const source = `import { z } from 'zod';
+const CallerSchema = z.object({ caller: z.string() });
+const projected = [];
+for (const [field, schema, expectedFlag] of [
+  ['input', z.record(z.string(), z.unknown()), '--action-input'],
+  ['json', z.string(), '--action-json'],
+  ['help', z.string(), '--action-help'],
+] as const) {
+  const ordinary = ((schema: { optional: () => string }) => schema.optional())({ optional: () => field });
+  projected.push({ field, expectedFlag, ordinary, schema: CallerSchema.extend({ [field]: schema.optional() }) });
+}
+`;
+  const converted = convert(source);
+  assert.deepEqual(converted.unresolved, []);
+  assert.match(converted.output, /z\.optional\(schema\)/);
+  const before = evaluate(source, classic, 'projected');
+  const after = evaluate(converted.output, mini, 'projected');
+  assert.match(converted.output, /=> schema\.optional\(\)/);
+  assert.deepEqual(after.map(({ field, expectedFlag, ordinary }) => ({ field, expectedFlag, ordinary })),
+    before.map(({ field, expectedFlag, ordinary }) => ({ field, expectedFlag, ordinary })));
+  for (let index = 0; index < before.length; index++) {
+    const { field } = before[index];
+    for (const value of [undefined, 'value', { key: true }, 42, null]) {
+      const input = value === undefined ? { caller: 'caller' } : { caller: 'caller', [field]: value };
+      assert.deepEqual(outcome(after[index].schema, input), outcome(before[index].schema, input));
+    }
+  }
+  assert.equal(convert(converted.output).output, converted.output);
+});
+
+test('for-of mixed schema columns refuse atomically and ordinary columns stay ordinary', () => {
+  const mixed = `import { z } from 'zod';
+for (const [field, schema] of [
+  ['schema', z.string()],
+  ['ordinary', { optional: () => 'ordinary' }],
+] as const) { schema.optional(); }
+`;
+  const refused = convert(mixed);
+  assert.equal(refused.output, mixed);
+  assert.ok(refused.unresolved.some(({ method, reason }) => method === 'optional' && /tuple/.test(reason)));
+
+  const ordinary = `import { z } from 'zod';
+const Other = z.string().optional();
+const values = [];
+for (const [field, schema] of [
+  ['first', { optional: () => 'first' }, z.string()],
+  ['second', { optional: () => 'second' }, z.number()],
+] as const) { values.push(schema.optional()); }
+`;
+  const converted = convert(ordinary);
+  assert.deepEqual(converted.unresolved, []);
+  assert.match(converted.output, /schema\.optional\(\)/);
+  assert.deepEqual(evaluate(converted.output, mini, 'values'), ['first', 'second']);
+  assert.equal(convert(converted.output).output, converted.output);
+});
 
 test('converts nested string checks and wrappers, preserving Mini behavior', () => {
   const source = `import { z } from 'zod';\nconst S = z.string().trim().min(2).max(4).optional();\n`;
@@ -58,6 +177,73 @@ test('maps named Zod schema type imports while preserving their local type names
   assert.match(result.output, /ZodMiniObject as ObjectSchema/);
   assert.match(result.output, /z\.partial\(O\)/);
   assert.match(result.output, /return z\.optional\(s\)/);
+  const broad = convert("import type * as z from 'zod';\nexport type Port = { input?: z.ZodObject<any>; result?: z.ZodObject<any> };\n");
+  assert.deepEqual(broad.unresolved, []);
+  assert.match(broad.output, /input\?: z\.core\.\$ZodObject/);
+  assert.match(broad.output, /result\?: z\.core\.\$ZodObject/);
+  assert.doesNotMatch(broad.output, /\bany\b/);
+  assert.equal(convert(broad.output).output, broad.output);
+
+  const concrete = convert("import { z, ZodObject as ObjectSchema } from 'zod';\ntype Concrete = z.ZodObject<{ id: z.ZodString }>;\ntype NamedConcrete = ObjectSchema<{ id: z.ZodString }>;\n");
+  assert.deepEqual(concrete.unresolved, []);
+  assert.match(concrete.output, /type Concrete = z\.ZodMiniObject<\{ id: z\.ZodMiniString<string> \}>/);
+  assert.match(concrete.output, /type NamedConcrete = ObjectSchema<\{ id: z\.ZodMiniString<string> \}>/);
+  assert.doesNotMatch(concrete.output, /core\.\$ZodObject/);
+  assert.equal(convert(concrete.output).output, concrete.output);
+});
+
+test('maps qualified safe-parse branch types to Mini core utility types', () => {
+  const source = `import { z } from 'zod';\nconst S = z.string();\nconst successful = (result: z.ZodSafeParseSuccess<string>) => result.data;\nconst failed = (result: z.ZodSafeParseError<string>) => result.error.issues;\n`;
+  const converted = convert(source);
+  assert.deepEqual(converted.unresolved, []);
+  assert.match(converted.output, /z\.core\.util\.SafeParseSuccess<string>/);
+  assert.match(converted.output, /z\.core\.util\.SafeParseError<string>/);
+});
+
+test('converts source-proven dynamic Zod namespaces and type imports atomically', () => {
+  const direct = `const { z } = await import('zod');\nconst S = z.string().min(2).optional();\n`;
+  const directResult = convert(direct);
+  assert.deepEqual(directResult.unresolved, []);
+  assert.match(directResult.output, /await import\('zod\/mini'\)/);
+  assert.match(directResult.output, /z\.optional\(z\.string\(\)\.check\(z\.minLength\(2\)\)\)/);
+  assert.equal(convert(directResult.output).output, directResult.output);
+
+  const grouped = `const [{ Schema }, { z }] = await Promise.all([import('./producer.js'), import('zod')]);\nconst S = z.object({ x: z.string() }).strict();\n`;
+  const groupedResult = convert(grouped);
+  assert.deepEqual(groupedResult.unresolved, []);
+  assert.match(groupedResult.output, /import\('zod\/mini'\)/);
+  assert.match(groupedResult.output, /z\.strictObject\(\{ x: z\.string\(\) \}\)/);
+
+  const duplicated = `import { z } from 'zod';\nimport { Schema } from './producer.js';\nasync function read() { const [{ Schema }, { z }] = await Promise.all([import('./producer.js'), import('zod')]); return z.string().optional().parse(Schema.parse('x')); }\n`;
+  const duplicateResult = transformSource(duplicated, 'fixture.ts',
+    { importedSchemas: new Map([['Schema', { kind: 'string' }]]) });
+  assert.deepEqual(duplicateResult.unresolved, []);
+  assert.match(duplicateResult.output, /import\('zod\/mini'\)/);
+  assert.match(duplicateResult.output, /z\.optional\(z\.string\(\)\)/);
+
+  const typed = `type Input = import('zod').input<typeof Schema>;\ntype Output = import('zod/v4').output<typeof Schema>;\n`;
+  const typedResult = convert(typed);
+  assert.deepEqual(typedResult.unresolved, []);
+  assert.match(typedResult.output, /import\('zod\/mini'\)\.input/);
+  assert.match(typedResult.output, /import\('zod\/mini'\)\.output/);
+
+  const opaque = `const library = await import('zod');\nconst S = library.z.string().optional();\n`;
+  const refused = convert(opaque);
+  assert.equal(refused.output, opaque);
+  assert.deepEqual(refused.unresolved.map(item => item.method), ['dynamic-import']);
+});
+
+test('unwraps a catch schema only under its native constructor guard', () => {
+  const source = `import { z } from 'zod';\nfunction writeSchema(schema: z.ZodType) { return schema instanceof z.ZodCatch ? writeSchema(schema.removeCatch()) : schema; }\nconst Inner = z.number();\nconst Wrapped = z.number().catch(5);\nconst Unwrapped = writeSchema(Wrapped);\n`;
+  const converted = convert(source);
+  assert.deepEqual(converted.unresolved, []);
+  assert.match(converted.output, /schema instanceof z\.ZodMiniCatch/);
+  assert.match(converted.output, /writeSchema\(schema\._zod\.def\.innerType\)/);
+  const before = evaluate(source, classic, '({ Inner, Unwrapped })');
+  const after = evaluate(converted.output, mini, '({ Inner, Unwrapped })');
+  for (const value of [undefined, 3, 'x']) assert.deepEqual(outcome(after.Unwrapped, value), outcome(before.Unwrapped, value));
+  const unguarded = `import { z } from 'zod';\nfunction bad(schema: z.ZodType) { return schema.removeCatch(); }\n`;
+  assert.deepEqual(convert(unguarded).unresolved.map(item => item.method), ['removeCatch']);
 });
 
 test('named Classic core imports use Mini core for runtime errors and result types', () => {
@@ -88,6 +274,43 @@ test('retains JSON Schema and error helper semantics through a Mini namespace', 
   assert.match(result.output, /z\.toJSONSchema\(S, \{ io: 'input' \}\)/);
 });
 
+test('uses Mini formatError only for a proven schema safeParse error', () => {
+  classic.config(classic.locales.en());
+  mini.config(mini.locales.en());
+  const source = `import { Schema } from './producer.js';\nconst parsed = Schema.safeParse({});\nconst formatted = parsed.success ? null : parsed.error.format();\n`;
+  const converted = transformSource(source, 'fixture.ts', { importedSchemas: new Map([['Schema', { kind: 'object' }]]) });
+  assert.deepEqual(converted.unresolved, []);
+  assert.match(converted.output, /import \* as z from 'zod\/mini'/);
+  assert.match(converted.output, /z\.formatError\(parsed\.error\)/);
+  const withSchema = code => code.replace("import { Schema } from './producer.js';", "const Schema = z.object({ x: z.string() });");
+  assert.deepEqual(evaluate(withSchema(converted.output), mini, 'formatted'), evaluate(withSchema(source), classic, 'formatted'));
+  const arbitrary = `import { Schema } from './producer.js';\nfunction show(error) { return error.format(); }\n`;
+  const refused = transformSource(arbitrary, 'fixture.ts', { importedSchemas: new Map([['Schema', { kind: 'object' }]]) });
+  assert.equal(refused.changed, false);
+  assert.deepEqual(refused.unresolved.map(item => item.method), ['format']);
+});
+
+test('number bound reflection retains Classic inclusive/exclusive and unbounded values', () => {
+  const source = `import { z } from 'zod';\nconst Bounded = z.number().positive().max(12000);\nconst Unbounded = z.number();\nconst min = Bounded.minValue, max = Bounded.maxValue;\nconst freeMin = Unbounded.minValue, freeMax = Unbounded.maxValue;\nconst user = { minValue: 7 };\nconst userMin = user.minValue;\n`;
+  const converted = convert(source);
+  assert.deepEqual(converted.unresolved, []);
+  assert.match(converted.output, /Bounded\._zod\.bag\.exclusiveMinimum/);
+  assert.match(converted.output, /Unbounded\._zod\.bag\.maximum/);
+  assert.match(converted.output, /user\.minValue/);
+  const before = evaluate(source, classic, '({ min, max, freeMin, freeMax, userMin })');
+  const after = evaluate(converted.output, mini, '({ min, max, freeMin, freeMax, userMin })');
+  assert.deepEqual(after, before);
+  const imported = transformSource(`import { N } from './producer.js';\nconst min = N.minValue;\n`, 'fixture.ts',
+    { importedSchemas: new Map([['N', { kind: 'number' }]]) });
+  assert.deepEqual(imported.unresolved, []);
+  assert.match(imported.output, /N\._zod\.bag\.minimum/);
+  const wrapped = `import { z } from 'zod';\nconst Wrapped = z.number().max(10).optional();\nconst reflected = Wrapped.unwrap().maxValue;\n`;
+  const convertedWrapped = convert(wrapped);
+  assert.deepEqual(convertedWrapped.unresolved, []);
+  assert.match(convertedWrapped.output, /<T extends z\.ZodMiniNumber>/);
+  assert.deepEqual(evaluate(convertedWrapped.output, mini, 'reflected'), evaluate(wrapped, classic, 'reflected'));
+});
+
 test('converted schemas preserve normalized values and issue codes/paths', () => {
   classic.config(classic.locales.en());
   mini.config(mini.locales.en());
@@ -112,6 +335,71 @@ test('explicit transform output matching its input captures the concrete Mini pi
   assert.equal(convert(result.output).output, result.output);
 });
 
+test('named Mini pipe transforms capture the schema output instead of a wider readonly callback input', async () => {
+  const source = `import { z } from 'zod/mini';\nfunction normalize(value: Readonly<{ values: readonly string[] }>): Readonly<{ values: readonly string[] }> { return { values: value.values.map(item => item.trim().toLowerCase()) }; }\nconst S = z.pipe(z.strictObject({ values: z.array(z.string()) }), z.transform(normalize));\n`;
+  const result = convert(source);
+  assert.deepEqual(result.unresolved, []);
+  assert.match(result.output, /\.apply\(\(schema\) => z\.pipe\(schema, z\.transform<z\.output<typeof schema>, ReturnType<typeof normalize>>\(normalize\)\)\)/);
+  const before = evaluate(source, mini, 'S'), after = evaluate(result.output, mini, 'S');
+  for (const value of [{ values: [' A ', 'b'] }, { values: [2] }, { values: ['a'], extra: true }]) {
+    assert.deepEqual(outcome(after, value), outcome(before, value));
+  }
+  assert.equal(convert(result.output).output, result.output);
+
+  const imported = `import { z } from 'zod/mini';\nimport { normalize } from './normalizer';\nconst S = z.pipe(z.strictObject({ values: z.array(z.string()) }), z.transform(normalize));\n`;
+  assert.match(transformSource(imported, 'fixture.ts', { importedPureTransforms: new Set(['normalize']) }).output,
+    /\.apply\(\(schema\) => z\.pipe\(schema, z\.transform<z\.output<typeof schema>, ReturnType<typeof normalize>>\(normalize\)\)\)/);
+  assert.equal(transformSource(imported, 'fixture.ts').output, imported);
+
+  const fixture = mkdtempSync(join(resolve('.'), '.project', 'tmp', 'zod-mini-named-pipe-'));
+  try {
+    const path = join(fixture, 'schema.ts');
+    const typeAssertions = `\ndeclare const output: z.output<typeof S>;\nconst exposed: Readonly<{ values: readonly string[] }> = output;\nconst input: z.input<typeof S> = { values: ['a'] };\n`;
+    const check = code => {
+      writeFileSync(path, code + typeAssertions);
+      return spawnSync(process.execPath, [resolve('scripts/workspaces/runTypeScriptCli.mjs'),
+        '--noEmit', '--strict', '--skipLibCheck', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
+        '--target', 'ES2022', path], { cwd: resolve('.'), encoding: 'utf8' });
+    };
+    const prior = check(source);
+    assert.notEqual(prior.status, 0);
+    assert.match(prior.stdout + prior.stderr, /TS2345/);
+    const compiled = check(result.output);
+    assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
+
+    const asyncSource = `import { z } from 'zod/mini';\nasync function normalizeAsync(value: Readonly<{ values: readonly string[] }>): Promise<Readonly<{ values: readonly string[] }>> { return { values: value.values.map(item => item.trim()) }; }\nconst S = z.pipe(z.strictObject({ values: z.array(z.string()) }), z.transform(normalizeAsync));\n`;
+    const asyncResult = convert(asyncSource);
+    assert.deepEqual(asyncResult.unresolved, []);
+    assert.match(asyncResult.output, /z\.transform<z\.output<typeof schema>, ReturnType<typeof normalizeAsync>>\(normalizeAsync\)/);
+    assert.match(check(asyncSource).stdout, /TS2345/);
+    const asyncCompiled = check(asyncResult.output);
+    assert.equal(asyncCompiled.status, 0, asyncCompiled.stdout + asyncCompiled.stderr);
+    const beforeAsync = evaluate(asyncSource, mini, 'S'), afterAsync = evaluate(asyncResult.output, mini, 'S');
+    for (const value of [{ values: [' a '] }, { values: [1] }]) {
+      const summarize = async schema => {
+        const parsed = await schema.safeParseAsync(value);
+        return parsed.success ? { success: true, data: parsed.data } : {
+          success: false, issues: parsed.error.issues.map(({ code, path, message }) => ({ code, path, message })),
+        };
+      };
+      assert.deepEqual(await summarize(afterAsync), await summarize(beforeAsync));
+    }
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+
+  const anonymous = `import { z } from 'zod/mini';\nconst S = z.pipe(z.string(), z.transform(value => value.trim()));\n`;
+  assert.equal(convert(anonymous).output, anonymous);
+  const generic = `import { z } from 'zod/mini';\nfunction identity<T extends Readonly<{ values: readonly string[] }>>(value: T): T { return value; }\nconst S = z.pipe(z.strictObject({ values: z.array(z.string()) }), z.transform(identity));\n`;
+  assert.equal(convert(generic).output, generic);
+  for (const modifier of ['', 'export ']) {
+    const overloaded = `import { z } from 'zod/mini';\n${modifier}function normalize(value: string): string;\n${modifier}function normalize(value: number): number;\n${modifier}function normalize(value: string | number): string | number { return value; }\nconst S = z.pipe(z.string(), z.transform(normalize));\n`;
+    const refused = convert(overloaded);
+    assert.equal(refused.output, overloaded);
+    assert.ok(refused.unresolved.some(item => item.method === 'transform'));
+  }
+});
+
 test('strict, strip, passthrough, default factories and refinement order retain behavior', () => {
   classic.config(classic.locales.en());
   mini.config(mini.locales.en());
@@ -131,14 +419,147 @@ test('strict, strip, passthrough, default factories and refinement order retain 
   assert.notEqual(first, second);
 });
 
+test('enum subsets select entry keys and preserve inherited or explicit error policy', () => {
+  classic.config(classic.locales.en());
+  mini.config(mini.locales.en());
+  const keySource = `import { z } from 'zod';\nconst Base = z.enum({ Foo: 'foo', Bar: 'bar' });\nconst Extracted = Base.extract(['Foo']);\nconst Excluded = Base.exclude(['Foo']);\n`;
+  const keyResult = convert(keySource);
+  assert.deepEqual(keyResult.unresolved, []);
+  const keyBefore = evaluate(keySource, classic, '({ Extracted, Excluded })');
+  const keyAfter = evaluate(keyResult.output, mini, '({ Extracted, Excluded })');
+  for (const name of ['Extracted', 'Excluded']) for (const value of ['foo', 'bar']) {
+    assert.deepEqual(outcome(keyAfter[name], value), outcome(keyBefore[name], value));
+  }
+  const source = `import { z } from 'zod';
+const Base = z.enum({ Foo: 'foo', Bar: 'bar', Alias: 'foo' }, { error: 'base enum' }).refine(() => false, 'base check');
+const Extracted = Base.extract(['Alias', 'Foo']);
+const Excluded = Base.exclude(['Foo', 'Foo']);
+const Empty = Base.extract([]);
+const Override = Base.exclude(['Foo'], { error: 'override enum' });
+const StringOverride = Base.extract(['Foo'], 'string enum');
+const UndefinedOverride = Base.extract(['Foo'], undefined);
+const Invalid = () => Base.extract(['missing']);
+let evaluations = 0;
+function makeEnum() { evaluations++; return z.enum({ Foo: 'foo', Bar: 'bar' }); }
+const Once = makeEnum().extract(['Foo']);
+`;
+  const result = convert(source);
+  assert.deepEqual(result.unresolved, []);
+  const names = '({ Extracted, Excluded, Empty, Override, StringOverride, UndefinedOverride, Invalid, Once, evaluations })';
+  const before = evaluate(source, classic, names), after = evaluate(result.output, mini, names);
+  for (const name of ['Extracted', 'Excluded', 'Empty', 'Override', 'StringOverride', 'UndefinedOverride', 'Once']) {
+    assert.deepEqual(after[name]._zod.def.entries, before[name]._zod.def.entries, name);
+    assert.deepEqual(after[name].options, before[name].options, name);
+    for (const value of ['foo', 'bar', 'Foo', 'missing']) {
+      assert.deepEqual(outcome(after[name], value), outcome(before[name], value), name);
+    }
+  }
+  assert.equal(after.evaluations, before.evaluations);
+  assert.equal(after.evaluations, 1);
+  assert.throws(before.Invalid, /Key missing not found in enum/);
+  assert.throws(after.Invalid, /Key missing not found in enum/);
+  assert.equal(convert(result.output).output, result.output);
+});
+
+test('preprocess contexts preserve inline, named, forwarded and shared refinement issue behavior', () => {
+  const source = `import { z } from 'zod';
+const Shape = z.object({ required: z.unknown() }).strict();
+const fields = Object.entries(Shape.shape);
+const Inline = z.preprocess((value, context) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  if (fields.some(([key, schema]) => (!Object.hasOwn(value, key) && !(schema instanceof z.ZodOptional)) || Object.hasOwn(value, key) && !Object.prototype.propertyIsEnumerable.call(value, key))) {
+    context.addIssue({ code: 'custom', message: 'required own field', path: ['required'] });
+  }
+  return { ...value };
+}, Shape);
+function addIssue(context: z.RefinementCtx) { context.addIssue({ code: 'custom', message: 'bad input', path: ['value'] }); }
+function normalize(value: unknown, context: z.RefinementCtx) { if (value === 'bad') addIssue(context); return value; }
+function shared(value: unknown, context: z.RefinementCtx) { if (value === 'bad') context.addIssue({ code: 'custom', message: 'shared', path: ['shared'] }); return value; }
+const Named = z.preprocess(normalize, z.string());
+const Shared = z.preprocess(shared, z.string());
+const Refined = z.string().superRefine(shared);
+`;
+  const result = convert(source);
+  assert.deepEqual(result.unresolved, []);
+  const names = '({ Inline, Named, Shared, Refined })';
+  const before = evaluate(source, classic, names), after = evaluate(result.output, mini, names);
+  const hidden = Object.defineProperty({}, 'required', { value: null, enumerable: false });
+  for (const value of [{}, hidden, { required: null }, { required: null, extra: true }]) {
+    assert.deepEqual(outcome(after.Inline, value), outcome(before.Inline, value));
+  }
+  const parseWithInput = (schema, value) => {
+    const parsed = schema.safeParse(value, { reportInput: true });
+    return parsed.success ? parsed : { success: false, issues: parsed.error.issues };
+  };
+  for (const name of ['Named', 'Shared', 'Refined']) for (const value of ['ok', 'bad', 3]) {
+    assert.deepEqual(parseWithInput(after[name], value), parseWithInput(before[name], value), name);
+  }
+  assert.equal(convert(result.output).output, result.output);
+});
+
+test('preprocess refuses opaque or escaping context callbacks atomically', () => {
+  for (const declaration of [
+    `import { normalize } from './external.js';`,
+    `const normalize = getNormalizer();`,
+    `function normalize(value: unknown, context: z.RefinementCtx) { external(value, context); return value; }`,
+    `function normalize(value: string): string; function normalize(value: unknown, context?: z.RefinementCtx) { return value; }`,
+  ]) {
+    const source = `import { z } from 'zod';\n${declaration}\nconst S = z.preprocess(normalize, z.string());\n`;
+    const result = convert(source);
+    assert.ok(result.unresolved.some(item => item.method === 'context'), declaration);
+    assert.equal(result.output, source);
+  }
+});
+
+test('enum subsets and preprocess contexts preserve semantic TypeScript input and output types', () => {
+  const source = `import { z } from 'zod';
+const Base = z.enum({ Foo: 'foo', Bar: 'bar', Count: 1 } as const, { error: 'base enum' });
+const Extracted = Base.extract(['Foo', 'Count']);
+const Excluded = Base.exclude(['Foo']);
+const ArrayBase = z.enum(['a', 'b', 'c']);
+const ArrayExtracted = ArrayBase.extract(['a', 'c']);
+const ArrayExcluded = ArrayBase.exclude(['b']);
+function normalize(value: unknown, context: z.RefinementCtx) { if (value === 'bad') context.addIssue({ code: 'custom', message: 'bad' }); return value; }
+const Processed = z.preprocess(normalize, z.string());
+const InlineProcessed = z.preprocess((value: unknown, context: z.RefinementCtx) => { if (value === 'bad') context.addIssue({ code: 'custom', message: 'bad' }); return value; }, z.string());
+`;
+  const assertions = `
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Assert<T extends true> = T;
+type ExtractInput = Assert<Equal<z.input<typeof Extracted>, 'foo' | 1>>;
+type ExtractOutput = Assert<Equal<z.output<typeof Extracted>, 'foo' | 1>>;
+type ExcludeInput = Assert<Equal<z.input<typeof Excluded>, 'bar' | 1>>;
+type ExcludeOutput = Assert<Equal<z.output<typeof Excluded>, 'bar' | 1>>;
+type ArrayExtractOutput = Assert<Equal<z.output<typeof ArrayExtracted>, 'a' | 'c'>>;
+type ArrayExcludeOutput = Assert<Equal<z.output<typeof ArrayExcluded>, 'a' | 'c'>>;
+type PreprocessInput = Assert<Equal<z.input<typeof Processed>, unknown>>;
+type PreprocessOutput = Assert<Equal<z.output<typeof Processed>, string>>;
+type InlinePreprocessOutput = Assert<Equal<z.output<typeof InlineProcessed>, string>>;
+`;
+  const converted = convert(source);
+  assert.deepEqual(converted.unresolved, []);
+  const fixture = mkdtempSync(join(resolve('.'), '.project', 'tmp', 'zod-mini-subset-types-'));
+  try {
+    const path = join(fixture, 'schema.ts');
+    for (const text of [source, converted.output]) {
+      writeFileSync(path, text + assertions);
+      const checked = spawnSync(process.execPath, [resolve('scripts/workspaces/runTypeScriptCli.mjs'),
+        '--strict', '--skipLibCheck', '--noEmit', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', path],
+      { cwd: resolve('.'), encoding: 'utf8' });
+      assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+    }
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+  assert.equal(convert(converted.output).output, converted.output);
+});
+
 test('literal enum extract and exclude preserve members, order, and parse failures', () => {
   classic.config(classic.locales.en());
   mini.config(mini.locales.en());
   const source = `import { z } from 'zod';\nconst lazyZodSchema = f => f();\nconst Base = lazyZodSchema(() => z.enum(['a', 'b', 'c']));\nconst Kept = lazyZodSchema(() => Base.extract(['c', 'a']));\nconst Removed = lazyZodSchema(() => Base.exclude(['b']));\n`;
   const result = convert(source);
   assert.deepEqual(result.unresolved, []);
-  assert.match(result.output, /z\.enum\(\(\['c', 'a'\] as const\)\.map/);
-  assert.match(result.output, /values\.filter/);
   const before = evaluate(source, classic, '({ Kept, Removed })');
   const after = evaluate(result.output, mini, '({ Kept, Removed })');
   for (const key of ['Kept', 'Removed']) {
@@ -153,13 +574,233 @@ test('named enum exclusions preserve literal output and reject an absent member'
   const source = `import { z } from 'zod';\nconst EXCLUDED = ['b'] as const;\nconst Base = z.enum(['a', 'b', 'c']);\nconst Removed = Base.exclude(EXCLUDED);\nconst Invalid = () => Base.exclude(['missing']);\n`;
   const converted = convert(source);
   assert.deepEqual(converted.unresolved, []);
-  assert.match(converted.output, /<const Values extends readonly string\[], const Excluded extends readonly Values\[number\]\[]>/);
   const before = evaluate(source, classic, '({ Removed, Invalid })');
   const after = evaluate(converted.output, mini, '({ Removed, Invalid })');
   assert.deepEqual(after.Removed.options, before.Removed.options);
   for (const value of ['a', 'b', 'c', 'x']) assert.deepEqual(outcome(after.Removed, value), outcome(before.Removed, value));
   assert.throws(before.Invalid, /Key missing not found in enum/);
   assert.throws(after.Invalid, /Key missing not found in enum/);
+});
+
+test('extracts imported literal-map enum members without widening or admitting absent keys', () => {
+  classic.config(classic.locales.en());
+  mini.config(mini.locales.en());
+  const source = `import { z } from 'zod';\nimport { CODES } from './producer.js';\nconst Base = z.enum(['a', 'b', 'c']);\nconst Selected = Base.extract([CODES.second, CODES.first]);\nconst Invalid = () => Base.extract([CODES.absent]);\n`;
+  const proof = new Map([['CODES', { first: 'a', second: 'b', absent: 'missing' }]]);
+  const converted = transformSource(source, 'fixture.ts', { importedLiteralObjects: proof });
+  assert.deepEqual(converted.unresolved, []);
+  const withRuntimeCodes = code => code.replace("import { CODES } from './producer.js';", "const CODES = { first: 'a', second: 'b', absent: 'missing' } as const;");
+  const before = evaluate(withRuntimeCodes(source), classic, '({ Selected, Invalid })');
+  const after = evaluate(withRuntimeCodes(converted.output), mini, '({ Selected, Invalid })');
+  assert.deepEqual(after.Selected.options, before.Selected.options);
+  for (const value of ['a', 'b', 'c', 'x']) assert.deepEqual(outcome(after.Selected, value), outcome(before.Selected, value));
+  assert.throws(before.Invalid, /Key missing not found in enum/);
+  assert.throws(after.Invalid, /Key missing not found in enum/);
+  const withoutProof = transformSource(source, 'fixture.ts');
+  assert.equal(withoutProof.changed, false);
+  assert.deepEqual(withoutProof.unresolved.map(item => item.method), ['extract', 'extract']);
+});
+
+test('CLI proves only exported as-const string maps for enum extraction', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-enum-map-'));
+  try {
+    const producer = join(fixture, 'producer.ts');
+    const consumer = join(fixture, 'consumer.ts');
+    writeFileSync(producer, `import { z } from 'zod/mini';\nexport const CODES = { first: 'a', second: 'b' } as const;\nexport const WIDE = { first: 'a' };\nexport const Base = z.enum([CODES.first, CODES.second]);\n`);
+    writeFileSync(consumer, `import { z } from 'zod';\nimport { CODES, WIDE, Base } from './producer.js';\nconst Selected = Base.extract([CODES.second]);\nconst Unsafe = () => Base.extract([WIDE.first]);\n`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.equal(report.files[0].changed, false);
+    assert.deepEqual(report.files[0].unresolved.map(item => item.method), ['extract']);
+    assert.equal(report.files[0].unresolved[0].line, 4);
+    writeFileSync(consumer, `import { z } from 'zod';\nimport { CODES, Base } from './producer.js';\nconst Selected = Base.extract([CODES.second]);\n`);
+    const safe = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', '--write', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.equal(safe.files[0].changed, true);
+    assert.deepEqual(safe.files[0].unresolved, []);
+    const output = readFileSync(consumer, 'utf8').replace("import { CODES, Base } from './producer.js';", "const CODES = { first: 'a', second: 'b' } as const; const Base = z.enum([CODES.first, CODES.second]);");
+    const selected = evaluate(output, mini, 'Selected');
+    assert.deepEqual(outcome(selected, 'b'), { success: true, data: 'b' });
+    assert.equal(selected.safeParse('a').success, false);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('scanning an existing source-empty directory reports zero files', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-empty-scan-'));
+  try {
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'scan', relative(repo, fixture)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.equal(report.scanned, 0);
+    assert.deepEqual(report.files, []);
+    assert.deepEqual(report.failures, []);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('an imported SafeParseResult function is not mistaken for a schema factory', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-result-provenance-'));
+  try {
+    const producer = join(fixture, 'producer.ts');
+    const consumer = join(fixture, 'consumer.ts');
+    writeFileSync(producer, `import { z } from 'zod';\nexport function parseValue(raw: unknown): z.ZodSafeParseResult<string> { return z.string().safeParse(raw); }\n`);
+    writeFileSync(consumer, `import { z } from 'zod';\nimport { parseValue } from './producer.js';\nconst Schema = z.string().optional();\nconst parsed = parseValue('x');\nif (parsed.success) console.log(parsed.data);\n`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.equal(report.files[0].changed, true, JSON.stringify(report.files[0]));
+    assert.deepEqual(report.files[0].unresolved, []);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('Object.entries of a typed Zod schema record proves only its value binding', () => {
+  const source = `import { z } from 'zod';\nfunction partial(shape: Readonly<Record<string, z.ZodTypeAny>>) {\n  return Object.fromEntries(Object.entries(shape).map(([field, fieldSchema]) => [field, fieldSchema.optional()]));\n}\n`;
+  const converted = transformSource(source, 'fixture.ts');
+  assert.deepEqual(converted.unresolved, []);
+  assert.match(converted.output, /z\.optional\(fieldSchema\)/);
+  const ordinary = `import { z } from 'zod';\nconst Schema = z.string();\nfunction project(values: Readonly<Record<string, { optional(): string }>>) {\n  return Object.entries(values).map(([key, value]) => [key, value.optional()]);\n}\n`;
+  const untouched = transformSource(ordinary, 'fixture.ts');
+  assert.deepEqual(untouched.unresolved, []);
+  assert.match(untouched.output, /value\.optional\(\)/);
+});
+
+test('a primitive-constrained literal factory retains singleton reflection through union options', () => {
+  const source = `import { z } from 'zod';\nfunction member<const Family extends string>(family: Family) { return z.object({ family: z.literal(family), entriesById: z.record(z.string(), z.string()).default({}) }); }\nconst Union = z.union([member('one'), member('two')]);\nconst selected = Union.options.find(schema => schema.shape.family.value === 'one');\nconst entry = selected!.shape.entriesById.unwrap().valueType;\n`;
+  const converted = transformSource(source, 'fixture.ts');
+  assert.deepEqual(converted.unresolved, []);
+  assert.match(converted.output, /schema\.shape\.family\._zod\.def\.values\[0\]/);
+  assert.match(converted.output, /selected!\.shape\.entriesById\._zod\.def\.innerType\._zod\.def\.valueType/);
+  const before = evaluate(source, classic, '({ selected, entry })');
+  const after = evaluate(converted.output, mini, '({ selected, entry })');
+  assert.equal(before.selected.shape.family.value, after.selected.shape.family._zod.def.values[0]);
+  for (const value of ['ok', 42]) assert.deepEqual(outcome(before.entry, value), outcome(after.entry, value));
+  const multi = transformSource(`import { z } from 'zod';\nconst Multi = z.literal(['a', 'b']);\nconst one = Multi.value;\n`, 'fixture.ts');
+  assert.equal(multi.changed, false);
+  assert.deepEqual(multi.unresolved.map(item => item.method), ['value']);
+});
+
+test('CLI proves imported singleton family and wrapped record reflection without a Zod import', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-imported-family-'));
+  try {
+    const producer = join(fixture, 'producer.ts');
+    const consumer = join(fixture, 'consumer.ts');
+    writeFileSync(producer, `import { z } from 'zod/mini';\nfunction member<const Family extends string>(family: Family) { return z.strictObject({ family: z.literal(family), entriesById: z._default(z.record(z.string(), z.string()), {}) }); }\nexport const Union = z.union([member('one'), member('two')]);\n`);
+    writeFileSync(consumer, `import { Union } from './producer.js';\nconst selected = Union.options.find(schema => schema.shape.family.value === 'one');\nconst entry = selected!.shape.entriesById.unwrap().valueType;\n`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', '--write', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.equal(report.files[0].changed, true);
+    assert.deepEqual(report.files[0].unresolved, []);
+    const output = readFileSync(consumer, 'utf8');
+    assert.match(output, /schema\.shape\.family\._zod\.def\.values\[0\]/);
+    assert.match(output, /selected!\.shape\.entriesById\._zod\.def\.innerType\._zod\.def\.valueType/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('CLI follows an overloaded exported Mini factory through local return helpers', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-overloaded-factory-'));
+  try {
+    const producer = join(fixture, 'producer.ts');
+    const consumer = join(fixture, 'consumer.ts');
+    writeFileSync(producer, `import { z } from 'zod/mini';\nfunction terminalObject(zod: typeof z) { return zod.object({ mode: zod.string() }); }\nfunction owner(zod: typeof z) {\n  const schema = (<T extends z.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(terminalObject(zod));\n  return (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new zod.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(zod.transform((value) => value), schema);\n}\nfunction legacy(zod: typeof z) {\n  return (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new zod.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(zod.transform((value) => value), (<T extends z.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(terminalObject(zod)));\n}\nexport function create(zod: typeof z, context: 'owner'): ReturnType<typeof owner>;\nexport function create(zod: typeof z, context?: 'legacy'): ReturnType<typeof legacy>;\nexport function create(zod: typeof z, context: 'owner' | 'legacy' = 'legacy') { return context === 'owner' ? owner(zod) : legacy(zod); }\n`);
+    writeFileSync(consumer, `import { z } from 'zod';\nimport { create } from './producer.js';\nconst S = create(z).optional();\n`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', '--write', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.equal(report.files[0].changed, true, JSON.stringify(report.files[0]));
+    assert.deepEqual(report.files[0].unresolved, []);
+    assert.match(readFileSync(consumer, 'utf8'), /z\.optional\(create\(z\)\)/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('current terminal metadata factory caller receives a functional Mini wrapper', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-terminal-metadata-'));
+  try {
+    const consumer = join(fixture, 'consumer.ts');
+    writeFileSync(consumer, `import { z } from 'zod';\nimport { createSessionTerminalMetadataSchema } from '@happier-dev/protocol/sessions/metadata/terminalMetadata';\nconst S = createSessionTerminalMetadataSchema(z).optional();\n`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', '--write', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.equal(report.files[0].changed, true, JSON.stringify(report.files[0]));
+    assert.deepEqual(report.files[0].unresolved, []);
+    assert.match(readFileSync(consumer, 'utf8'), /z\.optional\(createSessionTerminalMetadataSchema\(z\)\)/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('CLI scans and converts an imported array of Mini literal-object schemas without a Zod import', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-schema-array-'));
+  try {
+    const producer = join(fixture, 'producer.ts');
+    const consumer = join(fixture, 'consumer.ts');
+    writeFileSync(producer, `import { z } from 'zod/mini';\nexport const Schemas = [z.object({ kind: z.literal('one') }), z.object({ kind: z.literal('two') })];\n`);
+    writeFileSync(consumer, `import { Schemas } from './producer.js';\nconst kinds = Schemas.map(schema => schema.shape.kind.value);\nconst data = [{ shape: { kind: { value: 'ordinary' } } }];\nconst ordinary = data.map(item => item.shape.kind.value);\n`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', '--write', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.equal(report.files[0].changed, true, JSON.stringify(report.files[0]));
+    assert.deepEqual(report.files[0].unresolved, []);
+    assert.match(readFileSync(consumer, 'utf8'), /schema\.shape\.kind\._zod\.def\.values\[0\]/);
+    assert.match(readFileSync(consumer, 'utf8'), /item\.shape\.kind\.value/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('scan skips the generated password worker but retains authored UI public source', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const scratch = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-ui-public-'));
+  try {
+    const generated = join(scratch, 'apps/ui/public/happier-password-kdf-worker.js');
+    const authored = join(scratch, 'apps/ui/public/schema.ts');
+    mkdirSync(join(scratch, 'apps/ui/public'), { recursive: true });
+    writeFileSync(generated, `import { z } from 'zod'; const Generated = z.string();\n`);
+    writeFileSync(authored, `import { z } from 'zod'; const Authored = z.string();\n`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), '--root', scratch, 'scan', 'apps/ui/public'],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.equal(report.scanned, 1);
+    assert.deepEqual(report.files.map(file => file.file), ['apps/ui/public/schema.ts']);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test('import resolver treats an exported declaration without initializer as unknown', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-uninitialized-export-'));
+  try {
+    const producer = join(fixture, 'producer.ts');
+    const consumer = join(fixture, 'consumer.ts');
+    writeFileSync(producer, `export let optionalValue: unknown;\n`);
+    writeFileSync(consumer, `import { z } from 'zod';\nimport { optionalValue } from './producer.js';\nconst S = z.string().optional();\nvoid optionalValue;\n`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.deepEqual(report.failures, []);
+    assert.equal(report.files[0].changed, true);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 test('keyof options stay public enum options while an imported union shape uses core options', () => {
@@ -525,6 +1166,127 @@ test('relative export proof distinguishes schema aliases, neutral DSL, and descr
   }
 });
 
+test('source-proven VoiceSchema factory chains keep their own array method', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  mkdirSync(join(repo, '.project', 'tmp'), { recursive: true });
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-voice-schema-'));
+  try {
+    writeFileSync(join(fixture, 'producer.ts'), `export type VoiceSchema<T> = Readonly<{ parse(value: unknown): T; safeParse(value: unknown): { success: boolean }; optional(): VoiceSchema<T | undefined>; array(): VoiceSchema<T[]> }>;
+export function withVoiceSchemaField<T>(schema: VoiceSchema<T>, field: string): VoiceSchema<T> { return schema; }
+`);
+    const consumer = join(fixture, 'consumer.ts');
+    writeFileSync(consumer, `import { z } from 'zod';
+import { withVoiceSchemaField } from './producer.js';
+const Base = z.string();
+const WrappedSchema = withVoiceSchemaField(Base, 'field');
+const VoiceList = WrappedSchema.array();
+const ZodList = Base.array();
+`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', '--write', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.deepEqual(report.files[0].unresolved, []);
+    const converted = readFileSync(consumer, 'utf8');
+    assert.match(converted, /const VoiceList = WrappedSchema\.array\(\)/);
+    assert.match(converted, /const ZodList = z\.array\(Base\)/);
+  } finally {
+    rmSync(fixture, { recursive: true });
+  }
+});
+
+test('a stored-read identity keeps its imported Mini schema lineage', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  mkdirSync(join(repo, '.project', 'tmp'), { recursive: true });
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-stored-read-lineage-'));
+  try {
+    const consumer = join(fixture, 'consumer.ts');
+    writeFileSync(consumer, `import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { MachinePoolSelectionOriginV1Schema } from '@happier-dev/protocol/machines/pools/v1';
+const Metadata = z.object({ origin: createStoredReadSchema(MachinePoolSelectionOriginV1Schema).optional() });
+`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', '--write', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.deepEqual(report.files[0].unresolved, []);
+    assert.match(readFileSync(consumer, 'utf8'), /z\.optional\(createStoredReadSchema\(MachinePoolSelectionOriginV1Schema\)\)/);
+  } finally {
+    rmSync(fixture, { recursive: true });
+  }
+});
+
+test('a typed native Mini pipe factory retains Zod lineage through an identity projection', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  mkdirSync(join(repo, '.project', 'tmp'), { recursive: true });
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-pipe-lineage-'));
+  try {
+    writeFileSync(join(fixture, 'identity.ts'), `import { z } from 'zod/mini';
+export function defineStoredReadProjection<T extends z.core.$ZodType>(schema: T): T { return schema; }
+`);
+    writeFileSync(join(fixture, 'producer.ts'), `import { z } from 'zod/mini';
+import { defineStoredReadProjection } from './identity.js';
+function createRuntimeDescriptorV1Schema(zod: typeof z) {
+  const schema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new zod.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(zod.transform(value => value), zod.looseObject({ v: zod.literal(1) }));
+  return defineStoredReadProjection(schema);
+}
+export const RuntimeDescriptorV1Schema = createRuntimeDescriptorV1Schema(z);
+`);
+    const consumer = join(fixture, 'consumer.ts');
+    writeFileSync(consumer, `import { z } from 'zod';
+import { RuntimeDescriptorV1Schema } from './producer.js';
+const Metadata = z.object({ runtime: RuntimeDescriptorV1Schema.optional() });
+`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', '--write', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.deepEqual(report.files[0].unresolved, []);
+    assert.match(readFileSync(consumer, 'utf8'), /z\.optional\(RuntimeDescriptorV1Schema\)/);
+  } finally {
+    rmSync(fixture, { recursive: true });
+  }
+});
+
+test('a Mini lazy facade defers a check without adding an undeclared runtime dependency', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  mkdirSync(join(repo, '.project', 'tmp'), { recursive: true });
+  const scratch = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-plugin-lazy-'));
+  try {
+    const protocol = join(scratch, 'packages/protocol');
+    const plugin = join(scratch, 'packages/plugins/codex');
+    mkdirSync(join(protocol, 'src'), { recursive: true });
+    mkdirSync(join(plugin, 'src'), { recursive: true });
+    writeFileSync(join(protocol, 'package.json'), JSON.stringify({ name: '@happier-dev/protocol',
+      exports: { './base': { 'happier-source': './src/base.ts' },
+        './lazyZodSchema': { 'happier-source': './src/lazyZodSchema.ts' } } }));
+    writeFileSync(join(protocol, 'src/base.ts'), `import { z } from 'zod/mini';
+export const BaseSchema = lazyZodSchema(() => z.strictObject({ id: z.string() }));
+`);
+    writeFileSync(join(protocol, 'src/lazyZodSchema.ts'), `export function lazyZodSchema<T>(getter: () => T): T { return getter(); }
+`);
+    writeFileSync(join(plugin, 'package.json'), JSON.stringify({ name: '@happier-dev/plugin-codex',
+      devDependencies: { '@happier-dev/protocol': '0.0.0' } }));
+    const consumer = join(plugin, 'src/runtimeConfig.ts');
+    writeFileSync(consumer, `import { z } from 'zod';
+import { BaseSchema } from '@happier-dev/protocol/base';
+const Derived = BaseSchema.superRefine((value, ctx) => { if (!value.id) ctx.addIssue({ code: 'custom', message: 'missing' }); });
+`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), '--root', scratch, 'apply', '--write', 'packages/plugins/codex/src/runtimeConfig.ts'],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.deepEqual(report.files[0].unresolved, []);
+    const converted = readFileSync(consumer, 'utf8');
+    assert.doesNotMatch(converted, /import \{ lazyZodSchema \}/);
+    assert.match(converted, /BaseSchema\.check\(z\.superRefine/);
+    const repeated = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), '--root', scratch, 'apply', '--write', 'packages/plugins/codex/src/runtimeConfig.ts'],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.deepEqual(repeated.files[0].unresolved, []);
+    assert.equal(readFileSync(consumer, 'utf8'), converted);
+  } finally {
+    rmSync(scratch, { recursive: true });
+  }
+});
+
 test('CLI applies to an explicit scratch root using scratch package exports and refuses an outside path', () => {
   const repo = resolve(import.meta.dirname, '../../..');
   mkdirSync(join(repo, '.project', 'tmp'), { recursive: true });
@@ -615,6 +1377,43 @@ test('an exported const-asserted schema record proves only its Zod member fields
     const output = readFileSync(consumer, 'utf8');
     assert.match(output, /z\.extend\(Records\['action\.run'\], \{ b: z\.number\(\) \}\)/);
     assert.match(output, /Records\.meta\.optional\(\)/);
+  } finally {
+    rmSync(fixture, { recursive: true });
+  }
+});
+
+test('imported one-argument transform functions are source-proven through re-exports', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  mkdirSync(join(repo, '.project', 'tmp'), { recursive: true });
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-pure-transform-'));
+  const cli = join(repo, 'scripts/codemods/zod-mini/cli.mjs');
+  try {
+    writeFileSync(join(fixture, 'producer.ts'), `export function pure(value: unknown) { return value; }\nexport function contextual(value: unknown, context: { addIssue(issue: unknown): void }) { context.addIssue({ code: 'custom' }); return value; }\nexport function sneaky(value: unknown) { return arguments[1] ?? value; }\nexport function generic<T>(value: T): T { return value; }\nexport function overloaded(value: string): string;\nexport function overloaded(value: number): number;\nexport function overloaded(value: string | number) { return value; }\n`);
+    writeFileSync(join(fixture, 'barrel.ts'), `export { pure as normalize, contextual, sneaky, generic, overloaded } from './producer.js';\n`);
+    const pure = join(fixture, 'pure.ts');
+    writeFileSync(pure, `import { z } from 'zod';\nimport { normalize } from './barrel.js';\nconst S = z.unknown().transform(normalize);\n`);
+    const safeReport = JSON.parse(execFileSync(process.execPath,
+      [cli, 'apply', '--write', relative(repo, pure)], { cwd: repo, encoding: 'utf8' }));
+    assert.deepEqual(safeReport.files[0].unresolved, []);
+    assert.match(readFileSync(pure, 'utf8'), /z\.pipe\(z\.unknown\(\), z\.transform\(normalize\)\)/);
+    for (const name of ['contextual', 'sneaky']) {
+      const unsafe = join(fixture, `${name}.ts`);
+      const source = `import { z } from 'zod';\nimport { ${name} } from './barrel.js';\nconst S = z.unknown().transform(${name});\n`;
+      writeFileSync(unsafe, source);
+      const report = JSON.parse(execFileSync(process.execPath,
+        [cli, 'apply', '--write', relative(repo, unsafe)], { cwd: repo, encoding: 'utf8' }));
+      assert.ok(report.files[0].unresolved.some(item => item.method === 'context'));
+      assert.equal(readFileSync(unsafe, 'utf8'), source);
+    }
+    for (const name of ['generic', 'overloaded']) {
+      const unsafe = join(fixture, `${name}-pipe.ts`);
+      const source = `import { z } from 'zod/mini';\nimport { ${name} } from './barrel.js';\nconst S = z.pipe(z.string(), z.transform(${name}));\n`;
+      writeFileSync(unsafe, source);
+      const report = JSON.parse(execFileSync(process.execPath,
+        [cli, 'apply', '--write', relative(repo, unsafe)], { cwd: repo, encoding: 'utf8' }));
+      assert.ok(report.files[0].unresolved.some(item => item.method === 'context'));
+      assert.equal(readFileSync(unsafe, 'utf8'), source);
+    }
   } finally {
     rmSync(fixture, { recursive: true });
   }
@@ -843,6 +1642,18 @@ test('derived strict retains checks and Mini strict object output typing via nat
   assert.deepEqual(repaired.unresolved, []);
   assert.match(repaired.output, /z\.core\.clone\(schema, \{ \.\.\.schema\._zod\.def, catchall: z\.never\(\) \}\)/);
   assert.equal(convert(repaired.output).output, repaired.output);
+});
+
+test('strict policy on a proven catch-unwrapped object uses a strict clone, not catchall-never typing', () => {
+  const source = `import { z } from 'zod/mini';\nconst Wrapped = z.catch(z.object({ v: z.literal(1), title: z.string() }), { v: 1, title: 'default' });\nconst Strict = z.catchall(Wrapped._zod.def.innerType, z.never());\n`;
+  const result = convert(source);
+  assert.deepEqual(result.unresolved, []);
+  assert.match(result.output, /z\.core\.clone\(schema, \{ \.\.\.schema\._zod\.def, catchall: z\.never\(\) \}\) as z\.ZodMiniObject<T\['shape'\], z\.core\.\$strict>/);
+  const before = evaluate(source, mini, 'Strict'), after = evaluate(result.output, mini, 'Strict');
+  for (const value of [{ v: 1, title: 'ok' }, { v: 1, title: 'ok', extra: true }, { title: 'ok' }]) {
+    assert.deepEqual(outcome(after, value), outcome(before, value));
+  }
+  assert.equal(convert(result.output).output, result.output);
 });
 
 test('multi-statement local Zod factories prove their sole return and ambiguous branches refuse', () => {
@@ -1160,4 +1971,152 @@ test('a cold schema facade unwrap resolves to its concrete non-wrapper schema', 
   const result = convert(source);
   assert.deepEqual(result.unresolved, []);
   assert.match(result.output, /const Inner = ObjectSchema;/);
+});
+
+test('CLI preserves wrapped object field provenance when removing an imported catch and field default', () => {
+  classic.config(classic.locales.en());
+  mini.config(mini.locales.en());
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-imported-wrapped-field-'));
+  try {
+    const producer = join(fixture, 'producer.ts');
+    const consumer = join(fixture, 'consumer.ts');
+    writeFileSync(producer, `import { z } from 'zod/mini';\nexport const Settings = z.catch(z.looseObject({ quietHoursOverride: z._default(z.discriminatedUnion('mode', [z.looseObject({ mode: z.literal('account') }), z.looseObject({ mode: z.literal('custom'), timezone: z.string() })]), { mode: 'account' }) }), { quietHoursOverride: { mode: 'account' } });\n`);
+    const source = `import { Settings } from './producer.js';\nconst Field = Settings.removeCatch().shape.quietHoursOverride.removeDefault();\n`;
+    writeFileSync(consumer, source);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', '--write', relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.deepEqual(report.failures, []);
+    assert.deepEqual(report.files[0].unresolved, []);
+    const output = readFileSync(consumer, 'utf8');
+    assert.match(output, /Settings\._zod\.def\.innerType\.shape\.quietHoursOverride\._zod\.def\.innerType/);
+    const native = mini.catch(mini.looseObject({ quietHoursOverride: mini._default(mini.discriminatedUnion('mode', [
+      mini.looseObject({ mode: mini.literal('account') }),
+      mini.looseObject({ mode: mini.literal('custom'), timezone: mini.string() }),
+    ]), { mode: 'account' }) }), { quietHoursOverride: { mode: 'account' } });
+    const projected = new Function('Settings', output.replace(/^import[^\n]+\n/gm, '') + '\nreturn Field;')(native);
+    assert.equal(projected, native._zod.def.innerType.shape.quietHoursOverride._zod.def.innerType);
+    const expected = classic.discriminatedUnion('mode', [
+      classic.object({ mode: classic.literal('account') }).passthrough(),
+      classic.object({ mode: classic.literal('custom'), timezone: classic.string() }).passthrough(),
+    ]);
+    for (const value of [undefined, { mode: 'account', future: true }, { mode: 'custom', timezone: 'UTC' }, { mode: 'custom' }]) {
+      assert.deepEqual(outcome(projected, value), outcome(expected, value));
+    }
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('CLI inventories ignored authored source while excluding generated and dependency inputs', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-ignored-authored-'));
+  try {
+    mkdirSync(join(fixture, '.git'));
+    writeFileSync(join(fixture, '.gitignore'), '**/credentials.ts\n');
+    const file = 'apps/ui/sources/credentials.ts';
+    const source = `import { z } from 'zod';\nexport const Credentials = z.object({ token: z.string() }).strict();\n`;
+    for (const path of [file, 'apps/cli/node_modules/dependency.ts', 'apps/cli/dist/output.ts',
+      'apps/cli/dist.source/output.ts', 'apps/cli/dist-test/output.ts',
+      'apps/ui/.happier/snapshot/credentials.ts', 'apps/ui/sources/._credentials.ts',
+      'apps/cli/src/generated/projected.ts', 'apps/ui/public/happier-password-kdf-worker.js',
+      'apps/ui/sources/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts.js']) {
+      mkdirSync(join(fixture, path, '..'), { recursive: true });
+      writeFileSync(join(fixture, path), source);
+    }
+    const scan = path => JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), '--root', fixture, 'scan', path],
+      { cwd: repo, encoding: 'utf8' }));
+    const explicit = scan(file);
+    assert.deepEqual(explicit.files.map(item => item.file), [file]);
+    const directory = scan('apps');
+    assert.ok(directory.files.some(item => item.file === file), 'directory inventory must include ignored authored credentials');
+    assert.deepEqual(directory.files.map(item => item.file), [file]);
+    assert.deepEqual(directory.files.find(item => item.file === file).imports, explicit.files[0].imports);
+    assert.deepEqual(directory.failures, []);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('CLI retains authored distribution directories when pruning dist outputs', () => {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-authored-distribution-'));
+  try {
+    const file = 'apps/cli/src/plugins/distribution/npm/profiles/credentials.ts';
+    const source = `import { z } from 'zod';\nexport const Credentials = z.object({ token: z.string() }).strict();\n`;
+    for (const path of [file, 'apps/cli/dist/output.ts', 'apps/cli/dist.source/output.ts', 'apps/cli/dist-test/output.ts']) {
+      mkdirSync(join(fixture, path, '..'), { recursive: true });
+      writeFileSync(join(fixture, path), source);
+    }
+    const scan = path => JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), '--root', fixture, 'scan', path],
+      { cwd: repo, encoding: 'utf8' }));
+    const explicit = scan(file);
+    const directory = scan('apps');
+    assert.deepEqual(directory.files.map(item => item.file), [file]);
+    assert.deepEqual(directory.files[0].imports, explicit.files[0].imports);
+    assert.deepEqual(directory.failures, []);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('CLI follows exported aliases of canonical native Mini preprocess pipes', () => {
+  classic.config(classic.locales.en());
+  mini.config(mini.locales.en());
+  const repo = resolve(import.meta.dirname, '../../..');
+  const fixture = mkdtempSync(join(repo, '.project', 'tmp', 'zod-mini-imported-preprocess-alias-'));
+  try {
+    const producer = join(fixture, 'producer.ts');
+    const consumer = join(fixture, 'consumer.ts');
+    const source = `import * as z from 'zod';\nfunction normalize(raw: unknown): unknown { return typeof raw === 'string' ? { value: raw.trim() } : raw; }\nexport const DescriptorSchema = z.preprocess(normalize, z.object({ value: z.string().min(1) }).strict());\nexport const DescriptorV1Schema = DescriptorSchema;\n`;
+    writeFileSync(producer, source);
+    writeFileSync(consumer, `import { DescriptorV1Schema } from './producer.js';\nexport const Maybe = DescriptorV1Schema.optional();\n`);
+    const report = JSON.parse(execFileSync(process.execPath,
+      [join(repo, 'scripts/codemods/zod-mini/cli.mjs'), 'apply', '--write', relative(repo, producer), relative(repo, consumer)],
+      { cwd: repo, encoding: 'utf8' }));
+    assert.deepEqual(report.failures, []);
+    assert.deepEqual(report.files.flatMap(file => file.unresolved), []);
+    const output = readFileSync(consumer, 'utf8');
+    assert.match(output, /z\.optional\(DescriptorV1Schema\)/);
+    const before = evaluate(source.replace(/\bexport /g, ''), classic, 'DescriptorV1Schema').optional();
+    const descriptor = evaluate(readFileSync(producer, 'utf8').replace(/\bexport /g, ''), mini, 'DescriptorV1Schema');
+    const body = ts.transpileModule(output.replace(/^import[^\n]+\n/gm, '').replace(/\bexport /g, ''), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const after = new Function('z', 'DescriptorV1Schema', `${body}\nreturn Maybe;`)(mini, descriptor);
+    for (const value of [undefined, ' ready ', { value: 1 }, { value: '', extra: true }]) {
+      assert.deepEqual(outcome(after, value), outcome(before, value));
+    }
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('Classic scalar annotations preserve their concrete input types without narrowing native coercion', t => {
+  const source = "import { z, ZodString as NamedString } from 'zod';\n"
+    + "export const text: z.ZodString = z.string();\nexport const count: z.ZodNumber = z.number();\n"
+    + "export const enabled: z.ZodBoolean = z.boolean();\nexport const big: z.ZodBigInt = z.bigint();\n"
+    + "export const date: z.ZodDate = z.date();\nexport const symbol: z.ZodSymbol = z.symbol();\n"
+    + "export const named: NamedString = z.string();\nexport const runtime = text instanceof z.ZodString && named instanceof NamedString;\n";
+  const converted = convert(source);
+  assert.deepEqual(converted.unresolved, []);
+  const native = "import { z } from 'zod/mini';\nexport const implicit: z.ZodMiniString = z.coerce.string();\nexport const explicit: z.ZodMiniString<unknown> = z.coerce.string();\n";
+  assert.equal(convert(native).output, native, 'authored native Mini defaults and explicit unknown remain deliberate');
+  const root = resolve(import.meta.dirname, '../../..');
+  const cache = join(root, '.project', 'tmp'); mkdirSync(cache, { recursive: true });
+  const fixture = mkdtempSync(join(cache, 'zod-mini-scalar-input-'));
+  t.after(() => rmSync(fixture, { recursive: true, force: true }));
+  const contracts = converted.output + "\ntype Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;\ntype Assert<T extends true> = T;\n"
+    + "type Text = Assert<Equal<z.input<typeof text>, string>>;\ntype Count = Assert<Equal<z.input<typeof count>, number>>;\n"
+    + "type Enabled = Assert<Equal<z.input<typeof enabled>, boolean>>;\ntype Big = Assert<Equal<z.input<typeof big>, bigint>>;\n"
+    + "type DateInput = Assert<Equal<z.input<typeof date>, Date>>;\ntype SymbolInput = Assert<Equal<z.input<typeof symbol>, symbol>>;\n"
+    + "type Named = Assert<Equal<z.input<typeof named>, string>>;\n";
+  const path = join(fixture, 'contracts.mts'); writeFileSync(path, contracts);
+  const checked = spawnSync(process.execPath, [join(root, 'scripts/workspaces/runTypeScriptCli.mjs'), '--ignoreConfig',
+    '--strict', '--skipLibCheck', '--noEmit', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', path], { cwd: root, encoding: 'utf8' });
+  assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+  assert.equal(convert(converted.output).output, converted.output);
 });

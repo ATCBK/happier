@@ -3,10 +3,11 @@
  * callbacks remain the main codemod's responsibility. A refused flow leaves
  * the caller free to reject the whole file before applying any overrides.
  */
-export function analyzeTransformContexts({ ast, ts, isTransformCall, isZ, miniAlias }) {
+export function analyzeTransformContexts({ ast, ts, isTransformCall, isZ, miniAlias, isPureNamedTransform, isNativePayloadContextHelper }) {
   const overrides = new Map();
   const unresolved = [];
   const functions = new Map();
+  const declarationCounts = new Map();
   const uses = new Map();
   const contexts = new Map();
   const seenProblems = new Set();
@@ -56,9 +57,37 @@ export function analyzeTransformContexts({ ast, ts, isTransformCall, isZ, miniAl
     }
     return false;
   };
+  const nestedFunctionAt = (reference, name) => {
+    for (let scope = reference.parent; scope && scope !== ast; scope = scope.parent) {
+      if (ts.isBlock(scope)) {
+        const declarations = [];
+        for (const statement of scope.statements) {
+          if (ts.isFunctionDeclaration(statement) && statement.name?.text === name) declarations.push(statement);
+          if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) {
+            if (ts.isIdentifier(declaration.name) && declaration.name.text === name) declarations.push(declaration);
+          }
+        }
+        if (declarations.length) return declarations.length === 1 && ts.isFunctionDeclaration(declarations[0])
+          ? { fn: declarations[0] } : { shadowed: true };
+      }
+      if (isFunction(scope) && scope.parameters.some(parameter => ts.isIdentifier(parameter.name)
+        && parameter.name.text === name)) return { shadowed: true };
+      if (ts.isCatchClause(scope) && scope.variableDeclaration && ts.isIdentifier(scope.variableDeclaration.name)
+        && scope.variableDeclaration.name.text === name) return { shadowed: true };
+    }
+    return null;
+  };
+  const contextFreeOneArgument = fn => {
+    if (!fn.body || fn.parameters.length !== 1 || fn.parameters[0].dotDotDotToken) return false;
+    let usesArguments = false;
+    visit(fn.body, node => { if (ts.isIdentifier(node) && node.text === 'arguments') usesArguments = true; });
+    return !usesArguments;
+  };
 
   for (const statement of ast.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.name && statement.body) {
+    if (ts.isFunctionDeclaration(statement) && statement.name) {
+      declarationCounts.set(statement.name.text, (declarationCounts.get(statement.name.text) ?? 0) + 1);
+      if (!statement.body) continue;
       if (functions.has(statement.name.text)) problem(statement.name, 'context', 'local helper name has multiple declarations');
       else functions.set(statement.name.text, statement);
     }
@@ -88,9 +117,22 @@ export function analyzeTransformContexts({ ast, ts, isTransformCall, isZ, miniAl
     const callback = node.arguments[0];
     if (callback && isFunction(callback) && callback.parameters.length >= 2) addRole(callback, 1, role, callback, true);
     else if (callback && ts.isIdentifier(callback)) {
-      const fn = functions.get(callback.text);
-      if (!fn) {
-        if (role === 'transform') problem(callback, 'context', 'named Zod callback is not a unique local function');
+      const nested = nestedFunctionAt(callback, callback.text);
+      if (!nested && role === 'transform' && (declarationCounts.get(callback.text) ?? 0) > 1) {
+        problem(callback, 'context', 'named Zod callback has multiple declarations');
+        return;
+      }
+      const fn = nested?.fn ?? (nested ? null : functions.get(callback.text));
+      if (nested?.shadowed) {
+        if (role === 'transform') problem(callback, 'context', 'named Zod callback is shadowed');
+      } else if (nested?.fn && role === 'transform' && contextFreeOneArgument(nested.fn)) {
+        // A sole argument cannot receive Classic's context or Mini's payload.
+      } else if (nested?.fn && role === 'transform') {
+        problem(callback, 'context', 'nested Zod callback may observe its context');
+      } else if (!fn) {
+        if (role === 'transform' && isPureNamedTransform?.(callback) !== true) {
+          problem(callback, 'context', 'named Zod callback is not a unique local function');
+        }
       } else if (shadowedAt(callback, callback.text)) {
         if (role === 'transform') problem(callback, 'context', 'named Zod callback is shadowed');
       } else if (fn.parameters.length >= 2) addRole(fn, 1, role, callback);
@@ -123,7 +165,8 @@ export function analyzeTransformContexts({ ast, ts, isTransformCall, isZ, miniAl
               continue;
             }
             const callee = functions.get(node.expression.text);
-            if (!callee) {
+            if (!callee || (declarationCounts.get(node.expression.text) ?? 0) > 1) {
+              if (!callee && role === 'transform' && isNativePayloadContextHelper?.(node.expression, index) === true) continue;
               if (role === 'transform') problem(node, 'context', 'context is forwarded outside a unique local helper');
               continue;
             }
@@ -207,7 +250,11 @@ export function analyzeTransformContexts({ ast, ts, isTransformCall, isZ, miniAl
 
   // A local, exclusively transformed helper must not have unclassified calls.
   for (const entry of contexts.values()) {
-    if (entry.inline || !entry.roles.has('transform')) continue;
+    if (!entry.roles.has('transform')) continue;
+    if (entry.inline) {
+      if (refinementType(entry.param.type)) overrides.set(entry.param.type, () => `${alias()}.core.ParsePayload`);
+      continue;
+    }
     if (migratedType(entry.param.type)) continue;
     if (!refinementType(entry.param.type)) {
       problem(entry.param, 'context', 'named transform context lacks a proven RefinementCtx type');

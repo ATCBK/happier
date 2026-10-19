@@ -11,7 +11,8 @@ const keep = new Set('parse safeParse parseAsync safeParseAsync check with clone
 const wrappers = new Map([['default', '_default'], ...'optional nullable nullish nonoptional prefault catch readonly array extend safeExtend merge pick omit partial required keyof catchall pipe'.split(' ').map(x => [x, x])]);
 const checks = new Set('trim toLowerCase toUpperCase regex refine superRefine describe meta multipleOf positive negative nonpositive nonnegative startsWith endsWith includes lowercase uppercase overwrite base64 base64url hex'.split(' '));
 const formats = new Map([['email', 'email'], ['url', 'url'], ['uuid', 'uuid'], ['datetime', 'iso.datetime']]);
-const types = new Map([['ZodType', 'ZodMiniType'], ['ZodTypeAny', 'ZodMiniType'], ['ZodObject', 'ZodMiniObject'], ['ZodArray', 'ZodMiniArray'], ['ZodString', 'ZodMiniString'], ['ZodNumber', 'ZodMiniNumber'], ['ZodIssue', 'core.$ZodIssue'], ['ZodError', 'core.$ZodError'], ['ZodRawShape', 'core.$ZodShape'], ['ZodSafeParseResult', 'core.util.SafeParseResult'], ['RefinementCtx', 'core.$RefinementCtx']]);
+const types = new Map([['ZodType', 'ZodMiniType'], ['ZodTypeAny', 'ZodMiniType'], ['ZodObject', 'ZodMiniObject'], ['ZodArray', 'ZodMiniArray'], ['ZodString', 'ZodMiniString'], ['ZodNumber', 'ZodMiniNumber'], ['ZodIssue', 'core.$ZodIssue'], ['ZodError', 'core.$ZodError'], ['ZodRawShape', 'core.$ZodShape'], ['ZodSafeParseResult', 'core.util.SafeParseResult'], ['ZodSafeParseSuccess', 'core.util.SafeParseSuccess'], ['ZodSafeParseError', 'core.util.SafeParseError'], ['RefinementCtx', 'core.$RefinementCtx']]);
+const classicScalarInputs = new Map([['ZodString', 'string'], ['ZodNumber', 'number'], ['ZodBoolean', 'boolean'], ['ZodBigInt', 'bigint'], ['ZodDate', 'Date']]);
 const miniTypeName = name => types.get(name) ?? (/^Zod[A-Z]/.test(name) && `ZodMini${name.slice(3)}` in mini.z ? `ZodMini${name.slice(3)}` : null);
 const reflective = new Set('extend safeExtend merge pick omit partial required keyof catchall check refine superRefine strict strip passthrough loose extract exclude'.split(' '));
 const possible = new Set('optional nullable nullish nonoptional default prefault catch readonly brand array or and pipe transform refine superRefine min max length size nonempty int safe finite gt gte lt lte step nonnegative positive nonpositive negative multipleOf safeExtend extend merge pick omit partial required strict passthrough loose strip catchall keyof trim toLowerCase toUpperCase regex email url uuid datetime base64 base64url hex describe meta unwrap removeDefault removeCatch toJSONSchema format flatten extract exclude options rest startsWith endsWith includes lowercase uppercase overwrite'.split(' '));
@@ -27,7 +28,7 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
   const ast = project.createSourceFile(fileName, source).compilerNode;
   const imports = [], unresolved = [], edits = [];
   let needsLazyHelper = false;
-  const namespaces = new Set(), miniNamespaces = new Set(), namedSchemaTypes = new Set(), namedCoreAliases = new Map(), vars = new Map(), bindings = new Map(), localFunctions = new Map(), occupiedTopLevel = new Set(), api = Object.create(null);
+  const namespaces = new Set(), staticNamespaces = new Set(), dynamicNamespaces = new Set(), dynamicBindings = new Set(), sameSourceDynamicBindings = new Set(), staticNamedImports = new Map(), miniNamespaces = new Set(), namedSchemaTypes = new Set(), namedCoreAliases = new Map(), vars = new Map(), bindings = new Map(), localFunctions = new Map(), localFunctionDeclarationCount = new Map(), occupiedTopLevel = new Set(), api = Object.create(null);
   let coreAliasIndex = 0;
   const nextCoreAlias = () => {
     let alias;
@@ -37,6 +38,9 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
   const importedSchemas = options.importedSchemas ?? new Set();
   const importedSchemaFactories = options.importedSchemaFactories ?? new Set();
   const importedNeutralSchemas = options.importedNeutralSchemas ?? new Set();
+  const importedLiteralObjects = options.importedLiteralObjects ?? new Map();
+  const importedPureTransforms = options.importedPureTransforms ?? new Set();
+  const importedNativePayloadContexts = options.importedNativePayloadContexts ?? new Map();
   const transformIssueCalls = new Map();
   const transformRawIssuePushes = new Set();
   const seenUnresolved = new Set();
@@ -76,11 +80,15 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
     if (importBinding && ts.isNamespaceImport(importBinding)) occupiedTopLevel.add(importBinding.name.text);
     if (importBinding && ts.isNamedImports(importBinding)) for (const element of importBinding.elements) occupiedTopLevel.add(element.name.text);
     const module = statement.moduleSpecifier.text;
+    if (importBinding && ts.isNamedImports(importBinding)) for (const element of importBinding.elements) {
+      staticNamedImports.set(element.name.text, { module, name: element.propertyName?.text ?? element.name.text });
+    }
     if (!zodModules.has(module)) continue;
     const names = [], clause = statement.importClause;
     if (clause?.name) names.push(`default:${clause.name.text}`);
     if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
       namespaces.add(clause.namedBindings.name.text);
+      staticNamespaces.add(clause.namedBindings.name.text);
       if (module === 'zod/mini') miniNamespaces.add(clause.namedBindings.name.text);
       names.push(`*:${clause.namedBindings.name.text}`);
     }
@@ -90,6 +98,7 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
         names.push(`${name}:${element.name.text}`);
         if (name === 'z') {
           namespaces.add(element.name.text);
+          staticNamespaces.add(element.name.text);
           if (module === 'zod/mini') miniNamespaces.add(element.name.text);
         } else if (!factoryOnly && classicModules.has(module)) {
           const mapped = miniTypeName(name);
@@ -114,11 +123,68 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
     }
   }
 
+  function dynamicObjectPattern(node) {
+    const directAwait = node.parent;
+    if (ts.isAwaitExpression(directAwait) && directAwait.expression === node
+      && ts.isVariableDeclaration(directAwait.parent) && directAwait.parent.initializer === directAwait) {
+      return ts.isObjectBindingPattern(directAwait.parent.name) ? directAwait.parent.name : null;
+    }
+    const array = node.parent;
+    if (!ts.isArrayLiteralExpression(array)) return null;
+    const all = array.parent;
+    if (!ts.isCallExpression(all) || all.arguments[0] !== array
+      || !ts.isPropertyAccessExpression(all.expression) || !ts.isIdentifier(all.expression.expression)
+      || all.expression.expression.text !== 'Promise' || all.expression.name.text !== 'all') return null;
+    const awaited = all.parent;
+    if (!ts.isAwaitExpression(awaited) || !ts.isVariableDeclaration(awaited.parent)
+      || awaited.parent.initializer !== awaited || !ts.isArrayBindingPattern(awaited.parent.name)) return null;
+    const entry = awaited.parent.name.elements[array.elements.indexOf(node)];
+    return entry && ts.isObjectBindingPattern(entry.name) ? entry.name : null;
+  }
+  function dynamicZBinding(node) {
+    return dynamicObjectPattern(node)?.elements.find(element =>
+      (element.propertyName?.text ?? element.name.getText(ast)) === 'z'
+      && ts.isIdentifier(element.name)) ?? null;
+  }
+  walk(ast, node => {
+    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)
+      && ts.isStringLiteral(node.argument.literal) && zodModules.has(node.argument.literal.text)) {
+      const module = node.argument.literal.text;
+      imports.push({ file: fileName, line: line(node), module, names: [`type:${node.qualifier?.getText(ast) ?? '*'}`] });
+      if (!factoryOnly && classicModules.has(module)
+        && (!node.qualifier || !ts.isIdentifier(node.qualifier)
+          || !['infer', 'input', 'output'].includes(node.qualifier.text))) {
+        mark(node, 'type-import', 'dynamic Zod type requires an explicit Mini/core mapping');
+      }
+    }
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword
+      && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0])) {
+      const module = node.arguments[0].text;
+      for (const binding of dynamicObjectPattern(node)?.elements ?? []) {
+        if (!ts.isIdentifier(binding.name)) continue;
+        const previous = staticNamedImports.get(binding.name.text);
+        if (previous?.module === module
+          && previous.name === (binding.propertyName?.text ?? binding.name.text)) sameSourceDynamicBindings.add(binding);
+      }
+      if (!zodModules.has(module)) return;
+      const binding = dynamicZBinding(node);
+      imports.push({ file: fileName, line: line(node), module, names: binding ? [`dynamic:z:${binding.name.text}`] : ['dynamic:unresolved'] });
+      if (!binding) {
+        if (!factoryOnly && classicModules.has(module)) mark(node, 'dynamic-import', 'runtime Zod namespace binding is not source-proven');
+      } else {
+        namespaces.add(binding.name.text);
+        dynamicNamespaces.add(binding.name.text);
+        dynamicBindings.add(binding);
+      }
+    }
+  });
+
   function collect(node) {
     if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node)) && ts.isIdentifier(node.name)) {
       if (!bindings.has(node.name.text)) bindings.set(node.name.text, []);
       bindings.get(node.name.text).push(node);
-      if (namespaces.has(node.name.text) || importedSchemas.has(node.name.text) || namedCoreAliases.has(node.name.text)) mark(node.name, node.name.text, 'imported Zod/schema symbol is shadowed');
+      if (!dynamicBindings.has(node) && !sameSourceDynamicBindings.has(node)
+        && (namespaces.has(node.name.text) || importedSchemas.has(node.name.text) || namedCoreAliases.has(node.name.text))) mark(node.name, node.name.text, 'imported Zod/schema symbol is shadowed');
       vars.set(node.name.text, node);
     }
   }
@@ -143,7 +209,11 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
     return best;
   }
   for (const statement of ast.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.name && statement.body) localFunctions.set(statement.name.text, statement);
+    if (ts.isFunctionDeclaration(statement) && statement.name) {
+      const name = statement.name.text;
+      localFunctionDeclarationCount.set(name, (localFunctionDeclarationCount.get(name) ?? 0) + 1);
+      if (statement.body) localFunctions.set(name, statement);
+    }
   }
   function soleReturnExpression(fn) {
     if (!fn || !(ts.isFunctionDeclaration(fn) || ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) return null;
@@ -162,7 +232,9 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
   const neutralConstructors = new Set(['defineProtocolObject', 'defineProtocolUnion', 'createProtocolComposableSchema']);
   function isNeutralSchema(node, seen = new Set()) {
     if (unwrap(node)) return isNeutralSchema(node.expression, seen);
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) return neutralConstructors.has(node.expression.text);
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      return neutralConstructors.has(node.expression.text) || importedNeutralSchemas.has(node.expression.text);
+    }
     if (!ts.isIdentifier(node) || seen.has(node.text)) return false;
     if (importedNeutralSchemas.has(node.text)) return true;
     seen.add(node.text);
@@ -227,15 +299,8 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
     }
   };
   const miniAlias = () => factoryOnly ? ([...miniNamespaces][0] ?? freshMiniAlias())
-    : [...namespaces][0] ?? (vars.has('z') || occupiedTopLevel.has('z') ? freshMiniAlias() : 'z');
-  const transformContexts = analyzeTransformContexts({
-    ast, source, ts, isZ, miniAlias,
-    isTransformCall: node => ts.isCallExpression(node)
-      && ts.isPropertyAccessExpression(node.expression)
-      && node.expression.name.text === 'transform'
-      && isZ(node.expression.expression),
-  });
-  for (const { node, method, reason } of transformContexts.unresolved) mark(node, method, reason);
+    : [...staticNamespaces][0] ?? (dynamicNamespaces.size ? freshMiniAlias()
+      : vars.has('z') || occupiedTopLevel.has('z') ? freshMiniAlias() : 'z');
   const objectPolicyClone = (runtime, base, catchall, config) => {
     const typeZ = miniAlias();
     return `(<T extends ${typeZ}.ZodMiniObject>(schema: T) => ${runtime}.core.clone(schema, { ...schema._zod.def, catchall: ${catchall} }) as ${typeZ}.ZodMiniObject<T['shape'], ${typeZ}.core.$${config}>)(${base})`;
@@ -259,6 +324,9 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
     && node.parent.parent.expression === node.parent && !!schema(node.parent.parent);
   const hasReflectiveChain = node => ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
     && (reflective.has(node.expression.name.text) || hasReflectiveChain(node.expression.expression));
+  const deferredFacadeCheck = node => ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+    && ['refine', 'superRefine', 'check'].includes(node.expression.name.text)
+    && !!schema(node.expression.expression)?.facade;
   function fieldInitializer(shape, name, seen = new Set()) {
     if (!shape) return null;
     if (unwrap(shape)) return fieldInitializer(shape.expression, name, seen);
@@ -306,6 +374,32 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
     }
     return fields;
   }
+  function schemaRecordValueAlias(type) {
+    if (!type || !ts.isTypeReferenceNode(type)) return null;
+    if (ts.isIdentifier(type.typeName) && type.typeName.text === 'Readonly'
+      && type.typeArguments?.length === 1) return schemaRecordValueAlias(type.typeArguments[0]);
+    if (!ts.isIdentifier(type.typeName) || type.typeName.text !== 'Record'
+      || type.typeArguments?.length !== 2 || type.typeArguments[0].kind !== ts.SyntaxKind.StringKeyword) return null;
+    const value = type.typeArguments[1];
+    if (!ts.isTypeReferenceNode(value)) return null;
+    if (ts.isQualifiedName(value.typeName) && isZ(value.typeName.left)
+      && /^Zod(?:Mini)?(?:Type|Object|Array|String|Number)/.test(value.typeName.right.text)) return value.typeName.left.text;
+    if (ts.isIdentifier(value.typeName) && namedSchemaTypes.has(value.typeName.text)) return [...namespaces][0] ?? null;
+    return null;
+  }
+  function singleLiteralArgument(node) {
+    if (ts.isStringLiteral(node) || ts.isNumericLiteral(node)
+      || node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) return true;
+    if (!ts.isIdentifier(node)) return false;
+    const variable = bindingFor(node);
+    if (!variable?.type) return false;
+    const primitive = constraint => constraint && [ts.SyntaxKind.StringKeyword,
+      ts.SyntaxKind.NumberKeyword, ts.SyntaxKind.BooleanKeyword].includes(constraint.kind);
+    if (primitive(variable.type)) return true;
+    if (!ts.isTypeReferenceNode(variable.type) || !ts.isIdentifier(variable.type.typeName)) return false;
+    const generic = variable.parent?.typeParameters?.find(parameter => parameter.name.text === variable.type.typeName.text);
+    return !!generic && primitive(generic.constraint);
+  }
   function schema(node, seen = new Set()) {
     if (unwrap(node)) return schema(node.expression, seen);
     if (ts.isIdentifier(node)) {
@@ -314,6 +408,25 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
       const guarded = guardedSchema(node);
       if (guarded) return guarded;
       const variable = bindingFor(node);
+      if (variable && ts.isBindingElement(variable) && ts.isArrayBindingPattern(variable.parent)
+        && ts.isParameter(variable.parent.parent) && ts.isArrowFunction(variable.parent.parent.parent)) {
+        const callback = variable.parent.parent.parent;
+        const map = callback.parent;
+        if (ts.isCallExpression(map) && map.arguments[0] === callback
+          && ts.isPropertyAccessExpression(map.expression) && map.expression.name.text === 'map'
+          && ts.isCallExpression(map.expression.expression)
+          && ts.isPropertyAccessExpression(map.expression.expression.expression)
+          && ts.isIdentifier(map.expression.expression.expression.expression)
+          && map.expression.expression.expression.expression.text === 'Object'
+          && map.expression.expression.expression.name.text === 'entries'
+          && map.expression.expression.arguments.length === 1
+          && ts.isIdentifier(map.expression.expression.arguments[0])
+          && variable.parent.elements.indexOf(variable) === 1) {
+          const record = bindingFor(map.expression.expression.arguments[0]);
+          const alias = schemaRecordValueAlias(record?.type);
+          if (alias) return { alias, kind: 'unknown' };
+        }
+      }
       if (variable && ts.isParameter(variable) && ts.isIdentifier(variable.name)
         && variable.parent?.parameters?.[0] === variable
         && ts.isCallExpression(variable.parent.parent)
@@ -330,7 +443,10 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
         let literal = collection;
         if (ts.isIdentifier(literal)) literal = bindingFor(literal)?.initializer;
         while (literal && unwrap(literal)) literal = literal.expression;
+        const importedArray = ts.isIdentifier(collection) && importedSchemas instanceof Map
+          ? importedSchemas.get(collection.text) : null;
         const options = union?.kind === 'union' ? union.options
+          : importedArray?.kind === 'schemaArray' ? importedArray.elements
           : literal && ts.isArrayLiteralExpression(literal)
             ? literal.elements.map(option => schema(option, new Set(seen))) : null;
         if (options?.length && options.every(option => option?.kind === 'object')) {
@@ -357,6 +473,34 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
       }
       if (variable && ts.isBindingElement(variable) && !variable.dotDotDotToken
         && ts.isArrayBindingPattern(variable.parent) && ts.isVariableDeclaration(variable.parent.parent)) {
+        const declaration = variable.parent.parent;
+        const list = declaration.parent;
+        const loop = list.parent;
+        if (!variable.initializer && ts.isVariableDeclarationList(list)
+          && list.flags & ts.NodeFlags.Const && list.declarations.length === 1
+          && ts.isForOfStatement(loop) && loop.initializer === list) {
+          let rows = loop.expression;
+          while (unwrap(rows)) rows = rows.expression;
+          if (ts.isArrayLiteralExpression(rows) && rows.elements.length) {
+            const index = variable.parent.elements.indexOf(variable);
+            const members = rows.elements.map(row => {
+              while (unwrap(row)) row = row.expression;
+              if (!ts.isArrayLiteralExpression(row) || row.elements.slice(0, index + 1).some(ts.isSpreadElement)) return null;
+              const value = row.elements[index];
+              return value ? schema(value, new Set(seen)) : null;
+            });
+            if (members.every(Boolean)) return {
+              alias: members[0].alias,
+              kind: members.every(member => member.kind === members[0].kind) ? members[0].kind : 'unknown',
+              cold: members.some(member => member.cold),
+            };
+            const access = node.parent;
+            if (members.some(Boolean) && ts.isPropertyAccessExpression(access) && access.expression === node
+              && ts.isCallExpression(access.parent) && access.parent.expression === access && possible.has(access.name.text)) {
+              mark(access.name, access.name.text, 'tuple schema column is not proven for every row');
+            }
+          }
+        }
         const source = variable.parent.parent.initializer;
         if (source && ts.isPropertyAccessExpression(source) && source.name.text === 'options') {
           let owner = source.expression;
@@ -426,7 +570,7 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
         const meta = importedSchemas instanceof Map ? importedSchemas.get(node.text) : {};
         return { alias: [...namespaces][0] ?? null, kind: meta?.kind ?? 'unknown', cold: meta?.cold ?? false, factory: meta?.bridge ?? false, enumSimple: meta?.enumSimple ?? false,
           literalSingleton: meta?.literalSingleton ?? false,
-          wrapper: meta?.wrapper, fields: meta?.fields, element: meta?.element, options: meta?.options, facade: meta?.facade };
+          wrapper: meta?.wrapper, fields: meta?.fields, element: meta?.element, elements: meta?.elements, options: meta?.options, facade: meta?.facade };
       }
       return null;
     }
@@ -445,6 +589,14 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
         owner = owner.expression.expression;
       const base = schema(owner, new Set(seen));
       if (base?.kind === 'union') return { ...base, kind: 'unionOptions' };
+    }
+    if (ts.isPropertyAccessExpression(node) && node.name.text === 'innerType'
+      && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'def'
+      && ts.isPropertyAccessExpression(node.expression.expression)
+      && node.expression.expression.name.text === '_zod') {
+      const base = schema(node.expression.expression.expression, new Set(seen));
+      if (base?.wrapper && ['optional', 'nullable', 'nullish', 'nonoptional', 'default', '_default', 'prefault', 'catch', 'readonly'].includes(base.wrapper))
+        return { ...base, wrapper: undefined };
     }
     if (ts.isPropertyAccessExpression(node)) {
       if (ts.isIdentifier(node.expression)) {
@@ -485,6 +637,10 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
     if (ts.isPropertyAccessExpression(node) && node.name.text === 'element') {
       const base = schema(node.expression, seen);
       return base?.kind === 'array' ? base.element ? { ...base.element, alias: base.alias } : { ...base, kind: 'unknown', wrapper: undefined } : null;
+    }
+    if (ts.isPropertyAccessExpression(node) && node.name.text === 'valueType') {
+      const base = schema(node.expression, seen);
+      return base?.kind === 'recordSchema' ? base.element ? { ...base.element, alias: base.alias } : { ...base, kind: 'unknown', wrapper: undefined } : null;
     }
     if (ts.isElementAccessExpression(node) && ts.isPropertyAccessExpression(node.expression)
       && node.expression.name.text === 'options') {
@@ -585,27 +741,43 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
         : ['number', 'int'].includes(method) ? 'number'
         : method === 'literal' ? 'literal'
         : ['array', 'tuple'].includes(method) ? 'array'
+        : method === 'record' || method === 'partialRecord' ? 'recordSchema'
         : ['set', 'map', 'file'].includes(method) ? 'collection'
         : ['object', 'strictObject', 'looseObject', 'extend', 'safeExtend', 'merge', 'pick', 'omit', 'partial', 'required', 'catchall'].includes(method) ? 'object'
         : ['enum', 'nativeEnum', 'keyof'].includes(method) ? 'enum'
         : ['union', 'discriminatedUnion'].includes(method) ? 'union' : 'unknown';
-      return { alias, kind, directFactory: method, enumSimple: method === 'enum' && node.arguments.length === 1,
-        literalSingleton: method === 'literal' && node.arguments.length === 1
-          && (ts.isStringLiteral(node.arguments[0]) || ts.isNumericLiteral(node.arguments[0])
-            || node.arguments[0].kind === ts.SyntaxKind.TrueKeyword || node.arguments[0].kind === ts.SyntaxKind.FalseKeyword),
+      const wrapped = ['optional', 'nullable', 'nullish', 'nonoptional', '_default', 'prefault', 'catch', 'readonly'].includes(method)
+        ? schema(node.arguments[0], new Set(seen)) : null;
+      return { alias, kind: wrapped?.kind ?? kind, directFactory: method, enumSimple: method === 'enum' && node.arguments.length === 1,
+        literalSingleton: method === 'literal' && node.arguments.length === 1 && singleLiteralArgument(node.arguments[0]),
         wrapper: wrapperMethods.has(method) ? method : undefined,
-        shapeNode: kind === 'object' ? node.arguments[0] : undefined,
+        shapeNode: wrapped?.shapeNode ?? (kind === 'object' ? node.arguments[0] : undefined),
         fields: ['object', 'strictObject', 'looseObject'].includes(method) ? shapeFields(node.arguments[0], seen)
           : ['extend', 'safeExtend'].includes(method)
             ? { ...schema(node.arguments[0], new Set(seen))?.fields, ...shapeFields(node.arguments[1], seen) }
-            : kind === 'object' && node.arguments[0] ? schema(node.arguments[0], new Set(seen))?.fields : undefined,
-        element: kind === 'array' ? schema(node.arguments[0], new Set(seen)) : undefined,
+            : wrapped?.fields ?? (kind === 'object' && node.arguments[0] ? schema(node.arguments[0], new Set(seen))?.fields : undefined),
+        element: wrapped?.element ?? (kind === 'array' ? schema(node.arguments[0], new Set(seen))
+          : kind === 'recordSchema' ? schema(node.arguments[1], new Set(seen)) : undefined),
         options: kind === 'union' && ts.isArrayLiteralExpression(method === 'discriminatedUnion' ? node.arguments[1] : node.arguments[0])
           ? (method === 'discriminatedUnion' ? node.arguments[1] : node.arguments[0]).elements.map(option => schema(option, new Set(seen))) : undefined };
     }
     const base = schema(receiver, seen);
     if (!base || ['parse', 'safeParse', 'parseAsync', 'safeParseAsync', 'apply', 'toJSONSchema'].includes(method)) return null;
-    if (base.kind === 'record' || base.kind === 'unionOptions') return null;
+    if (method === 'unwrap' && base.wrapper && base.wrapper !== 'lazy') return { ...base, wrapper: undefined };
+    if (base.kind === 'unionOptions' && method === 'find' && base.options?.length
+      && base.options.every(option => option?.kind === 'object')) {
+      const members = base.options.map(option => option.fields ?? shapeFields(option.shapeNode));
+      const fields = Object.create(null);
+      for (const [field, proof] of Object.entries(members[0] ?? {})) {
+        if (members.every(member => member?.[field]?.kind === proof.kind
+          && member[field].wrapper === proof.wrapper)) fields[field] = {
+          alias: base.alias, kind: proof.kind, wrapper: proof.wrapper,
+          literalSingleton: members.every(member => member[field].literalSingleton),
+        };
+      }
+      return { alias: base.alias, kind: 'object', fields };
+    }
+    if (['record', 'unionOptions', 'schemaArray'].includes(base.kind)) return null;
     const kind = ['extend', 'safeExtend', 'merge', 'pick', 'omit', 'partial', 'required', 'catchall'].includes(method) ? 'object'
       : method === 'keyof' ? 'enum'
       : method === 'array' ? 'array'
@@ -622,6 +794,20 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
 
   // Rebuild only transformed AST subtrees, using original text for every
   // surrounding token and comment. The outer edit wins over its inner edits.
+  const isTransformContextCall = node => ts.isCallExpression(node)
+    && ts.isPropertyAccessExpression(node.expression)
+    && (node.expression.name.text === 'transform'
+      && (isZ(node.expression.expression) || !!schema(node.expression.expression))
+      || node.expression.name.text === 'preprocess' && isZ(node.expression.expression));
+  const transformContexts = analyzeTransformContexts({
+    ast, source, ts, isZ, miniAlias,
+    isPureNamedTransform: node => ts.isIdentifier(node)
+      && importedPureTransforms.has(node.text) && !bindingFor(node),
+    isNativePayloadContextHelper: (node, index) => ts.isIdentifier(node)
+      && importedNativePayloadContexts.get(node.text)?.has(index) && !bindingFor(node),
+    isTransformCall: isTransformContextCall,
+  });
+  for (const { node, method, reason } of transformContexts.unresolved) mark(node, method, reason);
   const typeGuardTarget = predicate => {
     if (!ts.isIdentifier(predicate)) return null;
     const declaration = localFunctions.get(predicate.text);
@@ -633,6 +819,7 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
   };
   function render(node) {
     if (!factoryOnly && ts.isCallExpression(node) && schema(node)?.cold && hasReflectiveChain(node)
+      && !deferredFacadeCheck(node)
       && !insideLazyFactory(node) && !isSchemaChainChild(node)) {
       if (!hasLazyHelper && !canImportLazyHelper) mark(node.expression, 'lazyZodSchema', 'cold derived schema needs an in-scope lazyZodSchema import');
       else {
@@ -645,6 +832,12 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
   function renderNormal(node) {
     const override = transformContexts.overrides.get(node);
     if (override) return override(render);
+    if (ts.isStringLiteral(node) && classicModules.has(node.text)
+      && (ts.isCallExpression(node.parent) && node.parent.expression.kind === ts.SyntaxKind.ImportKeyword
+        || ts.isLiteralTypeNode(node.parent) && ts.isImportTypeNode(node.parent.parent))) {
+      const quote = source[node.getStart(ast)];
+      return `${quote}zod/mini${quote}`;
+    }
     if (ts.isCallExpression(node) && transformIssueCalls.has(node)) {
       const { name: ctx, conciseForEach } = transformIssueCalls.get(node);
       const issue = node.arguments[0];
@@ -664,6 +857,10 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
     }
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const receiver = node.expression.expression, method = node.expression.name.text;
+      if (['format', 'flatten'].includes(method) && schemaSafeParseError(receiver)
+        && node.arguments.length <= 1) {
+        return `${miniAlias()}.${method}Error(${render(receiver)}${node.arguments.length ? `, ${render(node.arguments[0])}` : ''})`;
+      }
       if (method === 'check' && schema(receiver)) {
         const guardChecks = node.arguments.filter(arg => ts.isCallExpression(arg)
           && !arg.typeArguments?.length && ts.isPropertyAccessExpression(arg.expression)
@@ -701,6 +898,21 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
         && node.arguments[1].expression.name.text === 'transform'
         && node.arguments[1].arguments.length === 1) {
         const callback = node.arguments[1].arguments[0];
+        if (miniNamespaces.has(receiver.text) && !bindingFor(receiver)
+          && ts.isIdentifier(callback) && !bindingFor(callback)
+          && (localFunctionDeclarationCount.get(callback.text) ?? 0) > 1) {
+          mark(callback, 'transform', 'overloaded local callback has no unique return type');
+          return raw(node);
+        }
+        if (miniNamespaces.has(receiver.text) && !bindingFor(receiver)
+          && ts.isIdentifier(callback) && !bindingFor(callback)
+          && (importedPureTransforms.has(callback.text)
+            || localFunctions.get(callback.text)?.parameters.length === 1
+              && !localFunctions.get(callback.text)?.typeParameters?.length
+              && localFunctionDeclarationCount.get(callback.text) === 1)) {
+          const typeZ = miniAlias();
+          return `${render(node.arguments[0])}.apply((schema) => ${receiver.text}.pipe(schema, ${node.arguments[1].expression.expression.text}.transform<${typeZ}.output<typeof schema>, ReturnType<typeof ${callback.text}>>(${render(callback)})))`;
+        }
         if ((ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))
           && callback.parameters.length === 1 && ts.isIdentifier(callback.parameters[0].name)
           && !callback.parameters[0].type && callback.type && ts.isTypeQueryNode(callback.type)
@@ -725,7 +937,7 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
         }
       }
       const candidate = schema(receiver);
-      const info = candidate && !['record', 'unionOptions'].includes(candidate.kind) ? candidate : null;
+      const info = candidate && !['record', 'unionOptions', 'schemaArray'].includes(candidate.kind) ? candidate : null;
       if (info && !keep.has(method) && (!factoryOnly || info.factory)) {
         const z = factoryOnly ? miniAlias() : info.alias ?? miniAlias();
         const base = render(receiver), args = node.arguments.map(render), params = args.join(', ');
@@ -751,6 +963,7 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
           return `${z}.tuple(${render(receiver.arguments[0])}, ${params}${receiver.arguments[1] ? `, ${render(receiver.arguments[1])}` : ''})`;
         }
         if (['unwrap', 'removeDefault', 'removeCatch'].includes(method)) {
+          if (method === 'removeCatch' && catchGuardedHere(node, receiver)) return `${base}._zod.def.innerType`;
           if (method === 'unwrap' && info.facade && !info.wrapper) return base;
           if (info.wrapper === 'lazy' && method === 'unwrap') return `${base}._zod.innerType`;
           if (info.wrapper && info.wrapper !== 'lazy'
@@ -761,22 +974,22 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
         }
         if (['extract', 'exclude'].includes(method)) {
           const selections = node.arguments[0];
+          const literalSelection = item => ts.isStringLiteral(item) || ts.isPropertyAccessExpression(item)
+            && ts.isIdentifier(item.expression) && !bindingFor(item.expression)
+            && typeof importedLiteralObjects.get(item.expression.text)?.[item.name.text] === 'string';
           if (info.kind !== 'enum' || !selections || node.arguments.length > 2
-            || method === 'extract' && (!info.enumSimple || !ts.isArrayLiteralExpression(selections)
-              || !selections.elements.length || !selections.elements.every(ts.isStringLiteral))
+            || method === 'extract' && (!ts.isArrayLiteralExpression(selections)
+              || !selections.elements.every(literalSelection))
             || method === 'exclude' && !ts.isArrayLiteralExpression(selections) && !ts.isIdentifier(selections)) {
-            mark(node.expression.name, method, 'enum membership or source error policy is not statically proven');
+            mark(node.expression.name, method, 'enum selection keys are not statically proven');
             return raw(node);
           }
-          if (method === 'extract' && !ts.isIdentifier(receiver) && !ts.isPropertyAccessExpression(receiver)) {
-            mark(node.expression.name, method, 'enum subset needs a stable schema reference');
-            return raw(node);
-          }
-          if (method === 'extract') {
-            const selected = `(${args[0]} as const).map((value) => { if (!${base}.options.includes(value)) throw new Error(\`Key \${value} not found in enum\`); return value; })`;
-            return `${z}.enum(${selected}${args[1] ? `, ${args[1]}` : ''})`;
-          }
-          return `(<const Values extends readonly string[], const Excluded extends readonly Values[number][]>(values: Values, excluded: Excluded) => { for (const value of excluded) if (!values.includes(value)) throw new Error(\`Key \${value} not found in enum\`); return ${z}.enum(values.filter((value): value is Exclude<Values[number], Excluded[number]> => !excluded.some(item => item === value))${args[1] ? `, ${args[1]}` : ''}); })(${base}.options, ${args[0]})`;
+          const typeZ = miniAlias();
+          const subsetType = `${method === 'extract' ? 'Pick' : 'Omit'}<Entries, Keys[number]>`;
+          const entries = method === 'extract' ? '{}' : '{ ...schema._zod.def.entries }';
+          const select = method === 'extract' ? 'entries[key] = schema._zod.def.entries[key]' : 'delete entries[key]';
+          // Zod's native constructor erases the entries generic; the copied key map establishes the narrower type.
+          return `(<Entries extends ${typeZ}.core.util.EnumLike, const Keys extends readonly (keyof Entries)[]>(schema: ${typeZ}.ZodMiniEnum<Entries>, selected: Keys, params?: string | ${typeZ}.core.$ZodEnumParams) => { const keys = new Set<PropertyKey>(Object.keys(schema._zod.def.entries)); const entries: Record<PropertyKey, ${typeZ}.core.util.EnumValue> = ${entries}; for (const key of selected) { if (!keys.has(key)) throw new Error(\`Key \${key as string} not found in enum\`); ${select}; } return new ${z}.ZodMiniEnum({ ...schema._zod.def, checks: [], ...${z}.core.util.normalizeParams(params), entries }) as unknown as ${typeZ}.ZodMiniEnum<${subsetType}>; })(${base}, ${params})`;
         }
         if (wrappers.has(method)) return `${z}.${wrappers.get(method)}(${base}${rest})`;
         if (method === 'or') return `${z}.union([${base}, ${params}])`;
@@ -827,8 +1040,17 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
       && schema(node.expression)?.kind === 'union') return `${render(node.expression)}._zod.def.options`;
     if (!factoryOnly && ts.isPropertyAccessExpression(node) && node.name.text === 'element'
       && schema(node.expression)?.kind === 'array') return `${render(node.expression)}._zod.def.element`;
+    if (!factoryOnly && ts.isPropertyAccessExpression(node) && node.name.text === 'valueType'
+      && schema(node.expression)?.kind === 'recordSchema') return `${render(node.expression)}._zod.def.valueType`;
     if (!factoryOnly && ts.isPropertyAccessExpression(node) && node.name.text === 'maxLength'
       && schema(node.expression)?.kind === 'string') return `${render(node.expression)}._zod.bag.maximum`;
+    if (!factoryOnly && ts.isPropertyAccessExpression(node) && ['minValue', 'maxValue'].includes(node.name.text)
+      && schema(node.expression)?.kind === 'number') {
+      const stable = ts.isIdentifier(node.expression), base = stable ? render(node.expression) : 'schema';
+      const minimum = node.name.text === 'minValue';
+      const value = `(Math.${minimum ? 'max' : 'min'}(${base}._zod.bag.${minimum ? 'minimum' : 'maximum'} ?? Number.${minimum ? 'NEGATIVE' : 'POSITIVE'}_INFINITY, ${base}._zod.bag.exclusive${minimum ? 'Minimum' : 'Maximum'} ?? Number.${minimum ? 'NEGATIVE' : 'POSITIVE'}_INFINITY) ?? null)`;
+      return stable ? value : `(<T extends ${miniAlias()}.ZodMiniNumber>(schema: T) => ${value})(${render(node.expression)})`;
+    }
     if (!factoryOnly && ts.isPropertyAccessExpression(node) && node.name.text === 'value'
       && schema(node.expression)?.kind === 'literal' && schema(node.expression)?.literalSingleton)
       return `${render(node.expression)}._zod.def.values[0]`;
@@ -846,6 +1068,19 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
           return `${render(node.objectType)}['_zod']['def']['options']`;
         if (node.indexType.literal.text === '_output' && proof)
           return `${miniAlias()}.output<${render(node.objectType)}>`;
+      }
+    }
+    if (!factoryOnly && ts.isTypeReferenceNode(node)) {
+      const name = node.typeName;
+      const imported = ts.isIdentifier(name) ? staticNamedImports.get(name.text) : null;
+      const classicName = ts.isQualifiedName(name) && isZ(name.left) ? name.right.text
+        : imported && classicModules.has(imported.module) ? imported.name : null;
+      if (classicName === 'ZodObject' && ts.isQualifiedName(name)
+        && node.typeArguments?.length === 1 && node.typeArguments[0].kind === ts.SyntaxKind.AnyKeyword)
+        return `${name.left.text}.core.$ZodObject`;
+      if (!node.typeArguments?.length) {
+        const input = classicScalarInputs.get(classicName);
+        if (input) return `${render(name)}<${input}>`;
       }
     }
     if (!factoryOnly && ts.isQualifiedName(node) && ts.isIdentifier(node.left)
@@ -876,6 +1111,31 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
     });
     return output + source.slice(cursor, node.end);
   }
+  function schemaSafeParseError(receiver) {
+    if (!ts.isPropertyAccessExpression(receiver) || receiver.name.text !== 'error') return false;
+    let result = receiver.expression;
+    if (ts.isIdentifier(result)) {
+      const declaration = bindingFor(result);
+      if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer) return false;
+      result = declaration.initializer;
+    }
+    return ts.isCallExpression(result) && ts.isPropertyAccessExpression(result.expression)
+      && ['safeParse', 'safeParseAsync'].includes(result.expression.name.text)
+      && !!schema(result.expression.expression);
+  }
+  function catchGuardedHere(node, receiver) {
+    if (!ts.isIdentifier(receiver)) return false;
+    for (let parent = node.parent; parent; parent = parent.parent) {
+      if (ts.isFunctionLike(parent)) return false;
+      if (!ts.isConditionalExpression(parent) || node.pos < parent.whenTrue.pos || node.end > parent.whenTrue.end) continue;
+      const guard = parent.condition;
+      return ts.isBinaryExpression(guard) && guard.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword
+        && ts.isIdentifier(guard.left) && guard.left.text === receiver.text
+        && ts.isPropertyAccessExpression(guard.right) && isZ(guard.right.expression)
+        && ['ZodCatch', 'ZodMiniCatch'].includes(guard.right.name.text);
+    }
+    return false;
+  }
 
   function inspect(node) {
     if (factoryOnly && ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
@@ -892,8 +1152,8 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
       const receiver = node.expression.expression, method = node.expression.name.text;
       if (isZ(receiver)) count(method);
       const candidate = schema(receiver);
-      const info = candidate && !['record', 'unionOptions'].includes(candidate.kind) ? candidate : null;
-      if (method === 'transform' && (info || isZ(receiver))) {
+      const info = candidate && !['record', 'unionOptions', 'schemaArray'].includes(candidate.kind) ? candidate : null;
+      if (isTransformContextCall(node)) {
         const callback = node.arguments[0];
         if (callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))
           && callback.parameters.length >= 2 && ts.isIdentifier(callback.parameters[1].name)) {
@@ -946,7 +1206,8 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
         || singleArgMethods.has(method) && node.arguments.length !== 1)) {
         mark(node.expression.name, method, 'fluent method arity is not equivalent to Mini');
       }
-      if (info?.cold && reflective.has(method) && !insideLazyFactory(node) && !hasLazyHelper && !canImportLazyHelper) {
+      if (info?.cold && reflective.has(method) && !deferredFacadeCheck(node)
+        && !insideLazyFactory(node) && !hasLazyHelper && !canImportLazyHelper) {
         mark(node.expression.name, method, 'lazyZodSchema derived operation requires an in-scope helper');
       }
       if (info && !keep.has(method) && !possible.has(method)) mark(node.expression.name, method, 'unknown schema method');
@@ -971,7 +1232,8 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
         && !isNeutralSchema(receiver)) mark(node.expression.name, method, 'schema-like symbol has no provable Zod lineage');
       if (['format', 'flatten'].includes(method)
         && (ts.isIdentifier(receiver) && /(?:err|error)$/i.test(receiver.text)
-          || ts.isPropertyAccessExpression(receiver) && receiver.name.text === 'error')) {
+          || ts.isPropertyAccessExpression(receiver) && receiver.name.text === 'error')
+        && !(schemaSafeParseError(receiver) && node.arguments.length <= 1)) {
         mark(node.expression.name, method, 'Zod error instance formatter needs a core helper');
       }
     }
@@ -999,7 +1261,9 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
             && raw(node.parent.parent.arguments[0]) === raw(node.expression))
           && !(member === 'options' && ['enum', 'union'].includes(info.kind))
           && !(member === 'element' && info.kind === 'array')
+          && !(member === 'valueType' && info.kind === 'recordSchema')
           && !(member === 'maxLength' && info.kind === 'string')
+          && !(['minValue', 'maxValue'].includes(member) && info.kind === 'number')
           && !(member === 'value' && info.kind === 'literal' && info.literalSingleton)
           && !(member === 'in' && info.wrapper === 'pipe')
           && !(member === 'enum' && info.kind === 'enum')
@@ -1018,7 +1282,10 @@ export function transformSource(source, fileName = 'source.ts', options = {}) {
       if (converted !== raw(statement)) edits.push({ start: statement.getStart(ast), end: statement.end, text: converted });
     }
   }
-  if (edits.length && (factoryOnly ? !miniNamespaces.size : !imports.length && (importedSchemas.size || importedSchemaFactories.size))) {
+  const needsDynamicHelperImport = dynamicNamespaces.size && !staticNamespaces.size
+    && edits.some(edit => edit.text.includes(`${freshMiniAlias()}.`));
+  if (edits.length && (factoryOnly ? !miniNamespaces.size
+    : !imports.length && (importedSchemas.size || importedSchemaFactories.size) || needsDynamicHelperImport)) {
     edits.push({ start: 0, end: 0, text: `import * as ${miniAlias()} from 'zod/mini';\n` });
   }
   if (needsLazyHelper) edits.push({ start: 0, end: 0, text: `import { lazyZodSchema } from '${options.lazyHelperImport}';\n` });

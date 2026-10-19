@@ -11,11 +11,11 @@ import { analyzeTransformContexts } from './transformContexts.mjs';
 classic.config(en());
 mini.config(en());
 
-function project(source) {
+function project(source, isPureNamedTransform) {
   const ast = ts.createSourceFile('fixture.ts', source, ts.ScriptTarget.Latest, true);
   const isZ = node => ts.isIdentifier(node) && node.text === 'z';
   const result = analyzeTransformContexts({
-    ast, source, ts, isZ, miniAlias: () => 'z',
+    ast, source, ts, isZ, miniAlias: () => 'z', isPureNamedTransform,
     isTransformCall: node => ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
       && isZ(node.expression.expression) && node.expression.name.text === 'transform',
   });
@@ -120,6 +120,51 @@ const T = z.transform(transform);`;
 const T = z.transform(importedTransform);`);
   assert.equal(unprovenTransform.overrides.size, 0);
   assert.ok(unprovenTransform.unresolved.some(item => item.reason.includes('not a unique local function')));
+});
+
+test('source-proven pure imported transform callback is accepted without hiding unknown callbacks', () => {
+  const imported = `import { normalize } from './normalize';
+const S = z.transform(normalize);`;
+  assert.ok(project(imported).unresolved.some(item => item.method === 'context'));
+  const proven = project(imported, node => node.text === 'normalize');
+  assert.deepEqual(proven.unresolved, []);
+  assert.equal(proven.overrides.size, 0);
+  assert.equal(proven.output, imported);
+
+  const unknown = project(`import { opaque } from './normalize';
+const S = z.transform(opaque);`, node => node.text === 'normalize');
+  assert.ok(unknown.unresolved.some(item => item.reason.includes('not a unique local function')));
+  const expression = project(`import { create } from './normalize';
+const S = z.transform(create());`, () => true);
+  assert.ok(expression.unresolved.some(item => item.reason.includes('unproven binding')));
+
+  const local = project(`function normalize(value: unknown, ctx: z.core.$RefinementCtx) {
+  ctx.addIssue({ code: 'custom', message: 'invalid' });
+  return z.NEVER;
+}
+const S = z.transform(normalize);`, () => true);
+  assert.deepEqual(local.unresolved, []);
+  assert.match(local.output, /ctx: z\.core\.ParsePayload/);
+});
+
+test('accepts a unique nested one-argument transform callback without changing its bytes', () => {
+  const source = `function owner(parse: (value: unknown) => string) {
+  function parseStored(value: unknown): string { return parse(value); }
+  const S = z.pipe(z.unknown(), z.transform(parseStored));
+  return S;
+}`;
+  const converted = project(source);
+  assert.deepEqual(converted.unresolved, []);
+  assert.equal(converted.output, source);
+
+  const shadowed = project(`function owner() {
+  function parseStored(value: unknown): unknown { return value; }
+  {
+    const parseStored = (...args: unknown[]) => args[1];
+    return z.transform(parseStored);
+  }
+}`);
+  assert.ok(shadowed.unresolved.some(item => item.reason.includes('shadowed')));
 });
 
 test('refuses ambiguous helper context flow and unsupported issue shapes', () => {
