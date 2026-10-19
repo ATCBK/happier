@@ -62,11 +62,14 @@ export function getPermissionModeLabelForAgentType(agentType: AgentType, mode: P
     return t(`${prefix}.${seg}` as TranslationKey);
 }
 
+// The offered modes state what the agent may do without asking. A mode with no consequence line
+// yields '' and the pickers omit the line instead of repeating the label.
+const DESCRIBED_PERMISSION_MODES: ReadonlySet<PermissionMode> = new Set(['default', 'read-only', 'safe-yolo', 'yolo']);
+
 function getPermissionModeDescriptionForAgentType(agentType: AgentType, mode: PermissionMode): string {
     const prefix = getAgentPermissionModeI18nPrefix(agentType);
-    if (!prefix) return '';
-    const seg = PERMISSION_MODE_KEY_SEGMENT[mode] ?? 'default';
-    return t(`${prefix}.${seg}` as TranslationKey);
+    if (!prefix || !DESCRIBED_PERMISSION_MODES.has(mode)) return '';
+    return t(`${prefix}.${PERMISSION_MODE_KEY_SEGMENT[mode]}Description` as TranslationKey);
 }
 
 export function getPermissionModesForAgentType(agentType: AgentType): readonly PermissionMode[] {
