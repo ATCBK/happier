@@ -261,6 +261,17 @@ export const SERVER_RUNTIME_SERVER_CONFIG = defineServerConfigRegistry({
         aliases: ['HAPPIER_LOG_LEVEL', 'LOG_LEVEL'],
         description: 'Server log level.',
     },
+    HAPPIER_SERVER_LOG_FORMAT: {
+        type: 'enum',
+        default: 'pretty',
+        bounds: { values: ['pretty', 'json'] },
+        sensitivity: 'plain',
+        apply: 'restart',
+        editable: 'home',
+        section: 'server',
+        group: 'logging',
+        description: 'Node stdout log format. JSON writes one object per line for log collectors; Bun always uses JSON. Unrecognized env values use pretty.',
+    },
     DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING: {
         type: 'boolean',
         default: false,
