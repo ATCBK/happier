@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import type { RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { CallToolResultSchema, type CallToolResult, type ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { createHappierToolInventory, type HappierToolInventory, type BuiltInHappierToolsSurface } from '@/agent/tools/happierTools/listBuiltInHappierTools';
 import { dispatchBuiltInHappierTool } from '@/agent/tools/happierTools/dispatchBuiltInHappierTool';
 import { createPluginJsonSchemaZodObjectAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
@@ -25,15 +27,20 @@ import {
 
 const MCP_TOOL_PROGRESS_KEEPALIVE_INTERVAL_MS = 15_000;
 
+type McpToolRegistrationMetadata = Pick<RegisteredTool, 'title' | 'description' | 'annotations' | '_meta'> & Readonly<{
+    inputSchema: z.ZodMiniType;
+    outputSchema?: z.ZodMiniType;
+}>;
+
 export type ToolRegistrar<TExtra = unknown> = Readonly<{
-    registerTool: (name: string, meta: unknown, handler: (args: unknown, extra?: TExtra) => Promise<unknown>) => void;
+    registerTool: (name: string, meta: McpToolRegistrationMetadata, handler: (args: unknown, extra?: TExtra) => Promise<CallToolResult>) => void;
 }>;
 
 export type HappierMcpToolInventory = HappierToolInventory & Readonly<{
     registrations: readonly Readonly<{
         tool: HappierBuiltInToolDefinition;
         actionId: string | null;
-        meta: unknown;
+        meta: McpToolRegistrationMetadata;
     }>[];
 }>;
 
@@ -209,7 +216,7 @@ function buildPluginToolMcpMeta(tool: HappierBuiltInToolDefinition): Record<stri
     };
 }
 
-function resolveMcpToolAnnotations(tool: HappierBuiltInToolDefinition): unknown {
+function resolveMcpToolAnnotations(tool: HappierBuiltInToolDefinition): ToolAnnotations | undefined {
     if (tool.annotations !== undefined) {
         return tool.annotations;
     }
@@ -336,7 +343,7 @@ export function registerHappierMcpBuiltInTools(
         server.registerTool(
             tool.name,
             meta,
-            async (args: unknown, extra?: unknown) => {
+            async (args: unknown, extra?: unknown): Promise<CallToolResult> => {
                 const stopProgressKeepalive = startMcpToolProgressKeepalive(extra);
                 try {
                     const sessionId = params.resolveSessionId ? params.resolveSessionId(args) : params.sessionId;
@@ -402,7 +409,11 @@ export function registerHappierMcpBuiltInTools(
                         }
                         return {
                             content: [{ type: 'text' as const, text: stringifyMcpToolTextPayload(result.result) }, ...images],
-                            ...(tool.outputSchema === undefined ? {} : { structuredContent: result.result }),
+                            ...(tool.outputSchema === undefined ? {} : {
+                                // The MCP wire contract requires an object even though
+                                // Action dispatch can return arbitrary JSON values.
+                                structuredContent: CallToolResultSchema.shape.structuredContent.unwrap().parse(result.result),
+                            }),
                             isError: false as const,
                         };
                     }

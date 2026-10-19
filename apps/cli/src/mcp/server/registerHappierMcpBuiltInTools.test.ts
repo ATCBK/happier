@@ -19,8 +19,41 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 describe('registerHappierMcpBuiltInTools', () => {
+  it('contains malformed structured output at the MCP boundary and keeps healthy calls available', async () => {
+    const tool = { name: 'change_title', title: 'Change title', description: 'Change title',
+      inputSchema: z.strictObject({ title: z.string() }), outputSchema: z.strictObject({ success: z.boolean() }) };
+    const server = new McpServer({ name: 'structured-output-test', version: '1.0.0' });
+    const bridge = createActionToolExecutorBridge({ surface: 'mcp',
+      executor: createActionExecutor(createUnavailableActionTransportDeps()) });
+    let response: unknown = 'invalid structured result';
+    registerHappierMcpBuiltInTools(server, {
+      sessionId: 'sess-1', surface: 'mcp',
+      toolInventory: prepareHappierMcpToolInventory({ sessionId: 'sess-1',
+        inventory: { tools: [tool], actionToolNameToId: new Map() } }),
+      // Rename is a server write boundary; dispatch and the MCP transport remain real.
+      deps: { ...bridge, changeTitle: async () => response,
+        resolveActionOptions: args => bridge.resolveActionOptions(args, 'sess-1') },
+    });
+    const client = new Client({ name: 'structured-output-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const malformed = await client.callTool({ name: 'change_title', arguments: { title: 'Bad result' } });
+      expect(malformed).toMatchObject({ isError: true,
+        content: [{ type: 'text', text: expect.stringContaining('"errorCode":"tool_failed"') }] });
+      response = { success: true };
+      expect(await client.callTool({ name: 'change_title', arguments: { title: 'Healthy result' } })).toMatchObject({
+        isError: false, structuredContent: { success: true },
+      });
+    } finally { await client.close(); await server.close(); }
+  });
+
   it('advertises the real usage output through MCP discovery with resolvable document-local references', async () => {
     const spec = getActionSpec('usage.query');
     const inventory = prepareHappierMcpToolInventory({ sessionId: 'cli-global', inventory: {
@@ -336,7 +369,7 @@ describe('registerHappierMcpBuiltInTools', () => {
     });
 
     expect(registered.has('session_transcript_get')).toBe(true);
-    expect(registered.has('session_discussion_post')).toBe(false);
+    expect(registered.has('discussion_post')).toBe(false);
     await expect(registered.get('session_transcript_get')?.({ limit: 10 })).resolves.toMatchObject({
       isError: false,
     });

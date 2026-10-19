@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { FeaturesResponseSchema, getActionSpec } from '@happier-dev/protocol';
 import { SessionFollowActionOutputSchemasV1 } from '@happier-dev/protocol/sessions/follow/actions';
 
@@ -37,7 +37,7 @@ describe('createExternalMcpServer Session Follow dependencies', () => {
       expect(toolNames).toContain('action_execute');
       const textResult = z.object({
         isError: z.boolean(),
-        content: z.array(z.object({ type: z.literal('text'), text: z.string() })).nonempty(),
+        content: z.array(z.object({ type: z.literal('text'), text: z.string() })).check(z.minLength(1)),
       });
       const result = await client.callTool({
         name: 'action_execute',
@@ -57,7 +57,7 @@ describe('createExternalMcpServer Session Follow dependencies', () => {
   });
 
   it('composes the canonical Account Follow dependency for an external MCP Action', async () => {
-    const follow = SessionFollowActionOutputSchemasV1['session.follow.get'].parse({
+    const follow = SessionFollowActionOutputSchemasV1['follow.get'].parse({
       follow: null,
       isSessionOwner: false,
       capabilities: { manageFollow: true },
@@ -90,13 +90,13 @@ describe('createExternalMcpServer Session Follow dependencies', () => {
       expect(toolNames).toContain('action_execute');
       const result = await client.callTool({
         name: 'action_execute',
-        arguments: { actionId: 'session.follow.get', input: { sessionId: 'session-1' } },
+        arguments: { actionId: 'follow.get', input: { receiver: { kind: 'account' }, source: { kind: 'session', sessionId: 'session-1' } } },
       });
       const response = CallToolResultSchema.parse(result);
       expect(response.isError).toBe(false);
       const text = response.content.find((entry) => entry.type === 'text');
       if (!text || text.type !== 'text') throw new Error('Missing Follow text result');
-      const followResult = SessionFollowActionOutputSchemasV1['session.follow.get'].parse(JSON.parse(text.text));
+      const followResult = SessionFollowActionOutputSchemasV1['follow.get'].parse(JSON.parse(text.text));
       expect(followResult).toMatchObject({
         follow: null,
         isSessionOwner: false,

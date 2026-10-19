@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SkillArtifactStore } from '@/prompts/skills/library/readSkillLibraryContent';
-import type { AccountArtifact } from '@/api/artifacts/accountArtifactStore';
+import type { AccountArtifact, AccountArtifactHeader } from '@/api/artifacts/accountArtifactStore';
 import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
 import { McpServersSettingsV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { SpawnCapabilitiesPreviewSuccessV1Schema } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
@@ -30,8 +30,9 @@ describe('resolveSessionMcpPreview detection warnings', () => {
         await mkdir(join(root, name), { recursive: true });
         await writeFile(join(root, name, 'SKILL.md'), `---\nname: ${name}\n---\nNative`);
       }
-      const artifact = (id: string, name: string): AccountArtifact => ({ artifactId: id, ownerAccountId: 'account', access: 'owner',
+      const artifact = (id: string, name: string): AccountArtifact & AccountArtifactHeader => ({ artifactId: id, ownerAccountId: 'account', access: 'owner',
         revision: { headerVersion: 1, bodyVersion: 1 }, seq: 1, createdAt: 1, updatedAt: 1,
+        headerVersion: 1, bodyVersion: 1,
         header: { v: 1, kind: 'prompt_bundle.v2', title: name, bundleSchemaId: 'skills.skill_md_v1' },
         body: JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8',
           contentBase64: Buffer.from(`---\nname: ${name}\n---\nLibrary`).toString('base64') }] }) });

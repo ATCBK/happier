@@ -88,8 +88,11 @@ export async function probeMcpStdioServerTools(params: Readonly<{
   try {
     // Installed SDK 1.25.3 has no server/discover contract. Its connect owner
     // performs the supported initialize fallback and reports the negotiated version.
+    // Keep the caller's cancellation and the SDK request lifetime authoritative.
+    // A Test-only default cutoff can expire while the shared remote bridge is
+    // still within its startup and per-request credential lookup lifetimes.
     await withMcpTimeout(client.connect(transport, { signal: params.signal }), {
-      timeoutMs: params.connectTimeoutMs ?? 15_000,
+      timeoutMs: params.connectTimeoutMs ?? 0,
       label: 'mcp_connect_timeout',
     });
     phase = 'list_tools';
@@ -101,7 +104,7 @@ export async function probeMcpStdioServerTools(params: Readonly<{
         cursor === undefined ? undefined : { cursor },
         { signal: params.signal },
       ), {
-        timeoutMs: params.listToolsTimeoutMs ?? 15_000,
+        timeoutMs: params.listToolsTimeoutMs ?? 0,
         label: 'mcp_list_tools_timeout',
       });
       params.signal?.throwIfAborted();

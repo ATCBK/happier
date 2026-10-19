@@ -41,18 +41,22 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       if (actionId === 'action.spec.search' || actionId === 'action.spec.get') {
         return await params.base.execute(actionId, input, context);
       }
+      // Restricted child reads use the bound Session's admitted corpus reader.
+      // Account forwarding would replace that authority with the daemon's scope.
+      if (actionId === 'session.list' && context?.sessionListAccess === 'current_session') {
+        return await params.base.execute(actionId, input, context);
+      }
       // Contributed ids remain with the existing plugin catalog/execution owner.
       const builtIn = ActionIdSchema.safeParse(actionId);
       const spec = builtIn.success ? getActionSpec(builtIn.data) : null;
       const executionPlacement = spec ? resolveActionExecutionPlacementForInput(spec, input) : null;
       const requestedSessionId = input && typeof input === 'object' && 'sessionId' in input
         && typeof input.sessionId === 'string' ? input.sessionId.trim() : params.client.sessionId;
-      // The bound host holds its own Board/Discussion stored-content key. Other
+      // The bound host holds its own Board stored-content key. Other
       // Session readers use the credentialed owner, including reads of children.
       const boundRead = requestedSessionId === params.client.sessionId
         && (BOUND_SESSION_RPC_READS.has(actionId)
           || ACTION_ID_FAMILIES_V1.session_board.some(id => id === actionId)
-          || ACTION_ID_FAMILIES_V1.session_discussion.some(id => id === actionId)
           || ACTION_ID_FAMILIES_V1.subagent_registry.some(id => id === actionId)
           || ACTION_ID_FAMILIES_V1.session_permissions.some(id => id === actionId));
       const sessionRead = executionPlacement === 'session' && !boundRead && spec?.sideEffectClass === 'read';
@@ -97,6 +101,9 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       if (!path) return unavailable();
       const hostWitness = params.client.getActiveTurnAdmissionWitness?.();
       if (!hostWitness) return unavailable();
+      const binding = params.client.getSessionActionConfirmationBinding?.();
+      const executionRun = binding?.run;
+      if (binding && executionRun && (binding.turnId !== hostWitness.turnId || !binding.isCurrent())) return unavailable();
       let witness;
       try { witness = projectAgentRuntimeDaemonServiceTurnWitnessV1(hostWitness); }
       catch { return unavailable(); }
@@ -127,6 +134,8 @@ export function createSessionAccountActionExecutor(params: Readonly<{
           createRequest: (capability) => ({ v: 1,
             context: { token: capability, sessionId: params.client.sessionId },
             operation: { kind: 'action.execute', requestId, actionId, input, witness,
+              ...(context?.reviewCommentPrincipal ? { reviewCommentPrincipal: context.reviewCommentPrincipal } : {}),
+              ...(executionRun ? { executionRun: { runId: executionRun.runId, occurrenceId: executionRun.occurrenceId } } : {}),
               surface: context?.surface === 'mcp' ? 'mcp' : 'agent',
               ...(toolCallId ? { toolCallId } : {}) },
           }),

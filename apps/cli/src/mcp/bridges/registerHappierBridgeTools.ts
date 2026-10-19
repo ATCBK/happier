@@ -1,8 +1,9 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type { ProgressNotification, RequestMeta } from '@modelcontextprotocol/sdk/types.js';
 import { logger } from '@/ui/logger';
+import { projectMcpToolInputJsonSchema } from '@/mcp/server/projectMcpToolInputJsonSchema';
 
 type BridgeRequestExtra = Readonly<{
   signal?: AbortSignal;
@@ -31,21 +32,21 @@ type ToolRegistrar = Readonly<{
   ) => void;
 }>;
 
-function toBridgeSchema(schema: unknown): z.ZodType {
-  if (schema instanceof z.ZodType) {
+function toBridgeSchema(schema: unknown, input = false): z.core.$ZodType {
+  if (schema instanceof z.core.$ZodType) {
     return schema;
   }
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
-    return z.object({}).passthrough();
+    return z.looseObject({});
   }
 
   // MCP discovery returns JSON Schema while the high-level MCP server accepts
   // Zod registrations. This proxy deliberately validates permissively and
   // preserves the discovered schema for presentation; the remote server is
   // the authoritative validation and execution owner.
-  const adapter = z.object({}).passthrough();
+  const adapter = z.looseObject({});
   adapter._zod.processJSONSchema = (_ctx, json) => {
-    Object.assign(json, schema);
+    Object.assign(json, input ? projectMcpToolInputJsonSchema(schema as Readonly<Record<string, unknown>>) : schema);
   };
   return adapter;
 }
@@ -119,7 +120,7 @@ export function registerHappierBridgeTools(
     const meta = {
       description: tool.description ?? tool.title ?? tool.name,
       title: tool.title ?? tool.name,
-      inputSchema: toBridgeSchema(tool.inputSchema),
+      inputSchema: toBridgeSchema(tool.inputSchema, true),
       ...(tool.outputSchema === undefined ? {} : { outputSchema: toBridgeSchema(tool.outputSchema) }),
       ...(tool.annotations === undefined ? {} : { annotations: tool.annotations }),
       ...(tool._meta === undefined ? {} : { _meta: tool._meta }),

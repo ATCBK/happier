@@ -41,12 +41,23 @@ describe('Account Project capability reach', () => {
       sessionProject: { credentials, serverId, metadata: { workspaceId: 'linux-checkout', projectId: 'shared-project' } },
     }))).rejects.toMatchObject({ code: 'preparation_pending', reason: 'project_association_unavailable' });
   });
-  it('does not use directory containment to invent an association for a session with no Project', async () => {
+  it('uses the exact Account checkout for directory-only Sessions, with the same MCP and skill Project rules', async () => {
+    rows();
+    const result = await resolveSessionCapabilitiesForDirectory({ settings,
+      skills: { items: [{ skillId: 'lint', name: 'lint' }], rules: [
+        { id: 'skill-everywhere', skillId: 'lint', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 },
+        { id: 'skill-project-off', skillId: 'lint', target: { t: 'project', projectKey: 'shared-project' }, enabled: false, createdAt: 1, updatedAt: 1 },
+      ] }, machineId: 'linux', directory: '/srv/project', agentId: 'codex', agentAcceptsUserMcp: true,
+      sessionProject: { credentials, serverId, metadata: { path: '/srv/project' } } });
+    expect(result.mcp.items[0]).toMatchObject({ selected: true, reason: 'rule_on' });
+    expect(result.skills.items[0]).toMatchObject({ selected: false, reason: 'rule_off' });
+  });
+  it('does not use directory containment to invent an association for a nested unassociated directory', async () => {
     const request = rows();
-    const result = await resolveSessionCapabilitiesForDirectory({ settings, machineId: 'linux', directory: '/srv/project',
+    const result = await resolveSessionCapabilitiesForDirectory({ settings, machineId: 'linux', directory: '/srv/project/child',
       agentId: 'codex', agentAcceptsUserMcp: true, sessionProject: { credentials, serverId, metadata: {} } });
     expect(result.mcp.items[0]?.selected).toBe(false);
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalled();
   });
   it('resolves skill Project reach through the same association owner', async () => {
     rows();

@@ -50,7 +50,7 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
   const members = new Set(children);
   const row = (id: string) => ({ ...createSessionNotificationContextFixture(id), encryptionMode: 'plain' as const,
     metadata: JSON.stringify({ machineId: 'read-machine', path: '/workspace' }), active: read || actionId === 'session.open',
-    reportsTo: { sessionId } });
+    manager: { sessionId } });
   const command = 'node /runtime/.runner-snapshots/session-read/dist/index.mjs';
   const runner = { pid: process.pid, processStartTimeMs: 23346,
     processCommandHash: hashProcessCommand(command), snapshotIdentity: 'snapshot:session-read' };
@@ -74,6 +74,9 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
     httpReads.push(pathname);
     if (pathname === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
     if (pathname === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+    if (pathname === '/v1/machines' && actionId === 'session.status.get') return { status: 200, data: [{
+      id: 'read-machine', kind: 'persistent', active: false, revokedAt: null, replacedByMachineId: null,
+    }] };
     const target = [sessionId, ...children].find(id => pathname === `/v2/sessions/${id}`);
     if (target) return { status: 200, data: { session: row(target) } };
     const transcript = children.find(id => pathname === `/v1/sessions/${id}/messages`);
@@ -154,13 +157,15 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
     for (const child of targets) {
       const result = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
         arguments: { actionId, input: { sessionId: child,
+          ...(actionId === 'session.status.get' ? { readiness: true } : {}),
           ...(actionId === 'session.open' ? { intent: 'resume', serverId } : {}) } } }));
       const content = result.content.find(block => block.type === 'text');
       if (content?.type !== 'text') throw new Error('Missing MCP Action result');
       const value: unknown = JSON.parse(content.text);
       expect(result.isError, JSON.stringify({ content, forwarded, httpReads, queryRequests, boundaryFailures })).not.toBe(true);
       expect(value).toMatchObject(actionId === 'session.status.get'
-        ? { ok: true, session: { id: child }, awareness: { sessionId: child } }
+        ? { ok: true, session: { id: child }, awareness: { sessionId: child },
+          readiness: { configured: true, status: 'unavailable', cause: 'machine', machine: { status: 'offline' } } }
         : actionId === 'session.messages.recent.get'
           ? { ok: true, sessionId: child, items: [{ kind: 'user_message', text: `Ready ${child}` }] }
           : actionId === 'session.fork' ? { ok: true, childSessionId: children[0] }

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createActionExecutor, waitForExecutionRunTerminal, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { registerHappierMcpBuiltInTools } from './registerHappierMcpBuiltInTools';

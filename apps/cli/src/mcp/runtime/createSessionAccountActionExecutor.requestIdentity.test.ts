@@ -66,7 +66,9 @@ it('separates fresh Agent launches with reused MCP ids while same-key recovery r
     const bridge = createActionToolExecutorBridge({ executor, surface: 'agent' });
     const handlers = new Map<string, (args: unknown, extra?: unknown) => Promise<unknown>>();
     registerHappierMcpBuiltInTools({ registerTool: (name, _meta, handler) => { handlers.set(name, handler); } }, {
-      sessionId, surface: 'agent', deps: { ...bridge, changeTitle: async () => ({ success: true }) },
+      sessionId, surface: 'agent', deps: { ...bridge,
+        resolveActionOptions: args => bridge.resolveActionOptions(args, sessionId),
+        changeTitle: async () => ({ success: true }) },
     });
     const handler = handlers.get('action_execute');
     if (!handler) throw new Error('Missing real Action tool registration');
@@ -76,7 +78,7 @@ it('separates fresh Agent launches with reused MCP ids while same-key recovery r
     ...(creationKey ? { creationKey } : {}), executionTarget: { serverId: 'home', machineId: 'identity-machine' },
     directory: { kind: 'path', path: '/workspace' },
     agentTarget: { kind: 'agent', identity: { pluginId: 'acme.agent', localId: 'coding' } },
-    reportsTo: { sessionId },
+    manager: { sessionId },
   });
   const invoke = async (executor: ReturnType<typeof create>, value: ReturnType<typeof input>, actionRequestId: string | number) => {
     const result = CallToolResultSchema.parse(await executor({ actionId: 'session.spawn_new', input: value }, { requestId: actionRequestId }));

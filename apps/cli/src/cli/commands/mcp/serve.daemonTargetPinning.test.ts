@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createServer, type Server } from 'node:http';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 
 import { reloadConfiguration } from '@/configuration';
 import { readDaemonPluginCatalog } from '@/daemon/controlClient';
@@ -15,11 +17,14 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import type { McpCommandDeps } from './deps';
 import { runMcpServeCommand } from './serve';
 
+// Transform the real MCP composition before the target-pinning workload's deadline.
+await import('@/mcp/createExternalMcpServer');
+
 type ObservedDaemonRequest = Readonly<{ path: string; authorization: string | null }>;
 
 const pluginTool = {
   toolId: 'acme.review.plugin/review-tool',
-  actionId: 'acme.review.plugin/review-start',
+  actionId: formatQualifiedPluginActionId({ pluginId: 'acme.review.plugin', localId: 'review-start' }),
   name: 'acme_review_start',
   title: 'Acme Review Start',
   description: 'Start a review',
@@ -192,10 +197,13 @@ describe('happier mcp serve daemon target pinning', () => {
         enterPhase('connect-selected-client');
         await client.connect(clientTransport);
         enterPhase('invoke-selected-plugin');
-        const result = await client.callTool({
+        const result = CallToolResultSchema.parse(await client.callTool({
           name: 'acme_review_start',
           arguments: { scope: 'diff' },
-        });
+        }));
+        const textResult = result.content.find((item) => item.type === 'text');
+        if (!textResult || textResult.type !== 'text') throw new Error('Expected the plugin Action JSON result');
+        expect(result.isError, textResult.text).not.toBe(true);
         expect(result.structuredContent).toEqual({ daemon: 'selected' });
         expect(selectedRequests.map(({ path }) => path)).toEqual([
           '/plugins/catalog/read',

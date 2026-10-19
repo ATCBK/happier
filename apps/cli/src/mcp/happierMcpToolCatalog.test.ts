@@ -13,8 +13,8 @@ describe('HAPPIER_MCP_TOOL_CATALOG_NAMES', () => {
     const spec = getActionSpec('ui.prompts.picker.open');
     expect(spec.surfaces.mcp).toBe(true);
     expect(tool?.inputSchema).toBe(spec.inputSchema);
-    expect(tool?.inputSchema.parse({})).toEqual({});
-    expect(tool?.inputSchema.safeParse({ query: 'not a picker input' }).success).toBe(false);
+    expect(spec.inputSchema.parse({})).toEqual({});
+    expect(spec.inputSchema.safeParse({ query: 'not a picker input' }).success).toBe(false);
     expect(listBuiltInHappierTools({ surface: 'mcp', isActionEnabled: () => true,
       actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {} }),
     }).some(entry => entry.name === 'ui_prompts_picker_open')).toBe(true);
@@ -73,15 +73,17 @@ describe('HAPPIER_MCP_TOOL_CATALOG_NAMES', () => {
     }).map((tool) => tool.name));
 
     for (const actionId of ['localServices.launcher.start', 'localServices.actions.stopManaged',
-      'localServices.actions.restartManaged', 'localServices.actions.forget', 'localServices.actions.terminateDetected'] as const) {
+      'localServices.actions.restartManaged', 'localServices.actions.forget', 'localServices.actions.terminateDetected',
+      'localServices.actions.openPreview'] as const) {
       const spec = getActionSpec(actionId);
       expect(spec.surfaces.mcp, actionId).toBe(true);
       expect(mcpToolNames.has(spec.bindings?.mcpToolName ?? ''), actionId).toBe(true);
       expect(directMcpToolNames.has(spec.bindings?.mcpToolName ?? ''), actionId).toBe(true);
     }
-    for (const actionId of ['localServices.actions.copyUrl', 'localServices.actions.openPreview'] as const) {
+    for (const actionId of ['localServices.actions.copyUrl'] as const) {
       const spec = getActionSpec(actionId);
       expect(spec.surfaces.mcp).toBe(false);
+      expect(spec.bindings?.mcpToolName).toBeUndefined();
       const name = spec.bindings?.mcpToolName ?? actionId.replaceAll('.', '_');
       expect(mcpToolNames.has(name)).toBe(false);
       expect(directMcpToolNames.has(name)).toBe(false);

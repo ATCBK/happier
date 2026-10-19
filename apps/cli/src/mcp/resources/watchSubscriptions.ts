@@ -1,5 +1,4 @@
 import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { AnySchema } from '@modelcontextprotocol/sdk/server/zod-compat.js';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import { ErrorCode, McpError, SubscribeRequestSchema, UnsubscribeRequestSchema, type CallToolResult, type ServerRequest, type ServerNotification } from '@modelcontextprotocol/sdk/types.js';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
@@ -14,6 +13,8 @@ export type McpWatchOptions = Readonly<{
   defaultSessionId: string;
   isEnabled?: () => boolean;
 }>;
+
+export const MCP_WATCH_TOOL_NAME = 'watch';
 
 const PREFIX = 'happier://watch/';
 type Snapshot = Readonly<{ target: WaitActionInputV1['target']; condition: WaitActionInputV1['condition']; snapshot: unknown }>;
@@ -94,13 +95,12 @@ export function registerMcpWatchSubscriptions(options: McpWatchOptions): void {
   }
 
   const spec = getActionSpec('wait');
-  // The SDK accepts whole Zod 4 schemas at runtime, but its 4.4 declaration identity differs from Protocol's 4.3.
+  // The MCP boundary accepts host Mini schemas through the shared registration adapter.
   const tools = server as unknown as ToolRegistrar<RequestHandlerExtra<ServerRequest, ServerNotification>>;
-  tools.registerTool('watch', {
+  tools.registerTool(MCP_WATCH_TOOL_NAME, {
     title: 'Watch work',
     description: `${spec.description} Returns a readable resource URI for passive observation. Resource updates are change hints; the MCP host decides whether to wake an agent.`,
-    // MCP detects Zod 4 through _zod; its nested Zod copy has different internal types.
-    inputSchema: WaitActionInputV1Schema as unknown as AnySchema,
+    inputSchema: WaitActionInputV1Schema,
     annotations: { readOnlyHint: true, destructiveHint: false },
   }, async (args: unknown, extra?: RequestHandlerExtra<ServerRequest, ServerNotification>): Promise<CallToolResult> => {
     try {

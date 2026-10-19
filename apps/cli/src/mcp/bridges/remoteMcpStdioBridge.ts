@@ -13,7 +13,7 @@
 import '../../configureZodLocale';
 import { readFile } from 'node:fs/promises';
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -21,19 +21,19 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { extractWWWAuthenticateParams } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
-  CallToolResultSchema, InitializeResultSchema, JSONRPCMessageSchema,
+  CallToolRequestSchema, CallToolResultSchema, InitializeResultSchema, JSONRPCMessageSchema,
   JSONRPCNotificationSchema, JSONRPCRequestSchema, JSONRPCResultResponseSchema,
-  ListToolsResultSchema, ProgressNotificationSchema, ProgressTokenSchema, RequestIdSchema,
-  type Tool,
+  ListToolsRequestSchema, ListToolsResultSchema, ProgressNotificationSchema, ProgressTokenSchema, RequestIdSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { createConnectedAccountRequestAuthClient } from '@happier-dev/plugin-sdk/connected-accounts/request-auth';
 import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { callMcpToolWithResolvedTimeout } from '@/mcp/mcpToolCallRequestOptions';
 import { withMcpTimeout } from '@/mcp/runtime/withMcpTimeout';
 import { runMcpStdioBridgeLifecycle } from '@/mcp/runtime/runMcpStdioBridgeLifecycle';
-import { registerHappierBridgeTools } from './registerHappierBridgeTools';
+import { forwardHappierBridgeTool } from './registerHappierBridgeTools';
+import { projectMcpToolInputJsonSchema } from '@/mcp/server/projectMcpToolInputJsonSchema';
 import { MCP_REQUEST_AUTH_PURPOSE } from '@/mcp/runtime/mcpRequestAuth';
 import { createProviderRedactionLease } from '@/providers/spawn/redaction';
 import { readCredentialRedactionValues } from '@/plugins/runtime/invocation/services/credentialRedactionValues';
@@ -43,9 +43,10 @@ const MCP_BRIDGE_STARTUP_STEP_TIMEOUT_MS = 60_000;
 // rotations; this lease ends with this single bridge process, not a request.
 const outputRedaction = createProviderRedactionLease({ values: [] });
 
+// Borrow the SDK field validators unchanged; the bridge owns only these native Mini containers.
 const BridgeOutputSchema = z.union([
-  JSONRPCResultResponseSchema.extend({ result: z.union([InitializeResultSchema, ListToolsResultSchema, CallToolResultSchema]) }),
-  JSONRPCNotificationSchema.extend(ProgressNotificationSchema.shape),
+  z.strictObject({ ...JSONRPCResultResponseSchema.shape, result: z.union([InitializeResultSchema, ListToolsResultSchema, CallToolResultSchema]) }),
+  z.strictObject({ ...JSONRPCNotificationSchema.shape, ...ProgressNotificationSchema.shape }),
   JSONRPCMessageSchema,
 ]);
 
@@ -53,25 +54,25 @@ const BridgeOutputSchema = z.union([
 // keys and string payloads use the same credential lease as stderr; redacting
 // the serialized message would corrupt syntax when a secret is "content".
 function projectRedactedBridgeOutput(value: unknown, schema?: z.core.$ZodType): unknown {
-  if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable || schema instanceof z.ZodDefault) {
-    return projectRedactedBridgeOutput(value, schema.unwrap());
+  if (schema instanceof z.core.$ZodOptional || schema instanceof z.core.$ZodNullable || schema instanceof z.core.$ZodDefault) {
+    return projectRedactedBridgeOutput(value, schema._zod.def.innerType);
   }
   if (schema === RequestIdSchema || schema === ProgressTokenSchema
     || schema === InitializeResultSchema.shape.protocolVersion
     || schema === JSONRPCNotificationSchema.shape.method || schema === JSONRPCRequestSchema.shape.method
-    || schema instanceof z.ZodLiteral || schema instanceof z.ZodEnum) return value;
-  if (schema instanceof z.ZodUnion) {
-    const option = schema.options.find(candidate => z.safeParse(candidate, value).success);
+    || schema instanceof z.core.$ZodLiteral || schema instanceof z.core.$ZodEnum) return value;
+  if (schema instanceof z.core.$ZodUnion) {
+    const option = schema._zod.def.options.find(candidate => z.safeParse(candidate, value).success);
     return projectRedactedBridgeOutput(value, option);
   }
   if (typeof value === 'string') return outputRedaction.redact(value);
   if (Array.isArray(value)) {
-    const element = schema instanceof z.ZodArray ? schema.element : undefined;
+    const element = schema instanceof z.core.$ZodArray ? schema._zod.def.element : undefined;
     return value.map(item => projectRedactedBridgeOutput(item, element));
   }
   if (value === null || typeof value !== 'object') return value;
-  const fields = schema instanceof z.ZodObject ? schema.shape : undefined;
-  const entrySchema = schema instanceof z.ZodRecord ? schema.valueType : undefined;
+  const fields = schema instanceof z.core.$ZodObject ? schema._zod.def.shape : undefined;
+  const entrySchema = schema instanceof z.core.$ZodRecord ? schema._zod.def.valueType : undefined;
   return Object.fromEntries(Object.entries(value).map(([key, entry]) => [
     fields && Object.hasOwn(fields, key) ? key : outputRedaction.redact(key),
     // Remote metadata is an arbitrary private dictionary, including any keys
@@ -82,10 +83,12 @@ function projectRedactedBridgeOutput(value: unknown, schema?: z.core.$ZodType): 
 
 const RemoteBridgeConfigSchema = z.object({
   transport: z.enum(['http', 'sse']),
-  url: z.string().min(1),
-  headers: z.record(z.string(), z.string()).optional().default({}),
-  redactionValues: z.array(z.string().min(1)).optional().default([]),
-  auth: z.object({ capabilityFile: z.string().min(1), resource: z.string().url() }).strict().optional(),
+  url: z.string().check(z.minLength(1)),
+  headers: z._default(z.optional(z.record(z.string(), z.string())), {}),
+  redactionValues: z._default(z.optional(z.array(z.string().check(z.minLength(1)))), []),
+  auth: z.optional(z.strictObject({
+    capabilityFile: z.string().check(z.minLength(1)), resource: z.url(),
+  })),
 });
 
 type RemoteBridgeConfig = z.infer<typeof RemoteBridgeConfigSchema>;
@@ -208,33 +211,29 @@ async function main(): Promise<void> {
     throw new Error('Remote MCP server did not provide its identity.');
   }
   const instructions = remoteClient.getInstructions();
-  const server = new McpServer(serverInfo, { ...(instructions === undefined ? {} : { instructions }) });
+  const server = new Server(serverInfo, { capabilities: { tools: {} }, ...(instructions === undefined ? {} : { instructions }) });
+  // Discovery has its own MCP request lifetime. Keeping it out of initialize
+  // avoids charging upstream connection and every tool page to one handshake.
+  server.setRequestHandler(ListToolsRequestSchema, async (request, extra) => {
+    const page = await remoteClient.listTools(request.params, { signal: extra.signal });
+    return { ...page, tools: page.tools.map(tool => ({ ...tool,
+      inputSchema: projectMcpToolInputJsonSchema(tool.inputSchema),
+    })) };
+  });
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => CallToolResultSchema.parse(
+    await forwardHappierBridgeTool(request.params.name, request.params.arguments, {
+      signal: extra.signal, _meta: request.params._meta,
+      sendNotification: notification => extra.sendNotification(notification),
+    }, (name, args, options) => callMcpToolWithResolvedTimeout({
+      client: remoteClient, toolName: name, args,
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+      ...(options?.requestMetadata === undefined ? {} : { requestMetadata: options.requestMetadata }),
+      ...(options?.onprogress === undefined ? {} : { onprogress: options.onprogress }),
+    })),
+  ));
   const requestedSignal = await runMcpStdioBridgeLifecycle({
     stdin: process.stdin,
     start: async () => {
-      const tools: Tool[] = [];
-      let cursor: string | undefined;
-      do {
-        const page = await withMcpTimeout(remoteClient.listTools(cursor === undefined ? undefined : { cursor }), {
-          timeoutMs: MCP_BRIDGE_STARTUP_STEP_TIMEOUT_MS,
-          label: 'happier_mcp_bridge_list_tools_timeout',
-        });
-        tools.push(...page.tools);
-        cursor = page.nextCursor;
-      } while (cursor !== undefined);
-      registerHappierBridgeTools(server, {
-        tools,
-        callHttpTool: async (name, args, options) =>
-          await callMcpToolWithResolvedTimeout({
-            client: remoteClient,
-            toolName: name,
-            args,
-            ...(options?.signal === undefined ? {} : { signal: options.signal }),
-            ...(options?.requestMetadata === undefined ? {} : { requestMetadata: options.requestMetadata }),
-            ...(options?.onprogress === undefined ? {} : { onprogress: options.onprogress }),
-          }),
-      });
-
       const stdio = new StdioServerTransport();
       // One actual Agent-facing output boundary covers tool metadata, results,
       // protocol errors and progress without choosing or filtering any tools.

@@ -12,6 +12,13 @@ fs.writeFileSync(process.argv[1], String(process.pid));
 require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line);
   if (request.id === undefined) return;
+  if (request.method === 'initialize' && process.argv[2] === 'slow-initialize') {
+    setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+      protocolVersion: request.params.protocolVersion, capabilities: { tools: {} },
+      serverInfo: { name: 'probe-fixture', version: '1.0.0' }
+    } }) + '\n'), 16_000);
+    return;
+  }
   let result;
   if (request.method === 'initialize') result = {
     protocolVersion: request.params.protocolVersion, capabilities: { tools: {} },
@@ -25,7 +32,9 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
           annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
           inputSchema: { type: 'object' } }], nextCursor: 'second' };
   } else return;
-  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
+  const respond = () => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
+  if (request.method === 'tools/list' && !request.params?.cursor && process.argv[2] === 'slow-list') setTimeout(respond, 16_000);
+  else respond();
 });
 `;
 
@@ -62,6 +71,15 @@ describe('probeMcpStdioServerTools', () => {
     await expect(probeMcpStdioServerTools({ config, signal: controller.signal })).rejects.toThrow('probe-cancelled');
     await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it.each(['slow-initialize', 'slow-list'])('allows %s beyond the former Test-only cutoff within the caller and SDK lifetime', async mode => {
+    const { config } = await fixtureConfig(mode);
+    const controller = new AbortController();
+    await expect(probeMcpStdioServerTools({ config, signal: controller.signal })).resolves.toMatchObject({
+      tools: [{ name: 'first_page' }, { name: 'later_page' }],
+      serverInfo: { name: 'probe-fixture', version: '1.0.0' },
+    });
+  }, 30_000);
 
   it('aborts a pending tools request and closes its stdio child', async () => {
     const { config, marker } = await fixtureConfig('hang');

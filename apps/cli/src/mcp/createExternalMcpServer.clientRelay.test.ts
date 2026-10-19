@@ -134,7 +134,7 @@ describe('standalone MCP client Action admission', () => {
       for (const [name, args, connectedResult, absentResult] of [
         ['ui_find', { op: 'read' }, { status: 'idle' }, { status: 'unavailable', reason: 'noClient' }],
         ['session_pending_next', {}, { status: 'none' }, { status: 'unavailable' }],
-        ['workspace_tabs_list', {}, workspace, { errorCode: 'unavailable', error: 'noClient' }],
+        ['workspace_tabs_list', {}, workspace, { errorCode: 'unsupported_action', error: 'unsupported_action:workspace.tabs.list' }],
       ] as const) {
         const response = CallToolResultSchema.parse(await client.callTool({ name, arguments: args }));
         const text = response.content.find(entry => entry.type === 'text');
@@ -176,7 +176,10 @@ describe('standalone MCP client Action admission', () => {
       reviewedSettings = waivedSettings;
       const homeLookupsBeforeCoach = homeSessionLookups.length;
       const dismissed = await dismissCoach();
-      expect.soft(dismissed).toEqual(connected ? coachResult : { errorCode: 'unavailable', error: 'noClient' });
+      // The canonical Coach owner falls back to a headless usage query after
+      // noClient. This relay-only host has no Usage source, so it refuses that
+      // query without issuing a client RPC or changing a preference.
+      expect.soft(dismissed).toEqual(connected ? coachResult : { errorCode: 'unsupported_action', error: 'unsupported_action' });
       expect.soft(noWaiverResult).toMatchObject({ errorCode: 'approvals_not_supported' });
       expect(coachAdmissionsBeforeWaiver).toEqual([]);
       expect(daemonAdmissions).toContainEqual(expect.objectContaining({

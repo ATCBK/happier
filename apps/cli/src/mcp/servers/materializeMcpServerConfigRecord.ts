@@ -1,3 +1,5 @@
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
+
 /**
  * MCP server materialization (CLI/runtime)
  *
@@ -34,7 +36,7 @@ import { isPackageRunnerCommand, normalizePackageRunnerInvocation } from '@/pack
 import { resolveValueRefPlaintext } from '@/settings/valueRefs/resolveValueRefPlaintext';
 import { isSharedSavedSecretReferenceV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import type { SavedSecretOperationReferenceV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import type { McpRequestAuthCapability } from '@/mcp/runtime/mcpRequestAuth';
+import type { McpRequestAuthCapability, McpRequestAuthFailureCode } from '@/mcp/runtime/mcpRequestAuth';
 import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
 import { createProviderRedactionLease, type ProviderStreamingSanitizer } from '@/providers/spawn/redaction';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
@@ -89,7 +91,7 @@ async function resolveDefaultStdioLauncherCommand(): Promise<Readonly<{ command:
   });
 }
 
-function resolveNeutralLaunchCwd(processEnv: NodeJS.ProcessEnv): string {
+function resolveNeutralLaunchCwd(processEnv: ProcessEnvInput): string {
   const home = typeof processEnv.HOME === 'string' && processEnv.HOME.length > 0 ? processEnv.HOME : null;
   const userProfile =
     typeof processEnv.USERPROFILE === 'string' && processEnv.USERPROFILE.length > 0 ? processEnv.USERPROFILE : null;
@@ -133,7 +135,7 @@ async function materializeStdioServer(params: Readonly<{
   server: McpServerCatalogEntryV1;
   directory: string;
   resolvedEnv: Record<string, string>;
-  processEnv: NodeJS.ProcessEnv;
+  processEnv: ProcessEnvInput;
   tmpDir: string | null;
   deps: Deps;
   writtenPaths: string[];
@@ -233,11 +235,12 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
   resolved: McpServerMaterializationV1;
   savedSecretMaterializer?: SavedSecretMaterializerV1;
   session?: Parameters<typeof resolveValueRefPlaintext>[0]['session'];
-  processEnv?: NodeJS.ProcessEnv;
+  processEnv?: ProcessEnvInput;
   tmpDir: string | null;
   strictMode?: boolean;
   deps?: Deps;
   requestAuthByServerId?: Readonly<Record<string, McpRequestAuthCapability>>;
+  requestAuthFailuresByServerId?: Readonly<Record<string, McpRequestAuthFailureCode>>;
 }>): Promise<MaterializeMcpServerConfigRecordResult> {
   const strictMode = params.strictMode ?? params.resolved.strictMode;
   const processEnv = params.processEnv ?? process.env;
@@ -418,7 +421,7 @@ export async function materializeMcpServerConfigRecord(params: Readonly<{
       }
       if (server.remote.auth?.kind === 'oauth' && !resourceMatches) {
         const warning: MaterializeMcpServerConfigRecordWarning = { serverName, code: 'invalid_server',
-          detail: requestAuth ? 'mcp_resource_mismatch' : 'mcp_sign_in_required' };
+          detail: requestAuth ? 'mcp_resource_mismatch' : params.requestAuthFailuresByServerId?.[server.id] ?? 'mcp_sign_in_required' };
         if (strictMode) throw new Error(warning.detail);
         warnings.push(warning);
         continue;

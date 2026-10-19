@@ -1,12 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { SessionWorkerPublishInputV1 } from '@happier-dev/protocol';
+import { prepareActiveDiscussionAgentPublication } from '@/discussions/discussionAgentPublisher';
+import { DiscussionAgentPublisherResponseV1Schema } from '@happier-dev/protocol/discussions/api';
+import type { SessionUpdatePostInputV1 } from '@happier-dev/protocol';
 
 import type { HappyMcpSessionClient } from '@/mcp/startHappyServer';
 import { logger } from '@/ui/logger';
 import type { Metadata } from '@/api/types';
 import type { RpcLocalActionContext } from '@/api/rpc/types';
 
-import { registerHappierMcpResources } from '@/mcp/resources/registerHappierMcpResources';
+import { listHappierMcpToolNames, registerHappierMcpResources } from '@/mcp/resources/registerHappierMcpResources';
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { createChangeTitleToolHandler } from '@/agent/tools/happierTools/createChangeTitleToolHandler';
 import { dispatchBuiltInHappierTool } from '@/agent/tools/happierTools/dispatchBuiltInHappierTool';
@@ -35,7 +37,7 @@ import { AgentStartSessionCallerV1Schema } from '@happier-dev/protocol/account/s
 import type { ActionId, AccountSettings, ActionExecutorContext, ActionExecutorDeps, BackendTargetRefV2 } from '@happier-dev/protocol';
 import { getActionSpec, isActionSpecSurfacedOn } from '@happier-dev/protocol/actions/actionSpecs';
 import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { isMemorySessionSearchHitV1, negotiateMemorySearchV1 } from '@happier-dev/protocol/memory/memorySearch';
 import { MemoryWindowV1Schema } from '@happier-dev/protocol/memory/memoryWindow';
 import type { MemorySearchResultV1, MemoryWindowV1, SessionStateCapabilitiesV1 } from '@happier-dev/protocol';
@@ -48,7 +50,6 @@ import {
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { isSessionBoundMemoryTarget } from '@/mcp/sessionBoundMemoryTarget';
-import { createSessionDiscussionActionDeps } from '@/session/discussions/sessionDiscussionActionDeps';
 import { createSessionBoardActionDeps } from '@/session/board/sessionBoardActionDeps';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { createSessionFollowActionDeps } from '@/api/sessionFollowActionDeps';
@@ -206,7 +207,7 @@ export function createHappierMcpServer(
   const cryptoContext = ctx
     ? { mode: 'e2ee' as const, ctx }
     : { mode: 'plain' as const, ctx: null };
-  // Board and Discussions are Session-placed owners. They need this Session's
+  // The Board is Session-placed. It needs this Session's
   // transport credentials and its stored-content material, not Account
   // authority: a Session-scoped runtime (a Runner) holds no Account
   // credentials, and its live Session client is the only holder of the key.
@@ -340,24 +341,59 @@ export function createHappierMcpServer(
   };
 
   const machineAdmissionTransport = client.getMachineAdmissionTransport?.();
+  const { projectWorkerAction: projectWorkerAccountAction, ...accountServerActionPorts } = credentials
+    ? createAccountServerActionDeps({
+        token: credentials.token,
+        credentials,
+        isCredentialCurrent: async () => sameStoredCredentials(
+          credentials,
+          await readStoredCredentialsForServerId(serverId).catch(() => null),
+        ),
+        serverId,
+        serverHttpBaseUrl,
+        ...(serverIdentityId ? { serverIdentityId } : {}),
+        ...(client.getServerFeaturesSnapshot
+          ? { resolveServerFeaturesSnapshot: () => client.getServerFeaturesSnapshot?.() }
+          : {}),
+      })
+    : {};
   const harness = createCliActionExecutorHarness(
     {
       actionsSettingsProvider: actionSettingsProvider,
       token: sessionCredentials?.token ?? '',
       ...(credentials ? { credentials } : {}),
       sessionId: client.sessionId,
+      ...(client.postAgentDiscussionMessage ? {
+        postAgentDiscussionMessage: async (request, options) => {
+          if (request.sessionId !== client.sessionId) return { v: 1 as const, ok: false as const, error: 'discussion_post_denied' as const };
+          if (options?.approvedActionReplay) return DiscussionAgentPublisherResponseV1Schema.parse(await sessionScopedRpc(
+            SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, { request, approvedActionReplay: options.approvedActionReplay },
+            options.signal ? { signal: options.signal } : undefined));
+          const publication = prepareActiveDiscussionAgentPublication({ session: client, serverId, request });
+          if (!publication) return { v: 1 as const, ok: false as const, error: 'discussion_post_denied' as const };
+          return await client.postAgentDiscussionMessage!(publication, options);
+        },
+      } : {}),
+      ...(client.mutateSessionMessageReply && client.publishSessionMessageReply ? {
+        sessionMessageReplyPublisher: {
+          sessionId: client.sessionId,
+          mutateSessionMessageReply: (input, options) => client.mutateSessionMessageReply!(input, options),
+          publishSessionMessageReply: (input, options) => client.publishSessionMessageReply!(input, options),
+        },
+      } : {}),
       invokeBoundSessionRpc: async (method, input, signal) => await sessionScopedRpc(
         method,
         input,
         signal ? { signal } : undefined,
       ),
       ...(client.enqueueSessionEventCommitted ? {
-        publishWorkerReport: (report: SessionWorkerPublishInputV1) => client.enqueueSessionEventCommitted!({ type: 'worker-report', ...report }),
+        postSessionUpdate: (report: SessionUpdatePostInputV1) => client.enqueueSessionEventCommitted!({ type: 'worker-report', ...report }),
       } : {}),
       ...cryptoContext,
       rawSession,
       getCurrentSessionBackendTarget: () => resolveLiveClientBackendTarget(client),
       getCurrentSessionMetadata: () => client.getMetadataSnapshot?.() ?? null,
+      ...(client.getSessionRoleContext ? { getSessionRoleContext: () => client.getSessionRoleContext!() } : {}),
       ...(client.getCurrentSessionSkillItems ? { getCurrentSessionSkillItems: () => client.getCurrentSessionSkillItems!() } : {}),
       ...(client.getCurrentResolvedRoles ? { getCurrentResolvedRoles: () => client.getCurrentResolvedRoles!() } : {}),
       ...(client.readRoleSources ? { readRoleSources: (signal) => client.readRoleSources!(signal) } : {}),
@@ -375,6 +411,7 @@ export function createHappierMcpServer(
       ...(serverIdentityId ? { serverIdentityId } : {}),
       serverHttpBaseUrl,
       ...(machineAdmissionTransport ? { machineAdmissionTransport } : {}),
+      ...(projectWorkerAccountAction ? { projectWorkerAccountAction } : {}),
       ...(client.getServerFeaturesSnapshot
         ? { resolveServerFeaturesSnapshot: () => client.getServerFeaturesSnapshot?.() }
         : {}),
@@ -383,22 +420,14 @@ export function createHappierMcpServer(
       invokeContributedAction: async (request) => localExecutor.invokeContributedAction(request),
       ...(credentials
         ? {
-            ...createAccountServerActionDeps({
+            ...accountServerActionPorts,
+            ...createSessionFollowActionDeps({
               token: credentials.token,
               credentials,
               isCredentialCurrent: async () => sameStoredCredentials(
                 credentials,
                 await readStoredCredentialsForServerId(serverId).catch(() => null),
               ),
-              serverId,
-              serverHttpBaseUrl,
-              ...(serverIdentityId ? { serverIdentityId } : {}),
-              ...(client.getServerFeaturesSnapshot
-                ? { resolveServerFeaturesSnapshot: () => client.getServerFeaturesSnapshot?.() }
-                : {}),
-            }),
-            ...createSessionFollowActionDeps({
-              token: credentials.token,
               serverId,
               serverHttpBaseUrl,
               ...(serverIdentityId ? { serverIdentityId } : {}),
@@ -429,24 +458,6 @@ export function createHappierMcpServer(
       },
       ...(sessionContentOwnerOptions
         ? createSessionBoardActionDeps(sessionContentOwnerOptions)
-        : {}),
-      ...(sessionContentOwnerOptions
-        ? createSessionDiscussionActionDeps({
-            ...sessionContentOwnerOptions,
-            ...(client.postAgentDiscussionMessage
-              ? {
-                  postAgentMessage: async (request, options) => await client.postAgentDiscussionMessage!(
-                    {
-                      discussionId: request.discussionId,
-                      request: request.request,
-                      ...(request.runId ? { runId: request.runId } : {}),
-                      ...(request.toolCallId ? { toolCallId: request.toolCallId } : {}),
-                    },
-                    options,
-                  ),
-                }
-              : {}),
-          })
         : {}),
       sessionStateFieldSet: async (write) => {
         const { sessionId, value, fieldId } = write;
@@ -505,6 +516,7 @@ export function createHappierMcpServer(
               query,
               // This bridge has Session transport, not Account document-read authority.
               readDocumentSearchSupport: async () => false,
+              readProjectSearchSupport: async () => false,
               search: async (request) => await sessionScopedRpc(RPC_METHODS.DAEMON_MEMORY_SEARCH, request),
               ...(signal ? { signal } : {}),
             });
@@ -648,7 +660,7 @@ export function createHappierMcpServer(
       actionToolBridge.resolveActionOptions(args, client.sessionId),
     isActionEnabled: actionToolBridge.isActionEnabled,
   };
-  const { toolNames } = registerHappierMcpBuiltInTools(mcp as any, {
+  const { toolNames } = registerHappierMcpBuiltInTools(mcp, {
     sessionId: client.sessionId,
     workingDirectory: sessionLocation?.path,
     sessionMachineId: sessionLocation?.machineId ?? null,
@@ -663,7 +675,7 @@ export function createHappierMcpServer(
 
   return {
     mcp,
-    toolNames: [...toolNames, 'watch'],
+    toolNames: listHappierMcpToolNames(toolNames),
     executeTool: async (request) => await dispatchBuiltInHappierTool({
       toolName: request.toolName,
       args: request.args,

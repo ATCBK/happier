@@ -7,11 +7,12 @@ import type {
     ServerRequest,
     ToolAnnotations,
 } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import type { PluginJsonSchemaValidator } from '@happier-dev/protocol';
+import { projectMcpToolInputJsonSchema } from '@/mcp/server/projectMcpToolInputJsonSchema';
 
 import { assertHostedMcpServerRegistration } from './validation';
 import type {
@@ -72,13 +73,13 @@ function isSdkToolSchema(value: unknown): value is SdkToolSchema {
     return isZodSchemaLike(value) || isZodRawShapeLike(value);
 }
 
-function createSdkCompatibleObjectSchema(jsonSchema?: Record<string, unknown>): SdkToolSchema {
-    const adapter = z.object({}).passthrough();
+function createSdkCompatibleObjectSchema(jsonSchema?: Record<string, unknown>, input = false): SdkToolSchema {
+    const adapter = z.looseObject({});
     if (jsonSchema) {
         // Protocol/AJV remains the schema-semantics owner. This hook only
         // preserves the already-validated schema in MCP tool discovery.
         adapter._zod.processJSONSchema = (_ctx, json) => {
-            Object.assign(json, jsonSchema);
+            Object.assign(json, input ? projectMcpToolInputJsonSchema(jsonSchema) : jsonSchema);
         };
     }
     const candidate: unknown = adapter;
@@ -139,7 +140,7 @@ function resolveInputSchema(schema: unknown): HostedInputSchemaResolution {
     }
     if (jsonSchema.kind === 'json') {
         return {
-            schema: createSdkCompatibleObjectSchema(jsonSchema.schema),
+            schema: createSdkCompatibleObjectSchema(jsonSchema.schema, true),
             native: false,
             ...compileJsonSchema(jsonSchema.schema),
         };

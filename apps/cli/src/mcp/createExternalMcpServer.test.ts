@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { HAPPIER_MCP_ACTION_SPECS_RESOURCE_URI } from '@/mcp/resources/registerHappierMcpResources';
 import { createExternalMcpServer as createExternalMcpServerStatic } from '@/mcp/createExternalMcpServer';
 
 const env = process.env;
@@ -58,42 +61,40 @@ describe('createExternalMcpServer', () => {
       status: 'ready' as const,
       provenance: 'authenticated' as const,
       features: FeaturesResponseSchema.parse({
-        features: { sessions: { enabled: true, board: { enabled }, conversations: { enabled } } },
+        features: { sessions: { enabled: true, board: { enabled }, conversations: { enabled } }, sharing: { enabled: true, session: { enabled: true } } },
         capabilities: {},
       }),
     });
 
-    expect(createExternalMcpServerStatic({ credentials }).toolNames).not.toContain('session_board_get');
-    expect(createExternalMcpServerStatic({ credentials, serverFeaturesSnapshot: snapshot(false) }).toolNames).not.toContain('session_board_get');
+    // Board item reads also serve transcript visuals; only layout mutations
+    // depend on Board availability.
+    expect(createExternalMcpServerStatic({ credentials }).toolNames).toContain('session_board_get');
+    expect(createExternalMcpServerStatic({ credentials, serverFeaturesSnapshot: snapshot(false) }).toolNames).toContain('session_board_get');
     expect(createExternalMcpServerStatic({ credentials, serverFeaturesSnapshot: snapshot(true) }).toolNames).toContain('session_board_get');
-    expect(createExternalMcpServerStatic({ credentials }).toolNames).not.toContain('session_discussion_list');
-    expect(createExternalMcpServerStatic({ credentials, serverFeaturesSnapshot: snapshot(false) }).toolNames).not.toContain('session_discussion_list');
-    expect(createExternalMcpServerStatic({ credentials, serverFeaturesSnapshot: snapshot(true) }).toolNames).toContain('session_discussion_list');
+    expect(createExternalMcpServerStatic({ credentials }).toolNames).not.toContain('discussion_list');
+    expect(createExternalMcpServerStatic({ credentials, serverFeaturesSnapshot: snapshot(false) }).toolNames).not.toContain('discussion_list');
+    expect(createExternalMcpServerStatic({ credentials, serverFeaturesSnapshot: snapshot(true) }).toolNames).toContain('discussion_list');
   });
 
   it('registers action-spec resources for the mcp surface', async () => {
-    vi.resetModules();
-
-    let capturedSurface: string | undefined;
-    vi.doMock('@/mcp/resources/registerHappierMcpResources', () => ({
-      registerHappierMcpResources: (_server: any, opts: any) => {
-        capturedSurface = opts?.surface;
-      },
-    }));
-
-    const { createExternalMcpServer } = await import('@/mcp/createExternalMcpServer');
-
-    createExternalMcpServer({
-      credentials: {
-        token: 'token',
-        encryption: {
-          type: 'legacy',
-          secret: new Uint8Array([1, 2, 3, 4]),
-        },
-      },
+    const { mcp, toolNames } = createExternalMcpServerStatic({
+      credentials: { token: 'token', encryption: null },
     });
-
-    expect(capturedSurface).toBe('mcp');
+    const client = new Client({ name: 'external-resource-test', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await mcp.connect(serverTransport);
+    try {
+      await client.connect(clientTransport);
+      expect(toolNames).toContain('watch');
+      const resource = await client.readResource({ uri: HAPPIER_MCP_ACTION_SPECS_RESOURCE_URI });
+      const content = resource.contents[0];
+      if (!content || !('text' in content) || typeof content.text !== 'string') throw new Error('Missing Action catalog resource');
+      const catalog: { actionSpecs: Array<{ id: string }> } = JSON.parse(content.text);
+      expect(catalog.actionSpecs.map(spec => spec.id)).toContain('session.target.primary.set');
+    } finally {
+      await client.close();
+      await mcp.close();
+    }
   });
 
   it('uses the canonical plain Session crypto context for token-only credentials', async () => {
@@ -140,10 +141,10 @@ describe('createExternalMcpServer', () => {
         return {};
       },
     }));
-    vi.doMock('@/session/discussions/sessionDiscussionActionDeps', () => ({
-      createSessionDiscussionActionDeps: (input: Record<string, unknown>) => {
+    vi.doMock('@/discussions/discussionActionDeps', () => ({
+      createDiscussionActionDeps: (input: Record<string, unknown>) => {
         capturedDiscussionInput = input;
-        return { sessionDiscussionAction: vi.fn() };
+        return { discussionAction: vi.fn() };
       },
     }));
     vi.doMock('@/api/sessionFollowActionDeps', () => ({
@@ -176,7 +177,7 @@ describe('createExternalMcpServer', () => {
       provenance: 'authenticated' as const,
       features: FeaturesResponseSchema.parse({
         features: {},
-        capabilities: { serverIdentity: { serverIdentityId: 'stable-home-identity' } },
+        capabilities: { serverIdentity: { serverIdentityId: 'srv_stable-home-identity' } },
       }),
     };
     createExternalMcpServer({ credentials, machineId: 'machine-current', serverFeaturesSnapshot });
@@ -185,32 +186,21 @@ describe('createExternalMcpServer', () => {
       token: credentials.token,
       credentials,
       resolveServerFeaturesSnapshot: expect.any(Function),
-      serverIdentityId: 'stable-home-identity',
+      serverIdentityId: 'srv_stable-home-identity',
     });
-    expect(capturedDiscussionInput).toMatchObject({ credentials, serverIdentityId: 'stable-home-identity' });
+    expect(capturedDiscussionInput).toMatchObject({ credentials, serverIdentityId: 'srv_stable-home-identity' });
     expect(capturedFollowInput).toMatchObject({
       token: credentials.token,
-      serverIdentityId: 'stable-home-identity',
+      serverIdentityId: 'srv_stable-home-identity',
       prepareSourceKeyAfterSet: expect.any(Function),
     });
-    expect(capturedHarnessParams).toMatchObject({ serverIdentityId: 'stable-home-identity' });
+    expect(capturedHarnessParams).toMatchObject({ serverIdentityId: 'srv_stable-home-identity' });
   });
 
   it('passes through approval_request_created for execution_run_start tool calls via the shared action executor', async () => {
     vi.resetModules();
 
     let capturedExecuteActionByToolName: unknown = null;
-
-    vi.doMock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
-      McpServer: class FakeMcpServer {
-        registerResource() {}
-        registerTool() {}
-      },
-    }));
-
-    vi.doMock('@/mcp/resources/registerHappierMcpResources', () => ({
-      registerHappierMcpResources: () => {},
-    }));
 
     vi.doMock('@/mcp/server/registerHappierMcpBuiltInTools', () => ({
       registerHappierMcpBuiltInTools: (_server: any, params: any) => {
@@ -272,17 +262,6 @@ describe('createExternalMcpServer', () => {
     vi.resetModules();
 
     let capturedChangeTitle: unknown = null;
-
-    vi.doMock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
-      McpServer: class FakeMcpServer {
-        registerResource() {}
-        registerTool() {}
-      },
-    }));
-
-    vi.doMock('@/mcp/resources/registerHappierMcpResources', () => ({
-      registerHappierMcpResources: () => {},
-    }));
 
     vi.doMock('@/mcp/server/registerHappierMcpBuiltInTools', () => ({
       registerHappierMcpBuiltInTools: (_server: any, params: any) => {

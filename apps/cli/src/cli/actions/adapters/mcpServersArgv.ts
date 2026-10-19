@@ -7,7 +7,7 @@ import { matchPersonalSavedSecretMetadata } from './savedSecretsInput';
 import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
 import { sameStoredCredentials } from '@/persistence';
 import { configuration } from '@/configuration';
-import { normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveCurrentAccountAdministrationMachine, resolveCurrentAccountMachineTarget } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { createConnectedAccountDaemonClient } from '@/cli/commands/connect/connectedAccountDaemonClient';
 import { continueConnectedAccountAuthentication } from '@/cli/commands/connect';
@@ -24,7 +24,7 @@ function captureMcpAccountActionExecution(dependencies: Partial<ActionCliExecuti
   let captured: { params: Parameters<ActionCliExecutionDeps['createExecutorFn']>[0]; homeId: string; homeUrl: string } | undefined;
   const deps: Partial<ActionCliExecutionDeps> = { ...dependencies, createExecutorFn: async input => {
     const homeId = input.serverId ?? configuration.activeServerId;
-    const homeUrl = normalizeServerHttpBaseUrl(input.serverApiUrl ?? configuration.apiServerUrl);
+    const homeUrl = normalizeServerHttpBaseUrl(input.serverApiUrl ?? resolveServerHttpBaseUrl());
     if (captured && (!sameStoredCredentials(captured.params.credentials, input.credentials)
       || captured.homeId !== homeId || captured.homeUrl !== homeUrl
       || captured.params.serverIdentityId !== input.serverIdentityId)) {
@@ -159,14 +159,16 @@ async function handleMcpServerListCliCommand(params: Readonly<{
   return true;
 }
 
-async function handleMcpServerToolsCliCommand(params: Readonly<{
+async function handleMcpServerNamedCliCommand(params: Readonly<{
   argv: readonly string[]; signal?: AbortSignal; actionExecutionDeps?: Partial<ActionCliExecutionDeps>;
 }>): Promise<boolean> {
   const commands = listCompiledActionCliCommands();
   const list = findCompiledActionCliCommand(['mcp', 'servers', 'list'], commands);
   const toolsList = findCompiledActionCliCommand(['mcp', 'servers', 'tools'], commands);
   const toolsSet = findCompiledActionCliCommand(['mcp', 'servers', 'tools', 'set'], commands);
-  if (!list || !toolsList || !toolsSet) throw new Error('MCP Action command is unavailable');
+  const duplicate = findCompiledActionCliCommand(['mcp', 'servers', 'duplicate'], commands);
+  if (!list || !toolsList || !toolsSet || !duplicate) throw new Error('MCP Action command is unavailable');
+  const isDuplicate = params.argv[2] === 'duplicate';
   const options = argvBeforeOptionTerminator(params.argv);
   const hasWholeInput = options.some(token => token === '--input-json' || token.startsWith('--input-json='));
   if (hasWholeInput && (params.argv[3] === 'list' || params.argv[3] === 'set')) {
@@ -183,9 +185,9 @@ async function handleMcpServerToolsCliCommand(params: Readonly<{
       context: { actionId: command.actionId, invocationId: randomUUID(), commandPath: command.path,
         output: options.includes('--json') ? 'json' : 'human' } }) : parsed;
   };
-  const listed = parse(toolsList);
-  const command = listed.ok ? toolsList : toolsSet;
-  const composed = listed.ok ? listed : parse(toolsSet);
+  const listed = parse(isDuplicate ? duplicate : toolsList);
+  const command = isDuplicate ? duplicate : listed.ok ? toolsList : toolsSet;
+  const composed = isDuplicate || listed.ok ? listed : parse(toolsSet);
   // Help, whole-object input and malformed arguments retain the normal compiler
   // path. The adapter does not implement an independent parser or input policy.
   if (!composed.ok || options.includes('--help') || options.includes('-h') || hasWholeInput) {
@@ -275,7 +277,7 @@ export async function tryHandleMcpServerCliCommand(params: Readonly<{
   if (argv[0] === 'mcp' && argv[1] === 'servers' && argv[2] === 'add') return handleMcpServerAddCliCommand(params);
   if (argv[0] === 'mcp' && argv[1] === 'servers' && argv[2] === 'list') return handleMcpServerListCliCommand(params);
   if (argv[0] === 'mcp' && (argv[1] === 'found' || argv[1] === 'servers' && argv[2] === 'detect')) return handleMcpFoundCliCommand(params);
-  if (argv[0] === 'mcp' && argv[1] === 'servers' && argv[2] === 'tools') return handleMcpServerToolsCliCommand(params);
+  if (argv[0] === 'mcp' && argv[1] === 'servers' && (argv[2] === 'tools' || argv[2] === 'duplicate')) return handleMcpServerNamedCliCommand(params);
   if (argv[0] === 'mcp' && argv[1] === 'servers' && argv[2] === 'test') return handleMcpServerTestCliCommand(params);
   if (argv[0] !== 'mcp' || argv[1] !== 'servers' || (argv[2] !== 'sign-in' && argv[2] !== 'sign-out')) return false;
   const path = argv.slice(0, 3);
@@ -303,7 +305,7 @@ export async function tryHandleMcpServerCliCommand(params: Readonly<{
   const deps: Partial<ActionCliExecutionDeps> = { ...params.actionExecutionDeps,
     createExecutorFn: async input => {
       const homeId = input.serverId ?? configuration.activeServerId;
-      const homeUrl = normalizeServerHttpBaseUrl(input.serverApiUrl ?? configuration.apiServerUrl);
+      const homeUrl = normalizeServerHttpBaseUrl(input.serverApiUrl ?? resolveServerHttpBaseUrl());
       if (captured && (!sameStoredCredentials(captured.params.credentials, input.credentials)
         || captured.homeId !== homeId || captured.homeUrl !== homeUrl
         || captured.params.serverIdentityId !== input.serverIdentityId)) {
@@ -336,7 +338,7 @@ export async function tryHandleMcpServerCliCommand(params: Readonly<{
   };
   if (argv[2] === 'sign-out') {
     const machineId = await resolveCurrentAccountAdministrationMachine({ token: current.params.credentials.token,
-      serverHttpBaseUrl: current.homeUrl, preferredMachineId, signal: params.signal });
+      serverHttpBaseUrl: current.homeUrl, requestedMachineId: preferredMachineId ?? undefined, signal: params.signal });
     if (!machineId) throw Object.assign(new Error('No machine is online'), { code: 'no_machine_online' });
     await runCompiledActionCliCommand({ command, argv: composeArgv(machineId), signal: params.signal, deps });
     return true;

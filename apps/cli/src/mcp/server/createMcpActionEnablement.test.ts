@@ -139,7 +139,7 @@ describe('Lane 10 Action feature availability', () => {
     expect(restricted('notifications.notify_me')).toBe(true);
     expect(restricted('workflow.trigger.list')).toBe(false);
     expect(restricted('session.board.get')).toBe(true);
-    expect(restricted('session.discussion.list')).toBe(true);
+    expect(restricted('discussion.list')).toBe(true);
     // Transcript reads are Machine-placed, but the exact Session read remains
     // a supported runtime capability. Scope is not a Session-only allowlist.
     expect(restricted('session.transcript.get')).toBe(true);

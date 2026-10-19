@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { AuthorizationServerMetadata, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
@@ -47,21 +47,21 @@ export const MCP_SIGN_IN_CONNECTED_ACCOUNT_DESCRIPTOR = PluginConnectedAccountDe
     }] },
 });
 
-const RegistrationSchema = z.object({
-    clientId: z.string().min(1), authorizationEndpoint: z.string().url(), tokenEndpoint: z.string().url(),
-    revocationEndpoint: z.string().url().optional(), tokenEndpointAuthMethods: z.array(z.string()),
-    clientAuthMethod: z.enum(['client_secret_basic', 'client_secret_post', 'none']).optional(),
-    revocationAuthMethods: z.array(z.string()).optional(),
-}).strict();
+const RegistrationSchema = z.strictObject({
+    clientId: z.string().check(z.minLength(1)), authorizationEndpoint: z.string().check(z.url()), tokenEndpoint: z.string().check(z.url()),
+    revocationEndpoint: z.optional(z.string().check(z.url())), tokenEndpointAuthMethods: z.array(z.string()),
+    clientAuthMethod: z.optional(z.enum(['client_secret_basic', 'client_secret_post', 'none'])),
+    revocationAuthMethods: z.optional(z.array(z.string())),
+});
 type Registration = z.infer<typeof RegistrationSchema>;
 const ConfigurationSchema = z.object({
-    serverId: z.string().min(1), resource: z.string().url(), stepUp: z.boolean().default(false),
-    grantedScopes: z.array(z.string()).default([]), stepUpScopes: z.array(z.string()).default([]),
-    issuer: z.string().optional(), registrations: z.record(z.string(), RegistrationSchema).default({}),
+    serverId: z.string().check(z.minLength(1)), resource: z.string().check(z.url()), stepUp: z._default(z.boolean(), false),
+    grantedScopes: z._default(z.array(z.string()), []), stepUpScopes: z._default(z.array(z.string()), []),
+    issuer: z.optional(z.string()), registrations: z._default(z.record(z.string(), RegistrationSchema), {}),
 });
 const CompletionSchema = z.object({
-    issuer: z.string().url(), resource: z.string().url(), serverId: z.string(),
-    registration: RegistrationSchema, clientSecret: z.string().optional(), scopes: z.array(z.string()),
+    issuer: z.string().check(z.url()), resource: z.string().check(z.url()), serverId: z.string(),
+    registration: RegistrationSchema, clientSecret: z.optional(z.string()), scopes: z.array(z.string()),
 });
 const SecretsSchema = z.record(z.string(), z.string());
 
@@ -137,9 +137,9 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                 if (raw && typeof raw === 'object') {
                     const flags = raw as Readonly<Record<string, unknown>>;
                     // SDK 1.25.3's OIDC parser strips these extension fields.
-                    issRequired = z.boolean().optional().parse(flags.authorization_response_iss_parameter_supported) === true;
-                    clientMetadataSupported = z.boolean().optional().parse(flags.client_id_metadata_document_supported) === true;
-                    revocationAuthMethods = z.array(z.string()).optional().parse(flags.revocation_endpoint_auth_methods_supported);
+                    issRequired = z.optional(z.boolean()).parse(flags.authorization_response_iss_parameter_supported) === true;
+                    clientMetadataSupported = z.optional(z.boolean()).parse(flags.client_id_metadata_document_supported) === true;
+                    revocationAuthMethods = z.optional(z.array(z.string())).parse(flags.revocation_endpoint_auth_methods_supported);
                 }
             }
             return response;
@@ -150,7 +150,9 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
     }
     function failure(signal: AbortSignal, status: number | undefined, code: string) {
         signal.throwIfAborted();
-        return { status: status === undefined || status === 429 || status >= 500 ? 'outcomeUnknown' as const : 'rejected' as const, diagnostic: diagnostic(code) };
+        return status === undefined || status === 429 || status >= 500
+            ? { status: 'outcomeUnknown' as const, diagnostic: diagnostic(code) }
+            : { status: 'rejected' as const, diagnostic: diagnostic(code) };
     }
     return {
         authentication: { modes: { [MCP_SIGN_IN_AUTHENTICATION_MODE_ID]: {
@@ -197,17 +199,18 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                     } else if (registration) {
                         clientId = registration.clientId;
                     } else if (discovered.registration_endpoint) {
-                        const registered = await registerClient(issuer, { metadata: discovered, clientMetadata: {
+                        const clientMetadata = {
                             client_name: 'Happier', application_type: 'native', redirect_uris: [MCP_OAUTH_CALLBACK_URL_V1],
                             grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none',
-                        }, fetchFn: network.send });
+                        };
+                        const registered = await registerClient(issuer, { metadata: discovered, clientMetadata, fetchFn: network.send });
                         clientId = registered.client_id;
                         clientAuthMethod = RegistrationSchema.shape.clientAuthMethod.parse(registered.token_endpoint_auth_method);
                         if (registered.client_secret) clientSecrets[issuer] = registered.client_secret;
                     } else return { status: 'rejected', diagnostic: diagnostic('client_refused') };
                     registration = RegistrationSchema.parse({ clientId, authorizationEndpoint: discovered.authorization_endpoint,
                         tokenEndpoint: discovered.token_endpoint,
-                        ...(discovered.revocation_endpoint ? { revocationEndpoint: discovered.revocation_endpoint } : {}),
+                        ...('revocation_endpoint' in discovered && discovered.revocation_endpoint ? { revocationEndpoint: discovered.revocation_endpoint } : {}),
                         ...(clientAuthMethod ? { clientAuthMethod } : {}),
                         ...(flags.revocationAuthMethods ? { revocationAuthMethods: flags.revocationAuthMethods } : {}),
                         tokenEndpointAuthMethods: discovered.token_endpoint_auth_methods_supported ?? ['client_secret_basic'] });

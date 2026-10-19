@@ -233,7 +233,7 @@ describe('materializeMcpServerConfigRecord', () => {
     try {
       const config = out.mcpServers.local!;
       expect(config.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE).toBeDefined();
-      const child = spawn(config.command, config.args, { env: { ...process.env, ...config.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(config.command, config.args ?? [], { env: { ...process.env, ...config.env }, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', chunk => { stdout += String(chunk); });

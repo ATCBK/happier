@@ -6,6 +6,7 @@ import type { AgentSessionConfigurationUpdate, AgentSessionRuntime, AgentSession
 import { ApiClient } from '@/api/api';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import type { Metadata } from '@/api/types';
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
@@ -73,7 +74,7 @@ it('a real tools.set row-only publication sends one native SDK update with uncha
   // ApiSessionClient publishes asynchronously; preserve the canonical fixture's
   // metadata projection and events while honoring that transport contract.
   const updateMetadata = session.updateMetadata.bind(session);
-  session.updateMetadata = async update => { updateMetadata(update); };
+  session.updateMetadata = async update => { updateMetadata((current: Metadata | null) => current ? update(current) : current); };
   const received: AgentSessionConfigurationUpdate[] = [];
   const openedPolicy: unknown[] = [];
   const sdkSession: AgentSessionRuntime = { send: async () => ({ status: 'admitted' }), watch: () => ({ dispose() {} }), dispose() {},
@@ -85,7 +86,7 @@ it('a real tools.set row-only publication sends one native SDK update with uncha
       flavor: agentId, policyAgentId: agentId, backendDisplayName: 'MCP fixture', providerName: 'MCP fixture', uiLogPrefix: '[MCP fixture]', waitingForCommandLabel: 'MCP fixture', agentMessageType: agentId,
       runtimeActivityApplicability: 'not_applicable', pluginRuntimeRegistryLease: runtimeFixture.lease,
       machineMetadata: { host: 'test', platform: process.platform, happyCliVersion: 'test', homeDir: '/tmp', happyHomeDir: '/tmp', happyLibDir: '/tmp' },
-      terminalDisplay: () => null, shouldRenderTerminalDisplay: () => false, formatPromptErrorMessage: String,
+      loadTerminalDisplay: async () => () => null, shouldRenderTerminalDisplay: () => false, formatPromptErrorMessage: String,
       createSessionRuntime: params => {
         openedPolicy.push(params.mcpToolPolicy);
         const signal = new AbortController().signal;

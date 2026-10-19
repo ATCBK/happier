@@ -17,6 +17,8 @@ afterEach(() => boundary.daemonPost.mockClear());
 import { createHappierMcpServer } from './createHappierMcpServer';
 import { filterPluginToolsForActiveAgentComposition } from './startHappyServer';
 import { PLUGIN_ACTION_EXECUTE_PATH } from '@/plugins/daemon/controlRoutes';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 
 function sessionClient(sessionId: string): HappyMcpSessionClient {
   return {
@@ -34,7 +36,7 @@ function sessionClient(sessionId: string): HappyMcpSessionClient {
 describe('createHappierMcpServer plugin tools', () => {
   it('advertises and dispatches a daemon-projected tool through real session-agent MCP wiring', async () => {
     const entry = {
-      toolId: 'acme.review.plugin/review-tool', actionId: 'acme.review.plugin/review-start',
+      toolId: 'acme.review.plugin/review-tool', actionId: 'acme.review.plugin/actions/review-start',
       name: 'acme_review_start', title: 'Review', description: 'Start a plugin-defined review workflow',
       inputSchema: { type: 'object', properties: { scope: { type: 'string' } }, required: ['scope'], additionalProperties: false },
       outputSchema: { type: 'object', properties: { completed: { type: 'boolean' } }, required: ['completed'], additionalProperties: false },
@@ -47,12 +49,18 @@ describe('createHappierMcpServer plugin tools', () => {
       await mcp.connect(serverTransport);
       await client.connect(clientTransport);
       const listed = await client.listTools();
-      expect(listed.tools.find(tool => tool.name === entry.name)).toMatchObject({ inputSchema: entry.inputSchema, outputSchema: entry.outputSchema });
+      const advertised = listed.tools.find(tool => tool.name === entry.name);
+      expect(advertised).toMatchObject({ inputSchema: entry.inputSchema });
+      // Registration composes completed output with the canonical approval
+      // envelope; the real SDK validates the completed structured result below.
+      expect(advertised?.outputSchema).toBeDefined();
       const result = CallToolResultSchema.parse(await client.callTool({ name: entry.name, arguments: { scope: 'diff' } }));
       expect(result).toEqual({ content: [{ type: 'text', text: '{"completed":true}' }],
         structuredContent: { completed: true }, isError: false });
+      const action = parseQualifiedPluginActionId(entry.actionId);
+      if (!action) throw new Error('Expected qualified plugin Action');
       expect(boundary.daemonPost).toHaveBeenCalledWith(PLUGIN_ACTION_EXECUTE_PATH, expect.objectContaining({
-        actionId: entry.actionId, input: { scope: 'diff' }, surface: 'agent', startedBy: 'agent',
+        actionId: buildQualifiedPluginContributionKey(action), input: { scope: 'diff' }, surface: 'agent', startedBy: 'agent',
         defaultSessionId: 'sess_agent_plugin_tool_1',
       }), expect.objectContaining({ mutation: true, timeoutMs: null, signal: expect.any(AbortSignal) }));
     } finally { await client.close(); await mcp.close(); }
@@ -60,15 +68,15 @@ describe('createHappierMcpServer plugin tools', () => {
 
   it('advertises only selected tools for a composition-managed plugin to the actual MCP client', async () => {
     const catalog = [{
-      toolId: 'acme.composition/selected-tool', actionId: 'acme.composition/selected-action',
+      toolId: 'acme.composition/selected-tool', actionId: 'acme.composition/actions/selected-action',
       name: 'acme_composition_selected', title: 'Selected', description: 'The selected composition tool.',
       inputSchema: { type: 'object', additionalProperties: false }, safety: 'safe', surfaces: ['agent'],
     }, {
-      toolId: 'acme.composition/unselected-tool', actionId: 'acme.composition/unselected-action',
+      toolId: 'acme.composition/unselected-tool', actionId: 'acme.composition/actions/unselected-action',
       name: 'acme_composition_unselected', title: 'Unselected', description: 'The unselected composition tool.',
       inputSchema: { type: 'object', additionalProperties: false }, safety: 'safe', surfaces: ['agent'],
     }, {
-      toolId: 'acme.unmanaged/always-visible-tool', actionId: 'acme.unmanaged/always-visible-action',
+      toolId: 'acme.unmanaged/always-visible-tool', actionId: 'acme.unmanaged/actions/always-visible-action',
       name: 'acme_unmanaged_visible', title: 'Unmanaged', description: 'A tool without composition ownership.',
       inputSchema: { type: 'object', additionalProperties: false }, safety: 'safe', surfaces: ['agent'],
     }] as const satisfies readonly ProjectedPluginToolCatalogEntry[];

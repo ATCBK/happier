@@ -255,11 +255,19 @@ it.each(['legacy', 'legacy-terminal', 'current', 'malformed'] as const)('routes 
     expect(await call('workflow.library.view.get', {})).toMatchObject({ searchQuery: 'QA-FIN36b' });
     delayNextLibrarySet = kind === 'current';
     await act(async () => { expect(await call('workflow.library.view.set', { searchQuery: 'QA-FIN36b' })).toMatchObject({ ok: true }); });
-    expect(preparedRequest?.requestId).toBe(firstSetRequestId);
+    expect(firstSetRequestId).toBeTypeOf('string');
+    expect(preparedRequest?.requestId).toBeTypeOf('string');
+    expect(preparedRequest?.requestId).not.toBe(firstSetRequestId);
     expect(preparedRequest?.sessionActionOrigin?.sourceTurnId).toBe('next-turn');
     expect(delayedSetCount).toBe(kind === 'current' ? 1 : 0);
     expect(await call('workflow.library.view.get', {})).toMatchObject({ searchQuery: 'QA-FIN36b' });
     expect(minted).toContain('workflow.library.view.set');
+    if (kind === 'current') {
+      expect(await call('session.spawn_new', { machine: machine.id, directory: '/home/happier',
+        model: 'claude-haiku-4-5', instructions: 'Reply with the reading check result.', manager: true }))
+        .toMatchObject({ errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+      expect(minted).not.toContain('session.spawn_new');
+    }
     const scope = { serverId, accountId };
     editor = await renderScreen(<AuthProvider initialCredentials={connection.credentials}><ModalProvider><AppPaneProvider>
       <WorkflowEditorHostScreen source={{ kind: 'new' }} />

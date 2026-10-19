@@ -3,8 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { logger } from '@/ui/logger';
 import { prepareHappierMcpToolInventory, registerHappierMcpBuiltInTools } from './registerHappierMcpBuiltInTools';
@@ -15,16 +14,13 @@ describe('MCP invalid plugin tool isolation', () => {
     { inputSchema: { type: 'object', properties: { scope: { type: 'unsupported' } } } },
     { inputSchema: { type: 'object' }, outputSchema: false },
   ])('keeps initialize, discovery and healthy dispatch available with an attributed diagnostic (%j)', async schemas => {
-    const healthy = { name: 'change_title', title: 'Change title', description: 'Change title', inputSchema: z.object({ title: z.string() }).strict() };
+    const healthy = { name: 'change_title', title: 'Change title', description: 'Change title', inputSchema: z.strictObject({ title: z.string() }) };
     const id = 'outputSchema' in schemas ? 'invalid-output' : typeof schemas.inputSchema === 'boolean' ? 'invalid-input' : 'invalid-vocabulary';
     const invalid = { ...healthy, name: id, toolId: `acme.plugin/${id}`, actionId: `acme.plugin/${id}`, ...schemas };
     const inventory = { tools: [invalid, healthy], actionToolNameToId: new Map([[invalid.name, invalid.actionId]]) };
     const prepared = prepareHappierMcpToolInventory({ inventory, sessionId: 'sess-1' });
     const server = new McpServer({ name: 'invalid-plugin-test', version: '1' });
-    const { toolNames } = registerHappierMcpBuiltInTools({ registerTool: (name, meta, handler) => {
-      // The SDK registration is the boundary; retain its real schema and result validation.
-      server.registerTool(name, meta as { inputSchema: z.ZodType }, async (args, extra) => CallToolResultSchema.parse(await handler(args, extra)));
-    } }, {
+    const { toolNames } = registerHappierMcpBuiltInTools(server, {
       sessionId: 'sess-1', surface: 'mcp', toolInventory: prepared,
       deps: { changeTitle: async () => ({ success: true }), executeActionByToolName: async () => ({ ok: true, result: { healthy: true } }) },
     });

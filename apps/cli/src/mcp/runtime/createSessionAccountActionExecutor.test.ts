@@ -37,6 +37,9 @@ describe('Session MCP Account routing', () => {
   it.each([
     { actionId: 'notifications.notify_me' as const, input: { message: 'Notify' }, uncertain: false },
     { actionId: 'notifications.notify_me' as const, input: { message: 'Notify' }, uncertain: true },
+    { actionId: 'session.list' as const, input: {}, uncertain: false },
+    { actionId: 'session.activity.get' as const, input: { sessionId: 'caller-session' }, uncertain: false },
+    { actionId: 'session.transcript.get' as const, input: { sessionId: 'caller-session', limit: 10 }, uncertain: false },
     { actionId: 'session.notes.set' as const, input: { sessionId: 'led-child', notes: 'Delegated notes' }, uncertain: false },
     { actionId: 'session.roles.apply_to_reports' as const, input: { sessionId: 'caller-session' }, uncertain: false },
     { actionId: 'session.spawn_new' as const, input: {
@@ -85,9 +88,6 @@ describe('Session MCP Account routing', () => {
     vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
       const body: unknown = JSON.parse(String(init?.body));
       requests.push(body);
-      expect(body).toEqual({ v: 1, context: { token: 'A'.repeat(43), sessionId: 'caller-session' },
-        operation: { kind: 'action.execute', surface: 'agent', requestId: 'request-1', actionId,
-          input, witness: { ...witness, workDepth: 6 }, toolCallId: 'tool-1' } });
       if (uncertain) return new Response(JSON.stringify({ ok: false, error: {
         code: NATIVE_AGENT_SESSION_EFFECT_OUTCOME_UNKNOWN_CODE, message: 'Connection lost after dispatch',
       } }), { status: 200 });
@@ -99,6 +99,9 @@ describe('Session MCP Account routing', () => {
         sessionId: 'caller-session', getServerBinding: () => ({ serverId: 'home', serverUrl: 'https://home.test' }),
         rpcHandlerManager: { invokeLocal: async () => null, registerHandler() {} }, updateMetadata() {},
         getActiveTurnAdmissionWitness: () => witness,
+        ...(actionId === 'session.list' ? { getSessionActionConfirmationBinding: () => ({ turnId: witness.turnId,
+          lifetimeSignal: new AbortController().signal, isCurrent: () => true,
+          run: { runId: 'child-run', occurrenceId: 'child-occurrence', sidechainId: 'child-sidechain' } }) } : {}),
       } });
       await expect(executor.execute(actionId, input, {
         surface: 'cli', defaultSessionId: 'forged-session', actionRequestId: 'request-1',
@@ -106,6 +109,10 @@ describe('Session MCP Account routing', () => {
       })).resolves.toEqual(uncertain
         ? { ok: false, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' }
         : { ok: true, result: { attemptedChannels: 1, deliveredChannels: 1 } });
+      expect(requests[0]).toEqual({ v: 1, context: { token: 'A'.repeat(43), sessionId: 'caller-session' },
+        operation: { kind: 'action.execute', surface: 'agent', requestId: 'request-1', actionId,
+          ...(actionId === 'session.list' ? { executionRun: { runId: 'child-run', occurrenceId: 'child-occurrence' } } : {}),
+          input, witness: { ...witness, workDepth: 6 }, toolCallId: 'tool-1' } });
       expect(requests).toHaveLength(1);
     } finally { await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ ...authority, capabilityDigest: hashPrivateBearer('A'.repeat(43)) }); }
   });
