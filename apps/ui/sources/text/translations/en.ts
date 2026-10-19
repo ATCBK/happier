@@ -8225,6 +8225,7 @@ const enErrors = {
   tryAgain: 'Please try again',
   permissionAnswerUnconfirmed: 'Answer sent, but we couldn’t confirm it arrived. This clears once the agent settles the request.',
   permissionCheckAgain: 'Check again',
+  permissionCheckAgainFailed: 'We couldn’t check just now, so the answer is still unconfirmed. Try again in a moment.',
   contactSupport: 'Contact support if the problem persists',
   sessionNotFound: 'Session not found',
   voiceSessionFailed: 'Failed to start voice session',
