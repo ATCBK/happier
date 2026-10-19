@@ -11,7 +11,9 @@ runs:
         version="1-alpha-20251107-1"
         cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/tauri"
         mkdir -p "${cache_dir}"
-        path="${cache_dir}/linuxdeploy-x86_64.AppImage"
+        # Tauri CLI 2.12.1 prepare_tools uses this cache basename.
+        # Populate its entry so it consumes the verified upstream build.
+        path="${cache_dir}/linuxdeploy-07333c6-x86_64.AppImage"
         curl -L --fail --show-error --retry 3 \
           "https://github.com/linuxdeploy/linuxdeploy/releases/download/${version}/linuxdeploy-x86_64.AppImage" \
           -o "${path}"

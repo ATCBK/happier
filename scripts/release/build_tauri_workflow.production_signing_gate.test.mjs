@@ -394,6 +394,29 @@ test('build-tauri workflow validates updater pubkey via pipeline script', async 
   );
 });
 
+test('Tauri Linux jobs populate the CLI-selected linuxdeploy cache entry', async () => {
+  const workflow = parse(await readFile(workflowPath, 'utf8'));
+  const actionPath = './.github/actions/install-linuxdeploy';
+  for (const jobName of ['build', 'finalize']) {
+    const steps = workflow?.jobs?.[jobName]?.steps;
+    assert.ok(Array.isArray(steps), `workflow should define jobs.${jobName}.steps`);
+    const installStep = steps.find((step) => step?.uses === actionPath);
+    assert.ok(installStep, `${jobName} should use the canonical linuxdeploy action`);
+    assert.equal(installStep.if, "runner.os == 'Linux'");
+  }
+
+  const action = parse(await loadFile('.github/actions/install-linuxdeploy/action.yml'));
+  const installScript = String(action?.runs?.steps?.[0]?.run ?? '');
+  // Installed @tauri-apps/cli 2.12.1: prepare_tools consumes this exact basename.
+  // A different basename leaves the verified upstream tool unused.
+  const cachePath = installScript.match(/^\s*path="([^"]+)"/m)?.[1];
+  assert.equal(
+    cachePath,
+    '${cache_dir}/linuxdeploy-07333c6-x86_64.AppImage',
+    'the verified linuxdeploy must occupy the installed Tauri CLI cache entry',
+  );
+});
+
 test('build-tauri Linux jobs free unused hosted-runner disk before dependency install', async () => {
   const workflow = await readFile(workflowPath, 'utf8');
   const parsed = parse(workflow);
