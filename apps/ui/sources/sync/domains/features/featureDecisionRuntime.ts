@@ -282,20 +282,22 @@ export function useServerFeaturesMainSelectionSnapshot(
         }
         return { status: 'loading', serverIds, snapshotsByServerId };
     });
+    // Compare before enqueueing: even a same-state updater can leave React work
+    // that adds a redundant commit to the next unrelated store render. This is
+    // the latest publication (including queued ones), not an effect's stale state.
+    const publishedState = React.useRef(state);
 
     React.useEffect(() => {
         const publishState = (next: ServerFeaturesMainSelectionSnapshot) => {
-            setState((current) => {
-                if (
-                    current.status === next.status
-                    && current.serverIds.length === next.serverIds.length
-                    && current.serverIds.every((id, index) => id === next.serverIds[index])
-                    && next.serverIds.every((id) => current.snapshotsByServerId[id] === next.snapshotsByServerId[id])
-                ) {
-                    return current;
-                }
-                return next;
-            });
+            const current = publishedState.current;
+            if (
+                current.status === next.status
+                && current.serverIds.length === next.serverIds.length
+                && current.serverIds.every((id, index) => id === next.serverIds[index])
+                && next.serverIds.every((id) => current.snapshotsByServerId[id] === next.snapshotsByServerId[id])
+            ) return;
+            publishedState.current = next;
+            setState(next);
         };
         if (!enabled) {
             publishState({ status: 'ready', serverIds, snapshotsByServerId: {} });

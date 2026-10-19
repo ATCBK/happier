@@ -2,7 +2,7 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { createServerFetchForActiveServer, type ServerFetch } from '@/sync/http/client';
 import { HappyError } from '@/utils/errors/errors';
 import { backoff } from '@/utils/timing/time';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SealedConnectedServiceCredentialV1Schema, readConnectedServiceCredentialRevisionBoundaryV1, type ConnectedServiceCredentialRevisionBoundaryV1, type SealedConnectedServiceCredentialV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import type { ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
@@ -11,9 +11,9 @@ const ConnectedServiceCredentialSealedResponseSchema = z.object({
   sealed: SealedConnectedServiceCredentialV1Schema,
   metadata: z.object({
     kind: z.enum(['oauth', 'token']),
-    providerEmail: z.string().nullable().optional(),
-    providerAccountId: z.string().nullable().optional(),
-    expiresAt: z.number().finite().nullable().optional(),
+    providerEmail: z.optional(z.nullable(z.string())),
+    providerAccountId: z.optional(z.nullable(z.string())),
+    expiresAt: z.optional(z.nullable(z.number())),
   }),
 });
 

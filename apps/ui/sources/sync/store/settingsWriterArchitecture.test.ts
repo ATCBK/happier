@@ -50,12 +50,15 @@ function walkSourceFiles(root: string): string[] {
         const fullPath = join(root, entry);
         const stat = statSync(fullPath);
         if (stat.isDirectory()) {
-            if (entry === 'node_modules') continue;
+            const relativePath = relative(UI_SOURCES_ROOT, fullPath).replaceAll('\\', '/');
+            if (entry === 'node_modules' || entry === '__tests__' || entry === 'testSupport'
+                || relativePath === 'dev/testkit') continue;
             results.push(...walkSourceFiles(fullPath));
             continue;
         }
         if (!/\.(ts|tsx)$/.test(entry)) continue;
-        if (/\.(test|spec)\.(ts|tsx)$/.test(entry)) continue;
+        // The capability guard uses these explicit fixture suffixes, not loose path substrings.
+        if (/(?:\.(?:test|spec)|testSupport|testHelpers|testHarness|testkit|testFixtures)\.(ts|tsx)$/i.test(entry)) continue;
         results.push(fullPath);
     }
     return results;

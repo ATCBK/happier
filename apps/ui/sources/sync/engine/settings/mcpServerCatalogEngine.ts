@@ -13,7 +13,7 @@ const loader = createScopedSnapshotLoader<Target>({
         const guard = publicationGuards.get(key);
         try { guard?.(); } catch { return; }
         beginMcpServerCatalogLoad(scope);
-        return context.readWithMaintenance({
+        return context.readWithMaintenance<Awaited<ReturnType<typeof readMcpServerCatalog>>>({
             read: publication => readMcpServerCatalog(scope, undefined, guard, publication),
             publish: (snapshot, current) => {
                 try { guard?.(); } catch { return; }

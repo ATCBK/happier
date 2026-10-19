@@ -46,6 +46,22 @@ export function formatResetCountdown(
     return formatter.durationMinutes({ minutes });
 }
 
+/**
+ * The countdown inside its "in …" phrase while the reset is still ahead; at or past the moment the bare
+ * "now"/"Outdated" word stands alone, so a passed reset never reads "in Outdated".
+ */
+export function formatResetCountdownPhrase(
+    nowMs: number,
+    resetsAtMs: number | null,
+    formatter: ResetCountdownFormatter,
+    inPhrase: (countdown: string) => string,
+): string | null {
+    const countdown = formatResetCountdown(nowMs, resetsAtMs, formatter);
+    if (countdown === null) return null;
+    const ahead = resetsAtMs! - nowMs;
+    return Number.isFinite(ahead) && ahead > 0 ? inPhrase(countdown) : countdown;
+}
+
 export type ResetCountdownDaysFormatter = Readonly<{
     now: () => string;
     inDays: (params: Readonly<{ days: number }>) => string;

@@ -54,13 +54,17 @@ export function beginProfileCatalogLoad(scope: ServerAccountScope): void {
         transfer: current?.transfer, cleanup: current?.cleanup });
 }
 export function applyProfileCatalogSnapshot(scope: ServerAccountScope, catalog: ProfileCatalogSnapshotV1, current: boolean,
-    artifactsById: ReadonlyMap<string, ArtifactSharingResourceV1> = emptyArtifacts, legacy: ProfileCatalogLegacyProjection = {}): void {
+    artifactsById: ReadonlyMap<string, ArtifactSharingResourceV1> = emptyArtifacts, legacy: ProfileCatalogLegacyProjection = {}, fresh = true): void {
     if (!current) return;
     if (catalog.status === 'unavailable' && catalog.reason === 'scope-retired') {
         receiptOrdering.clearScope(scope);
         return;
     }
     const previous = getProfileCatalogSnapshot(scope);
+    // A wake can overtake the first checked read. Retain that cold answer for
+    // display while the queued census catches up, without replacing newer
+    // retained/acknowledged data or granting runtime and mutation authority.
+    if (!fresh && (previous?.data != null || (catalog.status !== 'ready' && catalog.status !== 'partial'))) return;
     const refused = catalog.status === 'unavailable' && ['unauthorized', 'forbidden', 'account-mode-mismatch',
         'account-not-found', 'account-inconsistent', 'encryption-material-unavailable'].includes(catalog.reason);
     if (refused || ((catalog.status === 'ready' || catalog.status === 'partial') && catalog.source !== 'destination')) {
@@ -93,7 +97,7 @@ export function applyProfileCatalogSnapshot(scope: ServerAccountScope, catalog: 
     const dataComplete = refused ? false : ready
         ? catalog.status === 'ready' && catalog.diagnostics.length === 0 && (legacyDiagnostics?.length ?? 0) === 0
         : previous?.dataComplete ?? false;
-    publish({ scope, catalog, data, dataComplete, stale: catalog.status !== 'ready',
+    publish({ scope, catalog: fresh ? catalog : loading, data, dataComplete, stale: !fresh || catalog.status !== 'ready',
         artifactsById: refused ? emptyArtifacts : !ready ? previousArtifacts ?? emptyArtifacts
             : sameArtifacts ? previousArtifacts : artifactsById,
         source: refused ? null : catalog.status === 'ready' || catalog.status === 'partial'

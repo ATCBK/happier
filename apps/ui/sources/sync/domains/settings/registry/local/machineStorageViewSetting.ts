@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 
@@ -10,18 +10,17 @@ const SortSchema = z.object({ by: SortBySchema, direction: SortDirectionSchema }
 export const MACHINE_STORAGE_VIEW_DEFAULT = { shape: 'list', sort: { by: 'size', direction: 'desc' } } as const;
 
 /** Preserve the existing tolerant device-data reader; Action inputs are admitted separately. */
-export const MachineStorageViewMapSchema = z.record(z.string(), z.object({
-    shape: ShapeSchema.catch('list'),
-    sort: z.object({ by: SortBySchema.catch('size'), direction: SortDirectionSchema.catch('desc') })
-        .catch(MACHINE_STORAGE_VIEW_DEFAULT.sort),
-})).catch({});
+export const MachineStorageViewMapSchema = z.catch(z.record(z.string(), z.object({
+    shape: z.catch(ShapeSchema, 'list'),
+    sort: z.catch(z.object({ by: z.catch(SortBySchema, 'size'), direction: z.catch(SortDirectionSchema, 'desc') }), MACHINE_STORAGE_VIEW_DEFAULT.sort),
+})), {});
 
 /** The persisted identity is Home + NUL + Machine, including for equal IDs on different Homes. */
-export const MachineStorageViewSettingKeySchema = z.string().regex(/^[^\u0000]+\u0000[^\u0000]+$/u);
-export const MachineStorageViewSettingChangeSchema = z.object({
-    shape: ShapeSchema.optional(),
-    sort: SortSchema.strict().optional(),
-}).strict().refine(value => value.shape !== undefined || value.sort !== undefined);
+export const MachineStorageViewSettingKeySchema = z.string().check(z.regex(/^[^\u0000]+\u0000[^\u0000]+$/u));
+export const MachineStorageViewSettingChangeSchema = z.strictObject({
+    shape: z.optional(ShapeSchema),
+    sort: z.optional((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(SortSchema)),
+}).check(z.refine(value => value.shape !== undefined || value.sort !== undefined));
 export type MachineStorageViewSettingChange = z.infer<typeof MachineStorageViewSettingChangeSchema>;
 
 export function readMachineStorageViewSetting(local: LocalSettings, key: string) {

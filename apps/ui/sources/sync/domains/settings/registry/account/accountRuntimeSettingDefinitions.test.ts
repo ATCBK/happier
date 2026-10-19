@@ -31,10 +31,11 @@ describe('Account runtime settings analytics presentation', () => {
         expect(ACCOUNT_RUNTIME_SETTING_ANALYTICS.peerMediationPreferencesV1).not.toHaveProperty('storageScope');
     });
 
-    it('leaves execution-guidance parsing with the Protocol legacy catalog while projecting only its count analytics', async () => {
+    it('excludes transferred execution guidance from preference parsing and analytics', async () => {
         const { ACCOUNT_RUNTIME_SETTING_ANALYTICS } = await import('./accountRuntimeSettingDefinitions');
+        const { settingsParse } = await import('../../settings');
 
-        const parsed = ACCOUNT_SETTING_ARTIFACTS.shape.executionRunsGuidanceEntries.safeParse([
+        const parsed = settingsParse({ executionRunsGuidanceEntries: [
             {
                 id: 'guidance_1',
                 description: 'Prefer the provider-universe backend target',
@@ -42,12 +43,10 @@ describe('Account runtime settings analytics presentation', () => {
                 suggestedBackendTarget: { kind: 'backend', backendId: 'acme.review.backend' },
                 suggestedIntent: 'review',
             },
-        ]);
+        ] });
 
-        expect(parsed.success).toBe(true);
-        expect(ACCOUNT_RUNTIME_SETTING_ANALYTICS.executionRunsGuidanceEntries).toEqual(expect.objectContaining({
-            privacy: 'count_only',
-            valueKind: 'count',
-        }));
+        expect(parsed).not.toHaveProperty('executionRunsGuidanceEntries');
+        expect(ACCOUNT_SETTING_ARTIFACTS.shape).not.toHaveProperty('executionRunsGuidanceEntries');
+        expect(ACCOUNT_RUNTIME_SETTING_ANALYTICS).not.toHaveProperty('executionRunsGuidanceEntries');
     });
 });

@@ -48,14 +48,18 @@ describe('settings legacy architecture', () => {
 
     it('keeps released OpenAI-compatible speech compatibility role-qualified and Chat-isolated', () => {
         const readSource = (relativePath: string) => readFileSync(join(UI_SOURCES_ROOT, relativePath), 'utf8');
+        const readProtocolSource = (relativePath: string) => readSource(`../../../packages/protocol/src/${relativePath}`);
         const accountIngress = readSource('sync/domains/settings/parse/accountSettingsCompatibilityMigrations.ts');
+        const credentialMigrationPolicy = readProtocolSource('voice/realtime/providerSettings.ts');
         const voicePersistence = readSource('sync/domains/settings/voiceSettingsPersistence.ts');
-        const releasedCompatibility = readSource('sync/domains/settings/migrations/releasedVoiceSettingsCompatibility.ts');
-        const speechMigrations = readSource('sync/domains/settings/migrations/speechProviders.ts');
+        const releasedCompatibility = readProtocolSource('voice/settings/migrations/releasedVoiceSettingsCompatibility.ts');
+        const speechMigrations = readProtocolSource('voice/settings/migrations/speechProviders.ts');
         const credentialItem = readSource('voice/credentials/CredentialItem.tsx');
 
-        expect(accountIngress).toContain("'happier.voice.openai-compat/stt'");
-        expect(accountIngress).toContain("'happier.voice.openai-compat/tts'");
+        expect(accountIngress).toContain('listLegacyVoiceCredentialMigrationCandidatesV1(');
+        expect(accountIngress).toContain('classifyLegacyVoiceCredentialCandidateV1(');
+        expect(credentialMigrationPolicy).toContain("'happier.voice.openai-compat/stt'");
+        expect(credentialMigrationPolicy).toContain("'happier.voice.openai-compat/tts'");
         expect(voicePersistence).not.toMatch(/stt_api_key|tts_api_key|providerId === 'openai_compat'/);
         expect(releasedCompatibility).toContain("'happier.voice.openai-compat/stt'");
         expect(releasedCompatibility).toContain("'happier.voice.openai-compat/tts'");

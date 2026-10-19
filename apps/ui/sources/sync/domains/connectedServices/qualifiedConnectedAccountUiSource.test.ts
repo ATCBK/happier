@@ -1,16 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-const network = vi.hoisted(() => ({ responses: [] as unknown[], requests: [] as Array<{ path: string; method: string; body?: unknown }> }));
-// HTTP is the genuine boundary; API parsing, Action admission and pool ownership stay real.
-vi.mock('@/sync/http/client', () => ({ serverFetch: async (path: string, init?: RequestInit) => {
-    network.requests.push({ path, method: init?.method ?? 'GET',
-        ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
-    if (!network.responses.length) throw new Error('unexpected_http');
-    return new Response(JSON.stringify(network.responses.shift()), { status: 200, headers: { 'Content-Type': 'application/json' } });
-} }));
+import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+
+const network = { responses: [] as unknown[], requests: [] as Array<{ path: string; method: string; body?: unknown }> };
 
 import { serverFetch } from '@/sync/http/client';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { executeConnectedServiceConfigurationActionV1, type ConnectedServiceConfigurationActionHostV1 } from '@happier-dev/protocol/connect/execute-configuration-action';
 import { getQualifiedConnectedAccountGroupV4 } from '@/sync/api/account/apiQualifiedConnectedAccountsV4';
 import { buildQualifiedConnectedAccountGroupMutationRequestV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountGroupRequestsV4';
@@ -44,10 +41,11 @@ const host: ConnectedServiceConfigurationActionHostV1 = {
     assertCurrent() {}, async resolveAgent() { return null; }, async resetQuota() {},
     async mutatePurposeBindings() { throw new Error('unexpected_purpose_write'); },
     async request({ path, method, body }) { return await (await serverFetch(path, { method,
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }) })).json(); },
+        headers: { Authorization: `Bearer ${credentials.token}` },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { includeAuth: false })).json(); },
 };
-const executor = createActionExecutor({ connectedServiceAction: ({ actionId, input }) =>
-    executeConnectedServiceConfigurationActionV1(host, actionId, input) } as unknown as ActionExecutorDeps);
+const executor = createActionExecutor(createActionExecutorBoundaryFixture({ connectedServiceAction: ({ actionId, input }) =>
+    executeConnectedServiceConfigurationActionV1(host, actionId, input) }));
 const mutation = {
     async execute(actionId: ConnectedServiceConfigurationActionIdV1, input: unknown) {
         const result = await executor.execute(actionId, input, { surface: 'ui', authority: 'present_user', serverId: 'home', runtimeAccountId: 'account' });
@@ -103,10 +101,21 @@ const qualifiedGroup = {
     }],
 };
 describe('createQualifiedConnectedAccountGroupsClient', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         network.responses.length = 0;
         network.requests.length = 0;
+        // HTTP is the genuine boundary; request authority, parsing and pool ownership stay real.
+        setRuntimeFetch(async (input, init) => {
+            const url = new URL(String(input));
+            if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') return Response.json({ ok: true });
+            network.requests.push({ path: `${url.pathname}${url.search}`, method: init?.method ?? 'GET',
+                ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
+            if (!network.responses.length) throw new Error('unexpected_http');
+            return Response.json(network.responses.shift());
+        });
+        await upsertAndActivateServer({ serverUrl: 'https://qualified-accounts.test', scope: 'device' });
     });
+    afterEach(resetRuntimeFetch);
 
     it('exposes active-since only when it belongs to the listed active account', async () => {
         network.responses.push({ groups: [{

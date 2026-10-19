@@ -50,7 +50,8 @@ const catalogKeys = ['mcp', 'acp', 'providerConnections', 'connectedConfiguratio
 
 /** Publish only explicit receipt revisions; revalidate the exact submitted mutation intent. */
 export function publishAcknowledgedSavedSecretReferenceCatalogsInContext(context: ProfileAccountContext, input: Readonly<{
-    catalogs: SavedSecretReferenceCatalogsV1; accountMode: 'plain' | 'e2ee';
+    catalogs: SavedSecretReferenceCatalogFacets & Pick<SavedSecretReferenceCatalogsV1, 'notificationChannels' | 'remoteHostRecords'>;
+    accountMode: 'plain' | 'e2ee';
     mutation: Pick<ReturnType<typeof SharedSavedSecretPromoteInputV1Schema.parse>,
         'catalogMutations' | 'notificationChannelMutation' | 'remoteHostMutation'>;
     receipt: ReturnType<typeof SharedSavedSecretPromoteOutputV1Schema.parse>;
@@ -264,7 +265,7 @@ export async function prepareSavedSecretReferenceCatalogMutationsInContext(conte
         return { expectedRevision, savedSecretRevisions: proofs.savedSecretRevisions,
             ...(expectedRevision === 'absent' ? { sourceSettingsVersion: input.sourceSettingsVersion } : {}) };
     };
-    const mutations: SavedSecretCatalogMutationsV1 = {
+    const mutations = {
         ...(mcp ? { mcp: await prepareMcpServerCatalogMutationInContext(context, { catalog: mcp, ...common('mcp') }) } : {}),
         ...(acp ? { acp: await prepareAcpCatalogMutationInContext(context, { record: acp, ...common('acp') }) } : {}),
         ...(providerConnections ? { providerConnections: await prepareProviderCatalogMutationInContext(context,

@@ -11,7 +11,7 @@ import { applyNotificationChannelPreferencePatchToRawSettings } from '@/componen
 import { readNotificationChannelCatalogProjectionInContext, writeNotificationChannelCatalogInContext,
     requireUpdatedNotificationChannelCatalog, publishAcknowledgedNotificationChannelCatalog,
     NotificationChannelCatalogOperationError } from '@/sync/api/account/apiNotificationChannelCatalog';
-import { syncSettings } from '@/sync/engine/settings/syncSettings';
+import { requireOneShotAccountSettingsMutationApplied, syncSettings } from '@/sync/engine/settings/syncSettings';
 import { resolveSettingsSecretsKeySet } from '@/sync/encryption/resolveSettingsSecretsKeySet';
 import { randomUUID } from '@/platform/randomUUID';
 import type { LazyActionAccountContext } from './actionAccountContext';
@@ -60,6 +60,7 @@ async function updateBuiltin(account: LazyActionAccountContext, channels: readon
                     : { status: 'applied', settingsVersion: receipt.settingsVersion };
             },
         } });
+    if (result?.status === 'invalid') requireOneShotAccountSettingsMutationApplied(result);
     if (result?.status !== 'applied') throw new NotificationChannelCatalogOperationError(
         result?.status === 'conflict' ? 'settings-conflict' : 'outcome_unknown', result);
     await publishAcknowledgedNotificationChannelCatalog(account);

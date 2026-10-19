@@ -53,7 +53,9 @@ describe('localOnlyAccountSettings', () => {
         expect(pickLocalOnlyAccountSettings(hydrated)).toMatchObject({
             machineAdministrationTargetsLocalV1: {},
         });
-        expect(hydrated.machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId['acme.plugin']?.materializationRef.machineId).toBe('remote');
+        expect(hydrated.machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId['acme.plugin']).toMatchObject({
+            materializationRef: { machineId: 'remote' },
+        });
     });
 
     it('strips UI-local lastUsedAgent from server-synced settings', () => {

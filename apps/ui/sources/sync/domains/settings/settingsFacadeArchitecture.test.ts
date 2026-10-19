@@ -10,6 +10,8 @@ const ALLOWED_SETTINGS_FACADE_IMPORTS = new Set([
     'KnownSettings',
     'Settings',
     'SettingsSchema',
+    // Public mutation shape derived from the same writable-key projection.
+    'SettingsWriteDelta',
     'SUPPORTED_SCHEMA_VERSION',
     // A key projection derived from the canonical `Settings` type. It declares
     // no schema, default, or version, so it does not reopen the superseded

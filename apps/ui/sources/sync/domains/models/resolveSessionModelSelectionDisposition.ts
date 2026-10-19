@@ -105,20 +105,15 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
             : providerFallbackSelection;
     const reportedSelection = exactSelection ?? fallbackSelection;
     const activeSelection = params.sessionActive ? exactSelection : null;
-    // A missing daemon observation is not evidence that the reader armed a
-    // different route. Compare the proposal with the coherent runtime-applied
-    // fact, using its own witness only to validate that historical fact. It
-    // never becomes active/context truth, and an observed replacement runner
-    // must still establish its own selection before it can satisfy a proposal.
-    const lastAppliedSelection = exactSelection ?? (
-        params.currentRunnerProcessIdentity === null
-            ? readActiveSessionModelSelectionFromMetadata(
-                params.metadata,
-                params.agentId,
-                params.agentTargetKey,
-                params.metadata?.sessionModelsV1?.activeSelectionV1?.runner ?? null,
-            )
-            : null
+    // A replacement runner is not a new model choice. Compare intent with
+    // coherent applied history even while the replacement's model publication
+    // is catching up. This history never supplies active/context authority;
+    // a genuinely different selection still requires transition admission.
+    const lastAppliedSelection = exactSelection ?? readActiveSessionModelSelectionFromMetadata(
+        params.metadata,
+        params.agentId,
+        params.agentTargetKey,
+        params.metadata?.sessionModelsV1?.activeSelectionV1?.runner ?? null,
     );
     const teamSelectionTransitionPending = proposedSelectionV2?.ref.source === 'team_resource'
         && (

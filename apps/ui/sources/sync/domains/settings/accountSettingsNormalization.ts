@@ -1,4 +1,7 @@
-import { AccountSettingsStoredContentEnvelopeSchema } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
+import {
+    AccountSettingsStoredContentEnvelopeSchema,
+    type AccountSettingsStoredContentEnvelope,
+} from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
 import { openAccountScopedBlobCiphertext, type AccountScopedCiphertextFormat } from '@happier-dev/protocol/crypto/accountScopedCipher';
 
 import type { Encryption } from '@/sync/encryption/encryption';
@@ -44,11 +47,21 @@ export type OpenedAccountSettingsStoredContent = Readonly<{
     format: AccountScopedCiphertextFormat | 'plain' | 'empty';
 }>;
 
-export function openAccountSettingsStoredContent(params: Readonly<{
+type OpenAccountSettingsStoredContentParams = Readonly<{
     content: unknown;
     encryption: Encryption | null;
     expectedMode?: AccountSettingsStorageMode;
-}>): OpenedAccountSettingsStoredContent {
+}>;
+
+export function openAccountSettingsStoredContent(
+    params: OpenAccountSettingsStoredContentParams & Readonly<{ content: AccountSettingsStoredContentEnvelope }>,
+): OpenedAccountSettingsStoredContent & Readonly<{ raw: Record<string, unknown> }>;
+export function openAccountSettingsStoredContent(
+    params: OpenAccountSettingsStoredContentParams,
+): OpenedAccountSettingsStoredContent;
+export function openAccountSettingsStoredContent(
+    params: OpenAccountSettingsStoredContentParams,
+): OpenedAccountSettingsStoredContent {
     if (params.content === null) {
         return {
             mode: params.expectedMode ?? 'plain',

@@ -101,26 +101,46 @@ describe('resolveSessionModelSelectionDisposition', () => {
         }
     });
 
-    it('still requires transition admission for a different model or Provider connection without runner observation', () => {
+    it('still arms a different model or Provider connection with unavailable or replacement runner observation', () => {
         const metadata = appliedConnectedClaudeMetadata();
         for (const selection of [
             { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'claude-sonnet-4-6' },
             { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: 'pc-new', modelId: 'claude-haiku-4-5' },
         ]) {
-            expect(resolveSessionModelSelectionDisposition({
-                agentId: 'claude', agentTargetKey: 'agent:happier.agent.claude/claude',
-                metadata: { ...metadata, modelSelectionIntentV1: { v: 1, updatedAt: 13, selection: ProviderBoundModelRefSchema.parse(selection) } },
-                sessionActive: true, currentRunnerProcessIdentity: null,
-            }).selectionTransitionPending).toBe(true);
+            for (const currentRunnerProcessIdentity of [null, { pid: 42, processStartTimeMs: 20 }]) {
+                const disposition = resolveSessionModelSelectionDisposition({
+                    agentId: 'claude', agentTargetKey: 'agent:happier.agent.claude/claude',
+                    metadata: { ...metadata, modelSelectionIntentV1: { v: 1, updatedAt: 13, selection: ProviderBoundModelRefSchema.parse(selection) } },
+                    sessionActive: true, currentRunnerProcessIdentity,
+                });
+                expect(disposition.selectionTransitionPending).toBe(true);
+                expect(resolveSessionComposerSendDestination({
+                    route: 'sessionAgent', armedContinuation: null, armedContinuationLocalId: null,
+                    armedRoute: disposition.selectionTransitionPending ? { turnActive: false } : null,
+                    machineId: 'machine-1', pendingTransitionOutcome: 'settled',
+                })).toEqual({ kind: 'armedRouteContinuation', machineId: 'machine-1' });
+            }
         }
     });
 
-    it('does not use a historical applied selection when the observed runner has been replaced', () => {
-        expect(resolveSessionModelSelectionDisposition({
+    it('keeps unchanged selection on ordinary Send while a capability replacement has not yet published its model proof', () => {
+        const metadata = appliedConnectedClaudeMetadata();
+        const disposition = resolveSessionModelSelectionDisposition({
             agentId: 'claude', agentTargetKey: 'agent:happier.agent.claude/claude',
-            metadata: appliedConnectedClaudeMetadata(), sessionActive: true,
+            metadata, sessionActive: true,
             currentRunnerProcessIdentity: { pid: 42, processStartTimeMs: 20 },
-        })).toMatchObject({ activeSelection: null, contextSelection: null, lastAppliedSelection: null, selectionTransitionPending: true });
+        });
+        expect(disposition).toMatchObject({
+            activeSelection: null,
+            contextSelection: null,
+            lastAppliedSelection: metadata.sessionModelsV1?.activeSelectionV1?.selection,
+            selectionTransitionPending: false,
+        });
+        expect(resolveSessionComposerSendDestination({
+            route: 'sessionAgent', armedContinuation: null, armedContinuationLocalId: null,
+            armedRoute: disposition.selectionTransitionPending ? { turnActive: false } : null,
+            machineId: 'machine-1', pendingTransitionOutcome: 'settled',
+        })).toEqual({ kind: 'sessionAgent' });
     });
 
     it('does not treat an incoherent historical selection as an applied proposal', () => {

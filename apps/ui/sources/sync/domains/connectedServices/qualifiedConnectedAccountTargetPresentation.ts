@@ -35,7 +35,7 @@ export type QualifiedConnectedAccountPresentationGroup = Readonly<{
   }>;
   displayName?: string | null;
   /** Its accounts; a pool is summarized by the ones it rotates and the one in use. */
-  members?: ReadonlyArray<Readonly<{ connectedAccountId: string; enabled: boolean }>>;
+  members?: ReadonlyArray<Readonly<{ enabled: boolean }>>;
   activeConnectedAccountId?: string | null;
 }>;
 

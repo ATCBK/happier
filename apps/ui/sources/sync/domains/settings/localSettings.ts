@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import {
     AttentionDeviceOverridesV1Schema,
@@ -18,7 +18,7 @@ export const LocalSettingsSchema = z.object(LOCAL_SETTING_ARTIFACTS.shape);
 // These are preferences that make sense to be different on each device.
 //
 
-const LocalSettingsSchemaPartial = createStoredReadSchema(LocalSettingsSchema).passthrough().partial();
+const LocalSettingsSchemaPartial = z.partial((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(createStoredReadSchema(LocalSettingsSchema)));
 type LocalSettingsParseInput = z.infer<typeof LocalSettingsSchemaPartial>;
 
 export type LocalSettings = z.infer<typeof LocalSettingsSchema>;

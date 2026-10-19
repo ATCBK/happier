@@ -37,7 +37,7 @@ describe('createEmptyCustomProfile', () => {
         } satisfies AiLaunchProfile;
         const sourceRow = { record: { v: 1, id: source.id,
             definition: { kind: 'artifact', artifactId: source.artifactId }, enabled: source.enabled,
-            promptStack: source.promptStack, secretBindings: { MASKED: null },
+            promptStack: source.promptStack, secretBindings: { MASKED: null }, skillSeeds: [],
         } satisfies ProfileRecordV1, revision: source.profileRecordRevision };
         const result = duplicateProfileDraftForEdit(source, { copySuffix: 'Copy', sourceRow });
         expect(result.status).toBe('draft');
@@ -60,7 +60,7 @@ describe('createEmptyCustomProfile', () => {
         const source = { ...body,
             enabled: true, profileRecordRevision: 7 } satisfies AiLaunchProfile;
         const sourceRow = { record: { v: 1, id: source.id, definition: { kind: 'inline', profile: body },
-            enabled: true, promptStack: [], secretBindings: {} } satisfies ProfileRecordV1, revision: 7 };
+            enabled: true, promptStack: [], secretBindings: {}, skillSeeds: [] } satisfies ProfileRecordV1, revision: 7 };
         const result = duplicateProfileDraftForEdit(source, { copySuffix: 'Copy', sourceRow });
         expect(result.status).toBe('draft');
         if (result.status !== 'draft') throw new Error(result.reason);

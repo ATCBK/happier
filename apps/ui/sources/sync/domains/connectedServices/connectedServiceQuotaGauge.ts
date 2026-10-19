@@ -2,13 +2,13 @@ import type {
     ConnectedServiceQuotaMeterV1,
     ConnectedServiceQuotaLimitSelectionV1,
     ConnectedServiceQuotaRecoveryCreditsV1,
-    ConnectedServiceQuotaRecoveryCreditV1,
     ConnectedServiceQuotaSnapshotV1,
     SessionRuntimeIssueV1,
 } from '@happier-dev/protocol';
 import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { readBuiltInLegacyConnectedAccountServiceKeyIngress, readBuiltInLegacyConnectedServiceIdForQualifiedService } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { readConnectedServiceLimitCategoryV1 } from '@happier-dev/protocol/connect/connected-service-limit-category';
+import { isConnectedServiceQuotaRecoveryCreditAvailable } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { resolveConnectedServiceQuotaMeterLabel } from '@happier-dev/protocol/connect/connectedServiceQuotaMeterLabel';
 
 import { getAgentCore, resolveAgentIdFromFlavor } from '@happier-dev/agents';
@@ -252,11 +252,6 @@ function formatNumber(value: number): string {
     return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(1)));
 }
 
-export function isAvailableRecoveryCredit(credit: ConnectedServiceQuotaRecoveryCreditV1, nowMs: number): boolean {
-    return credit.status === 'available'
-        && !(typeof credit.expiresAtMs === 'number' && Number.isFinite(credit.expiresAtMs) && credit.expiresAtMs <= nowMs);
-}
-
 export function summarizeConnectedServiceQuotaRecoveryCredits(
     recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1 | null | undefined,
     nowMs: number,
@@ -269,7 +264,7 @@ export function summarizeConnectedServiceQuotaRecoveryCredits(
         let nextExpiresAtMs: number | null = null;
         let providerCreditId: string | null = null;
         for (const credit of credits) {
-            if (!isAvailableRecoveryCredit(credit, nowMs)) continue;
+            if (!isConnectedServiceQuotaRecoveryCreditAvailable(credit, nowMs)) continue;
             const expiresAtMs = credit.expiresAtMs;
             if (providerCreditId === null && credit.id) {
                 providerCreditId = credit.id;

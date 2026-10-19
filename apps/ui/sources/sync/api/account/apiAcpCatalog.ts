@@ -5,7 +5,7 @@ import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema, AcpCatalo
 import type { AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { prepareAcpCatalogTransferV2, readAcpCatalogTransferSourceV2 } from '@happier-dev/protocol/acp/catalog/transferAcpCatalogV2';
 import type { AcpCatalogCleanupV1 } from '@happier-dev/protocol/acp/catalog/catalogMutationsV1';
-import { KIRO_ACP_STDERR_RULES } from '@happier-dev/plugins-kiro/agent/acp/transport';
+import { BUNDLED_CANONICAL_AGENT_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { classifyAccountStorageReadFailure, resolveAccountStorageContext } from '@/sync/encryption/accountStorageContext';
@@ -19,6 +19,7 @@ import { areAccountSettingsJsonValuesEqual } from '@/sync/domains/settings/accou
 import { normalizeAccountSettingsHistoryAfterTransfer } from '@/sync/engine/settings/accountSettingsHistoryRestore';
 import { applyAcknowledgedAcpCatalog } from '@/sync/store/settings/acpCatalogSnapshot';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 
 export type AcpCatalogAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
 export type AcpCatalogProjection = Readonly<{ catalog: AcpCatalogSnapshotV1; cleanup?: AcpCatalogCleanupV1;
@@ -90,7 +91,8 @@ export async function readAcpCatalogInContext(context: AcpCatalogAccountContext,
                 const source = readFreshAcpCatalogSourceV1(rawSettings);
                 if (source.status === 'ready') catalog = { status: 'ready', record: source.record, revision: 'absent', source: 'fresh', sourceSettingsVersion: baseline.version };
                 else {
-                    const transfer = prepareAcpCatalogTransferV2({ rawSettings, sourceSettingsVersion: baseline.version, kiroStderrRules: KIRO_ACP_STDERR_RULES });
+                    const transfer = prepareAcpCatalogTransferV2({ rawSettings, sourceSettingsVersion: baseline.version,
+                        agentDeclarations: Object.values(BUNDLED_CANONICAL_AGENT_DECLARATIONS) });
                     catalog = transfer.status === 'ready' ? { status: 'ready', record: transfer.record, revision: 'absent', source: 'predecessor', sourceSettingsVersion: transfer.sourceSettingsVersion }
                         : transfer.status === 'partial' ? { status: 'partial', record: transfer.record, reason: transfer.reason,
                             diagnostics: transfer.diagnostics, revision: 'absent' }
@@ -204,8 +206,11 @@ async function postAcpCatalogMutationInContext(context: AcpCatalogAccountContext
     } catch (error) {
         throw new AcpCatalogOperationError(classifyHttpMutationRequestFailure({ error, issued: true, signal }), error);
     }
-    const parsed = AcpCatalogRowMutationResponseV1Schema.safeParse(await response.json().catch(() => null));
-    if (!parsed.success) throw new AcpCatalogOperationError(response.ok ? 'outcome_unknown' : `acp_catalog_http_${response.status}`);
+    const body: unknown = await response.json().catch(() => null);
+    const rollback = readHomeDomainConfirmedRollbackV1(response.status, body);
+    if (rollback) throw new AcpCatalogOperationError(rollback.code);
+    const parsed = AcpCatalogRowMutationResponseV1Schema.safeParse(body);
+    if (!parsed.success) throw new AcpCatalogOperationError(response.ok || response.status >= 500 ? 'outcome_unknown' : `acp_catalog_http_${response.status}`);
     if (parsed.data.status === 'updated') {
         try {
             const opened = openAcpCatalogContentV1({ mode: mutation.content.t === 'plain' ? 'plain' : 'e2ee',

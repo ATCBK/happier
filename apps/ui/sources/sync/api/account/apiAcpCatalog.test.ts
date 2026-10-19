@@ -22,9 +22,11 @@ import { PROFILE_ROWS_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1 } from '@happie
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { REMOTE_HOST_ROWS_ROUTE_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { KIRO_ACP_STDERR_RULES } from '@happier-dev/plugins-kiro/agent/acp/transport';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import sodium from '@/encryption/libsodium.lib';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
 installDisconnectedServerSocketBoundary();
 const { getStorage } = await import('@/sync/domains/state/storage');
@@ -47,6 +49,8 @@ let raw: Record<string, unknown>;
 const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review', launch: { kind: 'command' as const, command: 'review', args: [] },
     createdAt: 1, updatedAt: 1 });
 let row: unknown;
+const promotionActionsSettings = normalizeActionsSettingsV1({ v: 1, actions: {},
+    approvalWaivedSurfaces: { 'secrets.shared.promote': ['ui'] } });
 const credentialsFor = (name: string): AuthCredentials => ({ token: `e30.${Buffer.from(JSON.stringify({ sub: `account-${name}` })).toString('base64url')}.signature` });
 async function activateHome(name: string) {
     await disconnectActiveServerConnection();
@@ -80,6 +84,31 @@ afterEach(async () => {
     await disconnectActiveServerConnection(); retireActiveServerAccountScopeLifetime(); resetRuntimeFetch();
 });
 describe('ACP captured Account row snapshots', () => {
+    it.each([
+        { status: 500, body: { error: 'internal' }, code: 'outcome_unknown' },
+        { status: 503, body: { error: 'database_transaction_conflict_exhausted', statusCode: 503 }, code: 'database_transaction_conflict_exhausted' },
+    ])('preserves the ACP HTTP mutation disposition ($status / $code)', async ({ status, body, code }) => {
+        setRuntimeFetch(async (url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+            if (path === ACP_CATALOG_ROWS_ROUTE_V1) return init?.method === 'POST'
+                ? Response.json(body, { status }) : Response.json(row);
+            return new Response(null, { status: 404 });
+        });
+        await expect(writeAcpCatalogRecord(scope, { record: { v: 1, definitions: [definition] }, expectedRevision: 3 }))
+            .rejects.toMatchObject({ code });
+    });
+    it('reads retained Kiro transport facts from the admitted bundled Agent declaration without activation', async () => {
+        const { launch: _launch, ...predecessorDefinition } = definition;
+        row = { status: 'absent' };
+        raw = { acpCatalogSettingsV1: { v: 2, backends: [{ ...predecessorDefinition,
+            command: 'custom-kiro-cli', args: ['acp'], transportProfile: 'kiro',
+        }] } };
+        expect(await readAcpCatalog(scope)).toMatchObject({ catalog: { status: 'ready', source: 'predecessor',
+            record: { definitions: [{ launch: { kind: 'command', command: 'custom-kiro-cli', args: ['acp'] },
+                runtime: { stderrRules: KIRO_ACP_STDERR_RULES } }] } } });
+    });
     it('retains the admitted row revision when malformed sibling definitions make the inventory partial', async () => {
         row = { status: 'present', revision: 10, content: { t: 'plain', v: { v: 1,
             definitions: [definition, { id: 'malformed-sibling' }] } } };
@@ -205,6 +234,7 @@ describe('ACP captured Account row snapshots', () => {
         const source = { ...predecessorDefinition, id: 'kiro', name: 'kiro', title: 'Source Kiro', command: 'kiro-cli', args: ['acp'],
             transportProfile: 'kiro', env: { TOKEN: { t: 'savedSecret' as const, secretId: 'old-token' } } };
         raw = { acpCatalogSettingsV1: { v: 2, backends: [source] }, neighboringUnknown: { preserve: true },
+            actionsSettingsV1: promotionActionsSettings,
             secrets: [{ id: 'old-token', name: 'Existing token', kind: 'token',
                 encryptedValue: { _isSecretValue: true, value: 'old-token' }, createdAt: 1, updatedAt: 1 }] };
         row = { status: 'absent' };
@@ -219,6 +249,7 @@ describe('ACP captured Account row snapshots', () => {
         setRuntimeFetch(async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+            if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion }));
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v2/account/settings') {
@@ -233,6 +264,7 @@ describe('ACP captured Account row snapshots', () => {
                 complete: true, referenceGuardRevision: profileGuardRevision, transferControl: { status: 'absent' }, diagnostics: [] });
             if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: profileGuardRevision });
             if (path === PROFILE_TRANSFER_ROUTE_V1 || path === REMOTE_HOST_ROWS_ROUTE_V1 || path === NOTIFICATION_CHANNELS_ROUTE_V1) return Response.json({ status: 'absent' });
+            if (path === `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`) return Response.json({ status: 'absent' });
             if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json({ status: 'listed', rows: [], coverage: 'complete' });
             if (path === '/v1/artifacts') return Response.json([]);
             if (path === '/v2/account/settings/history') return Response.json({ snapshots: [] });
@@ -269,7 +301,7 @@ describe('ACP captured Account row snapshots', () => {
                             content: { t: 'plain', v: { definitions: [{ title: 'Source Kiro', runtime: { stderrRules: KIRO_ACP_STDERR_RULES },
                                 env: { TOKEN: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1(promotions[0]!.resourceId) } } }] } },
                             settingsCleanup: { expectedSettingsVersion: 5 } });
-                        if (mutation.settingsCleanup?.nextSettings.t !== 'plain') throw new Error('Expected atomic Plain ACP cleanup');
+                        if (mutation.settingsCleanup?.nextSettings?.t !== 'plain') throw new Error('Expected atomic Plain ACP cleanup');
                         expect(mutation.settingsCleanup.nextSettings.v).not.toHaveProperty('acpCatalogSettingsV1');
                         raw = mutation.settingsCleanup.nextSettings.v;
                         settingsVersion += 1;
@@ -290,6 +322,9 @@ describe('ACP captured Account row snapshots', () => {
             return new Response(null, { status: 404 });
         });
         const { transportProfile: _sourceTransport, command, args, ...sourceFields } = source;
+        getStorage().getState().applySettingsForScope(scope, {
+            ...getStorage().getState().settings, actionsSettingsV1: promotionActionsSettings,
+        }, 4);
         const candidate = { ...sourceFields, launch: { kind: 'command' as const, command, args } };
         const record = { v: 1 as const, definitions: [{ ...candidate, title: 'User delta', runtime: { stderrRules: KIRO_ACP_STDERR_RULES } }] };
         if (entry === 'record') {
@@ -725,6 +760,7 @@ describe('ACP captured Account row snapshots', () => {
         expect(await readAcpCatalog(scope)).toMatchObject({ catalog: { status: 'ready', revision: 9, record: { definitions: [] } } });
     });
     it('receives catalog-only Account wakes while Settings and unrelated domain snapshots remain unchanged', async () => {
+        await (await import('@/sync/sync')).sync.awaitBootstrapForegroundAcquisition();
         const release = observeAcpCatalog(scope);
         try {
             await vi.waitFor(() => expect(getAcpCatalogSnapshot(scope)?.catalog.status).toBe('ready'));

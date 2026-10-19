@@ -4,10 +4,10 @@ import { ConnectedAccountCatalogRowMutationV1Schema, type ConnectedPurposeCatalo
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
-import { mutateConnectedAccountPurposeDefaultsInContext } from './connectedAccountPurposeDefaults';
 
 installDisconnectedServerSocketBoundary();
+const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+const { mutateConnectedAccountPurposeDefaultsInContext } = await import('./connectedAccountPurposeDefaults');
 
 it('retires a genuine legacy default only with the purpose row acknowledgement, preserving Team and unrelated Settings', async () => {
     const bridge = await loadSyncSingletonForTests();

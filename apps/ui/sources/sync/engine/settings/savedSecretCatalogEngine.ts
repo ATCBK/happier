@@ -7,6 +7,7 @@ import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFac
 import type { SavedSecretLegacyImportResult } from '@/sync/domains/settings/savedSecretTypes';
 import type { SavedSecretCatalogEntryV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { sync } from '@/sync/sync';
 import {
     applySavedSecretCatalogFailure,
     applySavedSecretCatalogPage,
@@ -41,6 +42,8 @@ const loader = createScopedSnapshotLoader<Target>({
                     account = await captureLazyActionAccountContext(scope.serverId);
                     if (account.accountId !== scope.accountId) throw new Error('action_account_scope_changed');
                     const captured = account;
+                    await sync.awaitBootstrapForegroundAcquisition();
+                    captured.assertCurrent();
                     const mode = await captured.resolveAccountMode();
                     const project = async (legacyImport?: SavedSecretLegacyImportResult): Promise<CatalogProjection> => {
                         const outcome = await readSavedSecretCatalogInContext(captured);

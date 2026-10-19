@@ -10,10 +10,10 @@ const targetFor = (scope: ServerAccountScope): Target => ({ key: `profiles:${ser
 const loader = createScopedSnapshotLoader<Target>({
     load: async ({ scope }, context) => {
         beginProfileCatalogLoad(scope);
-        return context.readWithMaintenance({
+        return context.readWithMaintenance<Awaited<ReturnType<typeof readProfileCatalogProjection>>>({
             read: publication => readProfileCatalogProjection(scope, undefined, publication),
-            publish: (result, current) => {
-                applyProfileCatalogSnapshot(scope, result.catalog, current, result.artifactsById, result);
+            publish: (result, current, isAccountCurrent) => {
+                applyProfileCatalogSnapshot(scope, result.catalog, isAccountCurrent?.() ?? current, result.artifactsById, result, current);
             },
             getPublication: () => getProfileCatalogSnapshot(scope),
         });

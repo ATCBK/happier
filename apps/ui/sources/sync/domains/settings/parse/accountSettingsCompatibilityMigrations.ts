@@ -4,7 +4,7 @@ import {
 } from '@happier-dev/protocol/voice/realtime/providerSettings';
 import { SessionTmuxMachineOverrideSchema, TRANSCRIPT_MESSAGE_TIMESTAMP_DISPLAY_MODE_VALUES } from '@happier-dev/protocol/account/settings/accountSettings';
 import { parsePermissionIntentAlias } from '@happier-dev/agents';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import {
@@ -193,7 +193,7 @@ export function applyAccountSettingsCompatibilityMigrations<TSettings extends Re
         if (parsed.success) next.sessionTmuxIsolated = parsed.data;
     }
     if (!('sessionTmuxTmpDir' in input) && 'terminalTmuxTmpDir' in input) {
-        const parsed = z.string().nullable().safeParse(input.terminalTmuxTmpDir);
+        const parsed = z.nullable(z.string()).safeParse(input.terminalTmuxTmpDir);
         if (parsed.success) next.sessionTmuxTmpDir = parsed.data;
     }
     if (!('sessionTmuxByMachineId' in input) && 'terminalTmuxByMachineId' in input) {

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { resolveAnchoredListMoveV1, type AnchoredListPositionV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
 
 /** Device-local placement policy shared by the app and workspace rails and the Session bar. */
@@ -11,26 +11,26 @@ export const NAVIGATION_SURFACE_IDS = ['appRail', 'sessionRail', 'workspaceRail'
 export type NavigationSurfaceId = typeof NAVIGATION_SURFACE_IDS[number];
 export type NavigationSurfacePlacementsV1 = Readonly<Partial<Record<NavigationSurfaceId, NavigationPlacementPreferences>>>;
 
-const navigationItemIdSchema = z.string().trim().min(1);
-export const NavigationPlacementPreferencesSchema = z.object({
+const navigationItemIdSchema = z.string().check(z.trim(), z.minLength(1));
+export const NavigationPlacementPreferencesSchema = z.strictObject({
     orderedIds: z.array(navigationItemIdSchema),
     placements: z.record(navigationItemIdSchema, z.enum(['pinned', 'overflow', 'hidden'])),
-}).strict();
-export const NavigationSurfacePlacementsV1Schema = z.object({
-    appRail: NavigationPlacementPreferencesSchema.optional(),
-    sessionRail: NavigationPlacementPreferencesSchema.optional(),
-    workspaceRail: NavigationPlacementPreferencesSchema.optional(),
-    sessionTabBar: NavigationPlacementPreferencesSchema.optional(),
-    phoneLauncher: NavigationPlacementPreferencesSchema.optional(),
-}).strict();
-const storedNavigationPlacementPreferencesSchema = NavigationPlacementPreferencesSchema.strip();
-export const StoredNavigationSurfacePlacementsV1Schema = NavigationSurfacePlacementsV1Schema.extend({
-    appRail: storedNavigationPlacementPreferencesSchema.optional(),
-    sessionRail: storedNavigationPlacementPreferencesSchema.optional(),
-    workspaceRail: storedNavigationPlacementPreferencesSchema.optional(),
-    sessionTabBar: storedNavigationPlacementPreferencesSchema.optional(),
-    phoneLauncher: storedNavigationPlacementPreferencesSchema.optional(),
-}).strip();
+});
+export const NavigationSurfacePlacementsV1Schema = z.strictObject({
+    appRail: z.optional(NavigationPlacementPreferencesSchema),
+    sessionRail: z.optional(NavigationPlacementPreferencesSchema),
+    workspaceRail: z.optional(NavigationPlacementPreferencesSchema),
+    sessionTabBar: z.optional(NavigationPlacementPreferencesSchema),
+    phoneLauncher: z.optional(NavigationPlacementPreferencesSchema),
+});
+const storedNavigationPlacementPreferencesSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(NavigationPlacementPreferencesSchema);
+export const StoredNavigationSurfacePlacementsV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(z.extend(NavigationSurfacePlacementsV1Schema, {
+    appRail: z.optional(storedNavigationPlacementPreferencesSchema),
+    sessionRail: z.optional(storedNavigationPlacementPreferencesSchema),
+    workspaceRail: z.optional(storedNavigationPlacementPreferencesSchema),
+    sessionTabBar: z.optional(storedNavigationPlacementPreferencesSchema),
+    phoneLauncher: z.optional(storedNavigationPlacementPreferencesSchema),
+}));
 export const EMPTY_NAVIGATION_PLACEMENT_PREFERENCES: NavigationPlacementPreferences = Object.freeze({ orderedIds: Object.freeze([]), placements: Object.freeze({}) });
 export const SESSION_COCKPIT_DEFAULT_BAR_SURFACE_IDS = Object.freeze(['browse', 'git', 'companion', 'terminal'] as const);
 

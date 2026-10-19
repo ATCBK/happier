@@ -1,32 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ACCOUNT_SETTING_ARTIFACTS, accountSettingsParse } from '@happier-dev/protocol';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 
-vi.mock('@happier-dev/agents', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@happier-dev/agents')>();
-    return {
-        ...actual,
-        getAllAgentCatalogDefinitions: () => [
-            ...actual.getAllAgentCatalogDefinitions(),
-            { id: 'acme.review.backend' },
-        ],
-    };
-});
-
-vi.mock('@/agents/registry/registryCore', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/agents/registry/registryCore')>();
-    return {
-        ...actual,
-        getAgentCore: (agentId: string) => ({
-            permissions: {
-                modeGroup: agentId === 'claude' ? 'claude' : 'codexLike',
-            },
-        }),
-    };
-});
-
-describe('account provider universe projection', () => {
-    it('keeps target-keyed Account defaults in the Protocol catalog while accepting shared provider identities', () => {
+describe('account agent target projection', () => {
+    it('keeps target-keyed Account defaults in the Protocol catalog while accepting explicit external backend targets', () => {
         const acmeTargetKey = resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'acme.review.backend' });
         const claudeTargetKey = resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' });
 
@@ -49,8 +26,7 @@ describe('account provider universe projection', () => {
         });
     });
 
-    it('migrates legacy account provider settings for every provider in the shared provider universe', async () => {
-        vi.resetModules();
+    it('migrates legacy authoring defaults only for registered executable Agents while preserving external backend preferences', async () => {
         const { applyAccountSettingsCompatibilityMigrations } = await import('../../parse/accountSettingsCompatibilityMigrations');
 
         const acmeTargetKey = resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'acme.review.backend' });
@@ -91,16 +67,15 @@ describe('account provider universe projection', () => {
         });
         expect(migrated.sessionDefaultPermissionModeByTargetKey).toMatchObject({
             [claudeTargetKey]: 'read-only',
-            [acmeTargetKey]: 'read-only',
         });
+        expect(migrated.sessionDefaultPermissionModeByTargetKey).not.toHaveProperty(acmeTargetKey);
         expect(migrated.newSessionDefaultPersistenceModeByTargetKeyV1).toMatchObject({
             [claudeTargetKey]: 'direct',
-            [acmeTargetKey]: 'persisted',
         });
+        expect(migrated.newSessionDefaultPersistenceModeByTargetKeyV1).not.toHaveProperty(acmeTargetKey);
     });
 
     it('normalizes predecessor Oh My Pi account target keys through the generic V2 owner', async () => {
-        vi.resetModules();
         const qualifiedKey = 'agent:happier.agent.ohmypi/ohmypi';
 
         expect(ACCOUNT_SETTING_ARTIFACTS.shape.backendEnabledByTargetKey.parse({

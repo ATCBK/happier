@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionCompanionPreferencesV1Schema } from '@/components/sessions/companion/state/sessionCompanionPreference';
 import { normalizeSessionMobileSurface, type SessionMobileSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
@@ -20,43 +20,43 @@ const projectMobileSurfaceSchema = z.custom<ProjectMobileSurface>((value) => (
     typeof value === 'string' && normalizeProjectMobileSurface(value) === value
 ));
 
-const TERMINAL_ARROW_PAD_PLACEMENT_SCHEMA = z.object({
+const TERMINAL_ARROW_PAD_PLACEMENT_SCHEMA = z.strictObject({
     side: z.enum(['left', 'right']),
-    y: z.number().finite().min(0).max(1),
+    y: z.number().check(z.minimum(0), z.maximum(1)),
     tucked: z.boolean(),
-}).strict();
+});
 
-const compactAppDestinationIdSchema = z.string().trim().min(1).max(256);
-const compactAppDestinationPreferencesSchema = z.object({
-    orderedDestinationIds: z.array(compactAppDestinationIdSchema).max(128).default([]),
-    hiddenDestinationIds: z.array(compactAppDestinationIdSchema).max(128).default([]),
-}).strict();
+const compactAppDestinationIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
+const compactAppDestinationPreferencesSchema = z.strictObject({
+    orderedDestinationIds: z._default(z.array(compactAppDestinationIdSchema).check(z.maxLength(128)), []),
+    hiddenDestinationIds: z._default(z.array(compactAppDestinationIdSchema).check(z.maxLength(128)), []),
+});
 
 export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
     uiSurfaceFinish: {
-        schema: z.enum(['flat', 'soft']).catch('soft'), default: 'soft',
+        schema: z.catch(z.enum(['flat', 'soft']), 'soft'), default: 'soft',
         description: 'Surface finish on this device', storageScope: 'local',
     },
     uiSurfaceFinishOverrides: {
-        schema: z.object({
-            card: z.enum(['flat', 'soft']).optional().catch(undefined),
-            floating: z.enum(['flat', 'soft']).optional().catch(undefined),
-            composer: z.enum(['flat', 'soft']).optional().catch(undefined),
-            primaryButton: z.enum(['flat', 'soft']).optional().catch(undefined),
-            secondaryButton: z.enum(['flat', 'soft']).optional().catch(undefined),
-        }).catch({}), default: {},
+        schema: z.catch(z.object({
+            card: z.catch(z.optional(z.enum(['flat', 'soft'])), undefined),
+            floating: z.catch(z.optional(z.enum(['flat', 'soft'])), undefined),
+            composer: z.catch(z.optional(z.enum(['flat', 'soft'])), undefined),
+            primaryButton: z.catch(z.optional(z.enum(['flat', 'soft'])), undefined),
+            secondaryButton: z.catch(z.optional(z.enum(['flat', 'soft'])), undefined),
+        }), {}), default: {},
         description: 'Per-role surface finish overrides on this device; absent roles inherit', storageScope: 'local',
     },
     widgetFrameStyleHome: {
-        schema: z.enum(['card', 'plain']).catch('card'), default: 'card',
+        schema: z.catch(z.enum(['card', 'plain']), 'card'), default: 'card',
         description: 'Default Home widget frame style on this device', storageScope: 'local',
     },
     widgetFrameStyleBoard: {
-        schema: z.enum(['card', 'plain']).catch('card'), default: 'card',
+        schema: z.catch(z.enum(['card', 'plain']), 'card'), default: 'card',
         description: 'Default Board widget frame style on this device', storageScope: 'local',
     },
     widgetFrameStyleCompanion: {
-        schema: z.enum(['card', 'plain']).catch('plain'), default: 'plain',
+        schema: z.catch(z.enum(['card', 'plain']), 'plain'), default: 'plain',
         description: 'Default Companion widget frame style on this device', storageScope: 'local',
     },
     uiContentWidthMode: {
@@ -127,10 +127,7 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
         storageScope: 'local',
     },
     terminalRendererPreference: {
-        schema: z.preprocess(
-            (value) => value === 'native-experimental' ? 'native' : value,
-            z.enum(['auto', 'xterm-webview', 'native']),
-        ).catch('auto'),
+        schema: z.catch((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => value === 'native-experimental' ? 'native' : value), z.enum(['auto', 'xterm-webview', 'native'])), 'auto'),
         default: 'auto',
         description: 'Preferred terminal renderer on this device',
         storageScope: 'local',
@@ -139,19 +136,19 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
     terminalArrowPadPlacement: {
         // The phone terminal's floating arrow pad (terminal lab P1): side, height fraction and
         // whether it is tucked into a dot, remembered per orientation on this device only.
-        schema: z.object({
-            portrait: TERMINAL_ARROW_PAD_PLACEMENT_SCHEMA.nullable(),
-            landscape: TERMINAL_ARROW_PAD_PLACEMENT_SCHEMA.nullable(),
-        }).strict().catch({ portrait: null, landscape: null }),
+        schema: z.catch(z.strictObject({
+            portrait: z.nullable(TERMINAL_ARROW_PAD_PLACEMENT_SCHEMA),
+            landscape: z.nullable(TERMINAL_ARROW_PAD_PLACEMENT_SCHEMA),
+        }), { portrait: null, landscape: null }),
         default: { portrait: null, landscape: null },
         description: 'Where the phone terminal arrow pad rests, per orientation',
         storageScope: 'local',
     },
     terminalNativeRendererQuarantine: {
-        schema: z.object({
+        schema: z.catch(z.nullable(z.strictObject({
             renderer: z.enum(['ios-ghosttykit', 'android-termux']),
-            expiresAtMs: z.number().finite().positive(),
-        }).strict().nullable().catch(null),
+            expiresAtMs: z.number().check(z.positive()),
+        })), null),
         default: null,
         description: 'Temporary native terminal renderer quarantine after an attributed fatal failure',
         storageScope: 'local',
@@ -164,7 +161,7 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'device_user' },
     },
     sessionLastMobileSurfaceBySessionId: {
-        schema: z.record(z.string(), sessionMobileSurfaceSchema).default({}),
+        schema: z._default(z.record(z.string(), sessionMobileSurfaceSchema), {}),
         default: {},
         description: 'Last active mobile session surface by realm-qualified session key',
         storageScope: 'local',
@@ -194,7 +191,7 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
         },
     },
     navigationSurfacePlacementsV1: {
-        schema: StoredNavigationSurfacePlacementsV1Schema.catch({}),
+        schema: z.catch(StoredNavigationSurfacePlacementsV1Schema, {}),
         default: {},
         description: 'Device-local ordering and pinned, overflow or hidden placement for navigation surfaces',
         storageScope: 'local',
@@ -202,7 +199,7 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
     sessionCockpitBarSurfaceIds: {
         // The person's Session bar in order; null until they change it (host defaults apply).
         // No count cap: the bar's width decides what fits, the rest scrolls or waits in More.
-        schema: z.array(z.string().trim().min(1)).nullable().catch(null),
+        schema: z.catch(z.nullable(z.array(z.string().check(z.trim(), z.minLength(1)))), null),
         default: null,
         description: 'Tools the person keeps on the Session mobile cockpit bar, in order',
         storageScope: 'local',
@@ -233,7 +230,7 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
         },
     },
     projectLastMobileSurfaceByWorkspaceRefId: {
-        schema: z.record(z.string(), projectMobileSurfaceSchema).default({}),
+        schema: z._default(z.record(z.string(), projectMobileSurfaceSchema), {}),
         default: {},
         description: 'Last active mobile project surface by realm-qualified workspace key',
         storageScope: 'local',
@@ -247,7 +244,7 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
         },
     },
     projectLastActiveRootPathByWorkspaceRefId: {
-        schema: z.record(z.string(), z.string()).default({}),
+        schema: z._default(z.record(z.string(), z.string()), {}),
         default: {},
         description: 'Last active project root path by Home-qualified workspace ref key',
         storageScope: 'local',
@@ -261,7 +258,7 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
         },
     },
     projectLastActiveWorktreeIdByWorkspaceRefId: {
-        schema: z.record(z.string(), z.string()).default({}),
+        schema: z._default(z.record(z.string(), z.string()), {}),
         default: {},
         description: 'Last active project worktree id by Home-qualified workspace ref key',
         storageScope: 'local',
@@ -275,7 +272,7 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
         },
     },
     appPaneScopesV1: {
-        schema: z.record(z.string(), paneScopeStateSchema.catch(EMPTY_PERSISTED_PANE_SCOPE_STATE)).default({}),
+        schema: z._default(z.record(z.string(), z.catch(paneScopeStateSchema, EMPTY_PERSISTED_PANE_SCOPE_STATE)), {}),
         default: {},
         description: 'Persisted app pane scope state by scope id',
         storageScope: 'local',
@@ -289,7 +286,7 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
         },
     },
     workspaceLayoutV1: {
-        schema: z.record(z.string(), z.unknown()).default({}),
+        schema: z._default(z.record(z.string(), z.unknown()), {}),
         default: {},
         description: 'Current workspace layout by Account and window on this device',
         storageScope: 'local',
@@ -303,7 +300,7 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
         },
     },
     sessionComposerCollapsedBannerKinds: {
-        schema: z.record(z.string(), z.boolean()).default({}),
+        schema: z._default(z.record(z.string(), z.boolean()), {}),
         default: {},
         description: 'Composer banner kinds collapsed on this device, honored only while sessionComposerRememberBannerVisibility is enabled',
         storageScope: 'local',

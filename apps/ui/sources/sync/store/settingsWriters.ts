@@ -35,6 +35,7 @@ import { areAccountSettingsScopesEqual, type AccountSettingsScope } from '@/sync
 import { BUILT_IN_SETTINGS_DECLARATIONS_V1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
 import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 async function persistAccountSettingsOnce(
   expectedSettingsScope: AccountSettingsScope | null,
@@ -82,11 +83,16 @@ const directAccountSettingDeclarations = BUILT_IN_SETTINGS_DECLARATIONS_V1.filte
   return binding?.scope === 'account' && binding.key && !binding.kind && !binding.path && !binding.owner
     && binding.access === 'read_write' && !declaration.sensitive;
 });
+const directLocalSettingDeclarations = BUILT_IN_SETTINGS_DECLARATIONS_V1.filter(declaration => {
+  const binding = declaration.storage;
+  return binding?.scope === 'local' && binding.key && !binding.kind && !binding.path && !binding.owner
+    && binding.access === 'read_write' && !declaration.sensitive;
+});
 
 export function useApplySettings(): (change: SettingsWrite) => void {
   const expectedSettingsScope = useAccountSettingsScope();
   const writeSetting = useSettingActionWriter();
-  return React.useCallback(async (change: SettingsWrite) => {
+  const apply = React.useCallback(async (change: SettingsWrite) => {
     let delta: SettingsWriteDelta;
     if (typeof change === 'function') {
       const current = getStorage().getState();
@@ -117,6 +123,11 @@ export function useApplySettings(): (change: SettingsWrite) => void {
     }
     for (const { declaration, value } of declaredWrites) await writeSetting(declaration, value);
   }, [expectedSettingsScope, writeSetting]);
+  return React.useCallback((change: SettingsWrite) => {
+    const operation = apply(change);
+    fireAndForget(operation, { tag: 'settings.apply' });
+    return operation;
+  }, [apply]);
 }
 
 /** Voice editors submit their change, not a stale replacement of the Account-owned profile. */
@@ -292,7 +303,24 @@ export function useApplyRememberedEngineSelectionReplacementIntent(): (
 }
 
 export function useApplyLocalSettings(): (delta: Partial<LocalSettings>) => void {
+  const writeSetting = useSettingActionWriter();
+  const apply = React.useCallback(async (delta: Partial<LocalSettings>) => {
+    const incumbentDelta = { ...delta };
+    const declaredWrites = (Object.keys(delta) as Array<keyof LocalSettings>).flatMap(key => {
+      const declaration = directLocalSettingDeclarations.find(candidate => candidate.storage?.key === key);
+      if (!declaration) return [];
+      delete incumbentDelta[key];
+      const stored = delta[key];
+      const value = declaration.storage?.invertBoolean && typeof stored === 'boolean' ? !stored : stored;
+      const parsed = SettingsDeclarationValueV1Schema.safeParse(value);
+      return parsed.success ? [{ declaration, value: parsed.data }] : [];
+    });
+    if (Object.keys(incumbentDelta).length > 0) applyLocalSettingsFromStore(incumbentDelta, 'ui');
+    for (const { declaration, value } of declaredWrites) await writeSetting(declaration, value);
+  }, [writeSetting]);
   return React.useCallback((delta: Partial<LocalSettings>) => {
-    applyLocalSettingsFromStore(delta, 'ui');
-  }, []);
+    const operation = apply(delta);
+    fireAndForget(operation, { tag: 'settings.local.apply' });
+    return operation;
+  }, [apply]);
 }

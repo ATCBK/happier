@@ -15,6 +15,32 @@ installConnectedServicesCommonModuleMocks();
 afterEach(() => { resetRuntimeFetch(); vi.restoreAllMocks(); });
 
 describe('Connected metadata deletion receipt admission', () => {
+    it.each([
+        { status: 503, error: 'database_transaction_conflict_exhausted', expected: 'database_transaction_conflict_exhausted' },
+        { status: 503, error: 'internal', expected: 'outcome_unknown' },
+        { status: 500, error: 'database_transaction_conflict_exhausted', expected: 'outcome_unknown' },
+    ])('preserves only the confirmed rollback witness for a pool DELETE ($status/$error)', async ({ status, error, expected }) => {
+        const home = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(home);
+        setRuntimeFetch(home.request);
+        const serverId = await home.addHome({ name: 'Pool rollback', serverUrl: 'https://pool-rollback.test',
+            accountId: 'pool-rollback-owner', currentAccount: true });
+        const input = { group: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'own-pool' },
+            expectedIncarnation: 'own-life', expectedGeneration: 1 };
+        const deletion = buildQualifiedConnectedAccountGroupMutationRequestV4('delete', input);
+        home.answer(serverId, `DELETE ${deletion.path}`, { status, body: { error, statusCode: status } });
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { createUiConnectedServiceAction } = await import('./connectedServiceActionDeps');
+        const account = await captureLazyActionAccountContext(serverId);
+        try {
+            const result = await createUiConnectedServiceAction(account)({ actionId: 'connectedServices.pools.delete', input,
+                context: { surface: 'ui', authority: 'present_user' } });
+            expect(result).toMatchObject({ ok: false, errorCode: expected });
+            expect(result).not.toHaveProperty('applied');
+            expect(home.requestsFor(deletion.path)).toHaveLength(1);
+        } finally { account.dispose(); await home.reset(); }
+    });
+
     it('preserves required history refusal in pre-delete preparation and the definite cleanup receipt', async () => {
         const home = createHomeGovernanceHarness();
         installHomeGovernanceBoundaries(home);

@@ -165,7 +165,7 @@ describe('SavedSecret catalog captured request boundary', () => {
         let raw: Record<string, unknown> = { ...(inference ? { inferenceOpenAIKey: 'old-private', preferredLanguage: 'fr' } : { secrets: [secret] }), actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
             approvalWaivedSurfaces: { 'secrets.shared.promote': ['ui'] } }) };
         let version = 4;
-        let retained: AccountSettingsStoredContentEnvelope = { t: 'plain', v: raw };
+        let retained: AccountSettingsStoredContentEnvelope | null = { t: 'plain', v: raw };
         const resources: unknown[] = [];
         const promotions: unknown[] = [];
         const historyWrites: unknown[] = [];

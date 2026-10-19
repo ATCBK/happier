@@ -17,6 +17,7 @@ const entry = {
     owner: {
         kind: 'account',
         accountId: 'owner-a',
+        name: 'Ada',
         firstName: 'Ada',
         lastName: null,
         username: null,

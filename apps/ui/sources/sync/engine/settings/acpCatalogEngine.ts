@@ -12,7 +12,7 @@ const loader = createScopedSnapshotLoader<Target>({
         const guard = publicationGuards.get(key);
         try { guard?.(); } catch { return; }
         beginAcpCatalogLoad(scope);
-        return context.readWithMaintenance({
+        return context.readWithMaintenance<Awaited<ReturnType<typeof readAcpCatalog>>>({
             read: publication => readAcpCatalog(scope, undefined, publication),
             publish: (projection, current) => {
                 try { guard?.(); } catch { return; }

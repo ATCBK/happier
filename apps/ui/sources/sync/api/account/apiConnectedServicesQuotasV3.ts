@@ -10,7 +10,7 @@ import type { ConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/conn
 import { parseBuiltInLegacyConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
 import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import type { ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 function extractErrorCode(json: unknown): string | null {
   if (!json || typeof json !== 'object') return null;
@@ -21,10 +21,10 @@ function extractErrorCode(json: unknown): string | null {
 const ConnectedServiceQuotasV3ResponseSchema = z.object({
   content: StoredJsonContentEnvelopeSchema,
   metadata: z.object({
-    fetchedAt: z.number().int().nonnegative(),
-    staleAfterMs: z.number().int().nonnegative(),
+    fetchedAt: z.number().check(z.int(), z.nonnegative()),
+    staleAfterMs: z.number().check(z.int(), z.nonnegative()),
     status: z.enum(['ok', 'unavailable', 'estimated', 'error']),
-    refreshRequestedAt: z.number().int().nonnegative().optional(),
+    refreshRequestedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
   }),
 });
 

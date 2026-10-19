@@ -11,7 +11,7 @@ const targetFor = (scope: ServerAccountScope): Target => ({ key: `remote-hosts:$
 const loader = createScopedSnapshotLoader<Target>({
     load: async ({ scope }, context) => {
         beginRemoteHostCatalogLoad(scope);
-        return context.readWithMaintenance({
+        return context.readWithMaintenance<Awaited<ReturnType<typeof readRemoteHostCatalogProjection>>>({
             read: publication => readRemoteHostCatalogProjection(scope, undefined, publication),
             publish: (catalog, current) => applyRemoteHostCatalogSnapshot(scope, catalog, current),
             getPublication: () => getRemoteHostCatalogSnapshot(scope),

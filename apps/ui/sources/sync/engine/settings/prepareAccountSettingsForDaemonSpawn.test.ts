@@ -19,7 +19,7 @@ describe('prepareAccountSettingsForDaemonSpawn', () => {
 
         const result = await prepareAccountSettingsForDaemonSpawn({
             settingsScope: scopeA,
-            pendingSettings: { renameSessions: false } as Partial<Settings>,
+            pendingSettings: { analyticsOptOut: false },
             getActiveSettingsScope: () => scopeA,
             getCurrentSettingsVersion: () => version,
             flushPendingServerSettings,
@@ -86,7 +86,7 @@ describe('prepareAccountSettingsForDaemonSpawn', () => {
 
         await expect(prepareAccountSettingsForDaemonSpawn({
             settingsScope: scopeA,
-            pendingSettings: { renameSessions: false } as Partial<Settings>,
+            pendingSettings: { analyticsOptOut: false },
             getActiveSettingsScope: () => activeScope,
             getCurrentSettingsVersion: () => 5,
             flushPendingServerSettings: vi.fn(async () => {
@@ -99,7 +99,7 @@ describe('prepareAccountSettingsForDaemonSpawn', () => {
     it('rejects with a pending-flush error when server-backed pending settings cannot be flushed', async () => {
         await expect(prepareAccountSettingsForDaemonSpawn({
             settingsScope: scopeA,
-            pendingSettings: { renameSessions: false } as Partial<Settings>,
+            pendingSettings: { analyticsOptOut: false },
             getActiveSettingsScope: () => scopeA,
             getCurrentSettingsVersion: () => 5,
             flushPendingServerSettings: vi.fn(async () => {
@@ -112,7 +112,7 @@ describe('prepareAccountSettingsForDaemonSpawn', () => {
     });
 
     it.each([
-        ['a pending server write', { renameSessions: false }, 5],
+        ['a pending server write', { analyticsOptOut: false }, 5],
         ['a freshness-only read', {}, null],
     ] as const)('preserves Account replacement refusal when %s also fails', async (_label, pendingSettings, version) => {
         let activeScope: AccountSettingsScope | null = scopeA;

@@ -5,7 +5,7 @@ import type {
     ConnectedServiceQuotaRecoveryCreditsV1,
 } from '@happier-dev/protocol';
 
-import { isAvailableRecoveryCredit } from './connectedServiceQuotaGauge';
+import { isConnectedServiceQuotaRecoveryCreditAvailable } from '@happier-dev/protocol/connect/connected-service-schemas';
 
 import { formatResetCountdownDays, type ResetCountdownDaysFormatter } from './formatResetCountdown';
 
@@ -71,7 +71,7 @@ export function buildQuotaResetRows(
     }
 
     const individuallyConsumableCredits = detailedCredits
-        .filter((credit) => isAvailableRecoveryCredit(credit, nowMs))
+        .filter((credit) => isConnectedServiceQuotaRecoveryCreditAvailable(credit, nowMs))
         .map((credit) => ({ credit, consumableCreditId: readCreditId(credit) }))
         .filter((entry): entry is Readonly<{
             credit: ConnectedServiceQuotaRecoveryCreditV1;

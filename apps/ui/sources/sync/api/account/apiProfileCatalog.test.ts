@@ -42,6 +42,8 @@ import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/c
 import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { createDeferred } from '@/dev/testkit';
 import { refreshProfileCatalog, invalidateProfileCatalogProjection } from '@/sync/engine/settings/profileCatalogEngine';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { readUiProfileCatalogSnapshot } from '@/sync/domains/profiles/aiLaunchProfileCollection';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -52,6 +54,8 @@ let secretResources: unknown[];
 let sourceRaw: Readonly<Record<string, unknown>>;
 let guardRevision: number;
 let profileArtifact: Artifact | null;
+const promotionActionsSettings = normalizeActionsSettingsV1({ v: 1, actions: {},
+    approvalWaivedSurfaces: { 'secrets.shared.promote': ['ui'] } });
 function readAbsentReferenceCatalogFixture(path: string, init?: RequestInit): Response | undefined {
     // These Accounts store no rows in the other reference domains. Explicit wire
     // absence lets the real census readers distinguish that fact from unsupported HTTP.
@@ -117,6 +121,34 @@ afterEach(async () => {
     resetRuntimeFetch();
 });
 describe('Profile catalog captured Account transport', () => {
+    it('shows the first checked Profile read while a wake requires a newer census, without granting runtime authority', async () => {
+        const first = createDeferred<Response>();
+        const second = createDeferred<Response>();
+        let reads = 0;
+        const profile = AIBackendProfileSchema.parse({ id: 'p', name: 'Checked Profile', createdAt: 1, updatedAt: 2 });
+        const response = (revision: number) => Response.json({ ...page, rows: [{ id: 'p', revision,
+            content: { t: 'plain', v: { ...page.rows[0].content.v, definition: { kind: 'legacy', profile } } } }] });
+        http.mockImplementation(async () => ++reads === 1 ? first.promise : second.promise);
+        const release = observeProfileCatalog(scope);
+        try {
+            await vi.waitFor(() => expect(reads).toBe(1));
+            const refresh = invalidateProfileCatalogProjection(scope);
+            first.resolve(response(2));
+            await vi.waitFor(() => expect(reads).toBe(2));
+            expect(getProfileCatalogSnapshot(scope)).toMatchObject({ stale: true, dataComplete: true,
+                catalog: { status: 'loading' }, data: [{ revision: 2, record: { definition: { profile: { name: 'Checked Profile' } } } }] });
+            expect(readUiProfileCatalogSnapshot(getProfileCatalogSnapshot(scope)!)).toMatchObject({ available: false,
+                profiles: [{ name: 'Checked Profile' }] });
+            second.resolve(response(3));
+            await refresh;
+            expect(getProfileCatalogSnapshot(scope)).toMatchObject({ stale: false, catalog: { status: 'ready' },
+                data: [{ revision: 3 }] });
+        } finally {
+            first.resolve(response(2));
+            second.resolve(response(3));
+            release();
+        }
+    });
     it('adds Profile seeds through the real captured projection while keeping raw censuses read-only and legacy ids intact', async () => {
         let record = ProfileRecordV1Schema.parse({ v: 1, id: 'profile', enabled: true, secretBindings: {}, skillSeeds: ['existing'],
             definition: { kind: 'inline', profile: { v: 2, id: 'profile', name: 'Profile', createdAt: 1, updatedAt: 1 } },
@@ -179,6 +211,7 @@ describe('Profile catalog captured Account transport', () => {
         const profile = AIBackendProfileSchema.parse({ id: 'p', name: 'Current Profile', createdAt: 1, updatedAt: 2 });
         setRuntimeFetch(async url => {
             const path = new URL(String(url)).pathname;
+            if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 4 }));
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v2/account/settings') return Response.json({ version: 4, content: { t: 'plain', v: {} } });
@@ -271,15 +304,17 @@ describe('Profile catalog captured Account transport', () => {
     it('retains an unknown promotion outcome when only the deterministic resource is visible and the source rewrite is not proven', async () => {
         const secret = { id: 'legacy-token', name: 'Legacy token', kind: 'token' as const,
             encryptedValue: { _isSecretValue: true as const, value: 'fixture-private' }, createdAt: 1, updatedAt: 2 };
-        sourceRaw = { secrets: [secret], secretBindingsByProfileId: { p: { TOKEN: secret.id } } };
+        sourceRaw = { secrets: [secret], secretBindingsByProfileId: { p: { TOKEN: secret.id } },
+            actionsSettingsV1: promotionActionsSettings };
         const resourceId = deriveSavedSecretImportResourceIdV1({ accountId: scope.accountId,
             source: { kind: 'personal-saved-secret', secretId: secret.id } });
         let dispatched = false;
         setRuntimeFetch(async (url, init) => {
             const path = new URL(String(url)).pathname;
+            if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 4 }));
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
-            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
             if (path === '/v2/account/settings') return Response.json({ version: 4, content: { t: 'plain', v: sourceRaw } });
             if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: 3 });
             if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
@@ -300,6 +335,9 @@ describe('Profile catalog captured Account transport', () => {
             if (referenceCatalog) return referenceCatalog;
             return Response.json({ error: 'not_found' }, { status: 404 });
         });
+        getStorage().getState().applySettingsForScope(scope, {
+            ...getStorage().getState().settings, actionsSettingsV1: promotionActionsSettings,
+        }, 4);
         await expect(promotePersonalSavedSecretResource({ scope, expectedSettingsVersion: 4, secret,
             accountGrants: [], teamGrants: [], groupGrants: [] })).resolves.toEqual({ ok: false, reason: 'outcome_unknown' });
         expect(dispatched).toBe(true);
@@ -314,7 +352,7 @@ describe('Profile catalog captured Account transport', () => {
                     length => new Uint8Array(length).fill(12)) }
                 : { _isSecretValue: true, value: 'fixture-private' }, createdAt: 1, updatedAt: 2 };
         sourceRaw = { secrets: [secret], secretBindingsByProfileId: { 'builtin-default': { TOKEN: secret.id } },
-            futureSibling: { preserve: true } };
+            futureSibling: { preserve: true }, actionsSettingsV1: promotionActionsSettings };
         let version = 4;
         const contentKeyFingerprint = material ? convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
             createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material }).contentPublicKeyFingerprint) : null;
@@ -330,7 +368,7 @@ describe('Profile catalog captured Account transport', () => {
                 recipientEnvelopeReadiness: mode === 'plain' ? { status: 'unavailable', reason: 'plain_account' } : { status: 'available' },
             });
             if (path === '/v1/account/encryption') return Response.json({ mode, updatedAt: 0 });
-            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
             if (path === '/v2/account/settings') return Response.json({ version, content: rawEnvelope() });
             if (path === '/v2/account/settings/history') return Response.json({ snapshots: [] });
             if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: 3 });
@@ -376,6 +414,9 @@ describe('Profile catalog captured Account transport', () => {
             await restoreConnectionToActiveServer(credentials);
             getStorage().setState({ profileScope: scope, settingsScope: scope });
         }
+        getStorage().getState().applySettingsForScope(scope, {
+            ...getStorage().getState().settings, actionsSettingsV1: promotionActionsSettings,
+        }, 4);
         await refreshSavedSecretCatalog(scope);
         const resourceId = deriveSavedSecretImportResourceIdV1({ accountId: scope.accountId,
             source: { kind: 'personal-saved-secret', secretId: secret.id } });

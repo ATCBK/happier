@@ -13,7 +13,7 @@ const loader = createScopedSnapshotLoader<Target>({
         const guard = publicationGuards.get(key);
         try { guard?.(); } catch { return; }
         beginNotificationChannelCatalogLoad(scope);
-        return context.readWithMaintenance({
+        return context.readWithMaintenance<Awaited<ReturnType<typeof readNotificationChannelCatalogProjection>>>({
             read: publication => readNotificationChannelCatalogProjection(scope, undefined, guard, publication),
             publish: (projection, current) => {
                 try { guard?.(); } catch { return; }

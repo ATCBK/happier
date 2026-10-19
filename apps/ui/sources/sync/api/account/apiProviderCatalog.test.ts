@@ -1,4 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { act } from 'react-test-renderer';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { getStorage } from '@/sync/domains/state/storage';
@@ -155,8 +158,14 @@ describe('Provider catalog captured Account HTTP', () => {
         // The incumbent mode cache also invalidates on ordinary preference/self-change refresh.
         invalidateAccountEncryptionModeCache();
         expect(getProviderCatalogSnapshot(scope)?.data).not.toBeNull();
+        await refreshProviderCatalog(scope);
+        admittedReads = rowReads;
         const beforeWithdrawal = await renderHook(() => useProviderSettings(scope));
+        // A finite read has no wake observer. The first mounted reader therefore
+        // revalidates through the real loader while retaining its admitted display data.
         expect(beforeWithdrawal.getCurrent().connections).toEqual(catalog.connections);
+        await act(async () => { await refreshProviderCatalog(scope); });
+        admittedReads = rowReads;
         await beforeWithdrawal.unmount();
         expect(rowReads).toBe(admittedReads);
         // Equal Account ids on another Home do not grant or withdraw this Home's keys.
@@ -272,6 +281,8 @@ describe('Provider catalog captured Account HTTP', () => {
         await vi.waitFor(() => expect(getStorage().getState().settingsVersion).toBe(7));
         expect(await readProviderCatalog(scope)).toMatchObject({ status: 'ready', revision: 1 });
         expect(await writeProviderCatalog(scope, { catalog, expectedRevision: 1 })).toMatchObject({ status: 'updated', revision: 2 });
+        expect(getProviderCatalogSnapshot(scope)).toMatchObject({ revision: 2, data: catalog });
+        await refreshProviderCatalog(scope);
         expect(getProviderCatalogSnapshot(scope)).toMatchObject({ status: 'ready', revision: 2 });
         expect(getStorage().getState().settingsVersion).toBe(7);
         expect(settingsWrites).toBe(0);

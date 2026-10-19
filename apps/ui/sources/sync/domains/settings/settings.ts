@@ -5,7 +5,7 @@ import {
     type AccountSettings,
     type AccountSettingsDefaults,
 } from '@happier-dev/protocol/account/settings/accountSettings';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
     stripDeprecatedSessionOnlyKeys,
@@ -45,7 +45,7 @@ type SettingsSchemaShape = {
     -readonly [Key in keyof SettingsSchemaCatalogShape]: SettingsSchemaCatalogShape[Key];
 };
 
-export const SettingsSchema: z.ZodObject<SettingsSchemaShape> = z.object({
+export const SettingsSchema: z.ZodMiniObject<SettingsSchemaShape> = z.object({
     ...ACCOUNT_SETTING_ARTIFACTS.shape,
     ...LOCAL_ACCOUNT_SETTING_ARTIFACTS.shape,
 });

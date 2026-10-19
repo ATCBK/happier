@@ -19,6 +19,33 @@ const { applySavedSecretCatalogPage, getSavedSecretCatalogSnapshot } = await imp
 const { getRemoteHostCatalogSnapshot } = await import('@/sync/store/settings/remoteHostCatalogSnapshot');
 
 describe('catalog mutation acknowledgement', () => {
+    it('keeps confirmed Provider database rollback retryable without claiming an unknown mutation outcome', async () => {
+        let writes = 0;
+        const account = await restoreServerAccountForTest({ serverUrl: 'https://provider-rollback.example.test',
+            accountId: 'account-provider-rollback', request: async (url, init) => {
+                const path = new URL(String(url)).pathname;
+                if (path === '/health') return Response.json({});
+                if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+                if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+                if (path === '/v2/account/settings') return Response.json({ version: 7, content: { t: 'plain', v: {} } });
+                if (path === '/v1/artifacts') return Response.json([]);
+                if (path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 && init?.method === 'POST') {
+                    writes += 1;
+                    return Response.json({ error: 'database_transaction_conflict_exhausted', statusCode: 503 }, { status: 503 });
+                }
+                return Response.json({ error: 'not_found' }, { status: 404 });
+            } });
+        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const { writeProviderCatalogInContext } = await import('./apiProviderCatalog');
+        const context = await captureLazyActionAccountContext(account.home.id);
+        try {
+            await expect(writeProviderCatalogInContext(context, { catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+                expectedRevision: 7 })).rejects.toMatchObject({ code: 'provider_catalog_unavailable', retryable: true, action: 'retry' });
+            expect(writes).toBe(1);
+        } finally { context.dispose(); await account.dispose(); }
+    });
+
     it.each(['mcp', 'providers', 'acp', 'configurations', 'purposes', 'notifications', 'acknowledgements', 'saved-secrets', 'remote-hosts'] as const)(
         'settles %s and publishes its acknowledged row while revalidation is pending', async domain => {
             const route = domain === 'configurations' || domain === 'purposes'

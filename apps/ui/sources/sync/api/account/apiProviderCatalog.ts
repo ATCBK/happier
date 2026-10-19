@@ -20,6 +20,7 @@ import { getRandomBytes } from '@/platform/cryptoRandom';
 import { classifyHttpMutationRequestFailure } from '@/sync/http/mutationRequestOutcome';
 import { applyAcknowledgedProviderCatalog } from '@/sync/store/settings/providerCatalogSnapshot';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 
 export type ProviderCatalogMutationResponse = ReturnType<typeof ProviderConnectionsRowMutationResponseV1Schema.parse>;
 export class ProviderCatalogOperationError extends Error {
@@ -192,7 +193,12 @@ export async function writeProviderCatalogInContext(context: LazyActionAccountCo
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mutation), signal,
         }, { retry: 'none' });
     } catch (error) { throw new ProviderCatalogOperationError(classifyHttpMutationRequestFailure({ error, issued: true, signal }), error); }
-    const result = ProviderConnectionsRowMutationResponseV1Schema.safeParse(await response.json().catch(() => null));
+    const payload: unknown = await response.json().catch(() => null);
+    if (response.status === 503 && payload && typeof payload === 'object'
+        && 'error' in payload && payload.error === 'database_transaction_conflict_exhausted') {
+        throw createProviderErrorV1('provider_catalog_unavailable');
+    }
+    const result = ProviderConnectionsRowMutationResponseV1Schema.safeParse(payload);
     if (!result.success) throw new ProviderCatalogOperationError(response.ok ? 'outcome_unknown' : `provider_catalog_http_${response.status}`);
     if (result.data.status === 'updated') {
         try {

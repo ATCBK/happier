@@ -22,7 +22,7 @@ import { NotificationChannelCatalogRecordV1Schema, type NotificationChannelCatal
 import { withProfileAccount, admitProfileAccount, readProfileCatalogInContext, readProfileTransferSourceInContext, prepareProfileRecordMutationsInContext, type ProfileAccountContext } from '@/sync/api/account/apiProfileCatalog';
 import { loadAiLaunchProfileArtifacts, resolveProfileCatalogAuthorityV1, removeTransferredProfileSourcesV1, listTransferredProfileIdsV1 } from '@happier-dev/protocol/profiles/read';
 import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
-import { syncSettings } from '@/sync/engine/settings/syncSettings';
+import { requireOneShotAccountSettingsMutationApplied, syncSettings } from '@/sync/engine/settings/syncSettings';
 import { openAccountSettingsStoredContent } from '@/sync/domains/settings/accountSettingsNormalization';
 import { normalizeAccountSettingsHistoryAfterTransfer } from '@/sync/engine/settings/accountSettingsHistoryRestore';
 import type { AccountSettingsHistorySavedSecretRecoveryV1 } from '@happier-dev/protocol/account/settings/accountSettingsHistoryClientV1';
@@ -118,7 +118,7 @@ function operationFailureReason(kind: 'conflict' | 'outcome_unknown' | string): 
     return 'failed';
 }
 
-type RemoteHostReferenceCapture = Readonly<{ revision: number | 'absent'; resourceRefs: readonly string[] }>;
+type RemoteHostReferenceCapture = NonNullable<SavedSecretReferenceCensusV1['remoteHosts']>;
 async function captureRemoteHostReferences(context: ProfileAccountContext, accountMode: 'plain' | 'e2ee'): Promise<Readonly<{
     hosts: SavedSecretReferenceCatalogsV1['remoteHostRecords']; capture: RemoteHostReferenceCapture;
 }> | null> {
@@ -158,7 +158,7 @@ export type SavedSecretReferenceStateCaptureResult =
         ok: true;
         baseline: Awaited<ReturnType<typeof readProfileTransferSourceInContext>>;
         profiles: Extract<ProfileCatalogSnapshotV1, { status: 'ready' }>;
-        catalogs: SavedSecretReferenceCatalogsV1;
+        catalogs: SavedSecretReferenceCatalogsV1 & Readonly<{ artifactsById: ReadonlyMap<string, ArtifactSharingResourceV1> }>;
         referenceCensus: SavedSecretReferenceCensusV1;
     }>;
 
@@ -192,7 +192,7 @@ export async function captureSavedSecretReferenceStateInContext(context: Profile
         const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
         context.assertCurrent();
         if (storage.mode !== accountMode) return { ok: false, reason: 'changed' };
-        const catalogs: SavedSecretReferenceCatalogsV1 = { ...referenceCatalogs.catalogs, notificationChannels: notificationChannels.catalog,
+        const catalogs = { ...referenceCatalogs.catalogs, notificationChannels: notificationChannels.catalog,
             profileRecords: profiles.records.map(({ record }) => record), artifactsById, profileControl: control,
             remoteHostRecords: remoteHosts.hosts };
         listSavedSecretReferenceCatalogRefsV1(catalogs);
@@ -807,6 +807,7 @@ export async function createSavedSecretResourcesWithCatalogMutationInContext(
                             return { status: 'rejected', error: new Error(`saved_secret_catalog_creation_${outcome.failure.kind}`) };
                         },
                     } });
+                if (mutation?.status === 'invalid') requireOneShotAccountSettingsMutationApplied(mutation);
                 if (mutation?.status === 'applied') return { ...success, settingsVersion: mutation.settingsVersion };
                 return mutation?.status === 'conflict' ? { ok: false, reason: 'changed' }
                     : { ok: false, reason: 'outcome_unknown', ...(verifyOutcome ? { verifyOutcome } : {}) };
@@ -1268,6 +1269,7 @@ async function promoteSavedSecretSourceResourceInContext(context: ProfileAccount
                 return { status: 'rejected', error: new Error(`saved_secret_promotion_${outcome.failure.kind}`) };
             },
         } });
+        if (mutation?.status === 'invalid') requireOneShotAccountSettingsMutationApplied(mutation);
         if (mutation?.status === 'applied') {
             if (promotionDataKey.value) {
                 await repairSavedSecretResourceEnvelopesBestEffort({
@@ -1522,7 +1524,7 @@ export async function importLegacySavedSecretsInContext(context: ProfileAccountC
             capturedControlRevision ??= result.profileTransferRevision;
             if (!advanceRetainedReceiptBaselines(result.previousSource, result.acknowledgedSource)) return { status: 'pending', reason: 'changed' };
             promotedReferences.push({ source: credential.source, resourceRef: result.resourceRef, revision: 1 });
-            transfers.push({ source: credential.source, resourceId: deriveSavedSecretImportResourceIdV1({
+            transfers.push({ savedSecretId: credential.source.secretId, resourceId: deriveSavedSecretImportResourceIdV1({
                 accountId: scope.accountId, source: credential.source }), expectedRevision: 1 });
         }
         const beforeHistory = await readProfileTransferSourceInContext(context);
@@ -1727,7 +1729,7 @@ export async function updateSavedSecretResource(params: Readonly<{
                     ...(keyEnvelopes.length > 0 ? { keyEnvelopes } : {}),
                 },
                 parse: (value) => SharedSavedSecretMutationOutputV1Schema.parse(value),
-                ...(onApprovalSucceeded ? { onApprovalSucceeded } : {}),
+                onApprovalSucceeded,
                 ...(params.onApprovalFailed ? { onApprovalFailed: params.onApprovalFailed } : {}),
             });
             context.assertResultCurrent('write');
@@ -1795,6 +1797,7 @@ export async function deleteSavedSecretResource(params: Readonly<{
                         return { settings: { ...raw }, value: listAccountSettingsSavedSecretReferences(raw, resourceRef, catalogs) };
                     },
                 } });
+            if (census?.status === 'invalid') requireOneShotAccountSettingsMutationApplied(census);
             if (census?.status !== 'applied') return { ok: false, reason: 'changed' };
             if (census.value.length > 0) return { ok: false, reason: 'in_use', references: census.value };
             context.assertCurrent();

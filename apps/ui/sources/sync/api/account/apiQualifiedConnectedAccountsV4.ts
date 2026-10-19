@@ -4,7 +4,7 @@ import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef }
 import { encodeQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
 import { buildQualifiedConnectedAccountGroupMutationRequestV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountGroupRequestsV4';
 import type { ProtocolComposableSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import {

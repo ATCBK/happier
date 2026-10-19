@@ -1132,6 +1132,18 @@ describe('Voice provider selection persistence compatibility', () => {
         const persisted = normalizeVoiceSettingsServerDelta({ ...admitted, uiFontSize: 'larger' }, source, null);
         expect(readRequiredRecord(readPredecessorAdapters(persisted).local_conversation, 'retained source').agent)
             .toMatchObject({ backend: 'openai_compat', openaiCompat: legacyChat });
+        const rewritten = normalizeVoiceSettingsServerDelta(
+            { ...settingsParse(persisted), uiFontSize: 'default' }, persisted, null,
+        );
+        expect(readRequiredRecord(readPredecessorAdapters(rewritten).local_conversation, 're-read source').agent)
+            .toMatchObject({ backend: 'openai_compat', openaiCompat: legacyChat });
+        const changedSource = { ...source, voice: { ...source.voice, adapters: {
+            ...source.voice.adapters, local_conversation: { ...source.voice.adapters.local_conversation,
+                agent: { ...source.voice.adapters.local_conversation.agent,
+                    openaiCompat: { ...legacyChat, chatModel: 'changed-chat' } } },
+        } } };
+        expect(() => normalizeVoiceSettingsServerDelta(changedSource, source, null))
+            .toThrow('voice_provider_catalog_unavailable');
     });
 
     it('projects a released OpenAI-compatible Chat sidecar only from one exact Provider Chat binding', async () => {

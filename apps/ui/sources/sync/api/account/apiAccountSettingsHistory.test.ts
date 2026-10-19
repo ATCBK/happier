@@ -1,5 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { getStorage } from '@/sync/domains/state/storage';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';

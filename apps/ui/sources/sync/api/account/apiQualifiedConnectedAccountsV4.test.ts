@@ -87,29 +87,21 @@ describe('apiQualifiedConnectedAccountsV4', () => {
         const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = new URL(String(input));
             if (isServerReadinessProbe(url.pathname)) {
-                return { ok: true, status: 200, json: async () => ({ ok: true }) };
+                return Response.json({ ok: true });
             }
             const contentType = new Headers(init?.headers).get('content-type');
             if (init?.body === undefined && contentType === 'application/json') {
-                return {
-                    ok: false,
-                    status: 400,
-                    json: async () => ({
+                return Response.json({
                         statusCode: 400,
                         code: 'FST_ERR_CTP_EMPTY_JSON_BODY',
                         error: 'Bad Request',
-                    }),
-                };
+                }, { status: 400 });
             }
             expect(init?.method).toBe('DELETE');
             expect(new Headers(init?.headers).get('authorization')).toBe('Bearer token');
-            return {
-                ok: true,
-                status: 200,
-                json: async () => url.pathname.endsWith('/member')
+            return Response.json(url.pathname.endsWith('/member')
                     ? { group: makeGroup({ members: [], activeConnectedAccountId: null, generation: 4 }) }
-                    : { success: true },
-            };
+                    : { success: true });
         });
         vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
@@ -135,18 +127,14 @@ describe('apiQualifiedConnectedAccountsV4', () => {
         const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
             const url = new URL(String(input));
             if (isServerReadinessProbe(url.pathname)) {
-                return { ok: true, status: 200, json: async () => ({ ok: true }) };
+                return Response.json({ ok: true });
             }
             expect(url.pathname).toBe('/v4/connect/qualified/groups');
             expect(parseQualifiedConnectedAccountV4StructuredQueryValue(
                 QualifiedConnectedAccountServiceRefSchema,
                 url.searchParams.get('service') ?? '',
             )).toEqual(service);
-            return {
-                ok: true,
-                status: 200,
-                json: async () => ({ groups: [makeGroup()] }),
-            };
+            return Response.json({ groups: [makeGroup()] });
         });
         vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
@@ -161,18 +149,14 @@ describe('apiQualifiedConnectedAccountsV4', () => {
         const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = new URL(String(input));
             if (isServerReadinessProbe(url.pathname)) {
-                return { ok: true, status: 200, json: async () => ({ ok: true }) };
+                return Response.json({ ok: true });
             }
             observed.push({
                 path: url.pathname,
                 method: init?.method ?? 'GET',
                 body: init?.body ? JSON.parse(String(init.body)) : null,
             });
-            return {
-                ok: true,
-                status: 200,
-                json: async () => ({ group: makeGroup({ runtimeStateRevision: 8 }) }),
-            };
+            return Response.json({ group: makeGroup({ runtimeStateRevision: 8 }) });
         });
         vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
@@ -251,7 +235,7 @@ describe('apiQualifiedConnectedAccountsV4', () => {
         const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
             const url = new URL(String(input));
             if (isServerReadinessProbe(url.pathname)) {
-                return { ok: true, status: 200, json: async () => ({ ok: true }) };
+                return Response.json({ ok: true });
             }
             const encoded = url.searchParams.get('group');
             if (encoded) {
@@ -261,14 +245,10 @@ describe('apiQualifiedConnectedAccountsV4', () => {
                 )).toEqual(groupRef);
                 expect(url.searchParams.get('expectedGeneration')).toBe('3');
             }
-            return {
-                ok: false,
-                status: 409,
-                json: async () => ({
+            return Response.json({
                     error: 'connect_group_runtime_state_revision_conflict',
                     runtimeStateRevision: 9,
-                }),
-            };
+            }, { status: 409 });
         });
         vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 

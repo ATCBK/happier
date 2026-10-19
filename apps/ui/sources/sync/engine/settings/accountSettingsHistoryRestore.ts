@@ -170,7 +170,7 @@ function sameHistoryNormalizationContext(a: Parameters<typeof normalizeAccountSe
 /** Private transport for the incumbent approved, exact-version purge intent. */
 export async function purgeAccountSettingsHistoryVersions(params: Readonly<{
     credentials: AuthCredentials; settingsScope: AccountSettingsScope; versions: readonly number[]; signal?: AbortSignal;
-    requestContext?: Readonly<{ request: ServerFetch; isCurrent(): boolean }>;
+    requestContext?: Readonly<{ request: ServerFetch; isCurrent(): boolean; dispose?(): void }>;
 }>): Promise<AccountSettingsHistoryCleanupResult> {
     const admitted = SettingsDeclarationOperationInputV1Schema.parse({ kind: 'account_settings_history_purge', versions: params.versions });
     if (admitted.kind !== 'account_settings_history_purge') throw new Error('Invalid history purge intent');
@@ -202,7 +202,7 @@ export async function purgeAccountSettingsHistoryVersions(params: Readonly<{
             } catch { pending.add(version); }
         }
         return pending.size ? { status: 'cleanup-pending', versions: [...pending] } : { status: 'complete' };
-    } finally { if ('dispose' in captured) captured.dispose(); }
+    } finally { captured.dispose?.(); }
 }
 
 /** One pass after source cleanup, including the previous document it just retained. */
@@ -212,7 +212,7 @@ export async function normalizeAccountSettingsHistoryAfterTransfer(params: Reado
     expectedProfileTransferRevision?: number | 'absent';
     savedSecretRecovery?: AccountSettingsHistorySavedSecretRecoveryV1;
     /** An incumbent transfer/Action lifetime; never recapture a different Home. */
-    requestContext?: Readonly<{ request: ServerFetch; isCurrent(): boolean }>;
+    requestContext?: Readonly<{ request: ServerFetch; isCurrent(): boolean; dispose?(): void }>;
 }>): Promise<AccountSettingsHistoryCleanupResult> {
     const captured = params.requestContext ?? await captureAccountSettingsRequest(params);
     if (!captured) throwStaleRestoreScope();
@@ -250,7 +250,7 @@ export async function normalizeAccountSettingsHistoryAfterTransfer(params: Reado
             if (completed.status === 'complete') completedHistoryNormalizations.set(key, { params, isCurrent: captured.isCurrent, checkpoint });
             return completed;
         } finally { pendingHistoryNormalizations.delete(entry); }
-    } finally { if ('dispose' in captured) captured.dispose(); }
+    } finally { captured.dispose?.(); }
 }
 
 export type RestoreAccountSettingsFromHistorySnapshotParams = Readonly<{
@@ -340,6 +340,9 @@ export async function restoreAccountSettingsFromHistorySnapshot(
                 status: 'outcomeUnknown',
                 lastKnownSettingsVersion: result.lastKnownSettingsVersion,
             });
+        }
+        if (result.status === 'invalid') {
+            throw new AccountSettingsHistoryRestoreInvalidError('invalidValue');
         }
         // The pure classification merge owns unchanged/applied. The one-shot
         // writer skips the POST for `unchanged`, so it never creates a history

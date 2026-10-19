@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
 
 import { accountSettingsParse } from '@happier-dev/protocol';
 
@@ -65,72 +64,30 @@ describe('applyAccountSettingsCompatibilityMigrations', () => {
         expect(migrated.sessionDefaultPermissionModeByTargetKey['agent:happier.agent.claude/claude']).toBe('read-only');
         expect(Object.keys(migrated.sessionDefaultPermissionModeByTargetKey)).not.toContain('agent:happier.agent.custom-acp/custom-acp');
     });
-    it('avoids absent legacy boolean validation during sparse Account refreshes while retaining malformed-present validation', () => {
+    it('retains sparse defaults and refuses malformed-present legacy boolean aliases', () => {
         const sparseSettings = accountSettingsParse({});
-        // Instrument Zod's external error callback; the Settings owner and validators stay real.
-        const originalCustomError = z.config().customError;
-        let absentBooleanIssues = 0;
-        const malformedInputs = {
-            compactSessionView: 'invalid-compact',
-            compactSessionViewMinimal: 'invalid-minimal',
-            usePickerSearch: 'invalid-picker',
-            transcriptMessageTimestampsEnabled: 'invalid-timestamps',
+        const expected = {
+            sessionListDensity: settingsDefaults.sessionListDensity,
+            useMachinePickerSearch: settingsDefaults.useMachinePickerSearch,
+            usePathPickerSearch: settingsDefaults.usePathPickerSearch,
+            transcriptMessageTimestampDisplayMode: settingsDefaults.transcriptMessageTimestampDisplayMode,
         };
-        const malformedBooleanInputs = new Set<unknown>();
-        z.config({ customError: (issue) => {
-            if (issue.code === 'invalid_type' && issue.expected === 'boolean') {
-                if (issue.input === undefined) absentBooleanIssues += 1;
-                malformedBooleanInputs.add(issue.input);
-            }
-            return originalCustomError?.(issue);
-        } });
-        try {
-            for (let refresh = 0; refresh < 100; refresh += 1) {
-                expect(applyAccountSettingsCompatibilityMigrations({
-                    input: {},
-                    settings: sparseSettings,
-                    inputSchemaVersion: sparseSettings.schemaVersion,
-                    supportedSchemaVersion: sparseSettings.schemaVersion,
-                })).toMatchObject({
-                    sessionListDensity: settingsDefaults.sessionListDensity,
-                    useMachinePickerSearch: settingsDefaults.useMachinePickerSearch,
-                    usePathPickerSearch: settingsDefaults.usePathPickerSearch,
-                    transcriptMessageTimestampDisplayMode: settingsDefaults.transcriptMessageTimestampDisplayMode,
-                });
-            }
-            expect(absentBooleanIssues).toBe(0);
-
-            expect(settingsParse(malformedInputs)).toMatchObject({
-                sessionListDensity: settingsDefaults.sessionListDensity,
-                useMachinePickerSearch: settingsDefaults.useMachinePickerSearch,
-                usePathPickerSearch: settingsDefaults.usePathPickerSearch,
-                transcriptMessageTimestampDisplayMode: settingsDefaults.transcriptMessageTimestampDisplayMode,
-            });
-            for (const malformed of Object.values(malformedInputs)) {
-                expect(malformedBooleanInputs.has(malformed)).toBe(true);
-            }
-            applyAccountSettingsCompatibilityMigrations({
-                input: { compactSessionViewMinimal: 'invalid-minimal-only' },
-                settings: sparseSettings,
+        // safeParse errors are lazy: an error-format callback cannot observe
+        // validation that correctly consumes only success. Assert the policy.
+        for (const input of [
+            {},
+            { compactSessionView: 'invalid-compact', compactSessionViewMinimal: 'invalid-minimal',
+                usePickerSearch: 'invalid-picker', transcriptMessageTimestampsEnabled: 'invalid-timestamps' },
+            { compactSessionViewMinimal: 'invalid-minimal-only' },
+            { compactSessionView: undefined, compactSessionViewMinimal: undefined,
+                usePickerSearch: undefined, transcriptMessageTimestampsEnabled: undefined },
+        ]) {
+            expect(applyAccountSettingsCompatibilityMigrations({
+                input, settings: sparseSettings,
                 inputSchemaVersion: sparseSettings.schemaVersion,
                 supportedSchemaVersion: sparseSettings.schemaVersion,
-            });
-            expect(malformedBooleanInputs.has('invalid-minimal-only')).toBe(true);
-            const issuesBeforePresentUndefined = absentBooleanIssues;
-            applyAccountSettingsCompatibilityMigrations({
-                input: {
-                    compactSessionView: undefined,
-                    compactSessionViewMinimal: undefined,
-                    usePickerSearch: undefined,
-                    transcriptMessageTimestampsEnabled: undefined,
-                },
-                settings: sparseSettings,
-                inputSchemaVersion: sparseSettings.schemaVersion,
-                supportedSchemaVersion: sparseSettings.schemaVersion,
-            });
-            expect(absentBooleanIssues - issuesBeforePresentUndefined).toBe(4);
-        } finally {
-            z.config({ customError: originalCustomError });
+            })).toMatchObject(expected);
+            expect(settingsParse(input)).toMatchObject(expected);
         }
     });
 

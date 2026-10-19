@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
     AttentionDeviceOverridesV1Schema,
@@ -20,11 +20,11 @@ const PetSelectedOverrideSchema = z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('inherit') }),
     z.object({
         kind: z.literal('detectedCodexHome'),
-        sourceKey: z.string().min(1),
+        sourceKey: z.string().check(z.minLength(1)),
     }),
     z.object({
         kind: z.literal('happierManagedLocal'),
-        sourceKey: z.string().min(1),
+        sourceKey: z.string().check(z.minLength(1)),
     }),
 ]);
 const DesktopPetOverlayVisibilityModeOverrideSchema = z.enum([
@@ -38,7 +38,7 @@ const DesktopPetOverlayOffsetSchema = z.object({
     x: z.number(),
     y: z.number(),
 });
-const PetCompanionSizeScaleSchema = z.number().catch(PET_COMPANION_SIZE_SCALE_DEFAULT);
+const PetCompanionSizeScaleSchema = z.catch(z.number(), PET_COMPANION_SIZE_SCALE_DEFAULT);
 
 function serializePetCompanionSizeScaleBucket(value: number): 'small' | 'default' | 'large' | 'xlarge' {
     const scale = normalizePetCompanionSizeScale(value);
@@ -186,14 +186,14 @@ export const ACTIVITY_SURFACE_LOCAL_SETTING_DEFINITIONS = {
     },
     // Null leaves the responsive device-class default to the presentation owner.
     voicePresenceContainer: {
-        schema: z.enum(['top_bar', 'island', 'orb']).nullable().catch(null),
+        schema: z.catch(z.nullable(z.enum(['top_bar', 'island', 'orb'])), null),
         default: null,
         description: 'Live Voice container on this device',
         storageScope: 'local',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'device_user' },
     },
     voiceHoldToTalkEnabled: {
-        schema: z.boolean().catch(false),
+        schema: z.catch(z.boolean(), false),
         default: false,
         description: 'Opt into one-turn hold-to-talk on this device',
         storageScope: 'local',
@@ -219,7 +219,7 @@ export const ACTIVITY_SURFACE_LOCAL_SETTING_DEFINITIONS = {
         storageScope: 'local',
     },
     petsDismissedCompanionTrayItemKeys: {
-        schema: z.array(z.string().min(1)).catch([]),
+        schema: z.catch(z.array(z.string().check(z.minLength(1))), []),
         default: [],
         description: 'Device-local dismissed pet companion activity bubble keys',
         storageScope: 'local',

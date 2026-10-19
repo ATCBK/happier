@@ -47,7 +47,7 @@ export function clearNewSessionOrdinaryEntryDraftIdExact(
  * pending state or JavaScript callers) before they can reach writeback.
  */
 export function stripDerivedAccountSettingsProjections(
-    settings: Partial<Settings>,
+    settings: Partial<Settings> & Readonly<{ currentSecretBindingsByProfileId?: unknown }>,
 ): Partial<Settings> {
     const {
         currentSecretBindingsByProfileId: _currentSecretBindingsByProfileId,

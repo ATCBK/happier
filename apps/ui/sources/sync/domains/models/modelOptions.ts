@@ -267,14 +267,18 @@ export function getModelOptionsForModes(modes: readonly ModelMode[]): readonly M
     }));
 }
 
-function getStaticModelOptionsForAgentType(agentType: AgentType): readonly ModelOption[] {
+function getStaticModelOptionsForAgentType(
+    agentType: AgentType,
+    options: Readonly<{ catalogOnly?: boolean; includeDefault?: boolean }> = {},
+): readonly ModelOption[] {
     if (!isBundledAgentId(agentType)) return [];
-    const seen = new Set<string>(['default']);
-    const out: ModelOption[] = [
-        { value: 'default', label: getModelLabel('default'), description: '' },
-    ];
+    const includeDefault = options.includeDefault !== false;
+    const seen = new Set<string>(includeDefault ? ['default'] : []);
+    const out: ModelOption[] = includeDefault
+        ? [{ value: 'default', label: getModelLabel('default'), description: '' }]
+        : [];
 
-    for (const model of getAgentStaticModels(agentType)) {
+    for (const model of getAgentStaticModels(agentType, options.catalogOnly ? { catalogOnly: true } : undefined)) {
         const value = typeof model.id === 'string' ? model.id.trim() : '';
         if (!value || seen.has(value)) continue;
         seen.add(value);
@@ -308,9 +312,12 @@ export function getModelOptionsForAgentTypeOrPreflight(params: {
         return getModelOptionsForAgentType(params.agentType);
     }
     if (params.preflight?.unavailable === true) {
-        // Discovery cannot authoritatively withdraw catalog models. Preserve trusted
-        // static/default choices while the caller presents the degraded probe state.
-        return getModelOptionsForAgentType(params.agentType);
+        // Preserve only concrete catalog facts. The compatibility Default placeholder
+        // is not evidence that dynamic discovery found a selectable model.
+        return getStaticModelOptionsForAgentType(params.agentType, {
+            catalogOnly: true,
+            includeDefault: false,
+        });
     }
     if (params.preflight && Array.isArray(params.preflight.availableModels)) {
         const preflightOptions = getModelOptionsForPreflightModelList(params.preflight);
@@ -384,6 +391,20 @@ export function findModelOptionForEffectiveModelId<T extends Readonly<{
         qualifiedMatch = option;
     }
     return qualifiedMatch;
+}
+
+/**
+ * The catalog title a Session's Agent gives a model id ("Haiku 4.5" for `claude-haiku-4-5`), or null
+ * when the catalog does not know the id. Every surface that names a Session model to a person reads
+ * this one lookup instead of printing the id.
+ */
+export function resolveSessionModelLabel(
+    agentType: AgentType,
+    metadata: ComposerOptionsInputV1 | null | undefined,
+    modelId: string | null | undefined,
+): string | null {
+    const option = findModelOptionForEffectiveModelId(getModelOptionsForSession(agentType, metadata), modelId);
+    return option?.label.trim() || null;
 }
 
 export function resolveCanonicalModelOptionId<T extends Readonly<{

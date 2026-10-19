@@ -138,12 +138,13 @@ describe('featureLocalPolicy', () => {
         })).toBe(true);
     });
 
-    it('disables voice.agent by default when experiments are on', () => {
-        expect(resolveLocalFeaturePolicyEnabled('voice.agent', {
-            ...settingsDefaults,
-            experiments: true,
-            featureToggles: {},
-        })).toBe(false);
+    it.each(['voice.agent', 'voice.daemonInference'] as const)('defaults %s on independently of Experiments while respecting opt-out', (featureId) => {
+        for (const experiments of [false, true]) {
+            expect(resolveLocalFeaturePolicyEnabled(featureId, { ...settingsDefaults, experiments })).toBe(true);
+            expect(resolveLocalFeaturePolicyEnabled(featureId, {
+                ...settingsDefaults, experiments, featureToggles: { [featureId]: false },
+            })).toBe(false);
+        }
     });
 
     it('disables attachments.uploads by default when experiments are on', () => {
@@ -168,14 +169,6 @@ describe('featureLocalPolicy', () => {
             experiments: true,
             featureToggles: { 'voice.agent': true },
         })).toBe(true);
-    });
-
-    it('disables voice.daemonInference by default when experiments are on', () => {
-        expect(resolveLocalFeaturePolicyEnabled('voice.daemonInference', {
-            ...settingsDefaults,
-            experiments: true,
-            featureToggles: {},
-        })).toBe(false);
     });
 
     it('enables voice.daemonInference when explicitly enabled', () => {
