@@ -540,8 +540,11 @@ In 0.3 development source, the selected Artifact lease owner shares in-flight
 acquisition by digest within the captured Account lifetime and removes each
 flight when it settles. Inventory refresh, occurrence replacement and surface
 remount recheck admission and read retained bytes through the existing byte
-custody owner. Evicted bytes, or bytes without persistent custody, are acquired
-again through the canonical source order. Retiring one reader cancels only its
+custody owner. React Native acquisition also reads the complete verified file
+set already held by the existing executable cache, qualified by Account and
+digest, including on hosts without persistent storage. Exact byte eviction,
+projection withdrawal and Account retirement still invalidate that cache;
+missing bytes are acquired again through the canonical source order. Retiring one reader cancels only its
 work; a surviving reader can supply the same digest through its own current
 source. Cached bytes do not grant execution or let a contradictory declared
 file graph pass integrity.
