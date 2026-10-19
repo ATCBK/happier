@@ -48,6 +48,18 @@ are optional and apply only to the selected guest process, not prerequisite
 inspection processes. Provider-reported SSH key
 evidence must match a fresh scan but cannot approve replacing saved host trust.
 
+The remote enrollment recipe shares one budget across request, consent and wait.
+The consent prompt ends at the earlier recipe deadline or Home request expiry,
+with `auth_enrollment_timeout` or `auth_request_expired` and a request to Retry
+setup; late consent cannot authorize the expired request. Finite `auth wait`
+failures project a credential-free code through the buffered enrollment error,
+including local expiry and argument/state validation. These are development
+source changes. A wait process without a usable diagnostic code reports
+`AUTH_WAIT_DIAGNOSTIC_UNAVAILABLE`, retaining its exit without exposing native
+output or inferring an authentication cause. Controller and guest CLI reloads
+are required; the server's
+terminal-request TTL policy is unchanged.
+
 For source-built guest QA in 0.3 development, an operator can set
 `HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT` on the controller to a prepared,
 target-compatible CLI payload directory. The shared payload installer consumes
@@ -152,6 +164,22 @@ otherwise it follows `HAPPIER_INSTALL_DIR`, falling back to `%USERPROFILE%\.happ
 The binary install directory can remain separate from an explicit data home.
 On Windows, `HAPPIER_NO_PATH_UPDATE` skips PATH changes only, not state-home persistence.
 This does not copy or migrate credentials from a previous data home.
+
+## Desktop executable identity
+
+Current development source configures `mainBinaryName` per desktop channel:
+`happier-desktop`, `happier-desktop-preview`, and `happier-desktop-dev`. These names
+keep Linux executables and icons distinct between channels and from the `happier`
+CLI. The Tauri configs own the names; candidate transfer, AppImage diagnostics, and
+macOS updater architecture inspection read them through the shared channel-config
+resolver instead of assuming the Cargo template name `app`.
+
+After an upgrade, open the app once so it can observe the computer's login-start
+setting. The existing autostart writer re-enables the same channel's login item
+with the current executable and `--menu-bar`, or removes it when login start is
+off. An unknown setting leaves the item untouched; failures remain visible in
+the tray and retry on the next setting observation. This reuses the existing
+login-item migration rather than adding another startup preference or writer.
 
 ## Native computer driver (0.3 development source)
 
@@ -284,6 +312,15 @@ Bun compiles a launcher that loads the emitted physical ESM graph from its own
 payload. It does not run pkgroll, the public declaration compiler, or a prior
 CLI dist build.
 
+These two emitters and their bundled executable sidecars also share the output
+policy in `sourceRuntimeEntries.mjs`. esbuild removes whitespace and ordinary
+comments, lowers tagged templates before ASCII emission, and retains exact legal
+comments in adjacent `.LEGAL.txt` files. Identifiers stay unminified, preserving
+named stack frames and emitted file/line/column locations. This avoids widening
+whole V8 Script source strings for Unicode comments or raw template text. esbuild
+does not escape Unicode regular-expression literals; first-party regex owners
+use equivalent Unicode escapes to keep those source graphs Latin-1-safe.
+
 Retained source daemon bundles also compile bundled Plugin UI graphs through
 `prepareSourcePluginUiArtifacts.mjs`, the same SDK compiler/inventory owner used
 by native CLI construction. The generated manifests and complete file sets live
@@ -311,8 +348,25 @@ migration entry through that same source export owner. Bun bundles the authored
 graph directly, including the Iroh JavaScript loader; binary construction and
 support discovery do not prepare workspace dist. Server support owns generated
 Prisma clients, query and migration engines, Sharp assets, and the exact-target
-Iroh addon with its package metadata. Sharp's binding loader still resolves the
-addon beside the compiled executable so its libvips sidecar remains available.
+Iroh addon with its package metadata. The server Sharp projection resolves each
+package from its actual consumer, including the server's installed Sharp version
+for foreign-target acquisition, then stages one adjacent native/libvips cohort.
+The Bun server builder selects Sharp's public CJS entry and redirects only its
+actual native addon import to that staged file. Sharp retains its own platform
+selection, CPU checks, and error reporting; package-JSON autoload stays disabled.
+Optional foreign-platform native imports stay virtual until selected at runtime;
+guarded libvips resolution hints remain external so unselected platform libraries
+are not embedded in the server executable.
+The thin CLI continues to load its physical source graph and uses its existing
+runtime dependency vendoring and target acquisition owners.
+Only the thin CLI launcher enables package-JSON metadata loading so the physical
+graph can resolve exports-only native packages beside itself. CLI dotenv and
+bunfig autoload remain disabled; working-directory package metadata does not
+replace the physical importing package's resolution authority.
+Standalone compiler defaults come from `DEFAULT_BUN_COMPILE_OPTIONS` in the
+existing compiler owner. The ordinary compiler and both Sharp/Prisma build
+adapters disable implicit project `bunfig.toml` loading, preventing local preload
+scripts from running before the tool starts. Dotenv policy remains separate.
 Server typechecking and public npm/SDK declaration tasks remain separate.
 
 Explicit web artifact construction and source QA share
@@ -882,6 +936,15 @@ Codex's managed release recipe retains its native-file allowance and uses the pl
 512 MiB total expansion ceiling. The digest-verified `rust-v0.161.0` Linux package includes resources
 beyond the installed executables and exceeds the former 384 MiB total. Digest verification, declared
 runtime-member publication and the shared path/compression/extraction guards remain enforced.
+
+In 0.3 development, the managed Codex Linux recipe also publishes the pinned
+release's `codex-resources/bwrap` with executable permissions. Codex resolves
+this bundled helper beside the package's `bin` directory when system bubblewrap
+is unavailable; Happier does not require installing a system package for this
+helper. Existing managed installs missing it need a forced reinstall through the
+normal Agent install Action after the corrected declaration is loaded. Linux
+hosts must also permit the user namespaces used by Codex's sandbox. macOS
+and Windows keep their platform-specific package members.
 
 Managed runtime support is component-owned, not a generic dependency-layer registry, and its references are a development/QA snapshot concern only. A server manifest may reference an immutable server-support artifact containing its generated Prisma/native closure; a daemon manifest may reference its immutable daemon-support artifact containing external/native runtime dependencies, tools and Go payloads; JavaScript sidecars and plugin resources/UI package files remain code-owned. The component builder computes and validates its own support identity. Snapshot validation follows those references, and retention follows the graph from retained snapshots through component artifacts to referenced support artifacts before deleting anything. Existing self-contained release/runtime artifacts remain readable until ordinary retention removes them. Release/self-host builders discover and embed their own complete target support closure directly.
 
