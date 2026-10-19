@@ -1664,6 +1664,12 @@ failures through the global HTTP error handler. A confirmed rollback returns
 the same typed 503 response; unexpected failures retain their diagnostic cause
 for server logging. The tuple writer translates only its Team credential-binding
 domain rejection. It does not collapse database failures into an unclassified 500.
+Both tuple and legacy `PATCH /v2/sessions/:sessionId` acknowledge the committed
+mutation before starting current-view publication or its post-commit row read.
+A missing row, rejected projection or failed publication read after commit is
+reported in content-free server diagnostics without changing the receipt. The
+committed change cursor remains available for ordinary client recovery. A
+publication-submitted diagnostic does not attest to realtime fanout delivery.
 
 Account-local writes in current 0.3 source use `inTx`'s ReadCommitted default
 after acquiring their existing Account fence, before mutation admission reads.

@@ -8,7 +8,7 @@ import {
     it,
     vi,
 } from "vitest";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { eventRouter } from "@/app/events/eventRouter";
 import { db } from "@/storage/db";
 import {
@@ -50,6 +50,7 @@ describe("session owner metadata migration route (SQLite integration)", () => {
     });
 
     afterEach(async () => {
+        eventRouter.clearIo();
         vi.restoreAllMocks();
         harness.resetEnv();
         await harness.resetDbTables([
@@ -58,6 +59,149 @@ describe("session owner metadata migration route (SQLite integration)", () => {
             () => db.session.deleteMany(),
             () => db.account.deleteMany(),
         ]);
+    });
+
+    it.each(["read_failure", "layout_migration"] as const)("acknowledges a committed legacy patch before postcommit publication %s", async failure => {
+        const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain",
+            metadata: LEGACY_METADATA, metadataLayoutVersion: 0, metadataVersion: 4,
+        } });
+        let enterPublication!: () => void;
+        let releasePublication!: () => void;
+        let settlePublication!: () => void;
+        const entered = new Promise<void>(resolve => { enterPublication = resolve; });
+        const release = new Promise<void>(resolve => { releasePublication = resolve; });
+        const settled = new Promise<void>(resolve => { settlePublication = resolve; });
+        const delegate = db.session;
+        const originalFindUnique = delegate.findUnique;
+        const findUnique = originalFindUnique.bind(delegate);
+        // Hold only the postcommit storage read; admission, CAS, cursor writes
+        // and HTTP response serialization retain their production owners.
+        // Prisma delegates are proxies: installing a method spy also registers
+        // a later global restore that can erase the next case's real delegate.
+        delegate.findUnique = new Proxy(originalFindUnique, {
+            apply(_target, _thisArg, argumentsList) {
+                const [args] = argumentsList as Parameters<typeof delegate.findUnique>;
+                if (args.where.id === session.id && args.select?.accountId
+                    && args.select.metadata && args.select.ownerMetadata && !args.select.active) {
+                    enterPublication();
+                    return release.then(async () => {
+                        try {
+                            if (failure === "read_failure") throw new Error("Publication database unavailable");
+                            return await findUnique(args);
+                        } finally {
+                            settlePublication();
+                        }
+                    });
+                }
+                return findUnique(args);
+            },
+        });
+        try {
+            await withAuthenticatedTestApp(app => sessionRoutes(app), async (app: FastifyInstance) => {
+                let status: number | undefined;
+                const response = app.inject({ method: "PATCH", url: `/v2/sessions/${session.id}`,
+                    headers: { "x-test-user-id": owner.id },
+                    payload: { metadata: { ciphertext: JSON.stringify({ name: "committed" }), expectedVersion: 4 } },
+                }).then((result: LightMyRequestResponse) => { status = result.statusCode; return result; });
+                await entered;
+                try {
+                    await expect(findUnique({ where: { id: session.id } })).resolves.toMatchObject({
+                        metadataVersion: 5, metadata: JSON.stringify({ name: "committed" }),
+                    });
+                    await expect.poll(() => status).toBe(200);
+                    expect((await response).json()).toEqual({ success: true, metadata: { version: 5 } });
+                    if (failure === "layout_migration") {
+                        // A later real migration makes the legacy publication
+                        // projection inadmissible; it cannot undo this receipt.
+                        await db.session.update({ where: { id: session.id }, data: {
+                            metadataLayoutVersion: 1, metadata: SHARED_METADATA,
+                            ownerMetadata: JSON.stringify(PLAIN_OWNER_METADATA),
+                        } });
+                    }
+                } finally {
+                    releasePublication();
+                    await settled;
+                    await response;
+                }
+            });
+        } finally {
+            releasePublication();
+            delegate.findUnique = originalFindUnique;
+        }
+    });
+
+    it("sends the committed tuple receipt before entering the realtime network boundary", async () => {
+        const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain",
+            metadataLayoutVersion: 1, metadata: SHARED_METADATA,
+            ownerMetadata: JSON.stringify(PLAIN_OWNER_METADATA),
+        } });
+        let receiptSent = false;
+        let receiptSentAtPublication: boolean | undefined;
+        // Only Socket.IO's network adapter is substituted. The real publisher
+        // and credential-qualified event router still select the destination.
+        eventRouter.setIo({
+            to: () => ({ emit: () => {}, disconnectSockets: () => {} }),
+            in: rooms => ({ fetchSockets: async () => {
+                if (rooms.includes(`session:${session.id}:${owner.id}`)) {
+                    receiptSentAtPublication = receiptSent;
+                }
+                return [];
+            } }),
+        });
+        await withAuthenticatedTestApp(app => {
+            app.addHook("onSend", async () => { receiptSent = true; });
+            sessionRoutes(app);
+        }, async (app: FastifyInstance) => {
+            const response = await app.inject({ method: "PATCH", url: `/v2/sessions/${session.id}`,
+                headers: { "x-test-user-id": owner.id, "x-happier-account-stored-content-protocol": "2" },
+                payload: { mode: "owner", metadataLayoutVersion: 1,
+                    expectedOwnerMetadata: PLAIN_OWNER_METADATA, ownerMetadata: PLAIN_OWNER_METADATA,
+                    sharedMetadata: { ciphertext: SHARED_METADATA, expectedVersion: 0 },
+                    agentState: { ciphertext: null, expectedVersion: 0 } },
+            });
+            expect(response.statusCode, response.body).toBe(200);
+            expect(response.json()).toEqual({ success: true, metadataLayoutVersion: 1,
+                sharedMetadata: { version: 1 }, agentState: { version: 1 } });
+            expect(receiptSentAtPublication).toBe(true);
+            await expect(db.session.findUniqueOrThrow({ where: { id: session.id } })).resolves.toMatchObject({
+                metadataVersion: 1, agentStateVersion: 1,
+            });
+        });
+    });
+
+    it.each([0, 1] as const)("does not acknowledge a layout-%s metadata write that rolls back", async layout => {
+        const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain",
+            metadataLayoutVersion: layout, metadata: layout === 0 ? LEGACY_METADATA : SHARED_METADATA,
+            ownerMetadata: layout === 0 ? null : JSON.stringify(PLAIN_OWNER_METADATA),
+        } });
+        const before = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+        const changesBefore = await db.accountChange.count({ where: { accountId: owner.id } });
+        await db.$executeRawUnsafe(`CREATE TRIGGER reject_metadata_patch BEFORE UPDATE OF metadata ON Session
+            BEGIN SELECT RAISE(ABORT, 'test metadata write failure'); END`);
+        try {
+            await withAuthenticatedTestApp(app => sessionRoutes(app), async (app: FastifyInstance) => {
+                const response = await app.inject({ method: "PATCH", url: `/v2/sessions/${session.id}`,
+                    headers: { "x-test-user-id": owner.id, "x-happier-account-stored-content-protocol": "2" },
+                    payload: layout === 0
+                        ? { metadata: { ciphertext: JSON.stringify({ name: "must roll back" }), expectedVersion: 0 } }
+                        : { mode: "owner", metadataLayoutVersion: 1,
+                            expectedOwnerMetadata: PLAIN_OWNER_METADATA, ownerMetadata: PLAIN_OWNER_METADATA,
+                            sharedMetadata: { ciphertext: SHARED_METADATA, expectedVersion: 0 },
+                            agentState: { ciphertext: null, expectedVersion: 0 } },
+                });
+                expect(response.statusCode, response.body).toBe(500);
+            });
+        } finally {
+            await db.$executeRawUnsafe("DROP TRIGGER reject_metadata_patch");
+        }
+        await expect(db.session.findUniqueOrThrow({ where: { id: session.id } })).resolves.toEqual(before);
+        await expect(db.accountChange.count({ where: { accountId: owner.id } })).resolves.toBe(changesBefore);
     });
 
     it("atomically migrates the exact plain layout-zero tuple to canonical layout one", async () => {
