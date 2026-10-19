@@ -491,7 +491,7 @@ export function WorkflowRunInputs(props: Readonly<{
                 <HappierInputField<ActionInputOptionValue> frame="none" field={hint} value={field.value}
                     {...(valueLabel === undefined ? {} : { valueLabel })}
                     selection={selected} options={options} optionsStatus={optionState.status}
-                    optionsNotice={<SurfaceStateCard kind="error" size="line" title={t('common.error')}
+                    optionsNotice={<SurfaceStateCard kind="error" size="line" title={t('workflows.start.choicesFailed')}
                         diagnosticCode={optionState.errorCode} action={{ label: t('common.retry'), onPress: retry }} />}
                     isEqual={isSameActionInputOptionValue} keyForOption={(option) => actionInputOptionValueKey(option.value)}
                     theme={selectTheme} disabled={props.pending} testID={id}
