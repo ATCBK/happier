@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
+import { PassThrough } from 'node:stream';
 import { Server } from 'socket.io';
 import { io } from 'socket.io-client';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -24,7 +25,7 @@ vi.mock('@/processes/terminate/terminateProcessTree', () => ({ terminateProcessT
 afterEach(() => vi.clearAllMocks());
 
 it.each(['tmp/fsp-find-review/target.txt\nunfinished', ''])('returns a bounded incomplete page at the supplied operation budget (%j)', async (output) => {
-    const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), pid: 4245 });
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new EventEmitter(), stderr: new EventEmitter(), pid: 4245 });
     boundary.spawn.mockImplementation(() => {
         queueMicrotask(() => child.stdout.emit('data', Buffer.from(output)));
         return child; // Traversal does not complete before its owning budget.

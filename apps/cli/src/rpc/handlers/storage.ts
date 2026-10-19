@@ -190,12 +190,12 @@ export function registerDaemonStorageRpcHandlers(rpc: RpcHandlerRegistrar, optio
     });
     rpc.registerHandler(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, async (raw: unknown, context) => {
         const request = MachineStorageCategoryListInputV1Schema.parse(raw);
-        const access = admission(request, context, request.categoryId !== 'sessionFolders');
+        const access = admission(request, context, request.categoryId !== 'sessionFolders' && request.categoryId !== 'trash');
         await access.assertCurrent();
         const actor = await readActor(access, context);
         const service = await options.getService(access.target!);
         await access.assertCurrent();
-        const result = await callStorageOwner(() => service.categoryList(request.categoryId, { signal: context?.signal, cursor: request.cursor,
+        const result = await callStorageOwner(() => service.categoryList(request.categoryId, { actor, signal: context?.signal, cursor: request.cursor,
             assertCurrentAuthority: actor.assertCurrentAuthority, ...(actor.sessionIds ? { sessionIds: actor.sessionIds } : {}) }));
         await access.assertCurrent();
         return MachineStorageCategoryListResultV1Schema.parse(result);

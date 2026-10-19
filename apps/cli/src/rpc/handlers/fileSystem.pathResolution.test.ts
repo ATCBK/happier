@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import type { RpcHandler } from '@/api/rpc/types';
 
 vi.mock('fs/promises', async (importOriginal) => ({
   ...await importOriginal<typeof import('fs/promises')>(),
@@ -27,7 +28,8 @@ import { accountSettingsParse } from '@happier-dev/protocol';
 
 const restrictedWorkDirPolicy = { kind: 'restrictedRoots', roots: ['/work/dir'] } as const;
 
-type Handler = (data: unknown) => Promise<unknown> | unknown;
+// This transport-boundary registry stores handlers with their request type erased.
+type Handler = RpcHandler;
 
 function createRpcHandlerManager(): { handlers: Map<string, Handler>; registerHandler: (method: string, handler: Handler) => void } {
   const handlers = new Map<string, Handler>();

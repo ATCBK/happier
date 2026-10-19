@@ -1,5 +1,5 @@
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { run as runRipgrep } from '@/integrations/ripgrep/index';
 import type { FilesystemAccessPolicy } from './fileSystem/accessPolicy/filesystemAccessPolicy';
 import { authorizeFilesystemPath } from './fileSystem/accessPolicy/filesystemPathAuthorization';
@@ -12,9 +12,9 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 // deliberately not part of the workspace search DTO.
 const TextField = z.union([z.object({ text: z.string() }), z.object({ bytes: z.string() })]);
 const PathRecord = z.object({ path: TextField });
-const LineRecord = PathRecord.extend({ lines: TextField, line_number: z.number().int().positive(),
-    submatches: z.array(z.object({ match: TextField, start: z.number().int().nonnegative(), end: z.number().int().nonnegative() })).optional() });
-const EndRecord = PathRecord.extend({ binary_offset: z.number().int().nonnegative().nullable().optional() });
+const LineRecord = z.extend(PathRecord, { lines: TextField, line_number: z.number().check(z.int(), z.positive()),
+    submatches: z.optional(z.array(z.object({ match: TextField, start: z.number().check(z.int(), z.nonnegative()), end: z.number().check(z.int(), z.nonnegative()) }))) });
+const EndRecord = z.extend(PathRecord, { binary_offset: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))) });
 const RecordEnvelope = z.object({ type: z.enum(['begin', 'match', 'context', 'end', 'summary']), data: z.unknown() });
 
 type Match = WorkspaceFileSearchFileV1['matches'][number];
@@ -150,6 +150,9 @@ export function registerWorkspaceFileSearchHandler(
                 return { ok: true, files, hasMore, coverage };
             } catch (error) {
                 if (context?.signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+                if (error instanceof Error && 'code' in error && error.code === 'WORKSPACE_ROOT_NOT_FOUND') {
+                    return { ok: false, code: 'root_not_found' };
+                }
                 return { ok: false, code: parseFailed ? 'ripgrep_failed' : 'ripgrep_unavailable' };
             }
         });
