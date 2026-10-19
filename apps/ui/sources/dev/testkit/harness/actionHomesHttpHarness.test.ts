@@ -14,6 +14,30 @@ import { initializeRealAppRuntimeForTests } from './realAppRuntimeHarness';
 await initializeRealAppRuntimeForTests();
 
 describe('served Account Settings HTTP boundary', () => {
+    it.each([false, true])('restores the prior logical Account after Home identity adoption (prior Account: %s)', async preexisting => {
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const { upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
+        const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+        const { parseToken } = await import('@/utils/auth/parseToken');
+        const serverUrl = `https://served-adoption-${preexisting}.example.test`;
+        const identity = `srv_served_adoption_${preexisting}`;
+        const profile = await upsertServerProfileOnly({ serverUrl });
+        const previous = preexisting ? { token: createAccountTokenForTests('prior-account') } : null;
+        if (previous) expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId: profile.id }, previous)).toBe(true);
+        const fixture = await serveAccountHomes({ homes: [{ key: 'home', serverUrl, accountId: 'fixture-account' }], route: () => undefined });
+        try {
+            expect(await setServerProfileIdentityForUrl(serverUrl, identity)).not.toBeNull();
+            const installed = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId: identity });
+            expect(parseToken(installed!.token)).toBe('fixture-account');
+            await fixture.dispose();
+            expect(await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId: identity })).toEqual(previous);
+        } finally {
+            await fixture.dispose();
+            await TokenStorage.removeCredentialsForServerUrl(serverUrl, { serverId: identity });
+        }
+    });
+
     it('retires verified Home credentials across fixture reuse and fences an Account switch', async () => {
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
