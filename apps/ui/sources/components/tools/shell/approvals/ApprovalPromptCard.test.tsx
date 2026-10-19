@@ -437,6 +437,21 @@ describe('ApprovalPromptCard', () => {
         expect(screen.getTextContent()).toContain('sessionInstructions.nextBoundary');
     });
 
+    it('keeps the failure code behind Technical details when a specialized body replaces the Details card', async () => {
+        const failed = ApprovalRequestSchema.parse({ ...approvalRequest(), status: 'failed', actionId: 'prompt_doc.update', summary: 'Update its instructions',
+            actionArgs: { artifactId: 'instructions-doc', title: 'Release captain', markdown: 'Check prerelease versions first.' },
+            decision: { kind: 'approve', decidedAtMs: 2 },
+            execution: { executedAtMs: 3, ok: false, errorCode: 'prompt_doc_unavailable', error: 'prompt_doc_unavailable' } });
+        const screen = await renderCard(failed, { chrome: 'inline' });
+        // The specialized body is shown in place of the generic fields card.
+        expect(screen.findByTestId('approval-prompt-prompt-doc-diff')).toBeTruthy();
+        expect(screen.getTextContent()).not.toContain('prompt_doc_unavailable');
+        const disclosure = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+        expect(disclosure).toBeTruthy();
+        await act(async () => { disclosure?.props.onExpandedChange(true); });
+        expect(screen.getTextContent()).toContain('prompt_doc_unavailable');
+    });
+
     it('withholds approve for a released V1 request while preserving rejection', async () => {
         const screen = await renderCard(approvalRequest());
         expect(screen.findByTestId('approval-prompt-approve')?.props).toMatchObject({

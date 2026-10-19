@@ -329,7 +329,7 @@ export function resourceProposalDisplayWithTrashReceipt(result: PileApplyResultV
   receipt: ResourceProposalTrashReceipt): ResourceProposalDisplay {
   if (receipt.kind === 'ready' && receipt.remaining.length === 0 && receipt.unknownCount === 0) {
     if (receipt.deletedCount > 0 && receipt.restoredCount === 0) return {
-      kind: 'emptied', count: receipt.deletedCount, freedBytes: receipt.freedBytes,
+      kind: 'emptied', count: receipt.deletedCount, freedBytes: receipt.freedBytes, result,
     };
     if (receipt.restoredCount > 0 && receipt.deletedCount === 0) return { kind: 'restored' };
   }
@@ -416,8 +416,7 @@ export function deriveResourceProposalDisplay(
           (outcome) =>
             outcome.status === 'deleted' || outcome.status === 'moved',
         ).length;
-        return { kind: 'emptied', count: acted, freedBytes: result.freedBytes,
-          ...(result.mode === 'delete' ? { result } : {}) };
+        return { kind: 'emptied', count: acted, freedBytes: result.freedBytes, result };
       }
       return { kind: 'trashed', result };
     }

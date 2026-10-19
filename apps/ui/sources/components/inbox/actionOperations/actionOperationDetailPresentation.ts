@@ -1,7 +1,11 @@
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import type { ProjectCommandAttachmentV1 } from '@happier-dev/protocol/actions/operations/v1';
+import type { WorkspaceAddressV1, WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { isWorkspacePathWithinRootV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
 import type { ActionOperationObservation } from '@/sync/domains/actionOperations/actionOperationStore';
 import { canRequestActionOperationStop } from './actionOperationPresentation';
+import { resolveSystemTaskFailureMessage } from '@/components/systemTasks/resolveSystemTaskFailureMessage';
 
 type ActionOperationSnapshot = ActionOperationProjection['snapshot'];
 export type MachineEnvironmentOutputAttachment = Extract<NonNullable<ActionOperationSnapshot['domainRef']>, { kind: 'machineEnvironment' }>;
@@ -113,7 +117,7 @@ function summarizeError(snapshot: ActionOperationSnapshot): readonly ActionOpera
     if (!snapshot.error) return [];
     const rows: ActionOperationDetailSummaryRow[] = [
         { label: 'code', value: snapshot.error.errorCode },
-        { label: 'message', value: snapshot.error.error },
+        { label: 'message', value: resolveSystemTaskFailureMessage({ code: snapshot.error.errorCode, message: snapshot.error.error }) ?? snapshot.error.error },
     ];
     return rows;
 }
@@ -264,6 +268,16 @@ function projectProjectCommand(snapshot: ActionOperationSnapshot): Omit<ActionOp
 export function readActionOperationOutputAttachment(snapshot: ActionOperationSnapshot): ProjectCommandAttachmentV1 | MachineEnvironmentOutputAttachment | null {
     const attachment = snapshot.domainRef;
     return attachment?.kind === 'projectCommand' || attachment?.kind === 'machineEnvironment' ? attachment : null;
+}
+
+/** Output belongs to the actual accepted checkout; the process cwd may be below its root. */
+export function readProjectCommandOutputWorkspace(attachment: ProjectCommandAttachmentV1,
+    workspaceRefs: readonly WorkspaceRefV1[]): WorkspaceAddressV1 | null {
+    const selected = resolveWorkspaceRefById(workspaceRefs, attachment.workspaceRefId, attachment.serverId);
+    if (selected.kind !== 'resolved' || selected.ref.machineId !== attachment.machineId
+        || !isWorkspacePathWithinRootV1(attachment.cwd, selected.ref.rootPath)) return null;
+    return { serverId: selected.ref.serverId, workspaceId: selected.ref.id,
+        machineId: selected.ref.machineId, rootPath: selected.ref.rootPath };
 }
 
 function projectMachineEnvironment(snapshot: ActionOperationSnapshot): Omit<ActionOperationDetailProjection, 'canCancel'> {

@@ -17,6 +17,8 @@ export type ActionApprovalPresentationInput = Readonly<{
     authoredSummary?: string | null;
     subject?: string | null;
     role?: RoleCatalogEntry | null;
+    /** The target Machine's readable path form (home-relative), when the presenting app knows its home. */
+    formatPath?: ((path: string) => string) | null;
 }>;
 
 /** Only the Account override Actions name an Account catalog Role. */
@@ -28,17 +30,19 @@ export function readActionApprovalRoleId(input: ActionApprovalPresentationInput)
 
 /** The existing Protocol reference projection owns subject identity, never a caller's id guess. */
 export function readActionApprovalSubject(input: ActionApprovalPresentationInput): ApprovalActionReference | undefined {
+    const references = describeApprovalActionFields({ ...input, actionArgs: input.actionArgs }).rows.flatMap(row => row.kind === 'value'
+        ? [...(row.reference ? [row.reference] : []), ...(row.entries?.flatMap(entry => entry.reference ? [entry.reference] : []) ?? [])]
+        : []);
     // A workspace-sync request is titled by its Action; its controller machine and linked folders read in Details.
     if (input.actionId.startsWith('workspace.sync.')) return undefined;
-    return describeApprovalActionFields({ ...input, actionArgs: input.actionArgs }).rows.flatMap(row => row.kind === 'value'
-        ? [...(row.reference ? [row.reference] : []), ...(row.entries?.flatMap(entry => entry.reference ? [entry.reference] : []) ?? [])]
-        : [])[0];
+    // The Home only routes the request: the thing acted on (a Machine, a Session) is the subject when there is one.
+    return references.find(reference => reference.kind !== 'home') ?? references[0];
 }
 
 /** One UI copy boundary for confirmation, Inbox, page and preview; authored plugin copy stays authored. */
-export function presentActionApproval(input: ActionApprovalPresentationInput): Readonly<{ title: string | null; summary: string | null }> {
+export function presentActionApproval(input: ActionApprovalPresentationInput): Readonly<{ title: string | null; summary: string | null; confirmLabel: string | null }> {
     const parsed = ActionIdSchema.safeParse(input.actionId);
-    if (!parsed.success) return { title: input.authoredTitle?.trim() || null, summary: input.authoredSummary?.trim() || null };
+    if (!parsed.success) return { title: input.authoredTitle?.trim() || null, summary: input.authoredSummary?.trim() || null, confirmLabel: null };
     const spec = getActionSpec(parsed.data);
     const role = input.role?.roleId === readActionApprovalRoleId(input) ? input.role : null;
     const roleKind = role ? role.source === 'built_in' ? t('roles.settings.sourceBuiltIn')
@@ -49,7 +53,7 @@ export function presentActionApproval(input: ActionApprovalPresentationInput): R
     const titleSource = roleIdentity || !english ? resolveActionTitle(spec.id, spec) : spec.title;
     const widgetPresentation = readWidgetApprovalPresentationV1(input.preview);
     const summarySource = buildApprovalPreviewSummary(spec, input.actionArgs, {
-        ...(widgetPresentation ? { widgetPresentation } : {}),
+        ...(input.formatPath ? { formatPath: input.formatPath } : {}), ...(widgetPresentation ? { widgetPresentation } : {}),
     });
     const authoredSummary = input.authoredSummary?.trim();
     const distinctAuthoredSummary = authoredSummary && authoredSummary !== summarySource ? authoredSummary : null;
@@ -62,6 +66,8 @@ export function presentActionApproval(input: ActionApprovalPresentationInput): R
     // Backup authority follows the Action into both confirmation and Inbox, including authored previews.
     const disclosure = spec.id === 'relay.runtime.personal_home.backup' ? t('personalHome.settings.backupDisclosureBody') : null;
     return {
+        // The confirm button names the Action itself ("Open machine terminal"), never a bare OK.
+        confirmLabel: titleSource,
         title: t('actionPresentation.title', { actionId: spec.id, source: titleSource,
             subject: roleIdentity ? `${roleIdentity.name} · ${roleIdentity.kind}` : input.subject }),
         summary: disclosure ? [visibleSummary, disclosure].filter(Boolean).join('\n\n') : visibleSummary,

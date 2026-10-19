@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 
 import { SessionBoardDeclarativeContent } from '@/components/sessions/board/SessionBoardDeclarativeContent';
-import { SESSION_BOARD_SEMANTIC_HEIGHTS } from '@/components/sessions/board/sessionBoardItemHeight';
+import { resolveSessionBoardReplyHeight } from '@/components/sessions/board/sessionBoardItemHeight';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { HostedHtmlSurfaceAdapter } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
 import { useSessionCallerHostedHtmlRuntime } from '@/components/ui/surfaces/hostedHtml/useSessionCallerHostedHtmlRuntime';
@@ -30,7 +30,7 @@ export function ApprovalVisualPreview(props: PreviewProps): React.ReactElement |
             </SectionContentRow>
         );
     }
-    return <ApprovalHtmlPreview {...props} preview={props.preview} />;
+    return <ApprovalHtmlPreview key={props.artifactId} {...props} preview={props.preview} />;
 }
 
 function ApprovalHtmlPreview(props: PreviewProps & Readonly<{
@@ -39,12 +39,18 @@ function ApprovalHtmlPreview(props: PreviewProps & Readonly<{
     // The approval carries the content, so the preview needs no readable Session, and without a
     // plugin runtime it admits no Actions or Resources: presentation only.
     const runtime = useSessionCallerHostedHtmlRuntime(props.serverId, undefined);
-    const [height, setHeight] = React.useState<number>(SESSION_BOARD_SEMANTIC_HEIGHTS.regular);
-    if (!runtime) return null;
+    const [reportedHeight, setReportedHeight] = React.useState<number>();
+    // The request already carries the visual, so reserve its declared footprint before
+    // the Account/runtime resolves, through the same height owner as the reply.
+    const height = resolveSessionBoardReplyHeight({
+        height: props.preview.height ?? { mode: 'auto', fallback: 'regular' },
+        reportedHeight,
+        measuresIntrinsicHeight: true,
+    })!.height;
     return (
         <SectionContentRow testID={`${props.testID}-row`}>
             <View testID={props.testID} style={{ height }}>
-                <HostedHtmlSurfaceAdapter
+                {runtime ? <HostedHtmlSurfaceAdapter
                     title={props.preview.title ?? t('sessionBoard.item.untitled')}
                     recordRevision={props.artifactId}
                     approvalSubject={`approval-preview:${props.artifactId}`}
@@ -52,9 +58,9 @@ function ApprovalHtmlPreview(props: PreviewProps & Readonly<{
                     requestedCapabilities={props.preview.requestedCapabilities}
                     target={{ kind: 'app' }}
                     runtime={runtime}
-                    onIntrinsicHeightChange={setHeight}
+                    onIntrinsicHeightChange={setReportedHeight}
                     testID={`${props.testID}-hosted-html`}
-                />
+                /> : null}
             </View>
         </SectionContentRow>
     );

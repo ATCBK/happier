@@ -4,6 +4,7 @@ import { renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { UpdateItem } from '@/updates/items/updateItem';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -50,10 +51,10 @@ describe('Updates log-copy Action admission', () => {
         const replay = await createDefaultActionExecutor().execute('approval.request.decide', {
             artifactId: approval.id, decision: 'approve',
         }, { surface: 'ui', serverId, expectedAccountId: 'alice' });
-        expect(replay).toMatchObject({ ok: true, result: { status: 'executed', execution: {
-            ok: true, result: { status: 'copied' },
-        } } });
-        expect(clipboard.write.mock.calls).toEqual([[failed.logPath]]);
+        expect(replay).toMatchObject({ ok: true, result: { status: 'approved' } });
+        // The decision releases the original mounted caller, which still owns its private path.
+        await vi.waitFor(() => expect(clipboard.write.mock.calls).toEqual([[failed.logPath]]));
+        await vi.waitFor(() => expect(screen.findAllByTestId(`updates.row.${failed.id}.viewLog.copied`).length).toBeGreaterThan(0));
     });
 
     it('does not claim a remote log was copied when the platform clipboard rejects the write', async () => {
@@ -81,8 +82,10 @@ describe('Updates log-copy Action admission', () => {
         await homes.reset();
         clipboard.write.mockClear();
         // The desktop shell's native command bridge is the platform effect boundary.
-        const invoke = vi.fn(async () => undefined);
-        vi.stubGlobal('__TAURI_INTERNALS__', { invoke });
+        const invoke = vi.fn(async (_command: string, _args?: Record<string, unknown>) => undefined);
+        const secureStorage = createDesktopSecureStorageBoundary();
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: (command: string, args?: Record<string, unknown>) =>
+            command.startsWith('desktop_secure_storage_') ? secureStorage.invoke(command, args) : invoke(command, args) });
         const serverId = await homes.addHome({ name: 'Updates', serverUrl: 'https://updates-local-log.test', accountId: 'alice' });
         await homes.requireUiApproval(serverId, 'relay.runtime.open_path');
         const screen = await renderScreen(<UpdateRow item={failed} where="This computer" presentation="screen" secondaryAction={false} isThisComputer onRun={() => {}} />);
@@ -91,11 +94,11 @@ describe('Updates log-copy Action admission', () => {
         expect(clipboard.write).not.toHaveBeenCalled();
         await vi.waitFor(() => expect(homes.artifacts(serverId).list()).toHaveLength(1));
         const approval = homes.artifacts(serverId).list()[0];
-        expect(await createDefaultActionExecutor().execute('approval.request.decide', {
+        const decision = await createDefaultActionExecutor().execute('approval.request.decide', {
             artifactId: approval.id, decision: 'approve',
-        }, { surface: 'ui', serverId, expectedAccountId: 'alice' }))
-            .toMatchObject({ ok: true, result: { status: 'executed' } });
-        expect(invoke.mock.calls).toEqual([['system_tasks_open_log_path', { path: failed.logPath }]]);
+        }, { surface: 'ui', serverId, expectedAccountId: 'alice' });
+        expect(decision).toMatchObject({ ok: true, result: { status: 'executed' } });
+        await vi.waitFor(() => expect(invoke.mock.calls).toEqual([['system_tasks_open_log_path', { path: failed.logPath }]]));
         expect(clipboard.write).not.toHaveBeenCalled();
     });
 });

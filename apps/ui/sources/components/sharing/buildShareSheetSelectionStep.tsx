@@ -239,7 +239,7 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
         icon: () => <ShareHandoffIcon name="copy" />, onSelect: adapter.sendCopy });
     if (handoffs.length) sections.push({ kind: 'static', id: 'handoffs', options: handoffs });
 
-    return { id: shareSheetStepId(ns), ...(model.editable ? { inputPlaceholder: t('shareSheet.addPlaceholder') } : {}),
+    return { id: shareSheetStepId(ns), ...(model.editable ? { inputPlaceholder: adapter.searchPlaceholder ?? t('shareSheet.addPlaceholder') } : {}),
         autoFocusFirstOption: false, disableInputFilter: true, emptyStateLabel: t('common.noMatches'), sections };
 }
 

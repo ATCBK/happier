@@ -19,7 +19,7 @@ import {
   useServerScopedMachine,
 } from '@/sync/store/hooks';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { listReviewedSetupCommands } from '@/components/projects/projectSetup/projectSetupEffectPresentation';
 import { formatProjectInvocation } from '@/components/projects/projectSetup/projectScriptPresentation';
 import { ProjectSetupReviewFacts } from '@/components/projects/projectSetup/ProjectSetupReview';
@@ -182,7 +182,7 @@ export function useProjectCommandApprovalTitle(
 ): string | null {
   const source = useServerScopedMachine(presentation?.serverId ?? null, presentation?.sourceMachineId ?? '');
   return presentation
-    ? describeProjectCommandApprovalTitle(presentation, getMachineDisplayName(source) ?? presentation.sourceMachineId)
+    ? describeProjectCommandApprovalTitle(presentation, source ? getMachineSentenceName(source) : presentation.sourceMachineId)
     : null;
 }
 
@@ -215,7 +215,7 @@ export const ProjectCommandApprovalFacts = React.memo(
     );
     const pools = useMachinePoolListForServer(presentation.serverId);
     const sourceName =
-      getMachineDisplayName(source) ?? presentation.sourceMachineId;
+      source ? getMachineSentenceName(source) : presentation.sourceMachineId;
     const pool =
       destination.kind === 'pool'
         ? (pools?.find((candidate) => candidate.pool.id === destination.poolId)?.pool ??
@@ -225,7 +225,7 @@ export const ProjectCommandApprovalFacts = React.memo(
       destination.kind === 'primary'
         ? sourceName
         : destination.kind === 'machine'
-          ? (getMachineDisplayName(target) ?? destination.machineId)
+          ? (target ? getMachineSentenceName(target) : destination.machineId)
           : t('projects.scripts.adhocWherePool', {
               pool: pool?.name ?? destination.poolId,
             });

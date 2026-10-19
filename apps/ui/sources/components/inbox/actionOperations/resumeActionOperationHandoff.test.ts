@@ -7,7 +7,19 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 import { resumeActionOperationHandoff } from './resumeActionOperationHandoff';
 
 describe('resumeActionOperationHandoff', () => {
-    beforeEach(() => machineRpcWithServerScope.mockReset());
+    beforeEach(() => { machineRpcWithServerScope.mockReset(); });
+
+    it('settles an unanswered handoff read when its request owner cancels', async () => {
+        machineRpcWithServerScope.mockImplementation(({ signal }: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        }));
+        const controller = new AbortController();
+        let result: Awaited<ReturnType<typeof resumeActionOperationHandoff>> | undefined;
+        void resumeActionOperationHandoff({ serverId: 'home-a', handoffId: 'handoff-1', sessionId: 'session-1',
+            targetMachineId: 'machine-1', signal: controller.signal }).then(value => { result = value; });
+        controller.abort();
+        await vi.waitFor(() => expect(result).toEqual({ kind: 'failed', message: 'aborted' }));
+    });
 
     it('queries and resumes the projected target through canonical machine RPC methods', async () => {
         machineRpcWithServerScope.mockResolvedValueOnce({

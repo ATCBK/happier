@@ -3,7 +3,7 @@ import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
-import { describeApprovalRequestFields, listActionSpecs, resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions';
+import { describeApprovalRequestFields, listActionSpecs } from '@happier-dev/protocol/actions';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -18,12 +18,12 @@ import { ApprovalDecisionFooter } from './ApprovalDecisionFooter';
 import { ApprovalPromptChrome } from './ApprovalPromptChrome';
 import { BrowserOpenApprovalProgress } from '@/components/approvals/BrowserOpenOperationStatus';
 import { readBrowserOpenAcceptance } from '@/sync/domains/browser/firstUse/browserFirstUse';
-import { getApprovalDecisionErrorMessage, isApprovalReplayRouteUnavailable, useApprovalDecisionHandler, useApprovalHome } from './useApprovalDecisionHandler';
+import { alertApprovalFailure, isApprovalReplayRouteUnavailable, useApprovalDecisionHandler, useApprovalHome } from './useApprovalDecisionHandler';
 import { presentApprovalFailureOutcome } from './approvalFailureOutcome';
 import { useFailedApprovalDismissal } from './failedApprovalDismissal';
 import { Icon } from '@/components/ui/icons/Icon';
-import { ActionApprovalFieldsCard } from '@/components/approvals/ActionApprovalFieldsCard';
-import { PromptDocApprovalDiff, readPromptDocUpdateApproval } from '@/components/approvals/PromptDocApprovalDiff';
+import { ActionApprovalFieldsCard, ApprovalTechnicalDetails } from '@/components/approvals/ActionApprovalFieldsCard';
+import { PromptDocApprovalDiff } from '@/components/approvals/PromptDocApprovalDiff';
 import { ComputerActionApprovalCard } from '@/components/approvals/ComputerActionApprovalCard';
 import {
     ProjectCommandApprovalFacts,
@@ -32,12 +32,12 @@ import {
     useProjectCommandApprovalTitle,
 } from '@/components/approvals/ProjectCommandApprovalFacts';
 import { useComputerApprovalChoice } from '@/components/approvals/useComputerApprovalChoice';
-import { isConfidentialSecretApprovalAction, readConfidentialSecretApproval } from '@/components/approvals/confidentialSecretApprovalModel';
+import { readActionApprovalReview } from '@/components/approvals/actionApprovalReview';
 import { ResourceProposalBody, ResourceProposalModeChip } from '@/components/approvals/resourceProposal/ResourceProposalBody';
 import { useResourceProposalApprovalMode } from '@/components/approvals/resourceProposal/useResourceProposalApprovalMode';
 import { resolveResourceProposalLabels } from '@/components/approvals/resourceProposal/resourceProposalLabels';
 import { useResourceProposalCheck } from '@/components/approvals/resourceProposal/useResourceProposalCheck';
-import { CapabilityEnableApproval, readCapabilityEnableApproval } from '@/components/sessions/capabilities/CapabilityEnableApproval';
+import { CapabilityEnableApproval } from '@/components/sessions/capabilities/CapabilityEnableApproval';
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
 import { useDeviceType } from '@/utils/platform/responsive';
 
@@ -81,10 +81,8 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     const phone = useDeviceType() === 'phone';
     const actionTitle = React.useMemo(() => resolveActionTitle(props.approval), [props.approval]);
     const previewSummary = React.useMemo(() => getPreviewSummary(props.approval.preview), [props.approval.preview]);
-    const approveAdmission = React.useMemo(
-        () => props.approval.status === 'open' ? resolveApprovalRequestApproveAdmission(props.approval) : null,
-        [props.approval],
-    );
+    const review = React.useMemo(() => readActionApprovalReview(props.approval), [props.approval]);
+    const approveAdmission = review.admission;
     const executionFailure = React.useMemo(
         () => readApprovalExecutionFailure(props.approval),
         [props.approval],
@@ -96,8 +94,8 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     const { dismiss: dismissFailure } = useFailedApprovalDismissal();
     const artifactId = props.artifact.id;
     const onDismissFailure = React.useCallback(() => dismissFailure(artifactId), [artifactId, dismissFailure]);
-    const confidentialAction = isConfidentialSecretApprovalAction(props.approval.actionId);
-    const confidentialApproval = readConfidentialSecretApproval(props.approval);
+    const confidentialAction = review.confidentialAction;
+    const confidentialApproval = review.confidential;
     const actionFields = React.useMemo(() => confidentialAction ? null
         : approveAdmission?.presentation ?? describeApprovalRequestFields(props.approval), [confidentialAction, approveAdmission, props.approval]);
     // An agent's finite Project command reads as its exact command, target and identity (lab `s-agent` ADHOC).
@@ -105,8 +103,8 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     const projectCommandTitle = useProjectCommandApprovalTitle(projectCommand);
     const projectCommandDecisions = projectCommand ? describeProjectCommandApprovalDecisions(projectCommand) : null;
     // An Agent's instructions edit reads as its diff against the current document (lab `b-work P`).
-    const promptDocUpdate = React.useMemo(() => readPromptDocUpdateApproval(props.approval), [props.approval]);
-    const capabilityEnable = React.useMemo(() => readCapabilityEnableApproval(props.approval), [props.approval]);
+    const promptDocUpdate = review.promptDocUpdate;
+    const capabilityEnable = review.capabilityEnable;
     const sessionId = props.sessionId;
     const computerChoice = useComputerApprovalChoice({
         artifactId: props.artifact.id,
@@ -170,7 +168,7 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
                 Modal.alert(t('common.error'), t('approvals.decisionError'));
             }
         } catch (error) {
-            Modal.alert(t('common.error'), getApprovalDecisionErrorMessage(error));
+            alertApprovalFailure(error);
         } finally {
             setIsDeciding(false);
         }
@@ -271,6 +269,11 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
                 <ActionApprovalFieldsCard presentation={actionFields} serverId={approvalHome.serverId}
                     failureMessage={failureOutcome?.message ?? undefined} failureCode={failureOutcome?.code ?? undefined}
                     collapsed={failureOutcome !== null || (chrome === 'inline' && phone)} />
+            ) : null}
+            {/* A specialized body replaces the generic fields card, which is the one place the card shows the
+                failure's code; the page keeps it through the same disclosure. */}
+            {failureOutcome?.code && (proposal || projectCommand || promptDocUpdate) ? (
+                <ApprovalTechnicalDetails lines={[{ key: 'failure-code', label: t('common.error'), value: failureOutcome.code }]} />
             ) : null}
             {approvalRouteUnavailable ? (
                 <Text style={styles.previewText}>{t('actionConfirmations.homeUnavailable')}</Text>

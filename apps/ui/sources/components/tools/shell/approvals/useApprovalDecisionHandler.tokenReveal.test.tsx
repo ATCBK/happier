@@ -5,7 +5,6 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import type { ApiTokenSettingsController } from '@/components/settings/apiTokens/apiTokenSettingsController';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 
 const modal = vi.hoisted(() => ({ boundary: null as ReturnType<typeof import('@/dev/testkit/mocks/modal').createModalModuleMock> | null }));
@@ -54,19 +53,29 @@ async function addConnectedHome() {
 async function createRequestedTokenApproval() {
     const serverId = await addConnectedHome();
     await home.requireUiApproval(serverId, 'account.apiTokens.create');
-    const result = await createDefaultActionExecutor().execute('account.apiTokens.create', { tokenId, label: summary.label }, {
-        surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' },
-        serverId, actionRequestId: 'requested-token-create',
+    const cancellation = new AbortController();
+    const invocation = createDefaultActionExecutor().execute('account.apiTokens.create', { tokenId, label: summary.label }, {
+        surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+        serverId, actionRequestId: 'requested-token-create', signal: cancellation.signal,
     });
-    if (!result.ok || typeof result.result !== 'object' || result.result === null
-        || !('artifactId' in result.result) || typeof result.result.artifactId !== 'string') {
-        throw new Error('token_approval_not_created');
+    try {
+        const artifactId = await vi.waitFor(() => {
+            const request = home.requestsFor('/v1/artifacts').find(request => request.input !== null);
+            const input = request?.input;
+            if (!input || typeof input !== 'object' || !('id' in input) || typeof input.id !== 'string') {
+                throw new Error('token_approval_not_created');
+            }
+            expect(home.artifacts(serverId).readPlainBody(input.id)).not.toBeNull();
+            return input.id;
+        });
+        const body = home.artifacts(serverId).readPlainBody(artifactId);
+        if (!body) throw new Error('token_approval_not_stored');
+        const approval = ApprovalRequestSchema.parse(JSON.parse(body));
+        return { serverId, artifactId, approval, invocation, cancellation };
+    } catch (error) {
+        cancellation.abort(); await invocation;
+        throw error;
     }
-    const artifactId = result.result.artifactId;
-    const body = home.artifacts(serverId).readPlainBody(artifactId);
-    if (!body) throw new Error('token_approval_not_stored');
-    const approval = ApprovalRequestSchema.parse(JSON.parse(body));
-    return { serverId, artifactId, approval };
 }
 
 beforeEach(async () => {
@@ -98,43 +107,19 @@ afterEach(async () => {
 });
 
 describe('approved API token reveal', () => {
-    it('shows the human live result through the canonical show-once controller without another mint or persistence', async () => {
-        const { serverId, artifactId, approval } = await createRequestedTokenApproval();
-        home.answer(serverId, 'POST /v1/auth/api-tokens/create', { body: { token, apiToken: summary } });
-        const hook = await renderHook(() => useApprovalDecisionHandler({ id: artifactId, header: null }, approval, '', serverId));
-        const revealed = await hook.getCurrent()('approve');
-        expectSuccessfulStoredExecution(serverId, artifactId);
-        expect(revealed).toBe(true);
-        const shown = modal.boundary?.spies.show.mock.calls.at(-1)?.[0];
-        expect(shown).toBeDefined();
-        // The modal is a genuine boundary; its typed props expose the real lifecycle owner beneath it.
-        const controller = (shown?.props as { controller: ApiTokenSettingsController }).controller;
-        expect(controller.getState().reveal).toMatchObject({ token, apiToken: summary, acknowledged: false });
-        expect(home.requestsFor('/v1/auth/api-tokens/create')).toHaveLength(1);
-        expect(home.artifacts(serverId).readPlainBody(artifactId)).not.toContain(token);
-        shown?.onHostUnmount?.();
-        expect(controller.getState().reveal).toBeNull();
-    });
-
-    it('does not disclose an approved live result after its captured Home Account retires', async () => {
-        const { serverId, artifactId, approval } = await createRequestedTokenApproval();
-        let issued!: () => void;
-        const started = new Promise<void>(resolve => { issued = resolve; });
-        let release!: () => void;
-        const respondAfter = new Promise<void>(resolve => { release = resolve; });
-        home.answer(serverId, 'POST /v1/auth/api-tokens/create', {
-            select: () => { issued(); return { body: { token, apiToken: summary }, respondAfter }; },
-        });
-        const hook = await renderHook(() => useApprovalDecisionHandler({ id: artifactId, header: null }, approval, '', serverId));
-        const deciding = hook.getCurrent()('approve');
-        await Promise.race([started, deciding.then(() => {
+    it('acknowledges a retained token request without revealing its caller-owned result to the approver', async () => {
+        const { serverId, artifactId, approval, invocation, cancellation } = await createRequestedTokenApproval();
+        try {
+            home.answer(serverId, 'POST /v1/auth/api-tokens/create', { body: { token, apiToken: summary } });
+            const hook = await renderHook(() => useApprovalDecisionHandler({ id: artifactId, header: null }, approval, '', serverId));
+            const revealed = await hook.getCurrent()('approve');
+            await expect(invocation).resolves.toMatchObject({ ok: true, result: { token, apiToken: summary } });
             expectSuccessfulStoredExecution(serverId, artifactId);
-            throw new Error('token_issuance_not_reached');
-        })]);
-        await home.switchAccount(serverId, 'account-b');
-        release();
-        await expect(deciding).resolves.toBe(false);
-        expect(modal.boundary?.spies.show).not.toHaveBeenCalled();
+            expect(revealed).toBe(true);
+            expect(modal.boundary?.spies.show).not.toHaveBeenCalled();
+            expect(home.requestsFor('/v1/auth/api-tokens/create')).toHaveLength(1);
+            expect(home.artifacts(serverId).readPlainBody(artifactId)).not.toContain(token);
+        } finally { cancellation.abort(); await invocation; }
     });
 });
 

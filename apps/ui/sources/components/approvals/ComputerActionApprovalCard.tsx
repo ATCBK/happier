@@ -1,125 +1,13 @@
 import * as React from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import {
-    ComputerApprovalDisplayV1Schema,
-    ComputerInputRequestV1Schema,
-    ComputerTargetRequestV1Schema,
-    ComputerTargetSelectRequestV1Schema,
-    ComputerSecretFillRequestV1Schema,
-    type ComputerApprovalDisplayV1,
-} from '@happier-dev/protocol/computer/v1';
+import { type ComputerActionApproval } from './computerApprovalModel';
+export { applyComputerSelection, describeComputerActionApproval, type ComputerActionApproval } from './computerApprovalModel';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-
-/**
- * What an approval of a native computer Action asks for. The act and the exact text or key come
- * from the request's own arguments (what the machine will execute); where it lands — the machine by
- * name, the window title or display label, the latest picture — comes from the computer owner's
- * host-resolved `computerApprovalDisplay` (W7), never from what the agent wrote. Seeing and using stay
- * distinct, matching the approval floor: observation egress versus dangerous input.
- */
-export type ComputerActionApproval = Readonly<{
-    access: 'see' | 'use';
-    act: 'see' | 'read' | 'click' | 'press' | 'type' | 'share' | 'fill';
-    machineId: string;
-    machineName: string;
-    appName?: string;
-    target: ComputerApprovalDisplayV1['target'] | null;
-    /** No window is shared yet: the person chooses one before anything is seen or used. */
-    requiresTargetSelection: boolean;
-    /** The latest Session image of the shared target, when the owner has one. */
-    captureMedia: NonNullable<ComputerApprovalDisplayV1['captureMedia']> | null;
-    /** The exact key or text the input sends; the person approving sees it before it is sent. */
-    sent: Readonly<{ kind: 'key' | 'text'; value: string }> | null;
-    /**
-     * An agent's proposed window for `computer.target.select` (a title or app hint it wrote): shown as
-     * its suggestion; the person's pick in the picker is what is approved (W15).
-     */
-    suggestion?: string | null;
-}>;
-
-function readDisplay(preview: unknown): ComputerApprovalDisplayV1 | null {
-    if (!preview || typeof preview !== 'object' || Array.isArray(preview)) return null;
-    const parsed = ComputerApprovalDisplayV1Schema.safeParse((preview as { computerApprovalDisplay?: unknown }).computerApprovalDisplay);
-    return parsed.success ? parsed.data : null;
-}
-
-export function describeComputerActionApproval(input: Readonly<{ actionId: string; actionArgs: unknown; preview: unknown }>): ComputerActionApproval | null {
-    if (input.actionId !== 'computer.capture' && input.actionId !== 'computer.query' && input.actionId !== 'computer.input'
-        && input.actionId !== 'computer.target.select' && input.actionId !== 'computer.secret.fill') return null;
-    const display = readDisplay(input.preview);
-    if (!display) return null;
-    const facts = {
-        machineName: display.machineDisplayName,
-        ...(display.appName ? { appName: display.appName } : {}),
-        target: display.requiresTargetSelection ? null : display.target ?? null,
-        requiresTargetSelection: display.requiresTargetSelection,
-        captureMedia: display.requiresTargetSelection ? null : display.captureMedia ?? null,
-    };
-    if (input.actionId === 'computer.secret.fill') {
-        const parsed = ComputerSecretFillRequestV1Schema.safeParse(input.actionArgs);
-        if (!parsed.success || display.requiresTargetSelection || !display.target) return null;
-        return { access: 'use', act: 'fill', machineId: parsed.data.machineId, ...facts, sent: null };
-    }
-    if (input.actionId === 'computer.target.select') {
-        const parsed = ComputerTargetSelectRequestV1Schema.safeParse(input.actionArgs);
-        if (!parsed.success) return null;
-        return {
-            access: parsed.data.access ?? display.access ?? 'use',
-            act: 'share',
-            machineId: parsed.data.machineId,
-            ...facts,
-            sent: null,
-            suggestion: parsed.data.requestedTarget?.trim() || null,
-        };
-    }
-    if (input.actionId === 'computer.input') {
-        const parsed = ComputerInputRequestV1Schema.safeParse(input.actionArgs);
-        if (!parsed.success) return null;
-        const operation = parsed.data.operation;
-        return {
-            access: 'use',
-            act: operation.kind,
-            machineId: parsed.data.machineId,
-            ...facts,
-            sent: operation.kind === 'type'
-                ? { kind: 'text', value: operation.text }
-                : operation.kind === 'press'
-                    ? { kind: 'key', value: operation.key }
-                    : null,
-        };
-    }
-    const parsed = ComputerTargetRequestV1Schema.safeParse(input.actionArgs);
-    if (!parsed.success) return null;
-    return {
-        access: 'see',
-        act: input.actionId === 'computer.capture' ? 'see' : 'read',
-        machineId: parsed.data.machineId,
-        ...facts,
-        sent: null,
-    };
-}
-
-/** The approval after the person chose a window from it: the owner's answer replaces "choose first". */
-export function applyComputerSelection(
-    presentation: ComputerActionApproval,
-    display: ComputerApprovalDisplayV1 | null,
-): ComputerActionApproval {
-    if (presentation.act === 'fill' || !display || display.requiresTargetSelection || !display.target) return presentation;
-    return {
-        ...presentation,
-        machineName: display.machineDisplayName,
-        appName: display.appName,
-        ...(presentation.act === 'share' && display.access ? { access: display.access } : {}),
-        target: display.target,
-        requiresTargetSelection: false,
-        captureMedia: display.captureMedia ?? null,
-    };
-}
 
 const CONSEQUENCE_KEY = {
     see: 'computerUse.approval.seeConsequence',

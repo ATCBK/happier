@@ -11,7 +11,7 @@ import {
 // the harness installs its network boundaries with `vi.doMock`, which only
 // reaches modules imported afterwards (see `installHomeGovernanceBoundaries`).
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createUiApprovalRequest, decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import {
     createHomeGovernanceHarness,
@@ -88,15 +88,26 @@ async function settle(hook: Reader, artifactId: string, assertion: (state: Retur
     }, { timeout: 20_000 });
 }
 
-/** A present-user Team rename the Account explicitly requires approval for. */
-async function openPresentUserApproval(serverId: string): Promise<string> {
+/** A stored present-user approval, as retained by a client before opening its detail reader. */
+async function openPresentUserApproval(serverId: string, options?: Readonly<{ omitPortableIdentity: boolean }>): Promise<string> {
     await harness.requireUiApproval(serverId, 'teams.update');
-    return await createUiApprovalRequest({
-        serverId,
+    const { getServerProfileById, resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+    const serverIdentityId = options?.omitPortableIdentity ? null : getServerProfileById(serverId)?.serverIdentityId;
+    // The reader contract starts at retained custody. Use its existing real
+    // Artifact route instead of requiring this HTTP fixture to implement the
+    // separate Team Action ingress just to arrange a readable approval.
+    const request = ApprovalRequestV2Schema.parse({
+        v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'system' }, requestedSurface: 'ui',
+        executionOriginV1: { v: 1, authority: 'present_user', surface: 'ui', caller: { kind: 'host' },
+            serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: ACCOUNT_ID,
+            ...(serverIdentityId ? { serverIdentityId } : {}),
+            actionId: 'teams.update', requestId: 'rename-1' },
         actionId: 'teams.update',
-        actionInput: { v: 1, teamId: 'team-1', name: 'Renamed' },
-        actionRequestId: 'rename-1',
+        actionArgs: { v: 1, teamId: 'team-1', name: 'Renamed' },
+        summary: 'Rename Team',
     });
+    return await storeApproval(serverId, buildApprovalRequestArtifactHeaderV1(request), request);
 }
 
 /** Stores one approval row through the Home's Artifact route, as its creator would. */
@@ -164,6 +175,69 @@ describe('useApprovalArtifact', () => {
 
     afterEach(() => standardCleanup());
 
+    it.each([true, false])('observes an unfocused approval only for a pending Action (%s)', async (observeWhileUnfocused) => {
+        const serverId = await addHome(HOME_IDENTITY);
+        const artifactId = await openPresentUserApproval(serverId);
+        await addHome(OTHER_IDENTITY, 'https://approval-unfocused-other.example');
+        const navigation = await import('@react-navigation/native');
+        const focus = vi.spyOn(navigation, 'useIsFocused').mockReturnValue(true);
+        const hook = await renderHook(() => useApprovalArtifact({ artifactId, serverId, observeWhileUnfocused }));
+        try {
+            await settle(hook, artifactId, state => expect(state.artifact?.header?.approvalStatus).toBe('open'));
+            focus.mockReturnValue(false);
+            await hook.rerender();
+            await expect(decideApprovalAsInbox(serverId, artifactId, 'reject')).resolves.toMatchObject({ ok: true });
+            const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+            await act(async () => { publishHomeAccountChange(serverId, [artifactId], { changeKinds: ['artifact'] }); });
+            if (observeWhileUnfocused) {
+                await settle(hook, artifactId, state => expect(state.artifact?.header?.approvalStatus).toBe('rejected'));
+            } else {
+                expect(hook.getCurrent().artifact?.header?.approvalStatus).toBe('open');
+            }
+        } finally {
+            focus.mockRestore();
+            await hook.unmount();
+        }
+    });
+
+    it('keeps an absent approval reader still when its Home becomes unreachable', async () => {
+        const serverId = await addHome(HOME_IDENTITY);
+        const request = homeSignedRequest(serverId, HOME_IDENTITY);
+        const artifactId = await storeApproval(serverId, buildApprovalRequestArtifactHeaderV1(request), request);
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const previous = storage.getState();
+        const applied = getAppliedActiveServerSnapshot();
+        const available = isAppliedActiveServerRuntimeAvailable();
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        storage.setState({ endpointStatus: 'online', socketStatus: 'connected' });
+        let renders = 0;
+        const hook = await renderHook<ReturnType<typeof useApprovalArtifact>, { artifactId: string | null }>(({ artifactId }) => {
+            renders += 1;
+            return useApprovalArtifact({ artifactId, serverId });
+        }, { initialProps: { artifactId: null } });
+        try {
+            await waitForHomeGovernance(() => expect(hook.getCurrent().homeUnavailable).toBe(false));
+            const rendersBefore = renders;
+            await act(async () => { storage.setState({ endpointStatus: 'offline' }); });
+            expect(renders).toBe(rendersBefore);
+            expect(hook.getCurrent()).toMatchObject({ homeUnavailable: false, isLoading: false, error: false, artifact: null });
+            await act(async () => { storage.setState({ endpointStatus: 'online' }); });
+            await hook.rerender({ artifactId });
+            await waitForHomeGovernance(() => expect(hook.getCurrent().artifact?.id).toBe(artifactId));
+            await act(async () => { storage.setState({ endpointStatus: 'offline' }); });
+            expect(hook.getCurrent().homeUnavailable).toBe(true);
+            expect(hook.getCurrent().artifact?.id).toBe(artifactId);
+            await act(async () => { storage.setState({ endpointStatus: 'online' }); });
+            expect(hook.getCurrent().homeUnavailable).toBe(false);
+        } finally {
+            await hook.unmount();
+            storage.setState(previous, true);
+            publishAppliedActiveServerSnapshot(applied, available);
+        }
+    });
+
     it('stops an empty approval loading state when its Home becomes unreachable without discarding the pending read', async () => {
         const serverId = await addHome(HOME_IDENTITY);
         const artifactId = await openPresentUserApproval(serverId);
@@ -220,6 +294,64 @@ describe('useApprovalArtifact', () => {
         await hook.unmount();
     });
 
+    it('settles a pending deep-link read when this Home is signed out', async () => {
+        const serverId = await addHome(HOME_IDENTITY);
+        const request = homeSignedRequest(serverId, HOME_IDENTITY);
+        const artifactId = await storeApproval(serverId, buildApprovalRequestArtifactHeaderV1(request), request);
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const path = `/v1/artifacts/${artifactId}`;
+        harness.answer(serverId, path, { respondAfter: held, status: 404 });
+        storage.setState({ artifacts: {} });
+        const hook = await renderReader(artifactId, HOME_IDENTITY);
+        try {
+            await waitForHomeGovernance(() => expect(harness.requestsFor(path).length).toBeGreaterThan(0));
+            expect(hook.getCurrent().isLoading).toBe(true);
+            await act(async () => {
+                expect(await TokenStorage.removeCredentialsForServerUrl(
+                    getServerProfileById(serverId)!.serverUrl, { serverId },
+                )).toBe(true);
+            });
+            await settle(hook, artifactId, state => {
+                expect(state.homeUnavailable).toBe(true);
+                expect(state.isLoading).toBe(false);
+                expect(state.error).toBe(true);
+            });
+        } finally {
+            release();
+            await hook.unmount();
+        }
+    });
+
+    it('classifies an incompatible body after an exact-Home header-only row is filled', async () => {
+        const serverId = await addHome(HOME_IDENTITY);
+        const request = homeSignedRequest(serverId, HOME_IDENTITY);
+        const artifactId = await storeApproval(serverId, {
+            ...buildApprovalRequestArtifactHeaderV1(request), serverIdentityId: OTHER_IDENTITY,
+        }, request);
+        const { captureActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const context = await captureActionAccountContext(serverId);
+        try {
+            const full = await context.fetchArtifact(artifactId);
+            if (!full) throw new Error('Expected the stored approval');
+            storage.getState().deleteArtifact(artifactId);
+            storage.getState().updateArtifact({ ...full, body: undefined, bodyVersion: undefined });
+            expect(storage.getState().artifacts[artifactId]?.body).toBeUndefined();
+        } finally {
+            context.dispose();
+        }
+        const hook = await renderReader(artifactId, serverId);
+        await settle(hook, artifactId, state => {
+            expect(state.invalidArtifact).toBe(true);
+            expect(state.isLoading).toBe(false);
+            expect(state.error).toBe(true);
+        });
+    });
+
     it('projects an accepted exact-Home decision before replay returns, without a remote change or poll', async () => {
         const serverId = await addHome(HOME_IDENTITY);
         const artifactId = await openPresentUserApproval(serverId);
@@ -244,7 +376,9 @@ describe('useApprovalArtifact', () => {
             artifactId, decision: 'approve',
         }, { surface: 'ui', serverId, authority: 'present_user' }).finally(() => { decisionReturned = true; });
         try {
-            await act(async () => { await reached; });
+            await act(async () => { await Promise.race([reached, decision.then(result => {
+                throw new Error(`Approval settled before its effect: ${JSON.stringify(result)}`);
+            })]); });
             // The server has accepted and claimed the decision, but its side effect
             // is still pending. No socket event, timer, or explicit refresh is sent.
             await settle(hook, artifactId, state => expect(state.artifact?.header?.approvalStatus).toBe('executing'));
@@ -278,7 +412,7 @@ describe('useApprovalArtifact', () => {
         // Home-signed external invocation records a portable identity, so requiring
         // one here would make every locally admitted V2 approval unreadable.
         const serverId = await addHome(HOME_IDENTITY);
-        const artifactId = await openPresentUserApproval(serverId);
+        const artifactId = await openPresentUserApproval(serverId, { omitPortableIdentity: true });
 
         const hook = await renderReader(artifactId, serverId);
 

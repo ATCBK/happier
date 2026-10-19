@@ -23,6 +23,14 @@ const unchosen = { machineDisplayName: 'Studio laptop', requiresTargetSelection:
 const typeInput = { machineId: 'machine_1', captureId: 'capture_1', operation: { kind: 'type', text: 'ana@lumen.dev' } };
 
 describe('describeComputerActionApproval', () => {
+    it('describes omitted selection access by the request default rather than the previous share', () => {
+        expect(describeComputerActionApproval({
+            actionId: 'computer.target.select',
+            actionArgs: { machineId: 'machine_1', requestedTarget: 'Editor' },
+            preview: { computerApprovalDisplay: { ...shared, access: 'see' } },
+        })).toMatchObject({ access: 'use', act: 'share' });
+    });
+
     it('shows the saved see-only decision after reloading without changing the original input', async () => {
         const actionArgs = { machineId: 'machine_1', requestedTarget: 'Lumen', access: 'use' };
         const hook = await renderHook(() => useComputerApprovalChoice({

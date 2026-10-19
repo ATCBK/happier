@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, standardCleanup } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { installPermissionShellCommonModuleMocks, createPermissionShellRenderer } from './permissionShellTestHelpers';
 
 const platformEnvironment = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ const ops = vi.hoisted(() => ({
     abort: vi.fn(async (..._args: unknown[]) => {}),
 }));
 const renderScreen = createPermissionShellRenderer(ops);
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | null = null;
 
 
 installPermissionShellCommonModuleMocks({
@@ -65,7 +67,10 @@ function expectMinimumActionTarget(button: ReactTestInstance, minimumSize: 44 | 
 }
 
 describe('PermissionFooter interactive targets', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        browser = await installBrowserRuntimeForTests({ url: 'https://permission-target.test' });
+        // A finger is the primary pointer; dense desktop controls have a separate 24px contract.
+        Object.defineProperty(browser.window.navigator, 'maxTouchPoints', { configurable: true, value: 1 });
         platformEnvironment.platform = 'web';
         ops.approve.mockReset();
         ops.approve.mockResolvedValue(undefined);
@@ -76,6 +81,11 @@ describe('PermissionFooter interactive targets', () => {
         ops.abort.mockReset();
         ops.abort.mockResolvedValue(undefined);
         standardCleanup();
+    });
+    afterEach(() => {
+        standardCleanup();
+        browser?.restore();
+        browser = null;
     });
 
     it.each([

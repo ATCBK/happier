@@ -235,14 +235,17 @@ describe('PermissionPromptCard (preview)', () => {
         expect(screen.findByTestId('permission-prompt-tool-inline-body')).toBeNull();
     });
 
-    it('does not repeat a shell command subtitle when a preview is visible', async () => {
+    it.each([
+        ['Bash', 'Run command', { command: 'COMMAND_SUBTITLE' }],
+        ['AskUserQuestion', 'Question', { questions: [{ question: 'COMMAND_SUBTITLE', options: [] }] }],
+    ])('does not repeat a %s subtitle the visible preview already shows', async (toolName, title, input) => {
         toolDetailSetting = 'summary';
-        mockedToolName = 'Bash';
-        mockedToolInput = { command: 'COMMAND_SUBTITLE' };
-        mockedHeaderText = { normalizedToolName: 'Bash', title: 'Run command', subtitle: 'COMMAND_SUBTITLE', statusText: null };
+        mockedToolName = toolName;
+        mockedToolInput = input;
+        mockedHeaderText = { normalizedToolName: toolName, title, subtitle: 'COMMAND_SUBTITLE', statusText: null };
         const { PermissionPromptCard } = await import('./PermissionPromptCard');
 
-        const request = { id: 'perm1', tool: 'Bash', arguments: { command: 'COMMAND_SUBTITLE' } } as PendingPermissionRequest;
+        const request = { id: 'perm1', tool: toolName, arguments: input } as PendingPermissionRequest;
 
         const screen = await renderWithSessionTranscriptSource(<PermissionPromptCard
                     request={request}

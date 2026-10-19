@@ -28,7 +28,7 @@ it('never writes a persistent setting after a failed permission answer', async (
         decision: { exposed: true, approval: 'ask', effectClass: 'unknown', source: 'server_default' } });
     let writes = 0;
     const controller = createMcpAlwaysAllowController({ identity, answerForSession: async () => { throw new Error('Offline'); },
-        execute: async () => { writes++; return { ok: false, error: 'must_not_write' }; } });
+        execute: async () => { writes++; return { ok: false, error: 'must_not_write', errorCode: 'must_not_write' }; } });
     await controller.allow();
     expect(controller.getSnapshot()).toMatchObject({ status: 'answer_failed', answered: false });
     expect(writes).toBe(0);

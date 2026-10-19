@@ -8,6 +8,15 @@ import { buildSessionListRenderableFromSession } from '@/sync/domains/session/li
 
 const routerPush = vi.hoisted(() => vi.fn());
 const initialState = storage.getState();
+const resumeRpc = vi.hoisted(() => ({ signals: [] as (AbortSignal | undefined)[] }));
+// The RPC transport is the external boundary; modal, operation projection and resume adapter stay real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: ({ signal }: { signal?: AbortSignal }) => {
+        resumeRpc.signals.push(signal);
+        return new Promise((_resolve, reject) => signal?.addEventListener('abort',
+            () => reject(new Error('aborted')), { once: true }));
+    },
+}));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -32,9 +41,26 @@ afterEach(() => {
     routerPush.mockReset();
     storage.setState(initialState, true);
     actionOperationStore.reset();
+    resumeRpc.signals.length = 0;
 });
 
+const { ActionOperationDetailModal } = await import('./ActionOperationDetailModal');
+
 describe('ActionOperationDetailModal', () => {
+    it('cancels an unanswered handoff resume when its modal closes', async () => {
+        actionOperationStore.mergeSnapshots({ serverId: 'home-a', snapshots: [{
+            version: 1, operationId: 'handoff-operation', revision: 3, actionId: 'session.handoff', state: 'running',
+            scope: { accountId: 'account-1', machineId: 'machine-1', sessionId: 'session-1' },
+            title: 'Hand off session', createdAt: 1_000, startedAt: 1_100,
+            progress: { kind: 'phase', phase: 'awaiting_user_resume', label: 'Resume' },
+            domainRef: { kind: 'handoff', id: 'handoff-1', targetMachineId: 'machine-2' }, cancellation: 'unsupported',
+        }] });
+        const screen = await renderScreen(<ActionOperationDetailModal serverId="home-a" operationId="handoff-operation" onClose={vi.fn()} />);
+        await screen.pressByTestIdAsync('action-operation-resume-handoff');
+        expect(resumeRpc.signals).toHaveLength(1);
+        await screen.unmount();
+        expect(resumeRpc.signals[0]?.aborted).toBe(true);
+    });
     it('shows the preferred source session title when the full session is not loaded', async () => {
         const session = createSessionFixture({
             id: 'session-1',

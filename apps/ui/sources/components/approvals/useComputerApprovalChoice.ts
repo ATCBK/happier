@@ -1,11 +1,12 @@
 import * as React from 'react';
 import type { ComputerAccessV1, ComputerApprovalDisplayV1, ComputerTargetV1 } from '@happier-dev/protocol';
+import { resolveComputerAccess } from '@happier-dev/protocol/computer/v1';
 
 import { noteSessionComputerMachine } from '@/sync/domains/computer/sessionComputerMachines';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
 
-import { applyComputerSelection, describeComputerActionApproval, type ComputerActionApproval } from './ComputerActionApprovalCard';
+import { applyComputerSelection, describeComputerActionApproval, type ComputerActionApproval } from './computerApprovalModel';
 
 type OpenComputerTargetPicker = typeof import('@/components/computer/openComputerTargetPickerForSession').openComputerTargetPickerForSession;
 
@@ -124,7 +125,7 @@ export function useComputerApprovalChoice(input: Readonly<{
     const decisionOptions = React.useMemo(
         () => (share && chosenTarget ? { narrowedInput: {
             ...(input.actionArgs && typeof input.actionArgs === 'object' ? input.actionArgs : {}),
-            target: chosenTarget, access: chosenAccess ?? 'use',
+            target: chosenTarget, access: resolveComputerAccess(chosenAccess),
         } } : {}),
         [chosenAccess, chosenTarget, input.actionArgs, share],
     );

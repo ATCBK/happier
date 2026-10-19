@@ -7,6 +7,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { WidgetLayoutFragmentActionIdV1Schema, readWidgetApprovalPresentationV1 } from '@happier-dev/protocol/widgets';
 import { presentActionApproval } from './actionApprovalPresentation';
+import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 
 type ApprovalSummaryInput = Readonly<{ actionId: string; actionArgs: unknown }>;
 
@@ -28,13 +29,15 @@ export function readApprovalPreviewSummary(preview: unknown, request?: ApprovalS
             actionArgs: request?.actionArgs, preview }).summary;
         const summary = spec.approvalPresentation && spec.inputSchema.safeParse(request?.actionArgs).success
             ? spec.approvalPresentation?.summary(request?.actionArgs) : null;
-        if (summary) return summary;
+        return presentActionApproval({ actionId: actionId.data, actionArgs: request?.actionArgs,
+            authoredSummary: summary || storedSummary }).summary;
     }
     return storedSummary;
 }
 
 export const ApprovalPreviewCard = React.memo(function ApprovalPreviewCard(props: Readonly<{ preview: unknown; request?: ApprovalSummaryInput }>) {
-    const summary = React.useMemo(() => readApprovalPreviewSummary(props.preview, props.request), [props.preview, props.request]);
+    const language = usePreferredLanguage();
+    const summary = React.useMemo(() => readApprovalPreviewSummary(props.preview, props.request), [props.preview, props.request, language]);
     if (!summary) return null;
 
     return (

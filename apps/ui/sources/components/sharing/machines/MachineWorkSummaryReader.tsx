@@ -2,6 +2,7 @@ import * as React from 'react';
 import { MachineWorkSummaryGetResultV1Schema } from '@happier-dev/protocol/machines/machineWorkSummaryV1';
 
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import type { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { subscribeHomeAccountChange, subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { serverAccountScopedResourceKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -19,7 +20,7 @@ type Props = Readonly<{
     online: boolean;
     /** The incumbent page's explicit refresh; not a timer or a work census. */
     refreshKey?: number;
-    execute?: ReturnType<typeof createFrontDoorActionExecute>;
+    execute?: ReturnType<typeof createDefaultActionExecutor>['execute'];
 }>;
 
 function unavailable(previous: MachineWorkSummaryState, reason: 'loading' | 'offline' | 'unavailable'): MachineWorkSummaryState {

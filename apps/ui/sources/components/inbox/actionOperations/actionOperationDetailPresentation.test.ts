@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { t } from '@/text';
 
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 
@@ -23,6 +24,14 @@ function operation(overrides: Partial<ActionOperationSnapshot> = {}): ActionOper
 }
 
 describe('action operation detail presentation', () => {
+    it('uses the shared typed setup failure copy for managed installation operations', () => {
+        const detail = projectActionOperationDetail(operation({
+            actionId: 'machines.managed.acquire', state: 'failed', settledAt: 2_000,
+            error: { errorCode: 'remote_cli_update_required', error: 'legacy daemon diagnostic' },
+        }), 'available');
+        expect(detail.errorSummary).toContainEqual({ label: 'message', value: t('setupOnboarding.remoteSshChecklist.remoteCliUpdateRequired') });
+    });
+
     it('keeps machine setup output on its exact joined target without inventing a Project', () => {
         const attachment = { kind: 'machineEnvironment' as const, serverId: 'target-home', machineId: 'joined-guest',
             preset: { id: 'preset', revision: 4 }, managedId: 'paid', terminalId: 'setup-output',

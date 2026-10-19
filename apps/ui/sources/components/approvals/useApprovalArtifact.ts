@@ -46,7 +46,13 @@ function hasCompatibleApprovalArtifact(
 }
 
 /** One exact-Home approval reader for the detail screen and its originating form. */
-export function useApprovalArtifact(input: Readonly<{ artifactId: string | null; serverId: string | null; scope?: ServerAccountScope }>) {
+export function useApprovalArtifact(input: Readonly<{
+    artifactId: string | null;
+    serverId: string | null;
+    scope?: ServerAccountScope;
+    /** A mounted Action still owns its result while Inbox review has focus. */
+    observeWhileUnfocused?: boolean;
+}>) {
     const requestedServerIdentifier = input.serverId?.trim() || null;
     const serverProfilesGeneration = useServerProfilesGeneration();
     const requestedServerTarget = React.useMemo(() => {
@@ -87,12 +93,14 @@ export function useApprovalArtifact(input: Readonly<{ artifactId: string | null;
     const unresolvedServer = requestedServerTarget?.unresolved === true;
     const { artifactId } = input;
     const focused = useIsFocused();
+    const observing = focused || input.observeWhileUnfocused === true;
     const resolution = useServerCredentialAccountScopeResolution(serverId);
     const scopeMatches = input.scope === undefined || (resolution.kind === 'bound'
         && areServerAccountScopesEqual(resolution.scope, input.scope));
     const activeScope = useActiveServerAccountScope();
     const readHomeId = unresolvedServer ? null : serverId ?? activeScope?.serverId;
-    const relevantHomeIds = React.useMemo(() => readHomeId ? [readHomeId] : [], [readHomeId]);
+    // Mounted Action writers have no approval until requested; they need no Home health projection.
+    const relevantHomeIds = React.useMemo(() => artifactId && readHomeId ? [readHomeId] : [], [artifactId, readHomeId]);
     const homeUnreachable = useFailureExplainedByUnreachableHome(relevantHomeIds);
     const local = useArtifact(artifactId ?? '');
     // Socket updates can publish the terminal header before this reader has the
@@ -159,7 +167,11 @@ export function useApprovalArtifact(input: Readonly<{ artifactId: string | null;
     const invalidArtifact = fetchedInvalid;
     const refresh = React.useCallback(async () => {
         pending.current?.abort();
-        if (!artifactId || unresolvedServer || !scopeMatches || (serverId && resolution.kind !== 'bound')) return;
+        if (!artifactId || unresolvedServer || !scopeMatches || (serverId && resolution.kind !== 'bound')) {
+            pending.current = null;
+            setLoading(false);
+            return;
+        }
         const controller = new AbortController();
         pending.current = controller;
         setLoading(true);
@@ -191,18 +203,24 @@ export function useApprovalArtifact(input: Readonly<{ artifactId: string | null;
                 invalidArtifact: Boolean(full && !compatible),
             });
             setError(!full || !compatible);
+            return compatible ? full : null;
         } catch {
             if (!controller.signal.aborted) setError(true);
         } finally {
-            if (!controller.signal.aborted) setLoading(false);
+            // An aborted read can still be the last one: losing Home authority
+            // must settle it, while an older read cannot settle its replacement.
+            if (pending.current === controller) {
+                pending.current = null;
+                setLoading(false);
+            }
         }
     }, [artifactId, input.scope, requestedByPortableIdentity, requestedServerIdentityId, resolution, scopeMatches, serverId, unresolvedServer]);
     React.useEffect(() => {
-        if (focused && artifactId && (serverId || (local?.body == null && local?.isDecrypted !== false))) void refresh();
+        if (observing && artifactId && (serverId || (local?.body == null && local?.isDecrypted !== false))) void refresh();
         return () => { pending.current?.abort(); };
-    }, [artifactId, focused, headerOnlyLocalUpdatedAt, refresh, serverId]);
+    }, [artifactId, observing, headerOnlyLocalUpdatedAt, refresh, serverId]);
     React.useEffect(() => {
-        if (!focused || !artifactId || !serverId || resolution.kind !== 'bound') return;
+        if (!observing || !artifactId || !serverId || resolution.kind !== 'bound') return;
         // A concurrently observed Home intentionally cannot publish its Artifact
         // into the focused Home's store. Its existing content-free wake instead
         // invalidates this mounted exact-Home reader through the same fetch owner.
@@ -211,12 +229,15 @@ export function useApprovalArtifact(input: Readonly<{ artifactId: string | null;
             if (event.entityIds !== undefined && !event.entityIds.includes(artifactId) && !event.entityIds.includes('self')) return;
             void refresh();
         });
-    }, [artifactId, focused, refresh, resolution, serverId]);
+    }, [artifactId, observing, refresh, resolution, serverId]);
+    const homeUnavailable = homeUnreachable || unresolvedServer || !scopeMatches
+        || Boolean(serverId && resolution.kind !== 'bound' && resolution.kind !== 'resolving');
     return {
         artifact,
-        isLoading: !homeUnreachable && scopeMatches && !artifact && Boolean(artifactId) && (loading || (serverId !== null && resolution.kind === 'resolving')),
-        homeUnavailable: homeUnreachable || unresolvedServer || !scopeMatches || Boolean(serverId && resolution.kind !== 'bound' && resolution.kind !== 'resolving'),
-        error: error || (homeUnreachable && !artifact) || unresolvedServer || !scopeMatches || Boolean(serverId && resolution.kind !== 'bound'),
+        isLoading: observing && !homeUnavailable && !artifact && Boolean(artifactId) && (loading || (serverId !== null && resolution.kind === 'resolving')),
+        homeUnavailable,
+        error: error || (homeUnreachable && !artifact) || unresolvedServer || !scopeMatches
+            || Boolean(serverId && resolution.kind !== 'bound' && resolution.kind !== 'resolving'),
         invalidArtifact,
         refresh,
     };

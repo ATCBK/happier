@@ -122,6 +122,8 @@ export type ShareSheetAdapter<TRow extends ShareGrantRowModel = ShareGrantRowMod
     namespace: string;
     /** The list's accessible name. */
     title: string;
+    /** The add field's words when this domain adds more than people and Teams (for example agents). */
+    searchPlaceholder?: string;
     /** Only levels the domain actually accepts. The sheet never invents missing levels. */
     levels: Readonly<Partial<Record<ShareAccessLevel, ShareLevelPresentation>>>;
     /** The domain's sharing rules, one sentence each. */

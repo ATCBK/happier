@@ -28,9 +28,12 @@ import { useApprovalSessionReading } from './useApprovalSessionReading';
 import { useWorkspaceSyncRelationshipSummary } from '@/sync/domains/sessionHandoff/useWorkspaceSyncRelationshipSummaries';
 import { endpointFor, type WorkspaceSyncRelationshipEndpoint, type WorkspaceSyncRelationshipSummary } from '@/sync/domains/sessionHandoff/workspaceSyncRelationshipModel';
 import { formatWorkspaceSyncRelationshipTitle } from '@/sync/domains/sessionHandoff/workspaceSyncPresentation';
+import { useManagedMachineInventory } from '@/components/settings/machines/managed/useManagedMachineInventory';
+import { createManagedMachineActionClient } from '@/sync/api/machines/managedMachineActions';
+import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 type ApprovalReference = ApprovalActionReference;
 
-export type ApprovalReferenceReading = Readonly<{ text: string; named: boolean; resolving?: boolean }>;
+export type ApprovalReferenceReading = Readonly<{ text: string; named: boolean; resolving?: boolean; subject?: 'managedMachine' }>;
 
 /** Both cached UI rows and authorized exact reads use the same content-readable name rule. */
 function readApprovalArtifactReference(reference: ApprovalReference, artifact: DecryptedArtifact | null | undefined): ApprovalReferenceReading {
@@ -65,6 +68,19 @@ export async function readApprovalReferenceForConfirmation(reference: ApprovalRe
         account.assertCurrent();
         sources.mcp = projectMcpServerCatalogSnapshot(snapshot);
     }
+    if (reference.kind === 'managedMachine' && reference.homeId === account.serverIdentityId) {
+        try {
+            account.assertCurrent();
+            const machine = await createManagedMachineActionClient({ request: account.request }).execute('machines.managed.get',
+                { homeId: reference.homeId, managedId: reference.id }, { signal });
+            if (machine.id === reference.id && machine.homeId === reference.homeId) sources.managedMachine = machine;
+        } catch {
+            // A display reference may be unreadable; it never grants resource access.
+        }
+        account.assertCurrent();
+        sources.managedEnrolledMachine = sources.managedMachine?.enrolledMachineId
+            ? resolveServerScopedMachine(storage.getState(), account.serverId, sources.managedMachine.enrolledMachineId) : null;
+    }
     return resolveApprovalReferenceReading(reference, reference.id, account.serverId, sources);
 }
 
@@ -90,7 +106,15 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
     const workspaceMachineId = workspaceRefId ? workspaceRefs.find((ref) => ref.id === workspaceRefId)?.machineId ?? '' : '';
     const workspaceMachineNames = useMachineDisplayNamesById(workspaceMachineId ? [workspaceMachineId] : []);
     const workspace = workspaceRefId ? endpointFor(workspaceRefId, workspaceRefs, workspaceMachineNames, approvalServerId ?? undefined) : null;
-    return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations,
+    const managedServerId = reference?.kind === 'managedMachine' && isSameApprovalHome(reference.homeId, approvalServerId)
+        ? approvalServerId : null;
+    const managed = useManagedMachineInventory(managedServerId ? [managedServerId] : [],
+        reference?.kind === 'managedMachine' ? reference.id : undefined);
+    const managedMachine = managedServerId ? managed.machinesByServerId[managedServerId]?.find(row =>
+        reference?.kind === 'managedMachine' && row.id === reference.id && row.homeId === reference.homeId) : undefined;
+    const managedEnrolledMachine = useServerScopedMachine(managedServerId, managedMachine?.enrolledMachineId ?? '');
+    return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine,
+        managedMachine, managedEnrolledMachine, managedMachineLoading: managed.loading, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations,
         syncLink, workspace });
 }
 
@@ -101,6 +125,9 @@ type ApprovalReferenceSources = {
     ownHome: boolean;
     artifact?: DecryptedArtifact | null;
     machine?: ReturnType<typeof useServerScopedMachine>;
+    managedMachine?: ManagedMachineV1;
+    managedEnrolledMachine?: ReturnType<typeof useServerScopedMachine>;
+    managedMachineLoading?: boolean;
     sessionMachine?: ReturnType<typeof useServerScopedMachine>;
     mcp?: ReturnType<typeof useMcpServerCatalogForServer>;
     registries?: Pick<ReturnType<typeof usePromptLibraryCatalogValue<'registry-sources'>>, 'value'>;
@@ -114,6 +141,11 @@ type ApprovalReferenceSources = {
 
 function resolveApprovalReferenceReading(reference: ApprovalReference | undefined, literal: string, approvalServerId: string | null, sources: ApprovalReferenceSources): ApprovalReferenceReading {
     const { serverId, sessionReading, viewer, ownHome, artifact, machine, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations } = sources;
+    if (reference?.kind === 'managedMachine') {
+        const title = getMachineDisplayName(sources.managedEnrolledMachine) ?? sources.managedMachine?.launch.name.trim();
+        return { text: title || t('contextBar.machine'), named: true, subject: 'managedMachine',
+            ...(sources.managedMachineLoading && !title ? { resolving: true } : {}) };
+    }
     if (reference?.kind === 'skill' || reference?.kind === 'artifact') return readApprovalArtifactReference(reference, ownHome ? artifact : null);
     if (reference?.kind === 'machine') {
         const title = getMachineDisplayName(machine) ?? reference.id;

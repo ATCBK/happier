@@ -9,9 +9,11 @@ import type { ActionOperationProjection } from '@/sync/domains/actionOperations/
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { storage } from '@/sync/domains/state/storage';
+import { readProjectWorkspaceRefs } from '@/sync/store/domains/projectAccountRows';
 
 import { openActionOperationDetail } from './openActionOperationDetail';
-import { readActionOperationOutputAttachment } from './actionOperationDetailPresentation';
+import { readActionOperationOutputAttachment, readProjectCommandOutputWorkspace } from './actionOperationDetailPresentation';
 
 /**
  * The pane scope whose bottom terminal shows a project command's output (plan 21 §2/§8). A host that
@@ -50,7 +52,7 @@ function scopeServerId(scopeId: string): string | null {
   );
 }
 
-type OutputTerminalRef = Readonly<{ terminalId?: string | null; machineId: string }>;
+type OutputTerminalRef = Readonly<{ terminalId?: string | null; machineId: string; workspaceRefId?: string }>;
 
 /** Retained PTY membership for explicit focus/open reuse, independent of pane visibility. */
 function findOutputTerminalInHost(scopeId: string, attachment: OutputTerminalRef) {
@@ -64,7 +66,8 @@ function findOutputTerminalInHost(scopeId: string, attachment: OutputTerminalRef
       (member) =>
         member.target.kind === 'terminal_view' &&
         member.target.terminalId === attachment.terminalId &&
-        member.target.machineId === attachment.machineId,
+        member.target.machineId === attachment.machineId &&
+        (!attachment.workspaceRefId || member.target.workspace?.workspaceId === attachment.workspaceRefId),
     );
 }
 
@@ -101,11 +104,14 @@ export function useProjectCommandOutputOpener() {
       options: ProjectCommandOutputOpenOptions,
     ): Promise<boolean> => {
       let openedInTerminal = false;
-      const present = async () => {
-        const attachment = readActionOperationOutputAttachment(operation.snapshot);
+      const present = async (address: Readonly<{ operation: ActionOperationProjection['snapshot'] }>) => {
+        const attachment = readActionOperationOutputAttachment(address.operation);
         const server = scopeId ? scopeServerId(scopeId) : null;
+        const workspace = attachment?.kind === 'projectCommand'
+          ? readProjectCommandOutputWorkspace(attachment, readProjectWorkspaceRefs(storage.getState())) : null;
         if (scopeId && !phone && attachment?.terminalId && server
-          && areServerProfileIdentifiersEquivalent(server, attachment.serverId)) {
+          && areServerProfileIdentifiersEquivalent(server, attachment.serverId)
+          && (attachment.kind !== 'projectCommand' || workspace)) {
           const open = findOutputTerminalInHost(scopeId, attachment);
           const result = open
             ? await execute('session.terminals.focus', { terminalId: open.id })
@@ -115,7 +121,8 @@ export function useProjectCommandOutputOpener() {
                   machineId: attachment.machineId,
                   terminalId: attachment.terminalId,
                   terminalKey: `project-command:${attachment.terminalId}`,
-                  ...(attachment.kind === 'projectCommand' ? { cwd: attachment.cwd } : {}),
+                  ...(attachment.kind === 'projectCommand' ? { cwd: attachment.cwd,
+                    ...(workspace ? { workspace } : {}) } : {}),
                 },
                 title: options.title,
               });

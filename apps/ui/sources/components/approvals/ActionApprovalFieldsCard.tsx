@@ -7,10 +7,11 @@ import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/Expan
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { TechnicalDetailsDisclosure, type TechnicalDetailsLine } from '@/components/ui/lists/TechnicalDetailsDisclosure';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-import { t } from '@/text';
+import { getTranslationValue, t, tLoose } from '@/text';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
 
 type ApprovalFieldRow = ApprovalActionFieldsPresentation['rows'][number];
@@ -143,7 +144,9 @@ function ApprovalValueItem(props: Readonly<{
     // supplied under its declared title, not as a missing or unavailable value.
     const literal = row.valueFormat === 'unavailable' ? t('common.unavailable')
         : row.valueFormat === 'confidential' ? t('approvals.confidentialSupplied')
-        : row.valueFormat === 'boolean' ? t(row.value === 'true' ? 'common.yes' : 'common.no') : row.value;
+        : row.valueFormat === 'boolean' ? t(row.value === 'true' ? 'common.yes' : 'common.no')
+        : row.selectedOptions ? row.selectedOptions.map(option => option.labelKey && typeof getTranslationValue(option.labelKey) === 'string'
+            ? tLoose(option.labelKey) : option.label).join(', ') : row.value;
     const reading = useApprovalReferenceReading(row.reference, literal, props.serverId);
     const title = nameApprovalReferenceLabel(row.title, row.reference, reading.named);
     if (props.anatomy !== 'page') {
@@ -176,7 +179,7 @@ function nameApprovalReferenceLabel(label: string, reference: ApprovalReference 
 }
 
 type ApprovalStructuredEntries = NonNullable<ApprovalValueRow['entries']>;
-export type ApprovalTechnicalLine = Readonly<{ key: string; label: string; value: string }>;
+export type ApprovalTechnicalLine = TechnicalDetailsLine;
 
 /**
  * What the readable part leaves out, in the request's order, labelled by where it sits ("Widget surface ›
@@ -222,36 +225,14 @@ function readableApprovalEntries(entries: ApprovalStructuredEntries): ApprovalSt
     return kept;
 }
 
-/** The one "Technical details" disclosure: exact identifiers and codes, one tap away from the readable page. */
+/** The approval page's Technical details: the shared disclosure, titled for approvals. */
 export function ApprovalTechnicalDetails(props: Readonly<{ lines: readonly ApprovalTechnicalLine[] }>) {
-    const [expanded, setExpanded] = React.useState(false);
     return (
-        <ExpandableItem
+        <TechnicalDetailsDisclosure
             testID="approvals.technical-details"
-            expanded={expanded}
-            onExpandedChange={setExpanded}
-            showDivider={false}
-            header={({ headerProps, expanded: open }) => (
-                <Item
-                    {...headerProps}
-                    title={t('approvals.technicalDetails')}
-                    showChevron={false}
-                    rightElement={<ExpandableItemCaret expanded={open} />}
-                />
-            )}
-        >
-            {/* Quiet reference lines in the entries' own type: a path, then its exact value in mono. */}
-            <SectionContentRow>
-                <View style={styles.entries}>
-                    {props.lines.map((line) => (
-                        <View key={line.key} style={styles.technicalLine}>
-                            <Text style={styles.pageEntryLabel}>{line.label}</Text>
-                            <Text selectable style={[styles.pageEntryValue, styles.technicalValue]}>{line.value}</Text>
-                        </View>
-                    ))}
-                </View>
-            </SectionContentRow>
-        </ExpandableItem>
+            title={t('approvals.technicalDetails')}
+            lines={props.lines}
+        />
     );
 }
 
@@ -405,13 +386,6 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         minWidth: 0,
         color: theme.colors.text.secondary,
-    },
-    technicalLine: {
-        gap: 1,
-    },
-    technicalValue: {
-        ...Typography.mono(),
-        flex: 0,
     },
     structuredAnswer: {
         gap: theme.space.s2,

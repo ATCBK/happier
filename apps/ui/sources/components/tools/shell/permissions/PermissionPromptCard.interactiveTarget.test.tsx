@@ -65,7 +65,8 @@ describe('PermissionPromptCard interactive targets', () => {
             edit: { tool: 'Edit', arguments: { file_path: 'example.ts' }, createdAt: 1,
                 turnId: 'native-turn', source: 'native_tool_approval_once' },
         } }));
-        const [request] = listPendingPermissionRequests({ sessionId: 'session-1', active: true, agentState: null }, messages);
+        const [request] = listPendingPermissionRequests({ sessionId: 'session-1', active: true, agentState: null,
+            actionConfirmations: null, presentationCompletedRequests: null, projected: null }, messages);
         if (!request) throw new Error('Missing projected native request');
         const respondToPermission = vi.fn(async () => {});
         const source = createTestSessionTranscriptSource({ sessionId: 'session-1', agentState: null,

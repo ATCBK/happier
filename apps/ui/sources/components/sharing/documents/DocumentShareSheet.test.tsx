@@ -1078,7 +1078,7 @@ describe('DocumentShareSheet', () => {
             expect((await readStoredApproval(artifactId)).status).toBe('open');
             expect(host.publicRequests.some(request => request.method === 'POST')).toBe(false);
             await act(async () => { acknowledge?.(); });
-            await expect(decision.decision).resolves.toBe(true);
+            await expect(decision.decision).rejects.toMatchObject({ code: 'public_share_request_failed' });
             expect(host.networkAtPublicCreate).toEqual([{ network: 'none' }]);
             expect(host.publicRequests.filter(request => request.method === 'POST')).toHaveLength(1);
             expect(host.publicShare).toBeNull();
@@ -1094,7 +1094,7 @@ describe('DocumentShareSheet', () => {
             try {
                 await act(async () => { retry.screen.findByTestId('session-public-link-network-off')!.props.onValueChange(true); });
                 await retry.screen.pressByTestIdAsync('public-link-network-confirm');
-                await expect(retry.decision).resolves.toBe(true);
+                await expect(retry.decision).rejects.toMatchObject({ code: 'public_share_request_failed' });
                 expect(host.documentUpdates).toHaveLength(1);
                 expect([...host.approvalArtifacts.values()]).toHaveLength(1);
                 // A failed original approval retains its recorded outcome; another human press

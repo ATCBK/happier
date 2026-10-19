@@ -19,7 +19,25 @@ export function resolveApprovalHomeName(
   return id ? resolveHomeDisplayName(getServerProfileById(id)) : null;
 }
 
-/** A session this device cannot name: it says where the session lives instead of showing its id. */
+/**
+ * The Home as a sentence names it: its own name, else "this Home" for a Home this device is signed in
+ * to but never named, else null for a Home this device has no profile for.
+ */
+export function resolveApprovalHomeSentenceName(
+  serverId: string | null | undefined,
+): string | null {
+  const id = serverId?.trim();
+  if (!id) return null;
+  return (
+    resolveApprovalHomeName(id) ??
+    (getServerProfileById(id) ? t('settingsAccount.thisHome') : null)
+  );
+}
+
+/**
+ * A session this device cannot name: it says where the session lives instead of showing its id. Only
+ * a Home this device has no profile for is "not on this device".
+ */
 export function describeUnnamedApprovalSession(
   homeName: string | null | undefined,
 ): string {

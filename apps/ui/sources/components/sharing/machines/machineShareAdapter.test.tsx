@@ -271,15 +271,15 @@ describe('Machine sharing through the canonical controller and sheet', () => {
                     adapter={createMachineShareAdapter({ machineName: 'Devbox', online: true, controller })}
                     presentation="full" testID="machine-share-editor" />;
             }
-            const screen = await renderScreen(<React.StrictMode><Surface /></React.StrictMode>);
+            const screen = await renderScreen(<Surface />, { wrapper: React.StrictMode });
             // Prove this renderer actually replayed setup/cleanup; a StrictMode wrapper alone is insufficient.
             expect(setups.map(setup => setup.retired)).toEqual([true, false]);
             await vi.waitFor(() => expect(requests.some(request => request.signal?.aborted === false)).toBe(true));
-            const current = requests.findLast(request => request.signal?.aborted === false)!;
+            const current = [...requests].reverse().find(request => request.signal?.aborted === false)!;
             await act(async () => { current.finish(Response.json(initial)); });
             await vi.waitFor(() => expect(screen.findByTestId('machine-share-grant-account:bob')).not.toBeNull());
             await act(async () => { publishHomeAccountChange(scope.serverId, ['machine']); });
-            const pending = requests.findLast(request => request !== current && request.signal?.aborted === false);
+            const pending = [...requests].reverse().find(request => request !== current && request.signal?.aborted === false);
             expect(pending).toBeDefined();
             await screen.unmount();
             expect(setups.every(setup => setup.retired)).toBe(true);
@@ -370,6 +370,9 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             await screen.pressByTestIdAsync('machine-share-level:account:bob:admin');
             await vi.waitFor(() => expect(screen.findByTestId('machine-share-retry:account:bob')).not.toBeNull());
             expect(screen.findByTestId('machine-share-level:account:bob:admin')?.props.accessibilityState.checked).toBe(true);
+            // The row shows the unsaved draft as chosen, so the failure says which change did not save and what holds.
+            expect(screen.getTextContent()).toContain(t('machines.sharing.saveFailed', {
+                person: 'Bob', draft: t('machines.sharing.manage'), current: t('machines.sharing.use') }));
             failSave = false;
             await screen.pressByTestIdAsync('machine-share-retry:account:bob');
             await vi.waitFor(() => {
@@ -393,6 +396,39 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             await screen.pressByTestIdAsync('machine-share-editor:list:header:leading:back-chip');
             expect(screen.findByTestId('machine-share-search')?.props.value).toBe('Bob');
             expect(screen.findByTestId('machine-share-remove:account:bob')).not.toBeNull();
+        } finally { await home.dispose(); }
+    });
+
+    it('words the sharing confirmation with the machine, the person and the role it gives', async () => {
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
+        const home = await serveActionHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-share-confirm.test', accountId: 'alice', settings: {
+            actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: {} },
+        } }],
+            route: (request) => {
+                if (request.path === '/v1/teams/list') return Response.json({ items: [teamSummaryFixture({ capabilities: teamCapabilitiesFixture({}) })], nextCursor: null });
+                if (request.path === '/v1/teams/groups/list') return Response.json({ items: [], nextCursor: null });
+                if (request.path !== '/v1/machines/machine/access') return undefined;
+                if (request.method === 'GET') return Response.json(initial);
+                return Response.json({ kind: 'saved', grant: { machineId: 'machine', principal: bob, level: 'admin' }, readiness: 'ready', canPrepareKeys: false });
+            } });
+        try {
+            const scope = { serverId: home.homes.machine!.id, accountId: 'alice' };
+            function Surface() {
+                const controller = useMachineShareController({ machineId: 'machine', machineName: 'Devbox', scope });
+                return <ShareSheet model={controller.model} actions={controller.actions}
+                    adapter={createMachineShareAdapter({ machineName: 'Devbox', online: true, controller })}
+                    presentation="full" testID="machine-share-editor" />;
+            }
+            const screen = await renderScreen(<Surface />);
+            await vi.waitFor(() => expect(screen.findByTestId('machine-share-grant-account:bob')).not.toBeNull());
+            await screen.pressByTestIdAsync('machine-share-grant-account:bob');
+            await screen.pressByTestIdAsync('machine-share-level:account:bob:admin');
+            await vi.waitFor(() => expect(Modal.confirm).toHaveBeenCalledTimes(1));
+            const [title, message] = vi.mocked(Modal.confirm).mock.calls[0]!;
+            expect(title).toContain('Devbox');
+            expect(message).toContain('Bob');
+            expect(message).toContain(t('machines.sharing.manage'));
         } finally { await home.dispose(); }
     });
 

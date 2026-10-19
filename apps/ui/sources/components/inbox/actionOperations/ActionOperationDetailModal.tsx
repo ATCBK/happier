@@ -130,14 +130,15 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
     const projectCommandMachineName = projectCommandRef && machine ? getMachineDisplayName(machine) ?? null : null;
     const [resumePending, setResumePending] = React.useState(false);
     const [resumeFeedback, setResumeFeedback] = React.useState<string | null>(null);
-    const mountedRef = React.useRef(true);
+    const resumeControllerRef = React.useRef<AbortController | null>(null);
 
     React.useEffect(() => {
-        mountedRef.current = true;
+        setResumePending(false);
+        setResumeFeedback(null);
         return () => {
-            mountedRef.current = false;
+            resumeControllerRef.current?.abort();
         };
-    }, []);
+    }, [props.operationId, props.serverId]);
 
     React.useEffect(() => {
         props.setChrome?.({
@@ -193,24 +194,29 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
         if (detail.nextAction?.kind !== 'resume_handoff' || resumePending) return;
         setResumePending(true);
         setResumeFeedback(null);
+        const controller = new AbortController();
+        resumeControllerRef.current?.abort();
+        resumeControllerRef.current = controller;
+        const isCurrentRequest = () => !controller.signal.aborted && resumeControllerRef.current === controller;
         void resumeActionOperationHandoff({
             serverId: operation.serverId,
             handoffId: detail.nextAction.handoffId,
             sessionId: detail.nextAction.sessionId,
             targetMachineId: detail.nextAction.targetMachineId,
+            signal: controller.signal,
         }).then((result) => {
-            if (!mountedRef.current) return;
+            if (!isCurrentRequest()) return;
             setResumeFeedback(result.kind === 'requested'
                 ? t('inbox.actionOperations.recovery.resumeRequested')
                 : result.kind === 'not_available'
                     ? t('inbox.actionOperations.recovery.resumeNoLongerAvailable')
                     : result.message);
         }).catch(() => {
-            if (mountedRef.current) {
+            if (isCurrentRequest()) {
                 setResumeFeedback(t('inbox.actionOperations.recovery.resumeFailed'));
             }
         }).finally(() => {
-            if (mountedRef.current) setResumePending(false);
+            if (isCurrentRequest()) setResumePending(false);
         });
     };
 

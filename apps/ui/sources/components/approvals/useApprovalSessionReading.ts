@@ -6,10 +6,27 @@ import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { readDisplayMachineIdForSession } from '@/sync/ops/sessionMachineTarget';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { ServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { SessionListHomeObservation } from '@/sync/domains/session/listing/sessionListHomeObservation';
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useHydrateSession } from '@/hooks/session/useHydrateSessionForRoute';
+
+/**
+ * The requesting session's name as every approval surface (page, Inbox row, title) reads it: the
+ * canonical Session title, withheld while this device may not show the session's content. A locked
+ * session's cached name stays private, so the surface says where the session lives instead.
+ */
+export function readApprovalSessionName(
+    session: SessionListRenderableSession | Session,
+    serverId: string | null,
+    nowMs: number = Date.now(),
+): string | null {
+    const encryption = projectUiSessionAwareness(session, nowMs).encryption;
+    return encryption !== 'unknown' && isSessionAwarenessContentReadableV1(encryption)
+        ? getSessionName(session, serverId)
+        : null;
+}
 
 export type ApprovalSessionReadingStatus = 'none' | 'resolving' | 'ready' | 'unavailable';
 export type ApprovalSessionReading = Readonly<{
@@ -59,12 +76,9 @@ export function useApprovalSessionReading(serverId: string | null, value: string
             ? 'resolving' : 'unavailable';
     const context = { status, session, homeObservation };
     if (!session) return { ...context, name: null, machineId: '' };
-    // A locked session's cached name stays private, as on every other approval surface.
-    const encryption = projectUiSessionAwareness(session, Date.now()).encryption;
-    const readable = encryption !== 'unknown' && isSessionAwarenessContentReadableV1(encryption);
     return {
         ...context,
-        name: readable ? getSessionName(session, serverId) : null,
+        name: readApprovalSessionName(session, serverId),
         machineId: readDisplayMachineIdForSession({
             serverId,
             sessionId: session.id,

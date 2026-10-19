@@ -1,4 +1,5 @@
 import { Typography } from '@/constants/Typography';
+import { McpAlwaysAllowDecision } from './McpAlwaysAllowDecision';
 import { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
 import { formatPermissionRequestSummary } from '@happier-dev/protocol/activity/agentRequestSummary';
 import type { SessionPermissionDecisionActorV1 } from '@happier-dev/protocol/sessions/permissions/v1';
@@ -285,6 +286,9 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     const accountScopeResolution = useServerCredentialAccountScopeResolution(serverId);
     const accountScope = serverId === undefined ? undefined
         : accountScopeResolution.kind === 'bound' ? accountScopeResolution.scope : null;
+    // The catalog write targets the request's Home; a tray card may leave `serverId` to the transcript source.
+    const catalogScopeResolution = useServerCredentialAccountScopeResolution(serverId ?? source.serverId ?? undefined);
+    const catalogScope = catalogScopeResolution.kind === 'bound' ? catalogScopeResolution.scope : null;
     const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const minimumInteractiveTargetStyle = {
         minWidth: minimumInteractiveTargetSize,
@@ -377,6 +381,38 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
         policy: answerPolicy,
         respondToPermission: async (params) => { if (actions) await actions.respondToPermission(params); },
     });
+    // MCP tools named by the catalog get the one choice that outlives the session (P8 U8.5, lab xa A).
+    const mcpIdentity = executionRun === undefined && !onceOnlyApproval && permission.mcpTool && permission.mcpTool.server !== 'happier'
+        ? permission.mcpTool : null;
+    const alwaysAllowNode = mcpIdentity ? (
+        <McpAlwaysAllowDecision
+            requestId={permission.id}
+            {...(projectedTurnId !== undefined ? { turnId: projectedTurnId } : {})}
+            {...(requestSource !== undefined ? { source: requestSource } : {})}
+            identity={mcpIdentity}
+            scope={catalogScope}
+            canWriteCatalog={canApprovePermissions}
+            pending={permission.status === 'pending'}
+            answerForSession={async () => {
+                await answerThroughSession('allowForSession');
+                markTranscriptPromptAnswered(source, permission.id);
+            }}
+            renderDecision={(decision) => (
+                <TouchableOpacity
+                    testID="permission-footer.always-allow"
+                    accessibilityRole="button"
+                    accessibilityState={{ busy: decision.busy }}
+                    style={[styles.button, minimumInteractiveTargetStyle, alignedButtonStyle]}
+                    onPress={decision.onPress}
+                    activeOpacity={0.7}
+                >
+                    <View style={styles.buttonContent}>
+                        <Text style={styles.buttonText} numberOfLines={1} ellipsizeMode="tail">{decision.label}</Text>
+                    </View>
+                </TouchableOpacity>
+            )}
+        />
+    ) : null;
     const execPolicyCommand = (() => {
         const proposedAmendment = toolInput?.proposedExecpolicyAmendment ?? toolInput?.proposed_execpolicy_amendment;
         if (Array.isArray(proposedAmendment)) {
@@ -1000,6 +1036,8 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                         </TouchableOpacity>
                     )}
 
+                    {alwaysAllowNode}
+
                     {/* Decision protocol: Yes, and don't ask for a session button */}
                     {!onceOnlyApproval && (
                     <TouchableOpacity
@@ -1257,6 +1295,8 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
                         )}
                     </TouchableOpacity>
                 )}
+
+                {alwaysAllowNode}
 
                 {/* Allow subcommand for session (shell tools only) */}
                 {toolName && toolName !== 'Edit' && toolName !== 'MultiEdit' && toolName !== 'Write' && toolName !== 'NotebookEdit' && toolName !== 'exit_plan_mode' && toolName !== 'ExitPlanMode' && showAllowForSessionSubcommand && (

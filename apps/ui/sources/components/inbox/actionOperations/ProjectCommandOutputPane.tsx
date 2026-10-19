@@ -10,10 +10,10 @@ import { Modal } from '@/modal';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
-import { useServerScopedMachine } from '@/sync/store/hooks';
+import { useServerScopedMachine, useWorkspaceRefs } from '@/sync/store/hooks';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { t } from '@/text';
-import { readActionOperationOutputAttachment } from './actionOperationDetailPresentation';
+import { readActionOperationOutputAttachment, readProjectCommandOutputWorkspace } from './actionOperationDetailPresentation';
 import { useProjectCommandOutputDocked } from './projectCommandOutputHost';
 import { describeActionOperationStatusLabel, resolveActionOperationStatus } from './actionOperationPresentation';
 
@@ -63,17 +63,13 @@ export const ProjectCommandOutputPane = React.memo(
       attachment?.serverId ?? null,
       attachment?.machineId ?? '',
     );
+    const workspaceRefs = useWorkspaceRefs();
     const workspace = React.useMemo(
       () =>
         attachment?.kind === 'projectCommand'
-          ? {
-              serverId: attachment.serverId,
-              workspaceId: attachment.workspaceRefId,
-              machineId: attachment.machineId,
-              rootPath: attachment.cwd,
-            }
+          ? readProjectCommandOutputWorkspace(attachment, workspaceRefs)
           : null,
-      [attachment],
+      [attachment, workspaceRefs],
     );
     const docked = useProjectCommandOutputDocked(attachment);
     if (!attachment) return null;

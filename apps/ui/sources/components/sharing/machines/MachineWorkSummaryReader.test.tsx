@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createActionExecutor } from '@happier-dev/protocol';
+import { createActionExecutor as createProtocolActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 
 import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
@@ -13,6 +14,9 @@ installSettingsViewCommonModuleMocks({ text: async () => vi.importActual<typeof 
     storage: 'real',
 });
 afterEach(() => standardCleanup());
+
+const createActionExecutor = (ports: Partial<ActionExecutorDeps>) =>
+    createProtocolActionExecutor(createActionExecutorBoundaryFixture(ports));
 
 describe('MachineWorkSummaryReader', () => {
     it('settles an in-flight read when heartbeat updates arrive before its response', async () => {

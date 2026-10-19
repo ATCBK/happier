@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     buildApprovalRequestArtifactHeaderV1,
     encodePasswordCredentialFieldV1,
+    type AcpCatalogSettingsV1,
+    type ApprovalRequest,
     type ApprovalRequestV2,
 } from '@happier-dev/protocol';
 
@@ -11,8 +13,8 @@ import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprova
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import {
     AgentsAcpBackendsUpsertOutputV1Schema,
-    applyAcpBackendUpsertV1,
 } from '@happier-dev/protocol/acp/catalog/catalogMutationsV1';
+import { AcpCatalogSettingsV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
 
 import {
     createActionApprovalContinuation,
@@ -21,6 +23,7 @@ import {
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { SessionBoardItemUpsertInputV1Schema, SessionBoardMutationActionResultV1Schema } from '@happier-dev/protocol/sessions/board/actions';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 
 const actionId = 'teams.identity.connections.test.start' as const;
 const actionInput = {
@@ -157,8 +160,12 @@ describe('createHomeActionApprovalContinuation', () => {
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({
             approvalsCreate: async ({ request }) => { recordedInput = request.actionArgs; return { artifactId: 'approval-1' }; },
         }));
-        expect(await executor.execute(boardActionId, input, { surface: 'ui', authority: 'present_user', serverId: 'home-1',
-            runtimeAccountId: 'account-1', actionRequestId: 'request-1' })).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        const execution = await executor.execute(boardActionId, input, { surface: 'ui', authority: 'present_user', serverId: 'home-1',
+            runtimeAccountId: 'account-1', actionRequestId: 'request-1',
+            actionsSettings: ActionsSettingsV1Schema.parse({ v: 1,
+                actions: { [boardActionId]: { approvalRequiredSurfaces: ['ui'] } } }),
+        });
+        expect(execution, JSON.stringify(execution)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
         const admitted = SessionBoardItemUpsertInputV1Schema.parse(recordedInput);
         expect(admitted.reviewedVisual).toBeDefined();
         const result = SessionBoardMutationActionResultV1Schema.parse({ v: 1, serverId: 'home-1', sessionId: 'session-1',
@@ -259,24 +266,60 @@ describe('createHomeActionApprovalContinuation', () => {
         expect(onFailed).not.toHaveBeenCalled();
     });
 
-    it('delivers an executed ACP receipt when transport omits native optional authoring members', async () => {
+    it('delivers the real ACP approval receipt and private review when transport omits native optional authoring members', async () => {
         // The mounted ACP editor explicitly sets auth to undefined for an agent without login.
         // The Home's JSON Artifact transport omits that optional native object member.
         const input = { backend: {
             id: 'custom-agent', name: 'custom-agent', title: 'Custom agent', launch: { kind: 'command' as const, command: 'custom-agent', args: [] },
-             env: {}, auth: undefined,
+            env: {}, auth: undefined,
         }, expectedRevision: 1 };
-        const mutation = applyAcpBackendUpsertV1({ settings: { v: 2, backends: [] }, backend: input.backend, nowMs: 2 });
-        if (!mutation.ok) throw new Error(mutation.code);
-        const result = { backend: mutation.backend, revision: 2 };
-        const artifact = executedArtifact({ actionId: 'agents.acp.backends.upsert', actionArgs: input, result });
+        let catalog: AcpCatalogSettingsV1 = { v: 2, backends: [] };
+        let storedRequest: ApprovalRequest | null = null;
+        // The Artifact and catalog are persistence ports. Admission, review
+        // projection, replay, mutation and receipt production remain real.
+        const { StoredApprovalRequestSchema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+        const persist = (request: ApprovalRequest) => {
+            storedRequest = StoredApprovalRequestSchema.parse(JSON.parse(JSON.stringify(request)));
+        };
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            approvalsCreate: async ({ request }) => { persist(request); return { artifactId: 'approval-1' }; },
+            approvalsGet: async () => storedRequest,
+            approvalsUpdate: async ({ request }) => { persist(request); return { ok: true }; },
+            updateAccountAcpCatalogSettings: async ({ mutate, expectedRevision }) => {
+                expect(expectedRevision).toBe(1);
+                catalog = AcpCatalogSettingsV1Schema.parse(mutate(catalog));
+                return { ok: true, revision: 2 };
+            },
+        }));
+        const context = { surface: 'ui' as const, authority: 'present_user' as const,
+            actionCaller: { kind: 'host' as const }, serverId: 'home-1', runtimeAccountId: 'account-1',
+            actionRequestId: 'request-1', actionsSettings: ActionsSettingsV1Schema.parse({ v: 1,
+                actions: { 'agents.acp.backends.upsert': { approvalRequiredSurfaces: ['ui'] } },
+            }),
+        };
+        await expect(executor.execute('agents.acp.backends.upsert', input, context)).resolves.toMatchObject({
+            ok: true, result: { kind: 'approval_request_created', artifactId: 'approval-1' },
+        });
+        expect(catalog.backends).toEqual([]);
+        await expect(executor.execute('approval.request.decide', { artifactId: 'approval-1', decision: 'approve' }, context))
+            .resolves.toMatchObject({ ok: true });
+        const request = StoredApprovalRequestSchema.parse(storedRequest);
+        const artifact: ReadableArtifact = { id: 'approval-1', title: null,
+            header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request),
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 2, isDecrypted: true,
+        };
         const terminal = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body);
         expect(terminal).toMatchObject({ family: 'built_in', request: { status: 'executed', execution: { ok: true } } });
         if (terminal?.family !== 'built_in') throw new Error('Invalid stored approval fixture');
-        expect(AgentsAcpBackendsUpsertOutputV1Schema.safeParse(terminal.request.execution?.result).success).toBe(true);
+        const result = AgentsAcpBackendsUpsertOutputV1Schema.parse(terminal.request.execution?.result);
+        expect(result).toMatchObject({ backend: { id: input.backend.id }, revision: 2 });
+        expect(catalog.backends).toEqual([result.backend]);
         expect(terminal.request.actionArgs).toEqual({ backend: {
-            id: 'custom-agent', name: 'custom-agent', title: 'Custom agent', launch: { kind: 'command' as const, command: 'custom-agent', args: [] }, env: {},
+            id: 'custom-agent', name: 'custom-agent', title: 'Custom agent', launch: { kind: 'command' as const, command: 'custom-agent', args: [] }, env: [],
         }, expectedRevision: 1 });
+        expect(terminal.request.preview).toMatchObject({ actionId: 'agents.acp.backends.upsert', actionArgs: {
+            backend: { env: [] }, expectedRevision: 1,
+        } });
 
         const onSucceeded = vi.fn();
         const onFailed = vi.fn();
@@ -287,6 +330,15 @@ describe('createHomeActionApprovalContinuation', () => {
         expect(await continuation.onExecuted(artifact)).toBe('consumed');
         expect(onFailed).not.toHaveBeenCalled();
         expect(onSucceeded).toHaveBeenCalledWith(result);
+        for (const expectedInput of [{ ...input, expectedRevision: 2 },
+            { ...input, backend: { ...input.backend, name: 'other-agent' } }]) {
+            onSucceeded.mockClear();
+            onFailed.mockClear();
+            await createActionApprovalContinuation({ artifactId: artifact.id, actionId: 'agents.acp.backends.upsert',
+                scope: { serverId: 'home-1', accountId: 'account-1' }, expectedInput, onSucceeded, onFailed }).onExecuted(artifact);
+            expect(onSucceeded).not.toHaveBeenCalled();
+            expect(onFailed).toHaveBeenCalledWith('approval_binding_mismatch');
+        }
     });
     it('delivers an exact immutable Agent terminal receipt and rejects altered origin facts', async () => {
         const terminalActionId = 'machines.terminal.restart' as const;

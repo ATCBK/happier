@@ -1,5 +1,7 @@
 import type { ApprovalSettledPresentation } from '@/sync/domains/artifacts/approvalArtifacts';
 import { presentsSettledResourceProposal } from '@/components/approvals/resourceProposal/readResourceProposalApproval';
+import { readBrowserOpenAcceptance } from '@/sync/domains/browser/firstUse/browserFirstUse';
+import { readCapabilityEnableApproval } from '@/components/sessions/capabilities/capabilityEnableApproval';
 import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 
 /**
@@ -9,6 +11,10 @@ import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/ap
  */
 export const TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS: readonly ApprovalSettledPresentation[] = [
     presentsSettledResourceProposal,
+    // An Agent's enable request settles into its one line with Undo (P8 U8.5).
+    (approval) => readCapabilityEnableApproval(approval) !== null,
+    // An approved Browser open stays while its operation is still preparing, connecting or failed.
+    (approval) => readBrowserOpenAcceptance(approval) !== null,
 ];
 
 /** Settled requests that remain actionable attention above the composer instead of moving rows. */

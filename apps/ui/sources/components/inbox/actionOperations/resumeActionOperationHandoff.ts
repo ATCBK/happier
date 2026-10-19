@@ -30,6 +30,7 @@ export async function resumeActionOperationHandoff(params: Readonly<{
     sessionId: string;
     targetMachineId: string;
     createAttemptId?: () => string;
+    signal?: AbortSignal;
 }>): Promise<ResumeActionOperationHandoffResult> {
     if (!params.serverId?.trim() || !params.targetMachineId.trim()) return { kind: 'not_available' };
     let statusEnvelope: Readonly<Record<string, unknown>> | null;
@@ -39,6 +40,7 @@ export async function resumeActionOperationHandoff(params: Readonly<{
             serverId: params.serverId,
             method: RPC_METHODS.DAEMON_SESSION_HANDOFF_STATUS_GET_V3,
             payload: { handoffId: params.handoffId },
+            ...(params.signal ? { signal: params.signal } : {}),
         }));
     } catch (error) {
         return { kind: 'failed', message: failureMessage(error instanceof Error ? error.message : error) };
@@ -60,6 +62,7 @@ export async function resumeActionOperationHandoff(params: Readonly<{
 
     let resumeResult: unknown;
     try {
+        params.signal?.throwIfAborted();
         resumeResult = await machineRpcWithServerScope<unknown, {
             handoffId: string;
             jobId: string;
@@ -69,6 +72,7 @@ export async function resumeActionOperationHandoff(params: Readonly<{
             machineId: params.targetMachineId,
             serverId: params.serverId,
             method: RPC_METHODS.DAEMON_SESSION_HANDOFF_PREPARE_TARGET_RESUME_V3,
+            ...(params.signal ? { signal: params.signal } : {}),
             payload: {
             handoffId: params.handoffId,
             jobId: status.data.jobId,

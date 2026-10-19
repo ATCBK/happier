@@ -15,12 +15,65 @@ import { t } from '@/text';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { getActionSpec } from '@happier-dev/protocol/actions';
 import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol';
+import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { settleApprovalRequestActionArgs } from '@happier-dev/protocol/approvals/approvalRequestTransition';
 import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { applyMcpServerCatalogSnapshot, resetMcpServerCatalogSnapshotsForTests } from '@/sync/store/settings/mcpServerCatalogSnapshot';
 import { resetMcpServerCatalogEngineForTests } from '@/sync/engine/settings/mcpServerCatalogEngine';
+
+it('localizes declared enum options in both approval anatomies through the shared presentation', async () => {
+    const presentation = describeApprovalActionFields({ actionId: 'machines.managed.power.set',
+        actionArgs: { homeId: 'home', managedId: 'guest', when: 'now', intent: 'stop', expectedRevision: 1 } });
+    // Target lookup is covered by the Home reference suite; this slice exercises the real option producer and reader.
+    const options: ApprovalActionFieldsPresentation = { ...presentation, rows: [
+        ...presentation.rows.filter(row => row.path === 'when' || row.path === 'intent'),
+        { kind: 'value', path: 'choice', title: 'Choice', value: 'untranslated source',
+            selectedOptions: [{ label: 'untranslated source', labelKey: 'common.yes' },
+                { label: 'Authored fallback', labelKey: 'unavailable.translation' }] },
+    ] };
+    for (const anatomy of ['page', 'card'] as const) {
+        const screen = await renderScreen(<ActionApprovalFieldsCard anatomy={anatomy} presentation={options} />);
+        expect(screen.getTextContent()).toContain(t('actionPresentation.options.now'));
+        expect(screen.getTextContent()).toContain(t('actionPresentation.options.stop'));
+        expect(screen.getTextContent()).toContain(`${t('common.yes')}, Authored fallback`);
+        expect(screen.getTextContent()).not.toContain('untranslated source');
+    }
+});
+
+it('names a readable document reference and retains its exact id only in Technical details', async () => {
+    const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://document-approval-title.test' });
+    profiles.push(home.id);
+    const artifactId = '4135b238-607a-458d-b96c-7877d8076877';
+    await act(async () => {
+        storage.setState({ settingsScope: { serverId: home.id, accountId: 'owner' } });
+        storage.getState().applyArtifacts([{ id: artifactId, title: 'Release notes', isDecrypted: true,
+            header: { title: 'Release notes' }, headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }]);
+    });
+    const spec = getActionSpec('artifact.public_link.create');
+    const screen = await renderScreen(<ActionApprovalFieldsCard anatomy="page" serverId={home.id}
+        presentation={describeApprovalActionFields({ actionId: spec.id, actionArgs: spec.inputSchema.parse({ artifactId }) })} />);
+    expect(screen.getTextContent()).toContain('Release notes');
+    expect(screen.getTextContent()).not.toContain(artifactId);
+    const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+    await act(async () => { details?.props.onExpandedChange(true); });
+    expect(screen.getTextContent()).toContain(artifactId);
+});
+
+it('reads a Browser view command by its target, keeping its ids and a failure code in the one Technical details', async () => {
+    const screen = await renderScreen(<ActionApprovalFieldsCard anatomy="page" failureCode="sandbox_unavailable"
+        presentation={describeApprovalActionFields({ actionId: 'browser.view.open', actionArgs: {
+            commandId: 'cmd-1', browserSessionId: 'browser-session-1', viewId: 'view-1', kind: 'openView', platform: 'web', focus: true,
+            target: { targetId: 'target-1', kind: 'externalUrl', url: 'http://127.0.0.1:4000' } } })} />);
+    const text = screen.getTextContent();
+    expect(text).toContain('http://127.0.0.1:4000');
+    for (const plumbing of ['cmd-1', 'view-1', 'target-1', 'openView']) expect(text).not.toContain(plumbing);
+    expect(text.split(t('approvals.technicalDetails'))).toHaveLength(2);
+    const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+    await act(async () => { details?.props.onExpandedChange(true); });
+    for (const exact of ['cmd-1', 'browser-session-1', 'view-1', 'target-1', 'openView', 'sandbox_unavailable']) expect(screen.getTextContent()).toContain(exact);
+});
 
 it.each(['open', 'executed'] as const)('names the MCP catalog title in %s approvals and keeps the id in Technical details', async (status) => {
     const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://mcp-approval-title.test' });
@@ -91,7 +144,7 @@ it('names reviewed skills and the exact Home machine, keeping their ids in Techn
         presentation={describeApprovalActionFields({ actionId: spec.id, actionArgs,
             preview: { actionId: spec.id, actionArgs: spec.projectObservationInput?.(actionArgs) } })} />);
     const text = screen.getTextContent();
-    for (const value of ['Skill', 'Release notes', 'Where', 'Machine Studio', 'Change', 'Turn on']) expect(text).toContain(value);
+    for (const value of ['Skill', 'Release notes', 'Where', 'Studio', 'Change', 'Turn on']) expect(text).toContain(value);
     for (const value of [skillId, machineId, 'Rules change', 'Kind Write', 'State on']) expect(text).not.toContain(value);
     const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
     await act(async () => { details?.props.onExpandedChange(true); });
@@ -178,6 +231,66 @@ afterEach(async () => {
     for (const id of profiles.splice(0)) await removeServerProfile(id);
 });
 
+it('renders the daemon-evaluated plugin install disclosure in the approval Inbox card', async () => {
+    const actionArgs = { path: '/plugins/acme.example', kind: 'path' as const };
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'cli' }, actionId: 'plugins.install', actionArgs, summary: 'Install plugin',
+        executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' },
+            requestId: 'plugin-install-request', surface: 'cli', serverId: 'home', actionId: 'plugins.install' },
+        preview: { actionId: 'plugins.install', actionArgs, pluginInstall: {
+            permissionsDisclosure: 'daemonEvaluated', pendingReview: {
+                kind: 'reviewRequired', reviewKind: 'installation', pendingChangeId: 'pending-plugin-install',
+                reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
+                review: createPluginInstallationReviewFixture({ requiredHostAccess: [{
+                    id: 'network', capability: 'network', reason: 'Call the service.',
+                    authorizationClass: 'cooperativeDisclosure',
+                    normalizedScope: { targets: [{ kind: 'fixedOrigin', origin: 'https://example.test' }] },
+                }] }),
+            },
+        },
+    } });
+    const presentation = describeApprovalRequestFields(request);
+
+    for (const anatomy of ['card', 'page'] as const) {
+        const screen = await renderScreen(<ActionApprovalFieldsCard presentation={presentation} anatomy={anatomy} />);
+        const text = screen.getTextContent();
+        for (const value of ['Daemon-evaluated install and trust disclosure', 'acme.example', 'network', 'https://example.test']) {
+            expect(text).toContain(value);
+        }
+    }
+});
+
+it('identifies a Delete approval by Session title, Machine, and id tail', async () => {
+    const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://delete-approval.test' });
+    profiles.push(home.id);
+    const sessionId = 'cmv9jgd3q016xmcvegf6icb89';
+    const machineId = 'machine-delete-target';
+    const machine = createMachineFixture({ id: machineId, metadata: {
+        ...createMachineFixture().metadata!, displayName: 'QA workstation',
+    } });
+    await act(async () => {
+        storage.setState({
+            settingsScope: { serverId: home.id, accountId: 'account' },
+            machines: { ...storage.getState().machines, [machineId]: machine },
+            machineListByServerId: { ...storage.getState().machineListByServerId, [home.id]: [machine] },
+        });
+        storage.getState().applySessions([createSessionFixture({
+            id: sessionId,
+            serverId: home.id,
+            metadata: { ...createSessionFixture().metadata!, name: 'Release cleanup', machineId },
+        })]);
+    });
+    const presentation = describeApprovalActionFields({ actionId: 'session.delete', actionArgs: { sessionId } });
+
+    for (const anatomy of ['card', 'page'] as const) {
+        const screen = await renderScreen(<ActionApprovalFieldsCard presentation={presentation} anatomy={anatomy} serverId={home.id} />);
+        const text = screen.getTextContent();
+        expect(text).toContain('Release cleanup');
+        expect(text).toContain('QA workstation');
+        expect(text).toContain(sessionId.slice(-8));
+    }
+});
+
 it('keeps widget placement internals behind the canonical Details disclosure', async () => {
     const presentation = describeApprovalActionFields({ actionId: 'widgets.group.add', actionArgs: {
         surface: { serverId: 'home', accountId: 'account', owner: { kind: 'home' } },
@@ -230,6 +343,9 @@ it('the approval Details page preserves an exact remote host id when a session h
                 metadata: { ...metadata, name: 'Session sharing Home token' } }),
         ]);
     });
+    // The Home's Session list has been read: a Session it does not hold is absent, not still loading.
+    storage.setState({ concurrentSessionListCacheByServerId: { [profile.id]: { serverName: null,
+        listObservation: { phase: 'ready', lastSuccessAt: 1 } } } });
     const presentation = { rows: [
         { kind: 'value', path: 'hostId', title: 'Remote host', value: hostId },
         { kind: 'value', path: 'operation.kind', title: 'Operation', value: 'disable' },
@@ -365,4 +481,16 @@ it('reads the approval\u2019s own Home and Account when the request carries the 
     expect(text).not.toContain('srv_portable_identity');
     expect(text).not.toContain(accountId);
     expect(text).toContain('Your account');
+});
+
+it('keeps a collapsed card to its Details line until the person opens it', async () => {
+    const presentation = describeApprovalActionFields({ actionId: 'browser.view.open', actionArgs: {
+        commandId: 'cmd-1', browserSessionId: 'browser-session-1', viewId: 'view-1', kind: 'openView', platform: 'web', focus: true,
+        target: { targetId: 'target-1', kind: 'externalUrl', url: 'http://127.0.0.1:4000' } } });
+    const screen = await renderScreen(<ActionApprovalFieldsCard collapsed presentation={presentation} />);
+    expect(screen.getTextContent()).toContain(t('approvals.details'));
+    expect(screen.getTextContent()).not.toContain('http://127.0.0.1:4000');
+    const disclosure = screen.findAllByTestId('approvals.details-disclosure').find(node => typeof node.props.onExpandedChange === 'function');
+    await act(async () => { disclosure?.props.onExpandedChange(true); });
+    expect(screen.getTextContent()).toContain('http://127.0.0.1:4000');
 });
