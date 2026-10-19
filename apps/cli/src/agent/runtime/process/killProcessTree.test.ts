@@ -119,29 +119,38 @@ describe('killProcessTree', () => {
     }
   });
 
-  it.runIf(process.platform !== 'win32').each(['exit', 'SIGTERM'] as const)('does not leave the root stopped when its owner ends by %s during discovery', async ending => {
+  it.runIf(process.platform !== 'win32').each([
+    { ending: 'exit', expected: { code: 0, signal: null } },
+    { ending: 'SIGTERM', expected: { code: null, signal: 'SIGTERM' } },
+    // An owner's one-time shutdown handler has already unregistered itself when the guard runs.
+    { ending: 'SIGTERM with async once-handler', expected: { code: 7, signal: null } },
+  ] as const)('does not leave the root stopped when its owner ends by $ending during discovery', async ({ ending, expected }) => {
     const processTreePath = join(__dirname, '../../../../scripts/process_tree.cjs');
     // Real owner process: it stops its detached root, then ends before discovery settles,
     // like a provider runner that finishes shutdown while cleanup is still pending.
     const owner = spawnInlineNodeTestProcess(`
       const { spawn } = require('node:child_process');
       const { killProcessTree } = require(${JSON.stringify(processTreePath)});
+      const ending = ${JSON.stringify(ending)};
+      if (ending.includes('once-handler')) process.once('SIGTERM', () => setTimeout(() => process.exit(7), 200));
       const root = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });
       void killProcessTree(root, { graceMs: 25 }, () => new Promise(() => {}));
       console.log(String(root.pid));
-      if (${JSON.stringify(ending)} === 'exit') setTimeout(() => process.exit(0), 100);
+      if (ending === 'exit') setTimeout(() => process.exit(0), 100);
       else setInterval(() => {}, 1000);
     `, { stdio: ['ignore', 'pipe', 'ignore'] });
     const [output] = await once(owner.stdout!, 'data');
     const rootPid = Number(String(output).trim());
     try {
       const ended = once(owner, 'exit');
-      if (ending === 'SIGTERM') owner.kill('SIGTERM');
-      const [, signal] = await ended;
-      // The guard must not swallow the owner's default signal termination.
-      expect(signal).toBe(ending === 'SIGTERM' ? 'SIGTERM' : null);
+      if (ending !== 'exit') owner.kill('SIGTERM');
+      const deadline = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('owner did not end')), 5_000));
+      const [code, signal] = await Promise.race([ended, deadline]);
+      // The guard must neither swallow default termination nor cut short an owner's own shutdown.
+      expect({ code, signal }).toEqual(expected);
       await expect(waitForProcessExit(rootPid, { timeoutMs: 3_000 })).resolves.toBe(true);
     } finally {
+      owner.kill('SIGKILL');
       try { process.kill(rootPid, 'SIGKILL'); } catch { /* already gone */ }
     }
   });

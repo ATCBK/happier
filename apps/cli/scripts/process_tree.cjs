@@ -86,9 +86,11 @@ function releaseFencedRoots() {
 }
 
 function onFenceSignal(signal) {
-  releaseFencedRoots();
   // Listening for a signal replaces its default termination; restore it when no other owner handles it.
-  if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+  // The guard is prepended, so every other handler (including one-time handlers) is still registered here.
+  const otherOwnersHandleSignal = process.listenerCount(signal) > 1;
+  releaseFencedRoots();
+  if (!otherOwnersHandleSignal) process.kill(process.pid, signal);
 }
 
 function removeFenceSignalGuards() {
@@ -101,7 +103,7 @@ function holdFencedRoot(proc) {
     process.on('exit', releaseFencedRoots);
   }
   if (fencedRoots.size === 0) {
-    for (const signal of FENCE_TERMINATION_SIGNALS) process.on(signal, onFenceSignal);
+    for (const signal of FENCE_TERMINATION_SIGNALS) process.prependListener(signal, onFenceSignal);
   }
   fencedRoots.add(proc);
 }
