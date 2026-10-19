@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import 'fake-indexeddb/auto';
 import { computeContentPublicKeyFingerprint, McpServersSettingsV1Schema, SavedSecretResourceMaterialV1Schema } from '@happier-dev/protocol';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
@@ -16,6 +19,7 @@ import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { encodeBase64 } from '@/encryption/base64';
 import { Modal } from '@/modal';
+import { t } from '@/text';
 import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { resetSavedSecretCatalogEngineForTests } from '@/sync/engine/settings/savedSecretCatalogEngine';
@@ -167,6 +171,7 @@ describe('SecretsSettingsScreen shared feature decision', () => {
 
     it('preserves exact shared-secret rotation bytes, including an all-whitespace value', async () => {
         const { page, account } = await render({}, 'plain');
+        vi.mocked(Modal.confirm).mockResolvedValue(true);
         await act(async () => { await page().onRotateShared?.(page().sharedEntries[0], '  token\n'); });
         await vi.waitFor(() => expect(account.updates).toHaveLength(1));
         expect(account.updates[0].storedContent).toEqual({ t: 'plain', v: { v: 1, name: 'Shared token', kind: 'token', value: '  token\n' } });
@@ -198,7 +203,7 @@ describe('SecretsSettingsScreen shared feature decision', () => {
             status: 'ready', revision: 5,
             secret: expect.objectContaining({ encryptedValue: { _isSecretValue: true, value: 'shared-value' } }),
         })));
-        expect(Modal.confirm).toHaveBeenCalledTimes(2);
+        expect(vi.mocked(Modal.confirm).mock.calls.filter(([title]) => title === t('secrets.catalog.convertToPlainTitle'))).toHaveLength(2);
     });
 
     it('offers each conversion direction only where the Account and the Home policy allow it', async () => {
@@ -233,7 +238,7 @@ describe('SecretsSettingsScreen shared feature decision', () => {
             expectedSettingsVersion: storage.getState().settingsVersion,
             referenceCensus: { accountMode: 'plain', profileTransferRevision: 'absent',
                 profiles: { referenceGuardRevision: 3, rows: [] },
-                catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 'absent', connectedConfigurations: 'absent', connectedPurposes: 'absent' },
+                catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 'absent', connectedConfigurations: 'absent', connectedPurposes: 'absent', registrySources: 'absent' },
                 remoteHosts: { revision: 'absent', resourceRefs: [] }, notificationChannels: { revision: 'absent', resourceRefs: [] } },
         }]));
         expect(Modal.confirm).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ destructive: true }));
@@ -259,7 +264,7 @@ describe('SecretsSettingsScreen shared feature decision', () => {
         account = await createSecretSettingsTestHarness({ mode: 'e2ee' });
         const { resourceDataKey } = await account.addOwnerResource('e2ee');
         const recipient = await createEncryptionFromAuthCredentials({ token: 'recipient-token', secret: encodeBase64(new Uint8Array(32).fill(9), 'base64url') });
-        account.recipients.push({ account: { kind: 'account', accountId: 'account-b', firstName: 'Bob', lastName: null, username: null, avatarUrl: null },
+        account.recipients.push({ account: { kind: 'account', accountId: 'account-b', name: 'Bob', firstName: 'Bob', lastName: null, username: null, avatarUrl: null },
             readiness: { status: 'available', contentPublicKey: encodeBase64(recipient.contentDataKey, 'base64'),
                 contentPublicKeyFingerprint: computeContentPublicKeyFingerprint(recipient.contentDataKey) }, envelopeStatus: 'missing' });
         const screen = await renderScreen(<InjectedAuthProvider credentials={account.credentials}><Screen /></InjectedAuthProvider>);

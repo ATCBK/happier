@@ -1,3 +1,4 @@
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import React, { useState } from 'react';
 import { Platform, View, useWindowDimensions } from 'react-native';
 import { useAuth } from '@/auth/context/AuthContext';
@@ -15,6 +16,7 @@ import { getAvatarUrl } from '@/sync/domains/profiles/profile';
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { HappyError } from '@/utils/errors/errors';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { setAccountUsername } from '@/sync/api/account/apiUsername';
 import { setAccountName } from '@/sync/api/account/apiAccountName';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -130,31 +132,13 @@ export const WorkspaceRouteBody = React.memo(() => {
         if (!accountScope) throw new Error('Account is unavailable');
         const outcome = await accountExecution.execute(actionId, { ...accountScope,
             ...(actionId === 'account.credentials.forgetAll' ? { scope: 'all-credentials' } : {}) });
+        if (!outcome.ok && isActionApprovalDeclinedErrorCode(outcome.errorCode)) return;
         if (!outcome.ok) throw new HappyError(outcome.error, false, { code: outcome.errorCode, details: outcome.details });
     };
     const handleLogout = async () => {
-        const confirmed = await Modal.confirm(
-            t('settingsAccount.logoutHome', { home: activeHomeLabel }),
-            t('settingsAccount.logoutHomeConfirm', { home: activeHomeLabel }),
-            {
-                confirmText: t('settingsAccount.logoutHome', { home: activeHomeLabel }),
-                destructive: true,
-            },
-        );
-        if (confirmed) {
-            await executeLeavingAction('account.signOut');
-        }
+        await executeLeavingAction('account.signOut');
     };
     const handleForgetAllCredentials = async () => {
-        const confirmed = await Modal.confirm(
-            t('settingsAccount.forgetAllCredentials'),
-            t('settingsAccount.forgetAllCredentialsConfirm'),
-            {
-                confirmText: t('settingsAccount.forgetAllCredentials'),
-                destructive: true,
-            },
-        );
-        if (!confirmed) return;
         await executeLeavingAction('account.credentials.forgetAll');
     };
     const handleDeleteAccount = async () => {
@@ -259,7 +243,7 @@ export const WorkspaceRouteBody = React.memo(() => {
                             testID="settings-account-profile-approval-pending"
                             message={t('approvals.waitingForYou')}
                             summary={accountExecution.approval.approvalSummary}
-                            onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(accountExecution.approval.approvalId!)}?serverId=${encodeURIComponent(accountExecution.binding!.scope.serverId)}`)}
+                            onOpenApproval={() => router.pushRetainingCurrent(buildApprovalHref(accountExecution.approval.approvalId!, accountExecution.binding!.scope.serverId))}
                         />
                     ) : null}
                     <SectionContentRow>

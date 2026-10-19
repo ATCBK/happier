@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { flushHookEffects, renderSettingsView } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
+import { CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import {
     type AccountSecurityGetResponseV1,
@@ -721,7 +724,7 @@ async function mountCurrentEncryptionHome(params: Readonly<{
     let settingsVersion = 0;
     let settingsContent: unknown = null;
     const serverUrl = 'https://encryption-' + crypto.randomUUID() + '.example.test';
-    const homeIdentity = 'encryption-' + crypto.randomUUID();
+    const homeIdentity = 'srv_' + crypto.randomUUID();
     const { adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
     await adoptHomeProfile({ source: 'manual', descriptorAuthority: 'current_connection_observation', descriptor: {
         v: 1, homeServerIdentityId: homeIdentity, canonicalServerUrl: serverUrl, revision: 1,
@@ -824,6 +827,10 @@ async function mountCurrentEncryptionHome(params: Readonly<{
             if (path === '/v1/machines' || path === '/v1/artifacts') return Response.json([]);
             if (path === '/v1/kv') return Response.json({ items: [], nextCursor: null });
             if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: 'account-a' });
+            if (path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
+            if (path === '/v1/account/project-rows/list') return Response.json(createPlainProjectAccountRowListFixture());
+            const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
+            if (bootstrapResponse) return bootstrapResponse;
             if (path === '/v1/account/encryption/migrate/review-comments/inventory') return Response.json({ v: 1, items: [] });
             if (path === '/v1/account/encryption/migrate/session-organization/inventory') return Response.json({ version: 0, folders: [], tags: [], labels: [] });
             if (path === '/v1/account/encryption/migrate/automations/inventory') return Response.json({ templates: [], runs: [] });
@@ -880,7 +887,7 @@ async function mountCurrentEncryptionHome(params: Readonly<{
         if (written) retainedDeviceCredentials = args[2];
         return written;
     }) : null;
-    if (params.mutableDeviceCustody) vi.mocked(currentTokens.getCredentialsForServerUrl).mockImplementation(async url => url === serverUrl ? retainedDeviceCredentials : null);
+    if (params.mutableDeviceCustody) vi.spyOn(currentTokens, 'getCredentialsForServerUrl').mockImplementation(async url => url === serverUrl ? retainedDeviceCredentials : null);
     const render = () => renderCurrentSettings(params.mutableDeviceCustody
         ? <AuthProvider initialCredentials={retainedDeviceCredentials}><AccountEncryptionSettingsSection /></AuthProvider>
         : <InjectedAuthProvider credentials={credentials}><AccountEncryptionSettingsSection /></InjectedAuthProvider>);

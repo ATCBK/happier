@@ -1,5 +1,8 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { profileDefaults, type Profile } from '@/sync/domains/profiles/profile';
 import { installAccountSettingsRouteModuleMocks } from './accountSettingsRouteTestHelpers';
@@ -19,9 +22,7 @@ const boundary = vi.hoisted(() => ({
     securityRequests: [] as string[],
 }));
 
-installAccountSettingsRouteModuleMocks({
-    storageModule: (importOriginal) => importOriginal(),
-});
+installAccountSettingsRouteModuleMocks();
 installDisconnectedServerSocketBoundary();
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());

@@ -1,7 +1,13 @@
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { storage } from '@/sync/domains/state/storageStore';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+beforeEach(async () => { await loadSyncSingletonForTests(); });
 import {
     renderScreen,
     standardCleanup,
