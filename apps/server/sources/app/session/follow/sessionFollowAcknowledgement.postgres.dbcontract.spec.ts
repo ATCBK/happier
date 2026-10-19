@@ -19,6 +19,56 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('F
     });
     afterAll(async () => { await db.$disconnect(); });
 
+    it('observes pending Follow work while the same socket heartbeat waits on Account publication', async () => {
+        const previousSessions = process.env.HAPPIER_FEATURE_SESSIONS__ENABLED;
+        const previousFollowing = process.env.HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED;
+        process.env.HAPPIER_FEATURE_SESSIONS__ENABLED = '1';
+        process.env.HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED = '1';
+        try {
+            await assertConcurrentFailedTurnRouteAcknowledgements({
+                duringObservation: async ({ accountId, presence, socket, observe }) => {
+                    let release!: () => void;
+                    let locked!: (pid: number) => void;
+                    const gate = new Promise<void>(resolve => { release = resolve; });
+                    const acquired = new Promise<number>(resolve => { locked = resolve; });
+                    const holder = db.$transaction(async tx => {
+                        await tx.$queryRaw`SELECT "id" FROM "Account" WHERE "id" = ${accountId} FOR NO KEY UPDATE`;
+                        const [backend] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                        locked(backend!.pid);
+                        await gate;
+                    }, { timeout: 30_000 });
+                    let heartbeat: ReturnType<typeof presence.touchPublisher> | undefined;
+                    let observation: Awaited<ReturnType<typeof observe>> | undefined;
+                    let pendingObservation: ReturnType<typeof observe> | undefined;
+                    try {
+                        const pid = await acquired;
+                        heartbeat = presence.touchPublisher({ socket });
+                        await vi.waitFor(async () => {
+                            const [waiting] = await db.$queryRaw<Array<{ blocked: boolean }>>`
+                                SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+                                    WHERE ${pid}::int = ANY(pg_blocking_pids(pid))) AS blocked`;
+                            expect(waiting?.blocked).toBe(true);
+                        });
+                        pendingObservation = observe();
+                        void pendingObservation.then(value => { observation = value; });
+                        await vi.waitFor(() => expect(observation).toBeDefined(), { timeout: 1_000 });
+                        return observation!;
+                    } finally {
+                        release();
+                        await holder;
+                        await heartbeat;
+                        await pendingObservation?.catch(() => undefined);
+                    }
+                },
+            });
+        } finally {
+            if (previousSessions === undefined) delete process.env.HAPPIER_FEATURE_SESSIONS__ENABLED;
+            else process.env.HAPPIER_FEATURE_SESSIONS__ENABLED = previousSessions;
+            if (previousFollowing === undefined) delete process.env.HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED;
+            else process.env.HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED = previousFollowing;
+        }
+    });
+
     it('commits both concurrent socket routes for one accepted input and a failed source turn', async () => {
         const previousSessions = process.env.HAPPIER_FEATURE_SESSIONS__ENABLED;
         const previousFollowing = process.env.HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED;

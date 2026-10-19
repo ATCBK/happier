@@ -19,6 +19,12 @@ import { logger } from '@/utils/logging/log';
 
 /** Only the socket transport is substituted; publisher, access, schema and ACK owners are real. */
 export async function assertConcurrentFailedTurnRouteAcknowledgements(options: Readonly<{
+    duringObservation?: (input: Readonly<{
+        accountId: string;
+        presence: ReturnType<typeof createSessionPublisherPresence>;
+        socket: object;
+        observe: () => Promise<ReturnType<typeof SessionFollowObservePendingResponseV1Schema.parse>>;
+    }>) => Promise<ReturnType<typeof SessionFollowObservePendingResponseV1Schema.parse>>;
     duringAcknowledgements?: (input: Readonly<{
         accountId: string;
         presence: ReturnType<typeof createSessionPublisherPresence>;
@@ -51,11 +57,16 @@ export async function assertConcurrentFailedTurnRouteAcknowledgements(options: R
             destinationSessionId: destination.id, policy: { preset: 'quiet' }, authentication })).toMatchObject({ ok: true });
         await db.session.update({ where: { id: source.id }, data: { seq: 2,
             latestTurnId: 'session-turn:failed-source', latestTurnStatus: 'failed' } });
-        let rawObservation: unknown;
-        await getSocketHandler(socket, SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1)({ v: 1,
-            sessionId: destination.id, includeManager: true, supportsWakeAdmission: true },
-        (value: unknown) => { rawObservation = value; });
-        const observation = SessionFollowObservePendingResponseV1Schema.parse(rawObservation);
+        const observe = async () => {
+            let rawObservation: unknown;
+            await getSocketHandler(socket, SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1)({ v: 1,
+                sessionId: destination.id, includeManager: true, supportsWakeAdmission: true },
+            (value: unknown) => { rawObservation = value; });
+            return SessionFollowObservePendingResponseV1Schema.parse(rawObservation);
+        };
+        const observation = options.duringObservation
+            ? await options.duringObservation({ accountId: owner.id, presence, socket, observe })
+            : await observe();
         expect(observation.ok).toBe(true);
         if (!observation.ok) throw new Error('Expected current publisher observation');
         const routes = observation.observations.filter(row => 'relation' in row);

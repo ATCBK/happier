@@ -1487,6 +1487,9 @@ policy, publisher and request-snapshot version. Each new Follow input represents
 one original message or request; older development inputs without that proof
 remain unproven, with no invented backfill or encrypted-history scan.
 Destination intake reads original-backed updates from this admitted custody.
+While the host holds queued originals from a source, its optional manager
+outcomes wait. They cannot consume the originals' context allowance or advance
+manager progress past their represented prefix.
 Legacy manager intake retains Turn-only lifecycle evidence. Exact terminal
 transcript anchors and request-to-waiting-Turn witnesses prevent an admitted
 original from returning as another lifecycle update; later transcript ranges

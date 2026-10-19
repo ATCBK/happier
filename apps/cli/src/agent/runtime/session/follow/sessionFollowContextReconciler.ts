@@ -470,6 +470,9 @@ export function createSessionFollowContextReconciler(input: Readonly<{
     const workerPrepared = stillAdmitted.flatMap((entry) => {
       const { observation, update, workerUpdate, recheckWorkerUpdateAdmission } = entry;
       if ('kind' in observation) return [];
+      // Required originals keep their existing Pending order. A later optional
+      // manager outcome must not spend their budget or ACK past their prefix.
+      if (followDeliveries.some(({ delivery }) => delivery.original.sourceSessionId === observation.sourceSessionId)) return [];
       if (!workerUpdate || deliveryIntent === 'wake' && !entry.mayWake) return [];
       const fitted = fitWorkerUpdateWithinHostContextAllowance(workerUpdate, Math.max(0, remainingBytes - 2));
       if (!fitted) return [];

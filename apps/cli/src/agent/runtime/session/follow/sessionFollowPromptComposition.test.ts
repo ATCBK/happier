@@ -1,132 +1,65 @@
 import { describe, expect, it, vi } from 'vitest';
-
-import {
-  deriveSessionFollowWakeEventLocalIdV1,
-  renderSessionInputContextPromptV1,
-} from '@happier-dev/protocol';
-
-import type { ApiSessionClient } from '@/api/session/sessionClient';
+import { renderSessionInputContextPromptV1 } from '@happier-dev/protocol';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createSessionFollowContextReconciler } from './sessionFollowContextReconciler';
-
-const frontier = {
-  transcriptSeq: 2,
-  readyEventSeq: 0,
-  agentStateVersion: 0,
-  turn: null,
-};
+import { createSessionFollowSourceHydrator } from './sessionFollowSourceHydrator';
+import { createSessionFollowSourceMaterialResolver } from './sessionFollowSourceMaterialResolver';
 
 describe('Session Follow prompt composition through the canonical owner', () => {
-  it('prepares a context-only wake only for authoritative human source input', async () => {
-    const acknowledgeSessionFollow = vi.fn().mockResolvedValue({ ok: true });
-    const observation = {
-      sourceSessionId: 'source', destinationSessionId: 'destination', policy: { preset: 'custom' as const, events: { person_wrote: { delivery: 'interrupt' as const }, message: { delivery: 'quiet' as const } } },
-      delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null }, observed: frontier,
-    };
-    const session = {
-      sessionId: 'destination',
-      observePendingSessionFollow: vi.fn().mockResolvedValue({
-        ok: true, v: 1, sessionId: 'destination', publisherGeneration: '7',
-        currentSourceSessionIds: ['source'], observations: [observation],
+  it.each(['goal_changed', 'message'] as const)('composes an admitted %s original and ACKs only its exact accepted input', async kind => {
+    const delivered = { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null };
+    const observed = { ...delivered, transcriptSeq: 1 };
+    const localInputId = 'admitted-original';
+    const delivery = SessionFollowInputV1Schema.parse({ v: 1, delivery: kind === 'goal_changed' ? 'wake' : 'next_turn',
+      original: { sourceSessionId: 'source', sourceMessage: { localId: 'source-original', seq: 1 } }, event: { kind } });
+    const acknowledgeSessionFollow = vi.fn(async (_request: unknown) => ({
+      ok: true as const, v: 1 as const, destinationSessionId: 'destination', sourceSessionId: 'source', delivered: observed,
+    }));
+    // Socket observation/ACK and source HTTP are boundaries; hydration,
+    // selection, composition and acceptance custody execute their real owners.
+    const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
+      runSessionFollowSourceRequest: async ({ request }) => request(),
+      observePendingSessionFollow: async () => ({
+        ok: true, v: 1, sessionId: 'destination', publisherGeneration: '7', currentSourceSessionIds: ['source'],
+        observations: [{ kind: 'admitted_input', localInputId, sourceSessionId: 'source', destinationSessionId: 'destination',
+          delivered, observed, delivery }],
       }),
       acknowledgeSessionFollow,
-    } as unknown as ApiSessionClient;
-    const reconciler = createSessionFollowContextReconciler({
-      session, maxFollowContextUtf8Bytes: 8_192,
-      hydrateObservation: async () => ({
-        v: 1, kind: 'session_follow_update', edge: { sourceSessionId: 'source', destinationSessionId: 'destination' },
-        reason: 'source_changed', deliveryIntent: 'context_only', observed: frontier,
-        awareness: { v: 1, sessionId: 'source', lifecycle: 'ready', runtime: 'idle', freshness: 'live', operational: { primary: 'ready', reasons: ['ready'] }, encryption: 'plain', availability: 'complete' },
-        recentMessages: [{ messageId: 'human-2', seq: 2, text: 'Review this', provenance: { v: 1, kind: 'happierApp', actor: { kind: 'owner' } } }],
-        truncated: false,
-      }),
-    });
-    const prepared = await reconciler({ signal: new AbortController().signal, deliveryIntent: 'wake' });
-    expect(prepared?.updates[0]).toMatchObject({ reason: 'human_changed_source', deliveryIntent: 'wake' });
-    const wakeEventLocalId = deriveSessionFollowWakeEventLocalIdV1({
-      destinationSessionId: 'destination',
-      publisherGeneration: '7',
-      observations: [{ policy: observation.policy, sourceSessionId: 'source', expected: observation.delivered, consumed: frontier }],
-    });
-    expect(prepared?.wakeEventLocalId).toBe(wakeEventLocalId);
-    prepared?.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: wakeEventLocalId });
-    await Promise.resolve();
-    expect(acknowledgeSessionFollow).toHaveBeenCalledWith(expect.objectContaining({
-      acceptance: {
-        kind: 'context_only_wake',
-        eventLocalId: wakeEventLocalId,
-        observations: [{ policy: observation.policy, sourceSessionId: 'source', relation: 'follower', expected: observation.delivered, consumed: frontier }],
-      },
-    }));
-  });
-
-  it('reaches the provider prompt and only acknowledges after provider acceptance', async () => {
-    const acknowledgeSessionFollow = vi.fn().mockResolvedValue({
-      ok: true, v: 1, destinationSessionId: 'destination', sourceSessionId: 'source', delivered: frontier,
-    });
-    const observation = {
-      sourceSessionId: 'source', destinationSessionId: 'destination',
-      delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null },
-      observed: frontier,
-      policy: { preset: 'quiet' as const },
-    };
-    const session = {
-      sessionId: 'destination',
-      observePendingSessionFollow: vi.fn().mockResolvedValue({
-        ok: true, v: 1, sessionId: 'destination', publisherGeneration: '7',
-        observations: [observation],
-      }),
-      acknowledgeSessionFollow,
-    } as unknown as ApiSessionClient;
-
-    const reconciler = createSessionFollowContextReconciler({
-      session,
-      maxFollowContextUtf8Bytes: 8_192,
-      hydrateObservation: async ({ observation }) => ({
-        v: 1,
-        kind: 'session_follow_update' as const,
-        edge: {
-          sourceSessionId: observation.sourceSessionId,
-          destinationSessionId: observation.destinationSessionId,
-        },
-        reason: 'source_changed' as const,
-        deliveryIntent: 'context_only' as const,
-        observed: observation.observed,
-        awareness: {
-          v: 1,
-          sessionId: observation.sourceSessionId,
-          title: 'Source title',
-          lifecycle: 'ready' as const,
-          runtime: 'idle' as const,
-          freshness: 'live' as const,
-          operational: { primary: 'ready' as const, reasons: ['ready' as const] },
-          encryption: 'plain' as const,
-          availability: 'complete' as const,
-        },
-        recentMessages: [{ messageId: 'seq:2', seq: 2, text: 'Please review', provenance: null }],
-        truncated: false,
-      }),
-    });
-
-    const prepared = await reconciler({ signal: new AbortController().signal });
-    expect(prepared).not.toBeNull();
-    expect(acknowledgeSessionFollow).not.toHaveBeenCalled();
-
-    const prompt = renderSessionInputContextPromptV1({
-      provenanceBlock: '',
-      sessionFollowUpdates: prepared!.updates,
-      transformedUserText: 'ACTUAL_INPUT',
-    });
-    expect(prompt).toContain('<session_follow>');
-    expect(prompt).toContain('Please review');
-    expect(prompt.endsWith('ACTUAL_INPUT')).toBe(true);
-
-    prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'input-1', userMessageSeq: 2 });
-    await Promise.resolve();
-    expect(acknowledgeSessionFollow).toHaveBeenCalledWith(expect.objectContaining({ policy: observation.policy,
-      sourceSessionId: 'source',
-      expected: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null },
-      consumed: frontier,
-      acceptance: { kind: 'admitted_input', localInputId: 'input-1', userMessageSeq: 2 },
-    }));
+    } });
+    const material = createSessionFollowSourceMaterialResolver();
+    try {
+      const hydrateObservation = createSessionFollowSourceHydrator({ session, credentials: { token: 'token', encryption: null },
+        sourceMaterialResolver: material, deps: { fetchRunnerSourceProjection: async () =>
+          SessionFollowSourceProjectionResponseV1Schema.parse({ v: 1,
+            source: { id: 'source', encryptionMode: 'plain', metadata: '{}', archivedAt: null,
+              createdAt: 1, updatedAt: 1, active: true, activeAt: 1, thinking: false, thinkingAt: null,
+              latestTurnStatus: null, latestTurnStatusObservedAt: null, latestReadyEventSeq: null, latestReadyEventAt: null,
+              meaningfulActivityAt: null, agentStateVersion: 0 },
+            messages: [{ seq: 1, createdAt: 1, messageRole: 'agent', content: { t: 'plain', v: { role: 'agent',
+              content: kind === 'goal_changed' ? { type: 'event', data: { type: 'goal-changed' } }
+                : { type: 'codex', data: { type: 'message', message: 'Please review' } } } } }], hasMore: false,
+          }),
+        } });
+      const reconciler = createSessionFollowContextReconciler({ session, hydrateObservation, maxFollowContextUtf8Bytes: 8192 });
+      const prepared = await reconciler({ signal: new AbortController().signal,
+        followDeliveries: [{ delivery, localInputId, userMessageSeq: 2 }] });
+      expect(prepared?.representedFollowLocalInputIds).toEqual([localInputId]);
+      expect(prepared?.wakeEventLocalId).toBeUndefined();
+      expect(acknowledgeSessionFollow).not.toHaveBeenCalled();
+      const prompt = renderSessionInputContextPromptV1({ sessionFollowUpdates: prepared!.updates,
+        transformedUserText: 'ACTUAL_INPUT' });
+      expect(prompt).toContain('<session_follow>');
+      expect(prompt).toContain(kind === 'goal_changed' ? 'goal changed' : 'Please review');
+      expect(prompt.endsWith('ACTUAL_INPUT')).toBe(true);
+      prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'another-input', userMessageSeq: 2 });
+      expect(acknowledgeSessionFollow).not.toHaveBeenCalled();
+      prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId, userMessageSeq: 2 });
+      await vi.waitFor(() => expect(acknowledgeSessionFollow).toHaveBeenCalledWith(expect.objectContaining({
+        localInputId, sourceSessionId: 'source', expected: delivered, consumed: observed,
+        acceptance: { kind: 'admitted_input', localInputId, userMessageSeq: 2 },
+      })));
+    } finally { material.dispose(); }
   });
 });

@@ -673,6 +673,7 @@ export function sessionUpdateHandler(
             const autonomousExchangeEnabled = await isServerFeatureEnabledForHome('sessions.autonomousExchange');
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket, deadlineAtMs: Date.now() + 5_000,
+                authorityMode: "snapshot",
                 isolationLevel: "Serializable", // Follow sources, access and frontiers must describe one observation.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(tx, authority, userId, request.data.sessionId)) return null;
