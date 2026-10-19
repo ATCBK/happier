@@ -14,17 +14,19 @@ const actions = vi.hoisted(() => ({
   results: [] as unknown[],
 }));
 
-// The Action front door is the boundary; the sheet, the Memory adapter and its result readers stay real.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
-  createFrontDoorActionExecute: () => async (actionId: string, input: any) => {
-    actions.calls.push({ actionId, input });
-    return (
-      actions.results.shift() ?? {
-        ok: true,
-        result: { ok: true, artifactId: 'doc-1', factId: 'fact-1' },
-      }
-    );
-  },
+// The Action executor is the boundary; the sheet, the Memory adapter and its result readers stay real.
+vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
+  createDefaultActionExecutor: () => ({
+    execute: async (actionId: string, input: any) => {
+      actions.calls.push({ actionId, input });
+      return (
+        actions.results.shift() ?? {
+          ok: true,
+          result: { ok: true, artifactId: 'doc-1', factId: 'fact-1' },
+        }
+      );
+    },
+  }),
 }));
 
 const { SaveMemoryDecisionForm, seedMemoryDecisionFromMessage } =
