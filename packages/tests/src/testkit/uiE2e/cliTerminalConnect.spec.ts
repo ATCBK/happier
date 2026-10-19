@@ -110,6 +110,8 @@ describe('sanitizeCliTestEnv', () => {
         expect(sanitizeCliTestEnv({
             PATH: '/usr/bin',
             HAPPIER_ACTIVE_SERVER_ID: 'ambient-server',
+            HAPPIER_STACK_INVOKED_CWD: '/outer/workspace',
+            HAPPIER_DAEMON_PENDING_FIRST_INPUT: 'outer-session-input',
             HAPPIER_DAEMON_SERVICE_INSTANCE_ID: 'ambient-instance',
             HAPPIER_DAEMON_SERVICE_SERVER_URL: 'https://ambient.invalid',
         })).toEqual({ PATH: '/usr/bin' });

@@ -12,6 +12,7 @@ describe('sanitizeDaemonSpawnEnv', () => {
       TMUX_PANE: 'leaked',
       TMUX_TMPDIR: 'leaked',
       HAPPIER_SESSION_ATTACH_FILE: 'leaked',
+      HAPPIER_DAEMON_PENDING_FIRST_INPUT: JSON.stringify({ text: 'outer session', localId: 'outer-input' }),
       HAPPY_SESSION_ATTACH_FILE: 'leaked',
       HAPPIER_ACTIVE_SERVER_ID: 'leaked',
       HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID: 'leaked',

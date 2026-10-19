@@ -13,6 +13,7 @@ export function sanitizeDaemonSpawnEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEn
   delete sanitized.TMUX_PANE;
   delete sanitized.TMUX_TMPDIR;
   delete sanitized.HAPPIER_SESSION_ATTACH_FILE;
+  delete sanitized.HAPPIER_DAEMON_PENDING_FIRST_INPUT;
   delete sanitized.HAPPY_SESSION_ATTACH_FILE;
   delete sanitized.HAPPIER_ACTIVE_SERVER_ID;
   delete sanitized.HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID;

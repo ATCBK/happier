@@ -13,6 +13,8 @@ describe('sanitizeDaemonEnvForSpawn', () => {
       HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: '/tmp/isolated-cli/dist/index.mjs',
       HAPPIER_SESSION_ATTACH_FILE: '/tmp/attach.json',
       HAPPIER_STACK_TOOL_TRACE_FILE: '/tmp/trace.json',
+      HAPPIER_DAEMON_PENDING_FIRST_INPUT: JSON.stringify({ text: 'outer session', localId: 'outer-input' }),
+      HAPPIER_STACK_INVOKED_CWD: '/outer/workspace',
       HAPPIER_STACK_STACK: 'inherited-stack',
       HAPPIER_STACK_ENV_FILE: '/tmp/inherited-stack.env',
       HAPPIER_STACK_CLI_HOME_DIR: '/tmp/inherited-home',
@@ -29,6 +31,8 @@ describe('sanitizeDaemonEnvForSpawn', () => {
     expect(env.HAPPIER_DAEMON_SESSION_RESPAWN_ENABLED).toBe('0');
     expect(env.HAPPIER_SESSION_ATTACH_FILE).toBeUndefined();
     expect(env.HAPPIER_STACK_TOOL_TRACE_FILE).toBeUndefined();
+    expect(env.HAPPIER_DAEMON_PENDING_FIRST_INPUT).toBeUndefined();
+    expect(env.HAPPIER_STACK_INVOKED_CWD).toBeUndefined();
     expect(env.HAPPIER_STACK_STACK).toBeUndefined();
     expect(env.HAPPIER_STACK_ENV_FILE).toBeUndefined();
     expect(env.HAPPIER_STACK_CLI_HOME_DIR).toBeUndefined();
