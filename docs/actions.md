@@ -3079,6 +3079,19 @@ owner's current bindings; omitting them retains whole-binding replacement/reset.
 
 ## Workflow inputs and complete review reads (0.3 development source)
 
+For a Session-agent `workflow.run.start`, the authenticated caller supplies the
+origin Session and its Machine/workspace context. `inputs` contains only the
+workflow's declared input values; putting `machineId` or `directory` there does
+not select where the workflow runs, and undeclared inputs are refused during
+start preparation. `executionTarget.kind` selects the leaf
+execution kind (`session` or `detached_run`), not a Machine or workspace.
+
+Resolve options for a declared workflow input through `action.options.resolve`
+with its workflow `consumer` and that input's name as `fieldPath`. The `inputs`
+container is not an input name. A known workflow with an unknown input name
+returns `input_type_consumer_unavailable` with the declared `availableFields`,
+so the caller can choose a real input before resolving its options.
+
 The Workflow Action census also includes `workflow.definition.import`,
 `workflow.definition.export`, and `workflow.trigger.run_now`. Document import takes
 `{ json }` and delegates the sole `workflowDocumentV1` codec, returning an
