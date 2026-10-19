@@ -132,7 +132,7 @@ describe('Add to Home', () => {
         });
         expect(sections.map((section) => [section.id, section.title])).toEqual([
             ['builtins:machines', 'machines.widgets.machine_fleet'], ['builtins:usage', 'usage.board.page.title'],
-            ['builtins:projects', 'tabs.projects'], ['builtins:session', 'sessionBoard.companion.title'], ['builtins', 'widgetAdd.builtIn'],
+            ['builtins:projects', 'tabs.projects'], ['builtins:session', 'widgetAdd.sessionDetails'], ['builtins', 'widgetAdd.builtIn'],
             ['plugin:happier.triage', 'PRs & Issues'],
         ]);
         const companion = sections.find(section => section.id === 'builtins:session')!.entries;

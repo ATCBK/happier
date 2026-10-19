@@ -92,16 +92,17 @@ describe('Usage Sources consent controller', () => {
     });
     it('discovers metadata lazily through the admitted Action without granting consent', async () => {
         const { lifetime } = lifetimeHarness();
+        const discovered = { ...source, discoveredFileCount: 2 };
         // The Machine RPC is the boundary; Action admission and Source validation remain real.
         const executor = createActionExecutor({ usageSourceAction: createUsageSourceActionPort({
             serverId: 'home',
             assertCurrent: () => { if (!lifetime.isCurrent()) throw new Error('retired'); },
-            rpc: async () => ({ sources: [source] }),
+            rpc: async () => ({ sources: [discovered] }),
         }) } as ActionExecutorDeps);
         const controller = createUsageSourcesController({ machineId: 'machine', lifetime, executor });
         expect(controller.getSnapshot()).toMatchObject({ sources: [], loaded: false });
         await controller.discover();
-        expect(controller.getSnapshot()).toMatchObject({ loaded: true, sources: [source] });
+        expect(controller.getSnapshot()).toMatchObject({ loaded: true, sources: [discovered] });
         controller.dispose();
     });
 

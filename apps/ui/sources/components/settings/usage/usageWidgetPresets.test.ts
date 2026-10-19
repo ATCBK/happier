@@ -11,6 +11,21 @@ const names = Object.fromEntries(USAGE_WIDGET_PRESET_IDS.map(id => [id, id])) as
 const surface: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'account', owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };
 
 describe('Usage host fragment presets', () => {
+    it('admits the Sources inventory above period-scoped Coverage and Unpriced through the shared area owner', async () => {
+        const presets = createUsageWidgetPresets(names).map(preset => WidgetAreaPresetV1Schema.parse(preset));
+        const sources = presets.find(preset => preset.id === 'sources')!;
+        expect(flattenWidgetLayoutWidgetsV1(sources.items).map(row => row.instance.definition)).toEqual([
+            { kind: 'builtin', id: 'usage_sources' }, { kind: 'builtin', id: 'usage_source_coverage' }, { kind: 'builtin', id: 'usage_unpriced' },
+        ]);
+        const port = createWidgetSurfaceArtifactPortV1({ read: async () => null,
+            create: async () => { throw new Error('unexpected_write'); }, update: async () => { throw new Error('unexpected_write'); } },
+            { surface: { ...surface, owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'sources' } }, presets, isCurrent: () => true });
+        expect((await port.readState()).layout.items).toEqual(sources.items);
+        for (const row of flattenWidgetLayoutWidgetsV1(sources.items).slice(1)) {
+            expect(row.instance.bindings.period).toEqual({ kind: 'context', slot: 'period' });
+            expect(row.instance.bindings.metric).toBeUndefined();
+        }
+    });
     it('initializes legacy Overview presentation without overwriting other host presets', () => {
         const presets = createUsageWidgetPresets(names, { initialMetric: 'cost' }).map(preset => WidgetAreaPresetV1Schema.parse(preset));
         for (const row of flattenWidgetLayoutWidgetsV1(presets.find(preset => preset.id === 'overview')!.items)) {
@@ -75,7 +90,8 @@ describe('Usage host fragment presets', () => {
         const ids = new Set(presets.flatMap(preset => flattenWidgetLayoutWidgetsV1(preset.items).map(row => row.instance.definition.kind === 'builtin' ? row.instance.definition.id : '')));
         expect([...ids].sort()).toEqual(['usage_daily', 'usage_period_summary', 'usage_cost_facts', 'usage_flow', 'usage_efficiency',
             'usage_breakdowns', 'usage_capacity', 'usage_projections', 'usage_resets', 'usage_plan_fit', 'usage_project_ledger', 'usage_session_value',
-            'usage_outcomes', 'usage_coach', 'usage_rhythm', 'usage_parallel', 'usage_human_loop', 'usage_night_shift', 'usage_recap', 'usage_sources'].sort());
+            'usage_outcomes', 'usage_coach', 'usage_rhythm', 'usage_parallel', 'usage_human_loop', 'usage_night_shift', 'usage_recap', 'usage_sources',
+            'usage_source_coverage', 'usage_unpriced'].sort());
         for (const preset of presets) for (const row of flattenWidgetLayoutWidgetsV1(preset.items)) {
             const descriptor = readBuiltinWidgetDescriptorV1(row.instance.definition)!;
             expect(descriptor).not.toBeNull();

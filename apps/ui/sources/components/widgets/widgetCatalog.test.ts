@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_WIDGET_DESCRIPTORS_V1, WIDGET_SIZE_POLICY_V1 } from '@happier-dev/protocol/widgets';
+import { BUILTIN_WIDGET_DESCRIPTORS_V1, WIDGET_SIZE_POLICY_V1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 
 import {
     widgetInstalledPackage as installedPackage,
@@ -11,6 +11,7 @@ import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projecti
 
 import type { SessionPluginRuntimeState } from '@/components/sessions/plugins/useSessionPluginRuntime';
 import {
+    describeBuiltinWidgetInstance,
     describeWidgetDefinitionSummaryV1,
     isBuiltinWidgetSwitchedOff,
     selectBuiltinWidgetCandidates,
@@ -268,5 +269,20 @@ describe('Your Home, the atmosphere widget', () => {
         expect(isBuiltinWidgetSwitchedOff({ kind: 'builtin', id: 'your_home' }, { yourHome: false })).toBe(true);
         expect(isBuiltinWidgetSwitchedOff({ kind: 'builtin', id: 'your_home' }, { yourHome: true })).toBe(false);
         expect(isBuiltinWidgetSwitchedOff({ kind: 'builtin', id: 'usage_daily' }, { yourHome: false })).toBe(false);
+    });
+});
+
+describe('A built-in called by what its inputs make it show', () => {
+    const breakdowns = selectBuiltinWidgetCandidates({}).find(candidate => candidate.key === 'builtin:usage_breakdowns')!;
+    const placed = (breakdown?: readonly string[]): WidgetInstanceV1 => ({ v: 1, id: 'w', definition: { kind: 'builtin', id: 'usage_breakdowns' },
+        bindings: breakdown ? { breakdown: { kind: 'value', value: [...breakdown] } } : {} });
+
+    it('tells two Usage Breakdowns widgets apart by the one dimension each ranks, and leaves the default pair as Breakdowns', () => {
+        const titles = [['model'], ['machine'], ['agent'], ['model', 'machine'], undefined]
+            .map(breakdown => describeBuiltinWidgetInstance(breakdowns, placed(breakdown)).title);
+        expect(titles[0]).not.toBe(breakdowns.title);
+        expect(titles[1]).not.toBe(titles[0]);
+        expect(new Set(titles.slice(0, 3)).size).toBe(3);
+        expect(titles.slice(3)).toEqual([breakdowns.title, breakdowns.title]);
     });
 });

@@ -52,7 +52,7 @@ export function WorkspaceActivationModeField(props: Readonly<{
     selectedId: string;
     title: string;
     subtitle: string;
-    items: ReadonlyArray<{ id: string; title: string; subtitle: string }>;
+    items: ReadonlyArray<{ id: string; title: string; subtitle: string; disabled?: boolean }>;
     onSelect: (id: string) => void;
     testID?: string;
     disabled?: boolean;

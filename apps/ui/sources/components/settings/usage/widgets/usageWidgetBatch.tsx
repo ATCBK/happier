@@ -49,6 +49,8 @@ const USAGE_WIDGET_DEMAND = {
   usage_night_shift: { includeSessionEvidence: true, includeWorkEvidence: false },
   usage_recap: { includeSessionEvidence: true, includeTranscriptEvidence: true, includeWorkEvidence: true },
   usage_footprint: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_source_coverage: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_unpriced: { includeSessionEvidence: false, includeWorkEvidence: false },
 } satisfies Record<UsageQueryWidgetId, Readonly<{ includeAccounting?: boolean; includeSessionEvidence: boolean; includeTranscriptEvidence?: boolean; includeWorkEvidence: boolean }>>;
 type UsageWidgetBatch = Readonly<{
   clauses: UsageWidgetQueryOverrides;

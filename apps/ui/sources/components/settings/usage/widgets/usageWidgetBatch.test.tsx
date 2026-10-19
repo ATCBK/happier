@@ -34,6 +34,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
+import { HappierDataMetric, HappierDataRows } from '@happier-dev/plugin-ui/presentation';
 
 const accounting: UsageAnalyticsQueryResponse = {
   v: 1,
@@ -94,6 +95,31 @@ function Body(
 }
 
 describe('Usage page batch', () => {
+  it('feeds Sources panels from one admitted accounting Resource through their real builtin dispatch', async () => {
+    const value: UsageAnalyticsQueryResponse = { ...accounting,
+      totals: { ...accounting.totals, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } },
+      contributions: [{ id: 'unpriced', sessionId: null, turnId: null, observedAtMs: 1, eventCount: 1,
+        agentId: 'codex', modelId: null, machineId: null, projectKey: null, workspaceId: null,
+        source: 'codex-native-accounting', sourceContext: { path: 'native', execution: 'outside' },
+        tokens: accounting.totals.tokens, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } }],
+      coverage: { status: 'partial', reasons: ['unpriced_tokens'], missingDimensions: [], range: { complete: false }, ranked: [],
+        sources: [{ source: 'codex-native-accounting', path: 'native', status: 'partial', eventCount: 1, captureKind: 'from_logs' }] } };
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-source-panels.test', accountId: 'account-a' }],
+      route: request => request.path === '/v2/usage/query' ? Response.json(value) : undefined });
+    publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    storage.setState({ profileScope: { serverId: home.homes.a!.id, accountId: 'account-a' }, profile: AccountProfileSchema.parse({ id: 'account-a' }) });
+    const screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><CoreCollectionScope>
+      <UsageWidgetBatchProvider clauses={clauses}>{(['usage_source_coverage', 'usage_unpriced'] as const).map(id =>
+        <UsageWidgetBody key={id} id={id} input={{ ...scope, period: { startMs: 0, endMs: 1000 } }} serverId={home!.homes.a!.id} testID={id} />)}
+      </UsageWidgetBatchProvider></CoreCollectionScope></InjectedAuthProvider>);
+    await expect.poll(() => screen.findAllByType(HappierDataMetric).find(metric => metric.props.testID === 'usage_unpriced.tokens')?.props.value).toBe(15);
+    expect(screen.findByType(HappierDataRows).props.rows).toHaveLength(1);
+    expect(home.requests.filter(request => request.path === '/v2/sessions/read-batch'
+      || request.path.endsWith('/messages') || request.path.endsWith('/turns'))).toEqual([]);
+    await screen.unmount();
+  });
   it('keeps standalone Capacity independent of accounting across unrelated Account and current-record wakes', async () => {
     const now = Date.now();
     const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'capacity' };
@@ -188,7 +214,7 @@ describe('Usage page batch', () => {
     await screen.update(<CoverageProbe />);
     expect(seen.at(-1)).toBe(false);
   });
-  it.each(['usage_daily', 'usage_outcomes', 'usage_footprint'] as const)('admits private evidence through the real %s body only when its projection consumes it', async narrowId => {
+  it.each(['usage_daily', 'usage_outcomes', 'usage_footprint', 'usage_source_coverage', 'usage_unpriced'] as const)('admits private evidence through the real %s body only when its projection consumes it', async narrowId => {
     const sessionReads = createSessionReadBatchHttpBoundary(request => {
         if (request.path === '/v2/usage/query') return Response.json(accounting);
         if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,

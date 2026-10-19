@@ -2273,10 +2273,10 @@ describe('usage query captured Resource adapter', () => {
     const nowMs = Date.now();
     const captured = await context(request => {
       if (request.path === '/v2/usage/query') return Response.json(value);
-      if (request.path === '/v2/sessions/truth') return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: 'truth',
-        createdAt: 1, updatedAt: nowMs, seq: 1, active: true, activeAt: nowMs, metadataVersion: 1, agentStateVersion: 1,
+      if (request.path === '/v2/sessions/truth') return Response.json({ session: { ...createPlainSessionCurrentProjectionRecordFixture({ id: 'truth',
+        createdAt: 1, updatedAt: nowMs, seq: 1, active: true, activeAt: nowMs, metadataVersion: 1, agentStateVersion: 1 }),
         agentState: JSON.stringify({ completedRequests: { approval: { tool: 'Bash', arguments: {},
-          createdAt: nowMs - 1000, completedAt: nowMs - 500, status: 'approved' } } }) }) });
+          createdAt: nowMs - 1000, completedAt: nowMs - 500, status: 'approved' } } }) } });
       if (request.path === '/v1/sessions/truth/turns') return Response.json({ v: 1, sessionId: 'truth', updatedAt: nowMs, turns: [] });
       if (request.path === '/v1/sessions/truth/messages') return Response.json({ messages: [], hasMore: false });
       return undefined;
