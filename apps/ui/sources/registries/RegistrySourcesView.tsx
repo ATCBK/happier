@@ -27,6 +27,7 @@ import { NavigationTitleChromeProvider } from '@/components/ui/layout/navigation
 import { PageLeaveActions } from '@/components/ui/layout/PageLeaveActions';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { Text } from '@/components/ui/text/Text';
 import { CATALOG_SURFACE_LIST_ROLE } from '@/modal/components/card/commandSurfaceCard';
@@ -471,25 +472,21 @@ function RegistrySourceDetail(
         </Text>
       ) : null}
       {editable ? (
-        <ItemGroup>
-          <Item
-            title={t('capabilities.registries.detail.nameTitle')}
-            subtitle={t('capabilities.registries.detail.nameBody')}
-            accessoryLayout="stacked"
-            rightElement={
-              <FieldTextInput
-                testID={`${props.testID}:name`}
-                value={name}
-                onChangeText={setName}
-                onBlur={commitName}
-                onSubmitEditing={commitName}
-                returnKeyType="done"
-                accessibilityLabel={t(
-                  'capabilities.registries.detail.nameTitle',
-                )}
-              />
-            }
-          />
+        <ItemGroup
+          title={t('capabilities.registries.detail.nameTitle')}
+          description={t('capabilities.registries.detail.nameBody')}
+        >
+          <SectionContentRow>
+            <FieldTextInput
+              testID={`${props.testID}:name`}
+              value={name}
+              onChangeText={setName}
+              onBlur={commitName}
+              onSubmitEditing={commitName}
+              returnKeyType="done"
+              accessibilityLabel={t('capabilities.registries.detail.nameTitle')}
+            />
+          </SectionContentRow>
         </ItemGroup>
       ) : null}
       <ItemGroup title={t('capabilities.registries.detail.sourceTitle')}>

@@ -5,6 +5,8 @@ import { StyleSheet } from 'react-native-unistyles';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { RegistrySourcesView } from '@/registries/RegistrySourcesView';
 import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 import { t } from '@/text';
 
 /**
@@ -16,9 +18,13 @@ export const PluginSourcesScreen = React.memo(function PluginSourcesScreen() {
     const chromeClearance = useFloatingChromeClearance();
     return (
         <View style={styles.page} testID="settings.plugins.sources">
-            <SettingsPageHeader columnWidth="pane" description={t('settingsPlugins.sourceAdministration.subtitle')} />
+            <SettingsPageHeader description={t('settingsPlugins.sourceAdministration.subtitle')} />
             <View style={[styles.body, chromeClearance > 0 ? { paddingBottom: chromeClearance } : null]}>
-                <RegistrySourcesView kind="plugin" testID="settings.plugins.sources.registries" />
+                <PageContentColumn>
+                    <ListPresentationProvider value="page" pageInsets="contained">
+                        <RegistrySourcesView kind="plugin" testID="settings.plugins.sources.registries" />
+                    </ListPresentationProvider>
+                </PageContentColumn>
             </View>
         </View>
     );
@@ -26,5 +32,6 @@ export const PluginSourcesScreen = React.memo(function PluginSourcesScreen() {
 
 const styles = StyleSheet.create((theme) => ({
     page: { flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base },
-    body: { flex: 1, minHeight: 0 },
+    // The registries sit a step under the header's purpose line.
+    body: { flex: 1, minHeight: 0, paddingTop: theme.space.s16 },
 }));
