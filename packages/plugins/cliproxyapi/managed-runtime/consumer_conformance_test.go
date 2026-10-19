@@ -65,7 +65,8 @@ func TestPinnedSDKSharedConsumersUseExactSubjectAndRejectUnboundOrRevokedAuthori
 	writeCapabilityV2(t, twoPath, testCapability(52), daemonPort)
 	one := map[string]any{"token": testCapability(61), "capabilityPath": onePath, "purposes": []QualifiedPurpose{testPurpose("openai-upstream")}}
 	two := map[string]any{"token": testCapability(62), "capabilityPath": twoPath, "purposes": []QualifiedPurpose{testPurpose("openai-upstream")}}
-	writeConsumerAccess(t, accessPath, one, two)
+	all := map[string]any{"token": testCapability(63), "capabilityPath": onePath, "purposes": []QualifiedPurpose{testPurpose("openai-upstream"), testPurpose("anthropic-upstream")}}
+	writeConsumerAccess(t, accessPath, one, two, all)
 	cfg := Config{
 		Host: "127.0.0.1", Port: reserveLoopbackPort(t), RuntimeDir: runtimeDir,
 		DownstreamBearer: "physical-health-secret", ConsumerAccessPath: accessPath,
@@ -103,6 +104,10 @@ func TestPinnedSDKSharedConsumersUseExactSubjectAndRejectUnboundOrRevokedAuthori
 		}
 		models := getStrictOpenAIModelCatalog(t, consumerConfig)
 		for _, model := range models {
+			var purposes []QualifiedPurpose
+			if err := json.Unmarshal(model["happier_connected_account_purposes"], &purposes); err != nil || len(purposes) != 1 || purposes[0] != testPurpose("openai-upstream") {
+				t.Fatalf("consumer model omitted its admitted vendor slot: %#v, %v", model, err)
+			}
 			var id string
 			if err := json.Unmarshal(model["id"], &id); err != nil {
 				t.Fatal(err)
@@ -110,6 +115,26 @@ func TestPinnedSDKSharedConsumersUseExactSubjectAndRejectUnboundOrRevokedAuthori
 			if strings.Contains(id, "claude") {
 				t.Fatalf("unbound vendor in consumer catalog: %#v", model)
 			}
+		}
+	}
+	consumerConfig.DownstreamBearer = all["token"].(string)
+	mixedModels := getStrictOpenAIModelCatalog(t, consumerConfig)
+	for _, expected := range []struct{ id, purpose string }{{"gpt-5.5", "openai-upstream"}, {"claude-sonnet-4-6", "anthropic-upstream"}} {
+		found := false
+		for _, model := range mixedModels {
+			var id string
+			_ = json.Unmarshal(model["id"], &id)
+			if id != expected.id {
+				continue
+			}
+			found = true
+			var purposes []QualifiedPurpose
+			if err := json.Unmarshal(model["happier_connected_account_purposes"], &purposes); err != nil || len(purposes) != 1 || purposes[0] != testPurpose(expected.purpose) {
+				t.Fatalf("mixed consumer model has wrong vendor slot: %#v, %v", model, err)
+			}
+		}
+		if !found {
+			t.Fatalf("mixed consumer catalog omitted %s", expected.id)
 		}
 	}
 	requests := upstream.requests()

@@ -1269,7 +1269,7 @@ func getStrictOpenAIModelCatalog(t *testing.T, cfg Config) []map[string]json.Raw
 	for i, row := range rows {
 		for key := range row {
 			switch key {
-			case "id", "object", "created", "owned_by":
+			case "id", "object", "created", "owned_by", "happier_connected_account_purposes":
 			default:
 				t.Fatalf("model catalog row %d has unexpected key %q", i, key)
 			}
