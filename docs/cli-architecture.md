@@ -276,6 +276,14 @@ current-target and materialization checks; the plugin does not reread a previous
 account's launch home after a switch. This proof carries no refresh token. These
 development-source contracts do not establish successful provider token rotation.
 
+In 0.3 development, the Codex plugin's shared Unix app-server waits for native
+socket readiness until Session cancellation or native process termination.
+The initialize RPC budget does not bound this phase: a new connected home can
+backfill its linked history before publishing the socket. Stopping that work at
+the RPC deadline can leave Codex's native backfill lease running and make a
+subsequent native start fail. Native exit diagnostics remain sanitized; this
+wait does not repair native databases or change Codex's own backfill policy.
+
 ### Exact Session creation targets (0.3 development)
 
 CLI Action Machine discovery reads the authenticated Account inventory through
@@ -881,6 +889,14 @@ uses the existing completion subscription for a later result; startup success
 alone cannot complete the step. Interrupted uncertainty remains in the recovery
 index until exact terminal evidence resolves the child. This observation leaves
 the interrupted parent and its explicit recovery controls unchanged.
+
+Cancellation recovery keeps an exact-Machine parent with pending custody in its
+index after the root becomes cancelled, even when every child has already
+settled. Invocation facts and parent settlement are separate writes; a later
+startup or reconnect pass can finish the parent after a failed settlement write.
+A cancelled child alone does not establish whole-Run cancellation. The existing
+recovery reader verifies the root and current child custody before committing
+the terminal parent state, after which ordinary history deletion is available.
 
 Environment-only setup uses the same environment body without inventing a
 command. The plugin request's launch is optional; an adapter that returns a

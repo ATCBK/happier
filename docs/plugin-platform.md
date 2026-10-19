@@ -2741,6 +2741,19 @@ forge supplies one, `retryNotBeforeMs`. PR and repository-provisioning responses
 share the validated failure fields. Git publishing, PR reads, checkout, clone and
 stacked actions preserve that retry instant without inventing a fallback deadline.
 
+### Connected Account purpose setup (0.3 development)
+
+Source discovery Actions select Connected Accounts through the same host purpose
+setup as Resources. The Action projection carries its declared qualified purpose
+scopes from the existing registry authorization owner. A plugin's
+`openConnectedAccounts` request can include that qualified `purpose`; the host
+captures the invoking Account and machine and opens the existing chooser.
+`connectedServices.purposes.default.set` admits either installed consumer and
+writes the canonical purpose catalog under the existing approval policy, also
+serving agent/MCP/CLI callers. Creating an account does not bind a purpose, and
+read-only discovery never selects one. Machine-provisioner setup still returns
+an explicit launch-input selection rather than writing a default.
+
 ### Machine-native GitHub credentials (0.3 development)
 
 GitHub's Connected Service declares `authentication.native: { systemTool: 'gh' }`.

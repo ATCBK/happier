@@ -89,6 +89,16 @@ or require a new Pending event. Results without a retry hint still wait for the
 existing queue, metadata or connection wake; input is never enqueued again to
 recover a lost settlement receipt. This is 0.3 development-source behavior.
 
+Protected Session inputs re-enter that same Pending admission owner after host
+prompt and checkpoint preparation, immediately before a new turn or in-flight
+steer reaches the native Agent. A local queue copy or committed user transcript
+row does not authorize dispatch after the Pending input is discarded. The host
+refuses native delivery when admission is rejected, held or unavailable.
+Protected originals retain independent
+queue entries so one cancellation cannot reject a valid peer. This applies to
+bundled and installed Agents; context-only host inputs retain their existing
+separate admission owner.
+
 In 0.3 development source, Role, prompt Artifact and Session Project association
 preparation classify Home read failures through the shared endpoint policy.
 Network, timeout and retryable HTTP failures publish the existing
@@ -782,10 +792,13 @@ cannot confirm idle, and completed observations are never cached.
 
 In 0.3 development source, the daemon's Workspace Sync runtime compares Project
 scope, WorkspaceRefs and relationships with its successful reconciliation input.
-Equal refreshes advance Project graph settlement without enqueueing material
-Sync work or resetting the Machine's idle interval. Changed inputs retain normal
-busy admission. Project withdrawal, failed or partial recovery, and supervised
-sidecar replacement require reconciliation even when desired inputs are equal.
+When no relationship belongs to the local controller and its activity coverage
+is complete and empty, equal refreshes advance Project graph settlement without
+enqueueing material Sync work or resetting the Machine's idle interval. Installed
+local relationships retain native bootstrap and custody reconciliation, including
+while their desired inputs are unchanged. Changed inputs retain normal busy
+admission. Project withdrawal, failed or partial recovery, and supervised sidecar
+replacement require reconciliation even when desired inputs are equal.
 
 Publisher reconnect reads this same inventory through the reserved server-origin
 Machine access-loss receiver. Only attribution matching the current Home, Machine

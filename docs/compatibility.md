@@ -2137,9 +2137,13 @@ summaries and recipient-key census consume the same Run access owner.
 Cursors bind both Account and source/filter scope. `workflow.run.summaries`
 reads the requested saved-workflow ids in one indexed batch and returns latest,
 recent and Needs-you facts with byte-bounded `remainingSourceArtifactIds`.
-List, wait and summaries share the server's attention predicate: interrupted
-Runs, terminal Runs retaining child custody, or actionable invocation rows.
-Failed origin delivery and a settled exhausted result do not add attention.
+List, detail, wait and summaries share the server's attention predicate: failed
+Runs, or non-cancelled Runs with actionable invocation rows. Accepted managed
+Automation Runs use this Workflow predicate and are excluded from ordinary
+Automation attention, so a failure without a Session still appears once in Inbox.
+Linked step Session attention folds beneath the same Run. An interrupted state,
+pending physical Stop custody, failed origin delivery or a settled exhausted
+result alone does not add attention.
 Lean list rows expose `attentionRequired` from that same membership, including
 exact Run reads used by Boards. Other projections may omit it; omission is
 unknown, not false. Ordinary child-row wakes refresh this fact without advancing

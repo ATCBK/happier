@@ -584,6 +584,14 @@ Current mode facts come from native observation or accepted application, never a
 The canonical V2 catalog permits an unknown current mode while preserving known selectable
 options. Readers prefer it over retained V1/ACP aliases; the same writer projects strict
 `sessionModesV1` compatibility only when the accepted current mode is known.
+In development source, the host checks an explicit native mode against this observed inventory
+at Session open and before configuration updates. A missing mode returns
+`native_agent_session_mode_unavailable` before prompt delivery; an unobserved inventory or the
+native accepted current mode retains the Agent's authority. A mode named `default` is an explicit
+native identifier, not a host-selected fallback for another Agent's configuration.
+Session-owned Runs carry the same live catalog binding into admission. OpenCode's native
+configuration owner also consumes the shared selection rule for detached execution contexts,
+which have no Session catalog-publication service.
 
 Host-managed ACP Sessions use those same model and mode bindings at startup, on
 resume and for live ACP updates. Initial selections are applied before publishing
