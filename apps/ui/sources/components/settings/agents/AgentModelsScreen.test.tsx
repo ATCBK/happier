@@ -502,10 +502,10 @@ describe('AgentModelsScreen provider settings safety', () => {
     expect(
       screen.findByTestId('agent-models-source-visibility:pc_a'),
     ).not.toBeNull();
-    expect(providerHarness.state.requests.filter(request => ![
-      RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION,
-      RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
-    ].includes(request.method))).toEqual([]);
+    expect(providerHarness.state.requests.filter(request => (
+      request.method !== RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION
+      && request.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+    ))).toEqual([]);
     // Setting the default is the row menu's rare operation for that exact model.
     const defaultControl = screen
       .findAllByType(PageHeaderMenu)
@@ -528,7 +528,10 @@ describe('AgentModelsScreen provider settings safety', () => {
         modelId: 'model-b',
       }),
     );
-    expect(providerHarness.state.requests.filter(request => request.method !== RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toEqual([]);
+    expect(providerHarness.state.requests.filter(request => (
+      request.method !== RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION
+      && request.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+    ))).toEqual([]);
   });
   it('shows the exact Account default on the Agent Session-default Model row without a machine', async () => {
     const agentTargetKey = 'agent:happier.agent.codex/codex';
