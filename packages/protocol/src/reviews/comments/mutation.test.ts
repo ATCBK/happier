@@ -6,6 +6,8 @@ import {
   ReviewCommentStructuralMutationV1Schema,
   ReviewCommentPrepareMutationResponseV1Schema,
   ReviewCommentCommitMutationResponseV1Schema,
+  reviewCommentTransitionTargetsV1,
+  reviewCommentTransitionAllowedV1,
 } from './mutation.js';
 import { splitReviewCommentV1, sealReviewCommentSensitiveEnvelopeV1, openStoredReviewCommentV1 } from './content.js';
 
@@ -19,6 +21,31 @@ const input = {
 const runtime = { now: () => 1000, createId: (prefix: string) => `${prefix}-1` };
 
 describe('canonical Review Comment structural mutations', () => {
+  it('derives offered transitions from the same graph that admits mutations', () => {
+    const create = projectReviewCommentStructuralMutationV1('reviews.comments.create', { ...input, authorIntent: 'propose' });
+    const first = deriveReviewCommentStructuralMutationV1({ mutation: create, accountId: 'account-1', actor, current: [], runtime }).records[0]!;
+    expect(reviewCommentTransitionTargetsV1('proposed')).toEqual(['open', 'dismissed']);
+    expect(reviewCommentTransitionTargetsV1('resolved')).toEqual(['open']);
+    expect(reviewCommentTransitionTargetsV1('dismissed')).toEqual(['open']);
+    for (const from of ['proposed', 'open', 'delegated', 'pending_review', 'resolved', 'dismissed'] as const) {
+      for (const to of ['proposed', 'open', 'delegated', 'pending_review', 'resolved', 'dismissed'] as const) {
+        const mutation = projectReviewCommentStructuralMutationV1('reviews.comments.transition', {
+          projectId: 'project-1', commentId: first.structural.id, expectedState: from, expectedServerRevision: 1,
+          toState: to, reason: 'Reviewed evidence', clientMutationId: `${from}-${to}`,
+        });
+        const derive = () => deriveReviewCommentStructuralMutationV1({ mutation, accountId: 'account-1', actor,
+          current: [{ ...first.structural, state: from }], runtime });
+        if (reviewCommentTransitionTargetsV1(from).includes(to)) {
+          expect(derive().records[0]?.structural.state).toBe(to);
+          expect(reviewCommentTransitionAllowedV1(from, to)).toBe(true);
+        } else {
+          expect(derive).toThrowError(expect.objectContaining({ code: 'review_comment_invalid_transition' }));
+          expect(reviewCommentTransitionAllowedV1(from, to)).toBe(false);
+        }
+      }
+    }
+  });
+
   it('uses the canonical Review error codes in both prepared and committed failures', () => {
     const failed = [{ commentId: 'missing-comment', errorCode: 'review_comment_not_found', error: 'Missing comment' }];
     const prepared = { v: 1, receipt: 'receipt', request: { v: 1,

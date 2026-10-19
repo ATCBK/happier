@@ -1,10 +1,8 @@
 import type { ReviewTriageStatus } from '../reviewTriageStatus.js';
 import type { ReviewCommentStateV1, ReviewCommentTransitionRequestV1, ReviewCommentV1 } from './v1.js';
+import { reviewCommentTransitionAllowedV1 } from './mutation.js';
 
 const IGNORED_REASON = 'Ignored during review triage';
-
-/** States a finding can be dismissed from (the server's transition table). */
-const DISMISSIBLE_STATES: ReadonlySet<ReviewCommentStateV1> = new Set(['proposed', 'open', 'delegated', 'pending_review']);
 
 function resolveTargetState(state: ReviewCommentStateV1, decision: ReviewTriageStatus): ReviewCommentStateV1 {
   switch (decision) {
@@ -12,7 +10,7 @@ function resolveTargetState(state: ReviewCommentStateV1, decision: ReviewTriageS
       // Choosing to fix a proposed or ignored finding makes it open work again.
       return state === 'proposed' || state === 'dismissed' ? 'open' : state;
     case 'reject':
-      return DISMISSIBLE_STATES.has(state) ? 'dismissed' : state;
+      return reviewCommentTransitionAllowedV1(state, 'dismissed') ? 'dismissed' : state;
     case 'defer':
     case 'needs_refinement':
       return state;

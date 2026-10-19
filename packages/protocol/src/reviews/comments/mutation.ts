@@ -146,13 +146,17 @@ export function reviewCommentActorsEqualV1(left: ReviewCommentActorRefV1, right:
   return false;
 }
 
-export function reviewCommentTransitionAllowedV1(from: ReviewCommentStateV1, to: ReviewCommentStateV1): boolean {
+export function reviewCommentTransitionTargetsV1(from: ReviewCommentStateV1): readonly ReviewCommentStateV1[] {
   const transitions: Record<ReviewCommentStateV1, readonly ReviewCommentStateV1[]> = {
     proposed: ['open', 'dismissed'], open: ['delegated', 'pending_review', 'resolved', 'dismissed'],
     delegated: ['open', 'pending_review', 'resolved', 'dismissed'],
     pending_review: ['open', 'resolved', 'dismissed'], resolved: ['open'], dismissed: ['open'],
   };
-  return transitions[from].includes(to);
+  return transitions[from];
+}
+
+export function reviewCommentTransitionAllowedV1(from: ReviewCommentStateV1, to: ReviewCommentStateV1): boolean {
+  return reviewCommentTransitionTargetsV1(from).includes(to);
 }
 
 /** One structural mutation owner; server admission and client sealing consume its result. */

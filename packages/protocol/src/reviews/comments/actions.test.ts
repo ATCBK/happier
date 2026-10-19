@@ -44,13 +44,12 @@ describe('review comment operation contracts', () => {
     }
   });
   it('exposes scoped review reads and CAS moderation to agents and MCP', () => {
-    for (const actionId of ['reviews.comments.list', 'reviews.comments.transition', 'reviews.comments.setDisposition'] as const) {
+    for (const actionId of ['reviews.comments.create', 'reviews.comments.list', 'reviews.comments.transition', 'reviews.comments.setDisposition'] as const) {
       const spec = getActionSpec(actionId);
       expect(spec.surfaces.agent).toBe(true);
       expect(spec.surfaces.mcp).toBe(true);
       expect(spec.bindings?.mcpToolName).toBe(actionId.replaceAll('.', '_'));
     }
-    expect(getActionSpec('reviews.comments.create').surfaces.agent).toBe(false);
     const transition = {
       commentId: 'comment-1', projectId: 'project-1', toState: 'dismissed', reason: 'Evidence disproves this finding.',
       expectedState: 'open', expectedServerRevision: 3, clientMutationId: 'stable-mutation-1',
