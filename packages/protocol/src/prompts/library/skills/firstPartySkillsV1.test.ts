@@ -7,9 +7,15 @@ import { listActionCliCommandDeclarations } from '../../../actions/actionSpecs.j
 import { readSkillLibraryCatalog } from './readSkillLibraryCatalog.js';
 
 describe('first-party bundled skills', () => {
-  it('makes bundled identities selectable through the canonical names/ids catalog without an Artifact', async () => {
-    const catalog = await readSkillLibraryCatalog({ list: async () => ({ items: [], coverage: 'complete' }) });
+  it('makes built-in and plugin identities selectable through the canonical names/ids catalog without an Artifact', async () => {
+    const plugin = { skillId: 'plugin:external.skills/guide', files: FIRST_PARTY_SKILLS_V1[0]!.files,
+      provenance: { kind: 'plugin' as const, pluginId: 'external.skills', occurrenceId: 'occurrence-1' } };
+    const store = { list: async () => ({ items: [], coverage: 'complete' as const }),
+      read: async () => { throw new Error('Read-only skills have no Artifact'); }, readPluginSkills: async () => [plugin] };
+    const catalog = await readSkillLibraryCatalog(store);
     expect(catalog).toContainEqual({ id: 'happier:happier', name: 'happier' });
+    expect(catalog).toContainEqual({ id: plugin.skillId, name: 'happier' });
+    expect(await readSkillLibraryCatalog(store, undefined, [plugin.skillId])).toEqual([{ id: plugin.skillId, name: 'happier' }]);
   });
   it('supplies a valid stable stub through the same bundle and reach consumers, with guides for declared CLI roots', () => {
     const skill = FIRST_PARTY_SKILLS_V1.find(item => item.skillId === 'happier:happier');

@@ -28,6 +28,7 @@ import {
   PluginProjectedSettingsFieldV2Schema,
   PluginProjectionInstalledPackageV2Schema,
   PluginProjectionV2Schema,
+  PluginDeclaredUiEntryV1Schema,
   PluginUiResourceBindingCapabilityV1Schema,
   projectPluginSettingsContributionV2,
   readDaemonPluginUiTargetedSurfaceMountV1,
@@ -37,6 +38,8 @@ import { RPC_METHODS } from '../rpc/index.js';
 import { PluginSettingsContributionV2Schema } from '../plugins/contributions/settings.js';
 import { PluginActionPresentUserAuthorizationFactsSchema } from '../plugins/actions/invocation.js';
 import type { PluginDeclarativeProjectedModelV1 } from '../plugins/contributions/ui/declarativeProjectedModelV1.js';
+import { normalizePluginUiDestinationBindingV1 } from '../plugins/contributions/ui/surfaceRegistry.js';
+import { FIRST_PARTY_SKILLS_V1 } from '../prompts/library/skills/firstPartySkillsV1.js';
 
 const TARGET_SOURCE_CUSTODY = {
   kind: 'development',
@@ -643,6 +646,30 @@ describe('daemon contribution registry projection (wire)', () => {
       ...surface,
       context: { ...surface.context, callerContext: { forged: true } },
     }).success).toBe(false);
+  });
+
+  it('preserves typed widget areas only on their declaring app-page placement', () => {
+    const entry = {
+      id: 'surfacePlacement:acme.widgets:overview',
+      pluginId: 'acme.widgets',
+      contributionKind: 'surfacePlacement',
+      binding: normalizePluginUiDestinationBindingV1({
+        pluginId: 'acme.widgets', destinationId: 'overview', rendererId: 'native',
+        availableRendererIds: ['native'], container: 'appPage', target: { kind: 'app' },
+      }),
+      widgetAreas: [{ name: 'pinned', contextSchema: { type: 'object', additionalProperties: false } }],
+    } as const;
+    expect(PluginDeclaredUiEntryV1Schema.parse(entry).widgetAreas).toEqual(entry.widgetAreas);
+    const { widgetAreas: _areas, ...withoutAreas } = entry;
+    expect(PluginDeclaredUiEntryV1Schema.safeParse(withoutAreas).success).toBe(true);
+    for (const invalid of [
+      { ...entry, widgetAreas: [...entry.widgetAreas, ...entry.widgetAreas] },
+      { ...entry, widgetAreas: [{ ...entry.widgetAreas[0], unrecognized: true }] },
+      { ...entry, contributionKind: 'reactNativeBundle' },
+      { ...entry, binding: undefined },
+    ]) {
+      expect(PluginDeclaredUiEntryV1Schema.safeParse(invalid).success).toBe(false);
+    }
   });
 
   it('carries an exact execution origin envelope on each projected plugin UI entry', () => {
@@ -1623,6 +1650,26 @@ describe('daemon contribution registry projection (wire)', () => {
       backendsById: {},
       familiesById: {},
     }).success).toBe(false);
+  });
+
+  it('admits addressed skill source reads and validates the real bundle producer at the machine boundary', async () => {
+    const { readSkillInLibrary } = await import('../prompts/library/promptLibraryActionOperations.js');
+    const skillId = 'plugin:acme.skills/guide';
+    expect(DaemonContributionRegistryProjectionDescribeRequestSchema.parse({ machineId: 'm1', selection: 'skills', skillIds: [skillId] }))
+      .toEqual({ machineId: 'm1', selection: 'skills', skillIds: [skillId] });
+    expect(DaemonContributionRegistryProjectionDescribeRequestSchema.safeParse({ machineId: 'm1', selection: 'skills', unexpected: true }).success).toBe(false);
+    expect(DaemonContributionRegistryProjectionDescribeRequestSchema.safeParse({ machineId: 'm1', skillIds: [skillId] }).success).toBe(false);
+    const read = await readSkillInLibrary({ store: { read: async () => null }, request: { skillId, includeFileContents: true },
+      pluginSkills: [{ skillId, files: FIRST_PARTY_SKILLS_V1[0]!.files,
+        provenance: { kind: 'plugin', pluginId: 'acme.skills', occurrenceId: 'occurrence-1' } }] });
+    if ('ok' in read || !read.fileContents || read.provenance.kind !== 'plugin') throw new Error('Skill producer failed');
+    const source = { skillId: read.skillId, files: read.fileContents, provenance: read.provenance };
+    const response = { protocolVersion: 1, projection: { v: 2, generation: 1, familiesById: {} }, pluginSkills: [source] };
+    expect(DaemonContributionRegistryProjectionDescribeResponseSchema.parse(response).pluginSkills).toEqual([source]);
+    for (const invalid of [{ ...source, unexpected: true }, { ...source, provenance: { ...source.provenance, unexpected: true } },
+      { ...source, files: [{ ...source.files[0]!, unexpected: true }] }]) {
+      expect(DaemonContributionRegistryProjectionDescribeResponseSchema.safeParse({ ...response, pluginSkills: [invalid] }).success).toBe(false);
+    }
   });
 
   it('reads the current contributions to one target without carrying the machine projection', () => {

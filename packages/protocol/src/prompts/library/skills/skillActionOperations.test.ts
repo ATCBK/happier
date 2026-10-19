@@ -18,6 +18,7 @@ import { readSkillInLibrary } from '../promptLibraryActionOperations.js';
 import { SkillReadResultV1Schema } from './skillReadV1.js';
 import retainedFrontmatter from '../../../../fixtures/0.2-retained-skill-frontmatter.json';
 import { estimateTokensV1 } from '../../../capabilities/estimateTokensV1.js';
+import { readSkillLibraryCatalog } from './readSkillLibraryCatalog.js';
 
 const markdown = '---\nname: sample\ndescription: A useful skill\n---\nInstructions';
 const files = [{ path: 'SKILL.md', contentBase64: encodeBase64(new TextEncoder().encode(markdown), 'base64'), contentKind: 'utf8' as const }];
@@ -61,22 +62,125 @@ function harness(registry?: ReturnType<typeof createRegistryHostV1>, foundReader
     failRules: (value: boolean) => { failRules = value; }, failSession: (value: boolean) => { failSession = value; } };
 }
 describe('skill library Actions', () => {
+  it('returns an addressed bundle in one read only when full file contents are requested', async () => {
+    const h = harness(), stub = FIRST_PARTY_SKILLS_V1[0]!;
+    const normal = SkillReadResultV1Schema.parse(await readSkillInLibrary({ store: h.store, request: { skillId: stub.skillId } }));
+    expect(normal).not.toHaveProperty('fileContents');
+    const expanded = SkillReadResultV1Schema.parse(await readSkillInLibrary({ store: h.store,
+      request: { skillId: stub.skillId, includeFileContents: true } }));
+    expect(expanded.fileContents).toEqual(stub.files);
+  });
+  it('projects current plugin content through the built-in read-only path and copies into editable personal ownership', async () => {
+    const h = harness();
+    const pluginFiles = [{ ...files[0]!, contentBase64: encodeBase64(new TextEncoder().encode(markdown.replace('name: sample', 'name: sample\nuser-invocable: false\ndisable-model-invocation: true')), 'base64') },
+      { path: 'scripts/check.sh', contentBase64: 'AAEC/w==', contentKind: 'binary' as const, unixMode: 0o755 }];
+    const plugin = { skillId: 'plugin:external.skills/sample', files: pluginFiles,
+      provenance: { kind: 'plugin' as const, pluginId: 'external.skills', occurrenceId: 'occurrence-1' } };
+    let active = true;
+    const readPluginSkills = async () => active ? [plugin] : [];
+    const execute = createSkillActionExecuteV1({ store: h.store, skillRules: h.skillRules, randomId: () => 'rule',
+      includeInSession: async () => ({ ok: true }), readPluginSkills });
+    const list = async () => SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await execute('skills.list', {}, { surface: 'ui' }));
+    const item = (await list()).items.find(item => item.skillId === plugin.skillId);
+    expect(item).toMatchObject({ name: 'sample', provenance: plugin.provenance, folderId: null, modified: false, userInvocable: false, trust: 'runs_scripts' });
+    const read = await readSkillInLibrary({ store: h.store, pluginSkills: await readPluginSkills(), request: { skillId: plugin.skillId, file: 'SKILL.md' } });
+    expect(SkillReadResultV1Schema.parse(read)).toMatchObject({ skillId: plugin.skillId, provenance: plugin.provenance, file: pluginFiles[0] });
+    expect(SkillReadResultV1Schema.parse(await readSkillInLibrary({ store: h.store, pluginSkills: [plugin],
+      request: { skillId: plugin.skillId, file: 'scripts/check.sh' } })).file).toEqual(pluginFiles[1]);
+    for (const actionId of ['skills.update', 'skills.delete'] as const) {
+      expect(await execute(actionId, { skillId: plugin.skillId, expectedRevision: item!.revision }, { surface: 'ui' }))
+        .toMatchObject({ ok: false, code: 'skill_read_only' });
+    }
+    expect(h.order).toEqual([]);
+    const copied = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.duplicate'].parse(await execute('skills.duplicate', { skillId: plugin.skillId }, { surface: 'ui' }));
+    expect(readSkillLockV1(h.artifacts.get(copied.skillId)!.header).provenance).toEqual({ kind: 'written' });
+    expect(await execute('skills.update', { skillId: copied.skillId, expectedRevision: copied.revision, description: 'My copy' }, { surface: 'ui' }))
+      .toMatchObject({ revision: '2:2' });
+    const retainedRule: SkillRuleV1 = { id: 'plugin-rule', skillId: plugin.skillId, target: { t: 'allMachines' },
+      enabled: true, createdAt: 1, updatedAt: 1 };
+    h.setRules([retainedRule]);
+    active = false;
+    expect((await list()).items.some(item => item.skillId === plugin.skillId)).toBe(false);
+    expect(await execute('skills.delete', { skillId: plugin.skillId, expectedRevision: item!.revision }, { surface: 'ui' }))
+      .toMatchObject({ ok: false, code: 'not_found' });
+    expect(h.rules()).toEqual([retainedRule]);
+    expect(await readSkillInLibrary({ store: h.store, pluginSkills: [], request: { skillId: plugin.skillId } })).toMatchObject({ ok: false, errorCode: 'not_found' });
+    // A retired host source is absent even when the independent Artifact transport is unavailable.
+    const unavailableStore = { ...h.store, read: async () => { throw new Error('Artifact transport unavailable'); } };
+    expect(await readSkillInLibrary({ store: unavailableStore, pluginSkills: [], request: { skillId: plugin.skillId } }))
+      .toMatchObject({ ok: false, errorCode: 'not_found' });
+    const retiredExecute = createSkillActionExecuteV1({ store: unavailableStore, skillRules: h.skillRules,
+      randomId: () => 'unused', includeInSession: async () => ({ ok: true }), readPluginSkills });
+    expect(await retiredExecute('skills.duplicate', { skillId: plugin.skillId }, { surface: 'ui' }))
+      .toMatchObject({ ok: false, code: 'not_found' });
+    expect(await readSkillLibraryCatalog({ list: async () => ({ items: [], coverage: 'complete' as const }),
+      read: unavailableStore.read, readPluginSkills }, undefined, [plugin.skillId])).toEqual([]);
+    active = true;
+    plugin.provenance.occurrenceId = 'occurrence-2';
+    expect((await list()).items.find(item => item.skillId === plugin.skillId)?.provenance).toEqual(plugin.provenance);
+  });
   it('starts independent Artifact inventory while display catalogs are still pending', async () => {
     const h = harness();
     const created = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' }));
     let release!: () => void;
     const catalogReady = new Promise<void>(resolve => { release = resolve; });
     let inventoryStarted = false;
+    let contentStarted = false;
     const execute = createSkillActionExecuteV1({ store: { ...h.store, list: async options => {
       inventoryStarted = true; return h.store.list!(options);
+    }, read: async (...args) => {
+      contentStarted = true; return h.store.read(...args);
     } }, skillRules: { ...h.skillRules, readCatalog: async (...args) => {
       await catalogReady; return h.skillRules.readCatalog(...args);
     } }, randomId: () => 'unused', includeInSession: async () => ({ ok: true }) });
     const pending = execute('skills.list', {}, { surface: 'ui' });
-    try { expect(inventoryStarted).toBe(true); }
+    try {
+      expect(inventoryStarted).toBe(true);
+      await vi.waitFor(() => expect(contentStarted).toBe(true));
+    }
     finally { release(); }
     const listed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await pending);
     expect(listed.items.find(item => item.skillId === created.skillId)?.name).toBe('sample');
+  });
+
+  it('opens each page of skill content while later inventory and earlier bodies are pending', async () => {
+    const h = harness();
+    const created = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' }));
+    const first = h.artifacts.get(created.skillId)!;
+    const second = { ...first, id: 'second-page-skill' };
+    let release!: () => void;
+    const firstBody = new Promise<void>(resolve => { release = resolve; });
+    let secondOpened = false;
+    let firstOpened = false;
+    let releasePage!: () => void;
+    const laterPage = new Promise<void>(resolve => { releasePage = resolve; });
+    let secondPageUnavailable = false;
+    const execute = createSkillActionExecuteV1({
+      store: { ...h.store,
+        list: async options => {
+          if (!options?.cursor) return { coverage: 'partial', nextCursor: 'page-2', items: [{ id: first.id, header: first.header, updatedAtMs: 1 }] };
+          await laterPage;
+          return secondPageUnavailable ? { coverage: 'unavailable', items: [] }
+            : { coverage: 'complete', items: [{ id: second.id, header: second.header, updatedAtMs: 1 }] };
+        },
+        read: async id => {
+          if (id === first.id) { firstOpened = true; await firstBody; return first; }
+          if (id === second.id) { secondOpened = true; return second; }
+          return null;
+        },
+      }, skillRules: h.skillRules, randomId: () => 'unused', includeInSession: async () => ({ ok: true }),
+    });
+    const pending = execute('skills.list', {}, { surface: 'ui' });
+    try {
+      await vi.waitFor(() => expect(firstOpened).toBe(true));
+      releasePage();
+      await vi.waitFor(() => expect(secondOpened).toBe(true));
+    }
+    finally { releasePage(); release(); }
+    const listed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await pending);
+    expect(listed.items.filter(item => item.provenance.kind !== 'first_party').map(item => item.skillId)).toEqual([first.id, second.id]);
+    secondPageUnavailable = true;
+    expect(await execute('skills.list', {}, { surface: 'ui' })).toMatchObject({ ok: false, code: 'library_unavailable' });
   });
 
   it('lists only upstream-tracked skills without reading display catalogs or written content', async () => {
@@ -167,30 +271,6 @@ describe('skill library Actions', () => {
     const result = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.duplicate'].parse(output);
     expect(h.order).toEqual(failRules ? ['content'] : ['content', 'rules']);
     expect(h.rules()).toEqual(failRules ? [] : [expect.objectContaining({ skillId: result.skillId, enabled: true })]);
-  });
-  it('opens independent listed skills together, so a slow content read does not gate the next skill', async () => {
-    const h = harness();
-    await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' });
-    await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' });
-    let release!: () => void;
-    const gate = new Promise<void>(resolve => { release = resolve; });
-    const opened = new Set<string>();
-    const execute = createSkillActionExecuteV1({ ...{
-      skillRules: { serverId: 'home', assertCurrent: () => {},
-        readCatalog: async () => ({ catalog: { status: 'ready' as const, rows: [], tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 0 }),
-        writeRecord: async () => ({ status: 'updated' as const, revision: 1, cursor: 1 }),
-        listSkills: async () => [], ruleWriteContext: () => ({ nowMs: 1, newId: () => 'rule' }),
-      }, includeInSession: async () => ({ ok: true }), randomId: () => 'id',
-    }, store: { ...h.store, read: async (id, options) => {
-      opened.add(id); if (id === 'skill-1') await gate;
-      return h.store.read(id, options);
-    } } });
-    const pending = execute('skills.list', {}, { surface: 'ui' });
-    try {
-      await vi.waitFor(() => expect(opened.has('skill-2')).toBe(true));
-    } finally { release(); }
-    const output = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await pending);
-    expect(output.items.map(item => item.skillId)).toEqual(['skill-1', 'skill-2', ...FIRST_PARTY_SKILLS_V1.map(skill => skill.skillId)]);
   });
   it('lists the bundled skill with actual rules and refuses mutations without writing, while duplication makes a written copy', async () => {
     const h = harness(), stub = FIRST_PARTY_SKILLS_V1[0]!;

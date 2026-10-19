@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readSkillFrontmatterV1, readSkillLockV1, isSkillModifiedV1, SkillRevisionV1Schema, decodeSkillRevisionV1 } from './skillLibraryItemV1.js';
+import { readSkillFrontmatterV1, readSkillLockV1, isSkillModifiedV1, SkillRevisionV1Schema, decodeSkillRevisionV1, SkillProvenanceV1Schema } from './skillLibraryItemV1.js';
 
 describe('readSkillFrontmatterV1', () => {
   it.each([
@@ -37,6 +37,13 @@ describe('readSkillFrontmatterV1', () => {
 });
 
 describe('skill provenance', () => {
+  it('admits closed plugin provenance only as a host projection, never as an Artifact lock', () => {
+    const provenance = { kind: 'plugin', pluginId: 'external.skills', occurrenceId: 'occurrence-1' };
+    expect(SkillProvenanceV1Schema.parse(provenance)).toEqual(provenance);
+    expect(SkillProvenanceV1Schema.safeParse({ ...provenance, directory: '/untrusted' }).success).toBe(false);
+    expect(SkillProvenanceV1Schema.safeParse({ ...provenance, occurrenceId: '' }).success).toBe(false);
+    expect(() => readSkillLockV1({ skillLock: { provenance, updatePolicy: 'manual' } })).toThrow('invalid_skill_lock');
+  });
   it('refuses corrupted known lock fields and unsafe revisions without reinterpreting the skill as written', () => {
     expect(() => readSkillLockV1({ skillLock: { provenance: { kind: 'registry' }, updatePolicy: 'manual' } })).toThrow('invalid_skill_lock');
     expect(SkillRevisionV1Schema.safeParse('9999999999999999999999999999:1').success).toBe(false);

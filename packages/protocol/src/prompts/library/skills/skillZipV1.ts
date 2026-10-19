@@ -1,4 +1,3 @@
-import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter, ZipReader } from '@zip.js/zip.js';
 import { decodeBase64, encodeBase64 } from '../../../crypto/base64.js';
 import type { SkillFileInputV1 } from './skillActionSchemasV1.js';
 
@@ -9,6 +8,7 @@ export function skillFileFromBytesV1(path: string, bytes: Uint8Array, unixMode?:
 }
 
 export async function readSkillZipFilesV1(bytes: Uint8Array): Promise<SkillFileInputV1[]> {
+  const { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } = await import('@zip.js/zip.js');
   const reader = new ZipReader(new Uint8ArrayReader(bytes), { useWebWorkers: false });
   try {
     const files: SkillFileInputV1[] = [];
@@ -25,6 +25,7 @@ export async function readSkillZipFilesV1(bytes: Uint8Array): Promise<SkillFileI
 
 /** One portable archive producer for both UI downloads and CLI exports. */
 export async function exportSkillBundlesAsZipV1(items: readonly Readonly<{ name: string; files: readonly SkillFileInputV1[] }>[]) {
+  const { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } = await import('@zip.js/zip.js');
   const writer = new ZipWriter(new Uint8ArrayWriter());
   const names = new Set<string>();
   for (const item of items) {

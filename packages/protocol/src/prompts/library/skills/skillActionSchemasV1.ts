@@ -79,6 +79,7 @@ export const SkillFoundListResultV1Schema = lazyZodSchema(() => z.strictObject({
   })),
   items: z.array(z.strictObject({
     name: z.string().check(z.minLength(1)), description: z.nullable(z.string()),
+    userInvocable: z.optional(z.boolean()),
     // Found and download both identify the skill directory, never its SKILL.md.
     path: z.string().check(z.minLength(1)), digest: z.string().check(z.minLength(1)), agents: z.array(AgentIdV1Schema),
     scope: z.enum(['user', 'project', 'plugin']), inLibrary: z.nullable(skillId),

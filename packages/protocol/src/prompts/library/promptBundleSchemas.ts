@@ -4,9 +4,9 @@ import { decodeBase64 } from '../../crypto/base64.js';
 import { ArtifactRevisionV1Schema } from '../../artifacts/artifactRevisionV1.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { PromptLibrarySaveOrganizationFieldsV1, isPromptLibrarySaveFolderAssignmentV1 } from './promptFolderActionSchemasV1.js';
-import { readStoredSkillFrontmatterV1 } from './skills/skillLibraryItemV1.js';
+import { readStoredSkillFrontmatterV1, readSkillFrontmatterV1, type ReadOnlySkillProvenanceV1 } from './skills/skillLibraryItemV1.js';
 import { computePromptBundleDigestV1 } from './promptLibraryDigests.js';
-import { FIRST_PARTY_SKILLS_V1 } from './skills/firstPartySkillsV1.js';
+import { FIRST_PARTY_SKILLS_V1, type ReadOnlySkillV1 } from './skills/firstPartySkillsV1.js';
 
 const PromptBundleSchemaIdV1Schema = lazyZodSchema(() => z.enum(['skills.skill_md_v1', 'bundle.generic_v1']));
 export type PromptBundleSchemaIdV1 = z.infer<typeof PromptBundleSchemaIdV1Schema>;
@@ -84,14 +84,18 @@ export function readSkillBundleContentV1(artifact: Readonly<{ header: unknown; b
 }
 
 /** Bundled content passes the same validation/digest owner as stored skill content. */
-export function readFirstPartySkillContentV1(skillId: string): SkillBundleContentV1 | null {
-  const skill = FIRST_PARTY_SKILLS_V1.find(item => item.skillId === skillId);
+export function readReadOnlySkillContentV1(skillId: string, pluginSkills: readonly ReadOnlySkillV1[] = []):
+  (SkillBundleContentV1 & Readonly<{ provenance: ReadOnlySkillProvenanceV1 }>) | null {
+  const skill = FIRST_PARTY_SKILLS_V1.find(item => item.skillId === skillId) ?? pluginSkills.find(item => item.skillId === skillId);
   if (!skill) return null;
   const content = readSkillBundleContentV1({ header: { v: 1, kind: 'prompt_bundle.v2',
-    title: skill.name, bundleSchemaId: 'skills.skill_md_v1' },
+    title: skill.skillId, bundleSchemaId: 'skills.skill_md_v1' },
     body: JSON.stringify({ v: 1, entries: skill.files, createdAtMs: 0, updatedAtMs: 0 }) });
-  if (!content) throw new Error('invalid_first_party_skill');
-  return content;
+  if (!content) throw new Error('invalid_read_only_skill');
+  // Packaged declarations are current inputs, not retained 0.2 Artifact Markdown.
+  const frontmatter = readSkillFrontmatterV1(content.skillMd);
+  if (!frontmatter.name) throw new Error('invalid_read_only_skill');
+  return { ...content, frontmatter: { ...frontmatter, name: frontmatter.name }, provenance: skill.provenance };
 }
 
 /** Normalize an already-admitted retained body for current writes, preserving the raw read contract. */
