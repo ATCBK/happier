@@ -219,6 +219,19 @@ describe('WorkspaceSyncRelationshipRow', () => {
         ]));
     });
 
+    it('tells two folders on the same machine apart in the open actions', async () => {
+        const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
+        const summary = createSummary(0, 'keep_synced');
+        summary.beta.machineName = summary.alpha.machineName;
+        const screen = await renderScreen(<WorkspaceSyncRelationshipRow summary={summary} />);
+
+        const items = screen.findAllByType('DropdownMenu')[0]?.props.items as ReadonlyArray<{ id: string; title: string }>;
+        const titles = items.filter((item) => item.id === 'open-alpha' || item.id === 'open-beta').map((item) => item.title);
+        expect(new Set(titles).size).toBe(2);
+        expect(titles[0]).toContain('Alpha');
+        expect(titles[1]).toContain('Beta');
+    });
+
     it('keeps a generic attention message for an unmapped daemon error code', async () => {
         const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
         const summary = createSummary(0);
