@@ -9,6 +9,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { validateAccountSettingsVersionAtPublicationInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import type { Tx } from '@/storage/inTx';
 import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx, type ReservedAccountScopedKvRowDomain,
@@ -64,6 +65,9 @@ export async function mutateMcpServerCatalogRowInTx(tx: Tx, input: Readonly<{
     }
     if (mutation.expectedRevision === 'absent' && fence.account.settingsVersion !== mutation.sourceSettingsVersion) {
         return { status: 'settings-conflict', revision: fence.account.settingsVersion };
+    }
+    if (mutation.expectedRevision === 'absent' && mutation.sourceSettingsVersion !== undefined) {
+        validateAccountSettingsVersionAtPublicationInTx(tx, { accountId: input.accountId, expectedVersion: mutation.sourceSettingsVersion });
     }
     const current = await readMcpServerCatalogRowInTx(tx, { accountId: input.accountId });
     if (current.status === 'present' && !parseMcpServerCatalogMigrationContentV1(current.content)) {

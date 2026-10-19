@@ -8,6 +8,8 @@ import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCata
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
 import { inReadSnapshot, inTx, isTransactionConflictExhaustedError } from '@/storage/inTx';
 import { mutateProviderConnectionsRowInTx, providerConnectionsHaveCrossAccountSecretReferences, readProviderConnectionsRowInTx } from './connectionRows';
+import { readReservedAccountScopedKvRowMutationConflict } from '@/app/kv/reservedAccountScopedKvRow';
+import { AccountSettingsPublicationConflict } from '@/app/accountSettings/writeAccountSettingsInTx';
 
 const internal = z.strictObject({ error: z.literal('internal') });
 
@@ -41,6 +43,10 @@ export function registerProviderConnectionsRoutes(app: Fastify): void {
       }));
     }
     catch (error) {
+      const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+      if (conflict) return reply.send(conflict);
+      if (error instanceof AccountSettingsPublicationConflict) return reply.send(error.result.status === 'version_mismatch'
+        ? { status: 'settings-conflict', revision: error.result.currentVersion } : { status: 'invalid-stored-content' });
       if (isTransactionConflictExhaustedError(error)) throw error;
       return reply.code(500).send({ error: 'internal' });
     }

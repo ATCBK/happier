@@ -10,8 +10,9 @@ import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/sa
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
-import { writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
+import { AccountSettingsPublicationConflict, validateAccountSettingsVersionAtPublicationInTx, writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
+  readReservedAccountScopedKvRowMutationConflict,
   type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import { inTx, transactionResult, type TransactionResult, type Tx } from '@/storage/inTx';
@@ -108,6 +109,8 @@ export async function mutateNotificationChannelCatalogInTx(tx: Tx, input: Mutati
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
   if (mutation.expectedRevision === 'absent' && fence.account.settingsVersion !== mutation.sourceSettingsVersion)
     return { status: 'settings-conflict' as const, revision: fence.account.settingsVersion };
+  if (mutation.expectedRevision === 'absent' && mutation.sourceSettingsVersion !== undefined)
+    validateAccountSettingsVersionAtPublicationInTx(tx, { accountId: input.accountId, expectedVersion: mutation.sourceSettingsVersion });
   if (mutation.settingsMutation && fence.account.settingsVersion !== mutation.settingsMutation.expectedSettingsVersion)
     return { status: 'settings-conflict', revision: fence.account.settingsVersion };
   try { if (mutation.content !== null) assertNotificationChannelCatalogContentForModeV1(mutation.content, fence.account.currentness.encryptionMode); }
@@ -147,5 +150,12 @@ export async function mutateNotificationChannelCatalog(input: MutationInput): Pr
     // Secret revisions and Team-derived access still require their SSI capture.
     ...((input.savedSecretRevisions?.length ?? 0) > 0 ? { isolationLevel: "Serializable" as const } : {}),
   }); }
-  catch (error) { if (error instanceof NotificationChannelCatalogPairedMutationRejected) return error.result; throw error; }
+  catch (error) {
+    if (error instanceof NotificationChannelCatalogPairedMutationRejected) return error.result;
+    const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+    if (conflict) return conflict;
+    if (error instanceof AccountSettingsPublicationConflict) return error.result.status === 'version_mismatch'
+      ? { status: 'settings-conflict', revision: error.result.currentVersion } : { status: 'invalid-stored-content' };
+    throw error;
+  }
 }

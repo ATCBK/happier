@@ -11,7 +11,7 @@ import type { Tx } from "@/storage/inTx";
 export async function markPluginWebhookAccountChangedInTxV1(
     tx: Tx,
     params: Readonly<{ accountId: string; pluginId: string }>,
-): Promise<number> {
+): ReturnType<typeof markAccountChanged> {
     const hint = { pluginDomain: "webhook" as const, pluginId: params.pluginId };
     return await markAccountChanged(tx, {
         accountId: params.accountId,

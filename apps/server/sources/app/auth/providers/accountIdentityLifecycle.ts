@@ -212,7 +212,7 @@ export async function unlinkIdentity(input: Parameters<typeof unlinkIdentityInTx
     await inTx((tx) => unlinkIdentityInTx(tx, input), { isolationLevel: "Serializable" /* Final-login viability spans identity, password, provider policy and Home-owner rows. */ });
 }
 
-async function readProviderLinkedAccountIdsInTx(tx: Tx, provider: string): Promise<readonly string[]> {
+export async function readProviderLinkedAccountIdsInTx(tx: Tx, provider: string): Promise<readonly string[]> {
     const identities = await tx.accountIdentity.findMany({
         where: { provider },
         select: { accountId: true },

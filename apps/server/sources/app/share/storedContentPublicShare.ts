@@ -11,6 +11,7 @@ import { artifactVisibleWhere } from "@/app/artifacts/artifactClassification";
 import { openArtifactStoredContentPair } from "@/app/artifacts/artifactStoredContent";
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
 import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { tryParseEncryptedDataKeyV0 } from "@/app/api/routes/share/encryptedDataKeyValidation";
 import { resolvePublicShareUseLimit } from "@/app/api/routes/share/publicShareMessageAccessGrant";
 import { isSessionTranscriptShareable, SESSION_TRANSCRIPT_PUBLICATION_SELECT, } from "@/app/session/sessionTranscriptPublicationPolicy";
@@ -51,7 +52,7 @@ export async function deleteSessionPublicShare(input: Pick<SessionPublicShareWri
         return { type: 'forbidden' as const };
     }
     const result = await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [userId], { includeSingleAccount: true });
+        await acquireSessionAccountCursorLocksInTx(tx, [sessionId], [userId]);
         const authority = await assertSessionCapabilityInTx({ tx, accountId: userId, sessionId, capability: "managePublicLink", authentication });
         if (!authority.ok)
             return { type: "forbidden" as const };
@@ -107,7 +108,7 @@ export async function writeSessionPublicShare(input: SessionPublicShareWrite) {
         return { type: 'forbidden' as const };
     }
     const result = await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [userId], { includeSingleAccount: true });
+        await acquireSessionAccountCursorLocksInTx(tx, [sessionId], [userId]);
         const authority = await assertSessionCapabilityInTx({ tx, accountId: userId, sessionId, capability: "managePublicLink", authentication });
         if (!authority.ok)
             return { type: "forbidden" as const };

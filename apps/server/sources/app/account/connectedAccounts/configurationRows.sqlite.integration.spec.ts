@@ -13,7 +13,8 @@ import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/ac
 import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
 import { applySavedSecretCatalogVoiceCredentialSourceMutationV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
-import { inTx } from '@/storage/inTx';
+import { inTx, type Tx } from '@/storage/inTx';
+import { mutateConnectedAccountCatalogRow } from './configurationRows';
 import { createSavedSecretResourceInTx, setSavedSecretResourceGrantsInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { deriveAccountEncryptionMigrationKeyFingerprints } from '@/app/encryption/accountEncryptionTransition';
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
@@ -33,6 +34,47 @@ describe('Connected Account configuration and purpose catalogs (SQLite)', () => 
     let harness: LightSqliteHarness;
     beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-connected-catalogs-', initEncrypt: true }); }, 120_000);
     afterAll(async () => { await harness?.close(); });
+
+    it('maps a terminal Settings CAS conflict and rolls back its paired catalog mutation', async () => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        expect(await mutateConnectedAccountCatalogRow({ accountId: account.id, key: 'purposes',
+            expectedRevision: 'absent', sourceSettingsVersion: 0, content: purposes, referencedSavedSecretIds: [],
+        })).toMatchObject({ status: 'updated', revision: 0 });
+        const transaction = db.$transaction;
+        let refusedSettingsCas = false;
+        // Model a lost CAS at the persistent database boundary; catalog admission,
+        // Settings validation, terminal publication and transaction rollback stay real.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                if (property !== 'account') return Reflect.get(inner, property, innerReceiver);
+                return new Proxy(inner.account, { get(delegate, method, delegateReceiver) {
+                    const operation = Reflect.get(delegate, method, delegateReceiver);
+                    if (method !== 'updateMany') return operation;
+                    return (input: Parameters<typeof tx.account.updateMany>[0]) => {
+                        if (input?.where?.id === account.id && input.data.settingsVersion === 1) {
+                            refusedSettingsCas = true;
+                            return Promise.resolve({ count: 0 });
+                        }
+                        return Reflect.apply(operation, delegate, [input]);
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            await expect(mutateConnectedAccountCatalogRow({ accountId: account.id, key: 'purposes',
+                expectedRevision: 0, content: purposes,
+                referencedSavedSecretIds: [], savedSecretRevisions: [],
+                settingsMutation: { expectedSettingsVersion: 0, content: { t: 'plain', v: { theme: 'night' } } },
+            })).resolves.toEqual({ status: 'settings-conflict', revision: 0 });
+            expect(refusedSettingsCas).toBe(true);
+            expect(await db.userKVStore.findMany({ where: { accountId: account.id }, select: { version: true } })).toEqual([{ version: 0 }]);
+            expect(await db.accountSettingsSnapshot.count({ where: { accountId: account.id } })).toBe(0);
+            expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(1);
+            expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).settingsVersion).toBe(0);
+        } finally { db.$transaction = transaction; }
+    });
 
     it.each([configurations, purposes])('preserves original stored metadata during actual $v.key conversion and exact replay', async fixture => {
         harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional',

@@ -15,6 +15,7 @@ import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import {
     listReservedAccountScopedKvRowsInTx,
     mutateReservedAccountScopedKvRowInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     readReservedAccountScopedKvRowInTx,
     type ReservedAccountScopedKvRowDomain,
     type ReservedAccountScopedKvRowFailure,
@@ -80,6 +81,11 @@ export async function mutateWorkspaceExecutionConfigRowInTx(tx: Tx, input: Reado
 export function readWorkspaceExecutionConfigRow(input: Parameters<typeof readWorkspaceExecutionConfigRowInTx>[1]): Promise<ReservedAccountScopedKvRowReadResult<WorkspaceExecutionConfigContentV1>> {
     return inTx(tx => readWorkspaceExecutionConfigRowInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
 }
-export function mutateWorkspaceExecutionConfigRow(input: Parameters<typeof mutateWorkspaceExecutionConfigRowInTx>[1]): Promise<ReservedAccountScopedKvRowMutationResult> {
-    return inTx(tx => mutateWorkspaceExecutionConfigRowInTx(tx, input));
+export async function mutateWorkspaceExecutionConfigRow(input: Parameters<typeof mutateWorkspaceExecutionConfigRowInTx>[1]): Promise<ReservedAccountScopedKvRowMutationResult> {
+    try { return await inTx(tx => mutateWorkspaceExecutionConfigRowInTx(tx, input)); }
+    catch (error) {
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        throw error;
+    }
 }

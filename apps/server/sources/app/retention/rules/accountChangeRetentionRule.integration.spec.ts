@@ -142,6 +142,7 @@ function installPauseAfterChangesCursorRead(accountId: string): Readonly<{
     const releaseRead = deferred();
     const delegate = db.account;
     const originalFindUnique = delegate.findUnique.bind(delegate);
+    const originalTransaction = db.$transaction;
     let paused = false;
     let restored = false;
 
@@ -159,6 +160,38 @@ function installPauseAfterChangesCursorRead(accountId: string): Readonly<{
         },
     });
 
+    // Route reads now use inTx. Instrument its real persistence delegate too,
+    // so the pause still reaches the cursor read rather than timing out.
+    db.$transaction = new Proxy(originalTransaction, {
+        apply(target, receiver, args: unknown[]) {
+            const operation = args[0];
+            if (typeof operation !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: object) => {
+                const account = Reflect.get(tx, 'account') as object;
+                const findUnique = Reflect.get(account, 'findUnique') as (...args: unknown[]) => Promise<unknown>;
+                const wrappedAccount = new Proxy(account, {
+                    get(target, property, receiver) {
+                        if (property !== 'findUnique') return Reflect.get(target, property, receiver);
+                        return async (input: unknown) => {
+                            const result = await Reflect.apply(findUnique, target, [input]);
+                            if (!paused && isChangesCursorRead(input, accountId)) {
+                                paused = true;
+                                cursorRead.resolve();
+                                await releaseRead.promise;
+                            }
+                            return result;
+                        };
+                    },
+                });
+                return operation(new Proxy(tx, {
+                    get(target, property, receiver) {
+                        return property === 'account' ? wrappedAccount : Reflect.get(target, property, receiver);
+                    },
+                }));
+            }, ...args.slice(1)]);
+        },
+    });
+
     return {
         reached: cursorRead.promise,
         release: releaseRead.resolve,
@@ -166,6 +199,7 @@ function installPauseAfterChangesCursorRead(accountId: string): Readonly<{
             if (restored) return;
             restored = true;
             releaseRead.resolve();
+            db.$transaction = originalTransaction;
             Object.defineProperty(delegate, 'findUnique', {
                 configurable: true,
                 writable: true,
@@ -416,7 +450,7 @@ describe('accountChangeRetentionRule', () => {
                     revision: 2,
                     rowIds: ['task-1'],
                 },
-            }));
+            })).then(publication => publication.resolveCursor());
             exactChange.then(
                 () => { exactCommitted = true; },
                 () => undefined,
@@ -552,7 +586,7 @@ describe('accountChangeRetentionRule', () => {
                     revision: 2,
                     rowIds: ['task-1'],
                 },
-            }))).resolves.toBe(2);
+            })).then(publication => publication.resolveCursor())).resolves.toBe(2);
 
             pause.release();
             await poll;

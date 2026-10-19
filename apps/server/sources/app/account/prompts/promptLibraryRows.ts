@@ -10,6 +10,7 @@ import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import type { Tx } from '@/storage/inTx';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { validateAccountSettingsVersionAtPublicationInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import { listReservedAccountScopedKvRowsInTx, mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
   type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
@@ -61,6 +62,7 @@ export async function mutatePromptLibraryRowInTx(tx: Tx, input: Readonly<{
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
     const source = await tx.account.findUniqueOrThrow({ where: { id: input.accountId }, select: { settingsVersion: true } });
     if (source.settingsVersion !== input.sourceSettingsVersion) return { status: 'settings-conflict' as const, revision: source.settingsVersion };
+    validateAccountSettingsVersionAtPublicationInTx(tx, { accountId: input.accountId, expectedVersion: input.sourceSettingsVersion });
   } else if (input.sourceSettingsVersion !== undefined) throw new Error('Only catalog initialization admits a source Settings version');
   if (key === 'registry-sources' && input.content !== null) {
     const mutation = PromptLibraryRowMutationV1Schema.parse({ expectedRevision: input.expectedRevision, content: input.content,

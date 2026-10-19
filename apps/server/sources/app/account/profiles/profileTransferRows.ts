@@ -14,10 +14,12 @@ import type { Tx } from '@/storage/inTx';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import { inTx, type TransactionResult } from '@/storage/inTx';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { AccountSettingsPublicationConflict, validateAccountSettingsVersionAtPublicationInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import { openPlainAccountSettingsDbValue, PlainAccountSettingsStorageUnavailableError } from '@/app/encryption/accountSettingsStorage';
 import { PROFILE_ACCOUNT_KV_PREFIX, PROFILE_TRANSFER_ACCOUNT_KV_KEY, parseProfilePhysicalKey } from '@/app/kv/accountScopedKv';
 import {
     mutateReservedAccountScopedKvRowInTx, listReservedAccountScopedKvRowsInTx,
+    readReservedAccountScopedKvRowMutationConflict,
 } from '@/app/kv/reservedAccountScopedKvRow';
 import { readArtifactForCallerInTx, projectPlainArtifactSharingResourceV1 } from '@/app/artifacts/artifactAccessService';
 import { readSavedSecretResourcesForAccountInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
@@ -128,6 +130,7 @@ export async function mutateProfileTransferInTx(tx: Tx, input: Readonly<{
     const revision = current.status === 'absent' ? 'absent' : current.revision;
     if (revision !== mutation.expectedRevision) return { status: 'conflict', revision: revision === 'absent' ? -1 : revision };
     if (fence.account.settingsVersion !== mutation.sourceSettingsVersion) return { status: 'settings-conflict', revision: fence.account.settingsVersion };
+    validateAccountSettingsVersionAtPublicationInTx(tx, { accountId: input.accountId, expectedVersion: mutation.sourceSettingsVersion });
     try { assertProfileTransferContentForModeV1(mutation.content, fence.account.currentness.encryptionMode); }
     catch { return { status: 'account-mode-mismatch' }; }
     if (mutation.operation === 'activate' && current.status !== 'present') {
@@ -177,6 +180,10 @@ export async function mutateProfileTransfer(input: Readonly<{
     try { return await inTx(tx => mutateProfileTransferInTx(tx, input), { /* Profile transfer validates shared Artifact and Secret inventory before activation. */ isolationLevel: "Serializable" }); }
     catch (error) {
         if (error instanceof ProfileTransferTransactionAbort) return error.result;
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        if (error instanceof AccountSettingsPublicationConflict) return error.result.status === 'version_mismatch'
+            ? { status: 'settings-conflict', revision: error.result.currentVersion } : { status: 'invalid-stored-content' };
         throw error;
     }
 }

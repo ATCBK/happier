@@ -12,10 +12,11 @@ import { listSavedSecretVoiceCredentialMutationReferencesV1, AccountSettingsSave
 import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import { openPlainAccountSettingsDbValue } from '@/app/encryption/accountSettingsStorage';
-import { writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
+import { AccountSettingsPublicationConflict, validateAccountSettingsVersionAtPublicationInTx, writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import { inTx, transactionResult, type TransactionResult, type Tx } from '@/storage/inTx';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
 
 export function connectedAccountCatalogRowDomain(key: ConnectedAccountCatalogKeyV1): ReservedAccountScopedKvRowDomain<ConnectedAccountCatalogContentV1> {
@@ -81,6 +82,9 @@ export async function mutateConnectedAccountCatalogRowInTx(tx: Tx, input: Mutati
     if (mutation.sourceSettingsVersion !== undefined && fence.account.settingsVersion !== mutation.sourceSettingsVersion) {
         return { status: 'settings-conflict', revision: fence.account.settingsVersion };
     }
+    if (mutation.sourceSettingsVersion !== undefined) {
+        validateAccountSettingsVersionAtPublicationInTx(tx, { accountId, expectedVersion: mutation.sourceSettingsVersion });
+    }
     if (mutation.settingsMutation && fence.account.settingsVersion !== mutation.settingsMutation.expectedSettingsVersion) {
         return { status: 'settings-conflict', revision: fence.account.settingsVersion };
     }
@@ -127,5 +131,12 @@ export async function mutateConnectedAccountCatalogRow(input: MutationInput): Pr
         ...((input.referencedSavedSecretIds?.length ?? 0) > 0 ? { isolationLevel: "Serializable" as const } : {}),
         transactionClass: "connected-account-catalog-mutate",
     }); }
-    catch (error) { if (error instanceof ConnectedAccountCatalogPairedMutationRejected) return error.result; throw error; }
+    catch (error) {
+        if (error instanceof ConnectedAccountCatalogPairedMutationRejected) return error.result;
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        if (error instanceof AccountSettingsPublicationConflict) return error.result.status === 'version_mismatch'
+            ? { status: 'settings-conflict', revision: error.result.currentVersion } : { status: 'invalid-stored-content' };
+        throw error;
+    }
 }

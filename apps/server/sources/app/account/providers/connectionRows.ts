@@ -6,6 +6,7 @@ import {
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import type { Tx } from '@/storage/inTx';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { validateAccountSettingsVersionAtPublicationInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
   type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
 import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
@@ -60,6 +61,7 @@ export async function mutateProviderConnectionsRowInTx(tx: Tx, input: ProviderCo
     if (input.sourceSettingsVersion === undefined || input.content === null) throw new Error('Provider catalog initialization requires captured source currentness');
     const source = await tx.account.findUniqueOrThrow({ where: { id: input.accountId }, select: { settingsVersion: true } });
     if (source.settingsVersion !== input.sourceSettingsVersion) return { status: 'settings-conflict' as const, revision: source.settingsVersion };
+    validateAccountSettingsVersionAtPublicationInTx(tx, { accountId: input.accountId, expectedVersion: input.sourceSettingsVersion });
   } else if (input.sourceSettingsVersion !== undefined) throw new Error('Only catalog initialization admits a source Settings version');
 
   const current = await readProviderConnectionsRowInTx(tx, { accountId: input.accountId });

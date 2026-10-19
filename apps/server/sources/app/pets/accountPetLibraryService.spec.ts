@@ -105,29 +105,19 @@ function createDeferred<T>(): {
 function createPrismaQuotaReadPauseHooks(): {
     hooks: NonNullable<PrismaAccountPetLibraryPersistenceOptions["hooks"]>;
     waitForFirstQuotaRead: Promise<void>;
-    waitForSecondQuotaRead: Promise<void>;
     releaseQuotaReads(): void;
 } {
     const firstQuotaRead = createDeferred<void>();
-    const secondQuotaRead = createDeferred<void>();
     const releaseQuotaReads = createDeferred<void>();
-    let quotaReadCount = 0;
 
     return {
         waitForFirstQuotaRead: firstQuotaRead.promise,
-        waitForSecondQuotaRead: secondQuotaRead.promise,
         releaseQuotaReads() {
             releaseQuotaReads.resolve();
         },
         hooks: {
             async afterQuotaRead() {
-                quotaReadCount += 1;
-                if (quotaReadCount === 1) {
-                    firstQuotaRead.resolve();
-                }
-                if (quotaReadCount === 2) {
-                    secondQuotaRead.resolve();
-                }
+                firstQuotaRead.resolve();
                 await releaseQuotaReads.promise;
             },
         },
@@ -871,19 +861,52 @@ describe("account pet library services", () => {
             }),
         });
 
+        const secondAdmissionAttempt = createDeferred<void>();
+        const originalTransaction = db.$transaction;
+        let admissionAttempts = 0;
+        // Observe SQLite's real Account admission statement before it blocks
+        // behind the first writer; quota reads themselves must serialize.
+        db.$transaction = new Proxy(originalTransaction, {
+            apply(target, receiver, args: unknown[]) {
+                const operation = args[0];
+                if (typeof operation !== "function") return Reflect.apply(target, receiver, args);
+                return Reflect.apply(target, receiver, [async (tx: object) => operation(new Proxy(tx, {
+                    get(target, property, receiver) {
+                        if (property !== "$executeRawUnsafe") return Reflect.get(target, property, receiver);
+                        const execute = Reflect.get(target, property) as (...args: unknown[]) => Promise<unknown>;
+                        return async (query: string, ...values: unknown[]) => {
+                            if (query.startsWith('UPDATE "Account" SET "settingsVersion"')) {
+                                admissionAttempts += 1;
+                                if (admissionAttempts === 2) secondAdmissionAttempt.resolve();
+                            }
+                            return Reflect.apply(execute, target, [query, ...values]);
+                        };
+                    },
+                })), ...args.slice(1)]);
+            },
+        });
+
         const firstCreate = firstServices.createAccountPetForAccount({
             accountId: "account-1",
             request: requestFor(WEBP_BYTES),
         });
-        await quotaHooks.waitForFirstQuotaRead;
-        const secondCreate = secondServices.createAccountPetForAccount({
-            accountId: "account-1",
-            request: requestFor(WEBP_BYTES),
-        });
-        await quotaHooks.waitForSecondQuotaRead;
-        quotaHooks.releaseQuotaReads();
-
-        const [first, second] = await Promise.all([firstCreate, secondCreate]);
+        let secondCreate: ReturnType<typeof secondServices.createAccountPetForAccount> | undefined;
+        let first: Awaited<typeof firstCreate>;
+        let second: Awaited<typeof firstCreate>;
+        try {
+            await quotaHooks.waitForFirstQuotaRead;
+            secondCreate = secondServices.createAccountPetForAccount({
+                accountId: "account-1",
+                request: requestFor(WEBP_BYTES),
+            });
+            await secondAdmissionAttempt.promise;
+            quotaHooks.releaseQuotaReads();
+            [first, second] = await Promise.all([firstCreate, secondCreate]);
+        } finally {
+            quotaHooks.releaseQuotaReads();
+            await Promise.allSettled([firstCreate, ...(secondCreate ? [secondCreate] : [])]);
+            db.$transaction = originalTransaction;
+        }
         const results = [first, second];
         const successCount = results.filter((result) => result.ok).length;
         const quotaFailures = results.filter((result) => !result.ok && result.errorCode === "quota_exceeded");

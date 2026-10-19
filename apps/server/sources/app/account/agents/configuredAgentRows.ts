@@ -11,12 +11,13 @@ import { KIRO_ACP_STDERR_RULES } from '@happier-dev/plugins-kiro/agent/acp/trans
 import { isDeepStrictEqual } from 'node:util';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
-import { writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
+import { AccountSettingsPublicationConflict, validateAccountSettingsVersionAtPublicationInTx, writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import { openPlainAccountSettingsDbValue, PlainAccountSettingsStorageUnavailableError } from '@/app/encryption/accountSettingsStorage';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import { inTx, type TransactionResult, type Tx } from '@/storage/inTx';
 import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
 
 /** Reads retain the original inventory; only current, complete records are new writes. */
@@ -84,6 +85,9 @@ async function applyConfiguredAgentCatalogMutationInTx(tx: Tx, input: MutationIn
     if (mutation.expectedRevision === 'absent') {
         if (fence.account.settingsVersion !== mutation.sourceSettingsVersion) {
             return { status: 'settings-conflict', revision: fence.account.settingsVersion };
+        }
+        if (mutation.sourceSettingsVersion !== undefined) {
+            validateAccountSettingsVersionAtPublicationInTx(tx, { accountId: input.accountId, expectedVersion: mutation.sourceSettingsVersion });
         }
         if (mutation.settingsCleanup?.nextSettings
             && mutation.settingsCleanup.nextSettings.t !== (fence.account.currentness.encryptionMode === 'plain' ? 'plain' : 'encrypted')) {
@@ -164,5 +168,12 @@ export async function mutateConfiguredAgentCatalogRow(input: MutationInput): Pro
         ...((input.referencedSavedSecretIds?.length ?? 0) > 0 ? { isolationLevel: "Serializable" as const } : {}),
         transactionClass: "acp-catalog-mutate",
     }); }
-    catch (error) { if (error instanceof ConfiguredAgentCatalogTransactionAbort) return error.result; throw error; }
+    catch (error) {
+        if (error instanceof ConfiguredAgentCatalogTransactionAbort) return error.result;
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        if (error instanceof AccountSettingsPublicationConflict) return error.result.status === 'version_mismatch'
+            ? { status: 'settings-conflict', revision: error.result.currentVersion } : { status: 'invalid-stored-content' };
+        throw error;
+    }
 }

@@ -9,6 +9,7 @@ import { deriveSavedSecretImportResourceIdV1 } from '@happier-dev/protocol/accou
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { validateAccountSettingsVersionAtPublicationInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import { openPlainAccountSettingsDbValue, PlainAccountSettingsStorageUnavailableError } from '@/app/encryption/accountSettingsStorage';
 import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
   type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
@@ -104,6 +105,8 @@ export async function mutateRemoteHostCatalogRowInTx(tx: Tx, input: RemoteHostCa
   if (mutation.expectedRevision === 'absent') {
     if (fence.account.settingsVersion !== mutation.sourceSettingsVersion)
       return { status: 'settings-conflict' as const, revision: fence.account.settingsVersion };
+    if (mutation.sourceSettingsVersion !== undefined)
+      validateAccountSettingsVersionAtPublicationInTx(tx, { accountId: input.accountId, expectedVersion: mutation.sourceSettingsVersion });
     if (mutation.content.t === 'plain') {
       try {
         const settings = openPlainAccountSettingsDbValue({ accountId: input.accountId, dbValue: fence.account.settings });
