@@ -118,10 +118,10 @@ export const QualifiedConnectedAccountPurposeBindingsV1RecordSchema = lazyZodSch
   })));
 
 /** Read-only retained source normalization; it never admits a current row write. */
-export const QualifiedConnectedAccountPurposeBindingsV1Schema = defineStoredReadProjection(lazyZodSchema(() => z.pipe(z.transform(readEarlierTeamResourcePurposeTargetsV1), z.safeExtend(QualifiedConnectedAccountPurposeBindingsV1RecordSchema, {
+export const QualifiedConnectedAccountPurposeBindingsV1Schema = defineStoredReadProjection(lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(readEarlierTeamResourcePurposeTargetsV1), z.safeExtend(QualifiedConnectedAccountPurposeBindingsV1RecordSchema, {
     bindings: z.array(QualifiedConnectedAccountPurposeBindingV1Schema).check(z.maxLength(256)),
     teamResourceSelections: z.optional(z.array(QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema).check(z.maxLength(256))),
-  }))), () => z.pipe(z.transform(readEarlierTeamResourcePurposeTargetsV1), createStoredReadSchema(QualifiedConnectedAccountPurposeBindingsV1RecordSchema)));
+  }))), () => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(readEarlierTeamResourcePurposeTargetsV1), createStoredReadSchema(QualifiedConnectedAccountPurposeBindingsV1RecordSchema)));
 
 export type QualifiedConnectedAccountPurposeBindingTargetV1 = z.infer<
   typeof QualifiedConnectedAccountPurposeBindingTargetV1Schema

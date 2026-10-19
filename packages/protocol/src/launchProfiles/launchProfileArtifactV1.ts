@@ -67,7 +67,7 @@ export type SharedLaunchProfileArtifactV1 = Readonly<LaunchProfileArtifactV1 & {
 
 export const LaunchProfileArtifactReferenceV1Schema = defineStoredReadProjection(
   lazyZodSchema(() => z.strictObject({ artifactId: z.string().check(z.minLength(1)) })),
-  () => z.pipe(z.transform((raw) => {
+  () => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => {
     // Inline profile discriminators remain authoritative even when a row also
     // carries an additive Artifact id. Never reinterpret a corrupt/future profile.
     if (raw && typeof raw === 'object'

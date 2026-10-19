@@ -15,7 +15,7 @@ export const SessionReminderPresetV1Schema = lazyZodSchema(() => z.object({
   label: z.optional(z.string().check(z.trim(), z.minLength(1))),
 }));
 
-export const SessionReminderPresetsV1Schema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+export const SessionReminderPresetsV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
     const parsed = SessionReminderPresetV1Schema.safeParse(entry);

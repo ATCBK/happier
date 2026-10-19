@@ -28,7 +28,7 @@ export const SessionTurnRollbackV1Schema = lazyZodSchema(() => z.readonly(z.loos
   })));
 export type SessionTurnRollbackV1 = z.infer<typeof SessionTurnRollbackV1Schema>;
 
-export const SessionTurnV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacySessionTurnAgentIdentity), z.readonly(z.looseObject({
+export const SessionTurnV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacySessionTurnAgentIdentity), z.readonly(z.looseObject({
     turnId: SessionTurnIdentifierV1Schema,
     agentId: z.optional(SessionTurnAgentIdV1Schema),
     agentTurnId: z.optional(SessionTurnIdentifierV1Schema),

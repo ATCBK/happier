@@ -17,7 +17,7 @@ export const ModelPackPromotionIntentV1Schema = lazyZodSchema(() => z.strictObje
     scopeKey: boundedString(1024),
     identityKey: boundedString(1024),
   })),
-  recovery: z.pipe(z.transform((value, context) => {
+  recovery: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value, context) => {
     if (value && typeof value === 'object' && !Array.isArray(value) && !Object.hasOwn(value, 'value')) {
       context.issues.push({ code: 'custom', message: 'Recovery records require their own value field', input: context.value });
     }

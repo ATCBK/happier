@@ -37,7 +37,7 @@ export type SessionContinueWithReplayRequest = z.infer<typeof SessionContinueWit
 
 export const SessionContinueWithReplayRpcParamsSchema = lazyZodSchema(() => z.looseObject({
     directory: z.string().check(z.minLength(1)),
-    backendTarget: z.pipe(z.transform(normalizeBackendTargetRefV2InputToV2), BackendTargetRefV2Schema),
+    backendTarget: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeBackendTargetRefV2InputToV2), BackendTargetRefV2Schema),
     approvedNewDirectoryCreation: z.optional(z.boolean()),
     permissionMode: z.optional(z.string()),
     permissionModeUpdatedAt: z.optional(z.number()),

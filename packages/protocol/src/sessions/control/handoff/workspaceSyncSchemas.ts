@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../../../strings/maxCodeUnits.js';
 import { z } from 'zod/mini';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
@@ -773,7 +774,7 @@ const WorkspaceSyncFileSizeV1Schema = lazyZodSchema(() => z.number().check(z.int
 export const ReadWorkspaceSyncFileResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
   z.strictObject({
     status: z.literal('text'),
-    text: z.string().check(z.maxLength(WORKSPACE_SYNC_FILE_PREVIEW_MAX_BYTES)),
+    text: z.string().check(maxCodeUnits(WORKSPACE_SYNC_FILE_PREVIEW_MAX_BYTES)),
     digest: WorkspaceSyncFileDigestV1Schema,
     size: WorkspaceSyncFileSizeV1Schema,
   }),

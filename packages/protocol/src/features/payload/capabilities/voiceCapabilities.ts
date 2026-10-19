@@ -2,8 +2,8 @@ import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
 export const VoiceCapabilitiesSchema = lazyZodSchema(() => z.object({
-  configured: z.pipe(z.transform((value) => (typeof value === 'boolean' ? value : undefined)), z._default(z.optional(z.boolean()), false)),
-  provider: z.pipe(z.transform((value) => (value === 'elevenlabs' ? value : null)), z.nullable(z.enum(['elevenlabs']))),
+  configured: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => (typeof value === 'boolean' ? value : undefined)), z._default(z.optional(z.boolean()), false)),
+  provider: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => (value === 'elevenlabs' ? value : null)), z.nullable(z.enum(['elevenlabs']))),
   /**
    * Whether the server operator/environment is attempting to enable Happier Voice.
    * This is diagnostic-only (not a feature gate); actual enablement is still represented via `features.voice.*.enabled`.

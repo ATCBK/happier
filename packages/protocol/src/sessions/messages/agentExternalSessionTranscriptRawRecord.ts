@@ -39,7 +39,7 @@ function snapshotStructuralDto(
 const USER_CONTENT_KEYS = new Set(['type', 'text']);
 const RAW_RECORD_KEYS = new Set(['role', 'content']);
 
-const AgentExternalSessionUserContentSchema = lazyZodSchema(() => z.pipe(z.transform((value, context) => snapshotStructuralDto(value, USER_CONTENT_KEYS, context)), z.strictObject({
+const AgentExternalSessionUserContentSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value, context) => snapshotStructuralDto(value, USER_CONTENT_KEYS, context)), z.strictObject({
     type: z.literal('text'),
     text: z.string(),
   })));
@@ -137,4 +137,4 @@ const AgentExternalSessionTranscriptRawRecordUnionSchema = lazyZodSchema(() => z
 export const AgentExternalSessionTranscriptRawRecordSchema: z.ZodMiniType<
   AgentExternalSessionTranscriptRawRecord,
   unknown
-> = lazyZodSchema(() => z.pipe(z.transform((value, context) => snapshotStructuralDto(value, RAW_RECORD_KEYS, context)), AgentExternalSessionTranscriptRawRecordUnionSchema));
+> = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value, context) => snapshotStructuralDto(value, RAW_RECORD_KEYS, context)), AgentExternalSessionTranscriptRawRecordUnionSchema));

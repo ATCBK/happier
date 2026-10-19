@@ -47,7 +47,7 @@ export const MemoryIndexPolicyV1Schema = lazyZodSchema(() => z.looseObject({
 }));
 export type MemoryIndexPolicyV1 = z.infer<typeof MemoryIndexPolicyV1Schema>;
 
-export const MemoryHintsSettingsV1Schema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+export const MemoryHintsSettingsV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const candidate = value as Record<string, unknown>;
     if (
@@ -265,7 +265,7 @@ export const ConversationSearchSettingsV1Schema = lazyZodSchema(() => z.strictOb
 }));
 export type ConversationSearchSettingsV1 = z.infer<typeof ConversationSearchSettingsV1Schema>;
 
-export const MemorySettingsV1Schema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+export const MemorySettingsV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const candidate = value as Record<string, unknown>;
   if (candidate.indexMode !== 'hints') return value;
@@ -299,7 +299,7 @@ export const MemorySettingsV1Schema = lazyZodSchema(() => z.pipe(z.transform((va
     deleteOnDisable: z._default(z.boolean(), false),
     hints: z.prefault(MemoryHintsSettingsV1Schema, DEFAULT_MEMORY_HINTS_SETTINGS),
     deep: z.prefault(MemoryDeepSettingsV1Schema, DEFAULT_MEMORY_DEEP_SETTINGS),
-    embeddings: z.prefault(z.pipe(z.transform((value) => normalizeMemoryEmbeddingsSettings(value)), MemoryEmbeddingsSettingsV2Schema), DEFAULT_MEMORY_EMBEDDINGS_SETTINGS),
+    embeddings: z.prefault((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeMemoryEmbeddingsSettings(value)), MemoryEmbeddingsSettingsV2Schema), DEFAULT_MEMORY_EMBEDDINGS_SETTINGS),
     budgets: z.prefault(MemoryBudgetsSettingsV1Schema, DEFAULT_MEMORY_BUDGETS_SETTINGS),
     worker: z.prefault(MemoryWorkerSettingsV1Schema, DEFAULT_MEMORY_WORKER_SETTINGS),
   })));

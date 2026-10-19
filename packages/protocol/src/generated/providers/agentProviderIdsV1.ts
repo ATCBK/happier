@@ -10,7 +10,7 @@
  * because that would create a package dependency cycle.
  */
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const AGENT_PROVIDER_IDS_V1 = Object.freeze([
   'claude',

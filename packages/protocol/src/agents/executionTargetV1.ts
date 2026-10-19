@@ -53,7 +53,7 @@ export function listAgentExecutionTargetsV1(
 }
 
 /** Genuine 0.2 stored selection ingress, never request/write admission. */
-export const AgentExecutionTargetV1StoredSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+export const AgentExecutionTargetV1StoredSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (value && typeof value === 'object' && !Array.isArray(value)
     && 'kind' in value && value.kind === 'configuredAcpBackend' && 'backendId' in value) {
     return { kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: value.backendId };

@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
@@ -18,7 +19,7 @@ function isUnicodeScalarString(value: string): boolean {
   return true;
 }
 
-export const AgentSessionStartupInstructionsIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(AGENT_SESSION_STARTUP_INSTRUCTIONS_V1_MAX_ID_CODE_UNITS), z.regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u)));
+export const AgentSessionStartupInstructionsIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), maxCodeUnits(AGENT_SESSION_STARTUP_INSTRUCTIONS_V1_MAX_ID_CODE_UNITS), z.regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u)));
 
 export const AgentSessionStartupInstructionsTextV1Schema = lazyZodSchema(() => z.string().check(z.refine((value) => value.trim().length > 0, 'Instructions must be nonempty'), z.refine(isUnicodeScalarString, 'Instructions must contain valid Unicode'), z.refine((value) => value.normalize('NFC') === value, 'Instructions must be NFC-normalized')));
 

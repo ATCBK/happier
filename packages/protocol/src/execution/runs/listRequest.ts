@@ -20,7 +20,7 @@ export const ExecutionRunListRequestSchema = lazyZodSchema(() => z.looseObject({
   // Canonical backend target values are V2; V1 remains accepted through the
   // shared preprocess so mixed-version components can keep exchanging list
   // filters while the compatibility alias exists.
-  backendTarget: z.pipe(z.transform(normalizeBackendTargetRefV2InputToV2), z.optional(BackendTargetRefV2Schema)),
+  backendTarget: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeBackendTargetRefV2InputToV2), z.optional(BackendTargetRefV2Schema)),
   status: z.optional(ExecutionRunStatusSchema),
   limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(200))),
 }));

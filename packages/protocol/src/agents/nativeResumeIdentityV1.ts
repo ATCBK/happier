@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
@@ -33,6 +34,6 @@ import { NonBlankOpaqueIdentifierSchema } from '../strings/opaqueIdentifier.js';
  */
 export const AgentNativeResumeIdentityV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    vendorResumeId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(512)),
+    vendorResumeId: NonBlankOpaqueIdentifierSchema.check(maxCodeUnits(512)),
   }));
 export type AgentNativeResumeIdentityV1 = z.infer<typeof AgentNativeResumeIdentityV1Schema>;

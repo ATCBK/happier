@@ -95,7 +95,7 @@ const ScmCapabilitiesSchemaCore = lazyZodSchema(() => z.object({
       push: z.optional(z.string()),
     })),
 }));
-export const ScmCapabilitiesSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+export const ScmCapabilitiesSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return value;
   }

@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
@@ -8,7 +9,7 @@ import {
 } from '../../plugins/actions/protocolComposableSchema.js';
 
 /** The Launch Profile V2 owner's existing trim and UTF-16 length contract. */
-export const LaunchProfileIdV2Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+export const LaunchProfileIdV2Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), maxCodeUnits(256)));
 
 /** Retained predecessor identities are exact nonempty strings; new inline V2 authoring keeps its own stricter contract. */
 export const ProfileRecordIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1)));

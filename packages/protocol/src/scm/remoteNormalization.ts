@@ -156,7 +156,7 @@ export const ScmRemoteNameSchema = createNormalizedStringSchema((value) => {
 });
 export type ScmRemoteName = z.infer<typeof ScmRemoteNameSchema>;
 
-export const ScmOptionalRemoteNameSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+export const ScmOptionalRemoteNameSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (typeof value !== 'string') {
     return value;
   }
@@ -170,7 +170,7 @@ export const ScmRemoteManagementNameSchema = createNormalizedStringSchema((value
     ? { ok: true, value: normalized.name }
     : normalized;
 });
-export const ScmOptionalRemoteManagementNameSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+export const ScmOptionalRemoteManagementNameSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (typeof value !== 'string') {
     return value;
   }
@@ -193,7 +193,7 @@ export const ScmBranchSourceRefSchema = createNormalizedStringSchema((value) => 
 });
 export type ScmBranchSourceRef = z.infer<typeof ScmBranchSourceRefSchema>;
 
-export const ScmOptionalBranchSourceRefSchema = lazyZodSchema(() => z.optional(z.pipe(z.transform((value) => {
+export const ScmOptionalBranchSourceRefSchema = lazyZodSchema(() => z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (typeof value !== 'string') {
     return value;
   }

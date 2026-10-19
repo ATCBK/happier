@@ -35,9 +35,9 @@ const NotificationChannelTopicsFieldsV1Schema = lazyZodSchema(() => z.object({
   machines: z._default(z.boolean(), true),
 }));
 
-export const NotificationChannelTopicsStrictV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizeNotificationChannelTopicsV1Input), (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(NotificationChannelTopicsFieldsV1Schema)));
+export const NotificationChannelTopicsStrictV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeNotificationChannelTopicsV1Input), (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(NotificationChannelTopicsFieldsV1Schema)));
 
-export const NotificationChannelTopicsV1Schema = lazyZodSchema(() => z.catch(z.pipe(z.transform(normalizeNotificationChannelTopicsV1Input), NotificationChannelTopicsFieldsV1Schema), {
+export const NotificationChannelTopicsV1Schema = lazyZodSchema(() => z.catch((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeNotificationChannelTopicsV1Input), NotificationChannelTopicsFieldsV1Schema), {
     ready: true,
     permissionRequest: true,
     userActionRequest: true,

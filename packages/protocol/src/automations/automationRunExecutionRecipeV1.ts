@@ -136,7 +136,7 @@ export const AutomationRunTriggerEvidenceEnvelopeV1ReadSchema = lazyZodSchema(()
     const evidence = AutomationRunTriggerEvidenceV1ReadSchema.safeParse(envelope.v);
     if (!evidence.success) {
       for (const issue of evidence.error.issues) {
-        context.issues.push({ ...issue, path: ['v', ...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) });
+        context.issues.push({ ...issue, path: ['v', ...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) } as z.core.$ZodRawIssue);
       }
       return z.NEVER;
     }
@@ -444,13 +444,13 @@ function createAutomationRunExecutionRecipeV1Schema(templateSchema: typeof Autom
 function projectAutomationExecutionRecipePlainContentV1<T extends Readonly<{
   template: z.infer<typeof AutomationStoredContentEnvelopeV1Schema>;
   triggerEvidence: z.infer<typeof AutomationStoredContentEnvelopeV1Schema> | null;
-}>>(recipe: T, context: z.core.$RefinementCtx) {
+}>>(recipe: T, context: z.core.ParsePayload) {
   const evidence = recipe.triggerEvidence === null
     ? null
     : AutomationRunTriggerEvidenceEnvelopeV1ReadSchema.safeParse(recipe.triggerEvidence);
   if (evidence !== null && !evidence.success) {
     for (const issue of evidence.error.issues) {
-      context.addIssue({ ...issue, path: ['triggerEvidence', ...issue.path] });
+      context.issues.push({ ...issue, path: ['triggerEvidence', ...issue.path], input: 'input' in issue ? issue.input ?? context.value : context.value } as z.core.$ZodRawIssue);
     }
     return z.NEVER;
   }

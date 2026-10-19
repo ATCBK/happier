@@ -38,7 +38,7 @@ function migrateLegacyHandsFreeDefaults(raw: unknown): unknown {
   };
 }
 
-export const VoiceHandsFreeSchema = z.pipe(z.transform(migrateLegacyHandsFreeDefaults), z._default(z
+export const VoiceHandsFreeSchema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(migrateLegacyHandsFreeDefaults), z._default(z
     .object({
       enabled: z._default(z.boolean(), false),
       endpointing: z.prefault(z

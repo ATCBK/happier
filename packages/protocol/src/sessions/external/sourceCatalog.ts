@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z, z as zodMiniCore0, ZodMiniType as ZodType, ZodMiniType as ZodTypeAny } from 'zod/mini';
 
@@ -229,7 +230,7 @@ export const EXTERNAL_SESSIONS_AGENT_IDS = Object.freeze(
 export const ExternalSessionAgentIdSchema = AgentIdV1Schema;
 export type ExternalSessionAgentId = z.infer<typeof ExternalSessionAgentIdSchema>;
 
-export const ExternalSessionSourceIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(2_000), z.refine((value) => value === value.trim(), 'External-session source id must already be trimmed.')));
+export const ExternalSessionSourceIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), maxCodeUnits(2_000), z.refine((value) => value === value.trim(), 'External-session source id must already be trimmed.')));
 export type ExternalSessionSourceId = z.infer<typeof ExternalSessionSourceIdSchema>;
 
 /**
@@ -238,7 +239,7 @@ export type ExternalSessionSourceId = z.infer<typeof ExternalSessionSourceIdSche
  * bound is measured on the preserved bytes rather than on a trimmed
  * projection of them.
  */
-const ExternalSessionRemoteSessionIdSchema = lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.check(z.maxLength(2_000)));
+const ExternalSessionRemoteSessionIdSchema = lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.check(maxCodeUnits(2_000)));
 
 export const ExternalSessionRefSchema = lazyZodSchema(() => z.strictObject({
   agentId: ExternalSessionAgentIdSchema,
@@ -266,7 +267,7 @@ export const ExternalSessionsSourceSchema = z.pipe(z.unknown(), z.transform((val
     ctx.issues.push({ code: 'custom', message: 'External-session source must be a bounded JSON object.', input: ctx.value });
     return z.NEVER;
   }
-  const kind = z.string().check(z.minLength(1), z.maxLength(MAX_EXTERNAL_SESSIONS_SOURCE_KIND_CODE_UNITS), z.refine((value) => value === value.trim(), 'External-session source kind must already be trimmed.'))
+  const kind = z.string().check(z.minLength(1), maxCodeUnits(MAX_EXTERNAL_SESSIONS_SOURCE_KIND_CODE_UNITS), z.refine((value) => value === value.trim(), 'External-session source kind must already be trimmed.'))
     .safeParse(parsed.data.kind);
   if (!kind.success) {
     ctx.issues.push({ code: 'custom', path: ['kind'], message: 'External-session source kind is invalid.', input: ctx.value });

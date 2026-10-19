@@ -36,7 +36,7 @@ export const UsageModelPriceOverrideSchema = lazyZodSchema(() => z.discriminated
   z.strictObject({ kind: z.literal('map'), modelId: z.string().check(z.trim(), z.minLength(1)) }),
 ]));
 // Zod records intentionally omit __proto__; reject it instead of acknowledging a lost setting.
-export const UsageModelPriceOverridesV1Schema = lazyZodSchema(() => z.pipe(z.transform((value, context) => {
+export const UsageModelPriceOverridesV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value, context) => {
   if (value !== null && typeof value === 'object' && Object.hasOwn(value, '__proto__')) {
     context.issues.push({ code: 'custom', path: ['__proto__'], message: 'Reserved record key', input: context.value });
   }

@@ -117,7 +117,7 @@ function coerceFeaturesResponsePayload(raw: unknown): unknown {
   };
 }
 
-export const FeaturesResponseSchema = lazyZodSchema(() => z.pipe(z.transform(coerceFeaturesResponsePayload), z.object({
+export const FeaturesResponseSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(coerceFeaturesResponsePayload), z.object({
     features: FeatureGatesSchema,
     capabilities: CapabilitiesSchema,
     // Additive optional Home connection descriptor (Home Iroh publication):

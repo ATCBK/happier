@@ -1,10 +1,11 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
 import { StrictJsonValueSchema, type JsonValue } from '../json/strictJsonValue.js';
 import { AGENT_SESSION_RUNTIME_LIMITS_CANDIDATE_V1 as LIMITS } from './agentSessionLimitsV1.js';
 
-const exactString = (max: number) => z.string().check(z.minLength(1), z.maxLength(max), z.refine((value) => value === value.trim(), 'Identifiers must not contain leading or trailing whitespace'));
+const exactString = (max: number) => z.string().check(z.minLength(1), maxCodeUnits(max), z.refine((value) => value === value.trim(), 'Identifiers must not contain leading or trailing whitespace'));
 
 const PluginContributionRefSchema = lazyZodSchema(() => z.strictObject({
   pluginId: exactString(LIMITS.providerIdMaxCodeUnits),
@@ -13,7 +14,7 @@ const PluginContributionRefSchema = lazyZodSchema(() => z.strictObject({
 
 const AgentRuntimeRemediationDataV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('retry') }),
-  z.strictObject({ kind: z.literal('openSettings'), path: z.string().check(z.maxLength(LIMITS.filePathMaxCodeUnits)) }),
+  z.strictObject({ kind: z.literal('openSettings'), path: z.string().check(maxCodeUnits(LIMITS.filePathMaxCodeUnits)) }),
   z.strictObject({ kind: z.literal('selectAccount'), service: PluginContributionRefSchema }),
   z.strictObject({
     kind: z.literal('installDependency'),
@@ -35,7 +36,7 @@ export type AgentRuntimeDiagnosticDataV1 = Readonly<{
 export const AgentRuntimeDiagnosticDataV1Schema: z.ZodMiniType<AgentRuntimeDiagnosticDataV1> = lazyZodSchema(() => z.strictObject({
   code: exactString(LIMITS.usageSourceMaxCodeUnits),
   severity: z.enum(['info', 'warning', 'error']),
-  message: z.optional(z.string().check(z.maxLength(LIMITS.descriptionMaxCodeUnits))),
+  message: z.optional(z.string().check(maxCodeUnits(LIMITS.descriptionMaxCodeUnits))),
   details: z.optional(StrictJsonValueSchema),
   remediation: z.optional(AgentRuntimeRemediationDataV1Schema),
 }));

@@ -23,7 +23,7 @@ export const LlmTaskRunnerConfigV1WriteSchema = lazyZodSchema(() => z.strictObje
 const StoredRunnerSchema = createStoredReadSchema(LlmTaskRunnerConfigV1WriteSchema);
 const StoredPredecessorTargetSchema = createStoredReadSchema(BackendTargetRefSchema);
 /** Forward reader for the real 0.2 runner setting; writers emit only modelSelection. */
-export const LlmTaskRunnerConfigV1Schema = lazyZodSchema(() => z.pipe(z.transform(value => {
+export const LlmTaskRunnerConfigV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(value => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
   if (Object.hasOwn(record, 'modelSelection')) return record;

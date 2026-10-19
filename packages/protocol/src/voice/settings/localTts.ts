@@ -66,7 +66,7 @@ function migrateKokoroProviderToLocalNeural(input: Record<string, unknown>): Voi
   };
 }
 
-export const VoiceLocalTtsSchema = z.pipe(z.transform((raw) => {
+export const VoiceLocalTtsSchema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => {
   if (!raw || typeof raw !== 'object') return raw;
   const obj = migrateLegacyGoogleTtsSettings(raw as Record<string, unknown>);
 

@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
@@ -46,7 +47,7 @@ export const ExternalAgentObservationEvidenceClassV1Schema = lazyZodSchema(() =>
   'reconciliation',
 ]));
 
-const ExternalAgentObservationOpaqueKeyV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(EXTERNAL_AGENT_OBSERVATION_KEY_MAX_CODE_UNITS_V1)));
+const ExternalAgentObservationOpaqueKeyV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), maxCodeUnits(EXTERNAL_AGENT_OBSERVATION_KEY_MAX_CODE_UNITS_V1)));
 
 export const ExternalAgentObservationResourceKeyV1Schema =
   ExternalAgentObservationOpaqueKeyV1Schema;
