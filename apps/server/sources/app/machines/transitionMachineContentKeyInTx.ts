@@ -8,6 +8,7 @@ import { isPlainMachineDataKeyMarker, machineStoredContentMatchesAccountMode } f
 import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireMachineAccessPublicationLocksInTx } from './machineAccess';
 import { afterTx, type Tx } from "@/storage/inTx";
 import { buildUpdateMachineUpdate, eventRouter } from "@/app/events/eventRouter";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
@@ -43,6 +44,7 @@ export async function transitionMachineContentKeyInTx(params: Readonly<{
 }>): Promise<MachineContentKeyTransitionResultV1<ReturnType<typeof serializeMachineRow>>> {
     const { tx, accountId } = params;
     const input = MachineContentKeyTransitionInputV1Schema.parse(params.input);
+    await acquireMachineAccessPublicationLocksInTx(tx, input.machineId);
     const machine = await tx.machine.findUnique({ where: { id: input.machineId } });
     if (!machine || machine.accountId !== accountId) return { kind: "refused", code: "forbidden" };
     if (machine.kind !== "persistent" || machine.revokedAt || machine.replacedByMachineId) {
@@ -105,12 +107,12 @@ export async function transitionMachineContentKeyInTx(params: Readonly<{
     // caller-openable key; C41 will project pending until delivery is current.
     const cursors = await markAccountsChanged(tx, { accountIds: [accountId,
         ...await resolveCurrentMachineRecipientAccountIdsInTx(tx, machine.id)], kind: "machine", entityId: machine.id });
-    const cursor = cursors.find(recipient => recipient.accountId === accountId)?.cursor;
+    const cursor = cursors.find(recipient => recipient.accountId === accountId);
     if (cursor === undefined) throw new Error("Machine owner is missing from its publication audience");
     afterTx(tx, () => {
         eventRouter.emitUpdate({
             userId: accountId,
-            payload: buildUpdateMachineUpdate(machine.id, cursor, randomKeyNaked(12),
+            payload: buildUpdateMachineUpdate(machine.id, cursor.resolveCursor(), randomKeyNaked(12),
                 { value: committed.metadata, version: committed.metadataVersion },
                 { value: committed.daemonState, version: committed.daemonStateVersion },
                 { dataEncryptionKey: privacyKit.encodeBase64(nextEnvelope), keyBasis: serializeMachineKeyBasis(committed), devcontainerChild }),

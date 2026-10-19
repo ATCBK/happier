@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
 import type { MachinePoolCreateInputV1, MachinePoolDeleteInputV1, MachinePoolDeleteOutputV1, MachinePoolErrorV1, MachinePoolResolveInputV1, MachinePoolResolveResultV1, MachinePoolUpdateInputV1, MachinePoolViewV1 } from '@happier-dev/protocol/machines/pools/v1';
 
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import { db, isPrismaUniqueConstraintError } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
@@ -202,6 +202,7 @@ export async function createMachinePool(params: Readonly<{
     let stored: StoredPool;
     try {
         const result = await inTx(async (tx) => {
+            await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
             const existing = await tx.machinePool.findUnique({ where: { id: params.input.poolId }, ...poolAggregate });
             if (existing) return { kind: "collision" as const };
             const invalid = await validateMembersInTx({ tx, accountId: params.accountId, members: params.input.members });
@@ -248,6 +249,7 @@ export async function updateMachinePool(params: Readonly<{
     io: MachineDaemonPresenceSocketServer;
 }>): Promise<PoolResult<MachinePoolViewV1>> {
     const result = await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         const current = await readOwnedPool(tx, params.accountId, params.input.poolId);
         if (!current) return { kind: "not_found" as const };
         if (sameDefinition(current, params.input)) return { kind: "settled" as const, stored: current };
@@ -299,6 +301,7 @@ export async function deleteMachinePool(params: Readonly<{
     io: MachineDaemonPresenceSocketServer;
 }>): Promise<PoolResult<MachinePoolDeleteOutputV1>> {
     const result = await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         const current = await readOwnedPool(tx, params.accountId, params.input.poolId);
         if (!current) return { kind: "not_found" as const };
         if (current.revision !== params.input.expectedRevision) return { kind: "conflict" as const, stored: current };

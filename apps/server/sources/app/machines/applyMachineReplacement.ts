@@ -1,4 +1,4 @@
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { buildUpdateMachineUpdate, eventRouter } from "@/app/events/eventRouter";
 import { activityCache } from "@/app/presence/sessionCache";
 import { afterTx } from "@/storage/inTx";
@@ -32,6 +32,7 @@ export class MachineReplacementWriteConflictError extends Error {
 }
 
 export async function applyMachineReplacement(params: ApplyMachineReplacementParams): Promise<void> {
+    await acquireAccountChangePublicationLocksInTx(params.tx, [params.accountId], { includeSingleAccount: true });
     const replacedAt = params.replacedAt ?? new Date();
     const invalidatedSessionBindings = await readMachineAccessKeySessionBindingsInTx(params.tx, {
         accountId: params.accountId,
@@ -98,7 +99,7 @@ export async function applyMachineReplacement(params: ApplyMachineReplacementPar
             userId: params.accountId,
             payload: buildUpdateMachineUpdate(
                 params.oldMachineId,
-                cursor,
+                cursor.resolveCursor(),
                 randomKeyNaked(12),
                 undefined,
                 undefined,
@@ -157,7 +158,7 @@ export async function clearMachineReplacement(params: Readonly<{
             userId: params.accountId,
             payload: buildUpdateMachineUpdate(
                 params.oldMachineId,
-                cursor,
+                cursor.resolveCursor(),
                 randomKeyNaked(12),
                 undefined,
                 undefined,

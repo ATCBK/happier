@@ -12,7 +12,7 @@ import { db, isPrismaUniqueConstraintError, getActivePrismaRuntime } from "@/sto
 import { AccountStatus, TeamMembershipStatus } from "@/storage/enums.generated";
 import { readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import {
     resolveTeamActorContextInTx, qualifyTeamOperationAuthenticationInTx,
     resolveTeamActorContextsInTx, qualifyTeamOperationAuthenticationsInTx,
@@ -122,6 +122,7 @@ function definition(preset: ManagedMachinePresetV1): ManagedMachinePresetCreateI
 export async function createMachinePreset(params: PresetContext & Readonly<{ input: ManagedMachinePresetCreateInputV1 }>): Promise<PresetMutationResultV1> {
     const input = ManagedMachinePresetCreateInputV1Schema.parse(params.input);
     const execute = () => inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId, ...(input.owner.kind === 'account' ? [input.owner.accountId] : [])], { includeSingleAccount: true });
         await requireHomeInTx(tx, input.homeId);
         if (!await mayAccessInTx(tx, params, input.owner, true)) return { kind: "refused", code: "permission_denied" } as const;
         const existing = await tx.managedMachinePreset.findUnique({ where: { id: input.id } });
@@ -192,6 +193,7 @@ export async function listMachinePresets(params: PresetContext & Readonly<{ inpu
 export async function updateMachinePreset(params: PresetContext & Readonly<{ input: ManagedMachinePresetUpdateInputV1 }>): Promise<PresetMutationResultV1> {
     const input = ManagedMachinePresetUpdateInputV1Schema.parse(params.input);
     try { return await inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         await requireHomeInTx(tx, input.homeId);
         const row = await tx.managedMachinePreset.findFirst({ where: { id: input.id, homeId: input.homeId } });
         if (!row || !await mayAccessInTx(tx, params, ownerOf(row), true)) return { kind: "refused", code: "preset_not_found" } as const;
@@ -230,6 +232,7 @@ export async function updateMachinePreset(params: PresetContext & Readonly<{ inp
 /** Archive changes recipe offers only; acquired rows and capacity are untouched. */
 async function setArchived(params: PresetContext & Readonly<{ input: ManagedMachinePresetRevisionInputV1 }>, archived: boolean): Promise<PresetMutationResultV1> {
     try { return await inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         await requireHomeInTx(tx, params.input.homeId);
         const row = await tx.managedMachinePreset.findFirst({ where: { id: params.input.id, homeId: params.input.homeId } });
         if (!row || !await mayAccessInTx(tx, params, ownerOf(row), true)) return { kind: "refused", code: "preset_not_found" } as const;

@@ -1,3 +1,4 @@
+import { inTx } from "@/storage/inTx";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import tweetnacl from "tweetnacl";
 import { MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent, signMachineInstallationProof,
@@ -85,7 +86,7 @@ describe("machinesRoutes machine replacement", () => {
 
     it("applies explicit automatic replacement when creating a new machine", async () => {
         const session = await db.session.create({ data: { accountId, tag: "retained-session", metadata: "encrypted-session", encryptionMode: "e2ee" } });
-        expect(await createSessionMachineAccessKeyInTx(db, { accountId, machineId: "m1", sessionId: session.id, data: "sealed-access-key" })).toMatchObject({ ok: true });
+        expect(await inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId, machineId: "m1", sessionId: session.id, data: "sealed-access-key" }))).toMatchObject({ ok: true });
         const recipe = serializeAutomationStoredWorkflowDefinitionRecipeV2({ v: 2, templateVersion: 1, triggerEvidence: null,
             workflow: { t: "encrypted", c: "encrypted-workflow" } });
         if (recipe.kind !== "available") throw new Error("Canonical encrypted Automation fixture was rejected");

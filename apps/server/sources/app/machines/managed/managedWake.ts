@@ -19,7 +19,7 @@ import { isCurrentSessionInputMachineTargetInTx, readCurrentCommittedSessionInpu
 import { readCurrentServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { emitAutomationRunUpdatedToMachineOnly } from '@/app/automations/automationChangePublisher';
 import { afterTx, inTx, type Tx } from '@/storage/inTx';
-import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { markAccountChanged, type AccountChangePublication } from '@/app/changes/markAccountChanged';
 import { readWorkflowRunOriginWakeCandidatesInTx } from '@/app/workflows/workflowRunAttention';
 import { ManagedMachineError, projectManagedMachine, requireManagedControllerInTx, sameManagedInput, type StoredManagedMachine } from './managedRows';
 import { forwardRpcCall } from '@/app/api/socket/rpc/forwardRpcCall';
@@ -198,7 +198,7 @@ export async function readManagedPendingActivationHoldReasonInTx(tx: Tx, input: 
 }
 
 /** Real queued assignment is the durable origin; guest claims remain at the incumbent claim owner. */
-export async function publishManagedRunWakeInTx(tx: Tx, input: Readonly<{ accountId: string; runId: string; cursor: number }>): Promise<void> {
+export async function publishManagedRunWakeInTx(tx: Tx, input: Readonly<{ accountId: string; runId: string; cursor: AccountChangePublication }>): Promise<void> {
     const run = await tx.automationRun.findUnique({ where: { id: input.runId }, include: { assignments: true } });
     if (!run || run.accountId !== input.accountId || run.state !== 'queued' || run.claimedByMachineId !== null) return;
     for (const assignment of run.assignments) {
@@ -209,7 +209,7 @@ export async function publishManagedRunWakeInTx(tx: Tx, input: Readonly<{ accoun
             const cursor = controller.accountId === input.accountId ? input.cursor
                 : await markAccountChanged(tx, { accountId: controller.accountId, kind: 'machine', entityId: target.controller.machineId });
             afterTx(tx, () => emitAutomationRunUpdatedToMachineOnly({ accountId: controller.accountId,
-                machineId: target.controller.machineId, run, cursor, managedWakeTargetV1: target }));
+                machineId: target.controller.machineId, run, cursor: cursor.resolveCursor(), managedWakeTargetV1: target }));
         }
     }
 }
@@ -291,7 +291,7 @@ export async function publishManagedContextWakeInTx(tx: Tx, input: Readonly<{ ru
     const controller = await tx.machine.findUniqueOrThrow({ where: { id: target.controller.machineId }, select: { accountId: true } });
     const cursor = await markAccountChanged(tx, { accountId: controller.accountId, kind: 'machine', entityId: target.controller.machineId });
     afterTx(tx, () => emitAutomationRunUpdatedToMachineOnly({ accountId: controller.accountId,
-        machineId: target.controller.machineId, run, cursor, managedWakeTargetV1: target }));
+        machineId: target.controller.machineId, run, cursor: cursor.resolveCursor(), managedWakeTargetV1: target }));
 }
 
 /**

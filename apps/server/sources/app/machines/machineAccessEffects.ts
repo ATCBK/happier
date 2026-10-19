@@ -27,6 +27,7 @@ export async function captureMachineAccessImpactsInTx(
     input: Readonly<{ machineIds: readonly string[]; accountIds: readonly string[] }>,
 ): Promise<ReadonlyMap<string, MachineAccessImpact>> {
     const accountIds = [...new Set(input.accountIds)];
+    await acquireAccountChangePublicationLocksInTx(tx, accountIds, { includeSingleAccount: true });
     const machineIds = [...new Set(input.machineIds)];
     const access = accountIds.length === 0 || machineIds.length === 0
         ? new Map<string, Map<string, MachineAccessRoleV1 | null>>()

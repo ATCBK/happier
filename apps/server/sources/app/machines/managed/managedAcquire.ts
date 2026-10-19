@@ -125,7 +125,7 @@ export async function admitManagedAcquire(params: Readonly<{
             } });
             await invalidateManagedMachineInTx(tx, row);
             return { machine: projectManagedMachine(row, declaration), replayed: false };
-        });
+        }, { intent: 'exclusive', additionalAccountIds: [params.requesterAccountId, params.custodianAccountId] });
         // Entering this owner can submit a write even if Prisma later rejects its
         // COMMIT acknowledgement. Its rollback attempt may also fail silently.
         transactionStarted = true;

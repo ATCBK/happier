@@ -144,12 +144,12 @@ describe("Machine transaction-composable mutations (SQLite integration)", () => 
         const session = await db.session.create({
             data: { accountId: account.id, tag: "machine-revoke-session", encryptionMode: "plain", metadata: "{}" },
         });
-        const accessKey = await createSessionMachineAccessKeyInTx(db, {
+        const accessKey = await inTx(tx => createSessionMachineAccessKeyInTx(tx, {
             accountId: account.id,
             machineId: machine.id,
             sessionId: session.id,
             data: "access-key",
-        });
+        }));
         expect(accessKey.ok).toBe(true);
 
         const disconnectedRooms: string[] = [];

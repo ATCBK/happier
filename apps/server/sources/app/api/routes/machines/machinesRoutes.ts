@@ -4,7 +4,7 @@ import { z } from "zod/mini";
 import { db, isPrismaErrorCode } from "@/storage/db";
 import { log } from "@/utils/logging/log";
 import { inTx, type Tx } from "@/storage/inTx";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { timingSafeEqual } from "node:crypto";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import tweetnacl from "tweetnacl";
@@ -576,6 +576,7 @@ export function machinesRoutes(app: Fastify) {
             let updated: UpdatedMachineRow;
             try {
                 updated = await inTx(async (tx) => {
+                    await acquireAccountChangePublicationLocksInTx(tx, [userId], { includeSingleAccount: true });
                     await requireManagedMachineRegistrationInTx(tx, { custodianAccountId: userId, machineId: id, enrollment: managedEnrollment });
                     const current = await tx.machine.findFirst({
                         where: {
@@ -730,6 +731,7 @@ export function machinesRoutes(app: Fastify) {
             let machineReplacement: MachineRegistrationReplacementResult | null = null;
             try {
                 const created = await inTx(async (tx) => {
+                    await acquireAccountChangePublicationLocksInTx(tx, [userId], { includeSingleAccount: true });
                     await requireManagedMachineRegistrationInTx(tx, { custodianAccountId: userId, machineId: id, enrollment: managedEnrollment });
                     const registered = await createMachineWithInstallationIdentityInTx(tx, {
                     accountId: userId,
@@ -779,6 +781,7 @@ export function machinesRoutes(app: Fastify) {
                         {
                             try {
                                 rejoinedMachine = await inTx(async tx => {
+                                    await acquireAccountChangePublicationLocksInTx(tx, [userId], { includeSingleAccount: true });
                                     await requireManagedMachineRegistrationInTx(tx, { custodianAccountId: userId, machineId: id, enrollment: managedEnrollment });
                                     const current = await tx.machine.findUnique({ where: { accountId_id: { accountId: userId, id } } });
                                     if (!current || current.revokedAt) throw new ManagedMachineError("enrollment_retired");
