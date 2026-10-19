@@ -90,7 +90,7 @@ import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 import { DiscussionAgentActivityReference } from '@/components/discussions/DiscussionAgentActivityReference';
 import { resolveSessionAgentActivityPresentation } from '@/components/sessions/agents/presentation/sessionAgentActivityPresentation';
 import { useOpenSessionAgentConversation } from '@/components/sessions/conversations/useOpenSessionAgentConversation';
-import { buildDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, resolveDiscussionMessageAuthorLabel, type DiscussionTimelineItem } from '@/components/discussions/discussionTimelineProjection';
+import { buildDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, type DiscussionTimelineItem } from '@/components/discussions/discussionTimelineProjection';
 import { useShareViewerProfile } from '@/components/sharing/useShareViewerProfile';
 import { useDiscussionParticipantProfiles } from './useDiscussionParticipantProfiles';
 import { useDiscussionParticipantManagement } from './useDiscussionParticipantManagement';
@@ -578,6 +578,8 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     const mentionedSessionAddresses = React.useMemo(() => [...new Set(messages.flatMap((message) => [
         ...(message.content ? readDiscussionMentionedParticipantIdsV1(message.content).mentionedSessionIds : []),
         ...(message.participantDeliveryV1?.map((delivery) => delivery.participantSessionId) ?? []),
+        // A Bot reply's byline names the Session that answered, through the same title projection.
+        ...(message.producerV1?.actionRequestAttributionV1?.requester ? [message.producerV1.sessionId] : []),
     ]))]
         .map((sessionId) => ({ serverId: props.scope.serverId, sessionId })), [messages, props.scope.serverId]);
     const mentionedSessionTitles = useSessionDisplayTitles(mentionedSessionAddresses);
@@ -1022,6 +1024,8 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                             resolveSessionLabel={resolveSessionLabel}
                             proposalClient={proposalClient}
                             viewerAccountId={props.scope.accountId}
+                            attributionLine={resolveDiscussionReplyAttributionLine(item.message, props.scope,
+                                item.message.producerV1 ? resolveSessionLabel(item.message.producerV1.sessionId) : null)}
                             footer={pendingMutation ? <>
                                 {mutationStatusLabel(pendingMutation) ? <Text testID={`session-discussion-message-status-${item.message.localId}`} accessibilityLiveRegion="polite" style={pendingMutation.status === 'failed' ? styles.error : styles.deliveryStatus}>{mutationStatusLabel(pendingMutation)}</Text> : null}
                                 <MutationRecovery mutation={pendingMutation} onRetry={() => void repository.retry(pendingMutation.localId)} onDismiss={dismissRefusal} />
@@ -1085,6 +1089,8 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
     authorLabel: string;
     proposalClient: ArtifactActionsClient;
     viewerAccountId: string;
+    /** "Asked by … · answered by …" from the reply's stamped cause; null when no person asked. */
+    attributionLine: string | null;
     footer: React.ReactNode;
 }>) => {
     const { message } = props;
@@ -1139,6 +1145,7 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                     disposition={message.docEditProposalDispositionV1} viewerAccountId={props.viewerAccountId}
                     resolveAccountLabel={props.resolveAccountLabel} />
                 : <Text testID={`session-discussion-message-content-${message.id}`} style={styles.messageText}>{renderDiscussionMessageContent(message, props.resolveAccountLabel, props.resolveSessionLabel)}</Text>}
+            {props.attributionLine ? <Text testID={`session-discussion-message-attribution-${message.id}`} style={styles.meta}>{props.attributionLine}</Text> : null}
             {message.participantDeliveryV1?.map((delivery) => <Text
                 key={delivery.participantSessionId}
                 testID={`session-discussion-participant-held-${message.id}-${delivery.participantSessionId}`}

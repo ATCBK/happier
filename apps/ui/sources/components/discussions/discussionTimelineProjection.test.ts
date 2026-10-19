@@ -7,7 +7,7 @@ import {
 } from '@/sync/domains/session/agentActivity';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 
-import { buildDiscussionTimelineItems, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel } from '@/components/discussions/discussionTimelineProjection';
+import { buildDiscussionTimelineItems, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine } from '@/components/discussions/discussionTimelineProjection';
 import { t } from '@/text';
 
 describe('readDiscussionMessagePreview', () => {
@@ -49,6 +49,38 @@ describe('resolveDiscussionMessageAuthorLabel', () => {
             .toBe(t('message.accountActorFormerMember'));
         expect(resolveDiscussionMessageAuthorLabel({ authorAccountId: 'viewer', accountActor: null, createdAt: 1 }, viewer))
             .toBe(t('session.collaboration.discussion.collaborator'));
+    });
+});
+
+describe('resolveDiscussionReplyAttributionLine', () => {
+    const persona = { serverId: 'home', sessionId: 'release-bot' };
+    const viewer = { serverId: 'home', accountId: 'viewer' };
+    const reply = (requesterAccountId: string | null, actor: { accountId: string; name: string } | null) => ({
+        producerV1: { v: 1 as const, kind: 'agent' as const, sessionId: 'release-bot', actionRequestAttributionV1: {
+            requestRef: 'req-1', requester: requesterAccountId ? { serverId: 'home', accountId: requesterAccountId } : null, persona, origin: null } },
+        requesterAccountActor: actor ? { v: 1 as const, accountId: actor.accountId, profile: { name: actor.name, firstName: null, lastName: null, username: null, avatarUrl: null } } : null,
+    });
+
+    it('names who asked and which Bot answered, from the stamped cause only', () => {
+        expect(resolveDiscussionReplyAttributionLine(reply('bob', { accountId: 'bob', name: 'Bob Keller' }), viewer, 'Release bot'))
+            .toBe(t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: 'Bob Keller', bot: 'Release bot' }));
+        expect(resolveDiscussionReplyAttributionLine(reply('viewer', { accountId: 'viewer', name: 'Maya Chen' }), viewer, 'Release bot'))
+            .toBe(t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: t('session.collaboration.discussion.attribution.you'), bot: 'Release bot' }));
+        expect(resolveDiscussionReplyAttributionLine(reply('bob', { accountId: 'bob', name: 'Bob Keller' }), viewer, null))
+            .toBe(t('session.collaboration.discussion.attribution.askedBy', { requester: 'Bob Keller' }));
+    });
+
+    it('keeps an unprojected or mismatched requester unknown and says nothing without a person cause', () => {
+        const other = t('session.collaboration.discussion.attribution.anotherPerson');
+        expect(resolveDiscussionReplyAttributionLine(reply('bob', null), viewer, 'Release bot'))
+            .toBe(t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: other, bot: 'Release bot' }));
+        expect(resolveDiscussionReplyAttributionLine(reply('bob', { accountId: 'owner', name: 'Bot Owner' }), viewer, 'Release bot'))
+            .toBe(t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: other, bot: 'Release bot' }));
+        expect(resolveDiscussionReplyAttributionLine(reply('viewer', null), { serverId: 'elsewhere', accountId: 'viewer' }, 'Release bot'))
+            .toBe(t('session.collaboration.discussion.attribution.askedByAnsweredBy', { requester: other, bot: 'Release bot' }));
+        expect(resolveDiscussionReplyAttributionLine(reply(null, null), viewer, 'Release bot')).toBeNull();
+        expect(resolveDiscussionReplyAttributionLine({ producerV1: { v: 1, kind: 'agent', sessionId: 'release-bot' }, requesterAccountActor: null }, viewer, 'Release bot')).toBeNull();
+        expect(resolveDiscussionReplyAttributionLine({ producerV1: null }, viewer, 'Release bot')).toBeNull();
     });
 });
 
