@@ -1,11 +1,17 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createWorkflowDefinitionFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-// Only HTTP and device credentials are replaced. The front door, Artifact
-// codec, definition owner and compare-and-set execute their production logic.
+// The real Action owner asks for destructive confirmation before deleting.
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
+});
+
+// HTTP, device credentials and confirmation presentation are boundaries. The
+// front door, Artifact codec, definition owner and compare-and-set remain real.
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 installDisconnectedServerSocketBoundary();

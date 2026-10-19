@@ -1,5 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createWorkflowDefinitionFixture, createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
@@ -9,10 +8,10 @@ import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredCo
 import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
-// Native Machine RPC and Home HTTP are the only replaced execution boundaries.
-const machineRpc = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
+// Home HTTP and external Machine Actions are the replaced system boundaries.
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 installDisconnectedServerSocketBoundary();
@@ -30,11 +29,11 @@ let available = isAppliedActiveServerRuntimeAvailable();
 beforeEach(async () => {
     previous = storage.getState(); applied = getAppliedActiveServerSnapshot(); available = isAppliedActiveServerRuntimeAvailable();
     await home.reset();
-    serverId = await home.addHome({ name: 'Run detail Home', serverUrl: 'https://workflow-run-detail.test', accountId: 'detail-owner' });
+    serverId = await home.addHome({ name: 'Run detail Home', serverUrl: 'https://workflow-run-detail.test',
+        serverIdentityId: 'srv_workflow_detail', accountId: 'detail-owner', currentAccount: true });
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     storage.setState({ profileScope: { serverId, accountId: 'detail-owner' } });
     home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
-    machineRpc.mockReset();
 });
 afterEach(async () => { await home.reset(); storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available); });
 
@@ -108,13 +107,18 @@ describe('workflow Run detail Actions through Account HTTP and native RPC', () =
     });
 
     it('targets workspace restoration at the exact Run Machine over the native relay', async () => {
-        machineRpc.mockResolvedValue({ run: createWorkflowRunSummaryFixture({ id: 'run-1', state: 'running', revision: 5 }), intent: 'resumed' });
+        const received: unknown[] = [];
+        const boundary = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://workflow-run-detail.test',
+            serverIdentityId: 'srv_workflow_detail', accountId: 'detail-owner', machineId: 'machine-1',
+            actionId: 'workflow.run.resume', tokenEpoch: 0, execute: (input, context) => {
+                received.push({ input, target: context.target });
+                return { run: createWorkflowRunSummaryFixture({ id: 'run-1', state: 'running', revision: 5 }), intent: 'resumed' };
+            } });
+        setRuntimeFetch(async (url, init) => await boundary.handle(new URL(String(url)), init) ?? home.request(url, init));
         const input = { mode: 'recover' as const, runId: 'run-1', expectedRevision: 4, invocations: [{ kind: 'restore_workspace' as const,
             invocation: { recordId: 'inv-1' }, conversation: 'fresh_agent' as const, input: { kind: 'original' as const } }] };
         await actions.restoreWorkspace(input, 'machine-1');
-        const request = machineRpc.mock.calls[0]?.[0];
-        expect(request).toMatchObject({ serverId, accountId: 'detail-owner', machineId: 'machine-1' });
-        expect(TargetedActionRpcRequestV1Schema.parse(request?.payload)).toMatchObject({ input, target: { kind: 'machine', machineId: 'machine-1' } });
+        expect(received).toEqual([{ input, target: { kind: 'machine', machineId: 'machine-1' } }]);
         expect(home.requestsFor(route)).toEqual([]);
     });
 });

@@ -1,6 +1,5 @@
-import { z } from 'zod';
-import { TodoItemV1Schema, TodoItemV1StoredSchema, TodoSessionLinkInputV1Schema } from '@happier-dev/protocol/todos/todoSessionLinkV1';
-import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { z } from 'zod/mini';
+import { TodoItemV1Schema, TodoItemV1StoredSchema, TodoIndexV1Schema, TodoIndexV1StoredSchema } from '@happier-dev/protocol/todos/todoSessionLinkV1';
 
 import {
     AccountStoredJsonContentEncryptionMaterialUnavailableError,
@@ -12,26 +11,13 @@ import {
 export const TODO_PREFIX = 'todo.';
 export const TODO_INDEX_KEY = 'todo.index';
 
-export const ZenTaskSourceSchema = z.object({
-    kind: z.literal('zen_task'),
-    taskId: z.string().min(1),
-    title: z.string(),
-    scope: TodoSessionLinkInputV1Schema.shape.scope,
-}).strict();
-
-/** Local draft custody; never part of the synchronized authoring document. */
-export type ZenTaskSource = z.infer<typeof ZenTaskSourceSchema>;
-
 export const TodoItemSchema = TodoItemV1Schema;
 
-export const TodoIndexSchema = z.object({
-    undoneOrder: z.array(z.string()),
-    completedOrder: z.array(z.string()),
-}).strict();
+export const TodoIndexSchema = TodoIndexV1Schema;
 
 export type TodoItem = z.infer<typeof TodoItemSchema>;
 export type TodoIndex = z.infer<typeof TodoIndexSchema>;
-const TodoIndexStoredSchema = createStoredReadSchema(TodoIndexSchema);
+const TodoIndexStoredSchema = TodoIndexV1StoredSchema;
 
 type RawAccountEncryption = Readonly<{
     encryptRaw: (value: unknown) => Promise<string>;

@@ -5,20 +5,22 @@ import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 import type { WorkflowRunGetResultV1, WorkflowRunListResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 
 import { materializeWorkflowRunAccountChange } from './materializeWorkflowRunAccountChange';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
+import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 /** Opened detail uses the same Account body owner as the exact Run screen. Callers fence the read before publication. */
-export function publishOpenedWorkflowRunDetail(detail: WorkflowRunGetResultV1): void {
+export function publishOpenedWorkflowRunDetail(detail: WorkflowRunGetResultV1, scope?: ServerAccountScope | null): void {
     storage.getState().upsertWorkflowRuns([{ ...workflowRunRowFromSummary(detail.run,
-        detail.acceptedContext.metadata ? { kind: 'available', value: detail.acceptedContext.metadata } : null), detail }]);
+        detail.acceptedContext.metadata ? { kind: 'available', value: detail.acceptedContext.metadata } : null), detail }], scope);
 }
 
 // Only pending reads are shared; the Account's existing Run/fact maps own all resolved content.
 const pendingSummaries = new WeakMap<ActiveServerAccountScopeLifetime, Map<string, Promise<void>>>();
 
-function publishInvocationProvenance(run: WorkflowRunListResultV1['runs'][number], facts: WorkflowRunListResultV1['invocationProvenance']): void {
+function publishInvocationProvenance(run: WorkflowRunListResultV1['runs'][number], facts: WorkflowRunListResultV1['invocationProvenance'], scope?: ServerAccountScope): void {
     for (const fact of facts ?? []) {
         if (fact.index.runId !== run.id) continue;
-        storage.getState().upsertWorkflowRunInvocation({ runId: run.id, parentRevision: run.revision,
+        storage.getState().upsertWorkflowRunInvocation({ runId: run.id, scope, parentRevision: run.revision,
             invocation: { ...fact.index, ...(fact.stepOrdinal ? { stepOrdinal: fact.stepOrdinal } : {}),
                 ...(fact.notificationCondition ? { notificationCondition: fact.notificationCondition } : {}), provenanceLoaded: true } });
     }
@@ -79,15 +81,16 @@ export async function refreshWorkflowRunById(
     options: Readonly<{
         signal?: AbortSignal;
         fence?: Readonly<{ isCurrent(): boolean }>;
+        accountLifetime?: ServerAccountScopeLifetime;
     }> = {},
 ): Promise<void> {
     const isCurrent = (): boolean => options.fence?.isCurrent() ?? true;
     await materializeWorkflowRunAccountChange({
         runId,
         getRun: () => {
-            const ids = Object.values(storage.getState().workflowRunInvocationsByRunId?.[runId]?.factsById ?? {})
+            const ids = Object.values(storage.getState().workflowRunInvocationsByRunId?.[workflowRunStoreKey(runId, options.accountLifetime?.scope)]?.factsById ?? {})
                 .filter(fact => fact.provenanceLoaded).map(fact => fact.id).sort();
-            return ids.length ? getWorkflowRunSummary(runId, options.signal, ids) : getWorkflowRunSummary(runId, options.signal);
+            return getWorkflowRunSummary(runId, options.signal, ids.length ? ids : undefined, options.accountLifetime);
         },
         upsertRun: (detail) => {
             if (!isCurrent()) return;
@@ -97,12 +100,12 @@ export async function refreshWorkflowRunById(
             // host could not open. Collapsing the two locked a perfectly
             // readable unnamed Run behind "Content unavailable" in the
             // collection and in every Session card that reads the same row.
-            storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(detail.run, detail.metadata)]);
-            publishInvocationProvenance(detail.run, detail.invocationProvenance);
+            storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(detail.run, detail.metadata)], options.accountLifetime?.scope);
+            publishInvocationProvenance(detail.run, detail.invocationProvenance, options.accountLifetime?.scope);
         },
         removeRun: (missingRunId) => {
             if (!isCurrent()) return;
-            storage.getState().removeWorkflowRun(missingRunId);
+            storage.getState().removeWorkflowRun(missingRunId, options.accountLifetime?.scope);
         },
     });
 }

@@ -1,18 +1,13 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deriveAutomationOccurrenceKeyV1 } from '@happier-dev/protocol';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { listAutomationDefinitionRuns } from './apiAutomationRuns';
 
-vi.mock('@/sync/domains/server/serverRuntime', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/server/serverRuntime')>(),
-    getActiveServerSnapshot: () => ({
-        serverId: 'test',
-        serverUrl: 'https://api.example.test',
-        kind: 'custom',
-        generation: 1,
-    }),
-}));
+beforeEach(async () => {
+    const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+    await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'device' });
+});
 
 const credentials: AuthCredentials = { token: 'token-1', secret: 'secret-1' };
 
@@ -85,11 +80,8 @@ describe('apiAutomationRuns', () => {
     });
 
     it('reads Event run summaries only through the current owner', async () => {
-        const fetchSpy = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => ({
-            ok: true,
-            status: 200,
-            json: async () => ({ runs: [eventRun], nextCursor: null }),
-        }) as Response);
+        const fetchSpy = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () =>
+            Response.json({ runs: [eventRun], nextCursor: null }));
         vi.stubGlobal('fetch', fetchSpy as unknown as typeof fetch);
 
         const result = await listAutomationDefinitionRuns({

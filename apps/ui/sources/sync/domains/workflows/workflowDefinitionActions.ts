@@ -7,6 +7,7 @@ import { callWorkflowAction, type WorkflowActionCallerContext } from './callWork
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { WorkflowDefinitionExportResultV1Schema, type WorkflowDefinitionExportResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 /** Export reads the saved Artifact once at the canonical document owner. The platform owns delivery. */
 export async function exportSavedWorkflowDocument(params: Readonly<{ definitionId: string; signal?: AbortSignal }>): Promise<WorkflowDefinitionExportResultV1> {
@@ -43,8 +44,9 @@ async function callDefinitionAction<TResult>(params: Readonly<{
     signal?: AbortSignal;
     deletedArtifactId?: string;
     context?: WorkflowActionCallerContext;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): Promise<TResult> {
-    const lifetime = captureActiveServerAccountScopeLifetime();
+    const lifetime = params.accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : params.accountLifetime;
     const result = await callWorkflowAction({
         ...params,
         fallbackMessage: 'Workflow definition request failed',
@@ -67,6 +69,7 @@ export async function listWorkflowDefinitions(params: Readonly<{
     cursor?: string;
     limit?: number;
     signal?: AbortSignal;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }> = {}): Promise<WorkflowDefinitionListResultV1> {
     const input = WorkflowDefinitionListRequestV1Schema.parse({
         ...(params.cursor === undefined ? {} : { cursor: params.cursor }),
@@ -76,6 +79,7 @@ export async function listWorkflowDefinitions(params: Readonly<{
         actionId: 'workflow.definition.list',
         input,
         parseResult: (value) => WorkflowDefinitionListResultV1Schema.parse(value),
+        ...(params.accountLifetime === undefined ? {} : { accountLifetime: params.accountLifetime }),
         ...signalOption(params.signal),
     });
 }
@@ -87,12 +91,14 @@ export async function listWorkflowDefinitions(params: Readonly<{
 export async function getWorkflowDefinition(params: Readonly<{
     definitionId: string;
     signal?: AbortSignal;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): Promise<WorkflowDefinitionGetResultV1> {
     const input = WorkflowDefinitionGetRequestV1Schema.parse({ definitionId: params.definitionId });
     return callDefinitionAction({
         actionId: 'workflow.definition.get',
         input,
         parseResult: (value) => WorkflowDefinitionGetResultV1Schema.parse(value),
+        ...(params.accountLifetime === undefined ? {} : { accountLifetime: params.accountLifetime }),
         ...signalOption(params.signal),
     });
 }
@@ -108,6 +114,7 @@ export async function createWorkflowDefinition(params: Readonly<{
     metadata: WorkflowDefinitionMetadataV1;
     signal?: AbortSignal;
     context?: WorkflowActionCallerContext;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): Promise<WorkflowDefinitionCreateResultV1> {
     const input = WorkflowDefinitionCreateRequestV1Schema.parse({
         definitionId: params.definitionId,
@@ -118,6 +125,7 @@ export async function createWorkflowDefinition(params: Readonly<{
         actionId: 'workflow.definition.create',
         input,
         parseResult: (value) => WorkflowDefinitionCreateResultV1Schema.parse(value),
+        ...(params.accountLifetime === undefined ? {} : { accountLifetime: params.accountLifetime }),
         ...(params.context === undefined ? {} : { context: params.context }),
         ...signalOption(params.signal),
     });
@@ -137,6 +145,7 @@ export async function updateWorkflowDefinition(params: Readonly<{
     metadata: WorkflowDefinitionMetadataV1;
     signal?: AbortSignal;
     context?: WorkflowActionCallerContext;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): Promise<WorkflowDefinitionUpdateResultV1> {
     const input = WorkflowDefinitionUpdateRequestV1Schema.parse({
         definitionId: params.definitionId,
@@ -148,6 +157,7 @@ export async function updateWorkflowDefinition(params: Readonly<{
         actionId: 'workflow.definition.update',
         input,
         parseResult: (value) => WorkflowDefinitionUpdateResultV1Schema.parse(value),
+        ...(params.accountLifetime === undefined ? {} : { accountLifetime: params.accountLifetime }),
         ...(params.context === undefined ? {} : { context: params.context }),
         ...signalOption(params.signal),
     });
@@ -160,6 +170,8 @@ export async function updateWorkflowDefinition(params: Readonly<{
 export async function deleteWorkflowDefinition(params: Readonly<{
     definitionId: string;
     signal?: AbortSignal;
+    onTransportIssued?: () => void;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): Promise<WorkflowDefinitionDeleteResultV1> {
     const input = WorkflowDefinitionDeleteRequestV1Schema.parse({ definitionId: params.definitionId });
     return callDefinitionAction({
@@ -167,7 +179,9 @@ export async function deleteWorkflowDefinition(params: Readonly<{
         input,
         deletedArtifactId: input.definitionId,
         parseResult: (value) => WorkflowDefinitionDeleteResultV1Schema.parse(value),
+        ...(params.accountLifetime === undefined ? {} : { accountLifetime: params.accountLifetime }),
         ...signalOption(params.signal),
+        ...(params.onTransportIssued ? { context: { onTransportIssued: params.onTransportIssued } } : {}),
     });
 }
 

@@ -1,13 +1,19 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { AutomationDefinitionDetailSchema, AutomationDefinitionListItemSchema } from '@happier-dev/protocol/automations/automationApiV3';
+import { AutomationDefinitionDetailSchema, AutomationDefinitionListItemSchema, AutomationDefinitionReconcileRequestSchema } from '@happier-dev/protocol/automations/automationApiV3';
 import { AutomationStoredWorkflowDefinitionRecipeV2Schema, AutomationStoredWorkflowDefinitionV2Schema } from '@happier-dev/protocol/automations/automationWorkflowRecipeV2';
+
+// The real Action owner asks for destructive confirmation before removing a set.
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
+});
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home); installDisconnectedServerSocketBoundary();
@@ -65,8 +71,10 @@ describe('Account trigger reads through real Action and Automation owners', () =
         expect(set?.revision).toBe(10);
         const pending = createDeferred<void>();
         home.answer(serverId, 'PUT /v3/automations/delayed-ack', { select: input => {
-            if (!input || typeof input !== 'object' || !('executionRecipe' in input)) throw new Error('Expected the real reconcile request');
-            row = AutomationDefinitionDetailSchema.parse({ ...automation('delayed-ack', 11, false), executionRecipe: input.executionRecipe });
+            const request = AutomationDefinitionReconcileRequestSchema.parse(input);
+            expect(request).toMatchObject({ expectedTemplateVersion: 10, enabled: false });
+            row = AutomationDefinitionDetailSchema.parse({ ...automation('delayed-ack', 11, request.enabled),
+                ...(request.executionRecipe === undefined ? {} : { executionRecipe: request.executionRecipe }) });
             return { body: row, respondAfter: pending.promise };
         } });
         const updated = updateWorkflowTrigger({ automationId: 'delayed-ack', expectedRevision: 10, patch: { enabled: false } });

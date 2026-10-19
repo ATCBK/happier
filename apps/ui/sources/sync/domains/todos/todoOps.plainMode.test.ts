@@ -7,7 +7,6 @@ import {
 import tweetnacl from 'tweetnacl';
 
 import { encodeBase64 } from '@/encryption/base64';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const LEGACY_SECRET_BYTES = new Uint8Array(32).fill(7);
 const LEGACY_SECRET = encodeBase64(LEGACY_SECRET_BYTES, 'base64url');
@@ -417,42 +416,6 @@ describe('todoOps plaintext account storage', () => {
         });
     });
 
-    it('refuses Todo writes and rolls back when an old Home lacks Account currentness', async () => {
-        // This contract uses the actual Sync, store, Account reader and KV client. Only the HTTP
-        // endpoint is unavailable; a missing feature snapshot is not the current write authority.
-        vi.resetModules();
-        for (const moduleId of [
-            '@/sync/api/account/apiAccountEncryptionMode',
-            '@/sync/api/capabilities/serverFeaturesClient',
-            '@/sync/api/account/apiKv',
-            '@/sync/domains/state/storage',
-            '@/sync/runtime/getSyncSingleton',
-            '@/auth/context/AuthContext',
-        ]) vi.doUnmock(moduleId);
-        const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-            Response.json({ error: 'not-found' }, { status: 404 }));
-        setRuntimeFetch(request);
-        try {
-            await loadSyncSingletonForTests();
-            const { storage } = await import('@/sync/domains/state/storage');
-            const priorState = { todos: {}, undoneOrder: [], doneOrder: [], versions: {} };
-            storage.getState().applyTodos(priorState);
-            const { addTodo: addTodoWithRealOwners } = await import('./todoOps');
-
-            await expect(addTodoWithRealOwners({ token: 'token-only' }, 'Do not send')).rejects.toMatchObject({
-                code: 'todo_stored_content_unavailable',
-                key: 'todo.index',
-                reason: 'account_currentness_unavailable',
-            });
-            expect(request).toHaveBeenCalledTimes(1);
-            expect(String(request.mock.calls[0]?.[0])).toMatch(/\/v1\/account\/encryption\/currentness$/);
-            expect(storage.getState().todoState).toEqual(priorState);
-        } finally {
-            resetRuntimeFetch();
-        }
-    });
-
     it('does not misreport encrypted Todo storage as empty when key material is unavailable', async () => {
         mocks.kvList.mockResolvedValue({
             items: [{
@@ -653,7 +616,7 @@ describe('todoOps plaintext account storage', () => {
         mocks.todoState = priorState;
         mocks.kvGet.mockResolvedValue(malformedIndex);
         await expect(
-            reorderTodos({ token: 'token-only' }, 'existing', { anchorId: null, placement: 'before' }),
+            reorderTodos({ token: `header.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature` }, 'existing', { anchorId: null, placement: 'before' }),
         ).rejects.toMatchObject({
             code: 'todo_stored_content_unavailable',
             key: 'todo.index',

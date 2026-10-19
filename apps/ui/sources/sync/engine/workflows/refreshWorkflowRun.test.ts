@@ -15,7 +15,7 @@ installDisconnectedServerSocketBoundary();
 beforeAll(loadSyncSingletonForTests);
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { refreshWorkflowRunById } = await import('./refreshWorkflowRun');
-const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { workflowRunRowFromSummary, workflowRunStoreKey } = await import('@/sync/store/domains/workflowRuns');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { readDestinationInstanceTitle, resolveCompactAppDestinations, useDestinationInstanceTitles } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
@@ -73,7 +73,7 @@ describe('refreshWorkflowRunById through the real Account summary and store owne
     it('reads and publishes the exact lean summary without opening Run detail history', async () => {
         await serveRun({ title: 'Review 500 files' });
         await refreshWorkflowRunById(run.id);
-        expect(storage.getState().workflowRunsById[run.id]).toMatchObject({ id: run.id,
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(run.id)]).toMatchObject({ id: run.id,
             summary: { id: run.id, revision: run.revision }, metadata: { kind: 'available', value: { title: 'Review 500 files' } } });
         expect(home.requestsFor(route).map(request => request.input)).toEqual([
             expect.objectContaining({ operation: 'list', request: { runId: run.id, limit: 1 } }),
@@ -83,27 +83,28 @@ describe('refreshWorkflowRunById through the real Account summary and store owne
     it('keeps readable accepted content without an authored title unnamed', async () => {
         await serveRun();
         await refreshWorkflowRunById(run.id);
-        expect(storage.getState().workflowRunsById[run.id]?.metadata).toBeNull();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(run.id)]?.metadata).toBeNull();
     });
 
     it('reports genuinely unopened accepted content with its typed unavailable reason', async () => {
         await serveRun(undefined, true);
         await refreshWorkflowRunById(run.id);
-        expect(storage.getState().workflowRunsById[run.id]?.metadata).toEqual({ kind: 'unavailable', reason: 'content_unavailable' });
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(run.id)]?.metadata).toEqual({ kind: 'unavailable', reason: 'content_unavailable' });
     });
 
     it('removes an existing row when the authoritative exact read reports deletion', async () => {
         storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(run)]);
         home.answer(serverId, route, { body: { runs: [], acceptedEnvelopesByRunId: {}, keyCensusByRunId: {} } });
         await refreshWorkflowRunById(run.id);
-        expect(storage.getState().workflowRunsById[run.id]).toBeUndefined();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(run.id)]).toBeUndefined();
     });
 
     it('rejects non-authoritative storage failures and preserves the existing row for retry', async () => {
         storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(run)]);
-        const retained = storage.getState().workflowRunsById[run.id];
+        const retained = storage.getState().workflowRunsById[workflowRunStoreKey(run.id)];
+        expect(retained).toBeDefined();
         home.answer(serverId, route, { status: 503, body: { error: 'storage_unavailable' } });
         await expect(refreshWorkflowRunById(run.id)).rejects.toThrow();
-        expect(storage.getState().workflowRunsById[run.id]).toBe(retained);
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(run.id)]).toBe(retained);
     });
 });

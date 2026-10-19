@@ -15,6 +15,9 @@ import type {
 import { callWorkflowAction } from './callWorkflowAction';
 import { WorkflowActionError } from './workflowActionError';
 import { workflowRunDetailActions } from './workflowRunDetailActions';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { sync } from '@/sync/sync';
 
 /**
  * The Workflows collection's Run **list** reader.
@@ -70,7 +73,14 @@ export async function listWorkflowRuns(params: Readonly<{
     cursor?: string;
     limit?: number;
     signal?: AbortSignal;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }> = {}): Promise<WorkflowRunListPage> {
+    const accountLifetime = params.accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : params.accountLifetime;
+    await sync.awaitBootstrapForegroundAcquisition();
+    if (accountLifetime?.isCurrent() === false) {
+        throw new WorkflowActionError({ message: 'action_account_scope_changed', rawCode: 'action_account_scope_changed' });
+    }
+    params.signal?.throwIfAborted();
     const request = WorkflowRunListRequestV1Schema.parse({
         ...(params.filter ?? {}),
         ...(params.cursor === undefined ? {} : { cursor: params.cursor }),
@@ -82,6 +92,7 @@ export async function listWorkflowRuns(params: Readonly<{
         parseResult: (value) => WorkflowRunListResultV1Schema.parse(value),
         fallbackMessage: 'Workflow run list request failed',
         ...(params.signal === undefined ? {} : { signal: params.signal }),
+        ...(params.accountLifetime === undefined && accountLifetime === null ? {} : { accountLifetime }),
     });
     const sidecar = result.metadataByRunId;
     const metadataByRunId: Record<string, WorkflowRunPrivateMetadataV1 | null> = Object.fromEntries(
@@ -164,7 +175,7 @@ export async function summarizeWorkflowRuns(params: Readonly<{
  * the row; any other failure is left rejected so the caller holds its cursor
  * and retries instead of losing the invalidation.
  */
-export async function getWorkflowRunSummary(runId: string, signal?: AbortSignal, invocationRecordIds?: readonly string[]): Promise<Readonly<{
+export async function getWorkflowRunSummary(runId: string, signal?: AbortSignal, invocationRecordIds?: readonly string[], accountLifetime?: ServerAccountScopeLifetime | null): Promise<Readonly<{
     run: WorkflowRunSummaryV1;
     /**
      * Sparse private metadata: `null` is a readable Run whose accepted
@@ -176,7 +187,7 @@ export async function getWorkflowRunSummary(runId: string, signal?: AbortSignal,
 }>> {
     const page = await listWorkflowRuns({ filter: { runId,
         ...(invocationRecordIds?.length ? { invocationProvenance: [{ runId, invocationRecordIds }] } : {}) },
-        limit: 1, ...(signal === undefined ? {} : { signal }) });
+        limit: 1, ...(signal === undefined ? {} : { signal }), ...(accountLifetime === undefined ? {} : { accountLifetime }) });
     const run = page.runs.find((candidate) => candidate.id === runId);
     if (!run) {
         throw new WorkflowActionError({ message: 'Workflow Run not found', rawCode: 'run_not_found' });

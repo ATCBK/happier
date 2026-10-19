@@ -51,7 +51,10 @@ describe('mounted Workflow conversation Action', () => {
         retire();
         expect(await executor.execute('workflow.authoring.conversation.bind', input, { surface: 'agent', authority: 'account_automation', serverId: scope.serverId }))
             .toEqual({ ok: true, result: { status: 'unavailable' } });
-        expect(boundary.requests).toEqual([]);
+        // Sync may refresh Account projections while the mounted editor is active;
+        // editing this draft must not create or mutate a persisted Workflow Artifact.
+        expect(boundary.requests.filter(request => request.path.startsWith('/v1/artifacts')
+            && request.method !== 'GET')).toEqual([]);
     });
 
     it('does not let another invocation Home or Account address the mounted draft', async () => {

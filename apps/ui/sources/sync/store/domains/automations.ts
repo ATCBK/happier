@@ -19,6 +19,7 @@ import {
     mergeWorkflowRunBodies,
     releaseWorkflowRunBodies,
     workflowRunRowFromAutomationRun,
+    workflowRunStoreKey,
     type WorkflowRunsById,
     type WorkflowRunsDomain,
 } from './workflowRuns';
@@ -178,11 +179,11 @@ function orderRunIdsNewestFirst(
     runsById: WorkflowRunsById,
     runIds: Iterable<string>,
 ): string[] {
-    const unique = Array.from(new Set(runIds)).filter((runId) => runsById[runId]?.automation !== undefined
-        && runsById[runId]?.automation !== null);
+    const unique = Array.from(new Set(runIds)).filter((runId) => runsById[workflowRunStoreKey(runId)]?.automation !== undefined
+        && runsById[workflowRunStoreKey(runId)]?.automation !== null);
     return unique.sort((leftId, rightId) => {
-        const left = runsById[leftId]!.automation!;
-        const right = runsById[rightId]!.automation!;
+        const left = runsById[workflowRunStoreKey(leftId)]!.automation!;
+        const right = runsById[workflowRunStoreKey(rightId)]!.automation!;
         const rightCauseAt = getAutomationDefinitionRunCauseAt(right);
         const leftCauseAt = getAutomationDefinitionRunCauseAt(left);
         if (rightCauseAt !== leftCauseAt) {
