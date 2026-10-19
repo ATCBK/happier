@@ -63,6 +63,22 @@ describe('verified invocation authority', () => {
       }
     }
   });
+  it('admits Voice question answers only as person-approval proposals while pass-up retains manager origin', () => {
+    const spec = getActionSpec('session.user_action.answer');
+    for (const actionInput of [
+      { requestId: 'q1', answers: [{ question: 'Revision?', values: ['42'] }] },
+      { requestId: 'q1', decision: 'reject' },
+    ]) {
+      expect(resolveCredentialActionAdmissionV1({ spec, actionInput, authority: 'account_automation',
+        grant: null, surface: 'voice' })).toEqual({ ok: true });
+      expect(resolveCredentialActionAdmissionV1({ spec, actionInput, authority: 'account_automation',
+        grant: null, surface: 'voice', hasExternalCredential: true }))
+        .toEqual({ ok: false, errorCode: 'present_user_required' });
+    }
+    expect(resolveCredentialActionAdmissionV1({ spec, actionInput: { requestId: 'q1', disposition: 'pass_up' },
+      authority: 'account_automation', grant: null, surface: 'voice' }))
+      .toEqual({ ok: false, errorCode: 'present_user_required' });
+  });
   it('admits automation only to request fresh-folder consent, never to supply it as human authority', () => {
     const spec = getActionSpec('session.open');
     const actionInput = { sessionId: 's1', approvedNewDirectoryCreation: true };

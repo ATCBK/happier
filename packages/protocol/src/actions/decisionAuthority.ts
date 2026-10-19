@@ -63,6 +63,9 @@ export function isAutomationApprovalRequestSurface(
   // Voice can propose the person's source disclosure through the ordinary
   // approval owner. It never supplies present-person execution authority.
   if (surface === 'voice' && spec?.id === 'discussion.second_opinion.start') return true;
+  // Spoken answers are proposals for the person's existing approval flow.
+  // Pass-up still requires the authenticated manager at the question owner.
+  if (surface === 'voice' && spec?.id === 'session.user_action.answer') return readRecord(input).disposition !== 'pass_up';
   return surface === 'agent' || surface === 'mcp' || surface === 'plugin'
     || (surface === 'cli' && isLegacyWorkflowConversionInputV1(spec, input));
 }

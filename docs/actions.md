@@ -4338,7 +4338,13 @@ system-browser opening, annotations and recording attachment retain their answer
 `session.user_action.answer` is conversational
 input: tokens need the Action grant, rather than `approve`. Other automation
 callers outside those host Agent/MCP decision paths still need present-user
-authority for these rows. Discussion create, rename, archive, restore and private
+authority for these rows. In 0.3 development, Voice can propose a question answer
+or rejection through the existing person approval flow. It remains Account
+automation until the person approves; replay reaches the same question answer
+owner and is attributed to the authenticated person. Waiving the prompt grants
+no execution authority. `disposition: pass_up` remains an authenticated manager
+disposition at that owner and does not use this Voice proposal path.
+Discussion create, rename, archive, restore and private
 read-state writes are Agent/MCP-requestable present-user Actions. They use the
 same deferred approval and replay owner as other present-user Session intents;
 waiving approval cannot grant automation present-user execution authority.
