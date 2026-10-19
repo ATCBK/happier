@@ -10,7 +10,6 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 
 import { WidgetFrame } from './WidgetFrame';
-import { WIDGET_FRAME_REFRESH_WORD_DELAY_MS } from './widgetFrameResourceActivity';
 import { renderWidgetSizeMenuSection } from './WidgetSizeControl';
 import { darkTheme, lightTheme } from '@/theme';
 import { SessionBoardDeclarativeContent } from '@/components/sessions/board/SessionBoardDeclarativeContent';
@@ -208,22 +207,26 @@ describe('WidgetFrame', () => {
         await act(async () => { screen.findByTestId('grouped.viewport')!.props.onLayout({ nativeEvent: { layout: { width: 330, height: 240 } } }); });
         expect(observed).toMatchObject({ size: 'small', geometry: { width: 330, height: 240 } });
     });
-    it('says Refreshing in words wherever the header has the room and falls back to the spinner alone where it has not', async () => {
+    it('keeps a background refresh to the glyph, and says Refreshing in words only for the refresh the person started with Retry', async () => {
         const { useWidgetFrameResourceActivity } = await import('./widgetFrameResourceActivity');
         function Refreshing() { useWidgetFrameResourceActivity(true); return <>rows</>; }
-        const frame = (testID: string) => <WidgetFrame testID={testID} frameStyle="card" placement="home" title="Period summary" source="Account"
+        let finishRetry: () => void = () => undefined;
+        const retry = vi.fn(() => new Promise<void>(resolve => { finishRetry = resolve; }));
+        const frame = (testID: string, footer?: React.ComponentProps<typeof WidgetFrame>['footer']) => <WidgetFrame testID={testID}
+            frameStyle="card" placement="home" title="Period summary" source="Account"
             widgetPresentation={{ size: 'medium', footprint: { columns: 2, columnSpan: 1, rowSpan: 2, height: 'regular', width: 'half' } }}
-            body={{ kind: 'content', children: <Refreshing /> }} />;
+            body={{ kind: 'content', children: <Refreshing /> }} {...(footer ? { footer } : {})} />;
         // A half-width cell with room: the dot-matrix glyph alone would read as one more grip beside the card's own.
-        const roomy = await renderScreen(frame('roomy'));
+        const roomy = await renderScreen(frame('roomy', { kind: 'refreshFailed', reason: 'Couldn\'t refresh', onRetry: retry }));
         await flushHookEffects({ cycles: 2 });
         await act(async () => { roomy.findByTestId('roomy')!.props.onLayout({ nativeEvent: { layout: { width: 400, height: 280 } } }); });
-        // FA19 W9: a refresh is quiet work. The glyph shows at once; the sentence only once it has run long enough to matter.
-        expect(roomy.findByTestId('roomy.refreshing')).not.toBeNull();
+        // W9b: a refresh nobody asked for is quiet work, however long it runs: the named glyph, never the sentence.
         expect(roomy.findByTestId('roomy.refreshing')?.props.accessibilityLabel).toBe('widgetDefinition.refreshing');
         expect(roomy.getTextContent()).not.toContain('widgetDefinition.refreshing');
-        await act(async () => { await new Promise(resolve => setTimeout(resolve, WIDGET_FRAME_REFRESH_WORD_DELAY_MS + 50)); });
+        await act(async () => { roomy.pressByTestId('roomy.stale-action'); });
         expect(roomy.getTextContent()).toContain('widgetDefinition.refreshing');
+        await act(async () => { finishRetry(); });
+        expect(roomy.getTextContent()).not.toContain('widgetDefinition.refreshing');
         // Below the frame's narrowing width the title keeps its room and the glyph stays, named for assistive technology.
         const tight = await renderScreen(frame('tight'));
         await flushHookEffects({ cycles: 2 });

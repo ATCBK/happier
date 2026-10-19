@@ -44,7 +44,7 @@ import { shadowLevelStyle } from '@/shadowElevation';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { MiddleEllipsisText } from '@/components/ui/text/MiddleEllipsisText';
-import { WIDGET_FRAME_REFRESH_WORD_DELAY_MS, WidgetFrameResourceActivityContext, useHeldFor } from './widgetFrameResourceActivity';
+import { WidgetFrameResourceActivityContext } from './widgetFrameResourceActivity';
 import { WidgetFrameBodyRowsContext } from './widgetFrameBody';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { resolveVerticalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
@@ -279,8 +279,15 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     // While a read refreshes, the meta slot says so in place of its time (lab ST "Refreshing"): the
     // shared activity glyph and the word, then the time returns. The content below never moves.
     const refreshing = refreshingResources.size > 0;
-    // A refresh is quiet work: the glyph shows at once, the word only once it has run long enough to matter.
-    const refreshingWords = useHeldFor(refreshing, WIDGET_FRAME_REFRESH_WORD_DELAY_MS);
+    // A refresh nobody asked for is quiet work however long it runs: the glyph alone. The frame owns the one
+    // refresh button the person presses (the footer's Retry), so only a refresh that button started says the word.
+    const [retrying, setRetrying] = React.useState(false);
+    const refreshingWords = refreshing && retrying;
+    const retryFooter = footer?.kind === 'refreshFailed' ? footer.onRetry : undefined;
+    const onRetry = React.useMemo(() => retryFooter ? () => {
+        setRetrying(true);
+        return Promise.resolve(retryFooter()).finally(() => setRetrying(false));
+    } : undefined, [retryFooter]);
     // Where the header is narrow (the frame's own measured width, never its footprint) the word leaves and the glyph
     // stays, named for assistive technology: a lone dot-matrix glyph beside the grip reads as a second grip, so it
     // is only the fallback for a header with no room for the word.
@@ -362,7 +369,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                 testID={`${props.testID}.stale`}
                 reason={footer.reason}
                 tone="warning"
-                {...(footer.onRetry ? { action: { label: t('common.retry'), onPress: footer.onRetry } } : {})}
+                {...(onRetry ? { action: { label: t('common.retry'), onPress: onRetry } } : {})}
             />
         </View>
     ) : footer?.kind === 'pending' ? (
