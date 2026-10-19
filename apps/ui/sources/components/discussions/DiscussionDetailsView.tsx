@@ -42,7 +42,9 @@ import { buildDiscussionRouteHref } from './discussionRoutes';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { AvatarStack } from '@/components/ui/avatar/AvatarStack';
-import { DetailsTabHeader } from '@/components/appShell/panes/details/header/DetailsTabHeader';
+import { DetailsTabHeader, type DetailsTabHeaderMetaFact } from '@/components/appShell/panes/details/header/DetailsTabHeader';
+import { artifactViewRoute } from '@/components/artifacts/artifactBrowserModel';
+import { useArtifact } from '@/sync/domains/state/storage';
 import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
@@ -90,7 +92,7 @@ import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 import { DiscussionAgentActivityReference } from '@/components/discussions/DiscussionAgentActivityReference';
 import { resolveSessionAgentActivityPresentation } from '@/components/sessions/agents/presentation/sessionAgentActivityPresentation';
 import { useOpenSessionAgentConversation } from '@/components/sessions/conversations/useOpenSessionAgentConversation';
-import { buildDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, type DiscussionTimelineItem } from '@/components/discussions/discussionTimelineProjection';
+import { buildDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, type DiscussionTimelineItem } from '@/components/discussions/discussionTimelineProjection';
 import { useShareViewerProfile } from '@/components/sharing/useShareViewerProfile';
 import { useDiscussionParticipantProfiles } from './useDiscussionParticipantProfiles';
 import { useDiscussionParticipantManagement } from './useDiscussionParticipantManagement';
@@ -102,6 +104,9 @@ import { useDiscussionDraft } from './useDiscussionDraft';
 import { formatDiscussionPresenceLine } from '@/components/discussions/discussionPresenceLine';
 import { DiscussionParticipantsPopover, DiscussionRosterFaces, formatDiscussionRosterLine, summarizeDiscussionRoster } from '@/components/discussions/DiscussionParticipantsPopover';
 import { DiscussionInviteButton } from '@/components/discussions/DiscussionInviteSheet';
+import { ChatHeaderView } from '@/components/sessions/transcript/ChatHeaderView';
+import { useDiscussionListRows } from '@/sync/ops/discussions/useDiscussionListRows';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 
 const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
 
@@ -127,6 +132,7 @@ const styles = StyleSheet.create((theme) => ({
     retry: { minHeight: minimumInteractiveTargetSize, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 },
     retryText: { color: theme.colors.accent.blue, fontWeight: '600' },
     fieldHint: { color: theme.colors.text.destructive },
+    outcomeFailed: { color: theme.colors.text.destructive },
     // The new page's name field is the header's title, at the title's own step, with no field chrome.
     titleInput: { flex: 1, minWidth: 0, padding: 0, color: theme.colors.text.primary, ...Typography.variant('heading', 'semiBold') },
     // A phone header takes the large title step; the name field follows it.
@@ -291,13 +297,14 @@ export function DiscussionDetailsView(props: Readonly<{
     const binding = React.useMemo(() => [...bindings.values()][0] ?? null, [bindings]);
     const availability = useSessionCollaborationAvailability(props.target.address.serverId);
     const enabled = useFeatureEnabled('sessions.conversations', { scopeKind: 'spawn', serverId: props.target.address.serverId });
+    const phoneChrome = useDiscussionPhoneChrome(props.standaloneSurface === true && props.target.kind === 'discussion');
     if (!enabled || availability !== 'available' || !binding) {
-        return <SurfaceStateCard
+        return <DiscussionPhoneChrome enabled={phoneChrome} onBack={props.onClose}><SurfaceStateCard
             testID="session-discussion-details-empty-state"
             kind="unavailable"
             title={t('sessionConversation.discussion.unavailableTitle')}
             reason={t('session.collaboration.discussion.unavailable')}
-        />;
+        /></DiscussionPhoneChrome>;
     }
     return props.target.kind === 'new'
         ? <NewDiscussion target={props.target} scope={binding.scope} accountLifetime={binding} onCreated={props.onCreated} />
@@ -588,6 +595,39 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     const anchorSessionId = discussion?.anchor?.kind === 'session' ? discussion.anchor.sessionId : null;
     const anchorAddresses = React.useMemo(() => anchorSessionId ? [{ serverId: props.scope.serverId, sessionId: anchorSessionId }] : [], [anchorSessionId, props.scope.serverId]);
     const anchorTitle = useSessionDisplayTitles(anchorAddresses)[0] ?? null;
+    const anchorDocId = discussion?.anchor?.kind === 'doc' ? discussion.anchor.doc.ref.artifactId : null;
+    const anchorDoc = useArtifact(anchorDocId ?? '');
+    // The way back to what this conversation hangs off (lab T2-A "PAY-212"): the Session or Doc opens where
+    // it lives; a task names itself but has no open contract yet, so it stays a plain fact.
+    const anchorFact = React.useMemo<DetailsTabHeaderMetaFact | null>(() => {
+        const anchor = discussion?.anchor;
+        if (!anchor) return null;
+        if (anchor.kind === 'session') {
+            if (!anchorTitle) return null;
+            const href = buildScopedSessionRouteHref({ serverId: props.scope.serverId, sessionId: anchor.sessionId });
+            return { key: 'anchor', text: anchorTitle, icon: 'chats-circle', testID: 'session-discussion-anchor',
+                accessibilityLabel: t('session.collaboration.discussion.openAnchor', { name: anchorTitle }),
+                onPress: () => router.push(href as Href) };
+        }
+        if (anchor.kind === 'doc') {
+            const name = anchorDoc?.title || t('artifacts.browser.kindOne.document');
+            return { key: 'anchor', text: name, icon: 'file-text', testID: 'session-discussion-anchor',
+                accessibilityLabel: t('session.collaboration.discussion.openAnchor', { name }),
+                onPress: () => router.push(artifactViewRoute(anchor.doc.ref.artifactId) as Href) };
+        }
+        return { key: 'anchor', text: anchor.entry.entryId, icon: 'check-square', testID: 'session-discussion-anchor' };
+    }, [anchorDoc, anchorTitle, discussion?.anchor, props.scope.serverId, router]);
+    // A private draft or request waiting on this viewer (lab T2-ST "Drafts for approval"): the same Inbox
+    // approval owner the column's Needs you reads. Reviewing it (Post or Decline) stays that owner's page.
+    const attentionItems = React.useMemo(() => discussion ? [discussion] : [], [discussion]);
+    const attention = useDiscussionListRows(props.scope, attentionItems)[0] ?? null;
+    const waitingApprovalId = attention?.attentionReason === 'draft_waiting' || attention?.attentionReason === 'approval_pending'
+        ? attention.approvalArtifactIds[0] ?? null : null;
+    const reviewWaiting = React.useCallback(() => {
+        if (!waitingApprovalId) return;
+        router.push(buildApprovalHref(waitingApprovalId, props.scope.serverId,
+            buildDiscussionRouteHref({ target: { kind: 'discussion', address: { serverId: props.target.address.serverId }, discussionId: props.target.discussionId } })) as Href);
+    }, [props.scope.serverId, props.target.address.serverId, props.target.discussionId, router, waitingApprovalId]);
     const sessionLabels = React.useMemo(() => new Map(mentionedSessionAddresses.map((address, index) => [address.sessionId, mentionedSessionTitles[index] ?? null])), [mentionedSessionAddresses, mentionedSessionTitles]);
     const resolveSessionLabel = React.useCallback((sessionId: string) => sessionLabels.get(sessionId) ?? null, [sessionLabels]);
     const selectableMessages = React.useMemo<readonly TranscriptSelectionToolbarMessage[]>(() => messages
@@ -859,47 +899,49 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         void participantManagement.requestLeave().then((outcome) => { if (outcome?.kind === 'succeeded') closeSurface(); });
     }, [closeSurface, participantManagement.requestLeave]);
     const retryAction = React.useMemo(() => ({ label: t('session.collaboration.discussion.retry'), onPress: retryDiscussion }), [retryDiscussion]);
+    const phoneChrome = useDiscussionPhoneChrome(props.standaloneSurface);
+    const stateChrome = (node: React.ReactElement) => <DiscussionPhoneChrome enabled={phoneChrome} onBack={closeSurface}>{node}</DiscussionPhoneChrome>;
     if (accessRevoked) {
-        return <SurfaceStateCard
+        return stateChrome(<SurfaceStateCard
             testID="session-discussion-details-state"
             kind="denied"
             title={t('sessionConversation.discussion.revokedTitle')}
             reason={t('sessionConversation.discussion.revokedReason')}
             action={{ label: t('sessionConversation.discussion.closeTab'), onPress: closeSurface }}
-        />;
+        />);
     }
     if (!thread || thread.status === 'idle' || (thread.status === 'loading' && !discussion)) {
-        return <SurfaceStateCard testID="session-discussion-details-state" kind="loading" title={t('sessionConversation.discussion.loadingTitle')} />;
+        return stateChrome(<SurfaceStateCard testID="session-discussion-details-state" kind="loading" title={t('sessionConversation.discussion.loadingTitle')} />);
     }
     if (!discussion) {
         const status = thread.status;
         if (status === 'offline') {
-            return <SurfaceStateCard
+            return stateChrome(<SurfaceStateCard
                 testID="session-discussion-details-state"
                 kind="unavailable"
                 title={t('sessionConversation.discussion.offlineTitle')}
                 reason={t('sessionConversation.discussion.offlineReason')}
                 action={retryAction}
-            />;
+            />);
         }
         if (status === 'locked') {
-            return <SurfaceStateCard
+            return stateChrome(<SurfaceStateCard
                 testID="session-discussion-details-state"
                 kind="error"
                 title={t('sessionConversation.discussion.lockedTitle')}
                 reason={t('sessionConversation.discussion.lockedReason')}
                 action={retryAction}
                 diagnosticCode={thread.errorCode ?? 'locked'}
-            />;
+            />);
         }
-        return <SurfaceStateCard
+        return stateChrome(<SurfaceStateCard
             testID="session-discussion-details-state"
             kind="error"
             title={t('sessionConversation.discussion.errorTitle')}
             reason={discussionFailureLabel(thread.errorCode ?? undefined)}
             action={retryAction}
             diagnosticCode={thread.errorCode ?? null}
-        />;
+        />);
     }
     // Retained content stays at full strength; a failed or offline refresh is one line under the
     // header with its Retry, never a second state over the messages.
@@ -919,9 +961,44 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                 : draft.status === 'error'
                     ? t('session.collaboration.discussion.loadError')
                     : null;
+    const participantsPopover = (
+        <DiscussionParticipantsPopover
+            scope={props.scope}
+            accountLifetime={props.accountLifetime}
+            onChanged={refreshRoster}
+            discussionId={props.target.discussionId}
+            discussionTitle={discussion.title ?? t('session.collaboration.discussion.encryptedTitle')}
+            serverId={props.target.address.serverId}
+            viewerAccountId={props.scope.accountId}
+            roster={roster}
+            accountActors={participantProfiles.accounts}
+            presentAccountIds={presentAccountIds}
+            resolveAccountLabel={resolveAccountLabel}
+            onLeave={leaveDiscussion}
+            management={participantManagement}
+            canManage={discussion.capabilities.manageAccess && discussion.archivedAt === null}
+            onLeft={closeSurface}
+        />
+    );
+    const rosterLine = roster ? formatDiscussionRosterLine(summarizeDiscussionRoster(roster)) : null;
+    // A phone folds the header into its one navigation band; the way back to the source moves into ⋯.
+    const anchorOpen = anchorFact && anchorFact.kind !== 'diffStat' ? anchorFact.onPress : undefined;
+    const phoneMenuActions: readonly PageHeaderMenuAction[] = anchorFact && anchorOpen
+        ? [{ id: 'open-anchor', title: t('session.collaboration.discussion.openAnchor', { name: anchorFact.kind !== 'diffStat' ? anchorFact.text : '' }), onSelect: anchorOpen }, ...lifecycleActions]
+        : lifecycleActions;
+    const phoneHeader = phoneChrome && rename === null ? <ChatHeaderView
+        title={discussion.title ?? t('session.collaboration.discussion.encryptedTitle')}
+        subtitle={[rosterLine, anchorFact && anchorFact.kind !== 'diffStat' ? anchorFact.text : null].filter(Boolean).join(' · ') || undefined}
+        onBackPress={closeSurface}
+        constrainWidth={false}
+        rightElement={<View style={styles.headerActions}>
+            {participantsPopover}
+            {phoneMenuActions.length > 0 ? <PageHeaderMenu triggerTestID="session-discussion-actions-menu" actions={phoneMenuActions} /> : null}
+        </View>}
+    /> : null;
     return <TranscriptMessageSelectionBoundary sessionId={dataKey} eligibleMessageIdsInOrder={selectableMessages.map((message) => message.id)}>
         <View style={styles.root} testID="session-discussion-details">
-            <DetailsTabHeader
+            {phoneHeader ?? <DetailsTabHeader
                 testID="session-discussion-header"
                 title={discussion.title ?? t('session.collaboration.discussion.encryptedTitle')}
                 // Who is in it and who can read it (lab T2-A header line); live presence leads it.
@@ -929,7 +1006,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     const facts = summarizeDiscussionRoster(roster);
                     return [
                         { key: 'roster', text: formatDiscussionRosterLine(facts), testID: 'session-discussion-roster' },
-                        ...(anchorTitle ? [{ key: 'anchor', text: anchorTitle, icon: 'chats-circle' as const, testID: 'session-discussion-anchor' }] : []),
+                        ...(anchorFact ? [anchorFact] : []),
                         { key: 'audience', text: facts.inherited ? t('session.collaboration.discussion.participants.teamCanRead') : t('session.collaboration.discussion.participants.invitedOnly'), icon: facts.inherited ? 'users' as const : 'lock' as const },
                     ];
                 })() : undefined}
@@ -943,23 +1020,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     discussionTitle={discussion.title ?? t('session.collaboration.discussion.encryptedTitle')}
                     onChanged={refreshRoster}
                 /> : null}
-                <DiscussionParticipantsPopover
-                    scope={props.scope}
-                    accountLifetime={props.accountLifetime}
-                    onChanged={refreshRoster}
-                    discussionId={props.target.discussionId}
-                    discussionTitle={discussion.title ?? t('session.collaboration.discussion.encryptedTitle')}
-                    serverId={props.target.address.serverId}
-                    viewerAccountId={props.scope.accountId}
-                    roster={roster}
-                    accountActors={participantProfiles.accounts}
-                    presentAccountIds={presentAccountIds}
-                    resolveAccountLabel={resolveAccountLabel}
-                    onLeave={leaveDiscussion}
-                    management={participantManagement}
-                    canManage={discussion.capabilities.manageAccess && discussion.archivedAt === null}
-                    onLeft={closeSurface}
-                /></View>}
+                {participantsPopover}</View>}
                 // Who is in it leads the line (lab T2-A); live presence follows the faces when someone is here.
                 metaLeadingKind="mark"
                 metaLeading={roster || presenceLabel ? <View style={styles.presenceRow}>
@@ -973,7 +1034,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                 controls={rename !== null ? <TextInput testID="session-discussion-rename-input" style={[styles.input, { flex: 1 }]} value={rename} onChangeText={setRename} accessibilityLabel={t('session.collaboration.discussion.rename')} autoFocus /> : undefined}
                 buttons={rename !== null ? [{ label: t('common.save'), disabled: !rename.trim() || mutationsDisabled, onPress: () => void lifecycle('rename') }] : undefined}
                 menu={rename === null && lifecycleActions.length > 0 ? <PageHeaderMenu triggerTestID="session-discussion-actions-menu" actions={lifecycleActions} /> : undefined}
-            />
+            />}
             {threadStaleLabel ? <SurfaceFreshnessLine
                 testID="session-discussion-freshness"
                 reason={threadStaleLabel}
@@ -1017,6 +1078,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                             parentAuthorLabel={parentMessage ? resolveDiscussionMessageAuthorLabel(parentMessage, viewer) : null}
                             onOpenMessage={openQuotedMessage}
                             authorLabel={resolveDiscussionMessageAuthorLabel(item.message, viewer)}
+                            agentLabel={item.message.producerV1 ? resolveSessionLabel(item.message.producerV1.sessionId) : null}
                             startsGroup={messageGroupStarts.has(item.message.id)}
                             repeatsPassage={repeatedPassages.has(item.message.id)}
                             selectable={isCommittedDisplayMessage(item.message) && isSelectableDiscussionMessage(item.message) && item.message.id !== mutation?.localId}
@@ -1047,6 +1109,16 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                 title={t('session.collaboration.discussion.selection.handoffError')}
                 action={{ testID: 'session-discussion-selection-handoff-retry', label: t('common.retry'), onPress: retrySelectionHandoff, disabled: selectionHandoffRetrying, busy: selectionHandoffRetrying }}
             /></View> : null}
+            {waitingApprovalId && attention ? <View style={styles.stateLine}><SurfaceStateCard
+                testID="session-discussion-waiting-approval"
+                size="line"
+                kind="warning"
+                accessibilitySemantics="status"
+                title={attention.attentionReason === 'draft_waiting'
+                    ? t('session.collaboration.discussion.home.draftWaiting')
+                    : t('session.collaboration.discussion.home.approvalPending')}
+                action={{ testID: 'session-discussion-waiting-approval-review', label: t('approvals.review'), onPress: reviewWaiting }}
+            /></View> : null}
             {discussion.archivedAt !== null
                 ? <View style={styles.stateLine}><SurfaceStateCard testID="session-discussion-archived" size="line" kind="unavailable" iconName="archive" title={t('session.collaboration.discussion.archivedNotice')} /></View>
                 : discussion.capabilities.postMessages
@@ -1054,6 +1126,36 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     : <View style={styles.stateLine}><SurfaceStateCard testID="session-discussion-read-only" size="line" kind="denied" title={t('session.collaboration.discussion.locked')} /></View>}
         </View>
     </TranscriptMessageSelectionBoundary>;
+}
+
+/**
+ * A phone shows a Discussion the way it shows a Session (lab T2-Ap): one navigation band with Back, the
+ * name and its who-and-where line, and the band's few controls. The pushed route hides its own bar for
+ * it, so every state of the page, loading and refused included, keeps Back.
+ */
+function useDiscussionPhoneChrome(standaloneDiscussion: boolean): boolean {
+    return useSurfaceStateSize() === 'phone' && standaloneDiscussion;
+}
+
+function DiscussionPhoneChrome(props: Readonly<{
+    enabled: boolean;
+    title?: string;
+    subtitle?: string;
+    right?: React.ReactNode;
+    onBack?: () => void;
+    children: React.ReactNode;
+}>) {
+    if (!props.enabled) return <>{props.children}</>;
+    return <View style={styles.root} testID="session-discussion-phone-chrome">
+        <ChatHeaderView
+            title={props.title ?? t('session.collaboration.discussion.title')}
+            subtitle={props.subtitle}
+            onBackPress={props.onBack}
+            rightElement={props.right}
+            constrainWidth={false}
+        />
+        {props.children}
+    </View>;
 }
 
 /** The faces of the people in this conversation right now; the names are read from the line beside. */
@@ -1087,6 +1189,8 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
     resolveAccountLabel: (accountId: string) => string | null;
     resolveSessionLabel: (sessionId: string) => string | null;
     authorLabel: string;
+    /** The Session that answered, named through this Home's title projection; null when not readable here. */
+    agentLabel: string | null;
     proposalClient: ArtifactActionsClient;
     viewerAccountId: string;
     /** "Asked by … · answered by …" from the reply's stamped cause; null when no person asked. */
@@ -1110,6 +1214,22 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
     const actor = message.accountActor;
     const faceAccountId = actor !== null && actor.accountId === message.authorAccountId ? actor.accountId : message.authorAccountId;
     const passage = props.repeatsPassage ? null : readDiscussionContentPassage(message.content);
+    const outcome = resolveDiscussionReplyOutcome(message);
+    const speaker = message.producerV1 ? props.agentLabel ?? props.authorLabel : props.authorLabel;
+    // A participant that passed, failed or stopped is one quiet attributed line in the thread (lab T2-A
+    // "Release bot passed · nothing to add"), not a message: nobody has to read past it.
+    if (outcome === 'pass' || outcome === 'failed' || outcome === 'cancelled') {
+        const reason = message.content ? textOf(message.content, props.resolveAccountLabel, props.resolveSessionLabel).trim() : '';
+        const said = t(outcome === 'pass' ? 'session.collaboration.discussion.reply.passed'
+            : outcome === 'failed' ? 'session.collaboration.discussion.reply.failed'
+                : 'session.collaboration.discussion.reply.cancelled', { name: speaker });
+        return <HappierThreadMessage testID={`session-discussion-outcome-${outcome}-${message.id}`} startsGroup={false}
+            space={theme.space} selectionColors={theme.colors.state.active} style={contentWidth}>
+            <Text accessibilityLiveRegion="polite" style={[styles.meta, outcome === 'failed' ? styles.outcomeFailed : null]}>
+                {reason ? `${said} · ${reason}` : said}
+            </Text>
+        </HappierThreadMessage>;
+    }
     return <HappierThreadMessage
         testID={`session-discussion-message-group-${props.startsGroup ? 'start' : 'continuation'}-${message.id}`}
         startsGroup={props.startsGroup}
@@ -1122,7 +1242,7 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                 ? <Avatar id={faceAccountId} imageUrl={actor?.profile?.avatarUrl ?? null} size={28} />
                 : null}
         attribution={props.startsGroup ? <>
-                <Text testID={`session-discussion-message-actor-${message.id}`} style={styles.messageAuthor}>{props.authorLabel}</Text>
+                <Text testID={`session-discussion-message-actor-${message.id}`} style={styles.messageAuthor}>{speaker}</Text>
                 {message.producerV1 ? <Text testID={`session-discussion-message-producer-${message.id}`} style={styles.meta}>{t('session.collaboration.discussion.viaAgent')}</Text> : null}
                 {message.createdAt > 0 ? <Text testID={`session-discussion-message-timestamp-${message.id}`} accessibilityRole="text" accessibilityLabel={new Date(message.createdAt).toLocaleString()} style={styles.timestamp}>{formatShortRelativeTime(message.createdAt)}</Text> : null}
         </> : null}
@@ -1146,6 +1266,8 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                     resolveAccountLabel={props.resolveAccountLabel} />
                 : <Text testID={`session-discussion-message-content-${message.id}`} style={styles.messageText}>{renderDiscussionMessageContent(message, props.resolveAccountLabel, props.resolveSessionLabel)}</Text>}
             {props.attributionLine ? <Text testID={`session-discussion-message-attribution-${message.id}`} style={styles.meta}>{props.attributionLine}</Text> : null}
+            {/* An addressed answer read the conversation only up to the question that asked it (C3 cutoff). */}
+            {outcome === 'answer' ? <Text testID={`session-discussion-message-cutoff-${message.id}`} style={styles.meta}>{t('session.collaboration.discussion.reply.readUpTo')}</Text> : null}
             {message.participantDeliveryV1?.map((delivery) => <Text
                 key={delivery.participantSessionId}
                 testID={`session-discussion-participant-held-${message.id}-${delivery.participantSessionId}`}

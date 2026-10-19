@@ -126,10 +126,11 @@ export function DiscussionRouteScreen(props: Readonly<{
             ) : null}
         </Pressable>
     ), [onBack, returnLabel, theme.colors.chrome.header.foreground]);
-    // Beside the column the page carries its own header band; a phone keeps the navigation bar.
+    // Beside the column the page carries its own header band. On a phone a Discussion folds its header into
+    // its own navigation band (lab T2-Ap), so only the new page keeps the navigation bar.
     const columnVisible = useAppShellColumn().columnVisible;
     const screenOptions = React.useMemo(() => ({
-        headerShown: !columnVisible && props.kind !== 'list',
+        headerShown: !columnVisible && props.kind === 'new',
         // The labelled Back already says where this thread lives; a second title would repeat it.
         headerTitle: returnLabel ? '' : props.kind === 'new'
             ? t('session.collaboration.discussion.newDiscussion')

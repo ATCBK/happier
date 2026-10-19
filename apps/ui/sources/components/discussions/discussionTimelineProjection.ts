@@ -69,6 +69,23 @@ export function resolveDiscussionReplyAttributionLine(
         : t('session.collaboration.discussion.attribution.askedBy', { requester: name });
 }
 
+/**
+ * How an addressed participant answered (C3 U2), read only from the return the append owner stamped on its
+ * reply. `failed` includes a turn that ended with no result: either way the person who asked got no answer.
+ * A message an agent posted on its own, or a person's message, has no outcome.
+ */
+export type DiscussionReplyOutcome = 'answer' | 'pass' | 'failed' | 'cancelled';
+export function resolveDiscussionReplyOutcome(message: Pick<DiscussionOpenedMessageV1, 'producerV1'>): DiscussionReplyOutcome | null {
+    switch (message.producerV1?.replyReturn?.outcome) {
+        case 'answer': return 'answer';
+        case 'pass': return 'pass';
+        case 'failed':
+        case 'terminal_no_result': return 'failed';
+        case 'cancelled': return 'cancelled';
+        default: return null;
+    }
+}
+
 export type DiscussionTimelineMessage = Pick<DiscussionOpenedMessageV1, 'id' | 'seq'>;
 
 export type DiscussionTimelineItem<

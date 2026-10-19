@@ -7,7 +7,7 @@ import {
 } from '@/sync/domains/session/agentActivity';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 
-import { buildDiscussionTimelineItems, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine } from '@/components/discussions/discussionTimelineProjection';
+import { buildDiscussionTimelineItems, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome } from '@/components/discussions/discussionTimelineProjection';
 import { t } from '@/text';
 
 describe('readDiscussionMessagePreview', () => {
@@ -140,6 +140,25 @@ function run(params: Readonly<{
         timestamps: {},
     };
 }
+
+describe('resolveDiscussionReplyOutcome', () => {
+    const reply = (outcome?: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result') => ({
+        producerV1: { v: 1 as const, kind: 'agent' as const, sessionId: 'checkout-ui',
+            ...(outcome ? { replyReturn: { serverId: 'home', requestLocalId: 'ask-1', outcome } } : {}) },
+    });
+
+    it('reads how an addressed participant answered from the stamped return, and says nothing for other messages', () => {
+        expect(resolveDiscussionReplyOutcome(reply('answer'))).toBe('answer');
+        expect(resolveDiscussionReplyOutcome(reply('pass'))).toBe('pass');
+        // Ending without a result is a failed answer to the person who asked, not a quiet pass.
+        expect(resolveDiscussionReplyOutcome(reply('failed'))).toBe('failed');
+        expect(resolveDiscussionReplyOutcome(reply('terminal_no_result'))).toBe('failed');
+        expect(resolveDiscussionReplyOutcome(reply('cancelled'))).toBe('cancelled');
+        // An agent posting on its own (no addressed question) and a person's message carry no outcome.
+        expect(resolveDiscussionReplyOutcome(reply())).toBeNull();
+        expect(resolveDiscussionReplyOutcome({ producerV1: null })).toBeNull();
+    });
+});
 
 describe('buildDiscussionTimelineItems', () => {
     it('anchors linked runs after the highest selected message and orders equal anchors by canonical start then run id', () => {
