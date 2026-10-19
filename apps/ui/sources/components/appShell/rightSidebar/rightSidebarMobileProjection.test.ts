@@ -52,6 +52,7 @@ describe('rightSidebarMobileProjection', () => {
             { tabId: 'git', surface: 'git', owner: 'builtin' },
             { tabId: 'files', surface: 'browse', owner: 'builtin' },
             { tabId: 'agents', surface: 'agents', owner: 'builtin' },
+            { tabId: 'collaboration', surface: 'collaboration', owner: 'builtin' },
             { tabId: 'navigation', surface: 'navigation', owner: 'builtin' },
             { tabId: 'terminal', surface: 'terminal', owner: 'builtin' },
             { tabId: 'browser', surface: 'browser', owner: 'builtin' },
