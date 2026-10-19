@@ -349,7 +349,8 @@ const sameHaze = (a: WallpaperHazeComposition, b: WallpaperHazeComposition) =>
 
 /**
  * The pane's column of the Wallpaper, the haze's solid core around the column's centre, the head-line band across
- * the column, and the same band at the window's middle, where Home stands its head lines.
+ * the column, the same band at the window's middle, where Home stands its head lines, and the veil's reach: both
+ * bands and the whole column, where cards come to rest as the page scrolls over the stationary picture.
  */
 export function wallpaperToneRegions(frame: AtmosphereRect, geometry: NonNullable<AtmosphereStage['geometry']>): WallpaperToneRegions {
   const x = geometry.rect.x - frame.x;
@@ -359,6 +360,8 @@ export function wallpaperToneRegions(frame: AtmosphereRect, geometry: NonNullabl
   const half = core.ry * core.solid;
   const column = { x0: x / frame.width, x1: (x + geometry.rect.width) / frame.width };
   const band = { y0: focusY - half, y1: focusY + half };
+  // The Wallpaper stays put while the page scrolls, so cards come to rest anywhere in the pane's column.
+  const pane = { y0: (geometry.rect.y - frame.y) / frame.height, y1: (geometry.rect.y + geometry.rect.height - frame.y) / frame.height };
   const middle = 0.5;
   return {
     column: { ...column, y0: 0, y1: 1 },
@@ -367,7 +370,8 @@ export function wallpaperToneRegions(frame: AtmosphereRect, geometry: NonNullabl
     heads: { ...column, ...band },
     look: { ...column, y0: middle - half, y1: middle + half },
     at: { x: (column.x0 + column.x1) / 2, y: middle },
-    reach: { x: (column.x1 - column.x0) / 2, y: Math.abs(focusY - middle) + half },
+    // The veil holds the head lines and the whole column the cards rest over, not only the band around the head lines.
+    reach: { x: (column.x1 - column.x0) / 2, y: Math.max(Math.abs(focusY - middle) + half, middle - pane.y0, pane.y1 - middle) },
   };
 }
 

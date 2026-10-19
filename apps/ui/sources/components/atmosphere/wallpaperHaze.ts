@@ -66,8 +66,8 @@ function veilColor(page: string, bandColor: string | undefined): string {
  * this surface stands its head lines and at the window's middle, where Home stands them), the haze veils toward
  * the page just far enough. The window's middle band makes the veil one decision per picture and theme, so every
  * surface over the same Wallpaper reads as one look. The veil takes the haze core's shape around `at` (the
- * column's centre at the window's middle), grown until its solid core holds every band (`column`: the bands'
- * half-extents around `at`, as fractions of the picture); the soft layers stay as composed, so the picture keeps
+ * column's centre at the window's middle), grown until its solid core holds every band and the column the
+ * cards rest over (`column`: their half-extents around `at`, as fractions of the picture); the soft layers stay as composed, so the picture keeps
  * its texture. The veil leans toward the theme's own ground,
  * so light stays light and dark stays dark, in the band's own hue (`bandColor`), so a dusk deepens rather than greys.
  *
