@@ -1850,11 +1850,20 @@ It uses the existing preparation checkpoint owner, then checks fresh authority
 outside that checkpoint before notifying consumers. A later refresh starts
 fresh; revocation during a catalog read prevents successful publication.
 
-Action preparation also uses this checkpoint for Prompt Library destination
-and storage-mode reads, Role source reads, ACP catalog reads and Profile catalog
-admission. Nested read-only preparation joins an existing bounded observation;
+Within one requester credential binding, the first Machine proof discovers the
+authenticated Account identity and Machine-access context. The middle read group
+and the second Machine proof reuse that exact discovery only for this binding;
+both Machine proofs still perform fresh signed Home verification. Discovery is
+matched to the exact Home, credential, attribution and Session and ends with the
+binding. Later invocations discover again.
+
+Action preparation also uses this checkpoint for the bounded Agent-start group:
+Role overrides, built-in Role sources, captured Settings and Agent inventory.
+Prompt Library destination/storage-mode reads, ACP catalog reads and Profile catalog
+admission join nested read-only preparation in an existing bounded observation;
 ordinary and effect checkpoints still start fresh. Migration writes, retained-source/history maintenance and private
-source publication leave the checkpoint before their existing effect fences.
+source/catalog publication leave the checkpoint before their existing effect fences.
+Injected preparation/readers and Settings bootstrap also leave that read scope.
 Catalog disclosure and final Agent-start context publication check fresh
 requester authority; cancellation withholds the prepared start context.
 Authorization preparation shares only its initial caller and Profile/encryption

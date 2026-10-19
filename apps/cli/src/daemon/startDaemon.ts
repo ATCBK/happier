@@ -1969,7 +1969,7 @@ export async function startDaemon(
           }
         }
       : undefined;
-    let createRequesterRuntime: ((bootstrap: AdmittedRequesterSessionBootstrap) => Promise<RequesterSessionRuntimeContext | null>) | null = null;
+    let createRequesterRuntime: ((bootstrap: AdmittedRequesterSessionBootstrap, signal?: AbortSignal) => Promise<RequesterSessionRuntimeContext | null>) | null = null;
     const requesterRuntimeServerId = configuration.activeServerId;
     const requesterRuntimeServerHttpBaseUrl = resolveServerHttpBaseUrl();
     const openRunAccountConnectionSource = managedPolicyHomeId && externalActionAccountId
@@ -2022,8 +2022,9 @@ export async function startDaemon(
     const resolveRequesterSessionRuntimeContext = createRequesterSessionRuntimeContextResolver({
       trackedSessions: pidToTrackedSession,
       getCreateRuntime: () => createRequesterRuntime,
-      recoverBootstrap: ({ sessionId, attribution: stamp, tracked }) => resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: configuration.happyHomeDir,
+      recoverBootstrap: ({ sessionId, attribution: stamp, tracked, signal }) => resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: configuration.happyHomeDir,
         serverId: requesterRuntimeServerId, sessionId, serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl,
+        signal,
         machineAdmissionBoundary: requesterMachineAdmissionBoundary(),
         ...(stamp ? { expectedAttribution: stamp } : {}),
         // Retained attribution is not proof that a legacy Session has a
@@ -3059,13 +3060,13 @@ export async function startDaemon(
     connectedServiceRefreshLoopHandle = runtimeBootstrap.connectedServiceRefreshLoopHandle;
     connectedServiceQuotasCoordinator = runtimeBootstrap.connectedServiceQuotasCoordinator;
     connectedServiceQuotasLoopHandle = runtimeBootstrap.connectedServiceQuotasLoopHandle;
-    createRequesterRuntime = async bootstrap => {
+    createRequesterRuntime = async (bootstrap, signal) => {
       if (bootstrap.serverHttpBaseUrl !== requesterRuntimeServerHttpBaseUrl
         || !requesterMachineAdmissionBoundary(bootstrap.attribution).isHomeCurrent()) return null;
       bindRequesterSessionRuntimeMachineAdmissionCurrentness({
         bootstrap, boundary: requesterMachineAdmissionBoundary(bootstrap.attribution),
       });
-      return await createRequesterSessionRuntimeContext({ bootstrap,
+      return await createRequesterSessionRuntimeContext({ bootstrap, signal,
         activeServerDir: configuration.activeServerDir, connectedServicesMaterializationBaseDir,
         resolveQualifiedConnectedAccountV4Support: () => resolveQualifiedConnectedAccountAtomicV4Negotiation(serverFeaturesSnapshotStore.getSnapshot()),
         coordinatorInput: {

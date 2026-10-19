@@ -1,6 +1,7 @@
-import { rethrowRequesterHomeReadFailure, requesterCurrentnessCheckpoint, type RequesterCurrentnessObservation } from './requesterCurrentness';
+import { readRequesterHomeWithinActionLifetime, rethrowRequesterHomeReadFailure, requesterCurrentnessCheckpoint, type RequesterCurrentnessObservation } from './requesterCurrentness';
 
 import { join } from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -11,7 +12,7 @@ import { configuration } from '@/configuration';
 import { bindRequesterSessionCredentialScope, decodeStoredCredentials, encodeStoredCredentials, type StoredCredentials } from '@/persistence';
 import { fetchAccountProfile } from '@/api/accountProfile';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
-import { acquireRequesterAccountEncryptionCurrentness, readRequesterAccountEncryptionCurrentness,
+import { acquireRequesterAccountEncryptionCurrentness, readRequesterAccountEncryptionCurrentness, waitForObservation,
   isRequesterAccountEncryptionCurrentnessObserved, sameRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
@@ -89,17 +90,18 @@ export type RequesterSessionRuntimeContext = Readonly<{
   | 'activateSessionPurposeBindings' | 'activatePurposeBindings'>;
 
 export type ResolveRequesterSessionRuntimeContext = (
-  sessionId: string, attribution?: RequesterWorkAttributionV1,
+  sessionId: string, attribution?: RequesterWorkAttributionV1, signal?: AbortSignal,
 ) => Promise<RequesterSessionRuntimeContext | null>;
 
 /** The daemon's one tracked/recovered requester selection and publication owner. */
 export function createRequesterSessionRuntimeContextResolver(input: Readonly<{
   trackedSessions: ReadonlyMap<number, TrackedSession>;
-  getCreateRuntime(): ((bootstrap: AdmittedRequesterSessionBootstrap) => Promise<RequesterSessionRuntimeContext | null>) | null;
-  recoverBootstrap(input: Readonly<{ sessionId: string; attribution?: RequesterWorkAttributionV1; tracked: boolean }>): Promise<AdmittedRequesterSessionBootstrap | null>;
+  getCreateRuntime(): ((bootstrap: AdmittedRequesterSessionBootstrap, signal?: AbortSignal) => Promise<RequesterSessionRuntimeContext | null>) | null;
+  recoverBootstrap(input: Readonly<{ sessionId: string; attribution?: RequesterWorkAttributionV1; tracked: boolean; signal?: AbortSignal }>): Promise<AdmittedRequesterSessionBootstrap | null>;
 }>): ResolveRequesterSessionRuntimeContext {
   const pidToTrackedSession = input.trackedSessions;
-  return async (sessionId, attribution) => {
+  return async (sessionId, attribution, signal) => {
+    if (signal?.aborted) return null;
     // Exited runners no longer lend requester authority. Inactive operations
     // still recover their own temporary context through the same custody path.
     const tracked = [...pidToTrackedSession.values()].find(candidate => candidate.happySessionId === sessionId
@@ -109,7 +111,7 @@ export function createRequesterSessionRuntimeContextResolver(input: Readonly<{
     let stamp = tracked?.requesterWorkAttributionV1 ?? tracked?.spawnOptions?.requesterWorkAttributionV1
       ?? context?.bootstrap.attribution ?? attribution;
     if (stamp && attribution && !isDeepStrictEqual(stamp, attribution)) return null;
-    const recoverBootstrap = () => input.recoverBootstrap({ sessionId, ...(stamp ? { attribution: stamp } : {}), tracked: tracked !== undefined });
+    const recoverBootstrap = () => input.recoverBootstrap({ sessionId, ...(stamp ? { attribution: stamp } : {}), tracked: tracked !== undefined, signal });
     const coldBootstrap = !context ? await recoverBootstrap() : null;
     stamp ??= coldBootstrap?.attribution;
     if (!stamp) return null;
@@ -125,17 +127,18 @@ export function createRequesterSessionRuntimeContextResolver(input: Readonly<{
       if (contextStamp.serverId !== stamp.serverId || contextStamp.accountId !== stamp.accountId
         || contextStamp.machineId !== stamp.machineId || contextStamp.installationId !== stamp.installationId
         || context.bootstrap.getBoundSessionId() !== sessionId) return null;
-      if (await context.isCurrent()) {
+      if (await context.isCurrent(signal)) {
         if (tracked && !stillOwnsTrackedContext(context)) return null;
         if (tracked) tracked.requesterWorkAttributionV1 = stamp;
         return context;
       }
     }
+    if (signal?.aborted) return null;
     const createRequesterRuntime = input.getCreateRuntime();
     if (!createRequesterRuntime) return null;
     const bootstrap = context ? await recoverBootstrap() : coldBootstrap;
     if (!bootstrap) return null;
-    const recovered = await createRequesterRuntime(bootstrap);
+    const recovered = await createRequesterRuntime(bootstrap, signal);
     if (!recovered) { bootstrap.savedSecretOperationContext.withdrawCatalog(); return null; }
     if (tracked) {
       const stillTracked = tracked.reportMarkerCustody?.retiring !== true && [...pidToTrackedSession.values()].some(candidate => candidate === tracked
@@ -148,9 +151,9 @@ export function createRequesterSessionRuntimeContextResolver(input: Readonly<{
         return incumbentStamp.serverId === stamp.serverId && incumbentStamp.accountId === stamp.accountId
           && incumbentStamp.machineId === stamp.machineId && incumbentStamp.installationId === stamp.installationId
           && incumbent.bootstrap.getBoundSessionId() === sessionId
-          && await incumbent.isCurrent() && stillOwnsTrackedContext(incumbent) ? incumbent : null;
+          && await incumbent.isCurrent(signal) && stillOwnsTrackedContext(incumbent) ? incumbent : null;
       }
-      if (!await recovered.isCurrent() || !stillOwnsTrackedContext(context)) {
+      if (!await recovered.isCurrent(signal) || !stillOwnsTrackedContext(context)) {
         await recovered.dispose(); return null;
       }
       tracked.requesterSessionRuntimeContext = recovered;
@@ -187,12 +190,13 @@ export type RequesterSessionRuntimeContextPorts =
 /** Canonical Session Account assertion used by the daemon's captured operation context. */
 export async function assertRequesterSessionAccountContextCurrent(input: Readonly<{
   expected: RequesterSessionRuntimeContext | null;
+  signal?: AbortSignal;
   resolveCurrent(): Promise<RequesterSessionRuntimeContext | null>;
   readTrackedContext(): RequesterSessionRuntimeContext | null;
 }>): Promise<void> {
   if (input.expected) {
     const tracked = input.readTrackedContext();
-    if (tracked && tracked !== input.expected || !await input.expected.isCurrent()) {
+    if (tracked && tracked !== input.expected || !await input.expected.isCurrent(input.signal)) {
       throw new Error('requester_session_not_current');
     }
     return;
@@ -287,8 +291,7 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
   const observationScope = { accountId: attribution.accountId, token: credentials.token,
     serverBaseUrl: input.boundary.serverHttpBaseUrl };
   try {
-    const readAccountCurrentness = async () => await runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl, async () => {
-      const signal = currentnessSignal();
+    const readAccountCurrentness = async (signal = currentnessSignal()) => await runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl, async () => {
       if (!live || signal.aborted || !await verify(signal)) return null;
       const profile = await fetchAccountProfile({ token: credentials.token, signal });
       if (profile.id !== attribution.accountId || !live || signal.aborted) return null;
@@ -298,8 +301,9 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
         && live && !signal.aborted && await verify(signal)
         && observation.isCurrent(currentness) ? currentness : null;
     });
-    const currentness = await readAccountCurrentness();
+    const currentness = await readRequesterHomeWithinActionLifetime(() => readAccountCurrentness(launchSignal), input.signal);
     if (!currentness || !observation) return null;
+    const accountObservation = observation;
     bindRequesterSessionCredentialScope(credentials, { serverId: attribution.serverId,
       serverHttpBaseUrl: normalizeServerHttpBaseUrl(input.boundary.serverHttpBaseUrl) });
     let cleanup: () => Promise<void> = async () => undefined;
@@ -318,20 +322,31 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
         serverHttpBaseUrl: input.boundary.serverHttpBaseUrl,
         verifyMachineAdmissionCurrent: verifyRuntime, signal: currentnessSignal() })
       : await readAccountCurrentness().then(next => next !== null && sameRequesterAccountEncryptionCurrentness(next, currentness));
-      return current && live && isRequesterAccountEncryptionCurrentnessObserved(observationScope, currentness);
+      return current && await isObservationCurrent();
     };
     // Ordinary readers share only an outstanding Home verification. Native
     // checkpoints also share its result until their next effect boundary.
     let currentObservation: RequesterCurrentnessObservation | undefined;
     let currentnessKey = {};
-    const isObservationCurrent = () => live && !currentnessSignal().aborted
-      && isRequesterAccountEncryptionCurrentnessObserved(observationScope, currentness);
-    const isCurrent = () => {
-      if (!isObservationCurrent()) return Promise.resolve(false);
+    const isObservationCurrent = async () => {
+      if (!live || currentnessSignal().aborted) return false;
+      if (isRequesterAccountEncryptionCurrentnessObserved(observationScope, currentness)) return true;
+      // Missing live evidence is not revocation. The observation owner
+      // distinguishes unavailable transport from a known changed Account fact.
+      const observed = await accountObservation.read(currentnessSignal());
+      return live && !currentnessSignal().aborted && sameRequesterAccountEncryptionCurrentness(observed, currentness);
+    };
+    const isCurrent = async () => {
+      if (!await isObservationCurrent()) return false;
       const checkpoint = requesterCurrentnessCheckpoint.getStore();
+      const read = (observed: RequesterCurrentnessObservation) => observed.pending
+        .then(current => current && isObservationCurrent()).catch(error => {
+          if (checkpoint?.observations.get(currentnessKey) === observed) checkpoint.observations.delete(currentnessKey);
+          throw error;
+        });
       const shared = checkpoint?.active ? checkpoint.observations.get(currentnessKey) : undefined;
       if (shared) return timeWebLatencyPhase('requester.currentness_reuse',
-        () => shared.pending.then(current => current && isObservationCurrent()), shared.trace);
+        () => read(shared), shared.trace);
       const reused = currentObservation;
       if (!currentObservation) {
         const pending = observeCurrent().finally(() => {
@@ -341,22 +356,22 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
       }
       if (checkpoint?.active) checkpoint.observations.set(currentnessKey, currentObservation);
       const observed = currentObservation;
-      const read = () => observed.pending.then(current => current && isObservationCurrent());
-      return reused ? timeWebLatencyPhase('requester.currentness_reuse', read, reused.trace) : read();
+      return reused ? timeWebLatencyPhase('requester.currentness_reuse', () => read(observed), reused.trace) : read(observed);
     };
-    if (!await isCurrent()) return null;
-    const accountSettingsContext = await runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl,
+    const readPreparationCurrentness = () => readRequesterHomeWithinActionLifetime(
+      () => waitForObservation(isCurrent(), input.signal ?? currentnessSignal()), input.signal);
+    if (!await readPreparationCurrentness()) return null;
+    const accountSettingsContext = await readRequesterHomeWithinActionLifetime(() => runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl,
       () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', publication: 'invocation',
-        signal: currentnessSignal(),
+        signal: launchSignal,
         // Requester admission already requires network authority. A known minimum
         // of zero also preserves a failed read instead of quietly returning cache.
         expectedAccountEncryptionMode: currentness.mode, honorAccountSettingsModeEnv: false, minSettingsVersion: currentness.settingsVersion ?? 0,
-        shouldCommit: () => !input.signal?.aborted }));
-    if (accountSettingsContext.source !== 'network' || !await isCurrent()) return null;
+        shouldCommit: () => !input.signal?.aborted })), input.signal);
+    if (accountSettingsContext.source !== 'network' || !await readPreparationCurrentness()) return null;
     const savedSecretOperationContext = createInvocationSavedSecretOperationContextV1({ credentials,
       machineAdmission,
       snapshot: accountSettingsContext, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl, isCurrent });
-    const accountObservation = observation;
     const settingsPublication = createRequesterAccountSettingsPublication({ observation: accountObservation, currentness, operationContext: savedSecretOperationContext });
     const dispose = async () => {
       live = false;
@@ -439,6 +454,18 @@ export type RequesterSessionMachineAdmissionBoundary = Readonly<{
   readInstallation(): Readonly<{ installationId: string; privateKey: string | Uint8Array }> | null;
 }>;
 
+// Discovery belongs to one binding invocation, including opaque ingress
+// callbacks that reach this same Machine owner. It never retains authority:
+// both Machine checks still sign and ask Home, and every later binding discovers
+// its context anew. Exact identity matching prevents another callback borrowing it.
+type RequesterBindingDiscovery = {
+  active: boolean;
+  binding: Readonly<{ credentials: StoredCredentials; sessionId: string;
+    attribution: RequesterWorkAttributionV1; serverHttpBaseUrl: string }>;
+  context?: NonNullable<RpcHandlerContext['machineAdmission']>;
+};
+const requesterBindingDiscovery = new AsyncLocalStorage<RequesterBindingDiscovery>();
+
 /** Runtime authority follows custody binding, not a prepared Session id or the completed launch RPC. */
 export function bindRequesterSessionRuntimeMachineAdmissionCurrentness(input: Readonly<{
   bootstrap: AdmittedRequesterSessionBootstrap;
@@ -472,30 +499,40 @@ async function readRequesterSessionMachineAdmissionCurrent(input: Readonly<{
       const installation = input.boundary.readInstallation();
       if (!input.boundary.isHomeCurrent() || input.attribution.machineId !== input.boundary.machineId
         || installation?.installationId !== input.attribution.installationId) return null;
-      const readAccess = createAccountServerActionDeps({ token: input.credentials.token,
-        serverId: input.attribution.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl }).machineAccessAction;
-      if (!readAccess) return null;
-      const [profile, result] = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all([
-        timeWebLatencyPhase('requester.machine_profile', () => fetchAccountProfile({ token: input.credentials.token, signal })),
-        timeWebLatencyPhase('requester.machine_access', () => readAccess({ actionId: 'machines.access.grants.list', input: { serverId: input.attribution.serverId,
-          machineId: input.attribution.machineId }, context: { surface: 'cli', serverId: input.attribution.serverId }, signal })),
-      ]));
-      rethrowRequesterHomeReadFailure(result);
-      const access = MachineAccessGrantsListResponseV1Schema.safeParse(result);
-      if (profile.id !== input.attribution.accountId || !access.success
-        || access.data.machineId !== input.attribution.machineId || access.data.access.accessState !== 'ready'
-        || access.data.custodian.accountId !== access.data.access.custodian.accountId
-        || !input.boundary.isHomeCurrent()
-        || input.boundary.readInstallation()?.installationId !== installation.installationId) return null;
-      const context = { actorAccountId: profile.id,
-        custodianAccountId: access.data.custodian.accountId, machineId: input.attribution.machineId,
-        installationId: installation.installationId, role: access.data.access.role,
-        encryptionMode: access.data.access.resourceMode };
+      const scope = requesterBindingDiscovery.getStore();
+      const discovery = scope?.active && scope.binding.credentials.token === input.credentials.token
+        && scope.binding.sessionId === input.sessionId && isDeepStrictEqual(scope.binding.attribution, input.attribution)
+        && normalizeServerHttpBaseUrl(scope.binding.serverHttpBaseUrl) === normalizeServerHttpBaseUrl(input.serverHttpBaseUrl)
+        ? scope : undefined;
+      let context = discovery?.context;
+      if (!context) {
+        const readAccess = createAccountServerActionDeps({ token: input.credentials.token,
+          serverId: input.attribution.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl }).machineAccessAction;
+        if (!readAccess) return null;
+        const [profile, result] = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all([
+          timeWebLatencyPhase('requester.machine_profile', () => fetchAccountProfile({ token: input.credentials.token, signal })),
+          timeWebLatencyPhase('requester.machine_access', () => readAccess({ actionId: 'machines.access.grants.list', input: { serverId: input.attribution.serverId,
+            machineId: input.attribution.machineId }, context: { surface: 'cli', serverId: input.attribution.serverId }, signal })),
+        ]));
+        rethrowRequesterHomeReadFailure(result);
+        const access = MachineAccessGrantsListResponseV1Schema.safeParse(result);
+        if (profile.id !== input.attribution.accountId || !access.success
+          || access.data.machineId !== input.attribution.machineId || access.data.access.accessState !== 'ready'
+          || access.data.custodian.accountId !== access.data.access.custodian.accountId
+          || !input.boundary.isHomeCurrent()
+          || input.boundary.readInstallation()?.installationId !== installation.installationId) return null;
+        context = { actorAccountId: profile.id,
+          custodianAccountId: access.data.custodian.accountId, machineId: input.attribution.machineId,
+          installationId: installation.installationId, role: access.data.access.role,
+          encryptionMode: access.data.access.resourceMode };
+      }
       const current = await timeWebLatencyPhase('requester.machine_signed_verification', () => readMachineRpcAdmissionCurrentOrThrow({ context,
         purpose: { kind: 'requester_session_currentness', sessionId: input.sessionId },
         privateKey: installation.privateKey, daemonToken: input.boundary.daemonToken, serverHttpBaseUrl: input.serverHttpBaseUrl, signal }));
-      return current !== null && input.boundary.isHomeCurrent()
-        && input.boundary.readInstallation()?.installationId === installation.installationId ? context : null;
+      if (current === null || signal?.aborted || !input.boundary.isHomeCurrent()
+        || input.boundary.readInstallation()?.installationId !== installation.installationId) return null;
+      if (discovery) discovery.context = context;
+      return context;
     } catch (error) { rethrowRequesterHomeReadFailure(error); return null; }
   });
 }
@@ -510,6 +547,7 @@ export async function verifyRequesterSessionMachineAdmissionCurrent(
 export async function resolveRequesterSessionBootstrap(input: RequesterSessionCredentialBinding & Readonly<{
   serverHttpBaseUrl: string;
   machineAdmissionBoundary: RequesterSessionMachineAdmissionBoundary;
+  signal?: AbortSignal;
 }>): Promise<AdmittedRequesterSessionBootstrap | null> {
   try {
     const stored = await readBoundCustody(requesterSessionCredentialPath(input), input);
@@ -521,11 +559,12 @@ export async function resolveRequesterSessionBootstrap(input: RequesterSessionCr
       machineAdmission = current ?? undefined;
       return current !== null;
     };
-    const credentials = await resolveRequesterSessionCredentials({ ...input, verifyMachineAdmissionCurrent: verify(stored) });
+    const credentials = await readRequesterHomeWithinActionLifetime(
+      () => resolveRequesterSessionCredentials({ ...input, verifyMachineAdmissionCurrent: verify(stored) }), input.signal);
     if (!credentials) return null;
     const result = await prepareRequesterSessionBootstrap({ credentials, attribution: input.attribution, machineAdmission,
       boundary: { serverId: input.attribution.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl, happyHomeDir: input.happyHomeDir },
-      preparedSessionId: input.sessionId, boundSessionId: input.sessionId, verifyMachineAdmissionCurrent: verify(credentials) });
+      preparedSessionId: input.sessionId, boundSessionId: input.sessionId, verifyMachineAdmissionCurrent: verify(credentials), signal: input.signal });
     return result?.admitted ?? null;
   } catch (error) { rethrowRequesterHomeReadFailure(error); return null; }
 }
@@ -536,6 +575,7 @@ export async function resolveRequesterSessionBootstrapFromCustody(input: Readonl
   machineAdmissionBoundary: RequesterSessionMachineAdmissionBoundary;
   legacyOwnerCredentials?: StoredCredentials;
   expectedAttribution?: RequesterWorkAttributionV1;
+  signal?: AbortSignal;
 }>): Promise<AdmittedRequesterSessionBootstrap | null> {
   const boundary = input.machineAdmissionBoundary;
   const installation = boundary.readInstallation();
@@ -564,8 +604,8 @@ export async function resolveRequesterSessionBootstrapFromCustody(input: Readonl
   if (!input.legacyOwnerCredentials) return null;
   try {
     const credentials = { ...input.legacyOwnerCredentials };
-    const profile = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl,
-      () => fetchAccountProfile({ token: credentials.token }));
+    const profile = await readRequesterHomeWithinActionLifetime(() => runWithServerHttpBaseUrl(input.serverHttpBaseUrl,
+      () => fetchAccountProfile({ token: credentials.token, signal: input.signal })), input.signal);
     const attribution = { serverId: input.serverId, accountId: profile.id,
       machineId: boundary.machineId, installationId: installation.installationId };
     if (expected && !isDeepStrictEqual(expected, attribution)) return null;
@@ -574,14 +614,14 @@ export async function resolveRequesterSessionBootstrapFromCustody(input: Readonl
     const path = requesterSessionCredentialPath({ ...input, attribution });
     try { await readPrivateOwnerFile(path); return null; }
     catch (error) { if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') return null; }
-    const machineAdmission = await readRequesterSessionMachineAdmissionCurrent({ credentials,
-      sessionId: input.sessionId, attribution, serverHttpBaseUrl: input.serverHttpBaseUrl, boundary });
+    const machineAdmission = await readRequesterHomeWithinActionLifetime(() => readRequesterSessionMachineAdmissionCurrent({ credentials,
+      sessionId: input.sessionId, attribution, serverHttpBaseUrl: input.serverHttpBaseUrl, boundary, signal: input.signal }), input.signal);
     if (!machineAdmission) return null;
     const verifyMachineAdmissionCurrent = (signal?: AbortSignal) => verifyRequesterSessionMachineAdmissionCurrent({ credentials,
       sessionId: input.sessionId, attribution, serverHttpBaseUrl: input.serverHttpBaseUrl, boundary, signal });
     const prepared = await prepareRequesterSessionBootstrap({ credentials, attribution, machineAdmission,
       boundary: { serverId: input.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl, happyHomeDir: input.happyHomeDir },
-      boundSessionId: input.sessionId, verifyMachineAdmissionCurrent });
+      boundSessionId: input.sessionId, verifyMachineAdmissionCurrent, signal: input.signal });
     return prepared?.admitted ?? null;
   } catch (error) { rethrowRequesterHomeReadFailure(error); return null; }
 }
@@ -680,30 +720,35 @@ export async function verifyRequesterSessionCredentialBinding(input: Readonly<{
         phase, status, sessionId: input.sessionId, durationMs: Math.round(performance.now() - startedAt),
       }); }
     };
-    try {
-      if (input.signal?.aborted || !await observe('machine_before', () => input.verifyMachineAdmissionCurrent(input.signal))) return false;
-      const [profile, currentness, session] = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all([
-        observe('profile', () => fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) })),
-        observe('encryption', () => readRequesterAccountEncryptionCurrentness({ accountId: input.attribution.accountId,
-          token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
-          ...(input.signal ? { signal: input.signal } : {}) })),
-        observe('session', () => fetchSessionById({ token: input.credentials.token, serverUrl: input.serverHttpBaseUrl, sessionId: input.sessionId,
-          ...(input.signal ? { signal: input.signal } : {}) })),
-      ]));
-      const owner = input.expectedSessionCreationTag !== undefined && session ? tryDecryptSessionOwnerMetadataView({ credentials: input.credentials,
-        accountEncryptionMode: currentness.mode, rawSession: session }) : null;
-      const correspondence = input.expectedSessionCreationTag === undefined ? null
-        : SessionCreationCorrespondenceV1Schema.safeParse(owner?.sessionCreationCorrespondenceV1);
-      return profile.id === input.attribution.accountId
-        && session?.id === input.sessionId && readSessionAccessProjectionRoleV1(session) === 'owner'
-        && (currentness.mode === 'plain' ? input.credentials.encryption === null : input.credentials.encryption !== null)
-        && (input.expectedSessionCreationTag === undefined
-          || correspondence?.success === true && correspondence.data.sessionCreationTag === input.expectedSessionCreationTag
-            && correspondence.data.recipe.execution.machineId === input.attribution.machineId)
-        && !input.signal?.aborted && await observe('machine_after', () => input.verifyMachineAdmissionCurrent(input.signal))
-        && isRequesterAccountEncryptionCurrentnessObserved({ accountId: input.attribution.accountId,
-          token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl }, currentness);
-    } catch (error) { rethrowRequesterHomeReadFailure(error); return false; }
+    const discovery: RequesterBindingDiscovery = { active: true, binding: input };
+    return await requesterBindingDiscovery.run(discovery, async () => {
+      try {
+        if (input.signal?.aborted || !await observe('machine_before', () => input.verifyMachineAdmissionCurrent(input.signal))) return false;
+        const [profile, currentness, session] = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all([
+          observe('profile', () => discovery.context ? Promise.resolve({ id: discovery.context.actorAccountId })
+            : fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) })),
+          observe('encryption', () => readRequesterAccountEncryptionCurrentness({ accountId: input.attribution.accountId,
+            token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
+            ...(input.signal ? { signal: input.signal } : {}) })),
+          observe('session', () => fetchSessionById({ token: input.credentials.token, serverUrl: input.serverHttpBaseUrl, sessionId: input.sessionId,
+            ...(input.signal ? { signal: input.signal } : {}) })),
+        ]));
+        const owner = input.expectedSessionCreationTag !== undefined && session ? tryDecryptSessionOwnerMetadataView({ credentials: input.credentials,
+          accountEncryptionMode: currentness.mode, rawSession: session }) : null;
+        const correspondence = input.expectedSessionCreationTag === undefined ? null
+          : SessionCreationCorrespondenceV1Schema.safeParse(owner?.sessionCreationCorrespondenceV1);
+        return profile.id === input.attribution.accountId
+          && session?.id === input.sessionId && readSessionAccessProjectionRoleV1(session) === 'owner'
+          && (currentness.mode === 'plain' ? input.credentials.encryption === null : input.credentials.encryption !== null)
+          && (input.expectedSessionCreationTag === undefined
+            || correspondence?.success === true && correspondence.data.sessionCreationTag === input.expectedSessionCreationTag
+              && correspondence.data.recipe.execution.machineId === input.attribution.machineId)
+          && !input.signal?.aborted && await observe('machine_after', () => input.verifyMachineAdmissionCurrent(input.signal))
+          && isRequesterAccountEncryptionCurrentnessObserved({ accountId: input.attribution.accountId,
+            token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl }, currentness);
+      } catch (error) { rethrowRequesterHomeReadFailure(error); return false; }
+      finally { discovery.active = false; discovery.context = undefined; }
+    });
   });
 }
 

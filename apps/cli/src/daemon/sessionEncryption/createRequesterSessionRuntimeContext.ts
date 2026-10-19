@@ -19,7 +19,7 @@ import { createProviderAccountUsagePersistenceScheduler } from '../connectedServ
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../connectedServices/accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import { startDaemonConnectedServiceRuntime } from '../startup/startDaemonRuntimeBootstrap';
 import type { AdmittedRequesterSessionBootstrap, RequesterSessionRuntimeContext } from './requesterSessionCredentials';
-import { rethrowRequesterHomeReadFailure, runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
+import { readRequesterHomeWithinActionLifetime, rethrowRequesterHomeReadFailure, runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
 import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
 import { createCliProfileStoreForOperation } from '@/settings/profiles/profileStore';
 import { ProfileCatalogUnavailableError, readProfilesFromAccountSettings,
@@ -51,6 +51,7 @@ export function resolveRequesterSessionRuntimeDirectories(input: Readonly<{
 /** Reuses ordinary Account owners with invocation custody; never publishes Bob as the daemon Account. */
 export async function createRequesterSessionRuntimeContext(input: Readonly<{
   bootstrap: AdmittedRequesterSessionBootstrap;
+  signal?: AbortSignal;
   coordinatorInput: Omit<CoordinatorInput, 'api' | 'credentials' | 'accountSettingsSnapshot'
     | 'activeServerDir' | 'providerAccountUsageStore' | 'connectedServiceRuntimeQuotaSnapshots'
     | 'qualifiedConnectedAccountEstablishedRuntimeOwner' | 'listScheduledQualifiedConnectedAccounts'
@@ -75,12 +76,12 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     if (disposed || signal?.aborted) return false;
     const readerSignal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
     try {
-      return await bootstrap.ensureAccountSettingsCurrent(readerSignal)
+      return await readRequesterHomeWithinActionLifetime(async () => await bootstrap.ensureAccountSettingsCurrent(readerSignal)
         && await waitForObservation(savedSecrets.isCurrent(), readerSignal)
-        && await bootstrap.ensureAccountSettingsCurrent(readerSignal) && !disposed;
+        && await bootstrap.ensureAccountSettingsCurrent(readerSignal) && !disposed, signal ? readerSignal : undefined);
     } catch (error) { rethrowRequesterHomeReadFailure(error); return false; }
   };
-  if (!await isCurrent()) return null;
+  if (!await isCurrent(input.signal)) return null;
   const sessionFollowRuleCache = createAccountSessionFollowRuleCache({ accountId: bootstrap.attribution.accountId,
     credentials: bootstrap.credentials, serverHttpBaseUrl: bootstrap.serverHttpBaseUrl,
     signal: lifetime.signal, isCurrent, subscribeInvalidation: bootstrap.subscribeSessionFollowRules });
@@ -185,13 +186,13 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     configuration: persistence.configuration, configurationOwner });
   const token = bootstrap.credentials.token;
   const qualifiedConnectedAccountApi: RequesterSessionRuntimeContext['qualifiedConnectedAccountApi'] = {
-    readGroup: async ({ service, groupId, signal }) => { if (!await isCurrent()) throw requesterAccountContextUnavailable();
+    readGroup: async ({ service, groupId, signal }) => { if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
       return await withHome(() => readQualifiedConnectedAccountGroupV4({ token, group: { service, groupId }, ...(signal ? { signal } : {}) })); },
-    listAccounts: async ({ service, signal }) => { if (!await isCurrent()) throw requesterAccountContextUnavailable();
+    listAccounts: async ({ service, signal }) => { if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
       return await withHome(() => listQualifiedConnectedAccountsV4({ token, service, ...(signal ? { signal } : {}) })); },
   };
   const directMaterial = createHttpTeamCredentialDirectMaterialClient({ token, serverUrl: bootstrap.serverHttpBaseUrl,
-    readRecipientEncryptionMaterial: async signal => { if (!await isCurrent()) return { mode: 'e2ee_unavailable' };
+    readRecipientEncryptionMaterial: async signal => { if (!await isCurrent(signal)) return { mode: 'e2ee_unavailable' };
       const mode = await withHome(() => api.getAccountEncryptionMode({ signal }));
       const encryption = bootstrap.credentials.encryption;
       return mode === 'plain' ? { mode: 'plain' } : mode === 'e2ee' && encryption
@@ -205,7 +206,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     resolveConnectedAccountEndpoints: async request => await withHome(() => established.readConfiguredEndpoints(request)),
     qualifiedApi: { listAccounts: async (service, signal) => await qualifiedConnectedAccountApi.listAccounts({ service, signal }),
       listGroups: async (service, signal) => {
-        if (!await isCurrent()) throw requesterAccountContextUnavailable();
+        if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
         return await withHome(() => listQualifiedConnectedAccountGroupsV4({ token, service, signal }));
       },
       readGroup: async (group, signal) => await qualifiedConnectedAccountApi.readGroup({ ...group, signal }) },
@@ -270,7 +271,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     try { await dispose(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Requester Account runtime startup failed'); }
     throw error;
   }
-  if (!await isCurrent()) {
+  if (!await isCurrent(input.signal)) {
     await dispose();
     return null;
   }

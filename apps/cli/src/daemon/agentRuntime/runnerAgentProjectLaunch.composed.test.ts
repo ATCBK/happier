@@ -246,7 +246,7 @@ it('shares requester authority reads within each native launch checkpoint and st
     // One preparation and Exec's three incumbent checkpoints: before native
     // environment production, before secret release, and before final launch.
     expect({ sessionReads, profileReads, accessReads, admissionReads }).toEqual({
-      sessionReads: 4, profileReads: 12, accessReads: 8, admissionReads: 8,
+      sessionReads: 4, profileReads: 4, accessReads: 4, admissionReads: 8,
     });
   }
 });
