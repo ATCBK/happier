@@ -1,14 +1,25 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { once } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { authenticateAcpAgent } from './authenticateAcpAgent';
 import { writeAcpTestAgentScript } from './testkit/subprocessHarness';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { isPidAlive } from '@/testkit/process/spawn';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 
 // Genuine OS enumeration boundary; the ACP transport and cleanup owner remain real.
 const enumeration = vi.hoisted(() => ({ denied: false }));
+const launched = vi.hoisted(() => [] as import('node:child_process').ChildProcess[]);
+vi.mock('cross-spawn', async importOriginal => {
+  const actual = await importOriginal<{ default: typeof import('cross-spawn') }>();
+  return { ...actual, default: (...args: Parameters<typeof actual.default>) => {
+    const child = actual.default(...args);
+    launched.push(child);
+    return child;
+  } };
+});
 const realNow = Date.now;
 let samplingClockOffsetMs = 0;
 vi.spyOn(Date, 'now').mockImplementation(() => realNow() + samplingClockOffsetMs);
@@ -26,10 +37,18 @@ vi.mock('@happier-dev/cli-common/process', async (importOriginal) => {
     return await actual.execFileWithDeadline(...args);
   } };
 });
-afterEach(() => {
+afterEach(async () => {
   // Native sampling recovers at its owning minute boundary after an OS failure.
   if (enumeration.denied) samplingClockOffsetMs += 60_000;
   enumeration.denied = false;
+  // Restore OS observation before releasing the exact handles this fixture spawned.
+  await Promise.all(launched.splice(0).map(async child => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = once(child, 'exit');
+    await terminateProcessTree(child);
+    await exited;
+    expect(isPidAlive(child.pid!)).toBe(false);
+  }));
 });
 
 function fixture(dir: string, behavior: 'success' | 'reject' | 'wait' = 'success') {
@@ -90,7 +109,11 @@ describe('ACP login', () => {
           errors: [{ code: -32602 }, { code: 'plugin_exec_termination_incomplete' }],
         });
         expect(existsSync(join(dir, 'settings.json'))).toBe(false);
-        expectProviderStopped(dir);
+        // The canonical terminator refuses every signal without fresh native
+        // identity. Incomplete custody is observable; teardown retries the same
+        // owned handle after the OS enumeration boundary becomes available.
+        expect(isPidAlive(Number(readFileSync(join(dir, 'pid'), 'utf8')))).toBe(true);
+        expect(existsSync(join(dir, 'unexpected-session-operation'))).toBe(false);
       } finally {
         if (previousPath === undefined) delete process.env.PATH;
         else process.env.PATH = previousPath;

@@ -13,14 +13,17 @@ export function buildAcpSpawnSpec(params: {
   args: readonly unknown[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  /** The host Exec owner supplied the complete process tuple. */
+  hostFinalizedLaunch?: true;
+  windowsVerbatimArguments?: boolean;
 }): AcpSpawnSpec {
   const args = (params.args ?? []).map((a) => String(a));
-  const invocation = resolveWindowsCommandInvocation({
+  const invocation = !params.hostFinalizedLaunch ? resolveWindowsCommandInvocation({
     command: params.command,
     args,
     env: params.env,
     resolveCommandOnPath: true,
-  });
+  }) : { command: params.command, args, windowsVerbatimArguments: params.windowsVerbatimArguments };
 
   return {
     command: invocation.command,

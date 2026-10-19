@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { DaemonAgentInstallStartResponseSchema, DaemonAgentInstallReadResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { createAgentInstallJobOwner } from '@/capabilities/installJobs/agentInstallJobOwner';
@@ -81,12 +82,12 @@ if(process.env.UV_FIXTURE_PYTHON==='1') { fs.mkdirSync(process.env.UV_PYTHON_INS
     try {
       expect(await resolveAcpLaunch(params)).toMatchObject({ kind: 'needs_install', installable: { source: { packageManager: 'managed_uv' } } });
       expect(await run('install')).toMatchObject({ outcome: { kind: 'succeeded', version: '1.0' } });
-      const old = await ensureAcpLaunchForSession({ ...params, settings: {}, machineId: 'fixture' });
+      const old = await ensureAcpLaunchForSession({ ...params, settings: accountSettingsParse({}), machineId: 'fixture' });
       expect(old.args).toEqual(['--acp']);
       inUse = true;
       const nextDefinition = AcpBackendDefinitionV1Schema.parse({ ...definition, launch: { ...definition.launch, version: '2.0' } });
-      const next = await ensureAcpLaunchForSession({ ...params, definition: nextDefinition, settings: {}, machineId: 'fixture' });
-      const foreign = await ensureAcpLaunchForSession({ ...params, accountId: 'bob', settings: {}, machineId: 'fixture' });
+      const next = await ensureAcpLaunchForSession({ ...params, definition: nextDefinition, settings: accountSettingsParse({}), machineId: 'fixture' });
+      const foreign = await ensureAcpLaunchForSession({ ...params, accountId: 'bob', settings: accountSettingsParse({}), machineId: 'fixture' });
       expect(new Set([old.command, next.command, foreign.command]).size).toBe(3);
       expect(await resolveAcpLaunch(params)).toMatchObject({ kind: 'ready', command: old.command });
       expect(DaemonAgentInstallStartResponseSchema.parse(owner.start({ agentId: 'custom-acp', definitionId: definition.id,
@@ -100,17 +101,17 @@ if(process.env.UV_FIXTURE_PYTHON==='1') { fs.mkdirSync(process.env.UV_PYTHON_INS
       expect(calls[0].tools).toContain(root);
       expect(calls.some(call => call.args.join(' ') === 'tool uninstall fixture-agent')).toBe(true);
       const failureParams = { ...params, accountId: 'failure-account', env: { ...env, UV_FIXTURE_FAIL: '1' } };
-      await expect(ensureAcpLaunchForSession({ ...failureParams, settings: {}, machineId: 'fixture' })).rejects.toThrow();
+      await expect(ensureAcpLaunchForSession({ ...failureParams, settings: accountSettingsParse({}), machineId: 'fixture' })).rejects.toThrow();
       // A failed external install must remain retryable through the same
       // first-use owner, rather than strand an unreceipted current directory.
-      const recovered = await ensureAcpLaunchForSession({ ...failureParams, env, settings: {}, machineId: 'fixture' });
+      const recovered = await ensureAcpLaunchForSession({ ...failureParams, env, settings: accountSettingsParse({}), machineId: 'fixture' });
       expect(recovered.command).not.toBe(foreign.command);
       const defaultDefinition = AcpBackendDefinitionV1Schema.parse({ ...definition, launch: { ...definition.launch, package: 'Fixture_Agent', command: undefined } });
       const defaultLaunch = await ensureAcpLaunchForSession({ ...params, accountId: 'default-command', definition: defaultDefinition,
-        env: { ...env, UV_FIXTURE_MULTI: '1' }, settings: {}, machineId: 'fixture' });
+        env: { ...env, UV_FIXTURE_MULTI: '1' }, settings: accountSettingsParse({}), machineId: 'fixture' });
       expect(defaultLaunch.command).toBe(join(dirname(defaultLaunch.command), 'fixture-agent'));
       const pythonLaunch = await ensureAcpLaunchForSession({ ...params, accountId: 'python-ownership',
-        env: { ...env, UV_FIXTURE_PYTHON: '1' }, settings: {}, machineId: 'fixture' });
+        env: { ...env, UV_FIXTURE_PYTHON: '1' }, settings: accountSettingsParse({}), machineId: 'fixture' });
       // Removing the shared bootstrap/cache must not strand a retained Agent's
       // interpreter. Its runtime belongs to the same guarded version root.
       await rm(join(root, 'tools', 'uv'), { recursive: true, force: true });

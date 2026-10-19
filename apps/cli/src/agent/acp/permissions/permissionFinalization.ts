@@ -1,10 +1,12 @@
+import type { AcpPermissionHandler } from './acpPermissionHandler';
+
 export async function abortPendingAcpPermissionRequests(
-  permissionHandler: Readonly<{ abortPendingRequestsAndFlush?: (reason: string) => Promise<void> }> | null | undefined,
+  permissionHandler: Pick<AcpPermissionHandler, 'abortPendingRequestsAndFlush'> | null | undefined,
   reason: string,
   onError?: (error: unknown) => void,
 ): Promise<void> {
   try {
-    await permissionHandler?.abortPendingRequestsAndFlush?.(reason);
+    await permissionHandler?.abortPendingRequestsAndFlush?.(reason, { preserveQuestions: true });
   } catch (error) {
     onError?.(error);
   }

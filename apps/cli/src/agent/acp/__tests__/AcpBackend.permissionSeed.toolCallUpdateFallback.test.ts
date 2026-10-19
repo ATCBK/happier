@@ -272,7 +272,7 @@ describe('AcpBackend permission seed + tool_call_update fallback', () => {
         });
         backendForCleanup = backend;
 
-        const toolResults: Array<{ toolName: string; result: unknown }> = [];
+        const toolResults: Array<{ toolName?: string; result: unknown }> = [];
         backend.onMessage((msg) => {
           if (msg.type !== 'tool-result') return;
           toolResults.push({ toolName: msg.toolName, result: msg.result });
@@ -322,7 +322,7 @@ describe('AcpBackend permission seed + tool_call_update fallback', () => {
         backendForCleanup = backend;
 
         const toolCalls: Array<{ toolName: string; args: unknown }> = [];
-        const toolResults: Array<{ toolName: string; result: unknown }> = [];
+        const toolResults: Array<{ toolName?: string; result: unknown }> = [];
         backend.onMessage((msg) => {
           if (msg.type === 'tool-call') {
             toolCalls.push({ toolName: msg.toolName, args: msg.args });

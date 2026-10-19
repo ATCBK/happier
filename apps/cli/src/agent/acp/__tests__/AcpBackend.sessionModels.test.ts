@@ -12,7 +12,7 @@ import { COPILOT_ACP_RUNTIME_DEFINITION } from '@happier-dev/plugins-copilot/age
 import type { AgentAcpRuntimeDefinition } from '@happier-dev/plugin-sdk/agents/runtime';
 import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime';
 
-function writeFakeAcpAgentScript(params: { dir: string; emptyModelChoices?: boolean; modelConfigEffort?: boolean; wrongConfigModel?: boolean; groupedModelChoices?: boolean }): string {
+function writeFakeAcpAgentScript(params: { dir: string; emptyModelChoices?: boolean; modelConfigEffort?: boolean; wrongConfigModel?: boolean; groupedModelChoices?: boolean; emptySetModelResponse?: boolean }): string {
   const src = `
     const decoder = new TextDecoder();
     let buf = '';
@@ -60,7 +60,7 @@ function writeFakeAcpAgentScript(params: { dir: string; emptyModelChoices?: bool
               currentModelId: 'model-a',
               availableModels: [
                 {
-                  id: 'model-a',
+                  modelId: 'model-a',
                   name: 'Model A',
                   description: 'Fast',
                   modelOptions: [
@@ -86,7 +86,7 @@ function writeFakeAcpAgentScript(params: { dir: string; emptyModelChoices?: bool
                     },
                   ],
                 },
-                { id: 'model-b', name: 'Model B', description: 'Accurate' },
+                { modelId: 'model-b', name: 'Model B', description: 'Accurate' },
               ],
             },
           });
@@ -112,6 +112,11 @@ function writeFakeAcpAgentScript(params: { dir: string; emptyModelChoices?: bool
                 ],
               },
             });
+            continue;
+          }
+          if (${params.emptySetModelResponse === true}) {
+            currentModelId = params.modelId;
+            ok(id, {});
             continue;
           }
           if (params && params._meta && params._meta.reasoningEffort) {
@@ -162,6 +167,17 @@ function writeFakeAcpAgentScript(params: { dir: string; emptyModelChoices?: bool
             result.configOptions[0].options = [{ group: 'available', name: 'Available', options: result.configOptions[0].options }];
           }
           ok(id, result);
+          continue;
+        }
+
+        if (method === 'session/prompt') {
+          send({
+            jsonrpc: '2.0', method: 'session/update', params: {
+              sessionId: params.sessionId,
+              update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: currentModelId } },
+            },
+          });
+          ok(id, { stopReason: 'end_turn' });
           continue;
         }
 
@@ -452,7 +468,38 @@ describe('AcpBackend session models', () => {
     });
   });
 
-  it('does not report model application success without provider-returned model state', async () => {
+  it('accepts an empty legacy set-model acknowledgement and retains the observed catalog', async () => {
+    await withTempDir('happier-acp-model-empty-ack-', async (dir) => {
+      // ACP v0.10.8 SetSessionModelResponse has only optional _meta. Registry
+      // adapter 2.2.2 returns {} after applying the requested model and effort.
+      const backend = new AcpBackend({
+        agentName: 'test', cwd: dir, command: process.execPath,
+        args: [writeFakeAcpAgentScript({ dir, emptySetModelResponse: true })],
+      });
+      const events: AgentMessage[] = [];
+      backend.onMessage((message) => events.push(message));
+      try {
+        const { sessionId } = await backend.startSession();
+        const availableModels = backend.getSessionModelState()?.availableModels;
+
+        await backend.setSessionModel(sessionId, 'model-b');
+        expect(backend.getSessionModelState()).toEqual({ currentModelId: 'model-b', availableModels });
+        expect(events).toContainEqual({
+          type: 'event', name: 'current_model_update', payload: { currentModelId: 'model-b' },
+        });
+        await backend.sendPrompt(sessionId, 'Report the current model');
+        await backend.waitForResponseComplete();
+        expect(events).toContainEqual(expect.objectContaining({ type: 'model-output', textDelta: 'model-b' }));
+
+        await backend.setSessionModel(sessionId, 'model-a');
+        expect(backend.getSessionModelState()).toEqual({ currentModelId: 'model-a', availableModels });
+      } finally {
+        await backend.dispose();
+      }
+    });
+  });
+
+  it('does not invent a catalog entry for an unadvertised model on an empty acknowledgement', async () => {
     await withTempDir('happier-acp-model-no-state-', async (dir) => {
       const backend = new AcpBackend({
         agentName: 'test',

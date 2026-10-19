@@ -27,7 +27,7 @@ export type AcpPermissionCallContext = Readonly<{
     permissionMode: string;
     readContext: () => import('@/mcp/runtime/resolveMcpToolIdentity').McpToolPolicyContext | null;
   }>;
-  origin?: 'host_acp_fs_write';
+  origin?: 'host_acp_fs_write' | 'host_occurrence_question';
   /** Request lifetime is independent of the causal turn's permission authority. */
   lifetime?: 'turn' | 'occurrence';
   /**
@@ -41,6 +41,8 @@ export type AcpPermissionCallContext = Readonly<{
    * must fail closed rather than inherit mutable Session mode.
    */
   causalPermissionAuthority?: AcpPermissionCausalAuthority | null;
+  /** Host-private current caller mode; the original admitted ceiling remains immutable. */
+  callerPermissionMode?: string | null;
 }>;
 
 /**
@@ -96,7 +98,7 @@ export interface AcpPermissionHandler {
    * projection before returning. Execution-run wrappers use this instead of
    * the session-wide abort below so retiring one child cannot affect siblings.
    */
-  abortPendingRequestAndFlush?(requestId: string, reason: string): Promise<void>;
+  abortPendingRequestAndFlush?(requestId: string, reason: string, options?: Readonly<{ preserveQuestions?: boolean }>): Promise<void>;
 
-  abortPendingRequestsAndFlush?(reason: string): Promise<void>;
+  abortPendingRequestsAndFlush?(reason: string, options?: Readonly<{ preserveQuestions?: boolean }>): Promise<void>;
 }

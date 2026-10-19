@@ -3,13 +3,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile, lstat } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PluginAgentContributionV2Schema, PluginManifestV2Schema, type PluginAgentAcpSkillsSessionDeliveryV2 } from '@happier-dev/protocol';
-import type { AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionRuntimeContext, AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createAgentLaunchObserver, createPluginTestkit, runAgentSkillDeliveryContract, type AgentLaunchObserverBoundaries } from '@happier-dev/plugin-sdk/testing';
+import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
 import { COPILOT_PLUGIN } from '@happier-dev/plugins-copilot/manifest';
 
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
+import { createAcpSessionRuntimeContextFixture } from '@/agent/acp/testkit/runtimeContextFixture';
 import { normalizePluginDeclarativeAcpRuntime } from '@/agent/acp/runtime/definition/plugin';
 import { readBundledPluginManifest } from '@/plugins/projection/registry/builtIn/locators';
 import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '@/plugins/projection/registry/sources/generatedBundledPluginManifests';
@@ -29,23 +31,25 @@ const knobs: readonly PluginAgentAcpSkillsSessionDeliveryV2[] = [
   { kind: 'native_config_skills_dir', subdirectory: 'skills' },
 ];
 function declaredAgent(knob: PluginAgentAcpSkillsSessionDeliveryV2) {
-  return PluginAgentContributionV2Schema.parse({
-    id: `fixture-${knob.kind}`, title: 'ACP skills fixture', primary: 'sessions',
+  const agent = PluginAgentContributionV2Schema.parse({
+    id: `fixture-${knob.kind.replaceAll('_', '-')}`, title: 'ACP skills fixture', primary: 'sessions',
     capabilities: { sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true },
       skills: { delivery: 'session_dir', nativeDisable: knob.kind === 'defaults_file_env' ? 'supported' : 'unsupported', liveReload: 'unsupported' } },
     runtime: { kind: 'acp', transport: { kind: 'stdio', executable: { kind: 'systemTool', id: 'fixture' } },
       definition: { skills: { sessionDelivery: knob },
         mcp: knob.kind === 'native_config_skills_dir' ? { policy: 'drop', nativeSessionConfig: nativeConfig } : { policy: 'pass_through' } } },
   });
+  if (!('runtime' in agent) || agent.runtime.kind !== 'acp') throw new Error('Expected an ACP fixture');
+  return agent;
 }
-const CaptureSchema = z.object({ argv: z.array(z.string()), env: z.record(z.string(), z.string()), sessionNew: z.unknown() }).strict();
+const CaptureSchema = z.strictObject({ pid: z.number(), argv: z.array(z.string()), env: z.record(z.string(), z.string()), sessionNew: z.unknown() });
 function fixture(dir: string, launchEnv: Readonly<Record<string, string>>, signal = new AbortController().signal, scenario = 'normal') {
   const capture = join(dir, 'launch.json');
   const script = writeAcpTestAgentScript({ dir, fileName: 'agent.mjs', source: `
     import { createInterface } from 'node:readline';
     import { writeFileSync } from 'node:fs';
     const keys = ['HOME','XDG_CONFIG_HOME','APPDATA','COPILOT_SKILLS_DIRS','CODEBUDDY_PLUGIN_DIRS','QWEN_CODE_SYSTEM_DEFAULTS_PATH'];
-    const record = sessionNew => writeFileSync(process.env.CAPTURE, JSON.stringify({ argv: process.argv.slice(2),
+    const record = sessionNew => writeFileSync(process.env.CAPTURE, JSON.stringify({ pid: process.pid, argv: process.argv.slice(2),
       env: Object.fromEntries(keys.filter(key => typeof process.env[key] === 'string').map(key => [key,process.env[key]])), sessionNew }));
     for await (const line of createInterface({ input: process.stdin })) {
       const r = JSON.parse(line); if (r.id === undefined) continue;
@@ -91,6 +95,23 @@ function options(knob: PluginAgentAcpSkillsSessionDeliveryV2) {
 }
 
 describe('declarative ACP skills delivery through the production composer', () => {
+  it('honors skills refresh cancellation through the SDK options argument', async () => {
+    await withTempDir('happier-acp-skill-refresh-cancel-', async dir => {
+      const skills = await skillFixture(dir);
+      const f = fixture(dir, { HOME: dir });
+      const runtime = await createPublicAcpSession({ kind: 'create', sessionId: 'session', cwd: dir, skills }, options(knobs[0]!), f.dependencies);
+      try {
+        if (!runtime.refreshSkills) throw new Error('Expected the Session skills refresh boundary');
+        const controller = new AbortController();
+        const reason = new Error('Skills refresh cancelled');
+        controller.abort(reason);
+        await expect(runtime.refreshSkills({ skills }, { signal: controller.signal })).rejects.toBe(reason);
+        await expect(runtime.refreshSkills({ skills })).resolves.toEqual({
+          kind: 'restart_required', reason: 'launch_path_unsupported',
+        });
+      } finally { await runtime.dispose(); }
+    });
+  });
   it.each(knobs.filter(knob => knob.kind === 'env_path_list'))('appends $envKey with its declared separator without changing native HOME', async knob => {
     if (knob.kind !== 'env_path_list') throw new Error('Expected a path list');
     await withTempDir('happier-acp-skill-list-', async dir => {
@@ -171,8 +192,12 @@ describe('declarative ACP skills delivery through the production composer', () =
         controller.abort();
       }
       expect(await failed).toBeInstanceOf(Error);
+      const captured = f.observe();
+      // The same owner that retires private launch files must observe this
+      // exact native child gone; an aborted open alone is not cleanup proof.
+      expect(() => process.kill(captured.pid, 0)).toThrow();
       const envKey = knob.kind === 'defaults_file_env' ? knob.envKey : process.platform === 'win32' ? 'APPDATA' : 'XDG_CONFIG_HOME';
-      const overlay = f.observe().env[envKey];
+      const overlay = captured.env[envKey];
       expect(overlay).toBeTruthy();
       expect(existsSync(overlay!)).toBe(false);
     });
@@ -260,26 +285,44 @@ for (const agentId of ['copilot', 'qwen', 'codebuddy', 'devin']) {
   afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
   it(`keeps the lazy ${agentId} declaration on the index path until its vendor probe passes`, () => {
     expect('skills' in agent.capabilities ? agent.capabilities.skills?.delivery : undefined).toBe('none');
-    if (agent.runtime.kind === 'acp') expect(agent.runtime.definition?.skills).toBeUndefined();
+    if ('runtime' in agent && agent.runtime.kind === 'acp') expect(agent.runtime.definition?.skills).toBeUndefined();
   });
   runAgentSkillDeliveryContract({ agent, async openSession(request) {
     const boundaries = observer.boundaries as AgentLaunchObserverBoundaries; boundaries.reset();
     const f = fixture(dir, { HOME: join(dir, 'native-home') });
     let runtime: AgentSessionRuntime;
-    if (agent.runtime.kind === 'acp') {
+    if ('runtime' in agent && agent.runtime.kind === 'acp') {
       runtime = await createPublicAcpSession(request, normalizePluginDeclarativeAcpRuntime(agent.runtime), f.dependencies);
     } else {
-      const host = await createPluginTestkit({ manifest, module: { activate: COPILOT_PLUGIN.activate } });
+      const parsed = parsePluginManifest(manifest);
+      if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
+      const host = await createPluginTestkit({ manifest: parsed.manifest, module: { activate: COPILOT_PLUGIN.activate } });
       const factory = host.registration('agents', agentId)?.factory;
       if (!factory) throw new Error('Expected the registered native ACP factory');
       const native = await factory({ plugin: { id: manifest.id, version: manifest.version }, agent: { id: agentId }, signal: f.dependencies.signal });
       if (!native.sessions) throw new Error('Expected a Session factory');
-      runtime = await native.sessions.open({ ...request, configuration: {
-        mode: { value: null, updatedAtMs: 1 }, model: { value: null, updatedAtMs: 1 },
-        permissionIntent: { value: 'default', updatedAtMs: 1 }, options: {},
-      } }, { protocols: { acp: { open: (r, o) => createPublicAcpSession(r, o, f.dependencies) } } } as AgentSessionRuntimeContext);
+      const contextFixture = createAcpSessionRuntimeContextFixture({ agent, pluginId: manifest.id,
+        pluginVersion: manifest.version, sessionId: request.sessionId, directory: request.cwd, signal: f.dependencies.signal,
+        protocols: { acp: {
+          open: (r, o) => createPublicAcpSession(r, o, f.dependencies),
+          openExecutionRunV1: (r, o) => createPublicAcpExecutionRun(r, o, f.dependencies),
+        } },
+      });
+      try {
+        runtime = await native.sessions.open({ ...request, configuration: {
+          mode: { value: null, updatedAtMs: 1 }, model: { value: null, updatedAtMs: 1 },
+          permissionIntent: { value: 'default', updatedAtMs: 1 }, options: {},
+        } }, contextFixture.context);
+      } catch (error) {
+        try { await contextFixture.dispose(); } finally { await host.dispose(); }
+        throw error;
+      }
       const session = runtime;
-      runtime = { ...session, async dispose() { try { await session.dispose(); } finally { await host.dispose(); } } };
+      runtime = { ...session, async dispose() {
+        try { await session.dispose(); } finally {
+          try { await contextFixture.dispose(); } finally { await host.dispose(); }
+        }
+      } };
     }
     const actual = f.observe(); boundaries.recordLaunch(actual); boundaries.recordAcpSessionNew(actual.sessionNew);
     return runtime;

@@ -68,4 +68,14 @@ describe('buildAcpSpawnSpec', () => {
     // We handle child-process cleanup inside the CLI with a process-tree kill strategy.
     expect(spec.options.detached).not.toBe(true);
   });
+
+  it('preserves an already finalized Windows invocation without resolving it again', () => {
+    if (!originalPlatformDescriptor) throw new Error('Expected a configurable platform');
+    Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
+    const args = ['/d', '/s', '/c', '""C:\\Agent Folder\\agent.cmd" "argument value""'];
+    const spec = buildAcpSpawnSpec({ command: 'C:\\Windows\\System32\\cmd.exe', args,
+      hostFinalizedLaunch: true, windowsVerbatimArguments: true });
+    expect(spec.args).toEqual(args);
+    expect(spec.options.windowsVerbatimArguments).toBe(true);
+  });
 });

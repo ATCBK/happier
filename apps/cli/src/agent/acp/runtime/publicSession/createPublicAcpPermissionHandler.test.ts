@@ -9,6 +9,7 @@ import type {
   HostSessionInteractionRequest as PluginSessionInteractionRequest,
   HostSessionInteractionResult as PluginSessionInteractionResult,
 } from '@/agent/runtime/state/currentSessionUiTypes';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 
 import { createPublicAcpPermissionHandler } from './createPublicAcpPermissionHandler';
@@ -65,10 +66,9 @@ describe('createPublicAcpPermissionHandler', () => {
         import('@/agent/permissions/providerEnforced/handler'),
         import('@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions'),
       ]);
-      const hostPermissionHandler = new ProviderEnforcedPermissionHandler(
-        new FakePermissionSession() as unknown as ApiSessionClient,
-        { logPrefix: '[PublicAcpPermissionTest]' },
-      );
+      const session = createMutableApiSessionClientFixture({ sessionId: 'public-acp-permission-test' });
+      const lifetime = new AbortController();
+      const hostPermissionHandler = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[PublicAcpPermissionTest]' });
       hostPermissionHandler.setPermissionMode(permissionMode);
       const currentSession = createNativeAgentCurrentSessionUiServices({
         permissionHandler: hostPermissionHandler,
@@ -79,21 +79,27 @@ describe('createPublicAcpPermissionHandler', () => {
         occurrenceId: 'occurrence-1',
         interactionDeadlineMs: 1_000,
         isCurrent: () => true,
-        signal: new AbortController().signal,
+        signal: lifetime.signal,
       });
       const handler = createPublicAcpPermissionHandler({
         interactions: currentSession.interactions,
-        signal: new AbortController().signal,
+        signal: lifetime.signal,
         resolveRequestId: (toolCallId) => `turn-1:${toolCallId}`,
       });
 
-      for (const toolName of ['writeTextFile', 'write_file', 'rename', 'delete', 'mkdir']) {
-        await expect(handler.handleToolCall(
-          `host-fs-write:${toolName}`,
-          toolName,
-          { path: '/workspace/forbidden.txt', bytes: 9 },
-          { origin: 'host_acp_fs_write' },
-        )).resolves.toEqual({ decision: 'denied' });
+      try {
+        for (const toolName of ['writeTextFile', 'write_file', 'rename', 'delete', 'mkdir']) {
+          await expect(handler.handleToolCall(
+            `host-fs-write:${toolName}`,
+            toolName,
+            { path: '/workspace/forbidden.txt', bytes: 9 },
+            { origin: 'host_acp_fs_write' },
+          )).resolves.toEqual({ decision: 'denied' });
+        }
+      } finally {
+        lifetime.abort();
+        await hostPermissionHandler.reset();
+        await session.close();
       }
     },
   );
@@ -401,7 +407,7 @@ describe('createPublicAcpPermissionHandler', () => {
     }
   });
 
-  it('withdraws only the cancelled elicitation and still accepts the next request', async () => {
+  it('retains a cancelled elicitation until explicit Stop and still accepts the next request', async () => {
     const fixture = await elicitationFixture();
     try {
       const controller = new AbortController();
@@ -413,7 +419,11 @@ describe('createPublicAcpPermissionHandler', () => {
       const request = await fixture.publishedRequest();
       controller.abort();
       await expect(pending).resolves.toEqual({ action: 'cancel' });
+      expect(fixture.session.agentState.requests[request.id]).toMatchObject({ tool: 'AskUserQuestion', kind: 'user_action' });
+      await fixture.permissionHandler.abortPendingRequestsAndFlush('Explicit person Stop');
       expect(fixture.session.agentState.requests[request.id]).toBeUndefined();
+      expect(fixture.session.agentState.completedRequests[request.id])
+        .toMatchObject({ status: 'canceled', reason: 'Explicit person Stop' });
       const next = fixture.handler.handleElicitation!(input);
       const nextRequest = await fixture.publishedRequest();
       await fixture.answer(nextRequest.id, true, { value: ['still active'] });

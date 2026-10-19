@@ -11,7 +11,7 @@ import { refreshActiveAcpCatalog, refreshDemandedActiveAcpCatalog } from './hydr
 import * as hydration from './hydrateAcpCatalog';
 import * as persistence from '@/persistence';
 import { createCliAcpCatalogStore } from './acpCatalogStore';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { SharedSavedSecretPromoteInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { PROFILE_ROWS_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileRecordV1';
@@ -43,6 +43,27 @@ function predecessorDefinitions(command: string) {
 const currentness = { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 };
 
 describe('ACP Account catalog hydration', () => {
+  it.each([
+    { status: 500, body: { error: 'internal' }, code: 'outcome_unknown' },
+    { status: 503, body: { error: 'unavailable' }, code: 'outcome_unknown' },
+    { status: 503, body: { error: 'database_transaction_conflict_exhausted', statusCode: 503 }, code: 'database_transaction_conflict_exhausted' },
+  ])('preserves the ACP mutation disposition for HTTP $status / $code', async ({ status, body, code }) => {
+    const credentials = account();
+    vi.spyOn(axios, 'get').mockImplementation(async input => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: currentness };
+      if (path === '/v1/account/entity-rows/acp') return { status: 200, data: { status: 'present', revision: 4,
+        content: { t: 'plain', v: record('before') } } };
+      throw new Error(`Unexpected ACP mutation observation: ${path}`);
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async (input, mutation) => {
+      expect(new URL(String(input)).pathname).toBe('/v1/account/entity-rows/acp');
+      expect(AcpCatalogRowMutationV1Schema.parse(mutation)).toMatchObject({ expectedRevision: 4 });
+      return { status, data: body };
+    });
+    await expect(createCliAcpCatalogStore({ credentials }).updateCatalog(() => ({ v: 2, backends: record('after').definitions })))
+      .rejects.toMatchObject({ code });
+  });
   it('sweeps only the installed daemon Account at startup and demanded reconnect hydration', async () => {
     const credentials = account();
     const successfulHydrations: string[] = [];
@@ -151,7 +172,7 @@ describe('ACP Account catalog hydration', () => {
           expect(mutation).toMatchObject({ expectedRevision: 'absent', source: 'predecessor', sourceSettingsVersion: settingsVersion,
             settingsCleanup: { expectedSettingsVersion: settingsVersion, nextSettings: { t: 'plain', v: { themePreference: 'dark', secrets: [] } } },
             content: { v: { definitions: [{ launch: { command: sourceChangedBeforeImport ? 'foreign-source-edit' : 'original-personal-source' } }] } } });
-          if (mutation.settingsCleanup?.nextSettings.t !== 'plain') throw new Error('Expected atomic source cleanup');
+          if (mutation.settingsCleanup?.nextSettings?.t !== 'plain') throw new Error('Expected atomic source cleanup');
           raw = mutation.settingsCleanup.nextSettings.v;
           settingsVersion += 1;
           events.push('transfer');
@@ -268,9 +289,11 @@ describe('ACP Account catalog hydration', () => {
     });
     vi.spyOn(axios, 'post').mockImplementation(async (input, body) => {
       expect(new URL(String(input)).pathname).toBe('/v1/account/entity-rows/acp');
-      expect(body.expectedRevision).toBe(4);
-      expect(body).not.toHaveProperty('sourceSettingsVersion');
-      currentRecord = body.content.v;
+      const mutation = AcpCatalogRowMutationV1Schema.parse(body);
+      expect(mutation.expectedRevision).toBe(4);
+      expect(mutation).not.toHaveProperty('sourceSettingsVersion');
+      if (mutation.content.t !== 'plain') throw new Error('Expected Plain ACP destination');
+      currentRecord = mutation.content.v;
       revision = 5;
       return { status: 200, data: { status: 'updated', revision, cursor: 12 } };
     });

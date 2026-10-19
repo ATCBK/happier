@@ -5,47 +5,36 @@ import { join } from 'node:path';
 
 import { buildInitializeRequest, createAcpClientFsMethods } from '../AcpBackend';
 import type { AcpPermissionHandler } from '../permissions/acpPermissionHandler';
-import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { createMutableApiSessionClientFixture, type MutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { accountSettingsParse } from '@happier-dev/protocol';
+import { clearActiveAccountSettingsSnapshot, commitActivePromptLibraryCatalog, getActiveAccountSettingsSnapshotLifetimeToken,
+  setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 
 const envScope = createEnvKeyScope(['HAPPIER_ACP_FS']);
 
-class FakeRpcHandlerManager {
-  handlers = new Map<string, (payload: unknown) => unknown>();
-
-  registerHandler(name: string, handler: (payload: unknown) => unknown) {
-    this.handlers.set(name, handler);
-  }
-}
-
-class FakePermissionSession {
-  sessionId = 'acp-fs-permission-test';
-  rpcHandlerManager = new FakeRpcHandlerManager();
-  agentState: {
-    requests: Record<string, unknown>;
-    completedRequests: Record<string, unknown>;
-  } = { requests: {}, completedRequests: {} };
-
-  getAgentStateSnapshot() {
-    return this.agentState;
-  }
-
-  updateAgentState(updater: (current: typeof this.agentState) => typeof this.agentState) {
-    this.agentState = updater(this.agentState);
-    return this.agentState;
-  }
-
-  getMetadataSnapshot() {
-    return null;
-  }
+const sessions: MutableApiSessionClientFixture[] = [];
+function createPermissionSession() {
+  const scopeKey = resolveAccountSettingsScopeKey({ token: 'acp-fs-account', encryption: null });
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}),
+    settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey });
+  commitActivePromptLibraryCatalog({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+    catalog: { status: 'ready', rows: [{ revision: 1,
+      record: { key: 'role-overrides', value: { v: 1, overrides: {} } } }], tombstones: [], diagnostics: [] } });
+  const session = createMutableApiSessionClientFixture({ sessionId: 'acp-fs-permission-test' });
+  sessions.push(session);
+  return { session };
 }
 
 describe('AcpBackend ACP FS capability experiment', () => {
-  afterEach(() => {
+  afterEach(async () => {
     envScope.restore();
     vi.restoreAllMocks();
+    await Promise.all(sessions.splice(0).map(session => session.close()));
+    clearActiveAccountSettingsSnapshot();
   });
 
   it('exposes buildInitializeRequest to allow ACP capabilities to be unit-tested', () => {
@@ -109,9 +98,9 @@ describe('AcpBackend ACP FS capability experiment', () => {
       for (const permissionMode of ['read-only', 'plan'] as const) {
         const targetPath = join(workspace, `${permissionMode}-must-not-exist.txt`);
         const toolCallId = `safe-looking-think-${permissionMode}`;
-        const session = new FakePermissionSession();
+        const { session } = createPermissionSession();
         const permissionHandler = new ProviderEnforcedPermissionHandler(
-          session as unknown as ApiSessionClient,
+          session,
           { logPrefix: '[AcpFsLowPrivilegeTest]' },
         );
         permissionHandler.setPermissionMode(permissionMode);
@@ -129,7 +118,7 @@ describe('AcpBackend ACP FS capability experiment', () => {
           }),
         ).rejects.toThrow(/denied/i);
         expect(existsSync(targetPath)).toBe(false);
-        expect(session.agentState.completedRequests[toolCallId]).toMatchObject({
+        expect(session.getAgentStateSnapshot()?.completedRequests?.[toolCallId]).toMatchObject({
           tool: 'writeTextFile',
           status: 'denied',
           decision: 'denied',
@@ -155,10 +144,12 @@ describe('AcpBackend ACP FS capability experiment', () => {
       });
 
       const targetPath = join(workspace, 'mode-transition-must-not-exist.txt');
+      const { session } = createPermissionSession();
       const permissionHandler = new ProviderEnforcedPermissionHandler(
-        new FakePermissionSession() as unknown as ApiSessionClient,
+        session,
         { logPrefix: '[AcpFsModeTransitionTest]' },
       );
+      permissionHandler.setPermissionMode('yolo');
       const clientFs = createAcpClientFsMethods({
         cwd: workspace,
         permissionHandler,
@@ -183,8 +174,9 @@ describe('AcpBackend ACP FS capability experiment', () => {
       const readablePath = join(workspace, 'readable.txt');
       writeFileSync(readablePath, 'readable in every mode', 'utf8');
 
+      const readOnlySession = createPermissionSession();
       const readOnlyHandler = new ProviderEnforcedPermissionHandler(
-        new FakePermissionSession() as unknown as ApiSessionClient,
+        readOnlySession.session,
         { logPrefix: '[AcpFsReadOnlyTest]' },
       );
       readOnlyHandler.setPermissionMode('read-only');
@@ -203,8 +195,9 @@ describe('AcpBackend ACP FS capability experiment', () => {
         'yolo',
         'bypassPermissions',
       ] as const) {
+        const { session } = createPermissionSession();
         const handler = new ProviderEnforcedPermissionHandler(
-          new FakePermissionSession() as unknown as ApiSessionClient,
+          session,
           { logPrefix: `[AcpFs${permissionMode}Test]` },
         );
         handler.setPermissionMode(permissionMode);
@@ -213,13 +206,14 @@ describe('AcpBackend ACP FS capability experiment', () => {
           permissionHandler: handler,
         });
         const fileName = `${permissionMode}-write.txt`;
-        await expect(
-          clientFs.writeTextFile!({
+        const requestId = `write-${permissionMode}`;
+        const write = clientFs.writeTextFile!({
             sessionId: 's',
             path: fileName,
             content: `${permissionMode} write`,
-          }),
-        ).resolves.toEqual({});
+            _meta: { toolCallId: requestId },
+          });
+        await expect(write).resolves.toEqual({});
         expect(readFileSync(join(workspace, fileName), 'utf8')).toBe(`${permissionMode} write`);
       }
     });

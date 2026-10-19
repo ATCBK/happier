@@ -118,7 +118,7 @@ describe('AcpBackend tool_call_update kind inference', () => {
         });
         backendForCleanup = backend;
 
-        const toolResults: Array<{ toolName: string; result: unknown }> = [];
+        const toolResults: Array<{ toolName?: string; result: unknown }> = [];
         backend.onMessage((msg) => {
           if (msg.type !== 'tool-result') return;
           toolResults.push({ toolName: msg.toolName, result: msg.result });

@@ -1,3 +1,4 @@
+import { $ZodError } from 'zod/v4/core';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -38,7 +39,7 @@ export async function refreshDaemonAcpCatalog(input: Readonly<{ credentials: Sto
 function failure(error: unknown, signal?: AbortSignal): AcpCatalogSnapshotV1 {
   const reason = error instanceof Error && 'reason' in error && typeof error.reason === 'string' ? error.reason
     : error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code
-      : error instanceof Error && error.name === 'ZodError' ? 'invalid-stored-content' : 'unreachable';
+      : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable';
   return { status: 'unavailable', reason: signal?.aborted ? 'cancelled'
     : reason === 'account_storage_currentness_unavailable' || reason === 'account_encryption_currentness_unavailable'
       ? 'encryption-material-unavailable' : reason };

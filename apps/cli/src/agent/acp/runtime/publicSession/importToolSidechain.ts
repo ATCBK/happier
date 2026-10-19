@@ -1,4 +1,4 @@
-import { isGenericSubAgentToolName } from '@happier-dev/protocol';
+import { isGenericSubAgentToolName } from '@happier-dev/protocol/tools/v2/subAgentFamilies';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 
 import type { AcpBackend } from '@/agent/acp/AcpBackend';
