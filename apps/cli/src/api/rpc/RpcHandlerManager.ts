@@ -535,12 +535,15 @@ export class RpcHandlerManager {
             if (!matchesRequest && parsedInputAuthorization.success && requestId) {
                 const binding = parsedInputAuthorization.data.binding;
                 try {
-                    matchesRequest = binding.actionId === 'session.message.send'
+                    matchesRequest = (binding.actionId === 'session.message.send'
+                            && targetMethod === SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND
+                        || binding.actionId === 'session.user_action.answer'
+                            && targetMethod === RPC_METHODS.SESSION_USER_ACTION_ANSWER)
                         && binding.requestId === requestId
                         && binding.machineId === this.localMachineId
                         && binding.target.kind === 'session'
                         && binding.target.sessionId === this.scopePrefix
-                        && request.method === `${this.scopePrefix}:${SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND}`
+                        && request.method === `${this.scopePrefix}:${targetMethod}`
                         && binding.requestEnvelopeDigest === computeExternalActionSocketRpcRequestDigestV1({
                             method: request.method, requestId, params: request.params, target: binding.target,
                         });

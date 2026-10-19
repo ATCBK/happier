@@ -910,12 +910,23 @@ it.each([
   expect(await openRpcResponse(encryptionKey, await rpc.handleRequest(admitted))).toEqual({
     proof, constraints: { models: null, permissionModes: ['read-only'] },
   });
+  const otherMethod = method === SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND
+    ? RPC_METHODS.SESSION_USER_ACTION_ANSWER : SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND;
+  const otherActionId = actionId === 'session.message.send' ? 'session.user_action.answer' : 'session.message.send';
+  rpc.registerHandler(otherMethod, effect);
+  const changedMethod = { ...request, method: `session-a:${otherMethod}`,
+    params: await sealRpcRequest(encryptionKey, `session-a:${otherMethod}`, input) };
   for (const refused of [
     { ...admitted, params: 'not-valid-ciphertext' },
+    { ...admitted, params: await sealRpcRequest(encryptionKey, request.method, { ...input, changed: true }) },
     { ...admitted, requestId: 'rpc-input-2' },
     { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, target: { kind: 'session' as const, sessionId: 'session-b' } } } },
     { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, machineId: 'machine-b' } } },
     { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, actionId: 'session.goal.set' } } },
+    { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, actionId: otherActionId } } },
+    { ...admitted, ...changedMethod, callerInputAuthorization: { ...proof, binding: { ...proof.binding,
+      requestEnvelopeDigest: computeExternalActionSocketRpcRequestDigestV1({ ...changedMethod, target }),
+    } } },
   ]) {
     expect(await openRpcResponse(encryptionKey, await rpc.handleRequest(refused)))
       .toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
