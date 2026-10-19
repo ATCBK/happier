@@ -104,7 +104,7 @@ export function resolveWorkflowRunUnavailableHomes(input: Readonly<{
             const filter = input.filter;
             const unavailable = filter && input.runs?.some(run => (run
                 ? matchWorkflowRunSessionListFilter(run, serverId, filter, input.viewerAccountId,
-                    input.runUnderSessionId === filter.underSessionId && filter.underSessionId !== undefined)
+                    input.runUnderSessionId === filter.underSessionId && filter.underSessionId !== undefined ? true : undefined)
                 : matchSessionListFilterV1(filter, { serverId, kind: 'run' })) === 'unavailable');
             if (!unavailable) return [];
         }
