@@ -2,7 +2,7 @@ import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierRadioMark } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
 import {
@@ -152,10 +152,7 @@ export const ProjectOpenUseSection = React.memo(function ProjectOpenUseSection(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const presentationTheme = React.useMemo(
-    () => projectPluginUiTheme(theme),
-    [theme],
-  );
+  const presentationTheme = usePluginUiTheme(theme);
   const [editingDestination, setEditingDestination] = React.useState(false);
   if (props.rows.length === 0) return null;
   const choice = props.rows.length > 1;
