@@ -146,7 +146,10 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
         await respond(400, JSON.stringify({ state: 'runtime_unavailable' }), { 'content-type': 'application/json' });
         return null;
     }
-    const origin = new URL(`${input.request.externalProtocol ?? 'http'}://${host}`).origin;
+    // The loader is requested from the document it is injected into, so the tag carries a root-relative
+    // URL and no scheme to derive. The document's own origin is only what the CSP admission compares with:
+    // a per-resource preview origin is https by construction (`resolveLocalServiceHostOrigin`).
+    const origin = new URL(`https://${host}`).origin;
     const loader = new URL(COOPERATIVE_COLLECTOR_LOADER_PATH, origin);
     if (config) {
         loader.searchParams.set('n', config.collector.nonce);
@@ -207,7 +210,7 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
                         const admission = htmlAdmission(html, header(headers, 'content-security-policy'), loader);
                         state = admission.allowed ? 'collector_available' : 'collector_blocked_by_csp';
                         if (admission.allowed) {
-                            const tag = `<script defer src="${loader.href.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></script>`;
+                            const tag = `<script defer src="${(loader.pathname + loader.search).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></script>`;
                             output = Buffer.from(html.slice(0, admission.offset) + tag + html.slice(admission.offset));
                         }
                     }

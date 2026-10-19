@@ -162,6 +162,43 @@ describe("preview native HTTP transport", () => {
         expect((await proxy(fixture)).body.equals(gzipSync(html))).toBe(true);
     });
 
+    it.each(["http", "https"] as const)("injects a scheme-less loader that matches the page's own https origin when the proxy derived %s", async (externalProtocol) => {
+        const fixture = await upstream((_request, response) => {
+            response.setHeader("Content-Type", "text/html");
+            response.setHeader("Content-Security-Policy", "script-src https://preview.example.test");
+            response.end("<html><head></head><body>page</body></html>");
+        });
+        const config = { browserSessionId: "bs", viewId: "v", navigationGeneration: 1,
+            collector: { collectorId: "c", nonce: "pane_nonce", version: "1.0.0" }, webPostMessageTargetOrigin: "https://app.example.test" };
+        let headers: Readonly<Record<string, string | readonly string[]>> = {};
+        const bytes: Uint8Array[] = [];
+        await proxyLocalServicePreviewHttpRequest({ ...fixture,
+            request: { method: "GET", path: "/", search: `?__happierCollector=${encodeURIComponent(JSON.stringify(config))}`,
+                headers: { host: "preview.example.test", "x-forwarded-proto": "https" }, externalProtocol },
+            response: { writeHead(_code, _message, value) { headers = value; }, write(chunk) { bytes.push(chunk); }, end() {}, destroy() {} },
+        });
+        expect(headers["x-happier-collector-state"]).toBe("collector_available");
+        expect(Buffer.concat(bytes).toString()).toContain('src="/__happier/collector-loader.js?');
+    });
+
+    it("forwards the configured public https protocol to the upstream service on the preview HTTP route", async () => {
+        let forwarded: string | undefined;
+        const fixture = await upstream((request, response) => {
+            forwarded = String(request.headers["x-forwarded-proto"]);
+            response.end("ok");
+        });
+        const app = Fastify();
+        app.decorate('authenticate', async () => {});
+        registerLocalServicePreviewRoutes(app as never, { ...fixture, resolvePreview: () => fixture.preview,
+            resolvePreviewByHost: () => fixture.preview, hostOriginBaseDomain: 'example.test', externalProtocol: 'https',
+            validateAccess: () => ({ ok: true }) });
+        try {
+            const response = await app.inject({ method: 'GET', url: '/', headers: { host: 'preview.example.test', cookie: 'happier_preview_token=authorized' } });
+            expect(response.statusCode).toBe(200);
+            expect(forwarded).toBe('https');
+        } finally { await app.close(); }
+    });
+
     it.each([
         { policy: "script-src 'none'", meta: '' },
         { policy: "default-src 'none'", meta: '' },
@@ -219,8 +256,9 @@ describe("preview native HTTP transport", () => {
             if (!script || !('attrs' in script)) throw new Error('cooperative loader missing');
             const src = script.attrs.find((attr) => attr.name === 'src')?.value;
             if (!src) throw new Error('loader src missing');
-            const loaderUrl = new URL(src, 'http://preview.example.test');
-            expect(loaderUrl.origin).toBe('http://preview.example.test');
+            // The loader shares the origin of the document it is injected into, so it carries no scheme of its own.
+            expect(src).toMatch(/^\/__happier\/collector-loader\.js\?/);
+            const loaderUrl = new URL(src, 'https://preview.example.test');
             const loader = await app.inject({ method: 'GET', url: loaderUrl.pathname + loaderUrl.search, headers });
             expect(loader.statusCode).toBe(200);
             expect(loader.headers['content-type']).toContain('javascript');

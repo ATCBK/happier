@@ -20,7 +20,7 @@ import { sendLocalServicePreviewHttpResponse, type LocalServicePreviewHttpReply 
 import { encodeLocalServiceRequestPath } from "@/app/local/services/preview/requestTarget";
 import { scopedLocalServiceViewerTokenCookie } from '@/app/local/services/viewerCookie';
 import { LOCAL_SERVICE_APPLICATION_HTTP_METHODS } from '../hostRoutes';
-import { readLocalServiceRequestHostname } from '@/app/local/services/preview/origin';
+import { readLocalServiceRequestHostname, resolveLocalServiceExternalProtocol } from '@/app/local/services/preview/origin';
 import {
     readLocalServicePublicClientKey,
     resolveLocalServicePublicAccessIdentity,
@@ -260,7 +260,7 @@ function createDownstreamAbortSignal(reply: RouteReply): AbortSignal | undefined
     return controller.signal;
 }
 
-function createPublicHttpRequest(request: RouteRequest, signal?: AbortSignal): LocalServicePreviewHttpRequest {
+function createPublicHttpRequest(request: RouteRequest, configuredExternalProtocol: "http" | "https" | undefined, signal?: AbortSignal): LocalServicePreviewHttpRequest {
     return {
         method: request.method ?? "GET",
         path: readWildcardPath(request),
@@ -276,7 +276,10 @@ function createPublicHttpRequest(request: RouteRequest, signal?: AbortSignal): L
         ),
         body: bodyChunks(request.body),
         signal,
-        externalProtocol: request.protocol === "https" ? "https" : "http",
+        externalProtocol: resolveLocalServiceExternalProtocol({
+            requestIsSecure: request.protocol === "https",
+            configured: configuredExternalProtocol,
+        }),
     };
 }
 
@@ -628,7 +631,7 @@ export async function handleLocalServicePublicHttpRequest(
         try {
             return await proxyHttp({
                 preview: access.preview,
-                request: createPublicHttpRequest(request, signal),
+                request: createPublicHttpRequest(request, options.externalProtocol, signal),
                 response,
                 openTunnel: options.openTunnel,
                 observability: createPublicExposureObservabilityEmitter(options.observability, exposureId),

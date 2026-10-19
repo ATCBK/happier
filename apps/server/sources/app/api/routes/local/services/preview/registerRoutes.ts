@@ -34,7 +34,7 @@ import { sendLocalServicePreviewHttpResponse, type LocalServicePreviewHttpReply 
 import { encodeLocalServiceRequestPath } from "@/app/local/services/preview/requestTarget";
 import { scopedLocalServiceViewerTokenCookie } from '@/app/local/services/viewerCookie';
 import { LOCAL_SERVICE_APPLICATION_HTTP_METHODS, registerLocalServiceHostRoutes } from '../hostRoutes';
-import { readLocalServiceRequestHostname } from '@/app/local/services/preview/origin';
+import { readLocalServiceRequestHostname, resolveLocalServiceExternalProtocol } from '@/app/local/services/preview/origin';
 import type {
     LocalServicePreviewRuntimeRegistrationInput,
     LocalServicePreviewRuntimeRegistrationResult,
@@ -353,6 +353,7 @@ function createDownstreamAbortSignal(reply: RouteReply): AbortSignal | undefined
 function createPreviewHttpRequest(
     request: RouteRequest,
     target: PreviewHttpRouteTarget,
+    configuredExternalProtocol: "http" | "https" | undefined,
     signal?: AbortSignal,
 ): LocalServicePreviewHttpRequest {
     return {
@@ -370,7 +371,10 @@ function createPreviewHttpRequest(
         ),
         body: request.body === undefined ? undefined : bodyChunks(request.body),
         signal,
-        externalProtocol: request.protocol === "https" ? "https" : "http",
+        externalProtocol: resolveLocalServiceExternalProtocol({
+            requestIsSecure: request.protocol === "https",
+            configured: configuredExternalProtocol,
+        }),
     };
 }
 
@@ -505,7 +509,7 @@ export async function handleLocalServicePreviewHttpRequest(
         try {
             return await proxyHttp({
                 preview: target.preview,
-                request: createPreviewHttpRequest(request, target, signal),
+                request: createPreviewHttpRequest(request, target, options.externalProtocol, signal),
                 response,
                 openTunnel: options.openTunnel,
                 observability: options.observability,
@@ -591,7 +595,10 @@ async function handlePreviewWebSocketUpgrade(
                     )),
                 ),
                 rawHeaders: request.rawHeaders ?? [],
-                externalProtocol: request.socket?.encrypted ? "https" : options.externalProtocol ?? "http",
+                externalProtocol: resolveLocalServiceExternalProtocol({
+                    requestIsSecure: request.socket?.encrypted === true,
+                    configured: options.externalProtocol,
+                }),
                 head,
                 signal: registration.signal,
                 client: createLocalServicePreviewUpgradeClient(socket),
