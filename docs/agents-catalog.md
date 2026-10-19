@@ -460,6 +460,14 @@ consume that same environment and include the selected profile identity in their
 In development source, every discovery method validates supplied Connected Account bindings;
 malformed input returns `connected-service-preflight-failed` before credential resolution.
 
+In development source, native execution-run structured-output admission uses that same preflight owner
+with the Run's Connected Account selection and Saved Secret overlay. A retained
+Run probes under its requester Account and plugin occurrence, rather than the
+daemon's foreground credentials. The host-private offered-model request carries
+those selections; an unavailable catalog still supplies no structured-output
+support evidence. A launch profile used only for prompt composition does not
+become an independent environment selection for this probe.
+
 In development source, an Agent's optional `preflightSessionControls.prepareLaunchEnvironment`
 reuses its native account preparation after the host admits the exact selected-account operation.
 It receives only that operation's Connected Accounts service and sanitized launch environment;
