@@ -306,6 +306,14 @@ describe('widget setup fields share the typed-field owners', () => {
         // A source whose value reads the same says it once.
         expect(await render({ kind: 'follows', label: 'Agents', valueLabel: 'Agents' })).toEqual(['Agents']);
     });
+    it('moves a wide field beneath its label in a narrow row and keeps only a switch beside it (FA21 S1)', async () => {
+        const { Item } = await import('@/components/ui/lists/Item');
+        const layoutOf = async (field: WidgetSetupField['field']) => (await renderScreen(<WidgetSetupFieldRow entry={{ field }} row={{ kind: 'needed' }}
+            options={[]} optionsStatus="ready" plainValue={undefined} phone={false} onChange={() => {}} testID="setup.field" />)).findByType(Item).props.accessoryLayout;
+        // A text field is as wide as a select: in a pane column it goes beneath, never squeezing its label.
+        expect(await layoutOf({ path: 'directory', title: 'Directory on the serving machine', widget: 'text', required: true })).toBe('adaptive');
+        expect(await layoutOf({ path: 'hidden', title: 'Include hidden files', widget: 'boolean' })).toBe('inline');
+    });
     it('offers two to four short choices as the shared field segmented control beside its title, not stacked tiles (F4 D-13)', async () => {
         const { HappierSegmentedChoice } = await import('@happier-dev/plugin-ui/presentation');
         const { Item } = await import('@/components/ui/lists/Item');

@@ -263,7 +263,7 @@ export function WidgetSetupStep(props: Readonly<{
     const widthFootprint = (width: 'half' | 'full') => ({ columns: 2, columnSpan: width === 'half' ? 1 : 2, rowSpan: 1 });
     const unavailableWidth = widths?.find(choice => choice.unavailableReason);
     const sizePicker = sizes && draft.size ? <WidgetSizeControl
-        testID={`${props.testID}.size`} showLabel={!pane} surface={sizes.surface} sizes={sizes.sizes}
+        testID={`${props.testID}.size`} showLabel={!pane} flush={!pane} surface={sizes.surface} sizes={sizes.sizes}
         size={draft.size} disabled={busy} onSet={size => { setError(null); setDraft(current => ({ ...current, size })); }} />
         // A saved group offers its width only (lab wgsaved A): the same picker, Half | Full.
         : widths && draft.width ? <View style={styles.widthPicker}>
@@ -324,6 +324,8 @@ export function WidgetSetupStep(props: Readonly<{
             <WidgetPreviewWell
                 testID={`${props.testID}.preview`}
                 caption={t('widgetAdd.preview')}
+                // The card has its own edge; only a fixed-height clip (Edit inputs on a phone) keeps a plate behind it.
+                framed
                 // The Add pane on a phone shows the whole compact card; Edit inputs keeps its fixed room.
                 {...(props.phone ? (pane ? {} : { height: PHONE_PREVIEW_HEIGHT_PX }) : { minHeight: PREVIEW_MIN_HEIGHT_PX })}
             >
@@ -387,9 +389,10 @@ export function WidgetSetupStep(props: Readonly<{
     const aside = preview && sizePicker ? <View style={{ gap: theme.space.s12 }}>{preview}{sizePicker}</View> : preview ?? sizePicker;
     return (
         <WidgetFlowPanel {...panel}>
-            {stacked ? (
+            {/* A copy that asks for nothing is its preview and size alone: no empty inputs column beside or above them. */}
+            {stacked || setup.fields.length === 0 ? (
                 <View style={styles.bodyPhone} onLayout={(event) => setBodyWidth(Math.round(event.nativeEvent.layout.width))}>
-                    {inputs}
+                    {setup.fields.length > 0 ? inputs : null}
                     {aside}
                 </View>
             ) : aside ? (

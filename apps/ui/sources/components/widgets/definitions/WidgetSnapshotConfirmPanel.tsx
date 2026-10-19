@@ -125,7 +125,7 @@ export function WidgetSnapshotConfirmPanel(props: Readonly<{
                 }}
         >
             {opened.preview ? (
-                <WidgetPreviewWell testID={`${props.testID}.preview`}>
+                <WidgetPreviewWell testID={`${props.testID}.preview`} framed>
                     <WidgetFrame
                         testID={`${props.testID}.card`}
                         frameStyle="card"

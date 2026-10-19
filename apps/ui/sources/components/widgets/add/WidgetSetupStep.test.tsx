@@ -43,6 +43,7 @@ const { buildWidgetCandidateSetup } = await import('@/components/widgets/surface
 const { buildWidgetGroupInputsCandidate } = await import('@/components/widgets/group/widgetGroupInputs');
 const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
 const { WidgetSetupStep } = await import('./WidgetSetupStep');
+const { ItemGroup } = await import('@/components/ui/lists/ItemGroup');
 const { WidgetSetupFieldRow } = await import('./WidgetSetupFieldRow');
 const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
 const { WidgetPreviewStage } = await import('@/components/widgets/flow/WidgetPreviewStage');
@@ -327,6 +328,20 @@ describe('WidgetSetupStep discovery', () => {
         await screen.pressByTestIdAsync('size-setup.submit');
         expect(previews.at(-1)).toEqual({ size: 'large', bindings: { filter: { kind: 'value', value: 'open' } } });
         expect(submit).toHaveBeenCalledWith({ size: 'large', bindings: { filter: { kind: 'value', value: 'open' } } });
+    });
+
+    it('draws no empty inputs column for a copy that asks for nothing, only its preview and size', async () => {
+        const bare: WidgetCandidate = { ...candidate, target: 'app', sessionInputPath: undefined, inputs: { fields: [] },
+            sizeDeclaration: { sizes: ['small', 'medium'], defaultSize: 'medium' } };
+        const setup = buildWidgetCandidateSetup({ candidate: bare, scope: { ...scope, owner: { kind: 'home' } },
+            audience: 'personal', context: {}, mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => ({ ok: true }),
+            renderPreview: () => null });
+        const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} onCancel={() => {}} onDone={() => {}} testID="bare-setup" />);
+        // A memo component's rendered element type is its `type`, which React.memo's public type does not declare.
+        const itemGroupType = (ItemGroup as unknown as Readonly<{ type: unknown }>).type;
+        expect(screen.root.findAll(node => node.type === itemGroupType)).toHaveLength(0);
+        expect(screen.findByTestId('bare-setup.size.small')).not.toBeNull();
+        expect(screen.findByTestId('bare-setup.preview')).not.toBeNull();
     });
 
     it('accepts a typed JSON literal without discovery through the public field parser and binder', async () => {

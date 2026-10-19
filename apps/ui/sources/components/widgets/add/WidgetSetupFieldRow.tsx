@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierInputField, HappierPressable, happierPageTextMetrics, resolveHappierActionFieldPresentation, resolveHappierChoiceControl } from '@happier-dev/plugin-ui/presentation';
+import { HappierInputField, HappierPressable, happierPageTextMetrics, resolveHappierActionFieldPresentation } from '@happier-dev/plugin-ui/presentation';
 import { sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { readInputOptionValue } from '@happier-dev/protocol/inputs';
 
@@ -252,7 +252,6 @@ function InputFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>):
     // The shared field decides how a fixed choice is drawn (two to four short ones are a segmented
     // control, anything else one compact choice field); the row only places them: beside the title when
     // there is room, and multi-line text beneath it.
-    const choiceControl = resolveHappierChoiceControl(presentation, options);
     // A value the choices cannot name (a period) is read from the row's own label.
     const valueLabel = row.kind === 'pinned' ? row.label : row.kind === 'follows' ? row.valueLabel ?? undefined : row.kind === 'invalid' ? row.label ?? undefined : undefined;
     const stacked = props.phone || (presentation.kind === 'text' && presentation.multiline);
@@ -281,7 +280,9 @@ function InputFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>):
             subtitleLines={0}
             titleAccessory={titleAccessory}
             showChevron={false}
-            accessoryLayout={stacked ? 'stacked' : choiceControl !== null ? 'adaptive' : 'inline'}
+            // Only a switch stays beside its label; every wider control (a choice, a field) moves beneath
+            // it when the row is narrow (a pane column), never squeezing the label into a stack of lines.
+            accessoryLayout={stacked ? 'stacked' : presentation.kind === 'toggle' ? 'inline' : 'adaptive'}
             rightElement={(
                 <View ref={controlHost} collapsable={false}>
                 <HappierInputField<JsonValue>

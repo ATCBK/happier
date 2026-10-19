@@ -235,29 +235,34 @@ export function WidgetFlowTextAction(props: Readonly<{
 const PREVIEW_WELL_PADDING_PX = 8;
 
 /**
- * The well a flow shows a real widget in (Set up's live preview, Post a snapshot's frozen card,
- * Save as your widget): an inset surface whose corner is concentric with the card's, so the inner
- * corner is never rounder than the outer one. `height` fixes the room on a phone, where the card
- * shows its first rows and the rest is clipped; the card itself is drawn at its own size.
+ * The plate a flow shows a preview on (Set up's live preview, Post a snapshot's frozen card, Save as
+ * your widget): an inset surface whose corner is concentric with the card's, so the inner corner is
+ * never rounder than the outer one. `height` fixes the room on a phone, where the card shows its
+ * first rows and the rest is clipped; the card itself is drawn at its own size.
+ *
+ * A `framed` preview is a real card with its own edge, so it needs no plate: the caption sits on the
+ * flow's own edge above it and the card is the only surface between the flow and its content.
  */
 export function WidgetPreviewWell(props: Readonly<{
     caption?: string;
     minHeight?: number;
     height?: number;
+    framed?: boolean;
     testID?: string;
     children: React.ReactNode;
 }>): React.ReactElement {
     const styles = stylesheet;
+    const framed = props.framed === true && props.height === undefined;
     return (
         <View
             testID={props.testID}
             style={[
-                styles.well,
+                framed ? styles.wellFramed : styles.well,
                 props.minHeight !== undefined ? { minHeight: props.minHeight } : null,
                 props.height !== undefined ? { height: props.height, overflow: 'hidden' } : null,
             ]}
         >
-            {props.caption ? <Text style={styles.wellCaption}>{props.caption}</Text> : null}
+            {props.caption ? <Text style={framed ? styles.wellCaptionFramed : styles.wellCaption}>{props.caption}</Text> : null}
             <View pointerEvents="none">{props.children}</View>
         </View>
     );
@@ -344,6 +349,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         padding: PREVIEW_WELL_PADDING_PX,
         gap: theme.space.s6,
     },
+    wellFramed: { gap: theme.space.s6 },
+    wellCaptionFramed: { ...Typography.default('semiBold'), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
     wellCaption: {
         ...Typography.default('semiBold'),
         ...happierPageTextMetrics('meta'),
