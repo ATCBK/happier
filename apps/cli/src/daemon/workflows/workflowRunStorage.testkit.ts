@@ -197,7 +197,7 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
       case 'admit': {
         if (acceptedEnvelope === null) {
           acceptedEnvelope = String(operation.acceptedEnvelope);
-          if (operation.resultDelivery !== undefined) originDeliveryAckRevision = 0;
+          if (operation.resultDelivery?.kind === 'originating_session') originDeliveryAckRevision = 0;
           return { kind: 'created', run: summary() };
         }
         return { kind: 'existing', run: summary() };

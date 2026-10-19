@@ -643,6 +643,7 @@ const SessionInputProtectedCommonV2Schema = lazyZodSchema(() => z.strictObject({
   sourceSession: z.optional(SessionInputSourceSessionV1Schema),
   sourceAuthority: z.optional(SessionInputSourceAuthorityV1Schema),
   replyIntent: z.optional(SessionInputReplyIntentV1Schema),
+  discussionAddressing: z.optional(DiscussionAddressingV1Schema),
   workflow: SessionInputWorkflowV2Schema,
   actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
 }));
@@ -656,6 +657,9 @@ function refineProtectedWorkflowInputCommon(
   }
   if (value.replyIntent?.humanOrigin || value.replyIntent?.mode === 'return' && !value.sourceSession) {
     context.addIssue({ code: 'custom', path: ['replyIntent'], message: 'Workflow returns require an admitted causal Session' });
+  }
+  if (value.discussionAddressing && value.replyIntent?.mode !== 'wait') {
+    context.addIssue({ code: 'custom', path: ['discussionAddressing'], message: 'Workflow Discussion publication observes the original invocation result' });
   }
 }
 
@@ -784,7 +788,7 @@ export function assertSessionInputAdmissionReceiptForRequest(params: Readonly<{
     throw new TypeError('Account admission receipts cannot attest protected Workflow input');
   }
   if (request.v === 1) assertFollowInputReceipt(request, receipt);
-  if (request.v === 1) assertDiscussionInputReceipt(request, receipt);
+  assertDiscussionInputReceipt(request, receipt);
   return receipt;
 }
 
@@ -804,7 +808,7 @@ function assertFollowInputReceipt(request: SessionInputRequestV1, receipt: Sessi
   }
 }
 
-function assertDiscussionInputReceipt(request: SessionInputRequestV1, receipt: SessionInputAdmissionReceiptV1): void {
+function assertDiscussionInputReceipt(request: SessionInputRequest, receipt: SessionInputAdmissionReceiptV1): void {
   const admitted = receipt.issuer === 'authenticatedMachine' ? receipt.discussionAddressing : undefined;
   if (!request.discussionAddressing && !admitted) return;
   if (!request.discussionAddressing || !admitted || receipt.issuer !== 'authenticatedMachine'
@@ -820,10 +824,10 @@ export function assertSessionInputAdmissionReceiptForAuthorityV1(params: Readonl
   authority: unknown;
   inputAdmissionReceipt: unknown;
 }>): SessionInputAdmissionReceiptV1 {
-  const authority = SessionInputAuthorityV1Schema.parse(params.authority);
+  const authority = SessionInputAuthoritySchema.parse(params.authority);
   const { admittedPermissionCeiling: _admittedPermissionCeiling, ...requestPermission } = authority.permission;
-  return assertSessionInputAdmissionReceiptForRequestV1({
-    request: SessionInputRequestV1Schema.parse({
+  return assertSessionInputAdmissionReceiptForRequest({
+    request: SessionInputRequestSchema.parse({
       ...authority,
       permission: requestPermission,
     }),
