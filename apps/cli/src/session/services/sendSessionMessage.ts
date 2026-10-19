@@ -1295,14 +1295,22 @@ export async function sendSessionMessage(
 ): Promise<SendSessionMessageResult> {
   const cancelledAtStart = cancelledBeforeAdmission(params.signal, params.inputAdmission !== undefined);
   if (cancelledAtStart) return cancelledAtStart;
-  const sessionTarget = await resolveSessionTransportContext({
-    credentials: params.credentials,
-    idOrPrefix: params.idOrPrefix,
-    ...(params.resolveAuthorizationHeaders
-      ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
-      : {}),
-    ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
-  });
+  let sessionTarget: Awaited<ReturnType<typeof resolveSessionTransportContext>>;
+  try {
+    sessionTarget = await resolveSessionTransportContext({
+      credentials: params.credentials,
+      idOrPrefix: params.idOrPrefix,
+      ...(params.resolveAuthorizationHeaders
+        ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
+        : {}),
+      ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+  } catch (error) {
+    const cancelled = cancelledBeforeAdmission(params.signal, params.inputAdmission !== undefined);
+    if (cancelled) return cancelled;
+    throw error;
+  }
   const cancelledAfterResolution = cancelledBeforeAdmission(params.signal, params.inputAdmission !== undefined);
   if (cancelledAfterResolution) return cancelledAfterResolution;
   if (!sessionTarget.ok) {

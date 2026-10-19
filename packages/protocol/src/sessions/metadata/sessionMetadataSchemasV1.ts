@@ -780,6 +780,20 @@ export const SessionOwnerModeCatalogV2Schema = lazyZodSchema(() => (<T extends z
 })));
 export type SessionOwnerModeCatalogV2 = z.infer<typeof SessionOwnerModeCatalogV2Schema>;
 
+/** Unknown inventory cannot refuse a native mode; accepted current facts may outlive selectable membership. */
+export function isSessionModeSelectionUnavailable(
+  modeId: string | null | undefined,
+  catalog: Readonly<{
+    availableModes: readonly Readonly<{ id: string }>[] | null;
+    currentModeId?: string | null;
+  }>,
+): boolean {
+  return Boolean(modeId)
+    && catalog.availableModes !== null
+    && catalog.currentModeId !== modeId
+    && !catalog.availableModes.some((mode) => mode.id === modeId);
+}
+
 export function readSessionModesMetadata(metadata: Readonly<Record<string, unknown>> | null | undefined): SessionOwnerModeCatalogV2 | null {
   if (!metadata) return null;
   if ('sessionModesV2' in metadata) {

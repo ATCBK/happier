@@ -161,7 +161,7 @@ export function useSessionContextLayers(params: Readonly<{
             .filter((entry) => isPromptStackSystemAppendPlacementV1(entry.placement))
             .map((entry) => {
                 const { kind, title } = presentations(entry);
-                const off = !entry.enabled ? 'source'
+                const off = !entry.enabled ? (layer === 'session' ? 'session' : 'source')
                     : layer !== 'session' && disabled.has(entry.id) ? 'session'
                         : kind === 'memory' && !memoryEnabled ? 'memory' : null;
                 return { layer, entry, kind, off, on: kind !== 'unknown' && off === null, title,

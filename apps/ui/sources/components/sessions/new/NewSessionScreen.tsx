@@ -224,7 +224,7 @@ function NewSessionContent(props: Readonly<{
     }
 
     return (
-        <NewSessionScreenPortalScope>
+        <NewSessionScreenPortalScope presentation={props.presentation}>
             {props.presentation === 'screen' ? <AtmosphereSurfaceFrame surface="new-session" showLook={!floatingComposer}>
                 <NewSessionScreenInner {...props} statusTrailingActions={statusTrailingActions} />
             </AtmosphereSurfaceFrame> : <NewSessionScreenInner {...props} />}

@@ -68,11 +68,9 @@ import {
     useFocusedSessionAddress,
     useSessionSurfaceVisibilitySnapshot,
     getSessionSurfaceVisibilityResetVersion,
-    retainVisibleSessionListSurfaces,
     subscribeSessionSurfaceVisibilityReset,
 } from '@/sync/domains/session/sessionSurfaceVisibility';
-import { sync } from '@/sync/sync';
-import { fireAndForget } from '@/utils/system/fireAndForget';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import { Modal } from '@/modal';
@@ -1545,27 +1543,12 @@ export function useSessionListViewStateFromPaneState(
         visibleSessionListAddressesRef.current = addresses;
         return addresses;
     }, [sessionListItemBySelectionKey, viewableSessionRowKeys]);
-    const hydratedSessionListViewportRef = React.useRef<Readonly<{
-        addresses: readonly SessionAddress[];
-        resetVersion: number;
-    }>>({ addresses: [], resetVersion: visibilityResetVersion });
-    React.useEffect(() => {
-        const previous = hydratedSessionListViewportRef.current;
-        const previousKeys = new Set(previous.resetVersion === visibilityResetVersion
-            ? previous.addresses.map(audienceSessionAddressKey)
-            : []);
-        const addresses = surfaceOwnership.dataActive ? visibleSessionListAddresses : [];
-        hydratedSessionListViewportRef.current = { addresses, resetVersion: visibilityResetVersion };
-        if (addresses.length === 0) return;
-        const entered = addresses.filter(address => !previousKeys.has(audienceSessionAddressKey(address)));
-        const release = retainVisibleSessionListSurfaces(visibleSessionListAddresses);
-        if (entered.length > 0) {
-            fireAndForget(sync.hydrateSessionListRows(entered), {
-                tag: 'sessionsList.hydrateVisibleRows',
-            });
-        }
-        return release;
-    }, [surfaceOwnership.dataActive, visibilityResetVersion, visibleSessionListAddresses]);
+    useSessionContentDemand(visibleSessionListAddresses, {
+        tag: 'sessionsList.hydrateVisibleRows',
+        hydrate: 'viewport',
+        active: surfaceOwnership.dataActive,
+        resetVersion: visibilityResetVersion,
+    });
     const statusDemandSubscriptionItems = React.useMemo(() => {
         if (viewableSessionRowKeys !== null) {
             const visibleItems: Array<Extract<SessionListIndexItem, { type: 'session' }>> = [];

@@ -7,6 +7,7 @@ import { applySavedScmDiffSummaryResult, getScmDiffSummaryState } from '@/sync/o
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { SessionModelDiscoveryDetail, type SessionModelDiscoveryContext } from '@/components/sessions/modelPicker/SessionModelDiscoveryDetail';
 import { getActiveServerAccountScope, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { getPromptLibraryCatalogValue } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { refreshPromptLibraryCatalog } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
@@ -4133,8 +4134,8 @@ function SessionViewLoadedContent({
         [sessionManagedWorkflowRuns],
     );
     const openManagedWorkflowRun = React.useCallback((runId: string) => {
-        router.push({ pathname: '/workflows/runs/[runId]', params: { runId } } as never);
-    }, [router]);
+        router.push(createWorkflowRunRoute(runId, sessionRouteServerId) as never);
+    }, [router, sessionRouteServerId]);
     // UIW2: the SINGLE compact above-AgentInput badge seam. Goal/task/todo priority is delegated to
     // the protocol resolver inside `resolveSessionActivityStatusBadgePresentation`; workflow headline
     // composition is layered on top. There is no second badge path that recomputes priority.

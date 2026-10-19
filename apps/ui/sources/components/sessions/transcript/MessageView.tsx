@@ -258,7 +258,7 @@ function AppWorkflowMessageProvenanceAttribution(props: WorkflowMessageProvenanc
     return <MessageProvenanceAttributionLabel testID={testID} label={label} />;
   }
   return <WorkflowMessageProvenanceChip {...props} label={label}
-    onPress={() => transcriptSource.navigate?.(createWorkflowInvocationRoute(props.runId, props.invocationRecordId))} />;
+    onPress={() => transcriptSource.navigate?.(createWorkflowInvocationRoute(props.runId, props.invocationRecordId, serverId))} />;
 }
 
 function WorkflowMessageProvenanceChip(props: WorkflowMessageProvenanceProps & Readonly<{ label: string; onPress?: () => void }>) {

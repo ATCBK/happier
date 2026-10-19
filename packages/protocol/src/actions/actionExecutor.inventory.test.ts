@@ -324,7 +324,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       definition: { kind: 'builtin', id: 'usage_period_summary' } }, fieldPath: 'breakdown' }, { serverId: 'home' })).toMatchObject({ ok: false });
     expect(readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_breakdowns' })?.inputs?.fields.find(field => field.path === 'breakdown')?.widget).toBe('multiselect');
   });
-  it('discovers builtin choices before a core-page preset is persisted without admitting missing-layout operations or another Account', async () => {
+  it('discovers builtin choices and reads an unpersisted core-page preset without admitting an unknown layout or another Account', async () => {
     const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'corePage' as const, pageId: 'usage', area: 'main', layoutId: 'overview' } };
     const area = createWidgetAreaActionPortV1(ref => createWidgetSurfaceArtifactPortV1({
       read: async () => null,
@@ -338,7 +338,13 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect(await executor.execute('action.options.resolve', request, { serverId: 'home' })).toMatchObject({ ok: true, result: {
       options: expect.arrayContaining([{ value: ['agent'], label: 'Agent' }, { value: ['source', 'machine'], label: 'Source · Machine' }]),
     } });
-    expect(await executor.execute('widgets.item.list', { surface }, { serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'widget_area_not_found' });
+    expect(await executor.execute('widgets.item.list', { surface }, { serverId: 'home' })).toMatchObject({ ok: true,
+      result: { preset: { id: 'overview' }, instances: expect.arrayContaining([
+        expect.objectContaining({ instance: expect.objectContaining({ definition: { kind: 'builtin', id: 'usage_period_summary' } }) }),
+      ]) } });
+    expect(await executor.execute('widgets.item.list', { surface: { ...surface,
+      owner: { ...surface.owner, layoutId: 'unknown-layout' } } }, { serverId: 'home' }))
+      .toMatchObject({ ok: false, errorCode: 'widget_area_not_found' });
     expect(await executor.execute('action.options.resolve', { ...request, consumer: { ...request.consumer,
       surface: { ...surface, accountId: 'other' } } }, { serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'account_target_mismatch' });
     expect(await executor.execute('action.options.resolve', request, { serverId: 'other-home' })).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });

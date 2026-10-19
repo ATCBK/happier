@@ -176,10 +176,11 @@ describe('mounted Session server-start recipe composer', () => {
     }
 
     it.each([
-        { name: 'canonical Home', aliasHost: false, aliasRecipe: false },
-        { name: 'saved recipe Home alias', aliasHost: false, aliasRecipe: true },
-        { name: 'mounted and saved Home aliases', aliasHost: true, aliasRecipe: true },
-    ])('composes a mounted external plugin recipe with $name and all authoring controls', async ({ aliasHost, aliasRecipe }) => {
+        { name: 'canonical Home', aliasHost: false, aliasRecipe: false, fresh: false },
+        { name: 'saved recipe Home alias', aliasHost: false, aliasRecipe: true, fresh: false },
+        { name: 'mounted and saved Home aliases', aliasHost: true, aliasRecipe: true, fresh: false },
+        { name: 'fresh connected Codex recipe without a launch profile', aliasHost: false, aliasRecipe: false, fresh: true },
+    ])('composes a mounted external plugin recipe with $name and all authoring controls', async ({ aliasHost, aliasRecipe, fresh }) => {
         const draft = recipe();
         const requestedDraft = aliasRecipe
             ? { ...draft, executionTarget: { ...draft.executionTarget, serverId: serverAlias } }
@@ -200,7 +201,9 @@ describe('mounted Session server-start recipe composer', () => {
             accountEncryptionMode: 'plain', targetedContributions: undefined, mount: { kind: 'destination',
                 destination: { pluginId: requestSurface.pluginId, localId: 'settings' }, container: 'appPage' } });
         const request = { hostAction: { action: 'session.spawn_new', projection: 'serverStartDraft' },
-            draft: PluginUiJsonObjectV1Schema.parse({ existingDraft: requestedDraft,
+            draft: PluginUiJsonObjectV1Schema.parse({ ...(fresh
+                ? { directory: '/tmp', agentId: 'codex', permissionMode: 'default' }
+                : { existingDraft: requestedDraft }),
                 candidates: [{ projectKey: { id: 'project-intake' }, serverId: aliasRecipe ? serverAlias : serverId,
                     machineId: 'machine-1', rootPath: '/repo', reachable: true, worktrees: [] }] }) } as const;
         // Removing the real host registration must refuse before any dialog opens.
@@ -248,9 +251,25 @@ describe('mounted Session server-start recipe composer', () => {
                 for (const field of ['agentTarget', 'allowedTools', 'unlistedTools']) {
                     expect(dialog.findHostByTestId(`server-start-draft-control-${field}-row`)).not.toBeNull();
                 }
-                expect(dialog.findByTestId('server-start-draft-folder')).not.toBeNull();
+                if (!fresh) expect(dialog.findByTestId('server-start-draft-folder')).not.toBeNull();
                 expect(dialog.findByType(PathSelectionList).props).toMatchObject({ serverId, machineId: 'machine-1' });
-                expect(dialog.findAllByType(Item).some(node => node.props.selected === true && typeof node.props.onPress === 'function')).toBe(true);
+                expect(dialog.findAllByType(Item).some(node => node.props.selected === true && typeof node.props.onPress === 'function')).toBe(!fresh);
+                if (fresh) {
+                    await act(async () => {
+                        dialog.findAllByType(SessionAuthoringControls)[0]!.props.onChangeFields({
+                            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+                            modelSelection: { v: 1, updatedAt: 12, ref: {
+                                agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-6.1-sol',
+                            } },
+                            sessionConfigOptionOverrides: { v: 1, updatedAt: 12, overrides: {
+                                reasoning_effort: { value: 'low', updatedAt: 12 },
+                            } },
+                            connectedServices: { v: 2, bindingsByServiceId: {
+                                'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: '97bd5614-8970-4068-87f2-1447de69d604' },
+                            } },
+                        });
+                    });
+                }
                 if (chrome.current?.kind !== 'card') throw new Error('Missing composer card');
                 const footer = await renderScreen(<>{chrome.current.footer}</>);
                 try {
@@ -258,7 +277,25 @@ describe('mounted Session server-start recipe composer', () => {
                     expect(submit.props.disabled).toBe(false);
                     await act(async () => { submit.props.onPress(); });
                 } finally { await footer.unmount(); }
-                await expect(selection).resolves.toEqual({ kind: 'serverStartDraft', draft });
+                if (fresh) {
+                    const settled = await selection;
+                    expect(settled).toMatchObject({ kind: 'serverStartDraft', draft: {
+                        executionTarget: { serverId, machineId: 'machine-1' },
+                        directory: { kind: 'path', path: '/tmp' },
+                        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+                        modelSelection: { ref: { modelId: 'gpt-6.1-sol' } },
+                        configuration: { options: { reasoning_effort: { value: 'low' } } },
+                        connectedServices: { bindingsByServiceId: {
+                            'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: '97bd5614-8970-4068-87f2-1447de69d604' },
+                        } },
+                    } });
+                    if (!settled || settled.kind !== 'serverStartDraft') throw new Error('Missing recipe settlement');
+                    expect(settled.draft).not.toHaveProperty('profileId');
+                    expect(PluginUiJsonObjectV1Schema.safeParse(settled.draft).success).toBe(true);
+                    expect(SessionServerStartSpawnDraftV1Schema.safeParse(settled.draft).success).toBe(true);
+                } else {
+                    await expect(selection).resolves.toEqual({ kind: 'serverStartDraft', draft });
+                }
             } finally { await dialog.unmount(); }
         } finally { adapter.dispose(); await plugin.unmount(); }
     });

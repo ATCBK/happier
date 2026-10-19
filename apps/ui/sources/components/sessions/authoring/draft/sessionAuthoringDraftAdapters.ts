@@ -1130,7 +1130,11 @@ export function applySessionServerStartSpawnDraftEdits(params: Readonly<{
                     updatedAtMs: params.edits.modelSelection?.updatedAt ?? updatedAtMs } } : {}),
         };
     }
-    return SessionServerStartSpawnDraftV1Schema.parse(next);
+    // An explicit undefined edit clears an optional choice. Omit the property
+    // in the settled recipe so it also satisfies the Host API's JSON boundary.
+    return SessionServerStartSpawnDraftV1Schema.parse(
+        Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined)),
+    );
 }
 
 /** The ordinary start and managed continuation share every target-independent authored field. */
