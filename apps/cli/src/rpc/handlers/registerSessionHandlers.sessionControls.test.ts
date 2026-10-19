@@ -7,7 +7,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Metadata } from '@/api/types';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
+import { createSessionClientTranscriptApi } from '@/api/session/client/transcript/sessionClientTranscriptApi';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { COMPOSER_SOURCE_REF_PRIVATE_META_FIELD_V1 } from '@happier-dev/protocol/plugins/ui/composerRef';
 import {
   SessionPendingMessageComposerAdmissionPrepareRequestV1Schema,
   SessionUsageLimitRecoveryV1Schema,
@@ -86,10 +88,23 @@ describe('registerSessionHandlers session controls', () => {
       value: { issueId: 43, prepared: true },
       presentation: { label: 'Issue #43', typeLabel: 'Issue' },
     };
-    const preparePendingMessageComposerAdmission = vi.fn(async () => ({
-      text: 'prepared text',
-      meta: {
-        happierStructuredInputV1: { v: 1, composerAttachments: [admittedAttachment] },
+    const preparedAttachment = { ...admittedAttachment, content: { kind: 'sessionMedia' as const, mediaId: 'media-42' } };
+    const sourceComposerRef = { kind: 'pendingMessage' as const, sessionId: 'session-1', localId: 'pending-original' };
+    const handle = {
+      v: 1 as const, id: 'prepared-child', executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+      owner: admittedAttachment.attachment, mediaKind: 'image' as const, mimeType: 'image/png' as const,
+      name: 'issue.png', sizeBytes: 42, sha256: 'a'.repeat(64),
+    };
+    const stagedMediaReleaseIntents = [
+      { handle, executionTarget: handle.executionTarget, owner: handle.owner,
+        claimant: { composer: { kind: 'session' as const, sessionId: 'session-1' }, attachmentInstanceId: admittedAttachment.instanceId } },
+      { handle: { ...handle, id: 'prepared-source' }, executionTarget: handle.executionTarget, owner: handle.owner,
+        claimant: { composer: sourceComposerRef, attachmentInstanceId: admittedAttachment.instanceId } },
+    ];
+    const stagedMediaHandles = stagedMediaReleaseIntents.map(({ handle }) => handle);
+    let mediaSettled = false;
+    const preparedMeta = {
+        happierStructuredInputV1: { v: 1, composerAttachments: [preparedAttachment] },
         happier: {
           kind: 'session_media.v1',
           payload: {
@@ -107,15 +122,54 @@ describe('registerSessionHandlers session controls', () => {
             }],
           },
         },
+    };
+    let daemonTransformPayload: Record<string, unknown> | undefined;
+    const transcriptApi = createSessionClientTranscriptApi({
+      token: 'token',
+      sessionId: 'session-1',
+      outboundShapeLogger: { log: () => undefined },
+      getSocket: () => ({ connected: false, emit: () => undefined }),
+      getLatestTurnSnapshot: () => null,
+      getActiveLocalTurnProgressAt: () => null,
+      getSessionConnectionSupervisor: () => null,
+      getMetadataSnapshot: () => null,
+      updateAgentState: async () => undefined,
+      updateMetadata: async () => undefined,
+      enqueueCommittedTranscriptMessage: async () => ({ persisted: true, delivered: false }),
+      enqueueCommittedVoiceAgentTranscriptTurn: async () => ({ persisted: true, delivered: true }),
+      usageObservationPublisher: { publish: async () => undefined },
+      buildOutboundSessionMessagePayload: (content) => ({ t: 'plain', v: content }),
+      toolCallCanonicalNameByProviderAndId: new Map(),
+      permissionToolCallRawInputByProviderAndId: new Map(),
+      toolCallInputByProviderAndId: new Map(),
+      admitSessionUserMessage: async ({ localId }) => ({ status: 'accepted', localId }),
+      findPersistedSessionUserMessageAdmission: async () => null,
+      getTranscriptQueryContext: () => ({
+        encryptionKey: new Uint8Array(32), encryptionVariant: 'legacy', encryptionMode: 'e2ee',
+      }),
+      // The daemon transport is the boundary; transcript preparation and
+      // structured-input admission below the Session RPC stay real.
+      transformSessionInputBeforeCommit: async (payload) => {
+        daemonTransformPayload = payload;
+        return {
+          transformed: { ...payload, text: 'prepared text', meta: preparedMeta, preparedComposerAttachments: [preparedAttachment] },
+          settlement: {
+            onAccepted: () => { mediaSettled = true; },
+            onDefinitiveAdmissionFailure: () => { mediaSettled = true; },
+            stagedMediaHandles,
+            stagedMediaReleaseIntents,
+            workingDirectory: '/workspace',
+            createdWorkspaceRelativePaths: [],
+          },
+        };
       },
-      stagedMediaHandles: [],
-    }));
+    });
     const acceptPendingMessageComposerAdmission = vi.fn(async () => undefined);
     const abandonPendingMessageComposerAdmission = vi.fn(async () => undefined);
 
     registerSessionHandlers(registrar, process.cwd(), {
       sessionRuntimeControls: {
-        preparePendingMessageComposerAdmission,
+        preparePendingMessageComposerAdmission: transcriptApi.preparePendingMessageComposerAdmission,
         acceptPendingMessageComposerAdmission,
         abandonPendingMessageComposerAdmission,
       },
@@ -125,6 +179,7 @@ describe('registerSessionHandlers session controls', () => {
       localId: 'pending-successor-1',
       text: 'draft text',
       structuredInput: { v: 1 as const, composerAttachments: [admittedAttachment] },
+      sourceComposerRef,
     };
     expect(SessionPendingMessageComposerAdmissionPrepareRequestV1Schema.safeParse(prepareRequest))
       .toMatchObject({ success: true });
@@ -133,8 +188,10 @@ describe('registerSessionHandlers session controls', () => {
     )?.(prepareRequest)).resolves.toEqual({
       ok: true,
       text: 'prepared text',
-      structuredInput: { v: 1, composerAttachments: [admittedAttachment] },
-      stagedMediaHandles: [],
+      structuredInput: { v: 1, composerAttachments: [preparedAttachment] },
+      stagedMediaHandles,
+      stagedMediaReleaseIntents,
+      sessionMediaCleanup: { workingDirectory: '/workspace', createdWorkspaceRelativePaths: [] },
       sessionMediaMetadata: {
         key: 'happier',
         envelope: {
@@ -156,12 +213,17 @@ describe('registerSessionHandlers session controls', () => {
         },
       },
     });
-    expect(preparePendingMessageComposerAdmission).toHaveBeenCalledWith({
+    expect(daemonTransformPayload).toMatchObject({
+      sessionId: 'session-1',
       localId: 'pending-successor-1',
       text: 'draft text',
-      meta: { happierStructuredInputV1: prepareRequest.structuredInput },
+      meta: {
+        happierStructuredInputV1: prepareRequest.structuredInput,
+        [COMPOSER_SOURCE_REF_PRIVATE_META_FIELD_V1]: prepareRequest.sourceComposerRef,
+      },
     });
     expect(acceptPendingMessageComposerAdmission).not.toHaveBeenCalled();
+    expect(mediaSettled).toBe(false);
 
     const acceptedRequest = {
       sessionId: 'session-1',

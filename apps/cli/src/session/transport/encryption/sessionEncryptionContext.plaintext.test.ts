@@ -166,7 +166,7 @@ describe('decryptStoredSessionPayload (plaintext)', () => {
     })).toBeNull();
   });
 
-  it('strictly parses layout-v1 shared metadata and rejects owner-only or future-layout fields', () => {
+  it('drops unknown stored shared metadata fields without exposing them and rejects future layouts', () => {
     const credentials = {
       token: 't',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
@@ -197,7 +197,7 @@ describe('decryptStoredSessionPayload (plaintext)', () => {
           path: '/owner-only-worktree',
         }),
       },
-    })).toBeNull();
+    })).toEqual({ v: 1 });
 
     expect(tryDecryptSessionMetadata({
       credentials,

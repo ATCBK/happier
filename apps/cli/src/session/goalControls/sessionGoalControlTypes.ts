@@ -7,15 +7,24 @@ import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 
 export type SessionGoalControlOperation = 'get' | 'set' | 'clear';
 
+export type SessionGoalControlTarget = RawSessionRecord | Readonly<{
+  active: true;
+  path?: unknown;
+  machineId?: unknown;
+  host?: unknown;
+  homeDir?: unknown;
+}>;
+
 export type SessionGoalControlAdapterParams = Readonly<{
   token: string;
   credentials?: StoredCredentials;
   sessionId: string;
-  rawSession: RawSessionRecord;
+  rawSession: SessionGoalControlTarget;
   metadata: Record<string, unknown>;
   currentMachineId: string | null;
   sessionMachineId: string | null;
   cwd: string | null;
+  signal?: AbortSignal;
 }> & SessionStoredContentCryptoContext;
 
 export type SessionGoalControlAdapter = Readonly<{

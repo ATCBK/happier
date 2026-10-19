@@ -1,7 +1,8 @@
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { randomUUID } from 'node:crypto';
 import { SessionWorkStateV1Schema as SessionStateWorkStateValueSchema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
-import { SessionInitialGoalRequestV1Schema, type ActionExecutorContext, type SessionGoalSetRequestV1 } from '@happier-dev/protocol';
+import { SessionInitialGoalRequestV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import type { ActionExecutorContext, SessionGoalSetRequestV1 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 import { resolveInactiveSessionGoalControls } from '@/agent/catalog/sessionControlAdapters';
@@ -14,19 +15,22 @@ import {
 import { splitDurableRegisteredSessionStateMetadata } from '@/agent/runtime/registry/pluginMetadataDurability';
 import type { DaemonWorkStateFieldMutation } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
 import type { SessionStoredContentCryptoContext } from '@/session/transport/encryption/sessionEncryptionContext';
-import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { requestInactiveSessionResume } from '@/session/services/requestInactiveSessionResume';
+import { logger } from '@/ui/logger';
+import { awaitGoalAcknowledgement } from './awaitGoalAcknowledgement';
+import { happierSessionGoalControlAdapter } from './happierSessionGoalControlAdapter';
 import type {
   ResolveSessionGoalControlAdapter,
   SessionGoalControlAdapterParams,
   SessionGoalControlOperation,
+  SessionGoalControlTarget,
 } from './sessionGoalControlTypes';
 
 type RouteSessionGoalControlParams = Readonly<{
   token: string;
   credentials?: StoredCredentials;
   sessionId: string;
-  rawSession: RawSessionRecord;
+  rawSession: SessionGoalControlTarget;
   metadata: Record<string, unknown> | null;
   currentMachineId: string | null;
   currentMachineHost?: string | null;
@@ -46,7 +50,7 @@ type RouteSessionGoalControlParams = Readonly<{
   machineResumeTransport?: Parameters<typeof requestInactiveSessionResume>[0]['machineRpcTransport'];
   callLiveSessionRpc: () => Promise<unknown>;
   resolveAdapter?: ResolveSessionGoalControlAdapter;
-  stageWorkStateMutation?: (mutation: DaemonWorkStateFieldMutation) => Promise<void>;
+  stageWorkStateMutation?: (mutation: DaemonWorkStateFieldMutation, options?: Readonly<{ signal?: AbortSignal }>) => Promise<void>;
 }> & SessionStoredContentCryptoContext;
 
 function stableError(errorCode: string): Readonly<{ ok: false; errorCode: string; error: string }> {
@@ -59,20 +63,20 @@ function readString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function resolveRawSessionString(rawSession: RawSessionRecord, key: 'path' | 'machineId' | 'host' | 'homeDir'): string | null {
+function resolveRawSessionString(rawSession: SessionGoalControlTarget, key: 'path' | 'machineId' | 'host' | 'homeDir'): string | null {
   return readString((rawSession as Partial<Record<typeof key, unknown>>)[key]);
 }
 
 function resolveSessionMachineHost(
   metadata: Record<string, unknown>,
-  rawSession: RawSessionRecord,
+  rawSession: SessionGoalControlTarget,
 ): string | null {
   return readString(metadata.host) ?? resolveRawSessionString(rawSession, 'host');
 }
 
 function resolveSessionMachineHomeDir(
   metadata: Record<string, unknown>,
-  rawSession: RawSessionRecord,
+  rawSession: SessionGoalControlTarget,
 ): string | null {
   return readString(metadata.homeDir) ?? resolveRawSessionString(rawSession, 'homeDir');
 }
@@ -94,6 +98,7 @@ function buildAdapterParams(
     metadata,
     currentMachineId: params.currentMachineId,
     sessionMachineId,
+    ...(params.signal ? { signal: params.signal } : {}),
     cwd: resolveSessionMachineWorkspacePath({
       metadata,
       currentMachineId: params.currentMachineId,
@@ -117,12 +122,9 @@ function shouldFallbackFromLiveSessionGoalRpc(result: unknown): boolean {
   const raw = result as Record<string, unknown>;
   const errorCode = typeof raw.errorCode === 'string' ? raw.errorCode : '';
   const error = typeof raw.error === 'string' ? raw.error : '';
-  // Fall back to the inactive metadata adapter ONLY on DEFINITIVE capability signals — the live
-  // runtime genuinely cannot serve the method. A transient TRANSPORT failure (`session_rpc_failed`,
-  // produced when the live-session RPC throws) must NOT fall back: doing so seeds a decorative
-  // `status:'active'` metadata goal the running session never started pursuing (`/goal` never
-  // reached the provider) — a split-brain between metadata and runtime (G-4). Transport failures
-  // surface as typed errors to the caller/UI instead, mirroring the `injectFailedError()` treatment.
+  // Only definitive missing-method signals admit the declared inactive facet.
+  // A transport failure may follow an accepted live effect; invoking another
+  // writer would duplicate it. Keep that uncertain result with the caller.
   return errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
     || errorCode === RPC_ERROR_CODES.METHOD_NOT_FOUND
     || errorCode === 'unsupported_session_runtime_method'
@@ -151,14 +153,34 @@ async function persistAdapterMetadataResult(
     mutation.fieldId === 'runtime.workState' && mutation.source === 'daemon' && mutation.deliveryClass === 'durable_required');
   if (mutations.length === 0) return result;
   if (!params.stageWorkStateMutation) return stableError('session_goal_control_work_state_custody_unavailable');
-  for (const mutation of mutations) await params.stageWorkStateMutation(mutation);
+  const startedAt = performance.now();
+  // The native facet may acknowledge an already-admitted effect after caller
+  // cancellation. Retain its truthful publication even though that receipt ended.
+  for (const mutation of mutations) {
+    await params.stageWorkStateMutation(mutation, { signal: params.signal?.aborted ? undefined : params.signal });
+  }
+  logger.debug('[SessionGoal] Work-state settlement', { sessionId: params.sessionId, operation: params.operation,
+    durationMs: Math.round(performance.now() - startedAt) });
   return result;
 }
 
 export async function routeSessionGoalControl(params: RouteSessionGoalControlParams): Promise<unknown> {
+  return await awaitGoalAcknowledgement(() => executeSessionGoalControl(params), params.signal);
+}
+
+async function executeSessionGoalControl(params: RouteSessionGoalControlParams): Promise<unknown> {
+  const startedAt = performance.now();
+  let phaseStartedAt = startedAt;
+  const phase = (name: 'live_rpc' | 'locality' | 'inactive_resume' | 'adapter_resolution' | 'native_control') => {
+    const now = performance.now();
+    logger.debug('[SessionGoal] Routing phase', { sessionId: params.sessionId, operation: params.operation, phase: name,
+      durationMs: Math.round(now - phaseStartedAt), elapsedMs: Math.round(now - startedAt) });
+    phaseStartedAt = now;
+  };
   params.signal?.throwIfAborted();
   if (params.rawSession.active === true) {
     const liveResult = await params.callLiveSessionRpc();
+    phase('live_rpc');
     if (!shouldFallbackFromLiveSessionGoalRpc(liveResult)) {
       return liveResult;
     }
@@ -183,11 +205,11 @@ export async function routeSessionGoalControl(params: RouteSessionGoalControlPar
   if (!sessionMachineId) {
     return stableError('session_goal_control_session_machine_unknown');
   }
+  const inactiveSession = params.rawSession.active === false ? params.rawSession : null;
   const initialGoal = params.operation === 'set' && params.resumeInactiveWithInitialGoal === true
-    && params.rawSession.active === false ? SessionInitialGoalRequestV1Schema.safeParse(params.request) : null;
+    && inactiveSession !== null ? SessionInitialGoalRequestV1Schema.safeParse(params.request) : null;
   if (initialGoal && !initialGoal.success) return stableError('invalid_parameters');
-  if (
-    !await resolveMachineControlLocalityProof({
+  const locality = await resolveMachineControlLocalityProof({
       sessionMachineId,
       currentMachineId,
       sessionHost: resolveSessionMachineHost(metadata, params.rawSession),
@@ -195,8 +217,9 @@ export async function routeSessionGoalControl(params: RouteSessionGoalControlPar
       currentMachineHost: params.currentMachineHost,
       currentMachineHomeDir: params.currentMachineHomeDir,
       credentials: { token: params.token },
-    })
-  ) {
+    });
+  phase('locality');
+  if (!locality) {
     params.signal?.throwIfAborted();
     if (params.callMachineGoalRpc) {
       return await params.callMachineGoalRpc({ machineId: sessionMachineId, operation: params.operation,
@@ -206,36 +229,33 @@ export async function routeSessionGoalControl(params: RouteSessionGoalControlPar
   }
 
   params.signal?.throwIfAborted();
-  if (initialGoal?.success) {
-    if (!params.credentials) return stableError('not_authenticated');
-    const resumed = await requestInactiveSessionResume({ credentials: params.credentials,
-      sessionId: params.sessionId, rawSession: params.rawSession, metadata,
-      requestId: params.actionRequestId ?? randomUUID(),
-      initialGoal: initialGoal.data, executionAuthority: params.executionAuthority,
-      ...(params.signal ? { signal: params.signal } : {}),
-      ...(params.machineResumeTransport ? { machineRpcTransport: params.machineResumeTransport } : {}) });
-    return resumed.ok ? { ok: true } : { ok: false, errorCode: resumed.code, error: resumed.message };
-  }
+  if (initialGoal?.success && !params.credentials) return stableError('not_authenticated');
 
+  if (!params.stageWorkStateMutation && params.callMachineGoalRpc) {
+    // Same-Machine Action hosts do not own the daemon's durable outbox. Native
+    // controls (including Get) may publish refreshed work state, so delegate
+    // before opening any inactive facet or accepting its native effect.
+    return await params.callMachineGoalRpc({ machineId: sessionMachineId, operation: params.operation,
+      ...(params.request ? { request: params.request } : {}), resumeInactiveWithInitialGoal: initialGoal?.success === true });
+  }
   const resolveAdapter = params.resolveAdapter ?? resolveInactiveSessionGoalControls;
-  const adapter = await resolveAdapter(resolveAgentId(metadata));
+  const adapter = await resolveAdapter(resolveAgentId(metadata)) ?? happierSessionGoalControlAdapter;
+  phase('adapter_resolution');
   params.signal?.throwIfAborted();
-  if (!adapter) {
-    return stableError('session_goal_control_unsupported');
-  }
-
   const adapterParams = buildAdapterParams(params, metadata, sessionMachineId);
   let result: unknown;
   if (params.operation === 'get') {
     result = typeof adapter.getGoal === 'function'
       ? await adapter.getGoal(adapterParams)
       : stableError('session_goal_control_unsupported');
+    phase('native_control');
     return await persistAdapterMetadataResult(params, result);
   }
   if (params.operation === 'clear') {
     result = typeof adapter.clearGoal === 'function'
       ? await adapter.clearGoal(adapterParams)
       : stableError('session_goal_control_unsupported');
+    phase('native_control');
     return await persistAdapterMetadataResult(params, result);
   }
   if (!params.request || typeof adapter.setGoal !== 'function') {
@@ -245,5 +265,26 @@ export async function routeSessionGoalControl(params: RouteSessionGoalControlPar
     ...adapterParams,
     request: params.request,
   });
-  return await persistAdapterMetadataResult(params, result);
+  phase('native_control');
+  const needsLiveGoal = initialGoal?.success === true && result !== null && typeof result === 'object'
+    && 'status' in result && result.status === 'unsupported'
+    && 'errorCode' in result && result.errorCode === 'inactive_agent_control_unsupported';
+  result = await persistAdapterMetadataResult(params, result);
+  if (!initialGoal?.success || !inactiveSession || (!needsLiveGoal && result && typeof result === 'object' && 'ok' in result && result.ok === false)) {
+    return result;
+  }
+  params.signal?.throwIfAborted();
+  // Native inactive writers retain their acknowledged Goal before reopening.
+  // An inactive facet that cannot write must enter the same live RPC after
+  // readiness; neither metadata nor the spawn receipt applies its Goal.
+  const resumed = await requestInactiveSessionResume({ credentials: params.credentials!,
+    sessionId: params.sessionId, rawSession: inactiveSession, metadata: readMetadataResult(result) ?? metadata,
+    requestId: params.actionRequestId ?? randomUUID(), executionAuthority: params.executionAuthority,
+    ...(needsLiveGoal ? { waitForReady: true } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.machineResumeTransport ? { machineRpcTransport: params.machineResumeTransport } : {}) });
+  phase('inactive_resume');
+  if (!resumed.ok) return { ok: false, errorCode: resumed.code, error: resumed.message };
+  params.signal?.throwIfAborted();
+  return needsLiveGoal ? await params.callLiveSessionRpc() : result;
 }

@@ -25,15 +25,18 @@ import { findSpawnConfigOptionAliasConflicts, mergeSpawnConfigOptionAliases } fr
 import type { SpawnConfigOptionValue } from '@happier-dev/protocol';
 import { canUseCustodianAccountForMachineRequest, RequesterWorkAttributionV1Schema } from '@/daemon/lifecycle/requesterWorkAttribution';
 import { isAdmittedRequesterSessionBootstrapCurrent } from '@/daemon/sessionEncryption/requesterSessionCredentials';
+import { createSessionStartupProjectSpawn } from './sessionStartupProjectOperation';
 
 import type {
     SessionLifecycleActionHandler,
     SessionLifecycleMachineHandlers,
+    SessionLifecycleMachineDeps,
 } from './sessionLifecycleTypes';
 
 export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
     spawnSession: SessionLifecycleMachineHandlers['spawnSession'];
     serverId?: string;
+    awaitAgentSessionOpen?: SessionLifecycleMachineDeps['awaitAgentSessionOpen'];
 }>): SessionLifecycleActionHandler {
     return async (rawParams: unknown, context) => {
         const cancelled = () => ({
@@ -46,6 +49,8 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
             && (Object.hasOwn(rawParams, 'requesterWorkAttributionV1')
                 || Object.hasOwn(rawParams, 'verifyRequesterMachineAdmissionCurrent')
                 || Object.hasOwn(rawParams, 'beforeSessionRunnerLaunch')
+                || Object.hasOwn(rawParams, 'resumeActionContext')
+                || Object.hasOwn(rawParams, 'projectSetupOperation')
                 || Object.hasOwn(rawParams, 'requesterSessionCredentialFile')
                 || Object.hasOwn(rawParams, 'requesterSessionRuntimeContext')
                 || Object.hasOwn(rawParams, 'requesterSessionBootstrap'))) {
@@ -301,6 +306,7 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
                 : undefined;
         const parsedExecutionAuthorization = SpawnSessionExecutionAuthorizationSchema.safeParse(executionAuthorization);
         const normalizedExecutionAuthorization = parsedExecutionAuthorization.success
+            && (!context?.localActionContext || context.localActionContext.authority === 'present_user')
             ? parsedExecutionAuthorization.data
             : undefined;
         const normalizedEnvironmentVariables = environmentVariables && typeof environmentVariables === 'object'
@@ -417,6 +423,8 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
                 serverId: params.serverId, accountId: requesterAdmission.actorAccountId,
                 machineId: requesterAdmission.machineId, installationId: requesterAdmission.installationId,
             }) : undefined;
+        const spawnSession = createSessionStartupProjectSpawn({ context, spawnSession: params.spawnSession,
+            ...(params.awaitAgentSessionOpen ? { awaitAgentSessionOpen: params.awaitAgentSessionOpen } : {}) });
         const buildBaseSpawnOptions = (resolvedDirectory: string): SpawnSessionOptions => ({
             ...admittedSpawnOptions,
             ...(context?.requesterSessionBootstrap ? { requesterSessionBootstrap: context.requesterSessionBootstrap } : {}),
@@ -505,11 +513,13 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
             if (context?.signal?.aborted) return cancelled();
             // Resume callers need the daemon's actual custody: an existing
             // Session identity, an accepted launch nonce, or a refusal.
-            return await params.spawnSession({
+            return await spawnSession({
                 ...(context?.creationAuthorization ? { creationAuthorization: context.creationAuthorization } : {}),
                 ...(context?.callerInputConstraints ? { callerInputConstraints: context.callerInputConstraints } : {}),
                 ...baseSpawnOptions,
                 existingSessionId,
+                ...(context?.localActionContext?.resumeActionContext
+                    ? { resumeActionContext: context.localActionContext.resumeActionContext } : {}),
                 approvedNewDirectoryCreation: typeof approvedNewDirectoryCreation === 'boolean'
                     ? approvedNewDirectoryCreation
                     : undefined,
@@ -528,7 +538,7 @@ export function createSpawnNewSessionLifecycleActionHandler(params: Readonly<{
         }
         const baseSpawnOptions = buildBaseSpawnOptions(directory);
         if (context?.signal?.aborted) return cancelled();
-        const result = await params.spawnSession({
+        const result = await spawnSession({
             ...(context?.creationAuthorization ? { creationAuthorization: context.creationAuthorization } : {}),
             ...(context?.callerInputConstraints ? { callerInputConstraints: context.callerInputConstraints } : {}),
             ...baseSpawnOptions,

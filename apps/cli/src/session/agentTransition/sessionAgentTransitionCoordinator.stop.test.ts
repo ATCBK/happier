@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -26,11 +27,16 @@ import {
 
 /** Flattens a `z.literal` / `z.enum` / `z.union` of those into its string members. */
 function readReasonLiterals(schema: unknown): readonly string[] {
-  const node = schema as Readonly<{ value?: unknown; options?: unknown }>;
-  if (typeof node.value === 'string') return [node.value];
-  if (!Array.isArray(node.options)) return [];
-  return node.options.flatMap((option: unknown) =>
-    typeof option === 'string' ? [option] : readReasonLiterals(option));
+  if (schema instanceof z.core.$ZodLiteral) {
+    return schema._zod.def.values.filter((value): value is string => typeof value === 'string');
+  }
+  if (schema instanceof z.core.$ZodEnum) {
+    return Object.values(schema._zod.def.entries).filter((value): value is string => typeof value === 'string');
+  }
+  if (schema instanceof z.core.$ZodUnion) {
+    return schema._zod.def.options.flatMap(readReasonLiterals);
+  }
+  return [];
 }
 
 /**
@@ -52,11 +58,9 @@ function readReasonLiterals(schema: unknown): readonly string[] {
  * producing union means a reason added there is pinned the day it exists.
  */
 function everyUnconfirmedStopOutcome(): ReadonlyArray<readonly [string, SessionStopOutcome]> {
-  const cases = SessionStopOutcomeSchema.options.flatMap((option) => {
-    const shape = (option as unknown as Readonly<{
-      shape: Readonly<{ status: Readonly<{ value: string }>; reason: unknown }>;
-    }>).shape;
-    const status = shape.status.value;
+  const cases = SessionStopOutcomeSchema._zod.def.options.flatMap((option) => {
+    const shape = option.shape;
+    const status = shape.status._zod.def.values[0];
     return readReasonLiterals(shape.reason).map((reason) => [
       `${status}/${reason}`,
       SessionStopOutcomeSchema.parse({ status, reason }),

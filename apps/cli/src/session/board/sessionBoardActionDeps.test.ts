@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -46,7 +47,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { registerHappierMcpBuiltInTools } from '@/mcp/server/registerHappierMcpBuiltInTools';
@@ -120,7 +121,7 @@ describe('CLI Board Action family', () => {
     const binding = normalizePluginUiInlineSurfaceBindingV1({ pluginId, surfaceId: localId,
       rendererId: 'counter', role: 'widget', target: { kind: 'app' } });
     if (!binding) throw new Error('Expected the canonical widget binding');
-    const occurrenceId = `${pluginId}:66`;
+    const occurrenceId = createPluginRuntimeOccurrenceId(pluginId);
     const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {
       pluginUi: { family: 'pluginUi', entriesById: { counter: { id: 'counter', pluginId, contributionKind: 'surfacePlacement',
         descriptorId: localId, occurrenceId, binding, target: binding.target, display: { title: 'Directory count' },
@@ -138,7 +139,7 @@ describe('CLI Board Action family', () => {
       inputTypes: [{ provenance: 'external', source: { kind: 'path' }, pluginId, identity: inputType,
         manifestPath: '/plugins/widgets/plugin.json', definition: type }],
       resources: [{ provenance: 'external', source: { kind: 'path' }, pluginId,
-        definition: { id: 'count-kinds', source: 'dynamic', kind: 'config', scope: 'global', contentType: 'application/json' } }],
+        definition: { kindVersion: 1, id: 'count-kinds', source: 'dynamic', type: 'config', scope: 'global', contentType: 'application/json' } }],
     });
     let revoked: 'owner' | 'selected' | null = null;
     const selectedSessionId = 'c000000000000000000000063';
@@ -396,7 +397,7 @@ describe('CLI Board Action family', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     registerHappierMcpBuiltInTools({ registerTool: (name, meta, handler) => {
       // Preserve the SDK's real input/output validation at the transport boundary.
-      server.registerTool(name, meta as { inputSchema: z.ZodType }, async (args, extra) => CallToolResultSchema.parse(await handler(args, extra)));
+      server.registerTool(name, meta as { inputSchema: z.ZodMiniType }, async (args, extra) => CallToolResultSchema.parse(await handler(args, extra)));
     } }, { sessionId: 'session-one', surface: 'agent', actionsSettings,
       deps: { changeTitle: async () => ({ success: true }), executeActionByToolName: tools.executeActionByToolName } });
     await server.connect(serverTransport);
@@ -490,7 +491,7 @@ describe('CLI Board Action family', () => {
     expect(command).toMatchObject({ kind: 'call', tool: tool!.name, sessionId: 'session-one' });
     if (command?.kind !== 'call' || !command.argsJson) throw new Error('Missing Daily usage command');
     const input = JSON.parse(command.argsJson);
-    const projected = tool!.inputSchema as z.ZodType;
+    const projected = tool!.inputSchema as z.ZodMiniType;
     expect(projected.safeParse(input).success).toBe(true);
     let committed: unknown;
     app.get('/v2/sessions/session-one/system-records/record', async request => {
@@ -1038,16 +1039,17 @@ describe('CLI Board Action family', () => {
   it('signs every external Board Home read without sending the daemon bearer', async () => {
     const keyPair = tweetnacl.sign.keyPair();
     const target = { kind: 'session' as const, sessionId: 'session-one' };
-    const authorization: ExternalActionExecutionAuthorizationV1 = {
+    const authorization = {
       v: 1,
       token: 'execution-proof',
       binding: {
         serverIdentityId: 'home-a', accountId: 'account-1', principalId: 'principal-1', credentialId: 'credential-1',
         grant: API_TOKEN_FULL_GRANT_V1,
         machineId: 'machine-1', actionId: 'session.board.get', requestId: 'request-1',
+        custodianAccountId: 'account-1', installationId: 'installation-1',
         requestEnvelopeDigest: 'd'.repeat(43), target,
       },
-    };
+    } satisfies ExternalActionExecutionAuthorizationV1;
     const verify = (request: Readonly<{ headers?: unknown }>, method: string, path: string) => {
       const readHeader = (name: string): string | null => {
         if (request.headers instanceof Headers) return request.headers.get(name);
@@ -1120,16 +1122,17 @@ describe('CLI Board Action family', () => {
     rawSession.metadata = JSON.stringify({ machineId: 'machine-session' });
     const keyPair = tweetnacl.sign.keyPair();
     const target = { kind: 'session' as const, sessionId: 'session-one' };
-    const authorization: ExternalActionExecutionAuthorizationV1 = {
+    const authorization = {
       v: 1,
       token: 'board-create-proof',
       binding: {
         serverIdentityId: 'home-a', accountId: 'account-1', principalId: 'principal-1', credentialId: 'credential-1',
         grant: API_TOKEN_FULL_GRANT_V1,
         machineId: 'machine-caller', actionId: 'session.board.item.upsert', requestId: 'board-create-request',
+        custodianAccountId: 'account-1', installationId: 'installation-1',
         requestEnvelopeDigest: 'd'.repeat(43), target,
       },
-    };
+    } satisfies ExternalActionExecutionAuthorizationV1;
     const context = {
       externalActionCredential: { accountId: 'account-1', principalId: 'principal-1', credentialId: 'credential-1', grant: authorization.binding.grant },
       externalActionExecutionAuthorization: authorization,

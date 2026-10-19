@@ -2,7 +2,7 @@ import { SessionHandoffCapabilityV3Schema, SessionHandoffExistingStateCheckRespo
   type SessionHandoffExistingStateCheckRequestV3 } from '@happier-dev/protocol/sessions/control/handoff/handoffSchemas';
 import { SessionRequesterHandoffPreflightBootstrapRpcRequestV1Schema } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
+import { createRpcCallError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
 
 import { prepareExternalActionHandoffPreflightAuthorization, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -76,12 +76,18 @@ export function createSessionHandoffPreflightMachineRpc(deps: Readonly<{
       }
       signal?.throwIfAborted();
       try {
-        return await callMachine({ credentials: input.credentials, machineId: input.machineId, method: input.method, request,
+        const result = await callMachine({ credentials: input.credentials, machineId: input.machineId, method: input.method, request,
           ...(externalAction ? { externalAction, authorityCeiling: 'account_automation' as const } : {}),
           ...(signal ? { signal } : {}),
         });
+        if (result && typeof result === 'object' && !('ok' in result)
+          && 'error' in result && typeof result.error === 'string') {
+          throw createRpcCallError({ error: result.error,
+            errorCode: 'errorCode' in result && typeof result.errorCode === 'string' ? result.errorCode : undefined });
+        }
+        return result;
       } catch (error) {
-        if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) return updateRequired();
+        if (isRpcMethodNotFoundError(error)) return updateRequired();
         throw error;
       }
     };

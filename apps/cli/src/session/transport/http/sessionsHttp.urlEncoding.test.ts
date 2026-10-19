@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import axios from 'axios';
 import fastify from 'fastify';
@@ -7,12 +7,19 @@ import { SessionHistoricalTranscriptImportV3Schema } from '@happier-dev/protocol
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
 
 describe('sessionControl.sessionsHttp URL encoding', () => {
   const envKeys = ['HAPPIER_SERVER_URL'] as const;
   let envScope = createEnvKeyScope(envKeys);
+  let releaseHome: () => void;
+
+  beforeEach(() => {
+    releaseHome = publishServerHttpRuntimeOrigin('http://server.example.test', 'https');
+  });
 
   afterEach(() => {
+    releaseHome();
     envScope.restore();
     envScope = createEnvKeyScope(envKeys);
     vi.restoreAllMocks();
@@ -66,7 +73,7 @@ describe('sessionControl.sessionsHttp URL encoding', () => {
       sessionId: 'session',
       serverUrl: 'https://captured.example',
       accessProjectionVersion: 1,
-    })).rejects.toThrow('Unexpected /v2/sessions response shape');
+    })).rejects.toMatchObject({ code: 'session_detail_projection_unavailable' });
   });
 
   it('derives effective-access detail from the exact Home collaboration snapshot', async () => {

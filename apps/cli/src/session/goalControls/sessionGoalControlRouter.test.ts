@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { Credentials, StoredCredentials } from '@/persistence';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { buildTestCodexRuntimeDescriptorV1 as buildCodexAgentRuntimeDescriptor } from '@/testkit/runtimeDescriptorFixtures';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SessionWorkStateGetResponseV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 
 const mocks = vi.hoisted(() => ({
   fetchAccountMachineReplacements: vi.fn(),
@@ -75,6 +75,43 @@ const e2eeCtx = {
 };
 
 describe('routeSessionGoalControl', () => {
+  it('FIX75 stores and completes a configured ACP objective through the real daemon Goal owner', async () => {
+    let metadata: Record<string, unknown> = {
+      machineId: 'machine-local', path: '/repo',
+      runtimeDescriptorV1: { v: 1, agentId: 'custom-acp', agent: { definitionId: 'configured-test' } },
+      acpConfiguredBackendV1: { v: 1, updatedAt: 1, backendId: 'configured-test', title: 'Configured Agent' },
+    };
+    const route = (operation: 'get' | 'set' | 'clear', request?: { objective?: string; status?: 'complete' }) => routeSessionGoalControl({
+      token: 'token', credentials: createTokenOnlyCredentials(), sessionId: 'sess_1',
+      rawSession: createRawSession({ active: true }), metadata, currentMachineId: 'machine-local',
+      ctx: null, mode: 'plain', operation, ...(request ? { request } : {}),
+      callLiveSessionRpc: async () => ({ ok: false, errorCode: 'unsupported_session_runtime_method' }),
+      stageWorkStateMutation: async mutation => {
+        metadata = { ...metadata, sessionWorkStateV1: mutation.op.kind === 'set' ? mutation.op.value : null };
+      },
+    });
+    await expect(route('set', { objective: 'Finish the work' })).resolves.toMatchObject({
+      workState: { items: [expect.objectContaining({ kind: 'goal', origin: 'happier', title: 'Finish the work', status: 'active' })] },
+    });
+    await expect(route('get')).resolves.toMatchObject({ nativeGoalOwner: false,
+      workState: { items: [expect.objectContaining({ title: 'Finish the work' })] } });
+    // This is the exact consumer used by UI Goal operations, not a copied response DTO.
+    expect(SessionWorkStateGetResponseV1Schema.parse(await route('get')).workState?.items[0]?.origin).toBe('happier');
+    await expect(route('set', { status: 'complete' })).resolves.toMatchObject({
+      workState: { items: [expect.objectContaining({ status: 'complete', completedAt: expect.any(Number) })] },
+    });
+    await expect(route('clear')).resolves.toMatchObject({ workState: { items: [] } });
+  });
+
+  it('FIX75 refuses a host Goal write without durable work-state wiring', async () => {
+    await expect(routeSessionGoalControl({
+      token: 'token', sessionId: 'sess_1', rawSession: createRawSession({ active: true }),
+      metadata: { machineId: 'machine-local', path: '/repo' }, currentMachineId: 'machine-local',
+      ctx: null, mode: 'plain', operation: 'set', request: { objective: 'Finish' },
+      callLiveSessionRpc: async () => ({ ok: false, errorCode: 'unsupported_session_runtime_method' }),
+    })).resolves.toMatchObject({ ok: false, errorCode: 'session_goal_control_work_state_custody_unavailable' });
+  });
+
   beforeEach(() => {
     mocks.updateSessionMetadataWithRetry.mockClear();
     mocks.fetchAccountMachineReplacements.mockReset();
@@ -85,21 +122,6 @@ describe('routeSessionGoalControl', () => {
       { id: 'machine-local' },
       { id: 'machine-remote' },
     ]);
-  });
-
-  it('wakes an inactive goal through the existing resume owner with the exact initial goal', async () => {
-    mocks.callMachineRpc.mockResolvedValue({ type: 'success', sessionId: 'sess_1' });
-    const result = await routeSessionGoalControl({
-      token: 'token', credentials: createTokenOnlyCredentials(), sessionId: 'sess_1',
-      rawSession: createRawSession({ seq: 17 }), metadata: createMetadata({ path: '/repo' }),
-      currentMachineId: 'machine-local', ctx: null, mode: 'plain', operation: 'set',
-      request: { objective: 'Ship the goal', tokenBudget: null }, callLiveSessionRpc: vi.fn(),
-      resumeInactiveWithInitialGoal: true,
-    });
-    expect(result).toEqual({ ok: true });
-    expect(mocks.callMachineRpc.mock.calls[0]?.[0]).toMatchObject({ machineId: 'machine-local',
-      method: RPC_METHODS.SPAWN_HAPPY_SESSION, request: { type: 'resume-session', sessionId: 'sess_1',
-        initialGoal: { objective: 'Ship the goal', tokenBudget: null }, initialTranscriptAfterSeq: 17 } });
   });
 
   it('routes an inactive remote goal to its target daemon without opening local native state', async () => {
@@ -188,7 +210,7 @@ describe('routeSessionGoalControl', () => {
       fieldId: 'runtime.workState',
       source: 'daemon',
       op: { kind: 'set', value: nextMetadata.sessionWorkStateV1 },
-    }));
+    }), { signal: undefined });
     expect(mocks.updateSessionMetadataWithRetry).not.toHaveBeenCalled();
   });
 

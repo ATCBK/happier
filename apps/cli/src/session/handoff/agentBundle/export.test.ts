@@ -53,7 +53,7 @@ describe('exportSessionHandoffAgentBundle', () => {
         vi.resetModules();
     });
 
-    it('projects persisted Codex connected-service affinity without exposing its source-machine path', async () => {
+    it('passes persisted Codex affinity to its native exporter without adding source-machine paths to the outward bundle', async () => {
         const exportBundle = vi.fn(async (_request: Readonly<{
             sessionId: string;
             metadata: unknown;
@@ -81,10 +81,11 @@ describe('exportSessionHandoffAgentBundle', () => {
         });
         const { exportSessionHandoffAgentBundle } = await import('./export');
 
-        await expect(exportSessionHandoffAgentBundle({
+        const exported = await exportSessionHandoffAgentBundle({
             metadata: {
                 machineId: 'machine-source',
                 path: '/repo',
+                nativeResumeIdentityV1: { v: 1, vendorResumeId: 'codex-persisted-1' },
                 runtimeDescriptorV1: {
                     v: 1,
                     agentId: 'codex',
@@ -100,7 +101,8 @@ describe('exportSessionHandoffAgentBundle', () => {
                 },
             },
             activeServerDir: '/active-server',
-        })).resolves.toEqual({
+        });
+        expect(exported).toEqual({
             agentBundle: {
                 providerId: 'codex',
                 remoteSessionId: 'codex-persisted-1',
@@ -113,20 +115,19 @@ describe('exportSessionHandoffAgentBundle', () => {
             sessionId: 'codex-persisted-1',
             metadata: {
                 path: '/repo',
-                providerSessionId: 'codex-persisted-1',
-                codexSessionId: 'codex-persisted-1',
-                codexBackendMode: 'appServer',
-                externalSessionSource: {
-                    kind: 'codexHome',
-                    home: 'connectedService',
-                    connectedServiceId: 'openai-codex',
-                    connectedServiceProfileId: 'profile-1',
-                    connectedServiceGroupId: 'group-1',
-                },
+                runtimeDescriptorV1: expect.objectContaining({
+                    v: 1, agentId: 'codex', agent: expect.objectContaining({
+                        backendMode: 'appServer', providerSessionId: 'codex-persisted-1',
+                        home: 'connectedService', connectedServiceId: 'openai-codex',
+                        connectedServiceProfileId: 'profile-1', connectedServiceGroupId: 'group-1',
+                        homePath: '/private/source-machine/codex-home',
+                    }),
+                }),
             },
             directory: '/active-server',
         });
-        expect(JSON.stringify(exportBundle.mock.calls[0]?.[0]?.metadata))
+        expect(exportBundle.mock.calls[0]?.[0]?.metadata).not.toHaveProperty('machineId');
+        expect(JSON.stringify(exported.agentBundle))
             .not.toContain('/private/source-machine/codex-home');
     });
 
@@ -244,6 +245,8 @@ describe('exportSessionHandoffAgentBundle', () => {
 
         expect(resolveSessionHandoffEligibility).toHaveBeenCalledWith({
             sourceMachineId: 'machine_source',
+            sessionAgentId: 'codex',
+            sessionProviderSessionId: 'codex_1',
             externalSessionLinkAuthority: expect.objectContaining({
                 ok: true,
                 transcriptStorage: 'direct',
@@ -255,9 +258,11 @@ describe('exportSessionHandoffAgentBundle', () => {
             }),
             metadata: {
                 path: '/repo',
-                providerSessionId: 'codex_1',
-                codexSessionId: 'codex_1',
-                codexBackendMode: 'appServer',
+                runtimeDescriptorV1: expect.objectContaining({
+                    v: 1, agentId: 'codex', agent: expect.objectContaining({
+                        backendMode: 'appServer', providerSessionId: 'codex_1',
+                    }),
+                }),
                 externalSessionSource: {
                     kind: 'codexHome',
                     home: 'connectedService',
@@ -271,9 +276,11 @@ describe('exportSessionHandoffAgentBundle', () => {
             sessionId: 'codex_1',
             metadata: {
                 path: '/repo',
-                providerSessionId: 'codex_1',
-                codexSessionId: 'codex_1',
-                codexBackendMode: 'appServer',
+                runtimeDescriptorV1: expect.objectContaining({
+                    v: 1, agentId: 'codex', agent: expect.objectContaining({
+                        backendMode: 'appServer', providerSessionId: 'codex_1',
+                    }),
+                }),
                 externalSessionSource: {
                     kind: 'codexHome',
                     home: 'connectedService',
@@ -403,7 +410,7 @@ describe('exportSessionHandoffAgentBundle', () => {
             sessionId: 'acme-session-1',
             metadata: {
                 path: '/repo',
-                providerSessionId: 'acme-session-1',
+                runtimeDescriptorV1: { v: 1, agentId: 'acme.handoff', agent: { providerSessionId: 'acme-session-1' } },
             },
             directory: '/active-server',
         });

@@ -18,10 +18,12 @@ export { createMachineSessionStopLifecycleActionExecutor };
 export function createMachineSessionSpawnRpcHandler(params: Readonly<{
     handlers: Pick<SessionLifecycleMachineHandlers, 'spawnSession'>;
     serverId?: string;
+    awaitAgentSessionOpen?: SessionLifecycleMachineDeps['awaitAgentSessionOpen'];
 }>): SessionLifecycleActionHandler {
     return createSpawnNewSessionLifecycleActionHandler({
         spawnSession: params.handlers.spawnSession,
         ...(params.serverId ? { serverId: params.serverId } : {}),
+        ...(params.awaitAgentSessionOpen ? { awaitAgentSessionOpen: params.awaitAgentSessionOpen } : {}),
     });
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { derivePluginSessionInputLocalIdV1 } from '@happier-dev/protocol';
+import { derivePluginSessionInputLocalIdV1, SessionInputRequestV1Schema } from '@happier-dev/protocol';
 
 import {
   buildAutomationSessionInputAdmissionV1,
@@ -10,9 +10,16 @@ import {
   buildSessionSpawnInitialInputAdmissionForLocalIdV1,
   deriveAutomationSessionInputLocalIdV1,
   deriveWorkflowSessionInputLocalIdV2,
+  requiresMachineAdmissionForSessionInput,
 } from './sessionInputAdmissionIdentity';
 
 describe('derivePluginSessionInputLocalIdV1', () => {
+  it('keeps a human-origin return on Account admission for encrypted input', () => {
+    const request = SessionInputRequestV1Schema.parse({ v: 1, producer: 'happierApp', caller: { kind: 'host' }, permission: {},
+      replyIntent: { mode: 'return', humanOrigin: { sessionId: 'composer-session' } } });
+    expect(requiresMachineAdmissionForSessionInput({ request, mode: 'e2ee' })).toBe(false);
+    expect(requiresMachineAdmissionForSessionInput({ request: { ...request, replyIntent: { mode: 'wait' } }, mode: 'e2ee' })).toBe(true);
+  });
   const caller = {
     kind: 'plugin' as const,
     pluginId: 'acme.channels',
@@ -112,6 +119,7 @@ describe('derivePluginSessionInputLocalIdV1', () => {
     expect(buildCausalSessionInputAdmissionV1({
       sourceSessionId: 'source-session',
       sourceTurnId: 'source-turn',
+      sourceInputId: 'source-input',
       callerDepth: 3,
       via: 'mcp',
       causalPermissionAuthority: {
@@ -133,6 +141,7 @@ describe('derivePluginSessionInputLocalIdV1', () => {
         sourceSession: {
           sourceSessionId: 'source-session',
           sourceTurnId: 'source-turn',
+          sourceInputId: 'source-input',
           via: 'mcp',
         },
         permission: { requestedPermissionCeiling: 'read-only' },

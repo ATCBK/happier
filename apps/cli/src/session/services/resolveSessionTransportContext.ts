@@ -12,6 +12,7 @@ import {
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import { type ResolveSessionIdResult, resolveSessionIdOrPrefix } from '@/session/query/resolveSessionId';
 import { fetchSessionById, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { logger } from '@/ui/logger';
 
 export type ResolveSessionTransportContextResult =
     | {
@@ -70,6 +71,14 @@ export async function resolveSessionTransportContext(params: Readonly<{
     /** Snapshot already bound to this exact Home; this owner never probes for one. */
     serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
 }>): Promise<ResolveSessionTransportContextResult> {
+    const resolutionStartedAt = performance.now();
+    let phaseStartedAt = resolutionStartedAt;
+    const phase = (name: 'account_currentness' | 'session_lookup' | 'session_record' | 'encryption_material', startedAt = phaseStartedAt) => {
+        const now = performance.now();
+        logger.debug('[SessionTransport] Resolution phase', { phase: name,
+            durationMs: Math.round(now - startedAt), elapsedMs: Math.round(now - resolutionStartedAt) });
+        phaseStartedAt = now;
+    };
     params.signal?.throwIfAborted();
     const currentnessAuthorizationHeaders = params.resolveAuthorizationHeaders?.({
         method: 'GET', path: '/v1/account/encryption/currentness',
@@ -77,15 +86,15 @@ export async function resolveSessionTransportContext(params: Readonly<{
     if (params.resolveAuthorizationHeaders && !currentnessAuthorizationHeaders) {
         throw new Error('External Action authorization unavailable');
     }
-    const accountEncryptionCurrentness = await fetchAccountEncryptionCurrentness({
+    const accountEncryptionCurrentnessRead = fetchAccountEncryptionCurrentness({
         token: params.credentials.token,
         ...(currentnessAuthorizationHeaders
             ? { authorizationHeaders: currentnessAuthorizationHeaders }
             : {}),
         ...(params.signal ? { signal: params.signal } : {}),
-    });
-    params.signal?.throwIfAborted();
-    const resolved = await resolveSessionIdOrPrefix({
+    }).then(currentness => { phase('account_currentness', resolutionStartedAt); return currentness; });
+    const lookupStartedAt = performance.now();
+    const sessionLookup = resolveSessionIdOrPrefix({
         credentials: params.credentials,
         idOrPrefix: params.idOrPrefix,
         ...(params.resolveAuthorizationHeaders
@@ -93,8 +102,12 @@ export async function resolveSessionTransportContext(params: Readonly<{
             : {}),
         ...(params.signal ? { signal: params.signal } : {}),
         ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
-        accountEncryptionMode: accountEncryptionCurrentness.mode,
-    });
+        accountEncryptionMode: async () => (await accountEncryptionCurrentnessRead).mode,
+    }).then(resolved => { phase('session_lookup', lookupStartedAt); return resolved; });
+    // Both reads stay fresh. No transport or encryption material is published
+    // until the Account witness and the canonical selector have both settled.
+    const [accountEncryptionCurrentness, resolved] = await Promise.all([accountEncryptionCurrentnessRead, sessionLookup]);
+    params.signal?.throwIfAborted();
     if (!resolved.ok) {
         return {
             ok: false,
@@ -115,6 +128,7 @@ export async function resolveSessionTransportContext(params: Readonly<{
             ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
         });
     const rawSession = await rawSessionPromise;
+    phase('session_record');
     params.signal?.throwIfAborted();
     if (!rawSession) {
         return {
@@ -139,6 +153,7 @@ export async function resolveSessionTransportContext(params: Readonly<{
         params.credentials,
         rawSession,
     );
+    phase('encryption_material');
     if (!ctx) {
         return {
             ok: false,

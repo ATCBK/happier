@@ -93,8 +93,8 @@ describe('sessionControl.sessionsHttp timeouts', () => {
         unarchiveSession({ token: 'fixture-token', sessionId: 's1' }),
       ]));
       expect(results).toMatchObject([
-        { status: 'rejected', reason: { code: 'ECONNABORTED' } },
-        { status: 'rejected', reason: { code: 'ECONNABORTED' } },
+        { status: 'rejected', reason: { code: 'outcome_unknown', cause: { code: 'ECONNABORTED' } } },
+        { status: 'rejected', reason: { code: 'outcome_unknown', cause: { code: 'ECONNABORTED' } } },
       ]);
     });
   });

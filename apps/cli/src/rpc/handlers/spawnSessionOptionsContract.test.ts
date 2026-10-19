@@ -15,6 +15,10 @@ import {
 } from './spawnSessionOptionsContract';
 
 describe('SpawnDaemonSessionRequestSchema', () => {
+  it('preserves an authored workspace ceiling through daemon admission', () => {
+    const request = { directory: '/workspace', workspaceWrites: 'deny' };
+    expect(pickDefinedSpawnSessionOptions(SpawnDaemonSessionRequestSchema.parse(request))).toMatchObject(request);
+  });
   it('preserves a strict private managed fork seed without accepting arbitrary source fields', () => {
     const request = { directory: '/private/child', directoryKind: 'managed', managedDirectorySeed: {
       sourceSessionId: 'source-1', sourcePath: '/private/source',

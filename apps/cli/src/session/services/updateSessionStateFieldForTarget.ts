@@ -29,6 +29,7 @@ const CLI_SESSION_STATE_METADATA_CAPABILITIES: SessionStateCapabilitiesV1 = {
     voicePreference: { supported: true, happierToProvider: { supported: false }, providerToHappier: { supported: false } },
   },
   display: {
+    statusReason: { supported: true, happierToProvider: { supported: false }, providerToHappier: { supported: false } },
     title: { supported: true, happierToProvider: { supported: false }, providerToHappier: { supported: false } },
     bot: { supported: true, happierToProvider: { supported: false }, providerToHappier: { supported: false } },
   },
@@ -84,7 +85,6 @@ export async function updateSessionStateFieldForTarget<F extends SessionStateFie
   fieldId: F;
   value: SessionStateFieldWriteValue<F>;
   metadataReason: string;
-  expectedMetadataRevision?: number;
   currentness?: SessionMetadataMutationCurrentness;
   maxAttempts?: number;
 }>): Promise<UpdateSessionMetadataForTargetResult> {
@@ -109,7 +109,6 @@ export async function updateSessionStateFieldForTarget<F extends SessionStateFie
               : {}),
             idOrPrefix: sessionId,
             updater,
-            expectedMetadataRevision: params.expectedMetadataRevision,
             currentness: params.currentness,
             ...(typeof opts.maxAttempts === 'number' ? { maxAttempts: opts.maxAttempts } : {}),
           });

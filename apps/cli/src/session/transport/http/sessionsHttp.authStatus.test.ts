@@ -371,4 +371,18 @@ describe('sessionControl.sessionsHttp authentication status handling', () => {
       code: 'session_active',
     });
   });
+
+  it('does not treat an unclassified archive server error as proof that the mutation failed', async () => {
+    vi.resetModules();
+    const { archiveSession, unarchiveSession } = await import('./sessionsHttp');
+    vi.spyOn(axios, 'post').mockResolvedValue({ status: 500, data: { error: 'private server diagnostic' } });
+    const results = await Promise.allSettled([
+      archiveSession({ token: 'token-1', sessionId: 'sess-1' }),
+      unarchiveSession({ token: 'token-1', sessionId: 'sess-1' }),
+    ]);
+    expect(results).toMatchObject([
+      { status: 'rejected', reason: { code: 'outcome_unknown' } },
+      { status: 'rejected', reason: { code: 'outcome_unknown' } },
+    ]);
+  });
 });

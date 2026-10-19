@@ -201,7 +201,7 @@ describe('session handoff start operation exclusion', () => {
     } as const;
     const controller = new AbortController();
     const result = handler(request, { signal: controller.signal });
-    let cancellationAssertionTimer: NodeJS.Timeout | null = null;
+    let cancellationAssertionTimer: ReturnType<typeof setTimeout> | null = null;
     try {
       controller.abort();
       await expect(Promise.race([

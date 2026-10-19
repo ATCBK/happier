@@ -31,6 +31,8 @@ import {
   createExternalActionMachineRpcExecution,
   createExternalActionSourceMachineRpcExecution,
   readExternalActionSourceMachineRpcSigner,
+  isReviewedServiceMoveChild,
+  isReviewedSecondOpinionModelSpawnChild,
   dispatchOriginalAccountAction,
   type ExternalActionMachineRequestSigningKey,
 } from '@/api/externalActionExecutionAuthorization';
@@ -44,6 +46,10 @@ import {
   type SocketRpcContent,
 } from '@happier-dev/sync-client';
 import { readRpcObservation, withUserScopedRpcSocket, type RpcObservationOptions } from './withUserScopedRpcSocket';
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
+import { isDiscussionSecondOpinionModelRpcMethodV1 } from '@happier-dev/protocol/discussions/secondOpinionActions';
+import type { RpcHandlerContext } from '@/api/rpc/types';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 export type MachineRpcRequestDisposition = RpcRequestDisposition;
 export const readMachineRpcRequestDisposition = readRpcRequestDisposition;
@@ -61,13 +67,43 @@ export class MachineRpcEncryptionModeMismatchError extends Error {
 /** The public caller retains V2 creation identity; the existing exact target reader selects private custody. */
 export async function dispatchRequesterSessionSpawnNewRpc(params: Readonly<{
   credentials: StoredCredentials; input: unknown; serverId: string; serverUrl: string; serverIdentityId?: string;
-  context?: ActionExecutorContext;
+  context?: ActionExecutorContext & Partial<Pick<RpcHandlerContext, 'workspaceSyncSourceExecution'
+    | 'machineAdmission' | 'verifyMachineAdmissionCurrent'>>;
+  externalActionMachineInstallationId?: string;
+  externalActionMachineRequestPrivateKey?: ExternalActionMachineRequestSigningKey;
   onRequesterSessionCredentialDisclosure?: (disclosure: ReturnType<typeof projectRequesterSessionCredentialDisclosure>) => boolean | void | Promise<boolean | void>;
 }>): Promise<ActionExecuteResult | null> {
   const parsed = SessionSpawnNewInputV2Schema.safeParse(params.input);
   if (!parsed.success || parsed.data.executionTarget.serverId !== params.serverId) return null;
   const signal = params.context?.signal;
   const machineId = parsed.data.executionTarget.machineId;
+  const root = params.context?.externalActionExecutionAuthorization;
+  if (root?.binding.actionId === 'discussion.second_opinion.start') {
+    const requester = readRequesterAccountActionContext(root);
+    if (!params.context || !params.externalActionMachineInstallationId || !params.externalActionMachineRequestPrivateKey
+      || !await isReviewedSecondOpinionModelSpawnChild({ authorization: root, envelope: params.context.originalActionEnvelope,
+        actionId: 'session.spawn_new', machineId, params: parsed.data, ...(signal ? { signal } : {}) })) {
+      return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+    }
+    if (!requester) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+    const packet = params.context.workspaceSyncSourceExecution;
+    if (packet && params.context.machineAdmission?.machineId === machineId
+      && params.context.machineAdmission.actorAccountId === root.binding.accountId
+      && packet.method === `${machineId}:${RPC_METHODS.SESSION_SPAWN_NEW}`
+      && packet.externalActionExecution.effectActionId === 'session.spawn_new'
+      && packet.externalActionExecution.authorization.token === root.token
+      && sameStrictJsonValue(packet.externalActionExecution.authorization.binding, root.binding)
+      && sameStrictJsonValue(packet.originalActionEnvelope, params.context.originalActionEnvelope)
+      && params.context.verifyMachineAdmissionCurrent && await params.context.verifyMachineAdmissionCurrent()) return null;
+    const result = SessionSpawnNewResultV1Schema.safeParse(await callExactMachineRpc({ credentials: requester.credentials,
+      serverUrl: params.serverUrl, machineId, method: RPC_METHODS.SESSION_SPAWN_NEW, request: parsed.data,
+      authorityCeiling: 'account_automation', timeoutMs: null, requireCurrentMachine: true, requiredMachineKind: 'persistent',
+      externalAction: { context: params.context, effectActionId: 'session.spawn_new',
+        installationId: params.externalActionMachineInstallationId, privateKey: params.externalActionMachineRequestPrivateKey },
+      ...(signal ? { signal } : {}) }));
+    return result.success ? { ok: true, result: result.data }
+      : { ok: false, errorCode: 'invalid_action_transport_output', error: 'invalid_action_transport_output' };
+  }
   const target = await resolveMachineRpcContentCodec({ credentials: params.credentials, machineId,
     serverUrl: params.serverUrl, timeoutMs: DEFAULT_MACHINE_RPC_TIMEOUT_MS, requireCurrentMachine: true,
     requiredMachineKind: 'persistent', ...(signal ? { signal } : {}) });
@@ -144,6 +180,10 @@ async function resolveMachineRpcContentCodec(params: Readonly<{
   const path = `/v1/machines/${encodeURIComponent(params.machineId)}`;
   const externalAuthorization = params.externalAction?.context.externalActionExecutionAuthorization;
   const externalTarget = params.externalAction?.context.externalActionTarget;
+  const moveChildRead = (externalAuthorization?.binding.actionId === 'projects.service.relocate'
+    && params.externalAction?.effectActionId !== externalAuthorization.binding.actionId)
+    || externalAuthorization?.binding.actionId === 'discussion.second_opinion.start'
+      && params.externalAction?.effectActionId === 'session.spawn_new';
   if (params.externalAction && (!externalAuthorization || !externalTarget)) {
     throw new Error('External Action Machine HTTP authorization is unavailable');
   }
@@ -152,10 +192,11 @@ async function resolveMachineRpcContentCodec(params: Readonly<{
     {
       headers: {
         ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-        ...(params.externalAction && externalAuthorization && externalTarget
+        ...(params.externalAction && externalAuthorization && externalTarget && !moveChildRead
           ? createExternalActionAuthorizedRequestHeaders({
               authorization: externalAuthorization,
-              effectActionId: params.externalAction.effectActionId,
+              effectActionId: externalAuthorization.binding.actionId === 'projects.service.relocate'
+                ? externalAuthorization.binding.actionId : params.externalAction.effectActionId,
               target: externalTarget,
               installationId: isOriginalRequesterSource(params.externalAction)
                 ? externalAuthorization.binding.installationId : params.externalAction.installationId,
@@ -270,6 +311,24 @@ export async function callExactMachineRpc(params: Readonly<{
     signal.throwIfAborted();
     const machineId = params.machineId.trim();
     if (!machineId) throw new Error('Machine id is required');
+    const moveAuthorization = params.externalAction?.context.externalActionExecutionAuthorization;
+    const opinionChild = moveAuthorization?.binding.actionId === 'discussion.second_opinion.start'
+      && params.externalAction?.effectActionId === 'session.spawn_new' && isDiscussionSecondOpinionModelRpcMethodV1(params.method);
+    const moveChild = (moveAuthorization?.binding.actionId === 'projects.service.relocate'
+      && params.externalAction?.effectActionId !== moveAuthorization.binding.actionId) || opinionChild;
+    if (moveChild && params.externalAction && moveAuthorization) {
+      const requester = readRequesterAccountActionContext(moveAuthorization);
+      if (!requester || requester.credentials.token !== params.credentials.token || !await requester.isCurrent()) {
+        throw new MachineRpcTargetNotCurrentError(machineId);
+      }
+      const review = opinionChild ? isReviewedSecondOpinionModelSpawnChild : isReviewedServiceMoveChild;
+      if (!await review({ authorization: moveAuthorization,
+        envelope: params.externalAction.context.originalActionEnvelope, signal,
+        actionId: params.externalAction.effectActionId, machineId, params: params.request,
+        ...(opinionChild ? { method: params.method } : {}) })) {
+        throw new MachineRpcTargetNotCurrentError(machineId);
+      }
+    }
     const timeoutMs = params.timeoutMs === null ? null
       : typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_MACHINE_RPC_TIMEOUT_MS;
     const setupTimeoutMs = timeoutMs ?? DEFAULT_MACHINE_RPC_TIMEOUT_MS;
@@ -375,17 +434,19 @@ export async function callExactMachineRpc(params: Readonly<{
               || Reflect.get(request, 'kind') === 'requester_session_handoff_preflight_bootstrap_v1');
           if (seal && transportAuthorization && !hasPrivateBootstrap) {
             const encodedKey = machineTarget.installationPublicKey;
-            if (machineTarget.installationId !== transportAuthorization.binding.installationId
-              || transportAuthorization.binding.machineId !== machineId || typeof encodedKey !== 'string') {
+            if ((!moveChild && (machineTarget.installationId !== transportAuthorization.binding.installationId
+              || transportAuthorization.binding.machineId !== machineId)) || !machineTarget.installationId || typeof encodedKey !== 'string') {
               throw new MachineRpcTargetNotCurrentError(machineId);
             }
             const publicKey = decodeBase64(encodedKey, 'base64');
             if (encodeBase64(publicKey, 'base64') !== encodedKey) throw new MachineRpcTargetNotCurrentError(machineId);
             const sealed = await seal({ authorization: transportAuthorization,
-              purpose: { kind: 'machine_rpc', method: params.method, params: request }, installationPublicKey: publicKey });
+              purpose: { kind: 'machine_rpc', method: params.method, params: request,
+                ...(moveChild ? { recipient: { machineId, installationId: machineTarget.installationId } } : {}) }, installationPublicKey: publicKey });
             if (!sealed || !sealed.requesterAccountContext) throw new Error('Requester Account custody unavailable');
             transportAuthorization = sealed;
           }
+          if (moveChild && !seal) throw new Error('Requester Account custody unavailable');
           const createExternalActionExecution = createExecution(transportAuthorization);
           return await callSocketRpc({
             socket,
@@ -399,7 +460,8 @@ export async function callExactMachineRpc(params: Readonly<{
             signal: attemptSignal,
             authorization: params.authorization,
             ...(createExternalActionExecution ? { createExternalActionExecution } : {}),
-            ...(params.method === RPC_METHODS.PROJECTS_OPEN && externalAction?.context.originalActionEnvelope
+            ...((params.method === RPC_METHODS.PROJECTS_OPEN || params.method === RPC_METHODS.DAEMON_PROJECTS_SCRIPT_RUN
+              || params.method === RPC_METHODS.DAEMON_PROJECTS_COMPUTE_EXEC || moveChild) && externalAction?.context.originalActionEnvelope
               ? { originalActionEnvelope: externalAction.context.originalActionEnvelope } : {}),
           });
         },
@@ -434,8 +496,9 @@ export async function callExactMachineRpc(params: Readonly<{
 async function resolveSuccessorMachineId(params: Readonly<{
   credentials: StoredCredentials;
   machineId: string;
+  serverUrl?: string;
 }>): Promise<string | null> {
-  const machines = await fetchAccountMachineReplacements({ credentials: params.credentials });
+  const machines = await fetchAccountMachineReplacements({ credentials: params.credentials, serverUrl: params.serverUrl });
   if (!machines) return null;
   const canonicalMachineId = resolveCanonicalMachineId(params.machineId, machines)?.machineId ?? null;
   return canonicalMachineId && canonicalMachineId !== params.machineId.trim()
@@ -474,6 +537,7 @@ export async function callMachineRpc(params: Parameters<typeof callExactMachineR
     const successorMachineId = await resolveSuccessorMachineId({
       credentials: params.credentials,
       machineId: params.machineId,
+      serverUrl: params.serverUrl,
     });
     if (!successorMachineId) throw error;
     return await callExactMachineRpc({ ...params, machineId: successorMachineId });

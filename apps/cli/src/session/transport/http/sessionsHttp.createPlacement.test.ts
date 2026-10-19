@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 
@@ -13,8 +13,15 @@ const plainAccountEncryptionCurrentness = {
 
 describe('getOrCreateSessionByTag creation placement transport', () => {
   let envScope = createEnvKeyScope(['HAPPIER_SERVER_URL']);
+  let releaseHome: () => void;
+
+  beforeEach(async () => {
+    const { publishServerHttpRuntimeOrigin } = await import('@/api/client/serverHttpBaseUrl');
+    releaseHome = publishServerHttpRuntimeOrigin('http://server.example.test', 'https');
+  });
 
   afterEach(() => {
+    releaseHome();
     envScope.restore();
     envScope = createEnvKeyScope(['HAPPIER_SERVER_URL']);
     vi.restoreAllMocks();
@@ -109,5 +116,31 @@ describe('getOrCreateSessionByTag creation placement transport', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer token-1' }),
       }),
     );
+  });
+  it('does not replace a denied signed assignment read with the installed Account token', async () => {
+    const { fetchSessionOrganizationPlacement } = await import('./sessionsHttp');
+    const get = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { snapshot: {
+      schemaVersion: 1, version: 1, pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [],
+    } } } as never);
+    const input = { token: 'installed-alice', sessionId: 'bob-session', resolveAuthorizationHeaders: () => null };
+    await expect(fetchSessionOrganizationPlacement(input)).rejects.toThrow('External Action authorization unavailable');
+    expect(get).not.toHaveBeenCalled();
+  });
+  it('loads a complete assignment corpus in the canonical snapshot batches rather than one request per Session', async () => {
+    const { fetchSessionOrganizationPlacements } = await import('./sessionsHttp');
+    const { SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS } = await import('@happier-dev/protocol/sessions/organization/constants');
+    const sessionIds = Array.from({ length: SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS + 1 }, (_, index) => `session-${index}`);
+    const get = vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
+      const ids = new URL(url).searchParams.get('assignmentSessionIds')!.split(',');
+      expect(config?.headers?.Authorization).toBeUndefined();
+      expect(config?.headers?.['signed-assignment']).toBe('requester');
+      return { status: 200, data: { snapshot: { schemaVersion: 1, version: 1, pins: [], folders: [], folderAssignments: [],
+        tags: [], tagAssignments: ids.map(sessionId => ({ sessionId, tagIds: [`tag-${sessionId}`] })), orderEntries: [], labels: [] } } } as never;
+    });
+    const placements = await fetchSessionOrganizationPlacements({ token: 'installed-alice', sessionIds,
+      resolveAuthorizationHeaders: () => ({ 'signed-assignment': 'requester' }) });
+    expect(placements.size).toBe(sessionIds.length);
+    for (const sessionId of sessionIds) expect(placements.get(sessionId)?.tagIds).toEqual([`tag-${sessionId}`]);
+    expect(get).toHaveBeenCalledTimes(2);
   });
 });

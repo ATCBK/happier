@@ -99,7 +99,7 @@ describe('resolveSessionTransportContext', () => {
             credentials: { token: 'token', encryption: null },
             idOrPrefix: 'sess-1',
             signal: cancellation.signal,
-            accountEncryptionMode: 'plain',
+            accountEncryptionMode: expect.any(Function),
         });
         expect(fetchSessionById).toHaveBeenCalledWith({
             token: 'token',
@@ -137,7 +137,7 @@ describe('resolveSessionTransportContext', () => {
             credentials: { token: 'token', encryption: null },
             idOrPrefix: 'sess-1',
             serverFeaturesSnapshot,
-            accountEncryptionMode: 'plain',
+            accountEncryptionMode: expect.any(Function),
         });
         expect(fetchSessionById).toHaveBeenCalledWith({
             token: 'token',

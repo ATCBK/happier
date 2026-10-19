@@ -33,6 +33,7 @@ export function registerMachineSessionRpcHandlers(params: Readonly<{
   const spawnLifecycleHandler = createMachineSessionSpawnRpcHandler({
     handlers: { spawnSession: params.handlers.spawnSession },
     ...(params.deps?.currentServerId ? { serverId: params.deps.currentServerId } : {}),
+    ...(params.deps?.awaitAgentSessionOpen ? { awaitAgentSessionOpen: params.deps.awaitAgentSessionOpen } : {}),
   });
   registerSessionCreationTargetPreparationRpc({
     rpcHandlerManager: params.rpcHandlerManager,

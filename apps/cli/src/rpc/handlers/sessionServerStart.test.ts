@@ -28,7 +28,7 @@ const plainCurrentness: AccountEncryptionCurrentnessResponse = createAccountEncr
 const plainSpawnInput = {
     creationKey: "automation-run:run-1",
     executionTarget: { serverId: "server-1", machineId: "machine-1" },
-    directory: "/workspace/project",
+    directory: { kind: "path", path: "/workspace/project" },
     organizationPlacement: { folderId: null, tagIds: [] },
     agentTarget: {
         kind: "agent",

@@ -1,31 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectedAccountCatalogRowReadResponseV1Schema, CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import type { QualifiedConnectedAccountPurposeV1 } from '@happier-dev/protocol';
+import * as persistence from '@/persistence';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 
 /**
  * The transition's TARGET connected-service binding, through the real
  * spawn-defaulting owner (`resolveSessionSpawnConnectedServicesDefaultsPayload`).
  *
- * Only genuine boundaries are doubled: the Account settings bootstrap and the
- * Home's recipient Team catalog read are network reads, and the Agent catalog's
- * declared service ids come from the plugin runtime this unit does not load.
+ * Only Home HTTP, credential storage and the recipient Team catalog read are
+ * substituted. The admitted Agent catalog, settings bootstrap and purpose-row
+ * opener run for real.
  * The owner's own decisions — default projection, Team currentness, typed
  * refusal — run for real, so a Team default that no longer resolves must reach
  * the coordinator as the owner's typed refusal (lane 10 child 02 §11.6 "no
  * silent native fallback"), before the source runtime is touched.
  */
-
-const mocks = vi.hoisted(() => ({
-  bootstrapAccountSettingsContext: vi.fn(),
-}));
-
-vi.mock('@/settings/accountSettings/bootstrapAccountSettingsContext', () => ({
-  bootstrapAccountSettingsContext: mocks.bootstrapAccountSettingsContext,
-}));
-vi.mock('@/agent/catalog/registry', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@/agent/catalog/registry')>(),
-  resolveCatalogAgentConnectedAccountServiceIds: (agentId: string) => agentId === 'codex'
-    ? ['happier.agent.codex/openai-codex']
-    : [],
-}));
 
 const { runSessionAgentTransition } = await import('./sessionAgentTransitionCoordinator');
 type SessionAgentTransitionDeps =
@@ -34,24 +28,14 @@ const {
   buildTransitionRequest,
   createTransitionDepsHarness,
   CLAUDE_SOURCE_METADATA,
-  TEST_CREDENTIALS,
   TEST_LOCAL_ID,
 } = await import('./sessionAgentTransitionTestkit');
 const { resolveSessionSpawnConnectedServicesDefaultsPayload } =
   await import('@/session/services/spawnConnectedServicesDefaults');
 const { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } =
   await import('@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn');
-const { readCurrentContributionRegistry } = await import('@/agent/catalog/snapshot');
-
-// Codex's real declared purpose, read from the bundled contribution projection.
-const CODEX_SCOPE = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({
-  agentId: 'codex',
-  contributions: readCurrentContributionRegistry(),
-})?.authorizedPurposes.find((scope) => scope.serviceRefs[0]?.localId === 'openai-codex');
-const CODEX_PURPOSE = {
-  consumer: CODEX_SCOPE?.purpose.consumer ?? { pluginId: 'missing', localId: 'missing' },
-  purpose: CODEX_SCOPE?.purpose.purpose ?? 'missing',
-};
+const TEST_CREDENTIALS = { token: `header.${Buffer.from(JSON.stringify({ sub: 'recipient-account' })).toString('base64url')}.signature`, encryption: null } as const;
+let CODEX_PURPOSE: QualifiedConnectedAccountPurposeV1;
 const CODEX_SERVICE = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
 const TEAM_SELECTION = {
   source: 'team_resource' as const,
@@ -59,16 +43,17 @@ const TEAM_SELECTION = {
   deliveryMode: 'brokered' as const,
 };
 
-/** What the Agent page chooser persists for Codex's declared purpose. */
-const TEAM_DEFAULT_SETTINGS = {
-  connectedAccountPurposeBindingsV1: {
-    v: 1,
-    bindings: [{
-      purpose: CODEX_PURPOSE,
-      target: { kind: 'team_resource', service: CODEX_SERVICE, teamId: 'team-a', selection: TEAM_SELECTION },
-    }],
-  },
-};
+let hasTeamDefault = true;
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => {
+  runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+    runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
+  const scope = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({ agentId: 'codex',
+    contributions: runtime.registry.contributes })?.authorizedPurposes.find(scope => scope.serviceRefs[0]?.localId === 'openai-codex');
+  if (!scope) throw new Error('Admitted Codex purpose is unavailable');
+  CODEX_PURPOSE = scope.purpose;
+});
+afterAll(async () => { await runtime?.dispose(); });
 
 function buildTeamCatalog(resources: readonly Record<string, unknown>[]) {
   return {
@@ -135,8 +120,25 @@ function createHarness(input: Readonly<{
 }
 
 beforeEach(() => {
-  mocks.bootstrapAccountSettingsContext.mockReset();
+  resetInMemoryAccountSettingsContextForTests();
+  hasTeamDefault = true;
+  vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(TEST_CREDENTIALS);
+  vi.spyOn(axios, 'get').mockImplementation(async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/v2/account/settings') return { status: 200,
+      data: { content: { t: 'plain', v: {} }, version: 9 } };
+    if (path === '/v1/account/encryption/currentness') return { status: 200,
+      data: createAccountEncryptionCurrentnessFixture({ settingsVersion: 9 }) };
+    if (path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`) return { status: 200,
+      data: ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 3,
+        content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: hasTeamDefault ? [{
+          purpose: CODEX_PURPOSE,
+          target: { kind: 'team_resource', service: CODEX_SERVICE, teamId: 'team-a', selection: TEAM_SELECTION },
+        }] : [] } } } }) };
+    return { status: 404, data: { error: 'unsupported' } };
+  });
 });
+afterEach(() => { vi.restoreAllMocks(); resetInMemoryAccountSettingsContextForTests(); });
 
 /**
  * A connected-service binding is Agent-scoped: it names a `serviceId` the
@@ -147,7 +149,6 @@ beforeEach(() => {
  */
 describe('runSessionAgentTransition — the target binding comes from the one spawn-defaulting owner', () => {
   it('refuses typed, with the source untouched, when the target Team default no longer resolves', async () => {
-    mocks.bootstrapAccountSettingsContext.mockResolvedValue({ settings: TEAM_DEFAULT_SETTINGS });
     // The Home no longer offers the resource from that Team.
     const { harness, captured, readTeamCatalog } = createHarness({
       readTeamCatalog: async () => buildTeamCatalog([]),
@@ -167,7 +168,6 @@ describe('runSessionAgentTransition — the target binding comes from the one sp
   });
 
   it('refuses typed when the Home catalog cannot be read for a Team default', async () => {
-    mocks.bootstrapAccountSettingsContext.mockResolvedValue({ settings: TEAM_DEFAULT_SETTINGS });
     const { harness, captured } = createHarness({ readTeamCatalog: async () => null });
 
     const result = await runSessionAgentTransition({
@@ -182,7 +182,6 @@ describe('runSessionAgentTransition — the target binding comes from the one sp
   });
 
   it('rebinds the target to its current Team default instead of carrying the source binding', async () => {
-    mocks.bootstrapAccountSettingsContext.mockResolvedValue({ settings: TEAM_DEFAULT_SETTINGS });
     const { harness, captured } = createHarness({
       readTeamCatalog: async () => buildTeamCatalog([CURRENT_TEAM_RESOURCE]),
     });
@@ -216,7 +215,7 @@ describe('runSessionAgentTransition — the target binding comes from the one sp
   });
 
   it('leaves the target on native auth when the Account configures no default for it', async () => {
-    mocks.bootstrapAccountSettingsContext.mockResolvedValue({ settings: {} });
+    hasTeamDefault = false;
     const { harness, captured, readTeamCatalog } = createHarness({
       readTeamCatalog: async () => buildTeamCatalog([]),
     });

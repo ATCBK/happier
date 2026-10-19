@@ -2,7 +2,7 @@ import axios from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -83,7 +83,16 @@ describe('spawn defaults from the current purpose catalog', () => {
           settingsVersion: 7, settings: accountSettingsParse(initialRaw), rawSettings: initialRaw, settingsSecretsReadKeys: [] },
         isCurrent: async () => true });
       await expect(resolveSessionSpawnConnectedServicesDefaultsPayload({ agentId: 'codex', credentials, operationContext })).resolves.toBeNull();
-      expect(operationContext.readSnapshot()).toMatchObject({ settingsVersion: 9, rawSettings: currentRaw });
+      // The opened row is authoritative at admission, even while the obsolete
+      // Settings carrier is retained. Source/history cleanup must not block it.
+      expect(operationContext.readSnapshot()).toMatchObject({ connectedPurposeCatalog: {
+        status: 'ready', revision: 4, record: { key: 'purposes', value: { v: 1, bindings: [] } },
+      } });
+      // Observe the independent cleanup publication rather than assuming its
+      // Settings read completed before the admission promise settled.
+      await vi.waitFor(() => {
+        expect(operationContext.readSnapshot()).toMatchObject({ settingsVersion: 9, rawSettings: currentRaw });
+      });
     });
   });
 });

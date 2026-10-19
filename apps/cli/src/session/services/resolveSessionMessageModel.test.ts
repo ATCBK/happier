@@ -206,17 +206,15 @@ describe('resolveSessionMessageModel', () => {
         },
       },
     } as const;
-    for (const providerConnectionId of ['pc_b', null] as const) {
-      expect(resolveSessionMessageModel({
-        metadata: providerMetadata,
-        modelSelectionInput: { providerConnectionId, modelId: 'default' },
-        agentPolicy: 'live',
-        nowMs: 10,
-      }).selection?.ref).toMatchObject({
-        providerConnectionId,
-        modelId: 'default',
-      });
-    }
+    expect(resolveSessionMessageModel({
+      metadata: providerMetadata,
+      modelSelectionInput: { providerConnectionId: 'pc_b', modelId: 'default' },
+      agentPolicy: 'live',
+      nowMs: 10,
+    }).selection?.ref).toMatchObject({
+      providerConnectionId: 'pc_b',
+      modelId: 'default',
+    });
     expect(resolveSessionMessageModel({
       metadata: { flavor: 'codex' },
       modelSelectionInput: { providerConnectionId: 'pc_a', modelId: 'provider-model' },
@@ -230,7 +228,7 @@ describe('resolveSessionMessageModel', () => {
       metadata: providerMetadata,
       modelSelectionInput: { modelId: 'default' },
       agentPolicy: 'live',
-    })).toBe('default');
+    })).toBe('');
   });
 
   it('delegates same-connection policy to the exact prompt-custody coordinator', () => {
@@ -261,16 +259,16 @@ describe('resolveSessionMessageModel', () => {
       },
       agentPolicy: 'live',
     })).toThrow(/concrete model/i);
-    expect(modelIdFor({
+    expect(resolveSessionMessageModel({
       metadata: { flavor: 'codex' },
       modelSelectionInput: { providerConnectionId: null, modelId: 'default' },
       agentPolicy: 'unsupported',
-    })).toBe('default');
-    expect(modelIdFor({
+    })).toEqual({ modelId: '', selection: null });
+    expect(resolveSessionMessageModel({
       metadata: { flavor: 'codex' },
       modelSelectionInput: { providerConnectionId: null, modelId: null },
       agentPolicy: 'unsupported',
-    })).toBe('default');
+    })).toEqual({ modelId: '', selection: null });
   });
 
   it('keeps the deployed bare override as compatibility-only input', () => {

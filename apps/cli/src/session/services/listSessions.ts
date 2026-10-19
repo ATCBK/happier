@@ -17,10 +17,12 @@ import { getSessionTranscript } from './getSessionTranscript';
 import type { SemanticTranscriptItem } from './transcript/semanticTranscriptItem';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import { projectCliSessionAwarenessV1 } from '@/cli/output/session/sessionAwareness';
+import { projectCliSessionListFilterFactsV1, readCliSessionListTagAssignmentsV1 } from '@/cli/output/session/sessionListFilterFacts';
 import { mapWithConcurrency } from '@/utils/async/mapWithConcurrency';
 import { buildSessionAwarenessListResultV1, markSessionListQueryResultV1 } from '@happier-dev/protocol/sessions/awareness/action';
 import type { SessionAwarenessListResultV1, SessionListQueryV1, SessionListViewV1 } from '@happier-dev/protocol';
-import { matchSessionBotFilterV1, matchSessionProjectFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { matchSessionBotFilterV1, matchSessionProjectFilterV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import type { FollowRulePreviewCandidateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
 import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { tryDecryptSessionOwnerMetadataView, tryDecryptSessionPresentationMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
@@ -107,6 +109,7 @@ export function resolveAdmittedSessionListQueryAdmission(
 ): AdmittedSessionListQueryAdmission {
   const arms: string[] = [];
   if (query.underSessionId !== undefined) arms.push('underSessionId');
+  if (query.coordinator !== undefined) arms.push('coordinator');
   if (query.scope !== 'all_accessible') arms.push('scope');
   if (query.attention !== 'any') arms.push('attention');
   if (query.audiences.length > 0) arms.push('audiences');
@@ -240,6 +243,10 @@ type ListSessionsParams = Readonly<{
   signal?: AbortSignal;
   /** Host-admitted corpus; applied before any row, awareness, or preview projection. */
   allowedSessionIds?: readonly string[];
+  /** Private current-fact projection for Follow preview; never part of an Action list DTO. */
+  filterCandidates?: Readonly<{
+    serverId: string; viewerAccountId?: string; filters?: readonly SessionListFilterV1[]; collect: (candidate: FollowRulePreviewCandidateV1) => void;
+  }>;
 }>;
 
 export function listSessions(params: ListSessionsParams & { view: 'awareness' }): Promise<SessionAwarenessListResultV1>;
@@ -379,10 +386,11 @@ export async function listSessions(params: ListSessionsParams): Promise<ListSess
   while (
     (seekingProjectMatch && filteredRows().length === 0)
     || (resultLimit !== null && shouldFillVisibleLimit && filteredRows().length < resultLimit)
+    || params.filterCandidates !== undefined
   ) {
     const attention = readSessionListAttentionContinuation(page);
     const cursor = page.hasNext ? page.nextCursor : null;
-    const attentionCursor = !cursor && seekingProjectMatch && query && attention?.attentionHasNext
+    const attentionCursor = !cursor && (seekingProjectMatch || params.filterCandidates) && query && attention?.attentionHasNext
       ? attention.attentionNextCursor : null;
     const continuationCursor = cursor ?? attentionCursor;
     if (!continuationCursor) break;
@@ -421,6 +429,22 @@ export async function listSessions(params: ListSessionsParams): Promise<ListSess
   }
 
   const limitedRows = resultLimit === null ? filteredRows() : filteredRows().slice(0, resultLimit);
+  if (params.filterCandidates) {
+    const projection = params.filterCandidates;
+    const nowMs = Date.now();
+    const assignments = await readCliSessionListTagAssignmentsV1({ credentials: params.credentials,
+      serverId: projection.serverId, sessionIds: limitedRows.map(row => row.id), filters: projection.filters ?? [],
+      resolveAuthorizationHeaders: params.resolveAuthorizationHeaders, signal: params.signal });
+    for (const row of limitedRows) {
+      const rawRow = rawRowById.get(row.id);
+      if (!rawRow) throw new Error(`Missing raw session row for ${row.id}`);
+      projection.collect({ source: { kind: 'session', sessionId: row.id }, facts: projectCliSessionListFilterFactsV1({
+        credentials: params.credentials, accountEncryption: accountEncryptionCurrentness, row: rawRow, nowMs,
+        serverId: projection.serverId, viewerAccountId: projection.viewerAccountId, workspaceRefs: params.workspaceRefs,
+        preparedFacts: { workspaceRefs: params.workspaceRefs, tagIds: assignments?.get(row.id) },
+      }) });
+    }
+  }
   // A server continuation describes the authenticated Account corpus, not the
   // host-admitted subset. Never expose it to a Session-scoped autonomous caller.
   const nextCursor = allowedSessionIds ? null : page.nextCursor;

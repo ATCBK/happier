@@ -12,8 +12,8 @@ import type { SessionTeamCredentialBindingIntentListV1, SessionTeamCredentialBin
 
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { refreshActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
+import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
+import { refreshConnectedAccountCatalogForAdmission } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { configuration } from '@/configuration';
@@ -46,6 +46,7 @@ export type SpawnConnectedServicesTeamResourceCatalog = Readonly<{
 
 export type ResolveSpawnConnectedServicesTeamResourceCatalog = (params: Readonly<{
   teamIds: readonly string[];
+  signal?: AbortSignal;
 }>) => Promise<SpawnConnectedServicesTeamResourceCatalog | null>;
 
 function readRecipientCatalogNextCursor(page: object): string | null {
@@ -58,7 +59,7 @@ export function createSpawnConnectedServicesTeamResourceCatalogResolver(params: 
   serverId: string;
   accountId: string;
 }>): ResolveSpawnConnectedServicesTeamResourceCatalog {
-  return async ({ teamIds }) => {
+  return async ({ teamIds, signal }) => {
     const resources: TeamCredentialResourceCatalogEntryV1[] = [];
     for (const teamId of teamIds) {
       let cursor: string | null = null;
@@ -66,6 +67,7 @@ export function createSpawnConnectedServicesTeamResourceCatalogResolver(params: 
         const raw = await params.homeDomainAction({
           actionId: 'teams.credentials.entitled.list', input: { teamId, ...(cursor ? { cursor } : {}) },
           context: { surface: 'cli', serverId: params.serverId },
+          ...(signal ? { signal } : {}),
         });
         if (raw && typeof raw === 'object' && 'ok' in raw && raw.ok === false) return null;
         const parsed = TeamCredentialResourceEntitledPageV1Schema.safeParse(raw);
@@ -124,8 +126,8 @@ export class ConnectedServicesDefaultUnavailableError extends Error {
  * substitute an in-process settings snapshot for this resolution: a second settings surface is
  * exactly the stale-snapshot split-brain that silently killed run defaulting live (QA2-F02).
  * Consumed by session spawn (createCliActionDeps) AND execution-run start (connectedServicesEnv).
- * Network bootstrap failures retain the legacy no-default behavior. Invalid settings
- * content refuses defaulting rather than selecting native authentication. A
+ * Network/bootstrap failures refuse defaulting rather than silently selecting
+ * native authentication. Invalid settings content does the same. A
  * persisted Team-resource default is different: it is an explicit selection,
  * so missing or stale current-resource evidence throws the typed unavailable
  * error instead of silently falling back to native authentication.
@@ -133,6 +135,7 @@ export class ConnectedServicesDefaultUnavailableError extends Error {
 export async function resolveSessionSpawnConnectedServicesDefaultsPayload(params: Readonly<{
   agentId: string;
   credentials: StoredCredentials;
+  signal?: AbortSignal;
   operationContext?: SavedSecretOperationContextV1;
   resolveTeamCredentialResourceCatalog?: ResolveSpawnConnectedServicesTeamResourceCatalog;
 }>): Promise<Readonly<{
@@ -154,6 +157,7 @@ export async function resolveSessionSpawnConnectedServicesDefaultsPayload(params
   try {
     const accountSettingsContext = await bootstrapAccountSettingsContext({
       credentials: params.credentials,
+      ...(params.signal ? { signal: params.signal } : {}),
       mode: 'blocking',
       publication: 'invocation',
       deps: { applySideEffects: () => undefined },
@@ -166,8 +170,8 @@ export async function resolveSessionSpawnConnectedServicesDefaultsPayload(params
     if (params.operationContext && !await operationContext.replaceAccountSettings(accountSettingsContext)) {
       throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
     }
-    const purposeCatalog = await refreshActiveConnectedAccountCatalog({ credentials: params.credentials,
-      key: 'purposes', operationContext });
+    const purposeCatalog = await refreshConnectedAccountCatalogForAdmission({ credentials: params.credentials,
+      key: 'purposes', operationContext, ...(params.signal ? { signal: params.signal } : {}) });
     if (purposeCatalog.status !== 'ready' || purposeCatalog.record.key !== 'purposes') {
       throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
     }
@@ -183,7 +187,7 @@ export async function resolveSessionSpawnConnectedServicesDefaultsPayload(params
     let teamCredentialResourceCatalog: SpawnConnectedServicesTeamResourceCatalog | undefined;
     if (teamIds.length > 0) {
       try {
-        teamCredentialResourceCatalog = await params.resolveTeamCredentialResourceCatalog?.({ teamIds }) ?? undefined;
+        teamCredentialResourceCatalog = await params.resolveTeamCredentialResourceCatalog?.({ teamIds, signal: params.signal }) ?? undefined;
       } catch {
         throw new ConnectedServicesDefaultUnavailableError(
           'connected_services_team_default_requires_current_resource',
@@ -226,7 +230,7 @@ export async function resolveSessionSpawnConnectedServicesDefaultsPayload(params
       throw new ConnectedServicesDefaultUnavailableError('connected_services_default_settings_invalid');
     }
     if (error instanceof ConnectedServicesDefaultUnavailableError) throw error;
-    return null;
+    throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
   }
   };
   return params.operationContext ? runWithServerHttpBaseUrl(params.operationContext.serverHttpBaseUrl, resolve) : resolve();
@@ -408,6 +412,7 @@ export function mergeSessionTeamCredentialBindingIntents(params: Readonly<{
 export async function resolvePurposeTeamCredentialBindingIntentsFromHome(params: Readonly<{
   teamResourceSelections: readonly PurposeTeamResourceSelectionForSession[];
   resolveTeamCredentialResourceCatalog: ResolveSpawnConnectedServicesTeamResourceCatalog | undefined;
+  signal?: AbortSignal;
 }>): Promise<SessionTeamCredentialBindingIntentListV1> {
   const teamIds = Array.from(new Set(params.teamResourceSelections.map((entry) => entry.teamId)));
   if (teamIds.length === 0) {
@@ -418,7 +423,7 @@ export async function resolvePurposeTeamCredentialBindingIntentsFromHome(params:
   }
   let catalog: SpawnConnectedServicesTeamResourceCatalog | null = null;
   try {
-    catalog = await params.resolveTeamCredentialResourceCatalog?.({ teamIds }) ?? null;
+    catalog = await params.resolveTeamCredentialResourceCatalog?.({ teamIds, signal: params.signal }) ?? null;
   } catch {
     catalog = null;
   }

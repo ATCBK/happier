@@ -1,4 +1,4 @@
-import { LlmTaskRunnerConfigV1Schema, type LlmTaskRunnerConfigV1 } from '@happier-dev/protocol';
+import { LlmTaskRunnerConfigV1Schema, type LlmTaskRunnerConfigV1 } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
 import { convertBackendTargetRefV2ToV1, parseBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { EphemeralExecutionRunTextPromptStartAction } from '@/agent/runtime/bridges/executionRun/runtime/textPrompt';
 

@@ -153,9 +153,20 @@ describe('canonical Session creation admission', () => {
       status: 404,
       data: { statusCode: 404, error: 'Not Found', message: 'Route POST:/v2/sessions/lookup-by-tags not found' },
     });
-    await expect(createSpawnedSession(params)).rejects.toMatchObject({ code: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE });
+    await expect(createSpawnedSession(params)).rejects.toMatchObject({ code: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+      details: { incompatibleTarget: { reason: 'creation_lookup_unavailable' } } });
     expect(spawn).not.toHaveBeenCalled();
     expect(resolveSpawnSessionByNonce).not.toHaveBeenCalled();
+  });
+
+  it('preserves the exact private requester-bootstrap predicate through spawn settlement', async () => {
+    spawn.mockResolvedValue({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+      errorMessage: 'Requester Session credential unavailable',
+      incompatibleTarget: { reason: 'requester_credentials_unavailable' } });
+    await expect(createSpawnedSession(params)).rejects.toMatchObject({
+      code: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+      details: { incompatibleTarget: { reason: 'requester_credentials_unavailable' } },
+    });
   });
 
   it('delivers sealed initial triggers to the exact daemon birth owner', async () => {
@@ -406,6 +417,121 @@ describe('canonical Session creation admission', () => {
       presentUserConfirmation: { actionId: 'session.spawn_new' }, actionRequestId: 'bot-weekly-upkeep-observe',
     })).toMatchObject({ ok: true, result: { type: 'success', disposition: 'rejoined', sessionId: 'session-created' } });
     expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('commits Discussion ownership before a native runner and keeps fresh facts out of the attach request', async () => {
+    const discussionParticipant = { discussionId: 'discussion', participantSlotId: 'slot' };
+    const discussionParticipantLaunch = { executionTarget: { serverId: 'home', machineId: 'machine-1' },
+      directory: { kind: 'path' as const, path: '/repo' }, agentTarget: params.agentTarget! };
+    const correspondence = SessionCreationCorrespondenceV1Schema.parse({ ...sessionCreationCorrespondence,
+      recipe: { ...sessionCreationCorrespondence.recipe, discussionParticipant } });
+    fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(FeaturesResponseSchema.parse({ features: {},
+      capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } } }))));
+    let committed = false;
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { accessKey: 'existing' } });
+    vi.mocked(axios.post).mockImplementation(async (url, raw) => {
+      if (String(url).endsWith('/lookup-by-tags')) return { status: 200, data: { sessions: [] } };
+      if (String(url).endsWith('/v1/sessions')) {
+        expect(raw).toMatchObject({ originKind: 'discussion', discussionParticipant, discussionParticipantLaunch,
+          ownerMetadata: { t: 'plain', v: { system: { sessionCreationCorrespondenceV1: correspondence } } } });
+        committed = true;
+        const input = raw as ReturnType<typeof buildSessionMetadataEnvelopeCreateFields>;
+        return { status: 200, data: { session: { id: 'session-created', seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+          metadataLayoutVersion: 1, metadata: input.sharedMetadata.ciphertext, ownerMetadata: input.ownerMetadata, metadataVersion: 1,
+          encryptionMode: 'plain', agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null }, created: true } };
+      }
+      throw new Error(`Unexpected Discussion birth request ${url}`);
+    });
+    spawn.mockImplementation(async request => {
+      expect(committed).toBe(true);
+      expect(request).toMatchObject({ existingSessionId: 'session-created' });
+      expect(request).not.toHaveProperty('discussionParticipant');
+      expect(request).not.toHaveProperty('discussionParticipantLaunch');
+      expect(request).not.toHaveProperty('originKind');
+      expect(request).not.toHaveProperty('pendingFirstInput');
+      return { type: 'success', sessionId: 'session-created' };
+    });
+    await expect(createSpawnedSession({ ...params, originKind: 'discussion', discussionParticipant, discussionParticipantLaunch,
+      accountSettings: accountSettingsParse({}), sessionCreationCorrespondence: correspondence }))
+      .resolves.toMatchObject({ disposition: 'created', sessionId: 'session-created' });
+  });
+
+  it('revalidates current Discussion ownership before accepting an authenticated creation-tag rejoin', async () => {
+    const discussionParticipant = { discussionId: 'discussion', participantSlotId: 'slot' };
+    const discussionParticipantLaunch = { executionTarget: { serverId: 'home', machineId: 'machine-1' },
+      directory: { kind: 'path' as const, path: '/repo' }, agentTarget: params.agentTarget! };
+    const correspondence = SessionCreationCorrespondenceV1Schema.parse({ ...sessionCreationCorrespondence,
+      recipe: { ...sessionCreationCorrespondence.recipe, discussionParticipant } });
+    const envelopes = buildSessionMetadataEnvelopeCreateFields({ credentials: params.credentials,
+      accountEncryptionMode: 'plain', storedContentMode: 'plain', agentState: null,
+      metadata: { path: '/repo', host: 'host', sessionCreationCorrespondenceV1: correspondence } });
+    const session = { id: 'session-existing', seq: 0, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
+      metadataLayoutVersion: envelopes.metadataLayoutVersion, metadata: envelopes.sharedMetadata.ciphertext,
+      ownerMetadata: envelopes.ownerMetadata, metadataVersion: 1, encryptionMode: 'plain',
+      agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null };
+    let participantCurrent = true;
+    vi.mocked(axios.post).mockImplementation(async url => {
+      if (String(url).endsWith('/lookup-by-tags')) return { status: 200, data: { sessions: [session] } };
+      if (String(url).endsWith('/v1/sessions')) return participantCurrent
+        ? { status: 200, data: { session, created: false } }
+        : { status: 403, data: { error: 'session-origin-forbidden' } };
+      throw new Error(`Unexpected Discussion rejoin request ${url}`);
+    });
+    fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(FeaturesResponseSchema.parse({ features: {},
+      capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } } }))));
+    await expect(createSpawnedSession({ ...params, originKind: 'discussion', discussionParticipant, discussionParticipantLaunch,
+      sessionCreationCorrespondence: correspondence })).resolves.toMatchObject({ disposition: 'rejoined', sessionId: session.id });
+    participantCurrent = false;
+    await expect(createSpawnedSession({ ...params, originKind: 'discussion', discussionParticipant, discussionParticipantLaunch,
+      sessionCreationCorrespondence: correspondence })).rejects.toThrow();
+    // Omitting fresh birth fields must not bypass current admission for an
+    // authenticated immutable recipe that still belongs to the Discussion.
+    await expect(createSpawnedSession({ ...params, sessionCreationCorrespondence: correspondence })).rejects.toThrow();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each(['restored', 'unavailable', 'different-session'] as const)(
+    'restores an archived same-key candidate through ordinary tag rejoin before success (%s)', async (outcome) => {
+    const envelopes = buildSessionMetadataEnvelopeCreateFields({ credentials: params.credentials,
+      accountEncryptionMode: 'plain', storedContentMode: 'plain', agentState: null,
+      metadata: { path: '/repo', host: 'host', sessionCreationCorrespondenceV1: sessionCreationCorrespondence } });
+    const session = { id: 'session-existing', seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+      archivedAt: 123, metadataLayoutVersion: envelopes.metadataLayoutVersion, metadata: envelopes.sharedMetadata.ciphertext,
+      ownerMetadata: envelopes.ownerMetadata, metadataVersion: 1, encryptionMode: 'plain',
+      agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null };
+    vi.mocked(axios.post).mockImplementation(async (url, body) => {
+      if (String(url).endsWith('/lookup-by-tags')) return { status: 200, data: { sessions: [session] } };
+      if (String(url).endsWith('/v1/sessions')) {
+        expect(body).toMatchObject({ tag: sessionCreationTag,
+          ownerMetadata: { t: 'plain', v: { system: { sessionCreationCorrespondenceV1: sessionCreationCorrespondence } } } });
+        if (outcome === 'unavailable') return { status: 503, data: { error: 'service_unavailable' } };
+        return { status: 200, data: { created: false, session: { ...session, archivedAt: null,
+          id: outcome === 'different-session' ? 'unexpected-successor' : session.id } } };
+      }
+      throw new Error(`Unexpected archived rejoin request ${url}`);
+    });
+    vi.mocked(axios.get).mockRejectedValue(new Error('Mutable organization placement unavailable'));
+    fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(FeaturesResponseSchema.parse({ features: {},
+      capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } } }))));
+
+    const result = createSpawnedSession(params);
+    if (outcome === 'restored') {
+      await expect(result).resolves.toMatchObject({ disposition: 'rejoined', sessionId: session.id,
+        session: { id: session.id, archivedAt: null } });
+    } else if (outcome === 'different-session') {
+      await expect(result).rejects.toMatchObject({ code: 'creation_conflict' });
+    } else {
+      await expect(result).rejects.toThrow('Unexpected status from /v1/sessions: 503');
+    }
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('rejoins an existing creation without preparing unavailable changed trigger drafts', async () => {

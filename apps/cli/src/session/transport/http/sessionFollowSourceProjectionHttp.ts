@@ -1,16 +1,18 @@
 import axios from 'axios';
 import { SessionFollowSourceProjectionRequestV1Schema, SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
-import type { SessionFollowSourceProjectionResponseV1 } from '@happier-dev/protocol';
+import type { SessionFollowSourceProjectionRequestV1, SessionFollowSourceProjectionResponseV1 } from '@happier-dev/protocol';
 
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { HttpStatusError } from '@/api/client/httpStatusError';
 
 export async function fetchSessionFollowSourceProjection(input: Readonly<{
   token: string;
   destinationSessionId: string;
   sourceSessionId: string;
-  edgeKind?: 'reports_to';
+  localInputId?: SessionFollowSourceProjectionRequestV1['localInputId'];
+  relation?: SessionFollowSourceProjectionRequestV1['relation'];
   attachedAt?: number;
-  readMode?: 'incremental' | 'initial_current_snapshot';
+  readMode?: 'incremental';
   afterTranscriptSeq: number;
   observedTranscriptSeq: number;
   limit: number;
@@ -19,7 +21,8 @@ export async function fetchSessionFollowSourceProjection(input: Readonly<{
   const body = SessionFollowSourceProjectionRequestV1Schema.parse({
     v: 1,
     sourceSessionId: input.sourceSessionId,
-    ...(input.edgeKind ? { edgeKind: input.edgeKind, attachedAt: input.attachedAt } : {}),
+    ...(input.localInputId ? { localInputId: input.localInputId } : {}),
+    ...(input.relation ? { relation: input.relation, attachedAt: input.attachedAt } : {}),
     ...(input.readMode ? { readMode: input.readMode } : {}),
     afterTranscriptSeq: input.afterTranscriptSeq,
     observedTranscriptSeq: input.observedTranscriptSeq,
@@ -36,6 +39,6 @@ export async function fetchSessionFollowSourceProjection(input: Readonly<{
     },
   );
   if (response.status === 404) return null;
-  if (response.status !== 200) throw new Error(`Unexpected Session Follow source projection status: ${response.status}`);
+  if (response.status !== 200) throw new HttpStatusError(response.status, 'Session Follow source projection unavailable');
   return SessionFollowSourceProjectionResponseV1Schema.parse(response.data);
 }

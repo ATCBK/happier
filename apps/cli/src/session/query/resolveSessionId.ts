@@ -21,6 +21,8 @@ export type ResolveSessionIdResult =
 
 const FULL_SESSION_ID_LOOKUP_TIMEOUT_MS = 25_000;
 
+type AccountEncryptionModeSource = 'plain' | 'e2ee' | (() => Promise<'plain' | 'e2ee'>);
+
 function normalizeIdOrPrefix(value: string): string {
   return value.trim();
 }
@@ -109,7 +111,7 @@ async function resolveSessionIdOrPrefixWithSignal(params: Readonly<{
   signal?: AbortSignal;
   deadlineAtMs?: number;
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
-  accountEncryptionMode?: 'plain' | 'e2ee';
+  accountEncryptionMode?: AccountEncryptionModeSource;
 }>): Promise<ResolveSessionIdResult> {
   params.signal?.throwIfAborted();
   const input = normalizeIdOrPrefix(params.idOrPrefix);
@@ -170,6 +172,12 @@ async function resolveSessionIdOrPrefixWithSignal(params: Readonly<{
   const prefixMatches = new Set<string>();
   const fallbackTagMatches = new Set<string>();
   const useOldServerTagFallback = indexedTagLookup?.state === 'unavailable';
+  // Exact and indexed reads do not open Account-scoped owner metadata. Let
+  // their HTTP overlap the caller's fresh mode read, consuming it only when
+  // the released-server tag fallback actually needs to open that metadata.
+  const accountEncryptionMode = useOldServerTagFallback
+    ? typeof params.accountEncryptionMode === 'function' ? await params.accountEncryptionMode() : params.accountEncryptionMode
+    : undefined;
   const useCurrentAccessQuery = resolveSessionDetailAccessProjectionVersion({
     serverFeaturesSnapshot: params.serverFeaturesSnapshot,
   }) === 1;
@@ -230,10 +238,10 @@ async function resolveSessionIdOrPrefixWithSignal(params: Readonly<{
         }
 
         if (useOldServerTagFallback) {
-          const metadata = params.accountEncryptionMode
+          const metadata = accountEncryptionMode
             ? tryDecryptSessionOwnerMetadataView({
                 credentials: params.credentials,
-                accountEncryptionMode: params.accountEncryptionMode,
+                accountEncryptionMode,
                 rawSession: row,
               })
             : tryDecryptSessionMetadata({
@@ -287,8 +295,8 @@ export async function resolveSessionIdOrPrefix(params: Readonly<{
   signal?: AbortSignal;
   /** Snapshot already bound to this exact Home; absence preserves released detail semantics. */
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
-  /** Persisted Account mode from the exact Home; required to open layout-v1 owner metadata. */
-  accountEncryptionMode?: 'plain' | 'e2ee';
+  /** Persisted mode or its pending exact-Home read; only legacy metadata lookup consumes it. */
+  accountEncryptionMode?: AccountEncryptionModeSource;
 }>): Promise<ResolveSessionIdResult> {
   params.signal?.throwIfAborted();
   const input = normalizeIdOrPrefix(params.idOrPrefix);

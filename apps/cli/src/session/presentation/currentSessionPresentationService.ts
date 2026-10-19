@@ -1,10 +1,11 @@
+import { $ZodError } from 'zod/v4/core';
 import { randomUUID } from 'node:crypto';
 import { CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD, CurrentSessionPresentationActionInputV1Schema, type CurrentSessionPresentationActionResultV1 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD, CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY, CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, CURRENT_SESSION_PRESENTATION_UNBIND_RPC_METHOD, CurrentSessionPresentationAckV1Schema, CurrentSessionPresentationBindV1Schema, CurrentSessionPresentationUnbindV1Schema, CurrentSessionPresentationIntentResultV1Schema, CurrentSessionPresentationOwnerV1Schema, CurrentSessionPresentationStateV1Schema, sameCurrentSessionPresentationOwnerV1 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import type { CurrentSessionPresentationAckV1, CurrentSessionPresentationBindV1, CurrentSessionPresentationIntentResultV1, CurrentSessionPresentationIntentV1, CurrentSessionPresentationOwnerV1, CurrentSessionPresentationStateV1 } from '@happier-dev/protocol/sessions';
-import { isSocketRpcCurrentSessionPresentationOriginAuthorizationContext } from '@happier-dev/protocol/rpc';
+import { isSocketRpcCurrentSessionPresentationOriginAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import type { SocketRpcCurrentSessionPresentationOriginAuthorizationContext } from '@happier-dev/protocol/rpc';
 
 import type { AgentState } from '@/api/types';
@@ -196,7 +197,7 @@ function isKnownPreApplicationFailure(error: unknown): boolean {
 }
 
 function isLocalContractFailure(error: unknown): boolean {
-  return error instanceof Error && error.name === 'ZodError';
+  return error instanceof $ZodError;
 }
 
 function abortPromise(signal: AbortSignal): Promise<null> {

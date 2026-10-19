@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import axios from 'axios';
+import { AccountEncryptionCurrentnessResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
 
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { reloadConfiguration } from '@/configuration';
@@ -99,12 +101,23 @@ describe('requestSessionStop', () => {
     waitForTrackedRunnerProcessesExitMock.mockReset();
     waitForTrackedRunnerProcessesExitMock.mockResolvedValue(false);
     disposeTerminalHostMock.mockClear();
+    // Terminal retirement now reads fresh Home currentness before its metadata CAS.
+    // Keep that network boundary explicit while exercising the real retirement owner.
+    vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      if (!String(url).endsWith('/v1/account/encryption/currentness')) {
+        throw new Error(`Unexpected Stop fixture HTTP read: ${String(url)}`);
+      }
+      return { status: 200, data: AccountEncryptionCurrentnessResponseSchema.parse({
+        mode: 'plain', version: 1, updatedAt: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null,
+      }) };
+    });
     persistedMetadata.current = {};
     updateSessionMetadataWithRetryMock.mockReset();
     updateSessionMetadataWithRetryMock.mockImplementation(async ({ updater }: {
-      updater: (metadata: Record<string, unknown>) => Record<string, unknown>;
+      updater: (metadata: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>;
     }) => {
-      persistedMetadata.current = updater(persistedMetadata.current);
+      persistedMetadata.current = await updater(persistedMetadata.current);
       return { version: 2, metadata: persistedMetadata.current };
     });
   });
@@ -158,6 +171,7 @@ describe('requestSessionStop', () => {
     expect(callMachineRpcMock).toHaveBeenCalledWith({
       credentials,
       machineId: 'machine-owning-session',
+      requestId: expect.any(String),
       method: 'stop-session',
       timeoutMs: null,
       request: { sessionId },
@@ -165,6 +179,46 @@ describe('requestSessionStop', () => {
     });
     expect(stopDaemonSessionMock).not.toHaveBeenCalled();
     expect(listSessionMarkersMock).not.toHaveBeenCalled();
+  });
+
+  it('persists explicit Stop intent before asking the owning machine to signal the runner', async () => {
+    const sessionId = 'sess_durable_stop_intent';
+    resolveSessionIdOrPrefixMock.mockResolvedValue({
+      ok: true,
+      sessionId,
+      rawSession: { id: sessionId, active: true, machineId: 'machine-owning-session' },
+    });
+    fetchSessionByIdCompatMock.mockResolvedValue({ id: sessionId, active: false });
+    callMachineRpcMock.mockImplementation(async () => {
+      expect(persistedMetadata.current).toMatchObject({
+        sessionExplicitStopV1: { v: 1, cause: 'explicit_stop', requestedAtMs: expect.any(Number) },
+      });
+      return { status: 'stopped' };
+    });
+
+    const { requestSessionStop } = await import('./requestSessionStop');
+    await expect(requestSessionStop({
+      credentials: { token: 'token_test', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } },
+      idOrPrefix: sessionId,
+    })).resolves.toMatchObject({ ok: true, sessionId, stopped: true });
+    expect(callMachineRpcMock).toHaveBeenCalledOnce();
+  });
+
+  it('does not turn a lifecycle cleanup stop into a person Stop hold', async () => {
+    const sessionId = 'sess_lifecycle_cleanup';
+    resolveSessionIdOrPrefixMock.mockResolvedValue({ ok: true, sessionId,
+      rawSession: { id: sessionId, active: true, machineId: 'machine-owning-session' } });
+    fetchSessionByIdCompatMock.mockResolvedValue({ id: sessionId, active: false });
+    callMachineRpcMock.mockResolvedValue({ status: 'stopped' });
+
+    const { requestSessionStop } = await import('./requestSessionStop');
+    await expect(requestSessionStop({
+      credentials: { token: 'token_test', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } },
+      idOrPrefix: sessionId,
+      stopIntent: 'lifecycle_control',
+    })).resolves.toMatchObject({ ok: true, sessionId, stopped: true });
+    expect(updateSessionMetadataWithRetryMock).not.toHaveBeenCalled();
+    expect(callMachineRpcMock).toHaveBeenCalledOnce();
   });
 
   it('reports the exact target daemon as unavailable without trying caller-local control', async () => {
@@ -457,6 +511,35 @@ describe('requestSessionStop', () => {
     });
   });
 
+  it('removes daemon-retained custody markers after a confirmed stop', async () => {
+    const sessionId = 'sess_daemon_marker_cleanup';
+    const markerPid = 12350;
+    const processCommandHash = 'a'.repeat(64);
+    await configureExactTransportAmbiguousHost({ sessionId, attachmentId: 'attachment-daemon-marker-cleanup' });
+    const { readSessionMarkerForPid, writeSessionMarker } = await import('@/daemon/sessionRegistry');
+    await writeSessionMarker({
+      pid: markerPid,
+      happySessionId: sessionId,
+      startedBy: 'daemon',
+      processCommandHash,
+      respawn: {
+        version: 1,
+        directory: '/tmp/project',
+        terminal: { mode: 'zellij' },
+      },
+    });
+
+    const { reloadConfiguration } = await import('@/configuration');
+    reloadConfiguration();
+    const { requestSessionStop } = await import('./requestSessionStop');
+    await expect(requestSessionStop({
+      credentials: { token: 'token_test', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } },
+      idOrPrefix: sessionId,
+    })).resolves.toEqual({ ok: true, sessionId, stopped: true });
+
+    await expect(readSessionMarkerForPid(markerPid)).resolves.toBeNull();
+  });
+
   it.each(['not_found', 'transport_ambiguous'] as const)(
     'retires the marker-authored actual Windows mode through the %s fallback',
     async (daemonResult) => {
@@ -562,7 +645,7 @@ describe('requestSessionStop', () => {
   it('does not report full success when exact marker fallback cannot retire serviceability', async () => {
     const sessionId = 'sess_transport_retirement_failure';
     await configureExactTransportAmbiguousHost({ sessionId, attachmentId: 'attachment-retirement-failure' });
-    updateSessionMetadataWithRetryMock.mockRejectedValueOnce(new Error('metadata persistence unavailable'));
+    vi.mocked(axios.get).mockRejectedValue(new Error('Retirement Account currentness unavailable'));
     const { reloadConfiguration } = await import('@/configuration');
     reloadConfiguration();
     const { requestSessionStop } = await import('./requestSessionStop');

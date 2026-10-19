@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { LlmTaskRunnerConfigV1Schema } from '@happier-dev/protocol';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { ExecutionRunStartRequestSchema, type ExecutionRunStartRequest } from '@happier-dev/protocol/execution/runs/startRequest';
 import { ExecutionRunWaitResultSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
-import { buildBackendTargetKeyV2, convertBackendTargetRefV2ToV1 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { runReplaySummaryForDialog } from './runReplaySummaryForDialog';
 
 describe('Replay summary settings to Run Action', () => {
@@ -16,6 +17,7 @@ describe('Replay summary settings to Run Action', () => {
         // The answering Run host is the external process boundary. Schema, Action admission,
         // text-prompt orchestration and Replay prompt construction all remain real.
         const executor = createActionExecutor({
+            ...createUnavailableActionTransportDeps(),
             executionRunCheckProtocolV2: async () => ({ ok: true }),
             executionRunStart: async (sessionId, input) => {
                 expect(sessionId).toBe('sess_parent');
@@ -24,11 +26,11 @@ describe('Replay summary settings to Run Action', () => {
             },
             executionRunWait: async () => ExecutionRunWaitResultSchema.parse({ ok: true, status: 'succeeded', result: {
                 run: { ...requests.at(-1), runId: 'summary-run', callId: 'summary-call', sidechainId: 'summary-call',
-                    backendTarget: convertBackendTargetRefV2ToV1(requests.at(-1)!.backendTarget),
+                    backendTarget: target,
                     status: 'succeeded', startedAtMs: 1, finishedAtMs: 2 },
                 latestToolResult: ' SUMMARY_OK ',
             } }),
-        } as unknown as ActionExecutorDeps); // Unrelated host ports are absent and must remain unused.
+        });
         expect(await runReplaySummaryForDialog({ cwd: '/repo', parentSessionId: 'sess_parent', runner,
             dialog: [{ role: 'User', createdAt: 1, text: 'hello' }, { role: 'Assistant', createdAt: 2, text: 'world' }],
             deps: { executeStart: (input, context) => executor.execute('execution.run.start', input, context) },

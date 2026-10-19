@@ -117,7 +117,7 @@ describe('Agent transition service effect transports', () => {
   it.each(['fence', 'stop', 'activate'] as const)('retains a forged-proof refusal for %s without an unsigned retry', async phase => {
     const forged = { ...externalAction, privateKey: tweetnacl.sign.keyPair().secretKey };
     if (phase === 'fence') await expect(invoke(phase, forged)).rejects.toThrow();
-    else expect(await invoke(phase, forged)).toMatchObject(phase === 'stop' ? { stopped: false } : { ok: false });
+    else expect(await invoke(phase, forged)).toMatchObject(phase === 'stop' ? { ok: false, errorCode: 'RPC_FORBIDDEN' } : { ok: false });
     expect(packets).toHaveLength(1);
     expect(packets[0].externalActionExecution).toBeDefined();
   });

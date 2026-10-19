@@ -1,13 +1,14 @@
 import axios, { type AxiosResponse } from 'axios';
 import { readActionCredentialScopeDeniedHttpFailureV1, type ActionCredentialScopeDeniedFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { classifyHomeDomainHttpMutationFailureV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { createExternalActionAuthorizedRequestHeaders } from '@/api/externalActionExecutionAuthorization';
 import type { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { readSessionCreationInitialTriggerError } from '@/api/session/sessionCreationInitialTriggerError';
 import { pickSessionCreateOriginFields } from '@/session/shared/sessionCreateOrigin';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SESSION_CREATION_AUTHORIZATION_HEADER_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import { agentEventLocalIdAttentionImpact } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
-import type { SessionMessageAttentionImpact, SessionStoredMessageContent, V2SessionByIdResponse, V2SessionListResponse, SessionLookupByTagsResponseV2, SessionMetadataInactiveModelIntentExpectationV1, SessionMetadataInactiveModelIntentOwnerPatchV1, SessionMetadataInactiveModelIntentPatchV1, SessionMetadataTuplePatchV1, SessionOrganizationPlacementV1, SessionTurnsProjectionV1, AccountEncryptionCurrentnessResponse, SessionListQueryV1, SessionListQueryResponseV1, SessionListUnavailableQueryV1, SessionInitialAccessDraftV1, SessionAttentionSetResultV1, SessionReportsToSetActionInputV1, SessionReportsToSetResultV1, SessionReportsToV1 } from '@happier-dev/protocol';
+import type { SessionMessageAttentionImpact, SessionStoredMessageContent, V2SessionByIdResponse, V2SessionListResponse, SessionLookupByTagsResponseV2, SessionMetadataInactiveModelIntentExpectationV1, SessionMetadataInactiveModelIntentOwnerPatchV1, SessionMetadataInactiveModelIntentPatchV1, SessionMetadataTuplePatchV1, SessionOrganizationPlacementV1, SessionTurnsProjectionV1, AccountEncryptionCurrentnessResponse, SessionListQueryV1, SessionListQueryResponseV1, SessionListUnavailableQueryV1, SessionInitialAccessDraftV1, SessionAttentionSetResultV1, SessionManagerSetActionInputV1, SessionManagerSetResultV1, SessionManagerV1 } from '@happier-dev/protocol';
 import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { SESSION_HISTORICAL_TRANSCRIPT_IMPORT_MAX_ITEMS, SessionTranscriptSurfaceItemReferenceInputV1Schema, type SessionTranscriptSurfaceItemReferenceInputV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { SessionLookupByTagsRequestV2Schema, SessionLookupByTagsResponseV2Schema, V2SessionByIdResponseSchema, V2SessionListResponseSchema, V2SessionMessageResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
@@ -20,7 +21,7 @@ import { buildSessionListServerQueryV1, SessionListUnavailableQueryV1Schema } fr
 import { SessionAttentionSetResultV1Schema, buildSessionAttentionStandingHttpPath } from '@happier-dev/protocol/sessions/organization/attentionAction';
 import { SetSessionPinRequestSchema, SetSessionPinResponseSchema, type SetSessionPinRequest, type SetSessionPinResponse } from '@happier-dev/protocol/sessions/organization/mutations';
 import { buildSessionOrganizationPinHttpPathV1 } from '@happier-dev/protocol/sessions/organization/pins';
-import { SessionReportsToSetActionInputV1Schema, SessionReportsToSetResultV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionManagerSetActionInputV1Schema, SessionManagerSetResultV1Schema } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { SessionTeamCredentialBindingMutationRejectionV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import type { SessionTeamCredentialBindingIntentV1, SessionTeamCredentialBindingIntentListV1, SessionTeamCredentialBindingMetadataPatchV1, SessionTeamCredentialBindingRejectionV1 } from '@happier-dev/protocol/teams';
 
@@ -93,16 +94,16 @@ export async function setSessionOrganizationPin(params: Readonly<{
   return result.data;
 }
 
-export async function setSessionReportsTo(params: SessionReportsToSetActionInputV1 & Readonly<{
+export async function setSessionManager(params: SessionManagerSetActionInputV1 & Readonly<{
   token: string;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{ method: 'POST'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
-}>): Promise<SessionReportsToSetResultV1 | ActionCredentialScopeDeniedFailureV1> {
-  const request = SessionReportsToSetActionInputV1Schema.parse({
-    sessionId: params.sessionId, leadSessionId: params.leadSessionId, expectedLeadSessionId: params.expectedLeadSessionId,
+}>): Promise<SessionManagerSetResultV1 | ActionCredentialScopeDeniedFailureV1> {
+  const request = SessionManagerSetActionInputV1Schema.parse({
+    sessionId: params.sessionId, managerSessionId: params.managerSessionId, expectedManagerSessionId: params.expectedManagerSessionId,
   });
-  const path = `/v1/sessions/${encodeSessionIdPathSegment(request.sessionId)}/reports-to`;
-  const body = { leadSessionId: request.leadSessionId, expectedLeadSessionId: request.expectedLeadSessionId };
+  const path = `/v1/sessions/${encodeSessionIdPathSegment(request.sessionId)}/manager`;
+  const body = { managerSessionId: request.managerSessionId, expectedManagerSessionId: request.expectedManagerSessionId };
   const authorizationHeaders = params.resolveAuthorizationHeaders?.({ method: 'POST', path, body })
     ?? (params.resolveAuthorizationHeaders ? null : { Authorization: `Bearer ${params.token}` });
   if (!authorizationHeaders) throw new Error('External Action authorization unavailable');
@@ -114,19 +115,19 @@ export async function setSessionReportsTo(params: SessionReportsToSetActionInput
   });
   const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, response.data);
   if (scopeDenial) return scopeDenial;
-  const result = SessionReportsToSetResultV1Schema.safeParse(response.data);
+  const result = SessionManagerSetResultV1Schema.safeParse(response.data);
   if (result.success) {
-    const expectedStatus = result.data.ok ? 200 : result.data.error === 'reports_to_cycle' ? 400
-      : result.data.error === 'reports_to_cas_conflict' ? 409 : 403;
+    const expectedStatus = result.data.ok ? 200 : result.data.error === 'manager_cycle' ? 400
+      : result.data.error === 'manager_cas_conflict' ? 409 : 403;
     if (response.status !== expectedStatus) throwUnexpectedStatusError(path, response.status);
-    if (result.data.ok && (result.data.sessionId !== request.sessionId || result.data.leadSessionId !== request.leadSessionId)) {
-      throw new Error('Unexpected reportsTo attachment response');
+    if (result.data.ok && (result.data.sessionId !== request.sessionId || result.data.managerSessionId !== request.managerSessionId)) {
+      throw new Error('Unexpected manager attachment response');
     }
     return result.data;
   }
   if (isAuthenticationStatus(response.status)) throwAuthenticationStatusError(response.status);
   if (response.status !== 200) throwUnexpectedStatusError(path, response.status);
-  throw new Error('Unexpected reportsTo response shape');
+  throw new Error('Unexpected manager response shape');
 }
 /**
  * `session.attention.set` (ORC R-10) over the existing attention-standing route. The server route is
@@ -233,7 +234,7 @@ class SessionListQueryHttpError extends HttpStatusError {
 
 type SessionByIdHttpResponse = AxiosResponse<unknown>;
 
-function parseSessionDetailSchema<T>(schema: z.ZodType<T>, payload: unknown, schemaName: string): T {
+function parseSessionDetailSchema<T>(schema: z.ZodMiniType<T>, payload: unknown, schemaName: string): T {
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
     // Keep only structural diagnostics. Zod messages/inputs can contain private values.
@@ -1045,10 +1046,10 @@ export type ApplySessionAgentTransitionCutoverHttpResult =
     }>
   | Readonly<{ ok: false; effect: 'unknown'; error: 'transport' }>;
 
-const SessionAgentTransitionCutoverSuccessSchema = z.object({
+const SessionAgentTransitionCutoverSuccessSchema = z.strictObject({
   success: z.literal(true),
-  dividerSeq: z.number().int().min(0),
-}).strict();
+  dividerSeq: z.number().check(z.int(), z.minimum(0)),
+});
 
 const SessionAgentTransitionCutoverNoEffectErrorSchema = z.enum([
   'invalid-params',
@@ -1067,14 +1068,14 @@ const SessionAgentTransitionCutoverCommittedErrorSchema = z.enum([
 ]);
 
 const SessionAgentTransitionCutoverConflictSchema = z.discriminatedUnion('effect', [
-  z.object({
+  z.looseObject({
     effect: z.literal('none'),
     error: SessionAgentTransitionCutoverNoEffectErrorSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     effect: z.literal('current_view_committed'),
     error: SessionAgentTransitionCutoverCommittedErrorSchema,
-  }).passthrough(),
+  }),
 ]);
 
 /**
@@ -1407,10 +1408,10 @@ export async function commitSessionStoredMessage(params: Readonly<{
   };
 }
 
-const V2HistoricalTranscriptImportResponseSchema = z.object({
-  imported: z.number().int().min(0),
-  cursor: z.number().int().min(0).nullable(),
-}).strict();
+const V2HistoricalTranscriptImportResponseSchema = z.strictObject({
+  imported: z.number().check(z.int(), z.minimum(0)),
+  cursor: z.nullable(z.number().check(z.int(), z.minimum(0))),
+});
 
 /**
  * Single HTTP adapter for transcript.import. Validate all rows before writing, then preserve their
@@ -1513,10 +1514,11 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
   shouldCommit?: () => boolean;
   initialAccess?: SessionInitialAccessDraftV1;
   initialTriggers?: readonly import('@happier-dev/protocol').SessionInitialTriggerAdmissionV1[];
-  reportsTo?: SessionReportsToV1;
+  manager?: SessionManagerV1;
   primaryTeamId?: string | null;
   teamCredentialBindings?: SessionTeamCredentialBindingIntentListV1;
   creationAuthorizationToken?: string;
+  prepareCreationAuthorizationProof?: import('@happier-dev/protocol/sessions/creation/sessionCreationAuthorizationV1').SessionCreationAuthorizationV1['prepareRequestProof'];
   accountEncryptionCurrentness?: AccountEncryptionCurrentnessResponse;
 }>): Promise<{
   session: RawSessionRecord;
@@ -1593,9 +1595,9 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
   if (params.shouldCommit && !params.shouldCommit()) {
     throw new Error('Session creation commit precondition failed');
   }
-  const response = await axios.post(`${serverUrl}/v1/sessions`, {
+  const body = {
     ...pickSessionCreateOriginFields(params),
-    ...(params.reportsTo !== undefined ? { reportsTo: params.reportsTo } : {}),
+    ...(params.manager !== undefined ? { manager: params.manager } : {}),
     tag: params.tag,
     ...metadataEnvelopeFields,
     dataEncryptionKey: dataEncryptionKeyPayload,
@@ -1605,6 +1607,10 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
     ...materializedInitialAccessFields,
     ...(params.initialTriggers !== undefined ? { initialTriggers: params.initialTriggers } : {}),
     ...(serverSupportsFeatureSnapshot ? { encryptionMode: desiredSessionEncryptionMode } : {}),
+  };
+  const creationAuthorizationProof = await params.prepareCreationAuthorizationProof?.(body);
+  const response = await axios.post(`${serverUrl}/v1/sessions`, {
+    ...body, ...(creationAuthorizationProof ? { creationAuthorizationProof } : {}),
   }, {
     headers: {
       ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
@@ -1685,21 +1691,32 @@ async function postArchiveMutation(params: Readonly<{
   token: string;
   sessionId: string;
   op: 'archive' | 'unarchive';
+  resolveAuthorizationHeaders?: (request: Readonly<{ method: 'POST'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
 }>): Promise<{ archivedAt: number | null }> {
   const serverUrl = resolveServerHttpBaseUrl();
+  const path = `/v2/sessions/${encodeSessionIdPathSegment(params.sessionId)}/${params.op}`;
+  const body = {};
+  const authorizationHeaders = params.resolveAuthorizationHeaders?.({ method: 'POST', path, body })
+    ?? (params.resolveAuthorizationHeaders ? null : { Authorization: `Bearer ${params.token}` });
+  if (!authorizationHeaders) throw new Error('External Action authorization unavailable');
   const response = await axios.post(
-    `${serverUrl}/v2/sessions/${params.sessionId}/${params.op}`,
-    {},
+    `${serverUrl}${path}`,
+    body,
     {
       headers: {
         ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-        Authorization: `Bearer ${params.token}`,
+        ...authorizationHeaders,
         'Content-Type': 'application/json',
       },
-      timeout: 10_000,
+      timeout: configuration.sessionControlHttpTimeoutMs,
       validateStatus: () => true,
     },
-  );
+  ).catch((cause: unknown) => {
+    const disposition = classifyHomeDomainHttpMutationFailureV1({ error: cause, issued: true, aborted: false });
+    throw Object.assign(new Error('Session archive mutation transport failed'), {
+      code: disposition === 'not_dispatched' ? 'server_unreachable' : 'outcome_unknown', cause,
+    });
+  });
 
   if (isAuthenticationStatus(response.status)) {
     throwAuthenticationStatusError(response.status);
@@ -1713,6 +1730,9 @@ async function postArchiveMutation(params: Readonly<{
     const err = new Error('Cannot archive an active session');
     (err as any).code = 'session_active';
     throw err;
+  }
+  if (response.status >= 500) {
+    throw Object.assign(new Error('Session archive mutation outcome is unknown'), { code: 'outcome_unknown' });
   }
   if (response.status !== 200) {
     throw new Error(`Unexpected status from /v2/sessions/${params.sessionId}/${params.op}: ${response.status}`);
@@ -1729,16 +1749,22 @@ async function postArchiveMutation(params: Readonly<{
   throw new Error(`Unexpected /v2/sessions/${params.sessionId}/${params.op} response shape`);
 }
 
-export async function archiveSession(params: Readonly<{ token: string; sessionId: string }>): Promise<{ archivedAt: number }> {
-  const res = await postArchiveMutation({ token: params.token, sessionId: params.sessionId, op: 'archive' });
+export async function archiveSession(params: Readonly<{
+  token: string; sessionId: string;
+  resolveAuthorizationHeaders?: Parameters<typeof postArchiveMutation>[0]['resolveAuthorizationHeaders'];
+}>): Promise<{ archivedAt: number }> {
+  const res = await postArchiveMutation({ ...params, op: 'archive' });
   if (typeof res.archivedAt !== 'number') {
     throw new Error('Unexpected archive response (archivedAt is null)');
   }
   return { archivedAt: res.archivedAt };
 }
 
-export async function unarchiveSession(params: Readonly<{ token: string; sessionId: string }>): Promise<{ archivedAt: null }> {
-  const res = await postArchiveMutation({ token: params.token, sessionId: params.sessionId, op: 'unarchive' });
+export async function unarchiveSession(params: Readonly<{
+  token: string; sessionId: string;
+  resolveAuthorizationHeaders?: Parameters<typeof postArchiveMutation>[0]['resolveAuthorizationHeaders'];
+}>): Promise<{ archivedAt: null }> {
+  const res = await postArchiveMutation({ ...params, op: 'unarchive' });
   if (res.archivedAt !== null) {
     throw new Error('Unexpected unarchive response (archivedAt is not null)');
   }

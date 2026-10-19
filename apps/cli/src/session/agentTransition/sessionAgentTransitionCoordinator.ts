@@ -163,6 +163,7 @@ export type SessionAgentTransitionDeps = Readonly<{
 export type SessionAgentTransitionParams = Readonly<{
   credentials: StoredCredentials;
   request: SessionAgentTransitionRequestV1;
+  signal?: AbortSignal;
   /** Host-private authenticated input provenance and permission ceiling. */
   inputAdmission?: Parameters<typeof sendSessionMessage>[0]['inputAdmission'];
   callerInputAuthorization?: Parameters<typeof sendSessionMessage>[0]['callerInputAuthorization'];
@@ -353,6 +354,7 @@ function buildTargetCurrentViewProjection(params: Readonly<{
 async function resolveTargetConnectedServiceBinding(params: Readonly<{
   credentials: StoredCredentials;
   targetAgentId: AgentId;
+  signal?: AbortSignal;
   deps: Pick<
     SessionAgentTransitionDeps,
     'resolveSpawnConnectedServicesDefaults' | 'createTeamCredentialResourceCatalogResolver'
@@ -377,6 +379,7 @@ async function resolveTargetConnectedServiceBinding(params: Readonly<{
     resolved = await params.deps.resolveSpawnConnectedServicesDefaults({
       agentId: params.targetAgentId,
       credentials: params.credentials,
+      ...(params.signal ? { signal: params.signal } : {}),
       ...(resolveTeamCredentialResourceCatalog ? { resolveTeamCredentialResourceCatalog } : {}),
     });
   } catch (error) {
@@ -864,6 +867,7 @@ export async function runSessionAgentTransition(
   const targetConnectedServices = await resolveTargetConnectedServiceBinding({
     credentials,
     targetAgentId: target.agentId,
+    ...(params.signal ? { signal: params.signal } : {}),
     deps,
   });
   if (!targetConnectedServices.ok) return effects.rejected('target_unavailable');
@@ -988,6 +992,7 @@ export async function runSessionAgentTransition(
   }
 
   const stop = await deps.requestSessionStop({ credentials, idOrPrefix: sessionId,
+    stopIntent: 'lifecycle_control',
     ...(externalAction ? { externalAction } : {}), ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}) })
     .catch(() => null);
   if (stop === null) {

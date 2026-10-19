@@ -54,7 +54,8 @@ const RETIRED_WORKSPACE_TRANSFER_CORRIDOR_TOKENS = [
     'SessionHandoffWorkspaceReplicationManifestTransferPublicationSchema',
     'workspaceReplicationSourceRootPath',
     'workspaceReplicationHandoffBackTargetRootPath',
-    'workspaceReplicationManifestTransferPublication',
+    // Rejecting the retired input by name is valid; declaring it is not.
+    'workspaceReplicationManifestTransferPublication:',
     'workspaceReplicationSourceControllerMetadata',
     'workspaceReplicationReverseSourceRootPath',
     'workspaceReplicationReverseTargetRootPath',

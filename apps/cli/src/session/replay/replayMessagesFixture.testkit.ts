@@ -1,12 +1,13 @@
-import * as zMini from 'zod/mini';
+import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
+import * as z from 'zod/mini';
 import {
   SessionMessageV1Schema,
   SessionMessagesPageV1Schema,
 } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
 
-const MessageFixtureInputSchema = zMini.extend(SessionMessageV1Schema, {
-  id: zMini.optional(SessionMessageV1Schema.shape.id),
-});
+const MessageFixtureInputSchema = lazyZodSchema(() => z.extend(SessionMessageV1Schema, {
+  id: z.optional(SessionMessageV1Schema.shape.id),
+}));
 
 /** Build HTTP boundary fixtures with the same schemas the real page reader consumes. */
 export function createReplayMessagesPage(params: Readonly<{

@@ -28,6 +28,7 @@ import { refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority } from '@/daemon
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import type { TrackedSession } from '@/daemon/types';
 import { buildSessionRunnerRespawnDescriptorV1FromSpawnOptions } from '@/daemon/processSupervision/sessionRunnerRespawnDescriptor';
+import { clearDaemonStateForTestTeardown, writeDaemonState } from '@/persistence';
 
 const boundary = vi.hoisted(() => ({ readCredentials: vi.fn(), readSettings: vi.fn(), readDaemonState: vi.fn(), fetchSession: vi.fn(), currentness: vi.fn() }));
 // Filesystem credential/settings reads and HTTP requests are system boundaries.
@@ -97,7 +98,11 @@ describe('daemon RPC to protected Session input admission composition', () => {
     // Feature fetch is the other network boundary. No server is contacted.
     vi.stubGlobal('fetch', async () => new Response('', { status: 404 }));
   });
-  afterEach(() => { release?.(); release = undefined; vi.unstubAllGlobals(); });
+  afterEach(async () => {
+    release?.(); release = undefined;
+    await clearDaemonStateForTestTeardown({ includeLockFile: false });
+    vi.unstubAllGlobals();
+  });
 
   function registerSpawnBoundary(mode: 'plain' | 'e2ee' = 'e2ee', launch?: SessionSpawnDirectTargetTransport['spawnedSession']['spawn']) {
     const handlers = new Map<string, RpcHandler>();
@@ -311,7 +316,12 @@ describe('daemon RPC to protected Session input admission composition', () => {
     const accountCredentials = mode === 'plain' ? { ...credentials, encryption: null } : credentials;
     boundary.readCredentials.mockResolvedValue(accountCredentials);
     boundary.currentness.mockResolvedValue(createAccountEncryptionCurrentnessFixture({ mode }));
-    boundary.readDaemonState.mockResolvedValue({ pid: process.pid, httpPort: 12345, controlToken: 'synthetic-control-token' });
+    const daemonState = { pid: process.pid, httpPort: 12345, controlToken: 'synthetic-control-token',
+      startedAt: Date.now(), startedWithCliVersion: '0.0.0-test', machineId, accountId: 'account-admission-test' };
+    // Explicit-Home daemon discovery reads the publication from disk; the control
+    // HTTP boundary below consumes the same state through its credential port.
+    writeDaemonState(daemonState);
+    boundary.readDaemonState.mockResolvedValue(daemonState);
     const { sessionSpawnDirectTargetTransport } = registerSpawnBoundary(mode);
     const signedRequests: unknown[] = [];
     vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
@@ -353,12 +363,12 @@ describe('daemon RPC to protected Session input admission composition', () => {
       await cmdSessionCreate(['create', '--machine-id', machineId, '--agent', 'codex', '--connected-services-json', '{"v":2,"bindingsByServiceId":{}}', '--prompt', 'CLI first prompt', '--spawn-attempt-id', 'r9-cli-spawn', '--json'], {
         readCredentialsFn: async () => accountCredentials,
       });
+      const envelope = output.json();
+      expect(envelope, JSON.stringify(envelope)).toMatchObject({ ok: true, kind: 'session_create', data: { session: { id: sessionId } } });
       expect(signedRequests).toEqual([expect.objectContaining({
         actionId: 'session.spawn_new', actionRequestId: 'r9-cli-spawn',
         target: { kind: 'machine', machineId }, input: expect.objectContaining({ initialInput: { text: 'CLI first prompt' } }),
       })]);
-      const envelope = output.json();
-      expect(envelope, JSON.stringify(envelope)).toMatchObject({ ok: true, kind: 'session_create', data: { session: { id: sessionId } } });
       expect(admitted).toHaveLength(mode === 'e2ee' ? 1 : 0);
       if (mode === 'e2ee') {
         expect(admitted[0]?.content.t).toBe('encrypted');

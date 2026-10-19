@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { ComposerAttachmentDraftV1Schema, ComposerAttachmentInputV1Schema } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
 import { ComposerContentHandleV1Schema } from '@happier-dev/protocol/runtime/input/composerContentV1';
 import { SessionMediaMessageMetaV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMediaV1';
+import type { ComposerStagedMediaReleaseIntentV1 } from '@happier-dev/protocol/sessions/userMessageRpc';
 import type { ComposerAttachmentDraftV1, ComposerAttachmentInputV1, ComposerContentHandleV1, ComposerRefV1, PluginContributionIdentityV1, SessionExecutionTargetV1 } from '@happier-dev/protocol';
 import {
   garbageCollectFailedSessionMediaCommit,
@@ -46,12 +47,7 @@ export class ComposerStagedMediaFinalizationError extends Error {
 }
 
 /** The only request-local facts needed after durable Message admission. */
-export type ComposerStagedMediaReleaseIntent = Readonly<{
-  handle: ComposerContentHandleV1;
-  executionTarget: SessionExecutionTargetV1;
-  owner: PluginContributionIdentityV1;
-  claimant: ComposerMediaStageClaimant;
-}>;
+export type ComposerStagedMediaReleaseIntent = Readonly<ComposerStagedMediaReleaseIntentV1>;
 
 export type ComposerStagedMediaFinalizationResult = Readonly<{
   meta: MetadataRecord;
@@ -65,6 +61,7 @@ type ReadyStagedMedia = Readonly<{
   handle: ComposerContentHandleV1;
   inspection: Extract<ComposerMediaStageInspection, { status: 'ready' }>;
   claimant: ComposerMediaStageClaimant;
+  sourceSnapshotReleaseIntent?: ComposerStagedMediaReleaseIntent;
 }>;
 
 function fail(code: ComposerStagedMediaFinalizationErrorCode): never {
@@ -172,6 +169,12 @@ async function inspectReadyStagedMedia(params: Readonly<{
       composer: params.destinationComposerRef,
       attachmentInstanceId: attachment.data.instanceId,
     };
+    const sourceInspection = await params.stageStore.inspectForFinalization({
+      handle,
+      executionTarget: params.executionTarget,
+      owner: attachment.data.attachment,
+      claimant: sourceClaimant,
+    });
     // Every captured submission snapshot submits against its own fork copy, even
     // when the source and destination Composer refs are equal. Persisting the
     // mutable draft original would let a concurrent draft removal delete the
@@ -202,7 +205,22 @@ async function inspectReadyStagedMedia(params: Readonly<{
     ) {
       fail('composer_staged_media_stage_unavailable');
     }
-    staged.push({ attachment: attachment.data, handle: submissionHandle, inspection, claimant });
+    staged.push({
+      attachment: attachment.data,
+      handle: submissionHandle,
+      inspection,
+      claimant,
+      ...(sourceInspection.status === 'ready' && sourceInspection.isSubmissionSnapshot === true ? {
+        // Only the store's persisted custody fact makes this an immutable
+        // submission copy. Mutable Composer originals survive settlement.
+        sourceSnapshotReleaseIntent: {
+          handle,
+          executionTarget: params.executionTarget,
+          owner: attachment.data.attachment,
+          claimant: sourceClaimant,
+        },
+      } : {}),
+    });
   }
   return Object.freeze(staged);
 }
@@ -344,12 +362,15 @@ export async function finalizeComposerStagedMediaToSession(params: Readonly<{
       attachment,
       mediaIdByAttachmentInstanceId.get(attachment.instanceId) ?? null,
     ))),
-    releaseIntents: Object.freeze(staged.map(({ handle, attachment, claimant }) => Object.freeze({
-      handle,
-      executionTarget: params.executionTarget,
-      owner: attachment.attachment,
-      claimant,
-    }))),
+    releaseIntents: Object.freeze(staged.flatMap(({ handle, attachment, claimant, sourceSnapshotReleaseIntent }) => [
+      Object.freeze({
+        handle,
+        executionTarget: params.executionTarget,
+        owner: attachment.attachment,
+        claimant,
+      }),
+      ...(sourceSnapshotReleaseIntent ? [Object.freeze(sourceSnapshotReleaseIntent)] : []),
+    ])),
     createdWorkspaceRelativePaths: persisted.createdWorkspaceRelativePaths,
   };
 }

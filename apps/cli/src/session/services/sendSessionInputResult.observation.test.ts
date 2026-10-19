@@ -12,6 +12,10 @@ import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessi
 import { stampTurnFacts } from '@/agent/runtime/session/turn/stampTurnFacts';
 import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
 import { WORKFLOW_STEP_INPUT_EVENT_MESSAGE } from '@/session/shared/sessionTurnLifecycle';
+import { CoordinationMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
+import { classifyWorkflowSessionInputResult } from '@/daemon/workflows/stepExecution';
+import { applyWorkflowInvocationFactV1, WorkflowProgressEnvelopeV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { SessionRuntimeIssueV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 const socketBoundary = vi.hoisted(() => ({ create: vi.fn() }));
 vi.mock('@/api/session/sockets', async (importOriginal) => ({
@@ -24,6 +28,126 @@ vi.mock('@/api/session/sockets', async (importOriginal) => ({
 }));
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+it.each(['cancelled', 'failed'] as const)('observes original pre-provider %s without inventing a committed input', async kind => {
+  const sessionId = 'c' + 'd'.repeat(24);
+  let replyVisible = false;
+  let replyReads = 0;
+  socketBoundary.create.mockReturnValue(Object.assign(new EventEmitter(), {
+    connected: false, connect: vi.fn(), disconnect: vi.fn(), close: vi.fn(),
+  }));
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+      mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } };
+    if (url.endsWith('/by-local-id/original/reply')) {
+      replyReads += 1;
+      return { status: 200, data: replyVisible ? {
+        v: 1, status: 'available', progress: { v: 1, mode: 'wait', disposition: 'observing', outcome: { kind } },
+      } : { v: 1, status: 'unavailable' } };
+    }
+    if (url.endsWith('/by-local-id/original')) throw Object.assign(new Error('Message not found'), {
+      isAxiosError: true, response: { status: 404, data: { error: 'Message not found' } },
+    });
+    if (url.includes('/pending')) return { status: 200, data: { pending: [] } };
+    if (url.endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session:
+      createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadata: '{}', active: true }) } };
+    throw new Error(`unexpected_pre_provider_read:${url}`);
+  });
+  const input = { credentials: { token: 'token', encryption: null }, idOrPrefix: sessionId, localId: 'original',
+    observation: { kind: 'absolute_deadline', deadlineMs: 0 } } as const;
+  expect(await waitForSessionInputResult(input)).toMatchObject({ ok: true, result: { kind: 'pending' } });
+  expect(replyReads).toBe(0);
+  expect(await waitForSessionInputResult({ ...input, observeReply: true }))
+    .toMatchObject({ ok: true, result: { kind: 'pending' } });
+  replyVisible = true;
+  const result = await waitForSessionInputResult({ ...input, observeReply: true });
+  expect(result).toMatchObject({ ok: true, result: { kind: 'fulfilled', outcome: { kind } }, replyOutcome: { kind } });
+  expect(result).not.toHaveProperty('inputMessageRef');
+});
+
+it.each(['pass', 'answer'] as const)('settles an explicit pass or answer (%s) from original reply custody without an unrelated final', async kind => {
+  const sessionId = 'c' + 'a'.repeat(24);
+  socketBoundary.create.mockReturnValue(Object.assign(new EventEmitter(), {
+    connected: false, connect: vi.fn(), disconnect: vi.fn(), close: vi.fn(),
+  }));
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+      mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } };
+    if (url.endsWith('/by-local-id/question-1/reply')) return { status: 200, data: {
+      v: 1, status: 'available', progress: { v: 1, mode: 'wait', acceptedTurnId: 'answer-turn',
+        disposition: 'observing', outcome: kind === 'pass' ? { kind: 'pass' }
+          : { kind: 'answer', result: { sessionId, messageId: 'committed-explicit-answer' } } } } };
+    if (url.endsWith('/by-local-id/question-1')) return { status: 200, data: { message: {
+      id: 'committed-question', localId: 'question-1', seq: 7, createdAt: 7, updatedAt: 7,
+      content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Anything to add?' } } },
+    } } };
+    if (url.endsWith('/turns')) return { status: 200, data: { v: 1, sessionId, updatedAt: 7, turns: [] } };
+    if (url.includes('/messages?')) return { status: 200, data: { messages: [
+      { id: 'committed-explicit-answer', seq: 8, createdAt: 8, content: { t: 'plain', v: {
+        role: 'agent', content: { type: 'text', text: 'Use revision abc123' } } } },
+      { id: 'unrelated-final', seq: 9, createdAt: 9, content: { t: 'plain', v: {
+        role: 'agent', content: { type: 'text', text: 'Wrong later answer' } } } },
+    ] } };
+    if (url.includes(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session:
+      createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadata: '{}', active: true }) } };
+    throw new Error(`unexpected_reply_read:${url}`);
+  });
+  await expect(waitForSessionInputResult({ credentials: { token: 'token', encryption: null },
+    idOrPrefix: sessionId, localId: 'question-1', observeReply: true, serverId: 'captured-qualified-home',
+    observation: { kind: 'absolute_deadline', deadlineMs: 0 } })).resolves.toMatchObject({
+      ok: true, inputMessageRef: { session: { serverId: 'captured-qualified-home', sessionId }, messageId: 'committed-question' },
+      result: kind === 'pass' ? { kind: 'fulfilled', outcome: { kind: 'pass' } }
+        : { kind: 'final_text', text: 'Use revision abc123', messageRef: {
+            session: { serverId: 'captured-qualified-home', sessionId }, messageId: 'committed-explicit-answer' } },
+    });
+});
+
+it.each([1_900_000_000_000, null, undefined])('carries the exact failed turn usage-limit issue into strict workflow progress (reset %s)', async resetAtMs => {
+  const sessionId = 'c' + 'e'.repeat(24);
+  const issue = resetAtMs === undefined ? undefined : SessionRuntimeIssueV1Schema.parse({
+    v: 1, scope: 'primary_session', status: 'failed', code: 'usage_limit', source: 'usage_limit', occurredAt: 10,
+    usageLimit: { v: 1, resetAtMs, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' },
+  });
+  const earlierIssue = SessionRuntimeIssueV1Schema.parse({ v: 1, scope: 'primary_session', status: 'failed',
+    code: 'agent_session_error', source: 'agent_session_error', occurredAt: 2 });
+  socketBoundary.create.mockReturnValue(Object.assign(new EventEmitter(), {
+    connected: false, connect: vi.fn(), disconnect: vi.fn(), close: vi.fn(),
+  }));
+  const input = { id: 'input', localId: 'exact-input', seq: 7, createdAt: 7, updatedAt: 7,
+    content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Work' } } } };
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+      mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } };
+    if (url.includes('/messages/by-local-id/')) return { status: 200, data: { message: input } };
+    if (url.endsWith('/turns')) return { status: 200, data: { v: 1, sessionId, updatedAt: 12, turns: [{
+      turnId: 'previous-turn', status: 'failed', startedAt: 1, updatedAt: 2, terminalAt: 2, lastRuntimeIssue: earlierIssue,
+      transcriptAnchors: { startUserMessageSeq: 1, userMessageSeqs: [1], startSeqInclusive: 1, endSeqInclusive: 2 },
+    }, {
+      turnId: 'failed-turn', status: 'failed', startedAt: 7, updatedAt: 12, terminalAt: 12,
+      ...(issue ? { lastRuntimeIssue: issue } : {}),
+      transcriptAnchors: { startUserMessageSeq: 7, userMessageSeqs: [7], startSeqInclusive: 7, endSeqInclusive: 12, finalAssistantMessageSeq: null },
+    }] } };
+    if (url.includes('/messages?')) return { status: 200, data: { messages: [] } };
+    if (url.includes(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session:
+      createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadata: '{}', active: true }) } };
+    throw new Error(`unexpected_http_read:${url}`);
+  });
+  const observed = await observeWorkflowSessionInputResult({ credentials: { token: 'token', encryption: null },
+    sessionId, localId: 'exact-input', deadlineMs: 0 });
+  expect(observed).toMatchObject({ ok: true, result: { kind: 'failed' } });
+  if (!observed.ok) throw new Error('missing_exact_input_result');
+  const result = classifyWorkflowSessionInputResult(observed.result);
+  expect(result).toMatchObject({ kind: 'failed', ...(issue ? { runtimeIssueV1: issue } : {}) });
+  if (result.kind !== 'failed') throw new Error('missing_failed_input_result');
+  const progress = applyWorkflowInvocationFactV1(WorkflowProgressEnvelopeV1Schema.parse({
+    kind: 'happier.workflow-progress.v1', blockKind: 'step', invocationPath: { blockId: 'work', scope: [] },
+    attempt: '0', logicalInvocationRecordId: 'leaf',
+  }), { reason: result.code, ...('runtimeIssueV1' in result ? { runtimeIssueV1: result.runtimeIssueV1 } : {}) });
+  expect(progress.reason).toEqual({ code: 'session_input_failed', ...(issue ? { runtimeIssueV1: issue } : {}) });
+});
 
 it.each(['single', 'shared', 'quiet'] as const)('captures only the host-settled final reply with %s inputs and exact turn anchors', async (mode) => {
   const sessionId = 'c' + 'f'.repeat(24);
@@ -98,16 +222,42 @@ it.each(['single', 'shared', 'quiet'] as const)('captures only the host-settled 
   if (mode !== 'single') await expect(observe(inputId('beta'))).resolves.toMatchObject({ ok: true, result: { kind: 'pending' } });
   phase = 'alpha_done';
   await expect(observe(inputId('alpha'))).resolves.toMatchObject({ ok: true,
-    result: { kind: 'final_text', text: 'QA-FIN38b TOOL DONE alpha', usage: { inputTokens: 7, outputTokens: 2 } } });
+    inputMessageRef: { kind: 'session', session: { serverId: configuration.activeServerId, sessionId }, messageId: 'row-7' },
+    result: { kind: 'final_text', text: 'QA-FIN38b TOOL DONE alpha', usage: { inputTokens: 7, outputTokens: 2 },
+      messageRef: { kind: 'session', session: { serverId: configuration.activeServerId, sessionId }, messageId: 'row-11' } } });
   if (mode !== 'single') await expect(observe(inputId('beta'))).resolves.toMatchObject({ ok: true, result: { kind: 'pending' } });
   phase = 'both_done';
   for (const name of mode !== 'single' ? ['alpha', 'beta'] : ['alpha']) {
-    await expect(observe(inputId(name))).resolves.toMatchObject({ ok: true,
+    const answer = await observe(inputId(name));
+    expect(answer).toMatchObject({ ok: true,
       result: { kind: 'final_text', text: `QA-FIN38b TOOL DONE ${name}`,
+        messageRef: { kind: 'session', session: { serverId: configuration.activeServerId, sessionId },
+          messageId: name === 'alpha' ? 'row-11' : 'row-13' },
         usage: { inputTokens: name === 'alpha' ? 7 : 9, outputTokens: 2 } } });
+    if (!answer.ok || answer.result.kind !== 'final_text') throw new Error('missing_committed_result');
+    // Feed the real Session producer into C3's sole cross-resource union.
+    expect(CoordinationMessageRefV1Schema.parse(answer.result.messageRef)).toEqual({
+      kind: 'session', session: { serverId: configuration.activeServerId, sessionId },
+      messageId: name === 'alpha' ? 'row-11' : 'row-13',
+    });
+    expect(CoordinationMessageRefV1Schema.parse(answer.inputMessageRef)).toMatchObject({
+      kind: 'session', messageId: name === 'alpha' ? 'row-7' : 'row-8',
+    });
   }
   phase = 'ledger_unavailable';
   await expect(observe(inputId('alpha'))).resolves.toMatchObject({ ok: true, result: { kind: 'pending' } });
+});
+
+it('does not mint a committed reference when current access is refused', async () => {
+  vi.spyOn(axios, 'get').mockRejectedValue(Object.assign(new Error('Forbidden'), {
+    isAxiosError: true, response: { status: 403, data: { error: 'forbidden' } },
+  }));
+  const answer = await waitForSessionInputResult({ credentials: { token: 'revoked', encryption: null },
+    idOrPrefix: 'c' + 'a'.repeat(24), localId: 'accepted-input',
+    observation: { kind: 'absolute_deadline', deadlineMs: 0 } });
+  expect(answer).toMatchObject({ ok: false });
+  expect(answer).not.toHaveProperty('inputMessageRef');
+  expect(answer).not.toHaveProperty('result.messageRef');
 });
 
 it('keeps the containing deadline authoritative when a change races a parked read', async () => {

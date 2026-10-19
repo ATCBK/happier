@@ -2,7 +2,8 @@ import { SessionCreationCorrespondenceV1Schema, type SessionCreationCorresponden
 import { deriveSessionCreationTagV1, type SessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 
 type CreationRecipeInput = Pick<SessionCreationImmutableRecipeV1, 'execution' | 'organization' | 'agentTarget'>
-  & Partial<Omit<SessionCreationImmutableRecipeV1, 'execution' | 'organization' | 'agentTarget'>>;
+  & Partial<Omit<SessionCreationImmutableRecipeV1, 'execution' | 'organization' | 'agentTarget' | 'allowedTools'>>
+  & Readonly<{ allowedTools?: Readonly<SessionCreationImmutableRecipeV1['allowedTools']> }>;
 
 /** Shared immutable birth producer for ordinary Actions and host-owned Session creation. */
 export function buildSessionCreationCorrespondence(input: Readonly<{

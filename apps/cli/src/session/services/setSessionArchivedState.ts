@@ -63,6 +63,7 @@ export async function setSessionArchivedState(params: Readonly<{
     const stopResult = await requestSessionStop({
       credentials: params.credentials,
       idOrPrefix: resolved.sessionId,
+      stopIntent: 'lifecycle_control',
       ...(params.externalAction ? { externalAction: params.externalAction } : {}),
       ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     });

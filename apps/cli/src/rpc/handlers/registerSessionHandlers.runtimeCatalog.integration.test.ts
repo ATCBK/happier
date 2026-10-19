@@ -1,6 +1,8 @@
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import * as credentialPersistence from '@/persistence';
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
     createFeatureDecision,
@@ -20,6 +22,18 @@ import type {
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 
 import { registerSessionHandlers } from './registerSessionHandlers';
+
+let managedServicesFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => {
+    // Only credential persistence is substituted; the registry and managed owners stay real.
+    const credentials = vi.spyOn(credentialPersistence, 'readStoredCredentials').mockResolvedValue(null);
+    try {
+        managedServicesFixture = await createAdmittedPluginRuntimeFixture({ runtimeOptions: {
+            contributes: createResolvedContributionRegistry({}), pluginIds: [],
+        } });
+    } finally { credentials.mockRestore(); }
+});
+afterAll(async () => { await managedServicesFixture?.dispose(); });
 
 function createRegistrar() {
     const handlers = new Map<string, RpcHandler>();
@@ -49,6 +63,8 @@ function createRuntimeRegistry(
     return {
         claimReleaseLessDeclarations: async () => undefined,
         contributes,
+        declarationContributes: contributes,
+        projectManagedServices: managedServicesFixture.registry.projectManagedServices,
         resolveCaptureSource: unexpectedCaptureSourceResolution,
         resolveProjectNativeAdapter: unexpectedProjectNativeAdapterResolution,
         resolvePromptAssetBlocks: async () => [],
