@@ -57,6 +57,20 @@ describe('personal widget areas at the Account Artifact owner', () => {
         const initial = await owner.readState();
         const first = flattenWidgetLayoutWidgetsV1(initial.layout.items)[0]!.instance.id;
         await owner.apply({ kind: 'rename', instanceId: first, displayName: 'Mine' });
+        const personal = await views.list();
+        expect(personal).toHaveLength(8);
+        expect(personal.filter(row => row.artifactId === listed[0]!.artifactId)).toEqual([
+            expect.objectContaining({ isPreset: true, isDefault: true, isEdited: true,
+                revision: b.rows.get(listed[0]!.artifactId)!.revision }),
+        ]);
+        // A distinct view may have the same display name; its layout identity stays independent.
+        const copy = await views.create({ layoutId: 'my-overview', name: 'Overview', fromSurface: listed[0]!.surface });
+        const withCopy = await views.list();
+        expect(withCopy).toHaveLength(9);
+        expect(new Set(withCopy.map(row => row.artifactId)).size).toBe(9);
+        expect(new Set(withCopy.map(row => row.surface.owner.kind === 'corePage' ? row.surface.owner.layoutId : null)).size).toBe(9);
+        expect(copy).toMatchObject({ isPreset: false, isDefault: false, isEdited: false });
+        expect(withCopy.filter(row => row.name === 'Overview')).toHaveLength(2);
         const replay = createWidgetSurfaceArtifactPortV1(b.transport, { surface: listed[0]!.surface, isCurrent: () => true });
         expect(await replay.readState()).toMatchObject({ kind: 'present', preset: { isEdited: true } });
         const reset = await replay.resetPreset();

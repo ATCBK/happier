@@ -69,7 +69,7 @@ afterEach(async () => {
 });
 
 describe('mounted Usage page scope commands', () => {
-    it('admits the deep-linked view and selects from a closing menu across a page republish', async () => {
+    it.each(['overview', 'work'])('admits the personalized %s once and selects from a closing menu across a page republish', async layoutId => {
         const selectedRoutes: string[] = [];
         const inventoryRead = createDeferred<void>();
         const inventoryStarted = createDeferred<void>();
@@ -83,7 +83,7 @@ describe('mounted Usage page scope commands', () => {
         const server = home.homes.a!;
         publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
         const surface: WidgetSurfaceRefV1 = { serverId: server.id, accountId: 'account-a',
-            owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'work' } };
+            owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId } };
         const query = normalizeUsageQuery({});
         const layout = WidgetAreaLayoutV1Schema.parse({ v: 1, surface, items: [{ kind: 'widget', instance: {
             v: 1, id: 'work-only', definition: { kind: 'builtin', id: 'usage_period_summary' },
@@ -97,7 +97,7 @@ describe('mounted Usage page scope commands', () => {
         const credentials = (await TokenStorage.getCredentialsForServerUrl(server.serverUrl))!;
         const screen = await renderScreen(<InjectedAuthProvider credentials={credentials}>
             <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider>
-                <CurrentContextPort /><UsageWidgetPage initialFilters={{ layoutId: 'work', period: '7days', metric: 'cost', costMode: 'auto', focus: null }}
+                <CurrentContextPort /><UsageWidgetPage initialFilters={{ layoutId, period: '7days', metric: 'cost', costMode: 'auto', focus: null }}
                     onLayoutChange={layoutId => selectedRoutes.push(layoutId)} />
             </CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
         </InjectedAuthProvider>);
@@ -109,7 +109,13 @@ describe('mounted Usage page scope commands', () => {
         expect.soft(Boolean(screen.findHostByTestId('usage-area.loading'))).toBe(false);
         expect.soft(screen.findAllByType(WidgetAreaLayoutBar)).toHaveLength(0);
         inventoryRead.resolve();
-        await vi.waitFor(() => expect(screen.findByType(WidgetAreaLayoutBar).props.selectedId).toBe('work'));
+        await vi.waitFor(() => expect(screen.findByType(WidgetAreaLayoutBar).props.selectedId).toBe(layoutId));
+        const views = screen.findByType(WidgetAreaLayoutBar).props.layouts;
+        expect(views).toHaveLength(8);
+        expect(new Set(views.map((view: { id: string }) => view.id)).size).toBe(8);
+        expect(views.filter((view: { id: string }) => view.id === layoutId)).toEqual([
+            expect.objectContaining({ isPreset: true, edited: true }),
+        ]);
         expect(screen.findAllByType(WidgetSurface).map(node => node.props.instance.id)).toEqual(['work-only']);
         await act(async () => {
             screen.findHostByTestId('usage-views')!.props.onLayout({ nativeEvent: { layout: { width: 300, height: 40 } } });
@@ -124,13 +130,14 @@ describe('mounted Usage page scope commands', () => {
         await act(async () => { menu.props.onOpenChange(false); });
         await screen.update(<InjectedAuthProvider credentials={credentials}>
             <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider>
-                <CurrentContextPort /><UsageWidgetPage initialFilters={{ layoutId: 'work', period: '7days', metric: 'cost', costMode: 'auto', focus: null }}
+                <CurrentContextPort /><UsageWidgetPage initialFilters={{ layoutId, period: '7days', metric: 'cost', costMode: 'auto', focus: null }}
                     onLayoutChange={layoutId => selectedRoutes.push(layoutId)} />
             </CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
         </InjectedAuthProvider>);
-        await act(async () => { queuedSelection('overview'); });
-        await vi.waitFor(() => expect(screen.findByType(WidgetAreaLayoutBar).props.selectedId).toBe('overview'));
-        expect(selectedRoutes).toEqual(['overview']);
+        const nextLayoutId = layoutId === 'overview' ? 'costs' : 'overview';
+        await act(async () => { queuedSelection(nextLayoutId); });
+        await vi.waitFor(() => expect(screen.findByType(WidgetAreaLayoutBar).props.selectedId).toBe(nextLayoutId));
+        expect(selectedRoutes).toEqual([nextLayoutId]);
         // The page's filter bar names the scope its widgets follow; no frame repeats "This page".
         await vi.waitFor(() => expect(screen.findAllByType(WidgetSurface).length).toBeGreaterThan(1));
         expect(screen.findByType(UsageFilterBar).props.metric).toBe('cost');
