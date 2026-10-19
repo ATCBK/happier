@@ -243,16 +243,16 @@ export async function sessionUsageLimitWaitResumeEnable(
 export async function sessionUsageLimitWaitResumeCancel(
     sessionId: string,
     params: Readonly<{
-        issueFingerprint: string;
-        armedAtMs: number;
+        issueFingerprint?: string | null;
+        armedAtMs?: number;
         runtimeAuthRecoveryAttemptId?: string;
     }>,
     opts?: UsageLimitRecoveryOperationOptions,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
     const payload = {
         sessionId,
-        issueFingerprint: params.issueFingerprint,
-        armedAtMs: params.armedAtMs,
+        ...(params.issueFingerprint !== undefined ? { issueFingerprint: params.issueFingerprint } : {}),
+        ...(params.armedAtMs !== undefined ? { armedAtMs: params.armedAtMs } : {}),
         ...(params.runtimeAuthRecoveryAttemptId
             ? { runtimeAuthRecoveryAttemptId: params.runtimeAuthRecoveryAttemptId }
             : {}),

@@ -373,8 +373,9 @@ import { resolveNonSteerableSendPlan, type NonSteerableSendPlan } from '@/compon
 import { createSyncBackedSubmitPort } from '@/sync/domains/session/input/syncBackedSubmitPort';
 import {
     normalizeUsageLimitRecoverySettings,
-    updateUsageLimitRecoveryRememberedMode,
 } from '@/sync/domains/settings/usageLimitRecoverySettings';
+import { SESSION_PROVIDER_LIMITS_SETTINGS } from '@/components/settings/session/sessionProviderLimitsSettings';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { isSessionLocallyAttached } from '@/sync/domains/session/control/sessionLocalControl';
 import { resolveSessionNativeGoalOwner } from '@/sync/domains/session/control/sessionGoalExecutionCapabilities';
 import {
@@ -744,16 +745,11 @@ import {
 } from '@/components/sessions/usageLimitRecovery/sessionUsageLimitRecoveryOperationFailureAlert';
 import { handleReadyUsageLimitRecoveryResult } from '@/components/sessions/usageLimitRecovery/sessionUsageLimitRecoveryReadyResult';
 import {
-    sessionUsageLimitCheckNow,
-    sessionUsageLimitConsumeResetCredit,
-    sessionUsageLimitSwitchAccountNow,
-    sessionUsageLimitWaitResumeCancel,
-    sessionUsageLimitWaitResumeEnable,
-    type SessionUsageLimitRecoveryOperationResult,
-} from '@/sync/ops/sessionUsageLimitRecovery';
-import {
-    connectedServiceQuotaRecoveryCreditConsume,
-} from '@/sync/ops/connectedServiceQuotaRecoveryCredits';
+    normalizeSessionUsageLimitRecoveryOperationResultV1,
+    SessionUsageLimitRecoveryOperationResultV1Schema,
+    type SessionUsageLimitRecoveryOperationResultV1 as SessionUsageLimitRecoveryOperationResult,
+} from '@happier-dev/protocol/sessions/control/sessionUsageLimitRecoveryOperationResultV1';
+import { ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import {
     computeConnectedServiceQuotaGaugeViewModel,
     selectConnectedServiceSessionProviderUsageSnapshot,
@@ -4194,7 +4190,6 @@ function SessionViewLoadedContent({
     const usageLimitRecoverySettings: UsageLimitRecoverySettings = React.useMemo(() => {
         return normalizeUsageLimitRecoverySettings(settings.usageLimitRecoverySettingsV1);
     }, [settings.usageLimitRecoverySettingsV1]);
-    const [, setUsageLimitRecoverySettings] = useSettingMutable('usageLimitRecoverySettingsV1');
     const usageLimitRecoveryState = React.useMemo(
         () => readSessionUsageLimitRecoveryFromMetadata(ownerMetadata),
         [ownerMetadata],
@@ -4726,12 +4721,17 @@ function SessionViewLoadedContent({
             status,
         });
     }, [usageLimitRecoveryPresentation]);
-    const usageLimitRecoveryOperationOptions = React.useMemo(() => ({
-        machineOnly: Boolean(usageLimitRecoveryPresentation?.banner.temporaryThrottle),
-        serverId: sessionRouteServerId,
-        signal: sessionViewCaller.signal,
-        refreshMachineTargets: () => sync.refreshMachinesThrottled({ staleMs: 0, force: true }),
-    }), [sessionRouteServerId, sessionViewCaller, usageLimitRecoveryPresentation?.banner.temporaryThrottle]);
+    const { execute: executeRecoveryAction } = useMountedActionExecution(sessionAccountScope, { openOnRequest: true });
+    const executeUsageLimitRecoveryAction = React.useCallback(async (
+        actionId: 'session.usageLimit.checkNow' | 'session.usageLimit.waitResume.enable'
+            | 'session.usageLimit.waitResume.cancel' | 'session.usageLimit.consumeResetCredit',
+        input: unknown,
+    ): Promise<SessionUsageLimitRecoveryOperationResult> => {
+        const execution = await executeRecoveryAction(actionId, input, { defaultSessionId: sessionId, signal: sessionViewCaller.signal });
+        const failure = !execution.ok ? SessionUsageLimitRecoveryOperationResultV1Schema.safeParse(execution.details) : null;
+        return normalizeSessionUsageLimitRecoveryOperationResultV1(execution.ok ? execution.result
+            : failure?.success ? failure.data : execution, { sessionId });
+    }, [executeRecoveryAction, sessionId, sessionViewCaller]);
     const consumeConnectedServiceRecoveryCreditForProfile = React.useCallback(async (params: Readonly<{
         profileRef: Readonly<{ serviceId: string; profileId: string }>;
         profileKey: string;
@@ -4754,16 +4754,19 @@ function SessionViewLoadedContent({
             return false;
         }
 
-        const result = await connectedServiceQuotaRecoveryCreditConsume({
+        const execution = await executeRecoveryAction('connectedServices.quota.reset', {
             machineId: targetMachineId,
-            serverId: sessionRouteServerId,
-            signal: sessionViewCaller.signal,
             serviceId: serviceId.data,
             profileId: params.profileRef.profileId,
             sourceSnapshotFetchedAtMs: params.snapshotFetchedAtMs,
             ...(params.providerCreditId ? { providerCreditId: params.providerCreditId } : {}),
-        });
+        }, { defaultSessionId: sessionId, signal: sessionViewCaller.signal });
         if (sessionViewCaller.signal.aborted) return false;
+        if (!execution.ok) {
+            await Modal.alert(t('common.error'), execution.error || execution.errorCode);
+            return false;
+        }
+        const result = ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema.parse(execution.result);
         if (!result.ok) {
             await Modal.alert(t('common.error'), result.error || result.errorCode);
             return false;
@@ -4787,6 +4790,7 @@ function SessionViewLoadedContent({
         sessionId,
         sessionRouteServerId,
         sessionViewCaller,
+        executeRecoveryAction,
         t,
     ]);
     const handleUsageLimitRecoveryAction = React.useCallback(async (kind: SessionUsageLimitRecoveryActionKind = usageLimitRecoveryPresentation?.banner.mode ?? 'enable') => {
@@ -4833,10 +4837,10 @@ function SessionViewLoadedContent({
             }
             if (kind === 'resume_now') {
                 if (usageLimitRecoveryCheckNowSupported) {
-                    const result = await sessionUsageLimitCheckNow(sessionId, {
-                        provider: session.lastRuntimeIssue?.agentId ?? null,
+                    const result = await executeUsageLimitRecoveryAction('session.usageLimit.checkNow', {
+                        sessionId,
+                        ...(session.lastRuntimeIssue?.agentId ? { agentId: session.lastRuntimeIssue.agentId } : {}),
                         resumePromptMode: usageLimitRecoverySettings.resumePromptMode ?? 'standard',
-                        ...usageLimitRecoveryOperationOptions,
                     });
                     if (!result.ok) {
                         setUsageLimitRecoveryOperationStatus(null);
@@ -4874,40 +4878,46 @@ function SessionViewLoadedContent({
                 return;
             }
             if (kind === 'remember') {
-                const result = await sessionUsageLimitWaitResumeEnable(sessionId, {
+                const result = await executeUsageLimitRecoveryAction('session.usageLimit.waitResume.enable', {
+                    sessionId,
                     issueFingerprint: usageLimitRecoveryPresentation.issueFingerprint,
                     remember: true,
                     resumePromptMode: usageLimitRecoverySettings.resumePromptMode ?? 'standard',
-                }, usageLimitRecoveryOperationOptions);
+                });
                 if (!result.ok) {
                     setUsageLimitRecoveryOperationStatus(null);
                     await showUsageLimitRecoveryOperationFailure(result);
                 } else {
-                    setUsageLimitRecoverySettings(updateUsageLimitRecoveryRememberedMode(
-                        usageLimitRecoverySettings,
-                        'auto_wait',
-                    ));
+                    const saved = await executeRecoveryAction('settings.set', {
+                        anchor: SESSION_PROVIDER_LIMITS_SETTINGS.settings.autoWait.anchor, value: true,
+                    }, { defaultSessionId: sessionId, signal: sessionViewCaller.signal });
+                    if (!saved.ok) await showUsageLimitRecoveryOperationFailure(saved);
                     setUsageLimitRecoveryOperationStatus(null);
                 }
                 return;
             }
             if (kind === 'forget') {
-                const result = await sessionUsageLimitWaitResumeCancel(sessionId, {
+                const result = await executeUsageLimitRecoveryAction('session.usageLimit.waitResume.cancel', {
+                    sessionId,
                     issueFingerprint: usageLimitRecoveryPresentation.issueFingerprint,
                     armedAtMs: usageLimitRecoveryPresentation.armedAtMs,
                     ...(usageLimitRecoveryPresentation.runtimeAuthRecoveryAttemptId
                         ? { runtimeAuthRecoveryAttemptId: usageLimitRecoveryPresentation.runtimeAuthRecoveryAttemptId }
                         : {}),
-                }, usageLimitRecoveryOperationOptions);
+                });
                 if (!result.ok) {
                     setUsageLimitRecoveryOperationStatus(null);
                     await showUsageLimitRecoveryOperationFailure(result);
                     return;
                 }
-                setUsageLimitRecoverySettings(updateUsageLimitRecoveryRememberedMode(
-                    usageLimitRecoverySettings,
-                    'ask',
-                ));
+                const saved = await executeRecoveryAction('settings.set', {
+                    anchor: SESSION_PROVIDER_LIMITS_SETTINGS.settings.autoWait.anchor, value: false,
+                }, { defaultSessionId: sessionId, signal: sessionViewCaller.signal });
+                if (!saved.ok) {
+                    setUsageLimitRecoveryOperationStatus(null);
+                    await showUsageLimitRecoveryOperationFailure(saved);
+                    return;
+                }
                 if (isUsageLimitRecoveryResolvedStatus(result.status)) {
                     markUsageLimitRecoveryIssueResolved();
                 } else {
@@ -4922,10 +4932,6 @@ function SessionViewLoadedContent({
             }
 
             if (kind === 'consume_reset_credit' && connectedServiceQuotaProfileIdentity && connectedServiceQuotaProfileKey) {
-                const recoveryCreditSummary = summarizeConnectedServiceQuotaRecoveryCredits(
-                    usageLimitRecoveryCredits,
-                    nowServerMs(),
-                );
                 const consumed = await consumeConnectedServiceRecoveryCreditForProfile({
                     profileRef: connectedServiceQuotaProfileIdentity,
                     profileKey: connectedServiceQuotaProfileKey,
@@ -4938,35 +4944,37 @@ function SessionViewLoadedContent({
             }
 
             const result = kind === 'cancel'
-                ? await sessionUsageLimitWaitResumeCancel(sessionId, {
+                ? await executeUsageLimitRecoveryAction('session.usageLimit.waitResume.cancel', {
+                    sessionId,
                     issueFingerprint: usageLimitRecoveryPresentation.issueFingerprint,
                     armedAtMs: usageLimitRecoveryPresentation.armedAtMs,
                     ...(usageLimitRecoveryPresentation.runtimeAuthRecoveryAttemptId
                         ? { runtimeAuthRecoveryAttemptId: usageLimitRecoveryPresentation.runtimeAuthRecoveryAttemptId }
                         : {}),
-                }, usageLimitRecoveryOperationOptions)
+                })
                 : kind === 'consume_reset_credit'
-                    ? await sessionUsageLimitConsumeResetCredit(sessionId, {
-                        provider: session.lastRuntimeIssue?.agentId ?? null,
+                    ? await executeUsageLimitRecoveryAction('session.usageLimit.consumeResetCredit', {
+                        sessionId,
+                        ...(session.lastRuntimeIssue?.agentId ? { agentId: session.lastRuntimeIssue.agentId } : {}),
                         issueFingerprint: usageLimitRecoveryPresentation.issueFingerprint,
-                        ...usageLimitRecoveryOperationOptions,
                     })
                     : isUsageLimitRecoverySwitchAction(kind)
-                        ? await sessionUsageLimitSwitchAccountNow(sessionId, {
-                            provider: session.lastRuntimeIssue?.agentId ?? null,
-                            ...usageLimitRecoveryOperationOptions,
+                        ? await executeUsageLimitRecoveryAction('session.usageLimit.checkNow', {
+                            sessionId, operation: 'switch_account_now',
+                            ...(session.lastRuntimeIssue?.agentId ? { agentId: session.lastRuntimeIssue.agentId } : {}),
                         })
                         : isSessionUsageLimitRecoveryCheckNowAction(kind)
-                            ? await sessionUsageLimitCheckNow(sessionId, {
-                                provider: session.lastRuntimeIssue?.agentId ?? null,
+                            ? await executeUsageLimitRecoveryAction('session.usageLimit.checkNow', {
+                                sessionId,
+                                ...(session.lastRuntimeIssue?.agentId ? { agentId: session.lastRuntimeIssue.agentId } : {}),
                                 resumePromptMode: usageLimitRecoverySettings.resumePromptMode ?? 'standard',
-                                ...usageLimitRecoveryOperationOptions,
                             })
-                            : await sessionUsageLimitWaitResumeEnable(sessionId, {
+                            : await executeUsageLimitRecoveryAction('session.usageLimit.waitResume.enable', {
+                                sessionId,
                                 issueFingerprint: usageLimitRecoveryPresentation.issueFingerprint,
                                 remember: usageLimitRecoverySettings.mode === 'auto_wait',
                                 resumePromptMode: usageLimitRecoverySettings.resumePromptMode ?? 'standard',
-                            }, usageLimitRecoveryOperationOptions);
+                            });
             if (!result.ok) {
                 setUsageLimitRecoveryOperationStatus(null);
                 await showUsageLimitRecoveryOperationFailure(result);
@@ -5013,9 +5021,9 @@ function SessionViewLoadedContent({
         session.active,
         session.lastRuntimeIssue?.agentId,
         sessionId,
-        setUsageLimitRecoverySettings,
+        executeRecoveryAction,
+        executeUsageLimitRecoveryAction,
         router,
-        usageLimitRecoveryOperationOptions,
         sessionViewCaller,
         usageLimitRecoveryCredits,
         usageLimitRecoveryCheckNowSupported,
@@ -5051,10 +5059,12 @@ function SessionViewLoadedContent({
                 return;
             }
 
-            const result = await sessionUsageLimitConsumeResetCredit(sessionId, {
-                provider: session.lastRuntimeIssue?.agentId ?? providerAccountUsageSnapshot?.providerId ?? null,
-                issueFingerprint: baseUsageLimitRecoveryPresentation?.issueFingerprint ?? null,
-                ...usageLimitRecoveryOperationOptions,
+            const recoveryAgentId = session.lastRuntimeIssue?.agentId ?? providerAccountUsageSnapshot?.providerId;
+            const result = await executeUsageLimitRecoveryAction('session.usageLimit.consumeResetCredit', {
+                sessionId,
+                ...(recoveryAgentId ? { agentId: recoveryAgentId } : {}),
+                ...(baseUsageLimitRecoveryPresentation?.issueFingerprint
+                    ? { issueFingerprint: baseUsageLimitRecoveryPresentation.issueFingerprint } : {}),
             });
             if (!result.ok) {
                 await Modal.alert(t('common.error'), formatUsageLimitRecoveryOperationError(result));
@@ -5083,7 +5093,7 @@ function SessionViewLoadedContent({
         providerUsageRecoveryCreditPending,
         session.lastRuntimeIssue?.agentId,
         sessionId,
-        usageLimitRecoveryOperationOptions,
+        executeUsageLimitRecoveryAction,
         baseUsageLimitRecoveryPresentation?.issueFingerprint,
         usageLimitRecoveryPresentation,
     ]);

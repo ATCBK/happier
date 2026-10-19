@@ -44,6 +44,11 @@ import { readOriginalAccountActionMachine } from '@/sync/api/externalActionAccou
 import { isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { sessionGoalGet, sessionGoalSet, sessionGoalClear } from '@/sync/ops/sessionGoals';
+import {
+  sessionUsageLimitWaitResumeEnable, sessionUsageLimitWaitResumeCancel, sessionUsageLimitCheckNow,
+  sessionUsageLimitSwitchAccountNow, sessionUsageLimitConsumeResetCredit,
+  type SessionUsageLimitRecoveryOperationResult,
+} from '@/sync/ops/sessionUsageLimitRecovery';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
 import { readPluginInstallApprovalPendingReview } from '@happier-dev/protocol/actions/actionApprovalPresentation';
@@ -715,6 +720,20 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
   const actionSessionRpc: typeof sessionRpcWithServerScope = <R, A>(params: Parameters<typeof sessionRpcWithServerScope<R, A>>[0]) =>
     withAccountLifetime(params.signal ?? accountContext?.invocationSignal,
       signal => sessionRpcWithServerScope<R, A>({ ...params, signal }));
+  const usageLimitRecoveryOptions = (sessionId: string, serverId: string | null | undefined, signal?: AbortSignal) => {
+    const session = storage.getState().sessions[sessionId];
+    const throttle = session && (!serverId || areServerProfileIdentifiersEquivalent(session.serverId, serverId))
+      ? session.lastRuntimeIssue?.temporaryThrottle : undefined;
+    return { serverId, signal, machineOnly: throttle?.v === 1 && throttle.recoverability === 'retry',
+      refreshMachineTargets: () => sync.refreshMachinesThrottled({ staleMs: 0, force: true }) };
+  };
+  const runUsageLimitRecovery = (sessionId: string, serverId: string | null | undefined,
+    operation: (options: ReturnType<typeof usageLimitRecoveryOptions>) => Promise<SessionUsageLimitRecoveryOperationResult>) =>
+    withAccountLifetime(accountContext?.invocationSignal, async signal => {
+      const result = await operation(usageLimitRecoveryOptions(sessionId, serverId, signal));
+      // The shared Action failure envelope retains the typed repair/status facts as details.
+      return result.ok ? result : { ...result, details: result };
+    });
   const promptLibraryStore = accountContext ? createUiPromptLibraryArtifactStore(accountContext.workflowArtifacts, accountContext) : null;
   const withPromptLibraryStore = <T>(run: (store: PromptLibraryArtifactStore) => Promise<T>, signal?: AbortSignal): Promise<T> =>
     promptLibraryStore ? run(promptLibraryStore) : withUiPromptLibraryArtifactStore(run, { signal });
@@ -1694,6 +1713,22 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       }, { serverId, signal: lifetime })),
     sessionGoalClear: async ({ sessionId, serverId, signal }) => await withAccountLifetime(signal,
       lifetime => sessionGoalClear(sessionId, { serverId, signal: lifetime })),
+    sessionUsageLimitWaitResumeEnable: async ({ sessionId, serverId, ...input }) =>
+      runUsageLimitRecovery(sessionId, serverId, options => sessionUsageLimitWaitResumeEnable(sessionId, input, options)),
+    sessionUsageLimitWaitResumeCancel: async ({ sessionId, serverId, ...input }) =>
+      runUsageLimitRecovery(sessionId, serverId, options => sessionUsageLimitWaitResumeCancel(sessionId, input, options)),
+    sessionUsageLimitCheckNow: async ({ sessionId, serverId, agentId, resumePromptMode }) =>
+      runUsageLimitRecovery(sessionId, serverId, options => sessionUsageLimitCheckNow(sessionId, {
+        provider: agentId, resumePromptMode, ...options,
+      })),
+    sessionUsageLimitSwitchAccountNow: async ({ sessionId, serverId, agentId }) =>
+      runUsageLimitRecovery(sessionId, serverId, options => sessionUsageLimitSwitchAccountNow(sessionId, {
+        provider: agentId, ...options,
+      })),
+    sessionUsageLimitConsumeResetCredit: async ({ sessionId, serverId, agentId, issueFingerprint }) =>
+      runUsageLimitRecovery(sessionId, serverId, options => sessionUsageLimitConsumeResetCredit(sessionId, {
+        provider: agentId, issueFingerprint, ...options,
+      })),
     sessionOpen: async ({ sessionId, serverId, intent, resumeRequest, approvedNewDirectoryCreation, actionRequestId, tabId, destination, signal }) => {
       const comparison = destination ? scmReviewComparisonOfSource(destination.comparison, destination.comparisonId) : null;
       if (destination && !comparison) return { ok: false, errorCode: 'invalid_parameters', error: 'comparison_selector_unavailable' };

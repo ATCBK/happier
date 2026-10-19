@@ -4,7 +4,8 @@ import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNaviga
 import { act } from 'react-test-renderer';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema, SESSION_RUNNER_RUNTIME_METADATA_KEY } from '@happier-dev/protocol';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -201,13 +202,6 @@ vi.mock('@/voice/session/voiceSession', () => ({
   voiceSessionManager: {},
 }));
 
-vi.mock('@/sync/ops/sessionUsageLimitRecovery', () => ({
-  sessionUsageLimitCheckNow: vi.fn(),
-  sessionUsageLimitConsumeResetCredit: vi.fn(),
-  sessionUsageLimitSwitchAccountNow: vi.fn(),
-  sessionUsageLimitWaitResumeCancel: vi.fn(),
-  sessionUsageLimitWaitResumeEnable: sessionUsageLimitWaitResumeEnableSpy,
-}));
 vi.mock('@/components/sessions/agentInput', () => ({
   AgentInput: (props: any) => {
     agentInputPropsSpy(props);
@@ -245,6 +239,7 @@ const runtime = installSessionPaneRuntimeTestHarness({
     return Response.json(path === '/v1/machines' ? [machine] : { machine });
   },
   rpc: async (method, _input, _targetId) => {
+    if (method === SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE) return await sessionUsageLimitWaitResumeEnableSpy(_input);
     if (method === 'switch') return await switchReply(_input);
     if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
       const inventory = createReadyMachineAgentInventoryFixture([{ agentId: 'claude', title: 'Claude' }]);
@@ -816,7 +811,7 @@ describe('SessionView (control switch timeout)', () => {
     await screen.unmount();
   });
 
-  it('clears optimistic usage-limit checking state after a recovery action fails', async () => {
+  it.each([false, true])('clears optimistic usage-limit checking state after a recovery failure (Action disabled: %s)', async disabled => {
     enabledFeatureIds.add('sessions.usageLimitRecovery');
     const futureResetAtMs = Date.now() + 60_000;
     sessionUsageLimitWaitResumeEnableSpy.mockResolvedValueOnce({
@@ -843,6 +838,11 @@ describe('SessionView (control switch timeout)', () => {
     });
 
     const screen = await renderSessionView();
+    if (disabled) {
+      await act(async () => shellStorage.setState({ settings: { ...shellStorage.getState().settings,
+        actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'session.usageLimit.waitResume.enable': { disabledSurfaces: ['ui'] } } }),
+      } }));
+    }
     expect(getWarningActionBannerProps().actionTestID).toBe('session-usageLimit-recovery-enable');
     expect(getAgentInputProps().statusBadges).toContainEqual(expect.objectContaining({
       key: 'usage-limit-recovery',
@@ -854,15 +854,10 @@ describe('SessionView (control switch timeout)', () => {
     });
     await flushHookEffects({ cycles: 1, turns: 1 });
 
-    expect(sessionUsageLimitWaitResumeEnableSpy).toHaveBeenCalledWith(
-      's1',
-      expect.objectContaining({
-          issueFingerprint: 'usage-limit:agent:1700000000000',
-      }),
-      expect.objectContaining({
-        serverId: runtime.serverId,
-      }),
-    );
+    if (disabled) expect(sessionUsageLimitWaitResumeEnableSpy).not.toHaveBeenCalled();
+    else expect(sessionUsageLimitWaitResumeEnableSpy).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 's1', issueFingerprint: 'usage-limit:agent:1700000000000',
+    }));
     expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'errors.operationFailed', undefined);
     expect(getWarningActionBannerProps().actionTestID).toBe('session-usageLimit-recovery-enable');
     expect(getAgentInputProps().statusBadges).toContainEqual(expect.objectContaining({
