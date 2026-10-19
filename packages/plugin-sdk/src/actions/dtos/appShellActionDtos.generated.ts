@@ -284,8 +284,30 @@ export type AppShellActionResultById = {
                             bodyVersion: number;
                         };
                     };
+                } | {
+                    kind: 'task';
+                    entry: Readonly<{
+                        source: Readonly<{
+                            pluginId: string;
+                            localId: string;
+                        }>;
+                        kindId: string;
+                        collisionScope: string;
+                        entryId: string;
+                    }>;
                 } | null;
                 replyTarget?: {
+                    kind: 'task';
+                    entry: Readonly<{
+                        source: Readonly<{
+                            pluginId: string;
+                            localId: string;
+                        }>;
+                        kindId: string;
+                        collisionScope: string;
+                        entryId: string;
+                    }>;
+                } | {
                     kind: 'doc_passage';
                     doc: {
                         ref: {
