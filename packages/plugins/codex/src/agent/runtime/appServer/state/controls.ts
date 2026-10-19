@@ -103,7 +103,9 @@ function normalizeReasoningEffortLabel(value: string): string {
         case 'max':
             return 'Max';
         default:
-            return value;
+            // Codex adds levels over time (for example `ultra`); a level without a word here still
+            // reads as a name rather than a raw value.
+            return value.length > 0 ? value.charAt(0).toUpperCase() + value.slice(1) : value;
     }
 }
 

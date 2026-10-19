@@ -114,6 +114,8 @@ describe('Codex app-server session controls', () => {
                                     { reasoningEffort: 'medium', description: 'Balanced' },
                                     { reasoningEffort: 'high', description: 'Deep' },
                                     { reasoningEffort: 'xhigh', description: 'Extra deep' },
+                                    // A level this build has no word for still reads as a name, not a raw enum value.
+                                    { reasoningEffort: 'ultra', description: 'Longest thinking' },
                                 ],
                                 defaultReasoningEffort: 'medium',
                                 serviceTiers: [
@@ -149,6 +151,7 @@ describe('Codex app-server session controls', () => {
                             { value: 'medium', name: 'Medium', description: 'Balanced' },
                             { value: 'high', name: 'High', description: 'Deep' },
                             { value: 'xhigh', name: 'XHigh', description: 'Extra deep' },
+                            { value: 'ultra', name: 'Ultra', description: 'Longest thinking' },
                         ],
                     },
                     {
