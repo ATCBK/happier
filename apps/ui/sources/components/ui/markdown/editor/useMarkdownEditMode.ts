@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { useRichEligibility } from '@/components/ui/markdown/editor/core/eligibility/richEligibility';
 import type { MarkdownRichIneligibleReason } from '@/components/ui/markdown/editor/core/eligibility/markdownRichEligibility';

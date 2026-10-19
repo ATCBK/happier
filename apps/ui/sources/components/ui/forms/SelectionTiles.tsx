@@ -18,7 +18,7 @@ import { Typography } from '@/constants/Typography';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { useListPresentation } from '@/components/ui/lists/listPresentation';
 import { projectPluginUiHostPalette, projectPluginUiTheme, readPluginUiHostTypography } from '@/components/plugins/surfaces/pluginUiThemeProjection';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { useItemDensityInputs } from '@/components/ui/lists/useResolvedItemDensity';
 import { isTouchPrimaryPointer, resolvePageRowDensityInput, resolvePageRowMetrics } from '@/components/ui/lists/pageRowMetrics';
 

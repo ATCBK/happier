@@ -45,4 +45,20 @@ describe('UI testkit barrel', () => {
 
         expect(barrelSource).not.toContain("./fixtures/agentCatalogFixtures");
     });
+
+    it('loads shared text and material readers without the aggregate store hooks or command runtime', async () => {
+        await import('@/components/ui/text/Text');
+        await import('@/components/ui/glass/useGlassMaterialSettings');
+        await import('@/components/ui/lists/SegmentedChoiceItem');
+        await import('@/components/ui/layout/PageHeader');
+        const cache = (globalThis as {
+            __vitest_worker__?: { moduleCache?: ReadonlyMap<string, { exports?: unknown }> };
+        }).__vitest_worker__?.moduleCache;
+        expect(cache).toBeDefined();
+        const loaded = [...cache!].filter(([id, entry]) => !id.startsWith('mock:') && entry.exports)
+            .map(([id]) => id.replaceAll('\\', '/'));
+        expect(loaded.filter(id => id.endsWith('/sync/store/hooks.ts')
+            || id.endsWith('/sync/store/settingsWriters.ts')
+            || id.endsWith('/sync/syncEngine.ts'))).toEqual([]);
+    });
 });

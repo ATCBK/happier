@@ -19,7 +19,7 @@ import {
 import { Typography } from '@/constants/Typography';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
 import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 
 import { scaleTextStyle } from './uiFontScale';
 

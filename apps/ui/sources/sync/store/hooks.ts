@@ -1,4 +1,13 @@
 import React from 'react';
+import { useSetting, useLocalSetting } from './settingsReadHooks';
+export {
+  useSettings,
+  useSettingsSelector,
+  useSettingsVersion,
+  useSetting,
+  useLocalSettings,
+  useLocalSetting,
+} from './settingsReadHooks';
 import { actionOperationStore, isActionOperationTerminal } from '@/sync/domains/actionOperations/actionOperationStore';
 import { readTranscriptBrowserActionIdentity } from '@/components/sessions/transcript/references/transcriptBrowserActionReference';
 import { useAiLaunchProfiles } from './useAiLaunchProfiles';
@@ -68,7 +77,6 @@ import type {
   SettingsWriteDelta,
   WritableSettingsKey,
 } from '../domains/settings/settings';
-import { settingsDefaults } from '../domains/settings/settings';
 import { projectCurrentSecretBindingsByProfileId, type CurrentSecretBindingsByProfileId } from '../domains/settings/secretBindings';
 import {
   deriveSessionListRenderableHasUnreadMessagesFromSession,
@@ -2136,29 +2144,6 @@ export function useSessionUsage(sessionId: string, exactScope?: ExactSessionUsag
   );
 }
 
-export function useSettings(): Settings {
-  return getStorage()(useShallow((state) => state.settings ?? settingsDefaults));
-}
-
-/** Subscribe to a settings-domain projection while retaining unchanged selected fields. */
-export function useSettingsSelector<T>(selector: (settings: Settings) => T): T {
-  const selectState = React.useMemo(() => {
-    let previous: { settings: Settings; value: T } | null = null;
-    return (state: StorageState): T => {
-      const settings = state.settings ?? settingsDefaults;
-      if (!previous || previous.settings !== settings) {
-        previous = { settings, value: selector(settings) };
-      }
-      return previous.value;
-    };
-  }, [selector]);
-  return getStorage()(useShallow(selectState));
-}
-
-export function useSettingsVersion(): number | null {
-  return getStorage()((state) => state.settingsVersion);
-}
-
 export function useSettingMutable<K extends WritableSettingsKey>(
   name: K
 ): [Settings[K], (value: Settings[K] | ((current: Settings[K]) => Settings[K] | null)) => void] {
@@ -2277,14 +2262,6 @@ export function useCurrentRememberedEngineSelectionsByScopeV1Mutable(): [
 
 export function useAuthoringMemoryField<K extends keyof AuthoringMemory>(name: K): AuthoringMemory[K] {
   return getStorage()((state) => state.authoringMemory[name]);
-}
-
-export function useSetting<K extends keyof Settings>(name: K): Settings[K] {
-  return getStorage()(useShallow((state) => state.settings?.[name] ?? settingsDefaults[name]));
-}
-
-export function useLocalSettings(): LocalSettings {
-  return getStorage()(useShallow((state) => state.localSettings));
 }
 
 export function useAllMachines(): Machine[] {
@@ -2979,10 +2956,6 @@ export function useWorkspaceRepositoryTreeExpandedPaths(scope: WorkspaceScopeBas
   return getStorage()(
     useShallow((state) => (cacheKey ? state.getWorkspaceRepositoryTreeExpandedPaths(scope as WorkspaceScopeBase) : []))
   );
-}
-
-export function useLocalSetting<K extends keyof LocalSettings>(name: K): LocalSettings[K] {
-  return getStorage()(useShallow((state) => state.localSettings[name]));
 }
 
 export function useSessionLastMobileSurface(

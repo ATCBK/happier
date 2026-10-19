@@ -5,7 +5,7 @@ import { EditorContent, useEditor } from '@tiptap/react';
 import type { Editor } from '@tiptap/core';
 
 import { TextInput } from '@/components/ui/text/Text';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { resolveCodeEditorFontMetrics } from '@/components/ui/code/editor/codeEditorFontMetrics';
 import { getDefaultFont, getMonoFont } from '@/constants/Typography';
 
@@ -446,7 +446,10 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
                 flushPendingChange: async () => {
                     flushPendingChange();
                 },
-                focus: () => editorRef.current?.commands.focus(),
+                focus: () => {
+                    const live = editorRef.current;
+                    if (live && !live.isDestroyed) live.commands.focus();
+                },
                 runCommand: (command) => controllerRef.current?.runCommand(command),
                 subscribeSelection: (callback) =>
                     controllerRef.current?.subscribeSelection(callback) ?? (() => {}),

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 
 import { warmRepositoryDirectoryCache } from '@/sync/domains/input/repositoryDirectory';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 export function useWarmRepositoryDirectoryCacheOnSessionOpen(input: Readonly<{

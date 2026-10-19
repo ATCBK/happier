@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { isTouchPrimaryPointer, resolvePageRowMetrics, type PageRowMetrics, type PageRowShape } from '@/components/ui/lists/pageRowMetrics';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 
 export type ResolvedItemDensity = 'comfortable' | 'cozy' | 'compact' | 'tight';
 

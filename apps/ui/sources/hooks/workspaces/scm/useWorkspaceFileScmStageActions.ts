@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
-import { storage } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { Modal } from '@/modal';
 import { t } from '@/text';

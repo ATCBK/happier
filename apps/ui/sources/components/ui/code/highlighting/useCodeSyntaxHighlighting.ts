@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import { getFileLanguageFromPath } from '@/utils/code/fileLanguage';
 
 import type { CodeLinesSyntaxHighlightingMode } from './resolveCodeLinesSyntaxHighlightingConfig';

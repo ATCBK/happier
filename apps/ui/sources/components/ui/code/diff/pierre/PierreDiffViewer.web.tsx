@@ -11,7 +11,7 @@ import type { DiffLineAnnotation, FileDiffMetadata, FileDiffOptions, OnDiffLineC
 import { FileDiff, Virtualizer, VirtualizerContext, WorkerPoolContext, useVirtualizer } from '@pierre/diffs/react';
 import { usePierreScrollRootVirtualizer } from './PierreScrollRootVirtualizerProvider.web';
 
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { t } from '@/text';
 import { looksLikeUnifiedDiff } from '@/scm/diff/looksLikeUnifiedDiff';

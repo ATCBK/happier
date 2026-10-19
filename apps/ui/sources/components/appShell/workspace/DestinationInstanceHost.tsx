@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { useGlobalSearchParams, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
-import { NavigationContext } from '@react-navigation/native';
 import { resolveHref } from 'expo-router/build/link/href';
 
 import { hrefForDestinationRef, type DestinationRef } from '@/components/appShell/destinations/compactAppDestinationCatalog';
@@ -19,37 +18,16 @@ import { resolveRootStackRouteOptions } from '@/components/navigation/root/rootS
 import { matchWorkspaceDestinationRoute, workspaceRouteFiles } from './workspaceRoutes';
 import { SessionViewerDestinationScope } from '@/components/sessions/viewer/SessionViewerDestinationScope';
 import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import { DestinationInstanceContext, DestinationHeaderOptionsContext, useDestinationInstanceKey, type DestinationInstanceContextValue, type DestinationNavigation } from './destinationInstanceContext';
+export { useDestinationInstanceKey, useDestinationNavigation, type DestinationNavigation } from './destinationInstanceContext';
 
 const EMPTY_SCREEN_OPTIONS: NativeStackNavigationOptions = {};
-
-const DestinationHeaderOptionsContext = React.createContext<((options: NativeStackNavigationOptions) => void) | null>(null);
-
-export type DestinationNavigation = Pick<ReturnType<typeof useRouter>, 'push' | 'replace' | 'back'>
-    & Partial<ReturnType<typeof useRouter>> & {
-        /** Automatic route selection, distinct from an explicit replacement chosen by the user. */
-        redirect?: ReturnType<typeof useRouter>['replace'];
-        /** Open another destination without retiring the caller's mounted draft. */
-        pushRetainingCurrent?: ReturnType<typeof useRouter>['push'];
-        /** Retain this pane before acquiring work that outlives its preview. */
-        retainCurrent?: () => void;
-    };
 
 type DestinationRouter = ReturnType<typeof useRouter> & {
     redirect: ReturnType<typeof useRouter>['replace'];
     pushRetainingCurrent: ReturnType<typeof useRouter>['push'];
     retainCurrent: () => void;
 };
-
-type DestinationInstanceContextValue = Readonly<{
-    tabId: string;
-    ref: DestinationRef;
-    pathname: string;
-    focused: boolean;
-    visible: boolean;
-    navigation?: DestinationNavigation;
-}>;
-
-const DestinationInstanceContext = React.createContext<DestinationInstanceContextValue | null>(null);
 
 function RetainedDestinationContext(props: Readonly<{
     captured: DestinationInstanceContextValue | null;
@@ -267,10 +245,6 @@ export function useDestinationVisibility(): boolean {
     return React.useContext(DestinationInstanceContext)?.visible ?? true;
 }
 
-export function useDestinationInstanceKey(): string | null {
-    return React.useContext(DestinationInstanceContext)?.tabId ?? null;
-}
-
 export function useDestinationPaneScopeId(resourceScopeId: string): string {
     return qualifyPaneScopeId(resourceScopeId, useDestinationInstanceKey());
 }
@@ -331,21 +305,6 @@ function useWorkspaceOrExpoRouter() {
             back: workspace.active ? workspace.back : router.back,
             canGoBack: workspace.active ? () => workspace.canGoBack : router.canGoBack };
     }, [router, workspace]);
-}
-
-/** The retained host owns its chrome options; Back still belongs to the same tab owner. */
-export function useDestinationNavigation() {
-    const instance = React.useContext(DestinationInstanceContext);
-    const nativeNavigation = React.useContext(NavigationContext);
-    const setOptions = React.useContext(DestinationHeaderOptionsContext);
-    return React.useMemo(() => instance ? {
-        canGoBack: () => instance.navigation?.canGoBack?.() ?? false,
-        goBack: () => instance.navigation?.back(),
-        setOptions: setOptions ?? ((_options: NativeStackNavigationOptions) => {}),
-        isFocused: () => instance.focused,
-        addListener: (_event: string, _listener: () => void) => () => {},
-        getParent: () => undefined,
-    } : nativeNavigation, [instance, nativeNavigation, setOptions]);
 }
 
 export function useDestinationFocusEffect(effect: React.EffectCallback): void {

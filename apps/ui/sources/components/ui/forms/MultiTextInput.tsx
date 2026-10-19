@@ -14,7 +14,7 @@ import { Typography } from '@/constants/Typography';
 import { TextInput } from '@/components/ui/text/Text';
 import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
 import { normalizeKeyboardKeyPressEvent, type KeyPressEvent as KeyboardKeyPressEvent } from '@/keyboard/events';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { recordLargeTextInputDiagnostic } from '@/utils/system/userInteractionDiagnostics';
 import {
     normalizeNativeMultiTextInputMaxHeight,

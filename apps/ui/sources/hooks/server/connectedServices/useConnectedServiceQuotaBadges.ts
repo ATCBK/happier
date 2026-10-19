@@ -5,7 +5,7 @@ import { computeConnectedServiceQuotaSummaryBadges } from '@/sync/domains/connec
 import type {
   ConnectedServiceQuotaProfileRefInput,
 } from '@/sync/domains/connectedServices/connectedServiceQuotaProfileRefs';
-import { useSettingsSelector } from '@/sync/store/hooks';
+import { useSettingsSelector } from '@/sync/store/settingsReadHooks';
 
 import {
   useConnectedServiceQuotaSnapshots,

@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import {
     normalizeSessionListSectionModeV1,
     resolveSessionListLayoutChoice,

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
 import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
-import { useLocalSetting } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import {
     EMPTY_NAVIGATION_PLACEMENT_PREFERENCES,
     readNavigationSurfacePlacements,
