@@ -5,8 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionListQueryV1 } from '@happier-dev/protocol';
 
-import { createSessionListQuerySourceHarness, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
-import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createSessionListQuerySourceHarness, waitForSessionListQueryState, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { storage } from '@/sync/domains/state/storageStore';
 import { buildSessionListRenderableFromSession } from './sessionListRenderable';
@@ -81,7 +80,7 @@ describe('session list query source: subscription locality', () => {
         }
         const screen = await mount(<Host />);
         try {
-            await act(async () => waitForHomeGovernance(() => expect(state.current?.statesByServerId[serverId]?.phase).toBe('ready')));
+            await waitForSessionListQueryState(() => expect(state.current?.statesByServerId[serverId]?.phase).toBe('ready'));
             const settled = renders;
             const settledStates = state.current?.statesByServerId;
             expect(boundary.queryRequests.some(request => request.serverId === serverId)).toBe(true);
@@ -103,7 +102,7 @@ describe('session list query source: subscription locality', () => {
         }
         const screen = await mount(<Host />);
         try {
-            await act(async () => waitForHomeGovernance(() => expect(state.current?.statesByServerId[serverId]?.phase).toBe('ready')));
+            await waitForSessionListQueryState(() => expect(state.current?.statesByServerId[serverId]?.phase).toBe('ready'));
             const settledSource = state.current?.source;
             const settledByServerId = state.current?.byServerId;
             expect(Array.isArray(settledSource)).toBe(true);

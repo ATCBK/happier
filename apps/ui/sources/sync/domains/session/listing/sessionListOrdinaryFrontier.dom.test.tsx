@@ -283,10 +283,11 @@ describe('ordinary Session-list frontier on the Home Sync owns', () => {
                 </ActivityPersonalSessionMembershipProvider>,
             ));
             const serverId = homes[0]!.id;
-            await act(async () => {
-                await vi.waitFor(() => expect(membership.current?.statesByServerId[serverId]).toMatchObject({
+            await vi.waitFor(async () => {
+                await act(async () => {});
+                expect(membership.current?.statesByServerId[serverId]).toMatchObject({
                     phase: 'ready', failureReason: null, failureCode: null,
-                }));
+                });
             });
             expect(personalQueryRequests).toEqual([null]);
             expect(membership.current?.membershipByServerId[serverId]).toEqual(['personal-page-1']);

@@ -1,4 +1,5 @@
 import { expect } from 'vitest';
+import { act } from 'react';
 import type { Socket } from 'socket.io-client';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
@@ -25,12 +26,24 @@ import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeature
 import { readConcurrentOrdinarySessionListLifecycle, startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } from '@/sync/runtime/orchestration/concurrentSessionCache';
 import { sync } from '@/sync/sync';
 
+// This fixture owns app initialization; its callers time their query/lifecycle
+// assertions after the real source graph and transport adapters are prepared.
+await initializeRealAppRuntimeForTests();
+
 type QueryRequest = Readonly<{
     serverId: string;
     cursor: string | null;
     signal: AbortSignal | null;
     aborts: { count: number };
 }>;
+
+/** Let each render commit before polling its projection, rather than holding an act scope open until that render. */
+export function waitForSessionListQueryState<T>(assertion: () => T | Promise<T>): Promise<T> {
+    return waitForHomeGovernance(async () => {
+        await act(async () => {});
+        return assertion();
+    });
+}
 
 /** Real Home/Account, controller, store and Socket lifetimes; only network replies are synthetic. */
 export async function createSessionListQuerySourceHarness() {

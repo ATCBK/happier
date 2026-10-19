@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionListQueryV1 } from '@happier-dev/protocol';
 
-import { createSessionListQuerySourceHarness, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
+import { createSessionListQuerySourceHarness, waitForSessionListQueryState, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useSessionListQuerySourceState, type SessionListQueryHomeInput, type SessionListQuerySourceState } from './useSessionListQuerySourceState';
@@ -56,9 +56,9 @@ async function mount(initialHomes: SessionListQueryHomeInput[], options: Readonl
         state,
         suspendedRenderAttempts: () => suspendedRenderAttempts,
         async ready(...serverIds: string[]) {
-            await act(async () => waitForHomeGovernance(() => {
+            await waitForSessionListQueryState(() => {
                 for (const serverId of serverIds) expect(state.current?.statesByServerId[serverId]?.phase).toBe('ready');
-            }));
+            });
         },
         async render(selectedHomes: SessionListQueryHomeInput[]) {
             await act(async () => render(selectedHomes, false));
@@ -93,8 +93,8 @@ describe('useSessionListQuerySourceState committed controller lifecycle', () => 
                 await waitForHomeGovernance(() => expect(boundary.queryRequests.some(request => request.serverId === homeB && request.cursor !== null)).toBe(true));
             });
             const pendingHomeB = boundary.queryRequests.find(request => request.serverId === homeB && request.cursor !== null)!;
-            await act(async () => waitForHomeGovernance(() => expect(screen.state.current?.statesByServerId[homeA]?.addresses.map(address => address.sessionId))
-                .toEqual([boundary.accountId(homeA) + '-row', boundary.accountId(homeA) + '-page-2'])));
+            await waitForSessionListQueryState(() => expect(screen.state.current?.statesByServerId[homeA]?.addresses.map(address => address.sessionId))
+                .toEqual([boundary.accountId(homeA) + '-row', boundary.accountId(homeA) + '-page-2']));
             await screen.suspend(homes(homeA, homeC));
             expect(screen.suspendedRenderAttempts()).toBeGreaterThan(0);
             expect(pendingHomeB.signal?.aborted).toBe(false);
@@ -122,11 +122,11 @@ describe('useSessionListQuerySourceState committed controller lifecycle', () => 
         boundary.holdQueries(homeB);
         const screen = await mount(homes(homeA, homeB), { strict: true });
         try {
-            await act(async () => waitForHomeGovernance(() => {
+            await waitForSessionListQueryState(() => {
                 for (const serverId of [homeA, homeB]) {
                     expect(boundary.queryRequests.some(request => request.serverId === serverId && request.signal?.aborted === false)).toBe(true);
                 }
-            }));
+            });
             await screen.unmount();
             expect(boundary.queryRequests.length).toBeGreaterThan(0);
             for (const request of boundary.queryRequests) {
@@ -163,7 +163,7 @@ describe('useSessionListQuerySourceState committed controller lifecycle', () => 
             await screen.ready(homeA, homeB);
             boundary.setReachable(homeB, false);
             await act(async () => { boundary.loseTransport(homeB); });
-            await act(async () => waitForHomeGovernance(() => expect(screen.state.current?.statesByServerId[homeB]?.phase).toBe('offline')));
+            await waitForSessionListQueryState(() => expect(screen.state.current?.statesByServerId[homeB]?.phase).toBe('offline'));
             // A later user retry is distinct from the coalesced transport-loss revalidation.
             vi.useFakeTimers({ toFake: ['Date'] });
             vi.setSystemTime(Date.now() + 1_000);
@@ -195,8 +195,8 @@ describe('useSessionListQuerySourceState committed controller lifecycle', () => 
         const screen = await mount(selectedHomes);
         try {
             await screen.ready(homeB);
-            await act(async () => waitForHomeGovernance(() => expect(screen.state.current?.statesByServerId[homeA])
-                .toMatchObject({ phase: 'error', failureReason: 'unsupported' })));
+            await waitForSessionListQueryState(() => expect(screen.state.current?.statesByServerId[homeA])
+                .toMatchObject({ phase: 'error', failureReason: 'unsupported' }));
             expect(boundary.queryRequests.some(request => request.serverId === homeA)).toBe(false);
             expect(screen.state.current?.statesByServerId[homeB]?.addresses)
                 .toEqual([{ serverId: homeB, sessionId: boundary.accountId(homeB) + '-row' }]);
@@ -224,7 +224,7 @@ describe('useSessionListQuerySourceState committed controller lifecycle', () => 
             });
             const oldRequest = boundary.queryRequests.slice(before).find(request => request.serverId === replacedHome)!;
             await act(async () => { await boundary.switchAccount(replacedHome, 'replacement-account'); });
-            await act(async () => waitForHomeGovernance(() => expect(oldRequest.signal?.aborted).toBe(true)));
+            await waitForSessionListQueryState(() => expect(oldRequest.signal?.aborted).toBe(true));
             expect(oldRequest.aborts.count).toBe(1);
             expect(Object.values(storage.getState().sessionListQueryMembershipByKey)
                 .some(membership => membership?.serverId === replacedHome && membership.accountId === oldAccountId)).toBe(false);
