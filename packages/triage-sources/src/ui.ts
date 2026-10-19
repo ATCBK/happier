@@ -30,6 +30,7 @@ export { TriageStatusRow, type TriageStatusRowProps } from './ui/statusRow.js';
 export {
   TriageDetailStory,
   TriageDetailChangeSummary,
+  TriageChecksRollupLine,
   TriageDetailChecks,
   TriageDetailSpread,
   type TriageDetailChecksRollupV1,
