@@ -2269,6 +2269,35 @@ describe('usage query captured Resource adapter', () => {
     } finally { release(); }
   });
 
+  it('keeps same-scope approval waits consistent across Coach and Human loop while empty turn history stays unknown', async () => {
+    const nowMs = Date.now();
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v2/sessions/truth') return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: 'truth',
+        createdAt: 1, updatedAt: nowMs, seq: 1, active: true, activeAt: nowMs, metadataVersion: 1, agentStateVersion: 1,
+        agentState: JSON.stringify({ completedRequests: { approval: { tool: 'Bash', arguments: {},
+          createdAt: nowMs - 1000, completedAt: nowMs - 500, status: 'approved' } } }) }) });
+      if (request.path === '/v1/sessions/truth/turns') return Response.json({ v: 1, sessionId: 'truth', updatedAt: nowMs, turns: [] });
+      if (request.path === '/v1/sessions/truth/messages') return Response.json({ messages: [], hasMore: false });
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: { truth: createSessionFixture({ id: 'truth', seq: 1,
+      serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' }) } });
+    const parallel = normalizeUsageQuery({ period: { relative: '7days' }, includeWorkEvidence: false, includeTranscriptEvidence: false });
+    const humanLoop = normalizeUsageQuery({ ...parallel, includeTranscriptEvidence: true });
+    const batch = await readUiUsageQueryBatch(captured, { queries: [parallel, humanLoop] });
+    for (const slice of batch.results) {
+      expect(slice.accounting?.totals.tokens.total).toBe(value.totals.tokens.total);
+      expect(slice.howYouWork?.todayInParallel, 'empty retained turn history cannot establish no runs today').toBeNull();
+      expect(slice.howYouWork?.permissions).toMatchObject({ pairedDecisionCount: 1, decisionLatencyMs: 500 });
+      const finding = slice.coach?.findings.find(row => row.detectorId === 'approval_friction');
+      expect(finding?.measurements).toEqual(expect.arrayContaining([
+        expect.objectContaining({ metric: 'permission_wait', value: 500 }),
+        expect.objectContaining({ metric: 'permission_requests', value: 1 }),
+      ]));
+    }
+  });
+
   it('settles a summary slice while a sibling transcript in the same batch is held or fails', async () => {
     const transcript = createDeferred<Response>();
     const captured = await context(request => {

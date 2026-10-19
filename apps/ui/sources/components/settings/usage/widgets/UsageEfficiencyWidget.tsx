@@ -67,7 +67,7 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
   if (!view) {
     // Its ratios beside the mix they come from: the skeleton holds that shape while the read answers.
     if (isUsageReadOutstanding(props.slice, ['accounting'])) return <UsageBodyReading testID={`${props.testID}.loading`} shape={{ kind: 'mix' }} />;
-    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} onRetry={props.model.refresh} />;
   }
   const { composition } = view;
   const totalTokens = props.slice.accounting?.totals.tokens.total ?? 0;

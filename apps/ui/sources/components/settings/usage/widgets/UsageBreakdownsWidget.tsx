@@ -131,7 +131,7 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
     ];
   });
   if (!accounting)
-    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} onRetry={props.model.refresh} />;
   if (blocks.length === 0)
     return (
       <UsageBodyInsufficient
