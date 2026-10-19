@@ -25,6 +25,7 @@ describe('CLI Board Actions through the Artifact owner', () => {
         const privateRevisionMetadata = {
             provenance: z.optional(z.nullable(z.string())),
             provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),
+            kind: z.optional(z.string()),
         };
         const createSchema = z.strictObject({ id: z.string(), header: z.string(), body: z.string(), dataEncryptionKey: z.string(),
             ...privateRevisionMetadata });
@@ -46,7 +47,11 @@ describe('CLI Board Actions through the Artifact owner', () => {
             if (path === '/v1/account/encryption') return { status: 200, data: { mode, updatedAt: 1 } };
             if (path === '/v1/account/profile') return { status: 200, data: { id: 'owner' } };
             if (path === '/v2/account/settings') return { status: 200, data: { content: null, version: 0 } };
-            if (path === '/v1/artifacts') return { status: 200, data: [...rows.values()] };
+            if (path === '/v1/artifacts') {
+                const kind = new URL(url).searchParams.get('kind');
+                // The Artifact server selects by its stored coarse kind; every row here is classified.
+                return { status: 200, data: kind ? { items: [...rows.values()].filter(row => row.kind === kind), hasUnclassified: false } : [...rows.values()] };
+            }
             const artifactId = decodeURIComponent(path.split('/')[3] ?? '');
             const row = rows.get(artifactId);
             // A create receipt is not readable content. Only the exact Home read is temporarily unavailable.
@@ -279,7 +284,10 @@ describe('CLI Board Actions through the Artifact owner', () => {
             if (url.endsWith('/access/grants')) return { status: 200, data: {
                 artifactId: new URL(url).pathname.split('/')[3], ownerAccountId: 'owner', access: 'owner', grants: [],
             } };
-            if (url.includes('/v1/artifacts?')) return { status: 200, data: [row('b1'), row('other')] };
+            if (url.includes('/v1/artifacts?')) {
+                const items = [row('b1'), row('other')];
+                return { status: 200, data: new URL(url).searchParams.has('kind') ? { items, hasUnclassified: false } : items };
+            }
             if (url.endsWith('/v1/artifacts/b1')) return { status: 200, data: row('b1') };
             if (url.endsWith('/v1/artifacts/other')) return { status: 200, data: row('other') };
             // The legacy path has a real empty response, so missing mock setup cannot supply RED.
