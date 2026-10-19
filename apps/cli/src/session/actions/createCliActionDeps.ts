@@ -302,6 +302,7 @@ import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedService
 import { getSessionStatus } from '@/session/services/getSessionStatus';
 import { createSessionBoardActionDeps } from '@/session/board/sessionBoardActionDeps';
 import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
+import { resolveWorkflowDiscussionOrigin } from '@/daemon/workflows/workflowDiscussion';
 import { createSessionListActionDeps } from './sessionListActionDependency';
 import { resolveCliAgentStartContextV1 } from './resolveCliAgentStartContextV1';
 import { resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
@@ -2084,6 +2085,30 @@ export function createCliActionDeps(params: Readonly<{
         definitions: workflowDefinitions,
         ...(workflowTriggers ? { triggers: workflowTriggers } : {}),
         runs: createWorkflowRunActionOwner({
+          resolveDiscussionOrigin: async ({ origin, context }) => {
+            const requester = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
+            const credentials = requester?.credentials ?? params.credentials;
+            if (!credentials || context.externalActionExecutionAuthorization && !requester) {
+              throw Object.assign(new Error('run_access_denied'), { code: 'run_access_denied' });
+            }
+            if (requester && !await requester.isCurrent()) throw Object.assign(new Error('run_access_denied'), { code: 'run_access_denied' });
+            const discussionAction = createDiscussionActionDeps({ credentials,
+              serverId: projectHomeId, serverHttpBaseUrl: requester?.serverHttpBaseUrl ?? workflowRunServerHttpBaseUrl,
+              ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
+              ...(params.externalActionMachineRequestPrivateKey ? { externalActionMachineRequestPrivateKey: params.externalActionMachineRequestPrivateKey } : {}),
+              ...(params.externalActionMachineInstallationId ? { externalActionMachineInstallationId: params.externalActionMachineInstallationId } : {}),
+              ...(params.resolveServerFeaturesSnapshot ? { resolveServerFeaturesSnapshot: params.resolveServerFeaturesSnapshot } : {}),
+            }).discussionAction!;
+            const result = await resolveWorkflowDiscussionOrigin({ origin, context, discussionAction, signal: context.signal }).catch(error => {
+              context.signal?.throwIfAborted();
+              const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+              throw Object.assign(new Error(code === 'invalid_reference_scope' ? 'invalid_reference_scope' : 'content_unavailable'), {
+                code: code === 'invalid_reference_scope' ? 'invalid_reference_scope' : 'content_unavailable',
+              });
+            });
+            if (requester && !await requester.isCurrent()) throw Object.assign(new Error('run_access_denied'), { code: 'run_access_denied' });
+            return result;
+          },
           resolveRunReportPolicy: async ({ context }) => {
             const requester = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
             const credentials = requester?.credentials ?? params.credentials;
