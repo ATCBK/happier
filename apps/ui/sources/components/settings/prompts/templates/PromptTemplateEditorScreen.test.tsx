@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { clearActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 import { createPlainPromptLibraryCatalogHomeFixture } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import {
     installPromptTemplatesCommonModuleMocks,
     promptTemplatesRouterBackSpy,
@@ -183,5 +184,58 @@ describe('PromptTemplateEditorScreen', () => {
         const saved = record.value.entries[0]!;
         expect(saved.id).not.toBe('');
         await vi.waitFor(() => expect(promptTemplatesRouterReplaceSpy).toHaveBeenCalledWith(`/settings/prompts/templates/${saved.id}`));
+    });
+
+    it('honors Action Off for a complete new template before writing the catalog', async () => {
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.alert).mockClear();
+        storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { 'prompts.invocation.create': { enabled: false } },
+        }) } });
+        const { PromptTemplateEditorScreen } = await import('./PromptTemplateEditorScreen');
+        const screen = await renderScreen(React.createElement(PromptTemplateEditorScreen, { invocationId: null }));
+        await act(async () => {
+            screen.changeTextByTestId('promptTemplate.title', 'Daily');
+            screen.changeTextByTestId('promptTemplate.token', 'daily');
+        });
+        await chooseTarget(screen, 'doc-1');
+        await act(async () => { await screen.findByTestId('promptTemplate.save')?.props.onPress(); });
+        // A raw catalog writer would persist despite the disabled Action.
+        await vi.waitFor(() => expect(promptTemplatesRouterReplaceSpy.mock.calls.length + vi.mocked(Modal.alert).mock.calls.length).toBeGreaterThan(0));
+        expect(catalog.mutations).toEqual([]);
+        expect(preventRemoveState.last).toBe(true);
+        expect(promptTemplatesRouterReplaceSpy).not.toHaveBeenCalled();
+    });
+
+    it('edits through the captured revision and lets the Action waiver own deletion confirmation', async () => {
+        const scope = storage.getState().settingsScope;
+        if (!scope) throw new Error('Missing admitted template Account');
+        const { writePromptLibraryRecord } = await import('@/sync/api/account/apiPromptLibraryCatalog');
+        await writePromptLibraryRecord(scope, { record: { key: 'invocations', value: { v: 1, entries: [{
+            id: 'saved', token: '/daily', title: 'Daily', target: { kind: 'doc', artifactId: 'doc-1', serverId: scope.serverId },
+            behavior: 'insert', allowArgs: false, availableIn: 'session_only',
+        }] } }, expectedRevision: 4 });
+        catalog.mutations.length = 0;
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
+        vi.mocked(Modal.show).mockClear();
+        const { PromptTemplateEditorScreen } = await import('./PromptTemplateEditorScreen');
+        const screen = await renderScreen(<PromptTemplateEditorScreen invocationId="saved" />);
+        await act(async () => { screen.changeTextByTestId('promptTemplate.title', 'Weekly'); });
+        await screen.pressByTestIdAsync('promptTemplate.save');
+        await vi.waitFor(() => expect(catalog.read().record.value).toMatchObject({ entries: [{ id: 'saved', title: 'Weekly',
+            availableIn: 'session_only', target: { serverId: scope.serverId } }] }));
+        expect(catalog.mutations).toEqual([{ key: 'invocations', expectedRevision: 5 }]);
+        storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, approvalWaivedSurfaces: { 'prompts.invocation.delete': ['ui'] },
+        }) } });
+        const menu = screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'promptTemplate.header.menu');
+        if (!menu) throw new Error('Missing template operations menu');
+        await act(async () => { await menu.props.onSelect('delete'); });
+        await vi.waitFor(() => expect(catalog.read().record.value).toEqual({ v: 1, entries: [] }));
+        expect(catalog.mutations).toEqual([{ key: 'invocations', expectedRevision: 5 }, { key: 'invocations', expectedRevision: 6 }]);
+        expect(Modal.confirm).not.toHaveBeenCalled();
+        expect(Modal.show).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(promptTemplatesRouterReplaceSpy).toHaveBeenCalledWith('/settings/prompts/templates'));
     });
 });

@@ -143,6 +143,24 @@ export type PromptLibraryActionInputById = {
         allowArgs?: boolean | undefined;
         availableIn?: 'global' | 'session_only' | undefined;
     };
+    readonly "prompts.invocation.update": {
+        token: string;
+        title: string;
+        target: {
+            artifactId: string;
+            kind: 'doc';
+            serverId?: string | undefined;
+        };
+        invocationId: string;
+        expectedRevision: number | 'absent';
+        behavior?: 'insert' | 'insert_on_send' | 'insert_and_send' | undefined;
+        allowArgs?: boolean | undefined;
+        availableIn?: 'global' | 'session_only' | undefined;
+    };
+    readonly "prompts.invocation.delete": {
+        invocationId: string;
+        expectedRevision: number | 'absent';
+    };
 };
 export type PromptLibraryActionResultById = {
     readonly "prompt_doc.get": {
@@ -212,6 +230,38 @@ export type PromptLibraryActionResultById = {
     } | {
         status: 'invalid';
         reason: 'invalid' | 'reserved' | 'actionCollision' | 'duplicate';
+    } | {
+        status: 'conflict';
+        revision: number;
+    } | {
+        status: 'unavailable';
+        reason: string;
+    };
+    readonly "prompts.invocation.update": {
+        status: 'updated';
+        invocationId: string;
+        token: string;
+        revision: number;
+    } | {
+        status: 'invalid';
+        reason: 'invalid' | 'reserved' | 'actionCollision' | 'duplicate';
+    } | {
+        status: 'conflict';
+        revision: number;
+    } | {
+        status: 'unavailable';
+        reason: string;
+    } | {
+        status: 'invalid';
+        reason: 'not_found';
+    };
+    readonly "prompts.invocation.delete": {
+        status: 'updated';
+        invocationId: string;
+        revision: number;
+    } | {
+        status: 'invalid';
+        reason: 'not_found';
     } | {
         status: 'conflict';
         revision: number;

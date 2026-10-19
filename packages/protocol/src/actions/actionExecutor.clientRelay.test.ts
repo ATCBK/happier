@@ -20,6 +20,8 @@ describe('client placement delivery after canonical admission', () => {
   it.each([
     { actionId: 'session.draft.delete' as const, input: { draftId: '11111111-1111-4111-8111-111111111111' } },
     { actionId: 'prompts.invocation.create' as const, input: { token: '/new', title: 'New', target: { kind: 'doc', artifactId: 'doc' } } },
+    { actionId: 'prompts.invocation.update' as const, input: { invocationId: 'saved', expectedRevision: 4, token: '/new', title: 'New', target: { kind: 'doc', artifactId: 'doc' } } },
+    { actionId: 'prompts.invocation.delete' as const, input: { invocationId: 'saved', expectedRevision: 4 } },
   ])('does not dispatch $actionId without approval', async ({ actionId, input }) => {
     let issued = false;
     const executor = createActionExecutor({ clientActionExecute: async () => {

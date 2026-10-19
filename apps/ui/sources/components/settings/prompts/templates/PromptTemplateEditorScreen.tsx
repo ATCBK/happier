@@ -1,8 +1,10 @@
 import * as React from 'react';
 import { useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
 
-import { PromptInvocationEntryV1Schema, validatePromptInvocationTokenV1 } from '@happier-dev/protocol/prompts/library/promptInvocationsV1';
+import { validatePromptInvocationTokenV1 } from '@happier-dev/protocol/prompts/library/promptInvocationsV1';
 import { listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
+import { PromptInvocationCreateOutputSchema, PromptInvocationUpdateOutputSchema, PromptInvocationDeleteOutputSchema } from '@happier-dev/protocol/actions/promptInvocationCreateActionSpecs';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Switch } from '@/components/ui/forms/Switch';
@@ -12,10 +14,10 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import type { PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { Modal } from '@/modal';
-import { randomUUID } from '@/platform/randomUUID';
 import { useArtifacts } from '@/sync/domains/state/storage';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
-import { requireUpdatedPromptLibraryMutation } from '@/sync/api/account/apiPromptLibraryCatalog';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { t } from '@/text';
 import { PromptDocSelectionGroup } from '@/components/settings/prompts/shared/PromptDocSelectionGroup';
 import { usePromptEditorDraftField } from '@/components/settings/prompts/shared/usePromptEditorDraftField';
@@ -35,9 +37,11 @@ export const PromptTemplateEditorScreen = React.memo((props: Readonly<{ invocati
   const navigation = useNavigation();
   const isNew = props.invocationId === null;
   const artifacts = useArtifacts();
-  const { value: invocations, write: writeInvocations, status, stale } = usePromptLibraryCatalogValue('invocations');
+  const scope = useAccountSettingsScope();
+  const { execute: executeAction, isCurrent: isActionCurrent, ready: actionReady } = useMountedActionExecution(scope);
+  const { value: invocations, revision, status, stale } = usePromptLibraryCatalogValue('invocations', scope);
   const hasInvocations = invocations !== null;
-  const canWriteInvocations = hasInvocations && status === 'ready' && !stale;
+  const canWriteInvocations = actionReady && hasInvocations && status === 'ready' && !stale;
 
   const existingEntry = React.useMemo(() => {
     if (!props.invocationId) return null;
@@ -173,38 +177,40 @@ export const PromptTemplateEditorScreen = React.memo((props: Readonly<{ invocati
 
     try {
       setSaving(true);
-      const id = props.invocationId ?? randomUUID();
-      const entry = PromptInvocationEntryV1Schema.parse({
-        id,
+      const fields = {
         token: rawToken,
         title: title.trim(),
         target: existingEntry?.target.artifactId === targetArtifactId.trim()
           ? existingEntry.target
-          : { kind: 'doc', artifactId: targetArtifactId.trim() },
+          : { kind: 'doc' as const, artifactId: targetArtifactId.trim() },
         behavior,
         allowArgs,
-        availableIn: 'global',
-      });
-
-      const nextEntries = props.invocationId
-        ? invocations.entries.map((e) => (e.id === props.invocationId ? entry : e))
-        : [...invocations.entries, entry];
-
-      requireUpdatedPromptLibraryMutation(await writeInvocations({ ...invocations, entries: nextEntries }));
-      setPristineTitle(entry.title);
-      setPristineToken(entry.token);
-      setPristineTargetArtifactId(entry.target.artifactId);
-      setPristineBehavior(entry.behavior);
-      setPristineAllowArgs(entry.allowArgs);
-      if (!props.invocationId) setPendingHref(promptCollectionItemHref('template', id));
+        availableIn: existingEntry?.availableIn ?? 'global',
+      };
+      const result = props.invocationId
+        ? await executeAction('prompts.invocation.update', { ...fields, invocationId: props.invocationId, expectedRevision: revision })
+        : await executeAction('prompts.invocation.create', fields);
+      if (!result.ok) {
+        if (isActionApprovalDeclinedErrorCode(result.errorCode)) return false;
+        throw new Error(result.errorCode);
+      }
+      const receipt = (props.invocationId ? PromptInvocationUpdateOutputSchema : PromptInvocationCreateOutputSchema).parse(result.result);
+      if (receipt.status !== 'updated') throw new Error(receipt.status);
+      if (!isActionCurrent()) return false;
+      setPristineTitle(fields.title);
+      setPristineToken(receipt.token);
+      setPristineTargetArtifactId(fields.target.artifactId);
+      setPristineBehavior(fields.behavior);
+      setPristineAllowArgs(fields.allowArgs);
+      if (!props.invocationId) setPendingHref(promptCollectionItemHref('template', receipt.invocationId));
       return true;
     } catch {
-      Modal.alert(t('common.error'), t('promptLibrary.saveError'));
+      if (isActionCurrent()) Modal.alert(t('common.error'), t('promptLibrary.saveError'));
       return false;
     } finally {
       setSaving(false);
     }
-  }, [allowArgs, behavior, canWriteInvocations, complete, existingEntry, invocations, props.invocationId, saving, writeInvocations, setPristineAllowArgs, setPristineBehavior, setPristineTargetArtifactId, setPristineTitle, setPristineToken, targetArtifactId, title, token]);
+  }, [allowArgs, behavior, canWriteInvocations, complete, executeAction, existingEntry, invocations, isActionCurrent, props.invocationId, revision, saving, setPristineAllowArgs, setPristineBehavior, setPristineTargetArtifactId, setPristineTitle, setPristineToken, targetArtifactId, title, token]);
 
   const leave = React.useCallback(() => setPendingHref(promptCollectionRoot('template')), []);
   React.useEffect(() => {
@@ -231,20 +237,21 @@ export const PromptTemplateEditorScreen = React.memo((props: Readonly<{ invocati
 
   const remove = React.useCallback(async () => {
     if (!props.invocationId || !canWriteInvocations || !invocations) return;
-    const confirmed = await Modal.confirm(
-      t('promptLibrary.deleteTemplate'),
-      t('promptLibrary.deleteTemplateConfirm'),
-      { confirmText: t('common.delete'), destructive: true },
-    );
-    if (!confirmed) return;
     try {
-      requireUpdatedPromptLibraryMutation(await writeInvocations({ ...invocations, entries: invocations.entries.filter((e) => e.id !== props.invocationId) }));
+      const result = await executeAction('prompts.invocation.delete', { invocationId: props.invocationId, expectedRevision: revision });
+      if (!result.ok) {
+        if (isActionApprovalDeclinedErrorCode(result.errorCode)) return;
+        throw new Error(result.errorCode);
+      }
+      const receipt = PromptInvocationDeleteOutputSchema.parse(result.result);
+      if (receipt.status !== 'updated') throw new Error(receipt.status);
+      if (!isActionCurrent()) return;
       discard();
       leave();
     } catch {
-      Modal.alert(t('common.error'), t('promptLibrary.saveError'));
+      if (isActionCurrent()) Modal.alert(t('common.error'), t('promptLibrary.saveError'));
     }
-  }, [canWriteInvocations, discard, invocations, leave, props.invocationId, writeInvocations]);
+  }, [canWriteInvocations, discard, executeAction, invocations, isActionCurrent, leave, props.invocationId, revision]);
 
   const menuActions = React.useMemo((): readonly PageHeaderMenuAction[] => (props.invocationId
     ? [{ id: 'delete', testID: 'promptTemplate.delete', title: t('common.delete'), onSelect: remove }]
