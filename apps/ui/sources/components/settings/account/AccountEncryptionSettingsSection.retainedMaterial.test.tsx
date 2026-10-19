@@ -9,6 +9,8 @@ import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 import { deriveAccountSigningPublicKey } from '@/auth/flows/challenge';
 import { buildContentKeyBinding } from '@/auth/oauth/contentKeyBinding';
 import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { DiscussionAccountEncryptionInventoryV1Schema } from '@happier-dev/protocol/discussions/accountEncryptionMigration';
+import { SESSION_FOLLOW_RULES_ROUTE_V1, ListSessionFollowRulesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -169,6 +171,10 @@ async function mount(params: Readonly<{
                 terminalPresentUserPolicy: 'allowed', nativeEmail: null, password: { status: 'not_enrolled', revision: null } });
             if (target.pathname === '/v1/kv') return json({ items: [] });
             if (target.pathname === '/v1/account/encryption/migrate/review-comments/inventory') return json({ v: 1, items: [] });
+            if (target.pathname === '/v1/account/encryption/migrate/discussions/inventory')
+                return json(DiscussionAccountEncryptionInventoryV1Schema.parse({ items: [] }));
+            if (target.pathname === SESSION_FOLLOW_RULES_ROUTE_V1)
+                return json(ListSessionFollowRulesResponseV1Schema.parse({ rules: [] }));
             if (target.pathname === '/v1/account/encryption/migrate/session-organization/inventory') return json({ version: 0, folders: [], tags: [], labels: [] });
             if (target.pathname === '/v1/account/encryption/migrate' && init?.method === 'POST') {
                 const migration = JSON.parse(String(init.body)) as AccountEncryptionMigrateRequest;

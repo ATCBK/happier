@@ -64,7 +64,7 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
 
     let root1!: renderer.ReactTestRenderer;
     root1 = (await renderScreen(React.createElement(Harness))).tree;
-    expect(readLatest().preflightModels?.availableModels.map(model => model.id)).toEqual(['m1']);
+    await vi.waitFor(() => expect(readLatest().preflightModels?.availableModels.map(model => model.id)).toEqual(['m1']));
     await act(async () => {
       root1.unmount();
     });
@@ -164,10 +164,12 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
     let root!: renderer.ReactTestRenderer;
     root = (await renderScreen(React.createElement(Harness))).tree;
 
-    expect(capabilityRpc).toHaveBeenCalledTimes(1);
-    expect(latestPreflightModels).toEqual({
-      availableModels: [],
-      supportsFreeform: true,
+    await vi.waitFor(() => {
+      expect(capabilityRpc).toHaveBeenCalledTimes(1);
+      expect(latestPreflightModels).toEqual({
+        availableModels: [],
+        supportsFreeform: true,
+      });
     });
 
     await act(async () => {
@@ -202,6 +204,7 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
     const root = screen.tree;
 
     expect(latestProbePhase).toBe('loading');
+    await vi.waitFor(() => expect(resolveProbe).toBeTypeOf('function'));
 
     await screen.update(React.createElement(Harness, { agentId: 'gemini' }));
 

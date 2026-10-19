@@ -16,7 +16,6 @@ import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendPr
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { installPromptLibrarySettingsCommonModuleMocks, promptLibrarySettingsRouterPushSpy } from '../promptLibrarySettingsTestHelpers';
 import { promptCollectionItemHref } from './promptCollectionRoutes';
-import { withUiPromptLibraryArtifactReader } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
 import { resolvePromptStackSystemAppendBlocksV1 } from '@/sync/ops/promptLibrary/resolvePromptStackSystemAppendBlocksV1';
 
 installDisconnectedServerSocketBoundary();
@@ -25,6 +24,7 @@ installPromptLibrarySettingsCommonModuleMocks({ storage: importOriginal => impor
     modal: async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true,
         spies: { confirm: deleteConfirmation } }).module });
 
+const { withUiPromptLibraryArtifactReader } = await import('@/sync/ops/promptLibrary/promptLibraryArtifactStore');
 const { storage } = await import('@/sync/domains/state/storage');
 const { settingsDefaults } = await import('@/sync/domains/settings/settings');
 const { applyPromptLibraryCatalogSnapshot } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');

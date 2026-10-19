@@ -138,10 +138,10 @@ describe('MachineDetailScreen canonical Stop fallback', () => {
                 serverUrl: `https://machine-stop-${settlement}.example.test`, machines: [machine], sessions: [session],
                 settings: { actionsSettingsV1 },
             });
-        routeParams.current = { id: machine.id, page: 'runs' };
+            routeParams.current = { id: machine.id, page: 'work' };
             let focusedServerId: string | undefined;
             if (settlement === 'route-home') {
-                routeParams.current = { id: machine.id, serverId: home.home.id , page: 'runs' };
+                routeParams.current = { id: machine.id, serverId: home.home.id, page: 'work' };
                 const focused = await network.addHome('https://machine-stop-focused-elsewhere.example.test', 'focused-account');
                 focusedServerId = focused.id;
                 const { setActiveServerId, getActiveServerId } = await import('@/sync/domains/server/serverProfiles');

@@ -7,6 +7,7 @@ import { renderScreen as renderCanonicalScreen } from '@/dev/testkit/render/rend
 import 'fake-indexeddb/auto';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -293,9 +294,17 @@ describe('SessionView read cursor on blur', () => {
     beforeEach(async () => {
         previousStorage = storage.getState();
         await home.reset();
-        await home.addHome({ name: 'Cursor Home', serverUrl: 'https://server-1', accountId: 'account-a' });
-        await home.addHome({ name: 'Previous Home', serverUrl: 'https://home-b', accountId: 'account-a', active: false });
-        await home.addHome({ name: 'Next Home', serverUrl: 'https://home-a', accountId: 'account-a', active: false });
+        const cursorHome = await home.addHome({ name: 'Cursor Home', serverUrl: 'https://server-1', accountId: 'account-a' });
+        const previousHome = await home.addHome({ name: 'Previous Home', serverUrl: 'https://home-b', accountId: 'account-a', active: false });
+        const nextHome = await home.addHome({ name: 'Next Home', serverUrl: 'https://home-a', accountId: 'account-a', active: false });
+        for (const serverId of [cursorHome, previousHome, nextHome]) {
+            // The snapshot lifecycle reads organization together with its list.
+            for (const path of ['/v2/sessions', '/v2/sessions/active', '/v2/session-organization']) {
+                const response = createEmptyAccountBootstrapHttpResponse(path);
+                if (!response) throw new Error('Session bootstrap fixture unavailable');
+                home.answer(serverId, path, { body: await response.json() });
+            }
+        }
         await loadSyncSingletonForTests();
         account = await restoreServerAccountForTest({ serverUrl: 'https://server-1', accountId: 'account-a',
             additionalRequestOrigins: ['https://home-b', 'https://home-a'], request: home.request,

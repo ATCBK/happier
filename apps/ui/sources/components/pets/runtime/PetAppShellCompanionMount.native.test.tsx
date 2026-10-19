@@ -178,9 +178,9 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
 
 const initialStorageState = storage.getState();
 
-function seedPetsStorage() {
+function seedPetsStorage(runtimeStorage = storage) {
     const source = activitySourceState.source;
-    storage.setState({
+    runtimeStorage.setState({
         settings: { ...settingsDefaults, ...settingsState.account },
         localSettings: { ...localSettingsDefaults, ...settingsState.local },
         isDataReady: source.isDataReady,
@@ -196,7 +196,8 @@ function seedPetsStorage() {
 }
 
 async function renderScreen(...args: Parameters<typeof renderTestkitScreen>) {
-    seedPetsStorage();
+    const { storage: runtimeStorage } = await import('@/sync/domains/state/storageStore');
+    seedPetsStorage(runtimeStorage);
     return renderTestkitScreen(...args);
 }
 

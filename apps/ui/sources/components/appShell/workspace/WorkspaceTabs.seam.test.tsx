@@ -308,7 +308,11 @@ describe('workspace tabs production composition', () => {
         const geometry = geometryModule.createWorkspaceBarGeometry();
         geometry.setGroupFrame('group:1', { x: 220, width: 1000 });
         let navigation!: WorkspaceNavigationContextValue;
-        const element = () => <KeyboardShortcutProvider handlers={{}}><AppPaneProvider>
+        const [{ InjectedAuthProvider }, { TokenStorage }] = await Promise.all([
+            import('@/auth/context/AuthContext'), import('@/auth/storage/tokenStorage'),
+        ]);
+        const credentials = await TokenStorage.getCredentialsForServerUrl(homes.homes.home!.serverUrl);
+        const element = () => <InjectedAuthProvider credentials={credentials}><KeyboardShortcutProvider handlers={{}}><AppPaneProvider>
             <WorkspaceProvider enabled catalog={catalog}>{owner => {
                 navigation = owner;
                 const detail = Object.values(owner.state.tabs).find(tab => tab.target.params.id === 'named' && tab.target.kind !== 'session');
@@ -319,7 +323,7 @@ describe('workspace tabs production composition', () => {
                         focused={detailActive} visible={detailActive} navigation={owner.navigationForTab(detail.id)}><SessionInfoRoute /></DestinationInstanceHost> : null}
                 </geometryModule.WorkspaceBarGeometryContext.Provider>;
             }}</WorkspaceProvider>
-        </AppPaneProvider></KeyboardShortcutProvider>;
+        </AppPaneProvider></KeyboardShortcutProvider></InjectedAuthProvider>;
         const renderOptions: RenderWithAppProvidersOptions = {
             createNodeMock: element => element.props.testID === 'workspace-title-bar'
                 ? { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 1440, 800) } : null,

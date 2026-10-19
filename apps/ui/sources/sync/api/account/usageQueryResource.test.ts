@@ -381,6 +381,7 @@ describe('usage query captured Resource adapter', () => {
     const captured = await context(request => {
       if (request.path === '/v2/usage/query') return Response.json({ ...value, contributions: [{ ...workContribution, sessionId: 'coach-session' }] });
       if (request.path === '/v2/sessions/coach-session') { sessionRequested.resolve(); return privateSession.promise; }
+      if (request.path === '/v1/sessions/coach-session/turns') return Response.json({ v: 1, sessionId: 'coach-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/account/entity-rows/mcp') { catalogRequested.resolve(); return catalogRead.promise; }
       if (request.path === '/v1/sessions/coach-session/messages') return Response.json({ messages: [{ id: 'mcp-row', seq: 1,
         localId: null, createdAt: 500, content: { t: 'plain', v: { role: 'agent', content: { type: 'event', id: 'mcp-window',
@@ -2223,6 +2224,7 @@ describe('usage query captured Resource adapter', () => {
       if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
       if (request.path === '/v2/sessions/staged-session') return session.promise;
+      if (request.path === '/v1/sessions/staged-session/turns') return Response.json({ v: 1, sessionId: 'staged-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/staged-session/messages') return Response.json({ messages: [], hasMore: false });
       return undefined;
     });
@@ -2436,6 +2438,7 @@ describe('usage query captured Resource adapter', () => {
       if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
       if (request.path === '/v2/sessions/coach-session') return Response.json({ session: coachSession });
+      if (request.path === '/v1/sessions/coach-session/turns') return Response.json({ v: 1, sessionId: 'coach-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/coach-session/messages') {
         // Real role filtering is the HTTP boundary: a user-only read cannot see host events.
         const admitted = request.url.searchParams.get('roles')?.split(',').includes('event');
@@ -2585,6 +2588,7 @@ describe('usage query captured Resource adapter', () => {
         metadataVersion: 1, metadata: JSON.stringify({ name: 'Opened' }),
         agentStateVersion: 1, agentState: null, share: null,
       } });
+      if (request.path === '/v1/sessions/fresh-session/turns') return Response.json({ v: 1, sessionId: 'fresh-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/fresh-session/messages') return Response.json({ messages: [{
         id: 'accepted-row', seq: 2, localId: 'accepted-input', createdAt: 300,
         content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'private prompt text' } } },
@@ -2654,6 +2658,7 @@ describe('usage query captured Resource adapter', () => {
         agentState: JSON.stringify({ completedRequests: { request: { tool: 'Bash', arguments: {},
           turnId: 'turn', createdAt: 200, completedAt: 400, status: 'approved' } } }), share: null,
       } });
+      if (request.path === '/v1/sessions/page-session/turns') return Response.json({ v: 1, sessionId: 'page-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/page-session/messages') return Response.json({ messages:
         pageKind === 'empty' ? [] : pageKind === 'unopened' ? unopenedRows : pageKind === 'legacy' ? [{
           id: 'legacy-row', seq: 3, localId: 'legacy-input', createdAt: 500,

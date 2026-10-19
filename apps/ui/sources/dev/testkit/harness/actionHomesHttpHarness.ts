@@ -151,7 +151,7 @@ export async function serveAccountHomes(params: Readonly<{
     const webLocks = typeof globalThis.navigator?.locks?.request === 'function' ? null : installWebLockManagerMock();
     const { loadSyncSingletonForTests } = await import('./syncSingletonLoader');
     await loadSyncSingletonForTests();
-    const [{ upsertServerProfileOnly, setActiveServer, getActiveServerSnapshot }, { TokenStorage }, { setRuntimeFetch, resetRuntimeFetch },
+    const [{ upsertServerProfileOnly, setActiveServer, getActiveServerSnapshot }, { TokenStorage, areCredentialsEqual }, { setRuntimeFetch, resetRuntimeFetch },
         { restoreConnectionToActiveServer, disconnectActiveServerConnection }, { resolveServerProfileScopeIdForIdentifier, setServerProfileIdentityForUrl }] = await Promise.all([
         import('@/sync/domains/server/serverRuntime'),
         import('@/auth/storage/tokenStorage'),
@@ -176,7 +176,7 @@ export async function serveAccountHomes(params: Readonly<{
     }));
     const specsByHome = new Map(params.homes.map(home => [home.key, home]));
     const homes: Record<string, Readonly<{ id: string; profileId: string; serverUrl: string }>> = {};
-    const credentialWrites: HomeCredentialWriteRollback[] = [];
+    const credentialWrites: Array<Readonly<{ write: HomeCredentialWriteRollback; credentials: AuthCredentials }>> = [];
     const focused = params.homes.at(-1)!;
     const requests: ServedHomeRequest[] = [];
     const httpRequests: ServedHomeRequest[] = [];
@@ -192,7 +192,7 @@ export async function serveAccountHomes(params: Readonly<{
         };
         const rollback = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: home.id }, credentials);
         if (!rollback) throw new Error(`Served Home credentials could not be stored: ${key}`);
-        credentialWrites.push(rollback);
+        credentialWrites.push({ write: rollback, credentials });
         accounts.set(key, accountId);
         return credentials;
     }
@@ -244,7 +244,12 @@ export async function serveAccountHomes(params: Readonly<{
         } finally {
             resetRuntimeFetch();
             try {
-                for (const write of credentialWrites.splice(0).reverse()) {
+                for (const { write, credentials } of credentialWrites.splice(0).reverse()) {
+                    const current = await TokenStorage.getCredentialsForServerUrl(write.serverUrl,
+                        { serverId: write.serverId, storageReadFailure: 'surface' });
+                    // Logout and Account replacement belong to the exercised flow. Only undo
+                    // installation while this fixture still owns the stored credential material.
+                    if (!areCredentialsEqual(current, credentials)) continue;
                     if (!await write.rollback()) throw new Error('Served Home credential rollback failed');
                 }
             } finally {
