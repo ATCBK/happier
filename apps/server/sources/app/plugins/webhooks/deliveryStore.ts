@@ -530,7 +530,7 @@ export async function admitPluginWebhookDeliveryV1(params: Readonly<{
                 params.onCommittedWake?.({
                     accountId,
                     targetMachineId,
-                    accountChangeCursor,
+                    accountChangeCursor: accountChangeCursor.resolveCursor(),
                 });
             });
         }

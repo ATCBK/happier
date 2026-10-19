@@ -206,7 +206,7 @@ async function markAvailabilityChangedTx(
     tx: Tx,
     accountId: string,
     pluginId: string,
-): Promise<number> {
+): ReturnType<typeof markAccountChanged> {
     const hint = availabilityChangeHint(pluginId);
     return await markAccountChanged(tx, {
         accountId,
@@ -2167,6 +2167,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
         try {
             const outcome = await inTx(async (tx) => {
                 const release = input.desiredVersion === null
+                await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true, intent: "exclusive" });
                     ? null
                     : await resolveReleaseTx(tx, params.accountId, {
                         pluginId: input.pluginId,
@@ -2297,7 +2298,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                 // the same Contract→Account order as release publication.
                 // Keep intent, quota and promotion admission inside the fence;
                 // failed admission still rolls materialization back atomically.
-                await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+                await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true, intent: "exclusive" });
                 const current = await tx.accountPluginIntent.findUnique({
                     where: {
                         accountId_pluginId: {
