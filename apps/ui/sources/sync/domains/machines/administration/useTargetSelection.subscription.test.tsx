@@ -33,6 +33,59 @@ afterEach(async () => {
 });
 
 describe('machine administration target demand', () => {
+    it.each(['select', 'clear'] as const)('releases an unavailable route when the person explicitly chooses to %s', async (intent) => {
+        const syncRuntime = await import('@/sync/syncEngine');
+        const requiredSync: typeof import('@/sync/sync') = createRequire(import.meta.url)('../../../sync.ts');
+        requiredSync.registerSyncRuntime(syncRuntime);
+        const previous = storage.getState();
+        const serverUrl = 'https://administration-route-recovery.example.test';
+        await upsertServerProfile({ serverUrl, name: 'Route recovery' });
+        const profile = await setServerProfileIdentityForUrl(serverUrl, 'srv_route_recovery');
+        if (!profile) throw new Error('Test profile was not created');
+        const scope = { serverId: profile.id, accountId: 'route-recovery-account' };
+        await network.addHome(serverUrl, scope.accountId);
+        await setActiveServerId(profile.id);
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        const saved = { serverIdentityId: 'srv_route_recovery', machineId: 'chosen-machine' };
+        const requested = { serverIdentityId: 'srv_route_recovery', machineId: 'missing-machine' };
+        try {
+            storage.setState(state => ({ profile: { ...state.profile, id: scope.accountId }, profileScope: scope, settingsScope: scope,
+                machineListByServerId: { [profile.id]: [createMachineFixture({ id: saved.machineId, activeAt: Date.now() }),
+                    createMachineFixture({ id: 'other-machine', activeAt: Date.now() })] },
+                machineListStatusByServerId: { [profile.id]: 'idle' },
+                settings: { ...state.settings, machineAdministrationTargetsLocalV1: { agents: saved } } }));
+            const hook = await renderHook(() => useMachineAdministrationTargetSelection('agents', { initialTarget: requested }));
+            expect(hook.getCurrent().selectedTarget).toEqual(requested);
+            expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
+            await act(async () => hook.getCurrent().selectTarget({ ...saved, serverIdentityId: 'srv_wrong_home' }));
+            expect(hook.getCurrent().selectedTarget).toEqual(requested);
+            await act(async () => intent === 'select' ? hook.getCurrent().selectTarget(saved) : hook.getCurrent().clearTarget());
+            await vi.waitFor(() => expect(hook.getCurrent().selectedTarget).toEqual(intent === 'select' ? saved : null));
+            if (intent === 'select') {
+                await vi.waitFor(() => expect(hook.getCurrent().resolveExecutionTarget()?.target).toEqual(saved));
+            } else {
+                expect(hook.getCurrent().state.kind).toBe('unselected');
+                expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
+            }
+            await hook.unmount();
+        } finally { storage.setState(previous); await removeServerProfile(profile.id); }
+    });
+    it('keeps an unavailable explicit route target instead of borrowing the saved Machine on another Home', async () => {
+        const previous = storage.getState();
+        const saved = { serverIdentityId: 'srv_saved', machineId: 'same-machine' };
+        const requested = { serverIdentityId: 'srv_requested', machineId: 'same-machine' };
+        try {
+            storage.setState(state => ({ settings: { ...state.settings,
+                machineAdministrationTargetsLocalV1: { agents: saved } } }));
+            const hook = await renderHook(() => useMachineAdministrationTargetSelection('agents', {
+                enabled: false, initialTarget: requested,
+            }));
+            expect(hook.getCurrent().selectedTarget).toEqual(requested);
+            expect(hook.getCurrent().state).toMatchObject({ kind: 'missing', target: requested });
+            expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
+            expect(storage.getState().settings.machineAdministrationTargetsLocalV1.agents).toEqual(saved);
+        } finally { storage.setState(previous); }
+    });
     it('leaves Plugin administration unresolved when more than one Account machine is eligible', async () => {
         // Vitest's ESM graph and the lazy Node require boundary have separate
         // module instances. Register the real engine in the latter, as app entry does.
