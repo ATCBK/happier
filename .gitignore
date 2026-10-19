@@ -219,6 +219,35 @@ _.env.pipeline.production.local
 
 # Local research/evidence dumps
 /triage-plan-research/
+/evidence/
+/scratch/
+/scratchpad/
+/.cache/
+/qa-shots/
+/logs/
+/isolate-*-v8.log
+
+# Mis-rooted browser captures and one-off local probes
+/--full
+/n
+/.codex-vm-patch-probe
+/.lane02_landings.tmp.mjs
+/.tmp-cli-provider-typecheck.json
+/failure-prepare-*.json
+/failure-status-*.json
+/00-home.png
+/844-live-next-landing-never-opened-tool-route-.png
+/940-live-next-*.png
+/ctx1.png
+/inbox.png
+/ov-a.png
+/p1.png
+/p2.png
+/p2-00-now.png
+/page-1440-light.png
+/q1.png
+/ui2-s0.png
+/w-light-1440.png
 
 # Local QA screenshots
 /apps/ui/onboard1.png
