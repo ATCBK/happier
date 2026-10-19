@@ -14,6 +14,10 @@ import type { ProcessMetrics, ProcessMetricSample } from './processMetrics';
 
 export type ProcessRequester = Readonly<{ accountId: string; custodianAccountId: string }>;
 export type ProcessRequesterIdentity = Readonly<{ accountId: string; displayName?: string }>;
+export type ProcessRequesterEvidenceFailure = Readonly<{
+    owner: ProcessOwnerRef;
+    reason: 'requester_unavailable' | 'display_identity_unavailable';
+}>;
 export type ProcessOwnershipRead = Awaited<ReturnType<ReturnType<typeof createProcessOwnershipRuntime>['readOwners']>>;
 export type ProcessesProjectionInput = Readonly<{
     machineId: string; scope: 'happier' | 'all'; view: 'tree' | 'owners'; detailToken?: string; sessionId?: string; query?: string;
@@ -22,6 +26,7 @@ export type ProcessesProjectionOptions = Readonly<{
     platform: 'linux' | 'darwin' | 'win32'; selfPid?: number; bootTimeMs?: number; allProcessesVisible: boolean;
     requesterForOwner(owner: ProcessOwnerRef, roots: readonly HappierProcessRoot[]): ProcessRequesterIdentity | null;
     requesterIdentities?: ReadonlyMap<string, Readonly<{ accountId: string; displayName: string }>>;
+    onRequesterEvidenceUnavailable?(failure: ProcessRequesterEvidenceFailure): void;
     confirmed: readonly LeftBehindItem[]; metrics?: ReadonlyMap<number, ProcessMetrics>;
     history?: Readonly<Record<string, readonly ProcessMetricSample[]>>;
     capturedAtMs?: number;
@@ -97,6 +102,14 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
         const identity = options.requesterForOwner(resolved.owner, read.roots);
         if (!custodian && identity?.accountId !== requester.accountId) { othersWork.add(ownerKey); continue; }
         if (request.sessionId && !belongsToSession(resolved.owner, request.sessionId)) continue;
+        const displayIdentity = identity?.displayName ? { accountId: identity.accountId, displayName: identity.displayName }
+            : identity ? options.requesterIdentities?.get(identity.accountId) : undefined;
+        if (custodian && (!identity || identity.accountId !== requester.custodianAccountId && !displayIdentity)) {
+            options.onRequesterEvidenceUnavailable?.({ owner: resolved.owner,
+                reason: identity ? 'display_identity_unavailable' : 'requester_unavailable' });
+            if (!request.sessionId) unverifiableCount++;
+            continue;
+        }
         const command = row.argv ? redactProcessCommand(row.argv) : row.commandLine ? redactProcessCommand(row.commandLine) : undefined;
         const classification = classifyProcessRole({ command: command ?? row.name, cwd: row.cwd,
             ...options.roleCatalog, ancestors: ancestorsOf(index, row.pid).map(ancestor => ({ command: ancestor.argv ? redactProcessCommand(ancestor.argv) : redactProcessCommand(ancestor.commandLine ?? ancestor.name) })) });
@@ -120,11 +133,6 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
             if (!item || !resolved.ownerEnded) continue;
             leftBehind.push({ ...processRow, level: 'left_behind', owner: resolved.owner, confirmedAtMs: item.confirmedAtMs });
         } else if (resolved.level === 'proven' || resolved.level === 'likely' || resolved.level === 'unknown') {
-            const displayIdentity = identity?.displayName ? { accountId: identity.accountId, displayName: identity.displayName }
-                : identity ? options.requesterIdentities?.get(identity.accountId) : undefined;
-            if (custodian && (!identity || identity.accountId !== requester.custodianAccountId && !displayIdentity)) {
-                return { ...base, state: 'unavailable', reason: 'read_failed', owners: [], leftBehind: [], totals: { happier: zero, leftBehind: zero } };
-            }
             const stopping = read.roots.some(root => {
                 const native = index.byPid.get(root.pid);
                 return root.live && native && processOwnerKey(root.owner) === ownerKey && root.state === 'stopping' && equalProcessStart(root.start, native.start);

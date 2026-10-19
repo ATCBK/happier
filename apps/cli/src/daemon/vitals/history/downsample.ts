@@ -50,11 +50,13 @@ export function downsampleMachineVitalsHistory(input: Readonly<{
     }
     let previous = firstLiveMinute;
     for (const point of live) {
-      if (point.t - previous > minuteMs) points.push(null);
+      // Samples at adjacent minute boundaries can arrive a few milliseconds late.
+      // A gap means an unobserved minute bucket, not elapsed-time jitter.
+      if (Math.floor(point.t / minuteMs) - Math.floor(previous / minuteMs) > 1) points.push(null);
       points.push(point);
       previous = point.t;
     }
-    if (input.now - previous > minuteMs) points.push(null);
+    if (Math.floor(input.now / minuteMs) - Math.floor(previous / minuteMs) > 1) points.push(null);
   }
   // The measured interval ending at UTC midnight belongs to the previous day.
   const todayStart = Math.floor(input.now / 86_400_000) * 86_400_000;

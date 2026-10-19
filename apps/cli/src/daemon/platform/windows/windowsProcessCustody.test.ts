@@ -318,6 +318,7 @@ describe('Windows process launch custody', () => {
     const unreadable = {
       pid: 9_999,
       processStartTimeMs: 2_000,
+      command: '',
       executablePath: launch.executablePath,
     };
 

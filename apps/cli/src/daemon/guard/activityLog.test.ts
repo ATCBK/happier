@@ -2,7 +2,9 @@ import { appendFile, mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { MachineGuardActivityEntryV1 } from '@happier-dev/protocol/machines/guard/activityV1';
+import type { MachineGuardActivityEntryV1, MachineGuardActivityWayBackV1 } from '@happier-dev/protocol/machines/guard/activityV1';
+import { createActionExecutor } from '@happier-dev/protocol/actions';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { createActivityLog } from './activityLog';
 import { createMachineResourceSummary } from '../resources/machineResourceSummary';
 import { createMachineVitalsSampler } from '../vitals/createMachineVitalsSampler';
@@ -35,6 +37,70 @@ async function fixture() {
 }
 
 describe('daemon Activity log through protected day-partitioned storage', () => {
+  it('keeps every way back portable on append and retained-file read without changing attribution or action payloads', async () => {
+    const f = await fixture();
+    const labels: MachineGuardActivityWayBackV1['label'][] = ['resume', 'start_again', 'reopen', 'undo', 'empty_now', 'raise_ceiling', 'review_processes'];
+    const wayBack = labels.map(label => ({ label, actionId: 'machines.storage.trash.empty' as const,
+      input: { serverId: 'daemon-local-alias', machineId: 'machine', entryIds: ['owned-entry'] } }));
+    await f.log.append(entry('new-portable', { wayBack }));
+    const path = join(f.directory, 'activity-2026-10-10.jsonl');
+    const written = JSON.parse((await readFile(path, 'utf8')).trim()) as MachineGuardActivityEntryV1;
+    expect(written.attribution).toEqual(attribution);
+    for (const item of written.wayBack!) expect(item.input).toEqual({ machineId: 'machine', entryIds: ['owned-entry'] });
+    // Stored presentation data is additive-open; old local qualifiers and unknown fields must not discard receipts.
+    await appendFile(path, `${JSON.stringify(entry('retained-portable', { wayBack: wayBack.map(item => ({ ...item, future: true })) }))}\n`);
+    const restarted = await f.create();
+    const entries = (await restarted.list({ range: 'today' })).entries;
+    expect(entries.map(row => row.id).sort()).toEqual(['new-portable', 'retained-portable']);
+    for (const row of entries) {
+      expect(row.attribution).toEqual(attribution);
+      expect(row.wayBack?.map(item => item.label)).toEqual(labels);
+      for (const item of row.wayBack!) expect(item.input).toEqual({ machineId: 'machine', entryIds: ['owned-entry'] });
+    }
+    const emptied: unknown[] = [];
+    // The machine RPC is the boundary. The real Action front door validates the producer's retained output.
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), machineStorageAction: async request => {
+      emptied.push(request.input);
+      return { outcomes: [{ entryId: 'owned-entry', status: 'deleted' }], freedBytes: 4096 };
+    } });
+    const retained = await restarted.read('retained-portable');
+    const empty = retained!.wayBack!.find(item => item.label === 'empty_now')!;
+    expect(await executor.execute(empty.actionId, empty.input, { surface: 'ui', serverId: 'srv-qualified-home',
+      authority: 'present_user', actionCaller: { kind: 'host' }, presentUserConfirmation: { actionId: empty.actionId } }))
+      .toEqual({ ok: true, result: { outcomes: [{ entryId: 'owned-entry', status: 'deleted' }], freedBytes: 4096 } });
+    expect(emptied).toEqual([{ machineId: 'machine', entryIds: ['owned-entry'] }]);
+  });
+
+  it('projects only available ways back after Trash emptying and Keep running, including retained receipts', async () => {
+    const f = await fixture();
+    const moved = (id: string) => entry(`${id}-trash_moved`, { kind: 'trash_moved', rule: 'approved_proposal',
+      subject: { kind: 'trash', items: 1 }, inTrashBytes: 128,
+      wayBack: [{ label: 'undo', actionId: 'machines.storage.trash.restore', input: { entryIds: [id] } },
+        { label: 'empty_now', actionId: 'machines.storage.trash.empty', input: { entryIds: [id] } }] });
+    await f.log.append(moved('emptied'));
+    await f.log.append(moved('retained'));
+    await f.log.append(entry('kept', { kind: 'kept_running',
+      wayBack: [{ label: 'resume', actionId: 'session.open', input: { sessionId: 'kept' } }] }));
+    await f.log.append(entry('emptied-trash_emptied', { at: initialTime + 1, kind: 'trash_emptied',
+      rule: 'approved_proposal', subject: { kind: 'trash', items: 1 }, freedBytes: 128 }));
+    f.now(initialTime + 2);
+    const restarted = await f.create();
+    const rows = (await restarted.list({ range: 'today' })).entries;
+    expect(rows.find(row => row.id === 'emptied-trash_moved')).toMatchObject({ inTrashBytes: 0 });
+    expect(rows.find(row => row.id === 'emptied-trash_moved')?.wayBack ?? []).toEqual([]);
+    expect(rows.find(row => row.id === 'retained-trash_moved')?.wayBack).toHaveLength(2);
+    expect(rows.find(row => row.id === 'kept')?.wayBack ?? []).toEqual([]);
+    expect((await restarted.read('emptied-trash_moved'))?.wayBack ?? []).toEqual([]);
+  });
+
+  it('exposes typed start failures without carrying legacy diagnostic prose into display notes', async () => {
+    const f = await fixture();
+    await f.log.append(entry('rejected', { kind: 'start_failed', outcome: 'failed',
+      note: 'Could not resume: spawn-rejected', failure: { reason: 'other' }, nextStep: 'review_processes' }));
+    expect(await f.log.read('rejected')).toMatchObject({ failure: { reason: 'other' }, nextStep: 'review_processes' });
+    expect((await f.log.read('rejected'))?.note).toBeUndefined();
+  });
+
   it('honors the current admitted machine and installation when projecting recipient receipts', async () => {
     const f = await fixture();
     await f.log.append(entry('current'));

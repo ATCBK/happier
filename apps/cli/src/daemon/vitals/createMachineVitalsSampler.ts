@@ -61,6 +61,7 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
     let host: MachineVitalsHostFactsV1 | null = null;
     let timer: TimerHandle | null = null;
     let reading: Promise<void> | null = null;
+    let lastReadStartedAt: number | null = null;
     let running = false;
     let summaries = 0;
     let lives = 0;
@@ -69,7 +70,6 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
     let extrasSample: MachineVitalsSampleV1 | null = null;
     let cpuCounterDelta = createCounterRateReader();
     let networkCounterDelta = createCounterRateReader();
-    let boundaryMonotonicMs: number | null = null;
     let boundaryAt: number | null = null;
     let lastBucketMinute: number | null = null;
     let bucket: MachineVitalsSampleV1[] = [];
@@ -91,8 +91,9 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
         const now = nowMs();
         const nextMinute = (Math.floor(now / MINUTE_MS) + 1) * MINUTE_MS;
         const interval = cadence();
+        // Read time and a watch's re-arm count toward the nominal start-to-start cadence.
         const nextCadence = immediateExtras && interval !== MINUTE_MS ? now
-            : interval === MINUTE_MS ? nextMinute : Math.min(now + interval, nextMinute);
+            : interval === MINUTE_MS ? nextMinute : Math.min(Math.max(now, (lastReadStartedAt ?? now) + interval), nextMinute);
         const next = overviews > 0 && nextExtrasAt !== null && interval !== MINUTE_MS
             ? Math.min(nextCadence, nextExtrasAt) : nextCadence;
         timer = setTimeoutFn(() => {
@@ -103,7 +104,6 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
     }
 
     function minuteRecord(t: number, counters: MachineVitalsMinuteCountersV1): MachineVitalsMinuteRecordV1 {
-        const elapsed = boundaryMonotonicMs === null ? 0 : counters.monotonicMs - boundaryMonotonicMs;
         const validMinute = boundaryAt === t - MINUTE_MS;
         const cpuReading: Record<string, number> = counters.containerCpu
             ? { [`usage:${counters.containerCpu.quotaCores}`]: counters.containerCpu.usageUsec }
@@ -124,14 +124,13 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
                 cpu = Math.min(100, cpuDelta.deltas.busy / cpuDelta.deltas.total * 100);
             }
             if (networkDelta && counters.network) {
-                rx = networkDelta.deltas[`rx:${networkIdentity}`];
-                tx = networkDelta.deltas[`tx:${networkIdentity}`];
+                // History stores a minute's rate in byte units. A late boundary's
+                // actual counter span must not become an inflated per-minute rate.
+                rx = networkDelta.deltas[`rx:${networkIdentity}`] * MINUTE_MS / networkDelta.elapsedMs;
+                tx = networkDelta.deltas[`tx:${networkIdentity}`] * MINUTE_MS / networkDelta.elapsedMs;
             }
         }
-        if (boundaryMonotonicMs === null || elapsed < 0 || elapsed >= MINUTE_MS / 2) {
-            boundaryMonotonicMs = counters.monotonicMs;
-            boundaryAt = t;
-        }
+        boundaryAt = t;
         const memories = bucket.flatMap((point) => point.memory.reported ? [point.memory] : []);
         const cpus = bucket.flatMap((point) => point.cpu.reported && point.cpu.busyPct !== null ? [point.cpu.busyPct] : []);
         const pressure = ['not_reported', 'calm', 'elevated', 'critical'] as const;
@@ -156,8 +155,6 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
             ...(extrasSample.battery ? { battery: extrasSample.battery } : {}),
             ...(extrasSample.thermal ? { thermal: extrasSample.thermal } : {}),
             ...(extrasSample.sharedMemory ? { sharedMemory: extrasSample.sharedMemory } : {}),
-            ...(sample.memory.reported && extrasSample.memory.reported && extrasSample.memory.composition
-                ? { memory: { ...sample.memory, composition: extrasSample.memory.composition } } : {}),
             ...(extrasSample.limits?.inotify ? { limits: { ...sample.limits, inotify: extrasSample.limits.inotify } } : {}),
         };
     }
@@ -166,12 +163,13 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
         if (reading) return reading;
         const run = async () => {
             const sampledAt = nowMs();
+            lastReadStartedAt = sampledAt;
             const observedBoundary = boundary === undefined ? undefined : Math.floor(sampledAt / MINUTE_MS) * MINUTE_MS;
             const intervalMs = cadence();
             const readExtras = overviews > 0 && (nextExtrasAt === null || sampledAt >= nextExtrasAt);
             let result: MachineVitalsReaderResult;
             try {
-                result = await input.readers.read({ sampledAt, monotonicMs: monotonicMs(), intervalMs, overviewExtras: readExtras });
+                result = await input.readers.read({ sampledAt, monotonicMs: monotonicMs(), intervalMs, overview: overviews > 0, overviewExtras: readExtras });
             } catch (error) {
                 onError(error);
                 result = { state: 'unavailable', reason: 'reader_failed' };
@@ -183,7 +181,6 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
                     lastBucketMinute = observedBoundary / MINUTE_MS;
                     cpuCounterDelta = createCounterRateReader();
                     networkCounterDelta = createCounterRateReader();
-                    boundaryMonotonicMs = null;
                     boundaryAt = null;
                 }
                 return;

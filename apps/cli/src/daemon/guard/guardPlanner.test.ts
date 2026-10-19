@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { evaluateSessionEligibility } from './sessionEligibility';
 import { planGuard, planIdleSessions, projectGuardLadderV1, type GuardTarget } from './guardPlanner';
 import { processRef } from '../processes/view/processRef';
@@ -7,6 +7,8 @@ import type { HappierProcessRoot } from '../processes/ownership/types';
 import type { ProcessCensusSnapshot } from '@/processes/census/processCensus';
 import type { LiveWorkInventoryV1 } from '../lifecycle/managedActivity';
 import type { TrackedSession } from '../types';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 
 const tracked: TrackedSession = { pid: 30, happySessionId: 's', startedBy: 'daemon' };
 const serviceOwner = {};
@@ -29,17 +31,24 @@ const ownership = { status: 'ok' as const, snapshot, roots, rows: resolveProcess
   daemonPrincipal: { kind: 'uid', value: '1' }, platform: 'darwin' }) };
 const policy = { enabled: true, actAt: 'critical' as const, sustainMs: 60000, cooldownMs: 60000,
   steps: { browsers: true, devServers: true, idleSessions: true }, pausedUntil: null };
-const eligibility = evaluateSessionEligibility({ tracked, inventory, draft: { status: 'absent' }, resume: {
-  sessionId: 's', rawSession: { machineId: 'm', path: '/project' },
-  metadata: { machineId: 'm', path: '/project', flavor: 'codex', codexSessionId: 'native-s' },
-} });
-const targets: GuardTarget[] = [
-  { kind: 'browser', root: roots[0]!, ownerRef: browserOwner, idle: true, settledAt: 3, label: 'Browser', wayBack: browserWayBack },
-  { kind: 'service', scope: 'project', workspacePath: '/project', workspaceIdle: true,
-    connectionMinutes: [{ t: 60000, quiet: true, quietSince: 0 }, { t: 120000, quiet: true, quietSince: 0 }],
-    root: roots[1]!, ownerRef: serviceOwner, listeners: [{ establishedConnections: 0 }], label: 'Server', wayBack: serviceWayBack },
-  { kind: 'session', root: roots[2]!, tracked, eligibility, label: 'Session' },
-];
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+let targets: GuardTarget[];
+beforeAll(async () => {
+  runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+    runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
+  const eligibility = await evaluateSessionEligibility({ tracked, inventory, draft: { status: 'absent' }, resume: {
+    sessionId: 's', rawSession: { machineId: 'm', path: '/project' },
+    metadata: { runtimeDescriptorV1: { v: 1 as const, agentId: 'codex', agent: { backendMode: 'appServer' } }, machineId: 'm', path: '/project', flavor: 'codex', codexSessionId: 'native-s' },
+  } });
+  targets = [
+    { kind: 'browser', root: roots[0]!, ownerRef: browserOwner, idle: true, settledAt: 3, label: 'Browser', wayBack: browserWayBack },
+    { kind: 'service', scope: 'project', workspacePath: '/project', workspaceIdle: true,
+      connectionMinutes: [{ t: 60000, quiet: true, quietSince: 0 }, { t: 120000, quiet: true, quietSince: 0 }],
+      root: roots[1]!, ownerRef: serviceOwner, listeners: [{ establishedConnections: 0 }], label: 'Server', wayBack: serviceWayBack },
+    { kind: 'session', root: roots[2]!, tracked, eligibility, label: 'Session' },
+  ];
+});
+afterAll(async () => { await runtime?.dispose(); });
 
 describe('memory guard canonical ladder', () => {
   it('admits an independently proven idle Session despite unrelated unavailable machine work', () => {
@@ -83,13 +92,13 @@ describe('memory guard canonical ladder', () => {
     expect(planGuard({ policy: { ...policy, steps: { ...policy.steps, browsers: false } }, ownership, inventory, targets, now: 120000 }).candidate)
       .toMatchObject({ kind: 'service', footprintBytes: 200 });
   });
-  it('keeps unknown connections, live owner work, draft truth, and a changed native identity out of execution', () => {
+  it('keeps unknown connections, live owner work, draft truth, and a changed native identity out of execution', async () => {
     const kept: GuardTarget[] = [
       { ...targets[0]!, root: { ...roots[0]!, start: { startTimeMs: 9 } } },
       { ...targets[1]!, kind: 'service', root: roots[1]!, ownerRef: serviceOwner, listeners: [{ establishedConnections: null }], label: 'Server' },
-      { ...targets[2]!, kind: 'session', root: roots[2]!, tracked, label: 'Session', eligibility: evaluateSessionEligibility({ tracked,
+      { ...targets[2]!, kind: 'session', root: roots[2]!, tracked, label: 'Session', eligibility: (await evaluateSessionEligibility({ tracked,
         inventory, draft: { status: 'present', updatedAt: 1 }, resume: { sessionId: 's', rawSession: { machineId: 'm', path: '/project' },
-          metadata: { machineId: 'm', path: '/project', flavor: 'codex', codexSessionId: 'native-s' } } }) },
+          metadata: { runtimeDescriptorV1: { v: 1 as const, agentId: 'codex', agent: { backendMode: 'appServer' } }, machineId: 'm', path: '/project', flavor: 'codex', codexSessionId: 'native-s' } } })) },
     ];
     const plan = planGuard({ policy, ownership, inventory, targets: kept, now: 120000 });
     expect(plan.candidate).toBeUndefined();
@@ -118,7 +127,7 @@ describe('memory guard canonical ladder', () => {
     expect(largerPlan.candidate).toMatchObject({ root: { pid: 11 }, footprintBytes: 150 });
     expect(largerPlan.ladder.steps[0]?.freesAboutBytes).toBe(250);
   });
-  it('never promotes a plain terminal, foreign process, unknown native fact, or waiting Session into a stop target', () => {
+  it('never promotes a plain terminal, foreign process, unknown native fact, or waiting Session into a stop target', async () => {
     const terminalRoot = { ...roots[0]!, owner: { kind: 'terminal' as const, terminalId: 't' } };
     const terminalOwnership = { ...ownership, roots: [terminalRoot], rows: resolveProcessOwnership({ snapshot, roots: [terminalRoot],
       daemonPrincipal: { kind: 'uid', value: '1' }, platform: 'darwin' }) };
@@ -136,8 +145,8 @@ describe('memory guard canonical ladder', () => {
     const waiting = { ...inventory, items: [...inventory.items, { category: 'attention' as const,
       ownerRef: tracked, attribution: { kind: 'unknown' as const }, state: 'active' as const }] };
     const session = { ...targets[2]!, kind: 'session' as const, root: roots[2]!, tracked, label: 'Session', eligibility:
-      evaluateSessionEligibility({ tracked, inventory: waiting, draft: { status: 'absent' }, resume: { sessionId: 's',
-        rawSession: { machineId: 'm', path: '/project' }, metadata: { machineId: 'm', path: '/project', flavor: 'codex', codexSessionId: 'native-s' } } }) };
+      (await evaluateSessionEligibility({ tracked, inventory: waiting, draft: { status: 'absent' }, resume: { sessionId: 's',
+        rawSession: { machineId: 'm', path: '/project' }, metadata: { runtimeDescriptorV1: { v: 1 as const, agentId: 'codex', agent: { backendMode: 'appServer' } }, machineId: 'm', path: '/project', flavor: 'codex', codexSessionId: 'native-s' } } })) };
     expect(planGuard({ policy, ownership, inventory: waiting, targets: [session], now: 120000 }).ladder.excluded[0]?.reason).toBe('waiting_for_you');
   });
   it('requires a captured native stop owner and restoration reference before admitting browsers or services', () => {

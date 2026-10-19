@@ -4,8 +4,15 @@ import { resolveProcessOwnerRequester } from '../ownership/resolveProcessOwnerRe
 import { createLeftBehindTracker } from '../leftBehind/leftBehindTracker';
 import { processRef } from '../view/processRef';
 import { createProcessActionExecutor, type ProcessActionExecutorInput } from './processActionExecutor';
+import { createProcessActionOwnerAdapters } from './processActionOwnerAdapters';
 import type { HappierProcessRoot, ProcessOwnerRef } from '../ownership/types';
 import type { ProcessCensusDependencies, ProcessCensusRow } from '@/processes/census/processCensus';
+import { createDeferred } from '@/testkit/async/deferred';
+import { createSessionProcessActionLifecycle } from '../../sessions/sessionProcessActionLifecycle';
+import { createDisconnectedTerminalHostResumeLifecycle } from '../../startup/disconnectedTerminalHostResumeLifecycle';
+import { createSessionRunnerRespawnManager } from '../../processSupervision/sessionRunnerRespawn';
+import { createStopSession } from '../../sessions/stopSession';
+import type { TrackedSession } from '../../types';
 
 const scope = '123456789abc';
 const principal = { kind: 'uid', value: '501' } as const;
@@ -13,7 +20,8 @@ const guest = { accountId: 'guest', isCustodian: false };
 const custodian = { accountId: 'custodian', isCustodian: true };
 const machineTarget = { serverId: 'server', machineId: 'machine', installationId: 'install' };
 
-function fixture(ports: Partial<Pick<ProcessActionExecutorInput, 'stopOwner' | 'prepareKill' | 'terminateDetected' | 'closeTerminal' | 'onRootEnded'>> = {}) {
+function fixture(ports: Partial<Pick<ProcessActionExecutorInput, 'stopOwner' | 'prepareKill' | 'terminateDetected' | 'closeTerminal' | 'onRootEnded'>> = {},
+    native?: Readonly<{ beforeVerification(): Promise<void> }>) {
     let now = 100_000;
     let available = true;
     let visible = false;
@@ -51,8 +59,8 @@ function fixture(ports: Partial<Pick<ProcessActionExecutorInput, 'stopOwner' | '
         resolveProcessOwnerRequester(value, currentRoots, { target: machineTarget, custodianAccountId: custodian.accountId });
     const executor = createProcessActionExecutor({ ownership, leftBehind: tracker, platform: 'darwin', selfPid: process.pid,
         allProcessesVisible: () => visible, requesterForOwner,
-        systemBoundary: { platform: 'darwin', censusDependencies, kill(pid) { signals.push(pid); rows.delete(pid); },
-            async wait() {} }, ...ports,
+        systemBoundary: { platform: 'darwin', censusDependencies, kill(pid) { signals.push(pid); if (!native) rows.delete(pid); },
+            async wait() { if (native) { await native.beforeVerification(); for (const pid of signals) rows.delete(pid); } } }, ...ports,
     });
     const target = (pid: number) => ({ ref: processRef(pid, rows.get(pid)!.start), expect: { level: 'proven' as const, owner } });
     return { executor, rows, roots, ownership, tracker, signals, target, row, owner, partial,
@@ -61,6 +69,51 @@ function fixture(ports: Partial<Pick<ProcessActionExecutorInput, 'stopOwner' | '
 }
 
 describe('process Actions through the canonical ownership and tree owners', () => {
+    it('keeps Resume behind native kill verification and gives concurrent Stop callers their real coalesced acknowledgement', async () => {
+        const signalled = createDeferred();
+        const releaseNative = createDeferred();
+        const sessions = new Map<number, TrackedSession>();
+        const barrier = createDisconnectedTerminalHostResumeLifecycle({ unresolvedTerminalHostSessionIds: new Set(),
+            clearUnresolvedTerminalHostSession() {}, findDisconnectedCandidate: () => null,
+            resolveResumeGateForCandidate: async () => { throw new Error('No disconnected host in this fixture'); }, retireCandidate() {} });
+        const respawn = createSessionRunnerRespawnManager({ enabled: true, maxRestarts: 2, baseDelayMs: 0, maxDelayMs: 0,
+            jitterMs: 0, random: () => 0, isSessionAlreadyRunning: () => false,
+            spawnSession: async () => { throw new Error('Intentional kill must not respawn'); }, logDebug() {}, logWarn() {} });
+        const stopCore = createStopSession({ pidToTrackedSession: sessions,
+            readHostAttachmentState: async () => ({ status: 'absent' }), readTerminalAttachmentInfo: async () => null });
+        let writes = 0;
+        const lifecycle = createSessionProcessActionLifecycle({ pidToTrackedSession: sessions,
+            markStopRequested: respawn.markStopRequested,
+            // Metadata transport is outside the process owner; exact binding and lifecycle stay real.
+            recordExplicitStopIntent: async () => { writes++; }, stopSession: stopCore,
+            registerPhysicalStopEffect: (sessionId, completion) => barrier.registerPhysicalStopEffect(sessionId, completion),
+        });
+        const f = fixture({ prepareKill: input => lifecycle.prepareKill(input) }, { beforeVerification: async () => {
+            signalled.resolve(); await releaseNative.promise; sessions.delete(30);
+        } });
+        sessions.set(30, { pid: 30, processStartTimeMs: 300, startedBy: 'daemon', happySessionId: 'guest-session',
+            vendorResumeId: 'guest-vendor', spawnOptions: { directory: '/repo' } });
+        const killing = f.executor.executeKill({ machineId: 'machine', targets: [f.target(30)], tree: false }, guest,
+            { actionContext: { surface: 'cli', authority: 'present_user', actionRequestId: 'intentional-kill' } });
+        let replacementStarted = false;
+        let stops = 0;
+        try {
+            await signalled.promise;
+            const resume = barrier.resolveResumePreGate('guest-session').then(() => { replacementStarted = true; });
+            const stop = () => barrier.runStop('guest-session', async () => { stops++; return { stopResult: await stopCore('guest-session') }; });
+            const stopping = [stop(), stop()];
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(replacementStarted, 'Metadata is persisted and a signal sent, but physical verification is still pending').toBe(false);
+            expect(stops).toBe(0);
+            expect(writes, 'Repeated native signal checks must not reauthor the Stop attempt').toBe(1);
+            releaseNative.resolve();
+            expect(await killing).toMatchObject({ status: 'ended' });
+            await resume;
+            expect(await Promise.all(stopping)).toEqual([{ status: 'not_found' }, { status: 'not_found' }]);
+            expect(stops).toBe(1);
+        } finally { releaseNative.resolve(); await killing; }
+    });
+
     it('refuses a reused PID and a changed owner without signalling either generation', async () => {
         const f = fixture();
         const target = f.target(20);
@@ -243,6 +296,33 @@ describe('process Actions through the canonical ownership and tree owners', () =
         const f = fixture({ stopOwner: async () => { f.rows.delete(30); return true; } });
         expect(await f.executor.executeStop({ machineId: 'machine', targets: [f.target(30)] }, guest))
             .toMatchObject({ status: 'ended', outcomes: [{ outcome: 'ended', freedBytes: 3000 }] });
+        expect(f.signals).toEqual([]);
+    });
+
+    it('counts ended owned members in a Stop receipt while excluding a surviving child', async () => {
+        const f = fixture(createProcessActionOwnerAdapters({}));
+        // The root's native stop boundary updates the same OS census consumed by
+        // the real lifecycle adapter, ownership runtime and receipt owner.
+        f.roots[1] = { ...f.roots[1]!, stop: async () => {
+            f.rows.delete(30); f.rows.delete(20); f.rows.delete(40); return true;
+        } };
+        expect(await f.executor.executeStop({ machineId: 'machine', targets: [f.target(30)] }, guest))
+            .toMatchObject({ status: 'ended', outcomes: [{ outcome: 'ended', freedBytes: 5000 }] });
+        expect(f.rows.has(21)).toBe(true);
+        expect(f.signals).toEqual([]);
+    });
+
+    it.each(['restarted', 'unreadable'] as const)('uses admitted memory and exact end evidence for a %s member', async state => {
+        const f = fixture(createProcessActionOwnerAdapters({}));
+        f.roots[1] = { ...f.roots[1]!, stop: async () => {
+            f.rows.delete(30);
+            if (state === 'restarted') f.rows.set(20, { ...f.rows.get(20)!, start: { startTimeMs: 999, native: 'darwin-proc:20:0:999' }, memory: { bytes: 99_999, kind: 'rss' } });
+            else { f.rows.delete(20); f.partial.push({ pid: 20, missing: ['start'] }); }
+            return true;
+        } };
+        expect(await f.executor.executeStop({ machineId: 'machine', targets: [f.target(30)] }, guest))
+            .toMatchObject({ status: 'ended', outcomes: [{ outcome: 'ended', freedBytes: state === 'restarted' ? 5000 : 3000 }] });
+        expect(f.rows.has(21)).toBe(true);
         expect(f.signals).toEqual([]);
     });
 

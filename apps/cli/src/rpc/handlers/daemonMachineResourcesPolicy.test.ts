@@ -23,7 +23,8 @@ describe('machine resources policy custodian admission', () => {
     const handlers: RpcHandlerMap = new Map();
     registerDaemonMachineResourcesPolicyRpcHandlers({ registerHandler(method, handler) { handlers.set(method, handler); } }, { policy, target: () => identity });
     const pending = handlers.get(RPC_METHODS.MACHINES_RESOURCES_POLICY_SET)!({ machineId: 'machine', expectedRevision: 1,
-      patch: { alerts: { cpu: { enabled: true } } } }, { machineAdmission: { ...identity, actorAccountId: 'owner', role: 'manage', encryptionMode: 'plain' },
+      patch: { alerts: { cpu: { enabled: true } } } }, { signal: new AbortController().signal,
+      machineAdmission: { ...identity, actorAccountId: 'owner', role: 'manage', encryptionMode: 'plain' },
       verifyMachineAdmissionCurrent: async () => { first('network_revalidation'); return allowed; } });
     try {
       expect(await entered).toBe('local_read');

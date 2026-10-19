@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MachineGuardPolicyV1Schema } from '@happier-dev/protocol/machines/guard/guardPolicyV1';
 import { createGuardRuntime, type GuardPolicyWork } from './guardRuntime';
 import { createActivityLog } from './activityLog';
@@ -24,7 +24,15 @@ import { createGuardLeftBehindFixture, guardLeftBehindAttribution } from './actu
 import { planLeftBehind } from './actuators/leftBehind';
 import { createProcessActionExecutor } from '../processes/actions/processActionExecutor';
 import { createProcessOwnershipRuntime } from '../processes/ownership/processOwnershipRuntime';
+import { listHappierProcessRoots } from '../processes/roots/listHappierProcessRoots';
 import { parseProcessOwnerTag } from '@/processes/ownerTag';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => { runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+  runtimeOptions: { pluginIds: ['happier.agent.codex'] } }); });
+afterAll(async () => { await runtime?.dispose(); });
 
 describe('memory guard episode on the incumbent minute sampler', () => {
   let directory: string;
@@ -111,11 +119,11 @@ describe('memory guard episode on the incumbent minute sampler', () => {
               workspaceIdle: readWorkspaceSessionIdle(facts, { workspacePath: '/project' }), root, ownerRef: root, label: 'Project server',
               listeners: [{ establishedConnections: connections }],
               wayBack: [{ label: 'start_again', actionId: 'localServices.launcher.start', input: { machineId: 'm', serviceId: 'project-service' } }] }]
-            : sessions.map((tracked, index) => ({ kind: 'session' as const, root: roots[index], tracked, label: 'Session',
+            : await Promise.all(sessions.map(async (tracked, index) => ({ kind: 'session' as const, root: roots[index], tracked, label: 'Session',
               wayBack: [{ label: 'resume' as const, actionId: 'session.open' as const, input: { sessionId: tracked.happySessionId!, intent: 'resume' } }],
-              eligibility: evaluateSessionEligibility({ tracked, inventory: facts,
+              eligibility: (await evaluateSessionEligibility({ tracked, inventory: facts,
                 draft, resume: { sessionId: tracked.happySessionId!, rawSession: { machineId: 'm', path: '/project' },
-                  metadata: { machineId: 'm', path: '/project', flavor: 'codex', codexSessionId: `native-${tracked.happySessionId}` } } }) })) };
+                  metadata: { runtimeDescriptorV1: { v: 1 as const, agentId: 'codex', agent: { backendMode: 'appServer' } }, machineId: 'm', path: '/project', flavor: 'codex', codexSessionId: `native-${tracked.happySessionId}` } } })) }))) };
       },
       // Genuine native stop boundary. Acknowledgement cannot prove process absence.
       stop: async candidate => { stops++; if (candidate.target.kind === 'session') stoppedIds.push(candidate.target.tracked.happySessionId!);
@@ -192,12 +200,14 @@ describe('memory guard episode on the incumbent minute sampler', () => {
     // Hold only native helper transport; the census reader/ownership/tracker remain real.
     const heldNativeRead: typeof nativeRead = async (...args) => { entered = true; await nativePending; return nativeRead(...args); };
     const censusDependencies = { ...native.censusDependencies, execFile: heldNativeRead };
-    const ownership = createProcessOwnershipRuntime({ listRoots: () => native.roots,
+    const ownership = createProcessOwnershipRuntime({ listRoots: snapshot => listHappierProcessRoots({ snapshot,
+      selfPid: process.pid, platform: 'darwin', daemonScopeKey: parseProcessOwnerTag(native.rows.get(300)?.ownerTag)!.daemonScopeKey,
+      endedRoots: native.roots }),
       daemonScopeKey: parseProcessOwnerTag(native.rows.get(300)?.ownerTag)!.daemonScopeKey,
       selfPid: process.pid, platform: 'darwin', censusDependencies });
     const observe = async () => {
       const result = await ownership.readOwners({ freshness: 'fresh' });
-      if (result.status !== 'ok') throw new Error('Native fixture unavailable');
+      if (result.status !== 'ok') throw new Error(`Native fixture unavailable: ${result.reason}`);
       native.tracker.observe({ status: 'ok', capturedAtMs: result.snapshot.capturedAtMs, rows: result.rows });
     };
     const signals: number[] = [];

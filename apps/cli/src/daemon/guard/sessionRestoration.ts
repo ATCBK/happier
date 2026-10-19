@@ -37,7 +37,7 @@ export function createGuardSessionRestoration(input: Readonly<{
       const failure = event.failure ?? { reason: 'other' as const };
       await input.activity.append({ v: 1, id: randomUUID(), at: now(), kind: 'start_failed', rule: receipt.rule,
         subject: receipt.subject, attribution, outcome: 'failed', ref: receipt.id,
-        note: `Could not resume: ${event.reason}`, failure,
+        failure,
         nextStep: failure.reason === 'no_ptys' ? 'close_idle_terminals' : 'review_processes',
         ...(receipt.wayBack ? { wayBack: receipt.wayBack } : {}) });
     },

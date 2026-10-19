@@ -12,7 +12,7 @@ export function createDarwinMachineVitalsReader(options: NativeMachineVitalsRead
     let extrasAt = -Infinity;
     let powerMinute: number | undefined;
     let powerFacts: ReturnType<typeof parseDarwinBatteryFacts> = { present: false };
-    let extras: Pick<MachineVitalsSampleV1, 'battery' | 'thermal' | 'gpu'> & { vmStat?: string } = {};
+    let extras: Pick<MachineVitalsSampleV1, 'battery' | 'thermal' | 'gpu'> = {};
     const tool = async (command: string, args: string[]) => {
         try { return String((await run(command, args, { encoding: 'utf8', signal: options.signal })).stdout); } catch { return ''; }
     };
@@ -24,6 +24,11 @@ export function createDarwinMachineVitalsReader(options: NativeMachineVitalsRead
             // Static display names are read once, never at the sampling cadence.
             hardwarePorts ??= parseDarwinHardwarePorts(await tool('/usr/sbin/networksetup', ['-listallhardwareports']));
             const sample = result.sample;
+            if (input.overview && sample.memory.reported) {
+                const vmStat = await tool('/usr/bin/vm_stat', []);
+                const composition = parseDarwinVmStat(vmStat, sample.memory.usedBytes);
+                if (composition) sample.memory.composition = composition;
+            }
             const readExtras = input.overviewExtras && (input.monotonicMs < extrasAt || input.monotonicMs - extrasAt >= 15_000);
             // Keep-awake and scheduled scans consume the always-on minute observation.
             // Overview reuses the same reader at its existing extras boundary; live
@@ -41,13 +46,11 @@ export function createDarwinMachineVitalsReader(options: NativeMachineVitalsRead
             if (input.overviewExtras) {
                 if (readExtras) {
                     extrasAt = input.monotonicMs;
-                    const [vmStat, thermal, gpu] = await Promise.all([
-                        tool('/usr/bin/vm_stat', []),
+                    const [thermal, gpu] = await Promise.all([
                         tool('/usr/bin/pmset', ['-g', 'therm']), tool('/usr/sbin/ioreg', ['-r', '-d', '1', '-c', 'IOAccelerator']),
                     ]);
-                    extras = { vmStat, battery: powerFacts.battery, thermal: parseDarwinThermal(thermal), gpu: parseDarwinGpu(gpu) };
+                    extras = { battery: powerFacts.battery, thermal: parseDarwinThermal(thermal), gpu: parseDarwinGpu(gpu) };
                 }
-                if (sample.memory.reported && extras.vmStat) sample.memory.composition = parseDarwinVmStat(extras.vmStat, sample.memory.usedBytes);
                 if (sample.disk.reported) sample.disk.volumes = await readVolumeCapacities({ volumes: sample.disk.volumes, monotonicMs: input.monotonicMs });
                 if (extras.battery) sample.battery = extras.battery;
                 if (extras.thermal) sample.thermal = extras.thermal;

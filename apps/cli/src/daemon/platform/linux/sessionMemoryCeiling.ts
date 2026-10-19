@@ -13,7 +13,7 @@ import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { posix } from 'node:path';
 import { equalProcessStart } from '../../processes/ownership/types';
 import { setGuardSessionMemoryHigh, sessionScopeExitEvidencePath } from './systemdUserResourceGovernor';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 export type SessionMemoryCeilingTarget = Readonly<{
@@ -46,11 +46,11 @@ export type SessionMemoryCeilingInput = Readonly<{
   }>;
 }>;
 
-const ScopeExitStoredSchema = createStoredReadSchema(z.object({
-  v: z.literal(1), unit: z.string(), path: z.string().optional(), status: z.enum(['captured', 'unavailable']),
-  oom: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  oomKill: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-}).strict());
+const ScopeExitStoredSchema = createStoredReadSchema(z.strictObject({
+  v: z.literal(1), unit: z.string(), path: z.optional(z.string()), status: z.enum(['captured', 'unavailable']),
+  oom: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  oomKill: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+}));
 const SESSION_OOM_EXPLANATION = 'This Session ran out of memory.';
 
 type Scope = Readonly<{ path: string; unit: string; systemd: boolean }>;

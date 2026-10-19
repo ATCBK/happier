@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createBrowserAutomationOwnerRegistry } from '../browser/automation/owners';
 import { createProcessOwnershipRuntime } from '../processes/ownership/processOwnershipRuntime';
 import type { HappierProcessRoot } from '../processes/ownership/types';
@@ -11,6 +11,13 @@ import { createManagedActivityInventory, type LiveWorkInventoryV1 } from '../lif
 import type { TrackedSession } from '../types';
 import { evaluateSessionEligibility } from './sessionEligibility';
 import { createReadGuardFacts } from './readGuardFacts';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => { runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+  runtimeOptions: { pluginIds: ['happier.agent.codex'] } }); });
+afterAll(async () => { await runtime?.dispose(); });
 
 async function fixture() {
   const tracked: TrackedSession = { pid: 30, happySessionId: 's', processStartTimeMs: 1, startedBy: 'daemon',
@@ -51,10 +58,10 @@ async function fixture() {
     listeners: [...additional, { pid: listenerPid, address: '127.0.0.1', port: 5173, protocol: 'tcp', establishedConnections }],
     processes: new Map(snapshot.rows.map(row => [row.pid, { pid: row.pid, ppid: row.ppid ?? undefined,
       processStartTimeMs: row.start.startTimeMs, censusRow: row, command: 'vite', processOwnership: 'self' as const }])) });
-  const eligibility = () => evaluateSessionEligibility({ tracked, inventory, draft: { status: 'absent' }, resume: {
+  const eligibility = async () => (await evaluateSessionEligibility({ tracked, inventory, draft: { status: 'absent' }, resume: {
     sessionId: 's', rawSession: { machineId: 'm', path: '/project' },
-    metadata: { machineId: 'm', path: '/project', flavor: 'codex', codexSessionId: 'native-s' },
-  } });
+    metadata: { runtimeDescriptorV1: { v: 1 as const, agentId: 'codex', agent: { backendMode: 'appServer' } }, machineId: 'm', path: '/project', flavor: 'codex', codexSessionId: 'native-s' },
+  } }));
   const project = { workspace: { id: 'workspace', rootPath: '/project', serverId: 'server', machineId: 'm', createdAtMs: 1 },
     cwd: '/project/nested', requester: { serverId: 'server', accountId: 'account', machineId: 'm', installationId: 'installation' } };
   const resourceTargets = [{ root: roots[1]!, project }, { root: roots[3]! }];

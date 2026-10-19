@@ -71,6 +71,9 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
     changed();
   };
   const emit = () => { for (const listener of listeners) { try { listener(); } catch (error) { input.onError(error); } } };
+  /** The episode owns failed identities for every execution and requester preview. */
+  const planMemory = (facts: GuardFacts, policy: MachineGuardPolicyV1['memoryGuard'], at: number) =>
+    planGuard({ ...facts, policy, now: at, failedTargets: episode?.failed });
   /** The get/watch and execution planner consume these same observed native facts. */
   const observeFacts = (facts: GuardFacts): GuardFacts => {
     const policy = input.readPolicy().memoryGuard;
@@ -141,7 +144,7 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
     outcome: MachineGuardActivityEntryV1['outcome']): MachineGuardActivityEntryV1 => ({
     v: 1, id: randomUUID(), at: now(), kind, rule: 'idle_sessions', outcome, attribution: candidate.attribution,
     subject: { kind: 'session', sessionId: sessionId(candidate)!, title: candidate.target.label },
-    ...(candidate.target.wayBack ? { wayBack: candidate.target.wayBack } : {}),
+    ...(kind !== 'kept_running' && candidate.target.wayBack ? { wayBack: candidate.target.wayBack } : {}),
   });
   const runIdlePlan = async (facts: GuardFacts | undefined, policy: MachineGuardPolicyV1, observed: number, signal: AbortSignal) => {
     const plan: ReturnType<typeof planIdleSessions> = facts ? planIdleSessions({ ...facts, policy: policy.idleSessions, now: now(), keepRunningAnchors,
@@ -210,7 +213,7 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
     episodeId: episode?.id, attribution: candidate.attribution,
     subject: candidate.target.kind === 'session' ? { kind: 'session', sessionId: candidate.target.tracked.happySessionId!, title: candidate.target.label }
       : candidate.target.kind === 'browser' ? { kind: 'browser' } : { kind: 'service', label: candidate.target.label },
-    ...(candidate.target.wayBack ? { wayBack: candidate.target.wayBack } : {}),
+    ...(kind !== 'kept_running' && candidate.target.wayBack ? { wayBack: candidate.target.wayBack } : {}),
     trigger: { level: episode?.level ?? input.readPolicy().memoryGuard.actAt, sinceMs: episode?.since ?? now() },
   });
   const record = async (entry: MachineGuardActivityEntryV1) => {
@@ -285,7 +288,7 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
           } else {
             if (!currentFacts) throw new Error('Enabled memory rule requires current owner facts');
             const facts = currentFacts;
-            const plan = planGuard({ ...facts, policy: memoryPolicy, now: now(), failedTargets: episode?.failed });
+            const plan = planMemory(facts, memoryPolicy, now());
             const sample = input.vitals.latest();
             const minute = Math.floor(now() / 60000) * 60000;
             const records = input.vitals.minutes(now() - memoryPolicy.sustainMs - 60000);
@@ -374,7 +377,7 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
                   // or a service gains a visitor. Re-admit every rung at the owner.
                   const fireFacts = observeFacts(await input.readFacts(signal));
                   const firePolicy = input.readPolicy().memoryGuard;
-                  const fireCandidate = planGuard({ ...fireFacts, policy: firePolicy, now: now(), failedTargets: episode.failed }).candidate;
+                  const fireCandidate = planMemory(fireFacts, firePolicy, now()).candidate;
                   const fireSample = input.vitals.latest();
                   const fireMemory = input.vitals.state().state === 'reporting' && fireSample
                     && fireSample.sampledAt >= Math.floor(now() / 60000) * 60000 && fireSample.memory.reported ? fireSample.memory : null;
@@ -424,6 +427,7 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
     run(signal: AbortSignal): Promise<void> { return running ??= loop(signal).finally(() => { running = undefined; }); },
     readEpisode: () => published,
     readPreview: () => preview,
+    planMemory,
     observeFacts,
     invalidate: changed,
     readSessionWarning: (id: string): Readonly<{ stopAt: number }> | undefined => {

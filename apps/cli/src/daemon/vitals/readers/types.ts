@@ -4,6 +4,8 @@ export interface MachineVitalsReaderInput {
     sampledAt: number;
     monotonicMs: number;
     intervalMs: number;
+    /** Parked Overview demand: memory detail is read with each observation, not cached extras. */
+    overview?: boolean;
     overviewExtras: boolean;
 }
 

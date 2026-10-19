@@ -70,7 +70,7 @@ async function actionFixture(requireApproval = false) {
     isApprovalExecutionOriginCurrent: createDaemonApprovalExecutionOriginCurrentness({
       accountId: 'owner', machineId: 'machine', serverId: 'home',
       resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'machine', serverIdentityId: 'home-identity' }),
-      resolveTarget: async () => ({ kind: 'machine', machineId: 'machine' }), listAccountApiTokens: async () => ({ tokens: [] }),
+      resolveTarget: async () => ({ kind: 'machine', machineId: 'machine' }), isAccountCurrent: async () => true, listAccountApiTokens: async () => ({ tokens: [] }),
     }),
   };
   const actions = createActionExecutor(deps as ActionExecutorDeps);

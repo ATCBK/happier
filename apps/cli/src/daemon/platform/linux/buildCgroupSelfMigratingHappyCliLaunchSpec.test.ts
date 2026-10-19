@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { getPriority, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -30,6 +30,23 @@ describe('buildCgroupSelfMigratingHappyCliLaunchSpec', () => {
   });
   let sandboxDir: string | null = null;
 
+  it.each(['file', 'not writable'] as const)('runs the target without scope diagnostics when the optional cgroup parent is %s', async (state) => {
+    sandboxDir = await mkdtemp(join(tmpdir(), 'happier-cgroup-unavailable-'));
+    const baseDir = join(sandboxDir, 'cgroup');
+    if (state === 'file') {
+      await writeFile(baseDir, 'not a delegated directory');
+    } else {
+      await mkdir(baseDir);
+      await chmod(baseDir, 0o500);
+    }
+    const spec = buildCgroupProcessLaunchSpec({ scope: { kind: 'cgroup', baseDir },
+      launchSpec: { filePath: '/bin/sh', args: ['-c', 'printf "target output"; printf "target error" >&2'] },
+    });
+    const result = await promisify(execFile)(spec.filePath, spec.args, { env: { ...process.env, ...spec.env } });
+    expect(result.stdout).toBe('target output');
+    expect(result.stderr).toBe('target error');
+  });
+
   it('sets the selected soft ceiling before the self-migrated target runs', async () => {
     sandboxDir = await mkdtemp(join(tmpdir(), 'happier-ceiling-launch-'));
     const unit = 'happier-session-0123456789ab.session-123-nonce.scope';
@@ -44,11 +61,13 @@ describe('buildCgroupSelfMigratingHappyCliLaunchSpec', () => {
     expect(await readFile(join(scopeDir, 'memory.high'), 'utf8')).toBe('1048576\n');
   });
 
-  it('refuses a configured-ceiling launch when the runner cannot enter its scope', async () => {
+  it.each(['create', 'enter'] as const)('refuses a configured-ceiling launch when the runner cannot %s its scope', async (failure) => {
     sandboxDir = await mkdtemp(join(tmpdir(), 'happier-ceiling-launch-'));
     const unit = 'happier-session-0123456789ab.session-123-nonce.scope';
-    await mkdir(join(sandboxDir, unit, 'cgroup.procs'), { recursive: true });
-    const spec = buildCgroupProcessLaunchSpec({ scope: { kind: 'cgroup', baseDir: sandboxDir }, unit, memoryHighBytes: 1048576,
+    const baseDir = join(sandboxDir, 'cgroup');
+    if (failure === 'create') await writeFile(baseDir, 'not a delegated directory');
+    else await mkdir(join(baseDir, unit, 'cgroup.procs'), { recursive: true });
+    const spec = buildCgroupProcessLaunchSpec({ scope: { kind: 'cgroup', baseDir }, unit, memoryHighBytes: 1048576,
       launchSpec: { filePath: '/bin/sh', args: ['-c', 'exit 0'] } });
     await expect(promisify(execFile)(spec.filePath, spec.args, { env: { ...process.env, ...spec.env } })).rejects.toThrow();
   });

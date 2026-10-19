@@ -11,6 +11,88 @@ import { waitForTrackedRunnerProcessesExit } from '../sessions/waitForTrackedRun
 import { listHappierProcessRoots } from './roots/listHappierProcessRoots';
 import { createLeftBehindPass } from './leftBehind/leftBehindPass';
 import type { TrackedSession } from '../types';
+import { formatProcessOwnerTag, resolveProcessOwnerScopeKey } from '@/processes/ownerTag';
+import { spawn } from 'node:child_process';
+
+it('protects a captured generation reowned during the final native identity read', async () => {
+    const owner = { kind: 'session', sessionId: 'departed' } as const;
+    const root: HappierProcessRoot = { owner: { kind: 'session', sessionId: 'resumed' },
+        pid: 5101, start: { startTimeMs: 1100 }, live: true, ownerCreatedAtMs: 0 };
+    const rows = new Map([[process.pid, { parent: 1, ticks: 10 }], [5101, { parent: 1, ticks: 110 }]]);
+    let rootReads = 0;
+    let reowned = false;
+    const censusDependencies: ProcessCensusDependencies = { platform: 'linux', selfPid: process.pid, linuxBoundary: {
+        async readdir() { return [...rows.keys()].map(String); }, async readlink() { return '/fixture'; },
+        async readFile(path) {
+            const pid = Number(path.split('/')[2]);
+            const row = rows.get(pid);
+            if (!row) throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+            if (path.endsWith('/status')) return 'Uid:\t1000\n';
+            if (path.endsWith('/stat')) {
+                if (pid === root.pid && rootReads === 3) reowned = true;
+                return pid + ' (fixture) ' + ['S', String(row.parent), '5000', '1', '0', '0',
+                    ...Array(13).fill('0'), String(row.ticks), '0', '0'].join(' ');
+            }
+            return '';
+        },
+    } };
+    const runtime = createProcessOwnershipRuntime({ platform: 'linux', daemonScopeKey: '123456789abc', censusDependencies,
+        listRoots: () => { rootReads++; return reowned ? [root] : []; } });
+    const signals: number[] = [];
+    const remainder = createEndOwnerRemainder({ platform: 'linux', processOwnershipRuntime: runtime,
+        daemonScopeKey: '123456789abc', firstPass: () => {}, systemBoundary: { platform: 'linux', censusDependencies,
+            kill(pid) { signals.push(pid); rows.delete(pid); return true; } } });
+    await remainder.end(owner, { scope: 'subtree', ownership: [], roots: [{ ...root, owner }] });
+    expect(reowned).toBe(true);
+    expect(signals).toEqual([]);
+});
+
+it.each(['exit', 'stop'] as const)('retires a Run-tagged native child with its captured Session generation after refresh (%s)', async retirement => {
+    const happierHomeDir = '/fixture/refresh-run-remainder';
+    const scope = resolveProcessOwnerScopeKey(happierHomeDir);
+    const owner = { kind: 'session', sessionId: 'refresh-run-remainder' } as const;
+    const run = { kind: 'run', runId: 'review-native' } as const;
+    const parent = spawn(process.execPath, ['-e', `
+        const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+            detached: true, stdio: 'ignore', env: { ...process.env, HAPPIER_PROCESS_OWNER: ${JSON.stringify(formatProcessOwnerTag({ happierHomeDir, owner: run }))} }
+        });
+        process.stdout.write(String(child.pid) + '\\n');
+        setInterval(() => {}, 1000);
+    `], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const childPid = await new Promise<number>(resolve => parent.stdout.once('data', data => resolve(Number(String(data).trim()))));
+    try {
+        const initial = await readProcessCensus({ freshness: 'fresh', scope: 'all' });
+        if (initial.status !== 'ok') throw new Error('Native census unavailable');
+        const native = initial.rows.find(row => row.pid === parent.pid)!;
+        const root: HappierProcessRoot = { owner, pid: native.pid, start: native.start, live: true, ownerCreatedAtMs: 0 };
+        let roots: readonly HappierProcessRoot[] = [root, { ...root, owner: run }];
+        const runtime = createProcessOwnershipRuntime({ daemonScopeKey: scope, listRoots: () => roots });
+        const remainder = createEndOwnerRemainder({ processOwnershipRuntime: runtime, daemonScopeKey: scope, firstPass: () => {} });
+        const captured = await remainder.captureTree(owner, { pid: native.pid, start: native.start });
+        const departed = once(parent, 'exit'); parent.kill('SIGKILL'); await departed;
+        // A new live Session incarnation must neither hide the retired tree nor
+        // become a target of its generation-specific physical cleanup.
+        const self = initial.rows.find(row => row.pid === process.pid)!;
+        roots = [{ ...root, live: false }, { ...root, owner: run, live: false },
+            { ...root, pid: self.pid, start: self.start }];
+        if (retirement === 'exit') {
+            const result = await remainder.end(owner, captured);
+            expect(result.outcomes).toContainEqual(expect.objectContaining({ pid: childPid, outcome: 'ended' }));
+        } else {
+            const tracked: TrackedSession = { pid: native.pid, processStartTimeMs: native.start.startTimeMs,
+                happySessionId: owner.sessionId, startedBy: 'daemon', ownerRemainderCapture: captured };
+            const stop = createStopSession({ pidToTrackedSession: new Map([[native.pid, tracked]]), ownerRemainder: remainder,
+                areTrackedRunnersExited: async () => true, waitForTrackedRunnersExit: async () => true });
+            expect(await stop(owner.sessionId)).toEqual({ status: 'stopped' });
+        }
+        expect(await waitForProcessExit(childPid, { timeoutMs: 2000 })).toBe(true);
+        expect(() => process.kill(process.pid, 0)).not.toThrow();
+    } finally {
+        parent.kill('SIGKILL');
+        try { process.kill(childPid, 'SIGKILL'); } catch { /* Exact owned native fixture. */ }
+        await waitForProcessExit(childPid);
+    }
+}, 15_000);
 
 it('keeps the Stop receipt incomplete when a captured child actually survives both signals', async () => {
     const { parent, childPid } = await spawnInlineNodeParentWithChild();
