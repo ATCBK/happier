@@ -14,6 +14,7 @@ export const actionOperationInboxTranslations = {
             succeeded: 'Completed',
             failed: 'Failed',
             cancelled: 'Cancelled',
+            outcomeUncertain: 'Outcome not confirmed. Check the machine.',
         },
         observation: {
             reconnecting: 'Reconnecting',

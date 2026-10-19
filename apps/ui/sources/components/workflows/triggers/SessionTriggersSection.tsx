@@ -93,7 +93,7 @@ export const SessionTriggersSectionView = React.memo(function SessionTriggersSec
         <WorkSection
             testID="session-work-triggers"
             anatomy="page"
-            title={t('workflows.triggers.section.title')}
+            title={t('workflows.triggers.section.habitsHere')}
             count={empty ? '' : t('workflows.triggers.section.countOn', { count: onCount })}
             info={t('workflows.triggers.section.info')}
             loading={props.status === 'loading' && empty}

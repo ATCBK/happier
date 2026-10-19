@@ -12,6 +12,18 @@ export type DetailPageTranslations = Readonly<{
         sessionElsewhere: string;
         origin: Readonly<Record<'voice' | 'agent' | 'mcp' | 'cli' | 'ui' | 'api' | 'plugin' | 'system', string>>;
         proposalsDescription: string;
+        requester: Readonly<{
+            title: string;
+            descriptionYou: string;
+            descriptionOther: (params: Readonly<{ name: string }>) => string;
+            askedBy: string;
+            writesWith: string;
+            setupOf: (params: Readonly<{ name: string }>) => string;
+            anotherPerson: string;
+            waitingFor: (params: Readonly<{ name: string }>) => string;
+            confirmedBy: string;
+            declinedBy: string;
+        }>;
     }>;
     runs: Readonly<{
         description: string;
@@ -60,6 +72,18 @@ export const detailPageTranslationsEnglish = { en: {
                 system: 'Asked by Happier',
             },
             proposalsDescription: 'Posted to the review if you approve.',
+            requester: {
+                title: 'Who confirms',
+                descriptionYou: 'You asked for this, so you confirm it.',
+                descriptionOther: ({ name }) => `${name} asked for this, so only they can confirm it.`,
+                askedBy: 'Asked by',
+                writesWith: 'Writes with',
+                setupOf: ({ name }) => `${name}’s setup`,
+                anotherPerson: 'Another person',
+                waitingFor: ({ name }) => `Waiting for ${name} to confirm`,
+                confirmedBy: 'Confirmed by',
+                declinedBy: 'Declined by',
+            },
         },
         runs: {
             description: 'Background runs on your machines.',
