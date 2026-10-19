@@ -1,4 +1,4 @@
-import { ManagedAdmissionComputeInputV1Schema, ManagedMachineActionInputSchemasV1, ManagedMachineActionOutputSchemasV1, resolveManagedAcquireReviewV1,
+import { ManagedMachineActionInputSchemasV1, ManagedMachineActionOutputSchemasV1, resolveManagedAcquireReviewV1,
     type ManagedMachineActionIdV1, type ManagedMachineActionOutputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import type { ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -136,17 +136,11 @@ async function executeManagedMachineNativeActionWithinLifetime(params: ManagedMa
                 || (!foreignController && row.access.resourceMode !== accountMode)))) return failure('content_unavailable');
         if (encryption) material = { type: 'dataKey', machineKey: encryption.getContentPrivateKey() };
     }
-    const acquire = actionId === 'machines.managed.acquire'
-        ? ManagedMachineActionInputSchemasV1['machines.managed.acquire'].parse(input) : undefined;
-    const managedAdmission = acquire ? (() => {
-        const { agentStart, ...compute } = acquire;
-        return { actionId: 'machines.managed.acquire' as const, input: ManagedAdmissionComputeInputV1Schema.parse(compute), continuationPresent: Boolean(agentStart) };
-    })() : undefined;
     // Narrow the authenticated Account carrier before the installed daemon's
     // canonical Action policy creates the Ask. Human replay stays with that owner.
     params.signal?.throwIfAborted();
     const execution = await executeOriginalAccountActionTransport({ account, binding, input, authority: context.authority,
-        ...(material ? { material } : {}), ...(managedAdmission ? { managedAdmission } : {}),
+        ...(material ? { material } : {}),
         ...(machineCustody ? { machineCustody } : {}),
         ...(params.signal ? { signal: params.signal } : {}),
         invalidResponseCode: 'managed_response_invalid', requestFailureCode: 'managed_request_failed' });

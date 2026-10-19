@@ -3,18 +3,17 @@ import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntim
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { serveAccountHomes, serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { executeMachineAccessHttpAction } from './machineAccessApi';
-import { setServerProfileIdentityForUrl, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 describe('Machine access through the real Action front door', () => {
     it('accepts a bound local profile target at the captured Home while rejecting another Home', async () => {
-        const home = await serveAccountHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-alias.test', accountId: 'alice' }],
+        const home = await serveAccountHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-alias.test', accountId: 'alice',
+            serverIdentityId: 'srv_machine_alias' }],
             route: request => request.path.endsWith('/access') ? Response.json({ kind: 'saved',
                 grant: { machineId: 'machine', principal: { kind: 'account', accountId: 'bob' }, level: 'view' },
                 readiness: 'ready', canPrepareKeys: false }) : undefined });
         try {
-            await setServerProfileIdentityForUrl(home.homes.machine!.serverUrl, 'srv_machine_alias');
-            const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home.homes.machine!.id), accountId: 'alice' };
-            const input = { serverId: home.homes.machine!.id, machineId: 'machine', principal: { kind: 'account', accountId: 'bob' }, level: 'view' };
+            const scope = { serverId: home.homes.machine!.id, accountId: 'alice' };
+            const input = { serverId: home.homes.machine!.profileId, machineId: 'machine', principal: { kind: 'account', accountId: 'bob' }, level: 'view' };
             expect(await executeMachineAccessHttpAction({ scope, actionId: 'machines.access.grant.set', input }))
                 .toMatchObject({ kind: 'saved' });
             await expect(executeMachineAccessHttpAction({ scope, actionId: 'machines.access.grant.set', input: { ...input, serverId: 'srv_foreign_home' } }))

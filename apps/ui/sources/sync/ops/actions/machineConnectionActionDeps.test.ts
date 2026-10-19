@@ -100,6 +100,7 @@ describe('UI machine connection Actions', () => {
         expect(JSON.stringify(failedStatus).includes('fixture-diagnostic-marker')).toBe(false);
     });
     it('captures a saved host and SavedSecret for Agent/MCP without a mounted draft and persists exact completion', async () => {
+        await loadSyncSingletonForTests();
         vi.stubGlobal('isTauri', true);
         const serverId = await harness.addHome({ name: 'Saved SSH', serverUrl: 'https://ssh-saved.example', accountId: 'alice' });
         harness.answer(serverId, '/v1/account/encryption/currentness', { body: AccountEncryptionCurrentnessResponseSchema.parse({
@@ -321,6 +322,7 @@ describe('UI machine connection Actions', () => {
         expect(boundary.rpc).not.toHaveBeenCalled();
     });
     it('retires the trusted pairing lifecycle after returning its link when the Home Account changes', async () => {
+        await loadSyncSingletonForTests();
         const identity = 'srv_pairing-home';
         const serverUrl = 'https://pairing.example';
         const serverId = await harness.addHome({ name: 'Pairing Home', serverUrl, serverIdentityId: identity, accountId: 'alice' });
@@ -348,7 +350,10 @@ describe('UI machine connection Actions', () => {
                 pairId: 'pair', homeServerIdentityId: identity, requesterPublicKey, expiresAtMs }) } });
         harness.answer(serverId, '/v1/auth/pairing/consume', { body: {} });
         try {
-            const result = await makeExecutor().execute('machines.pairing.create', { serverId }, { surface: 'ui', authority: 'present_user', serverId });
+            const result = await makeExecutor().execute('machines.pairing.create', { serverId }, {
+                surface: 'ui', authority: 'present_user', serverId,
+                presentUserConfirmation: { actionId: 'machines.pairing.create' },
+            });
             if (!result.ok) throw new Error(JSON.stringify(result));
             expect(result).toMatchObject({ ok: true, result: { pairId: 'pair', expiresAtMs } });
             await vi.waitFor(() => expect(harness.requestsFor(statusPath)).toHaveLength(1));

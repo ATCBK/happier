@@ -7,7 +7,7 @@ import {
     DaemonLocalServiceInventoryWatchResponseV1Schema,
 } from '@happier-dev/protocol/local/services/inventory/v1';
 import { isRpcMethodNotFoundResult, RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { isMachineRpcTimeoutError, MACHINE_RPC_TIMEOUT_ERROR_CODE, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
@@ -98,7 +98,8 @@ export async function watchLocalServiceInventorySnapshotViaMachineRpc(
         return parsed.data.snapshot.machineId === input.machineId
             ? { ok: true, changed: true, snapshot: parsed.data.snapshot }
             : { ok: false, reason: 'invalid_response' };
-    } catch {
-        return { ok: false, reason: 'request_failed' };
+    } catch (error) {
+        return { ok: false, reason: 'request_failed',
+            ...(isMachineRpcTimeoutError(error) ? { reasonCode: MACHINE_RPC_TIMEOUT_ERROR_CODE } : {}) };
     }
 }

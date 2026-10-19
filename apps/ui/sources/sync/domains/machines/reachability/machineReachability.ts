@@ -2,6 +2,7 @@ import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { isMachineReachableV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
 import { readMachineOnlineGraceMsFromEnv } from '@/utils/sessions/machineUtils';
 import { createServerAccountScope, serverAccountScopedResourceKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 export type MachineReachabilityScope = ServerAccountScope;
 
@@ -22,7 +23,7 @@ const listeners = new Set<() => void>();
 let revision = 0;
 
 function observationKey(scope: MachineReachabilityScope | null | undefined, machineId: string | null | undefined, route?: MachineRequestObservationInput['route']): string | null {
-    const normalizedScope = createServerAccountScope(scope?.serverId, scope?.accountId);
+    const normalizedScope = createServerAccountScope(resolveServerProfileScopeIdForIdentifier(scope?.serverId), scope?.accountId);
     const normalizedMachineId = String(machineId ?? '').trim();
     return normalizedScope && normalizedMachineId
         ? serverAccountScopedResourceKey(normalizedScope, normalizedMachineId, ...(route ? [route] : []))
@@ -118,7 +119,7 @@ export function clearMachineRequestReachabilityForMachine(scope: MachineReachabi
 }
 
 export function clearMachineRequestReachabilityForScope(scope: MachineReachabilityScope): void {
-    const normalizedScope = createServerAccountScope(scope.serverId, scope.accountId);
+    const normalizedScope = createServerAccountScope(resolveServerProfileScopeIdForIdentifier(scope.serverId), scope.accountId);
     if (!normalizedScope) return;
     const prefix = serverAccountScopedResourceKey(normalizedScope);
     let changed = false;

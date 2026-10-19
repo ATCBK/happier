@@ -21,9 +21,17 @@ let webLocks: ReturnType<typeof installWebLockManagerMock>;
 describe('terminal captured Account scope', () => {
     beforeEach(async () => {
         webLocks = installWebLockManagerMock();
+        installHomeGovernanceBoundaries(homes);
         const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
         await loadSyncSingletonForTests();
         serverId = await homes.addHome({ name: 'Terminal Home', serverUrl: 'https://terminal-home.test', accountId: 'account-a' });
+        // These cases retain an admitted invocation across Account retirement;
+        // the Account's persisted policy, not a caller bypass, waives Ask here.
+        homes.answer(serverId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: {
+                'machines.terminal.open': ['ui'], 'session.terminals.restart': ['ui'], 'session.terminals.close': ['ui'],
+            } },
+        } } } });
         outgoing.length = 0;
     });
     afterEach(async () => {
@@ -41,11 +49,13 @@ describe('terminal captured Account scope', () => {
         // The public Action preparation owns captured Account authority. The
         // low-level terminal RPC options have no retained Account-id contract.
         const retained = await Promise.all([
-            executor.prepare('machines.terminal.open', { machineId: 'machine-1', terminalKey: 'terminal-key', cwd: '/tmp', cols: 80, rows: 24 }, context),
+            executor.prepare('machines.terminal.open', { serverId, machineId: 'machine-1', terminalKey: 'terminal-key', cwd: '/tmp', cols: 80, rows: 24 }, context),
             executor.prepare('session.terminals.restart', { scopeId, terminalId: 'terminal-a' }, context),
             executor.prepare('session.terminals.close', { scopeId, terminalId: 'terminal-a' }, context),
         ]);
-        expect(retained.every((prepared) => prepared.kind === 'ready')).toBe(true);
+        expect(retained.every((prepared) => prepared.kind === 'ready'), JSON.stringify(retained.map(prepared =>
+            prepared.kind === 'settled' ? prepared.result : prepared.kind))).toBe(true);
+        expect(homes.artifacts(serverId).list()).toEqual([]);
         await homes.switchAccount(serverId, 'account-b');
         homes.requests.length = 0;
         for (const prepared of retained) {

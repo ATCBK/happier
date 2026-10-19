@@ -64,6 +64,7 @@ describe('always-on Machine resource attention', () => {
         const hook = await renderHook(() => useMachineResourceFleetAttention());
         await vi.waitFor(() => expect(hook.getCurrent().needsYou).toEqual([{ serverId, machineId: 'needs' }]));
         expect(hook.getCurrent().look).toEqual([{ machineKey: JSON.stringify([serverId, 'look']), reasonKey: 'memory' }]);
+        expect(hook.getCurrent()).toMatchObject({ reportingMachineKeys: ['acted', 'look', 'needs'].map(id => JSON.stringify([serverId, id])) });
         expect(hook.getCurrent().lastAutomaticActionAt).toBe(8);
         expect(hook.getCurrent().headline?.machineKey).toEqual({ serverId, machineId: 'needs' });
         expect(transport.rpc).not.toHaveBeenCalled();
@@ -95,6 +96,7 @@ describe('always-on Machine resource attention', () => {
         const hook = await renderHook(() => useMachineResourceFleetAttention());
         await vi.waitFor(() => expect(hook.getCurrent().needsYou).toEqual([{ serverId, machineId: 'no-host' }]));
         expect(hook.getCurrent().headline?.reason).toMatchObject({ kind: 'memory_pressure', pressure: 'critical' });
+        expect(hook.getCurrent()).toMatchObject({ reportingMachineKeys: [] });
         expect(transport.rpc).not.toHaveBeenCalled();
         await hook.unmount();
     });

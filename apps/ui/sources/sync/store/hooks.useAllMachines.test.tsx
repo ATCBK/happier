@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
+import { MachinePublishedResourceSummaryV1Schema } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -17,12 +18,136 @@ import {
 import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { readMachineOnlineGraceMsFromEnv } from '@/utils/sessions/machineUtils';
 
 afterEach(() => {
     standardCleanup();
 });
 
 describe('useAllMachines', () => {
+    it('refreshes launch admission when daemon content catches up to its published key basis', async () => {
+        const previousState = storage.getState();
+        const serverId = getActiveServerSnapshot().serverId;
+        const machine = createMachineFixture({ metadataVersion: 1, daemonStateVersion: 1,
+            keyBasis: { dataEncryptionKey: 'fixture-envelope', metadataVersion: 1, daemonStateVersion: 2 } });
+        try {
+            storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] } });
+            const hook = await renderHook(() => useLaunchSelectionMachines());
+            const held = hook.getCurrent();
+            const caughtUp = { ...machine, daemonStateVersion: 2 };
+            await act(async () => storage.setState({ machines: { [machine.id]: caughtUp }, machineListByServerId: { [serverId]: [caughtUp] } }));
+            expect(hook.getCurrent()).not.toBe(held);
+            expect(hook.getCurrent()[0]).toBe(caughtUp);
+            await hook.unmount();
+        } finally { storage.setState(previousState); }
+    });
+    it('keeps visible launch inputs stable across resource versions while observing launch changes', async () => {
+        const previousState = storage.getState();
+        const serverId = getActiveServerSnapshot().serverId;
+        const machine = createMachineFixture({ activeAt: Date.now(), daemonStateVersion: 1,
+            daemonState: { contributionRegistryProjectionRevision: 1 } });
+        let renders = 0;
+        try {
+            storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] } });
+            const hook = await renderHook(() => {
+                renders += 1;
+                return { machines: useLaunchSelectionMachines(), lists: useMachineListByServerId(true, 'launch') };
+            });
+            const held = hook.getCurrent();
+            const before = renders;
+            const full = await renderHook(() => useMachineListByServerId());
+            let latest = machine;
+            for (let tick = 1; tick <= 5; tick += 1) {
+                latest = { ...latest, seq: latest.seq + 1, daemonStateVersion: tick + 1,
+                    daemonState: { ...latest.daemonState, resources: MachinePublishedResourceSummaryV1Schema.parse({
+                        v: 1, vitals: { state: 'unavailable', since: tick, reason: 'reader_failed' }, attention: { level: 'calm', reasons: [] },
+                    }) } };
+                await act(async () => storage.getState().applyMachines([latest], false, { sourceServerId: serverId }));
+            }
+            expect(renders - before).toBe(0);
+            expect(hook.getCurrent()).toBe(held);
+            expect(full.getCurrent()[serverId]?.[0]?.daemonStateVersion).toBe(latest.daemonStateVersion);
+            for (const change of [
+                { metadata: { ...latest.metadata!, homeDir: '/new-home' }, metadataVersion: latest.metadataVersion + 1 },
+                { daemonState: { ...latest.daemonState, contributionRegistryProjectionRevision: 2 } },
+                { availability: { kind: 'locked' as const, reason: 'encryption_material_unavailable' as const } },
+            ]) {
+                latest = { ...latest, ...change, daemonStateVersion: latest.daemonStateVersion + 1 };
+                await act(async () => storage.getState().applyMachines([latest], false, { sourceServerId: serverId }));
+                expect(hook.getCurrent().machines[0]).toBe(storage.getState().machines[machine.id]);
+                expect(hook.getCurrent().lists[serverId]?.[0]).toBe(storage.getState().machines[machine.id]);
+            }
+            await full.unmount();
+            await hook.unmount();
+        } finally { storage.setState(previousState); }
+    });
+    it('retains hidden launch inventory across resource publications and catches up on presentation', async () => {
+        const previousState = storage.getState();
+        const serverId = getActiveServerSnapshot().serverId;
+        const machine = createMachineFixture({ activeAt: Date.now() });
+        let renders = 0;
+        try {
+            storage.setState({ profileScope: { serverId, accountId: 'retained-launch-a' }, machines: { [machine.id]: machine },
+                machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+            const hook = await renderHook(({ presented }) => {
+                renders += 1;
+                return { machines: useLaunchSelectionMachines(presented), lists: useMachineListByServerId(presented) };
+            }, { initialProps: { presented: true } });
+            await hook.rerender({ presented: false });
+            const held = hook.getCurrent();
+            const before = renders;
+            let latest = machine;
+            for (let tick = 1; tick <= 5; tick += 1) {
+                latest = { ...machine, daemonStateVersion: tick, daemonState: { resources: MachinePublishedResourceSummaryV1Schema.parse({
+                    v: 1, vitals: { state: 'unavailable', since: tick, reason: 'reader_failed' }, attention: { level: 'calm', reasons: [] },
+                }) } };
+                await act(async () => storage.setState({ machines: { [machine.id]: latest },
+                    machineListByServerId: { [serverId]: [latest] } }));
+            }
+            expect(renders - before).toBe(0);
+            expect(hook.getCurrent()).toBe(held);
+            await hook.rerender({ presented: true });
+            expect(hook.getCurrent().machines[0]).toBe(latest);
+            expect(hook.getCurrent().lists[serverId]?.[0]).toBe(latest);
+            await hook.rerender({ presented: false });
+            await act(async () => storage.setState({ profileScope: null, machines: {}, machineListByServerId: {} }));
+            expect(hook.getCurrent().machines).toEqual([]);
+            expect(hook.getCurrent().lists).toEqual({});
+            await hook.unmount();
+        } finally { storage.setState(previousState); }
+    });
+
+    it('keeps concurrent launch snapshots stable when presence ages without an inventory change', async () => {
+        const previousState = storage.getState();
+        const now = 1_800_000_000_000;
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+        const machine = createMachineFixture({ activeAt: now });
+        const serverId = getActiveServerSnapshot().serverId;
+        try {
+            storage.setState({ machines: { [machine.id]: machine },
+                machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+            const first = await renderHook(() => useLaunchSelectionMachines());
+            const firstSnapshot = first.getCurrent();
+            const second = await renderHook(() => useLaunchSelectionMachines());
+            const secondSnapshot = second.getCurrent();
+            clock.mockReturnValue(now + readMachineOnlineGraceMsFromEnv() + 1);
+            await second.rerender();
+            await first.rerender();
+            expect(first.getCurrent()).toBe(firstSnapshot);
+            expect(second.getCurrent()).toBe(secondSnapshot);
+            const replacement = { ...machine, metadata: { ...machine.metadata!, homeDir: '/new-home' } };
+            await act(async () => storage.setState({ machines: { [machine.id]: replacement },
+                machineListByServerId: { [serverId]: [replacement] } }));
+            expect(first.getCurrent()[0]).toBe(replacement);
+            expect(second.getCurrent()[0]).toBe(replacement);
+            await first.unmount();
+            await second.unmount();
+        } finally {
+            clock.mockRestore();
+            storage.setState(previousState);
+        }
+    });
     it.each(['shared', 'exclusive'] as const)('retires and restores %s footer control through the real store', async (topology) => {
         const previousState = storage.getState();
         const session = createSessionFixture({

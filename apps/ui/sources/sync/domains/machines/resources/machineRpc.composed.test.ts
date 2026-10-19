@@ -21,7 +21,7 @@ import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 // HTTP/auth are the Home boundary; the Action, route, codec and Socket.IO path stay real.
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
-const { fetchMachineVitalsViaMachineRpc } = await import('./machineRpc');
+const { fetchMachineVitalsViaMachineRpc, watchMachineVitalsViaMachineRpc } = await import('./machineRpc');
 const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
 const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
 const { fetchMachineGuardViewViaAction } = await import('../guard/machineGuardRpc');
@@ -37,6 +37,7 @@ const { useMachineProcesses } = await import('../processes/useMachineProcesses')
 const { machineProcessesStore } = await import('../processes/machineProcessesStore');
 const { useMachineGuardView, useMachineGuardActivity, useMachinesGuardActivity } = await import('../guard/useMachineGuardView');
 const { machineGuardStore } = await import('../guard/machineGuardStore');
+const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
 const { subscribeLocalServiceInventoryStore, getLocalServiceInventoryState, resetLocalServiceInventoryStoreForTests } = await import('@/sync/domains/local/services/inventory/sharedStore');
 const { DEFAULT_BROWSER_CAPABILITIES } = await import('@happier-dev/protocol/features/payload/capabilities/browserCapabilities');
 const { useLocalServiceInventoryState } = await import('@/sync/domains/local/services/inventory/useLocalServiceInventoryState');
@@ -54,10 +55,15 @@ async function withMachineHome(run: (home: Readonly<{
         if (request.url === '/health' || request.url === '/v1/auth/ping') {
             response.setHeader('content-type', 'application/json'); response.end('{}'); return;
         }
-        const answer = await homes.request(new URL(request.url ?? '/', serverUrl), {
-            method: request.method, headers: request.headers.authorization ? { Authorization: request.headers.authorization } : {},
-        });
-        response.writeHead(answer.status, { 'content-type': 'application/json' }); response.end(await answer.text());
+        try {
+            const answer = await homes.request(new URL(request.url ?? '/', serverUrl), {
+                method: request.method, headers: request.headers.authorization ? { Authorization: request.headers.authorization } : {},
+            });
+            response.writeHead(answer.status, { 'content-type': 'application/json' }); response.end(await answer.text());
+        } catch (error) {
+            // A simulated lost HTTP connection must reach fetch, not leave its socket parked.
+            response.destroy(error instanceof Error ? error : undefined);
+        }
     });
     const server = new Server(http, { path: '/v1/updates/' });
     await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
@@ -249,6 +255,38 @@ it('releases a recording request on session replacement and permits the next sta
             await act(async () => { await start(); });
             expect(home.calls.filter(call => call.method === RPC_METHODS.DAEMON_BROWSER_RECORDING_START)).toHaveLength(2);
         } finally { await screen.unmount(); unregister(); }
+    });
+});
+
+it('reports actual watch dispatch through the real scoped transport before its parked reply', async () => {
+    await withMachineHome(async home => {
+        const dispatched = createDeferred<void>();
+        const issued = createDeferred<MachineCall>();
+        home.setAnswer(async call => { issued.resolve(call); });
+        let settled = false;
+        const reply = watchMachineVitalsViaMachineRpc({ serverId: home.serverId, expectedAccountId: 'owner',
+            machineId: 'shared-machine', view: 'overview', onDispatched: () => dispatched.resolve() });
+        void reply.then(() => { settled = true; });
+        await dispatched.promise;
+        expect(settled).toBe(false);
+        await (await issued.promise).reply({ changed: false });
+        expect(await reply).toEqual({ ok: true, value: { changed: false } });
+    });
+});
+
+it('preserves an HTTP Machine-row failure through the real RPC seam and recovers on the next read', async () => {
+    await withMachineHome(async home => {
+        homes.answer(home.serverId, '/v1/machines/shared-machine', { dispatchThenFail: true });
+        const input = { serverId: home.serverId, accountId: 'owner', machineId: 'shared-machine',
+            method: 'machines.vitals.get', payload: { machineId: 'shared-machine', view: 'summary' }, preferScoped: true } as const;
+        await expect(machineRpcWithServerScope(input)).rejects.toThrow(/fetch failed|Failed to fetch/u);
+        expect(home.calls).toHaveLength(0);
+        homes.answer(home.serverId, '/v1/machines/shared-machine', { body: {
+            machine: createPlainMachineRowFixture({ id: 'shared-machine', accountId: 'owner' }),
+        } });
+        const snapshot = vitals();
+        home.setAnswer(async call => { await call.reply(snapshot); });
+        expect(MachineVitalsSnapshotV1Schema.parse(await machineRpcWithServerScope(input))).toEqual(snapshot);
     });
 });
 

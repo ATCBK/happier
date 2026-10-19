@@ -1,9 +1,11 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import type {
     LocalServiceLauncherSnapshotClientInput,
     LocalServiceLauncherSnapshotClientResult,
 } from './api';
+import type { LocalServiceInventorySnapshotClient } from '../inventory/sharedStore';
 import {
     EMPTY_LOCAL_SERVICE_LAUNCHER_STATE,
     getLocalServiceLauncherState,
@@ -30,6 +32,7 @@ export type UseLocalServiceLauncherStateInput = Readonly<{
     enabled?: boolean;
     nowMs?: () => number;
     snapshotClient?: LocalServiceLauncherSnapshotClient;
+    inventorySnapshotClient?: LocalServiceInventorySnapshotClient;
 }>;
 
 export type LocalServiceLauncherStateController = Readonly<{
@@ -39,7 +42,7 @@ export type LocalServiceLauncherStateController = Readonly<{
      * Re-read the daemon's launcher feed.
      *
      * The feed is derived from the inventory the daemon just rescanned, so it has no push producer
-     * of its own: the surface refreshes it when the inventory watch reports a change. Undefined
+     * of its own: the shared launcher store follows the inventory watch. Undefined
      * when there is no machine to read.
      */
     refresh: (() => void) | undefined;
@@ -53,7 +56,8 @@ function normalizeId(value: unknown): string | null {
 export function useLocalServiceLauncherStateController(
     input: UseLocalServiceLauncherStateInput,
 ): LocalServiceLauncherStateController {
-    const enabled = input.enabled ?? true;
+    const presented = useLayoutPresentationActive();
+    const enabled = (input.enabled ?? true) && presented;
     const machineId = normalizeId(input.machineId);
     const serverId = normalizeId(input.serverId);
     const sessionId = normalizeId(input.sessionId);
@@ -62,6 +66,7 @@ export function useLocalServiceLauncherStateController(
     const snapshotClient = input.snapshotClient;
     const nowMs = input.nowMs ?? Date.now;
     const snapshotClientRef = React.useRef(snapshotClient);
+    const inventorySnapshotClientRef = React.useRef(input.inventorySnapshotClient);
     const nowMsRef = React.useRef(nowMs);
     const storeKey = React.useMemo<LocalServiceLauncherStoreKeyInput | null>(() => (
         enabled && machineId ? { machineId, serverId, sessionId, scope, workspaceRoot } : null
@@ -78,13 +83,15 @@ export function useLocalServiceLauncherStateController(
 
     React.useEffect(() => {
         snapshotClientRef.current = snapshotClient;
+        inventorySnapshotClientRef.current = input.inventorySnapshotClient;
         nowMsRef.current = nowMs;
-    }, [nowMs, snapshotClient]);
+    }, [nowMs, snapshotClient, input.inventorySnapshotClient]);
 
     const subscribe = React.useCallback((listener: () => void) => (
         storeKey
             ? subscribeLocalServiceLauncherStore(storeKey, listener, {
                 ...(snapshotClientRef.current ? { snapshotClient: (request) => snapshotClientRef.current!(request) } : {}),
+                ...(inventorySnapshotClientRef.current ? { inventorySnapshotClient: (request) => inventorySnapshotClientRef.current!(request) } : {}),
                 nowMs: () => nowMsRef.current(),
             })
             : () => {}

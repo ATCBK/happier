@@ -16,6 +16,7 @@ type StartProductionMachineLiveStreamInput = Readonly<{
     codecId?: MachineLiveStreamCodecIdV1;
     viewerCodecs?: readonly MachineLiveStreamCodecIdV1[];
     timeoutMs?: number;
+    signal?: AbortSignal;
 }>;
 
 type StartProductionMachineLiveStream = (
@@ -27,6 +28,7 @@ type StartDaemonRelay = (input: Readonly<{
     serverId?: string | null;
     startRequest: MachineLiveStreamStartRequestV1;
     timeoutMs?: number;
+    signal?: AbortSignal;
 }>) => Promise<MachineLiveStreamRelayStartRpcResult>;
 
 export type OpenMachineLiveStreamRelayClientResult = Readonly<
@@ -76,6 +78,7 @@ export type MachineLiveStreamRelayClientInput = Readonly<{
     codecId?: MachineLiveStreamCodecIdV1;
     viewerCodecs?: readonly MachineLiveStreamCodecIdV1[];
     timeoutMs?: number;
+    signal?: AbortSignal;
     startProduction?: StartProductionMachineLiveStream;
     startDaemonRelay?: StartDaemonRelay;
     onAuthorized?: (startRequest: MachineLiveStreamStartRequestV1) => void;
@@ -98,11 +101,13 @@ export async function renewMachineLiveStreamRelayClient(input: MachineLiveStream
         ...(input.codecId ? { codecId: input.codecId } : {}),
         ...(input.viewerCodecs ? { viewerCodecs: input.viewerCodecs } : {}),
         timeoutMs: input.timeoutMs,
+        signal: input.signal,
     } satisfies Parameters<StartProductionMachineLiveStream>[0]);
 }
 
 export async function openMachineLiveStreamRelayClient(input: MachineLiveStreamRelayClientInput): Promise<OpenMachineLiveStreamRelayClientResult> {
     const started = await renewMachineLiveStreamRelayClient(input);
+    if (input.signal?.aborted) return { ok: false, reasonCode: 'live_stream_relay_start_failed' };
 
     if (!started.ok) {
         return started.requiredCapability
@@ -120,6 +125,7 @@ export async function openMachineLiveStreamRelayClient(input: MachineLiveStreamR
         machineId: input.sourceMachineId,
         serverId: input.serverId,
         startRequest: { ...started.startRequest, ...(input.sourceOccurrenceId ? { sourceOccurrenceId: input.sourceOccurrenceId } : {}) },
+        signal: input.signal,
         ...(typeof input.timeoutMs === 'number' ? { timeoutMs: input.timeoutMs } : {}),
     });
     if (!daemonStarted.ok) return { ok: false, reasonCode: daemonStarted.reasonCode };

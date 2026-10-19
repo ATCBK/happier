@@ -175,9 +175,48 @@ const previewRevokeResponse = {
 describe('UI local-services runtime action executor', () => {
     beforeEach(() => relocationBoundary.rpc.mockReset());
 
+    it('opens a preview through the Machine Action response shared with openOrCreate', async () => {
+        const { createLocalServicesRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+        const { DaemonLocalServicePreviewOpenOrCreateResponseV1Schema } = await import('@happier-dev/protocol/local/services/preview/v1');
+        const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
+        // Machine transport is the boundary; the returned DTO uses the lifecycle owner's schema.
+        const response = DaemonLocalServicePreviewOpenOrCreateResponseV1Schema.parse(previewOpenOrCreateResponse);
+        const executeOnMachine = vi.fn(async () => response);
+        const onPreviewSnapshot = vi.fn();
+        const execute = createLocalServicesRuntimeActionExecutor({ executeOnMachine, onPreviewSnapshot });
+        const args = runtimeArgs({ actionId: 'localServices.actions.openPreview', input: {
+            requestId: 'open-service', action: 'open_preview',
+            target: { kind: 'inventory_entry', inventoryEntryId: 'entry_1', machineId: 'machine_1', sessionId: 'session_1' },
+        }, context: { serverId: 'server_1', defaultSessionId: 'session_1' } });
+        const result = await execute(args);
+        const outputSchema = getActionSpec('localServices.actions.openPreview').outputSchema;
+        if (!outputSchema) throw new Error('Expected Preview Open to publish its lifecycle response schema');
+        expect(outputSchema.safeParse(result).success).toBe(true);
+        expect(result).toEqual(response);
+        expect(executeOnMachine).toHaveBeenCalledWith(expect.objectContaining({ actionId: args.actionId,
+            context: expect.objectContaining({ externalActionTarget: { kind: 'machine', machineId: 'machine_1' } }) }));
+        expect(onPreviewSnapshot).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine_1', serverId: 'server_1' }));
+    });
+
+    it('preserves Machine Action refusals and refuses conflicting preview targets before dispatch', async () => {
+        const { createLocalServicesRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+        const refusal = { ok: false, errorCode: 'approval_required', error: 'approval_required' } as const;
+        const executeOnMachine = vi.fn(async () => refusal);
+        const onPreviewSnapshot = vi.fn();
+        const execute = createLocalServicesRuntimeActionExecutor({ executeOnMachine, onPreviewSnapshot });
+        const args = runtimeArgs({ actionId: 'localServices.actions.openPreview', input: {
+            requestId: 'open-service', action: 'open_preview',
+            target: { kind: 'inventory_entry', inventoryEntryId: 'entry_1', machineId: 'machine_1' },
+        } });
+        expect(await execute(args)).toEqual(refusal);
+        expect(onPreviewSnapshot).not.toHaveBeenCalled();
+        executeOnMachine.mockClear();
+        expect(await execute({ ...args, context: { externalActionTarget: { kind: 'machine', machineId: 'other-machine' } } }))
+            .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+        expect(executeOnMachine).not.toHaveBeenCalled();
+    });
+
     it('reads relocation refs from current accepted Project rows in the default composition', async () => {
-        const { createDefaultRuntimeActionExecutor } = await import('@/sync/ops/actions/defaultRuntimeActionExecutor');
-        const { storage } = await import('@/sync/domains/state/storageStore');
         const previous = storage.getState();
         const scope = { serverId: 'source-home', accountId: 'account-a' };
         try {

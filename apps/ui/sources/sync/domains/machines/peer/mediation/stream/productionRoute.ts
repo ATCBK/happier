@@ -39,10 +39,12 @@ export type ProductionMachineLiveStreamStartResult =
 async function resolveServerFeatures(input: Readonly<{
     serverId: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
 }>): Promise<FeaturesResponse | null> {
     return await getReadyServerFeatures({
         serverId: input.serverId,
         timeoutMs: input.timeoutMs ?? SERVER_FEATURES_TIMEOUT_MS,
+        signal: input.signal,
     }).catch(() => null);
 }
 
@@ -51,6 +53,7 @@ async function startServerRelayedStream(input: Readonly<{
     credentials: Awaited<ReturnType<typeof TokenStorage.getCredentialsForServerUrl>>;
     startRequest: MachineLiveStreamUnsignedStartRequest;
     timeoutMs?: number;
+    signal?: AbortSignal;
 }>): Promise<ProductionMachineLiveStreamStartResult> {
     if (!input.credentials) return { ok: false, reasonCode: 'grant_missing' };
     const relayAuthorization = await requestLiveStreamRelayAuthorization({
@@ -58,6 +61,7 @@ async function startServerRelayedStream(input: Readonly<{
         credentials: input.credentials,
         startRequest: input.startRequest,
         timeoutMs: input.timeoutMs,
+        signal: input.signal,
     });
     if (!relayAuthorization.ok) return { ok: false, reasonCode: relayAuthorization.reasonCode };
     const authorizedStartRequest = createLiveStreamStartRequest({
@@ -88,6 +92,7 @@ export async function startProductionMachineLiveStream(input: Readonly<{
     codecId?: MachineLiveStreamCodecIdV1;
     viewerCodecs?: readonly MachineLiveStreamCodecIdV1[];
     timeoutMs?: number;
+    signal?: AbortSignal;
 }>): Promise<ProductionMachineLiveStreamStartResult> {
     const server = resolveTargetServer(input.serverId);
     if (!server) return { ok: false, reasonCode: 'topology_unavailable' };
@@ -95,6 +100,7 @@ export async function startProductionMachineLiveStream(input: Readonly<{
     const serverFeatures = await resolveServerFeatures({
         serverId: server.serverId,
         timeoutMs: input.timeoutMs,
+        signal: input.signal,
     });
     if (!serverFeatures) return { ok: false, reasonCode: 'server_features_unavailable' };
 
@@ -125,6 +131,6 @@ export async function startProductionMachineLiveStream(input: Readonly<{
     if (availability.status !== 'available') return { ok: false,
         reasonCode: availability.status === 'disabled' ? availability.reasonCode : 'server_features_unavailable' };
     return await startServerRelayedStream({
-        server, credentials, startRequest: createBaseStartRequest(input), timeoutMs: input.timeoutMs,
+        server, credentials, startRequest: createBaseStartRequest(input), timeoutMs: input.timeoutMs, signal: input.signal,
     });
 }

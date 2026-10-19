@@ -1,4 +1,4 @@
-import { DaemonMcpServersDetectRequestSchema, DaemonMcpServersDetectResponseSchema, DaemonMcpServersTestRequestSchema, DaemonMcpServersTestResponseSchema, type DaemonMcpServersDetectRequest, type DaemonMcpServersDetectResponse, type DaemonMcpServersTestRequest, type DaemonMcpServersTestResponse } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
+import { DaemonMcpServersDetectRequestSchema, DaemonMcpServersDetectResponseSchema, DaemonMcpServersTestAuthoringRequestSchema, DaemonMcpServersTestResponseSchema, type DaemonMcpServersDetectRequest, type DaemonMcpServersDetectResponse, type DaemonMcpServersTestRequest, type DaemonMcpServersTestResponse } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
@@ -32,24 +32,14 @@ export async function machineMcpServersDetect(
     return parsed.data;
 }
 
-export type MachineMcpServersTestInput =
-    | Omit<Extract<DaemonMcpServersTestRequest, { t: 'draft' }>, 'machineId'>
-    | Omit<Extract<DaemonMcpServersTestRequest, { t: 'byId' }>, 'machineId'>;
+export type MachineMcpServersTestInput = Omit<Extract<DaemonMcpServersTestRequest, { t: 'byId' }>, 'machineId'>;
 
 export async function machineMcpServersTest(
     machineId: string,
     input: MachineMcpServersTestInput,
     opts?: MachineMcpServersOpts,
 ): Promise<DaemonMcpServersTestResponse> {
-    const payload = input.t === 'draft'
-        ? DaemonMcpServersTestRequestSchema.parse({
-            ...input,
-            machineId,
-        })
-        : DaemonMcpServersTestRequestSchema.parse({
-            ...input,
-            machineId,
-        });
+    const payload = DaemonMcpServersTestAuthoringRequestSchema.parse({ ...input, machineId });
     const response = await machineRpcWithServerScope<unknown, DaemonMcpServersTestRequest>({
         machineId,
         serverId: opts?.serverId,

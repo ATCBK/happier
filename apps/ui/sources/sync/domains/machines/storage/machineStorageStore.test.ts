@@ -121,6 +121,20 @@ describe('machine storage subscription owner', () => {
         await vi.waitFor(() => expect(h.store.getScan(input).page?.indexedAt).toBe(200));
         expect(h.store.getScan(input).page?.indexedAt).toBe(200);
         expect(h.store.getScan(input).page).not.toBe(retained);
+        const slow = createDeferred<unknown>();
+        const scanReplies = vi.fn<() => Promise<unknown>>(async () => success(current))
+            .mockImplementationOnce(() => slow.promise)
+            .mockResolvedValueOnce(success({ ...page, indexedAt: 300 }));
+        boundary.reply.mockImplementation((action: string) => action === 'machines.storage.scan.get'
+            ? scanReplies() : Promise.resolve(success(summary(2))));
+        h.store.retryScan(input);
+        await vi.waitFor(() => expect(scanReplies).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(h.watches).toHaveLength(2));
+        h.watches[1].answer.resolve({ changed: true, summary: summary(3) });
+        await vi.waitFor(() => expect(h.store.getState(key).summary?.revision).toBe(3));
+        slow.resolve(success(current));
+        await vi.waitFor(() => expect(h.store.getScan(input).page?.indexedAt).toBe(300));
+        expect(h.store.getScan(input).page?.indexedAt).toBe(300);
         expect(vi.getTimerCount()).toBe(0);
         first(); expect(h.watches.at(-1)?.input.signal?.aborted).toBe(false);
         second(); expect(h.watches.at(-1)?.input.signal?.aborted).toBe(true);

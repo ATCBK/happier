@@ -1,5 +1,5 @@
 import { act } from 'react-test-renderer';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
@@ -28,6 +28,7 @@ const { machineGuardStore } = await import('./machineGuardStore');
 const { useMachineGuardView } = await import('./useMachineGuardView');
 const guardRpc = await import('./machineGuardRpc');
 const before = storage.getState();
+beforeEach(async () => { await home.reset(); });
 afterEach(async () => {
     standardCleanup(); machineGuardStore.reset(); network.rpc.mockReset(); storage.setState(before); await home.reset();
 });

@@ -328,6 +328,12 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     )
                 ));
                 for (const machine of scopedMachinesWithAdvancedDaemonState) {
+                    if (!shouldUpdateActiveProjection && sourceServerId) {
+                        invalidateCachedTransferRoutesForMachine({
+                            serverId: sourceServerId,
+                            remoteMachineId: machine.id,
+                        });
+                    }
                     const previous = Array.isArray(currentScopedMachines)
                         ? currentScopedMachines.find((current) => current.id === machine.id)
                         : shouldUpdateActiveProjection ? state.machines[machine.id] : undefined;

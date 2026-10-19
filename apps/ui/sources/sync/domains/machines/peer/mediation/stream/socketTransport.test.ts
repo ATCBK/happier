@@ -48,7 +48,7 @@ describe('live-stream viewer transport', () => {
         expect(deliver.mock.calls.some(([value]) => value.message.kind === 'frame')).toBe(false);
     });
 
-    it('drops an in-flight decode when its viewer transport is disposed', async () => {
+    it.each(['transport', 'content'] as const)('drops an in-flight decode when its %s is retired', async owner => {
         const sealed = await sealMachineLiveStreamEnvelopeV1(frame, { mode: 'plain' });
         if (!sealed.ok) throw new Error(sealed.code);
         let release!: () => void;
@@ -56,10 +56,11 @@ describe('live-stream viewer transport', () => {
         let current = true;
         const deliver = vi.fn(); const emit = vi.fn();
         const transport = createMachineLiveStreamSocketTransport({ emit, deliver, onError: vi.fn(),
-            isCurrent: () => current, resolveContent: async () => { await pending; return { mode: 'plain' }; } });
+            isCurrent: () => owner === 'content' || current,
+            resolveContent: async () => { await pending; return { mode: 'plain', isCurrent: () => current }; } });
         transport.receive(sealed.value);
         await Promise.resolve(); current = false; release();
-        await pending; await Promise.resolve(); await Promise.resolve();
+        await pending; await new Promise<void>(resolve => setImmediate(resolve));
         expect(deliver).not.toHaveBeenCalled(); expect(emit).not.toHaveBeenCalled();
     });
 });

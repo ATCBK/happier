@@ -22,6 +22,8 @@ import type { MachineDaemonReadKey } from '../useMachineDaemonReadTarget';
 
 export type MachineGuardReadInput = MachineDaemonReadKey & Readonly<{ signal?: AbortSignal }>;
 export type MachineGuardActivityQuery = Readonly<{ range: 'today' | '7d' | '30d'; filter: 'all' | 'stopped' | 'cleaned_up' | 'needs_look' }>;
+/** Guard's preview and the Activity page open on the same history, before the person changes filters. */
+export const DEFAULT_MACHINE_GUARD_ACTIVITY_QUERY = { range: '7d', filter: 'all' } as const satisfies MachineGuardActivityQuery;
 export type MachineGuardResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; reason: 'older_happier' | 'request_failed' | 'invalid_response' }>;
 export type MachineGuardClients = Readonly<{
     viewClient: (input: MachineGuardReadInput) => Promise<MachineGuardResult<MachineGuardViewV1>>;

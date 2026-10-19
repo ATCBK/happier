@@ -86,4 +86,4 @@ export type LocalServiceInventoryWatchClientInput = Readonly<{
 export type LocalServiceInventoryWatchClientResult =
     | Readonly<{ ok: true; changed: true; snapshot: LocalServiceInventorySnapshot }>
     | Readonly<{ ok: true; changed: false }>
-    | Readonly<{ ok: false; reason: 'unavailable' | 'request_failed' | 'invalid_response' }>;
+    | Readonly<{ ok: false; reason: 'unavailable' | 'request_failed' | 'invalid_response'; reasonCode?: string }>;

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { RunnerPublicKeySchema } from '@happier-dev/protocol/ephemeralRunner/activation';
 import {
@@ -60,7 +60,7 @@ function parseStored(value: string | null): RunnerCreatorMachineContentKeyTrustV
     if (!record || typeof record !== 'object') throw new Error('Invalid Runner Machine trust custody');
     const row = record as Partial<StoredRunnerCreatorMachineContentKeyTrustV1>;
     if (row.v !== 1) throw new Error('Invalid Runner Machine trust custody');
-    const activationId = z.string().uuid().safeParse(row.activationId);
+    const activationId = z.string().check(z.uuid()).safeParse(row.activationId);
     const publicKey = RunnerPublicKeySchema.safeParse(row.activationSigningPublicKey);
     if (!activationId.success || !publicKey.success) throw new Error('Invalid Runner Machine trust custody');
     return { activationId: activationId.data, activationSigningPublicKey: publicKey.data };

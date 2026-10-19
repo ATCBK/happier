@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decodePlainMachineStoredContent, type MachineUpdateMetadataRequest, type MachineUpdateMetadataResponse } from '@happier-dev/protocol';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { AccessibleMachineAccessV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { MachineMetadata } from '@/sync/domains/state/storageTypes';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
@@ -34,25 +36,27 @@ let initialState: StoreState;
 let webLocks: ReturnType<typeof installWebLockManagerMock>;
 async function fixture(mode: 'plain' | 'e2ee') {
     readySocket = undefined;
-    const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-    // Reachability's HTTP probe is a separate genuine network leaf from the
-    // Account request adapter installed by the governance harness.
-    setRuntimeFetch(async (input) => {
-        const url = new URL(String(input));
-        if (url.origin !== 'https://machine-metadata.test') throw new Error('unexpected_metadata_probe_origin');
-        return url.pathname === '/v1/auth/ping' ? Response.json({ ok: true }) : new Response(null, { status: 404 });
-    });
-    const homeId = await homes.addHome({ name: 'Metadata Home', serverUrl: 'https://machine-metadata.test', accountId: 'account-a', accountEncryptionMode: mode });
-    const token = homes.findByServerUrl('https://machine-metadata.test')?.token;
-    if (!token) throw new Error('expected_metadata_account');
-    homes.answer(homeId, '/v2/cursor', { body: { cursor: '0' } });
     const { encodeBase64 } = await import('@/encryption/base64');
+    const token = createAccountTokenForTests('account-a');
     const credentials = mode === 'plain' ? { token } : { token, secret: encodeBase64(new Uint8Array(32).fill(17), 'base64url') };
+    // Reachability probes and captured Account requests share runtimeFetch.
+    // Keep the canonical Home boundary installed so its Machine/settings/mode
+    // replies reach the real finite-policy and Action admission owners too.
+    const homeId = await homes.addHome({ name: 'Metadata Home', serverUrl: 'https://machine-metadata.test',
+        accountId: 'account-a', accountEncryptionMode: mode, credentials });
     const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     await restoreConnectionToActiveServer(credentials);
     await vi.waitFor(() => expect(readySocket?.connected).toBe(true));
     const { getSyncSingleton } = await import('@/sync/runtime/getSyncSingleton');
     const sync = getSyncSingleton();
+    // Cold restore deliberately leaves Profile hydration asynchronous. Settle
+    // that real HTTP work before a metadata write captures the Account identity
+    // across encryption; a connected Socket alone is not a hydrated Profile.
+    await sync.refreshProfile();
+    const { getStorage } = await import('@/sync/domains/state/storage');
+    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    expect(getActiveServerAccountScope()).toEqual({ serverId: homeId, accountId: 'account-a' });
+    expect(getStorage().getState().profile.id).toBe('account-a');
     const { MACHINE_PLAIN_DATA_KEY_MARKER } = await import('@happier-dev/protocol/machines/machineStoredContent');
     let dataEncryptionKey = MACHINE_PLAIN_DATA_KEY_MARKER;
     if (mode === 'e2ee') {
@@ -62,11 +66,19 @@ async function fixture(mode: 'plain' | 'e2ee') {
         await sync.encryption.initializeMachines(new Map([['m1', new Uint8Array(32).fill(23)]]));
     }
     const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
-    const { getStorage } = await import('@/sync/domains/state/storage');
     const machine = createMachineFixture({ id: 'm1', storageMode: mode, metadataVersion: 4, dataEncryptionKey });
-    getStorage().getState().applyMachines([machine]);
+    getStorage().getState().applyMachines([machine], false, { sourceServerId: homeId, sourceAccountId: 'account-a' });
     const metadata: MachineMetadata = { ...machine.metadata!, displayName: 'New Name' };
     return { sync, metadata, homeId, dataEncryptionKey };
+}
+
+function answerMachineMetadata(homeId: string, metadata: string, dataEncryptionKey: string) {
+    const machine = createPlainMachineRowFixture({ id: 'm1', accountId: 'account-a' });
+    homes.answer(homeId, '/v1/machines/m1', { body: { machine: {
+        ...machine, metadata, metadataVersion: 4, dataEncryptionKey,
+        access: AccessibleMachineAccessV1Schema.parse({ ...machine.access,
+            resourceMode: dataEncryptionKey === MACHINE_PLAIN_DATA_KEY_MARKER ? 'plain' : 'e2ee' }),
+    } } });
 }
 
 describe('machineUpdateMetadata', () => {
@@ -156,10 +168,7 @@ describe('machineUpdateMetadata', () => {
     it('rebases finite policy over an unrelated metadata CAS change on the exact Machine', async () => {
         const { metadata, homeId } = await fixture('plain');
         const current = { ...metadata, displayName: 'Current Name' };
-        homes.answer(homeId, '/v1/machines/m1', { body: { machine: {
-            id: 'm1', metadata: encodePlainMachineStoredContent(current), metadataVersion: 4,
-            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-        } } });
+        answerMachineMetadata(homeId, encodePlainMachineStoredContent(current), MACHINE_PLAIN_DATA_KEY_MARKER);
         respond = async (request) => request.expectedVersion === 4
             ? { result: 'version-mismatch', version: 5, metadata: encodePlainMachineStoredContent({ ...current, displayName: 'Concurrent Name' }) }
             : { result: 'success', version: 6, metadata: request.metadata };
@@ -179,10 +188,7 @@ describe('machineUpdateMetadata', () => {
         const capturedEncryption = sync.encryption;
         const cipher = capturedEncryption?.getMachineEncryption('m1');
         if (!cipher) throw new Error('expected_real_machine_cipher');
-        homes.answer(homeId, '/v1/machines/m1', { body: { machine: {
-            id: 'm1', metadata: await cipher.encryptRaw(metadata), metadataVersion: 4,
-            dataEncryptionKey,
-        } } });
+        answerMachineMetadata(homeId, await cipher.encryptRaw(metadata), dataEncryptionKey);
         const issued = createDeferred<void>();
         const reply = createDeferred<MachineUpdateMetadataResponse>();
         respond = async () => { issued.resolve(); return await reply.promise; };
@@ -233,10 +239,7 @@ describe('machineUpdateMetadata', () => {
             actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.worker.policy.set': ['ui'] } },
         });
         const settingsVersion = (getStorage().getState().settingsVersion ?? 0) + 1;
-        homes.answer(homeId, '/v1/machines/m1', { body: { machine: {
-            id: 'm1', metadata: encodePlainMachineStoredContent(metadata), metadataVersion: 4,
-            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-        } } });
+        answerMachineMetadata(homeId, encodePlainMachineStoredContent(metadata), MACHINE_PLAIN_DATA_KEY_MARKER);
         homes.answer(homeId, '/v2/account/settings', { body: { content: { t: 'plain', v: configuredSettings }, version: settingsVersion } });
         // The restored active Account is the Action's canonical settings source;
         // a later HTTP answer alone cannot replace its already-published baseline.
@@ -264,7 +267,8 @@ describe('machineUpdateMetadata', () => {
             result: acknowledgement === 'confirmed'
                 ? { status: 'applied', policy: { accepting: false, runAtMost: 2 }, metadataVersion: 5 }
                 : { status: 'outcomeUnknown' } });
-        expect(getStorage().getState().machines.m1?.metadataVersion).toBe(4);
+        expect(getStorage().getState().profileScope).toEqual({ serverId: homeId, accountId: 'replacement' });
+        expect(getStorage().getState().machines.m1).toBeUndefined();
         expect(homes.findByServerUrl('https://machine-metadata.test')?.accountId).toBe('replacement');
         expect(sent).toHaveLength(1);
         expect(homes.requestsFor('/v1/machines/m1')).toHaveLength(1);

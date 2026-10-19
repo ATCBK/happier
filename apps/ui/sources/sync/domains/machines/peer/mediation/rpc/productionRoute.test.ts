@@ -17,7 +17,6 @@ const DATA_KEY_TOKEN = 'header.eyJzdWIiOiJhY2NvdW50LTEifQ.data-key-signature';
 const getCredentialsForServerUrlSpy = vi.hoisted(() => vi.fn());
 const getActiveServerSnapshotSpy = vi.hoisted(() => vi.fn());
 const captureAuthoritySpy = vi.hoisted(() => vi.fn());
-const listServerProfilesSpy = vi.hoisted(() => vi.fn());
 const storageSnapshot = vi.hoisted(() => ({
     state: {
         machines: {},
@@ -60,36 +59,6 @@ vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope', () => ({
     captureServerRequestAuthorityForServerAccountScope: (...args: unknown[]) => captureAuthoritySpy(...args),
     createServerRequestWithServerScope: ({ activeRequest }: { activeRequest: (path: string, init?: RequestInit) => Promise<Response> }) => activeRequest,
-}));
-
-function normalizeServerProfileTestId(raw: unknown): string {
-    return String(raw ?? '').trim();
-}
-
-function findServerProfileTestDouble(idRaw: unknown): { id: string; serverUrl: string; serverIdentityId?: string | null } | null {
-    const id = normalizeServerProfileTestId(idRaw);
-    const profiles = listServerProfilesSpy();
-    if (!id || !Array.isArray(profiles)) return null;
-    return (profiles as Array<{ id: string; serverUrl: string; serverIdentityId?: string | null; legacyServerIds?: readonly string[] }>).find((profile) => (
-        normalizeServerProfileTestId(profile.id) === id
-        || normalizeServerProfileTestId(profile.serverIdentityId) === id
-        || (profile.legacyServerIds ?? []).some((legacyId) => normalizeServerProfileTestId(legacyId) === id)
-    )) ?? null;
-}
-
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    areServerProfileIdentifiersEquivalent: (left: unknown, right: unknown) => {
-        const leftId = normalizeServerProfileTestId(left);
-        const rightId = normalizeServerProfileTestId(right);
-        if (!leftId || !rightId) return false;
-        if (leftId === rightId) return true;
-        const leftProfile = findServerProfileTestDouble(leftId);
-        const rightProfile = findServerProfileTestDouble(rightId);
-        return Boolean(leftProfile && rightProfile && leftProfile.id === rightProfile.id);
-    },
-    getServerProfileById: (id: unknown) => findServerProfileTestDouble(id),
-    listServerProfiles: (...args: unknown[]) => listServerProfilesSpy(...args),
-    resolveServerProfileScopeId: (profile: { id: string; serverIdentityId?: string | null }) => profile.serverIdentityId ?? profile.id,
 }));
 
 vi.mock('@/sync/domains/state/storage', async () => {
@@ -166,7 +135,6 @@ describe('production peer mediation machine RPC route adapter', () => {
         getCredentialsForServerUrlSpy.mockReset();
         storageGetStateSpy.mockReset();
         getActiveServerSnapshotSpy.mockReset();
-        listServerProfilesSpy.mockReset();
         captureAuthoritySpy.mockReset();
         vi.unstubAllGlobals();
         storageSnapshot.state = { machines: {}, machineListByServerId: {} };
@@ -175,7 +143,6 @@ describe('production peer mediation machine RPC route adapter', () => {
             serverUrl: 'https://server-a.example.test',
             generation: 1,
         });
-        listServerProfilesSpy.mockReturnValue([]);
         getReadyServerFeaturesSpy.mockResolvedValue(createFeaturePayload());
         getCredentialsForServerUrlSpy.mockResolvedValue({
             token: TOKEN_A,

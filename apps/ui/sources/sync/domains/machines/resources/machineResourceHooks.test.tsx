@@ -9,9 +9,10 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const boundary = vi.hoisted(() => ({
-    rpc: vi.fn<(input: { method: string; payload: unknown; serverId?: string | null; machineId?: string; signal?: AbortSignal }) => Promise<unknown>>(),
+    rpc: vi.fn<(input: { method: string; payload: unknown; serverId?: string | null; machineId?: string; signal?: AbortSignal; onDispatched?: () => void }) => Promise<unknown>>(),
     appState: null as ReturnType<typeof createReactNativeAppStateEmitter> | null,
     focused: true,
+    presented: true,
     visibility: 'visible',
 }));
 const documentBoundary = new EventTarget();
@@ -24,7 +25,13 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock({ AppState: boundary.appState.appState });
 });
 // The real encrypted/scoped RPC transport is the external boundary; all subscription logic stays real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: boundary.rpc }));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: (input: Parameters<typeof boundary.rpc>[0]) => {
+        const reply = boundary.rpc(input);
+        input.onDispatched?.();
+        return reply;
+    },
+}));
 vi.mock('@react-navigation/native', async () => {
     const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
     return { ...createReactNavigationNativeMock(), useIsFocused: () => boundary.focused };
@@ -43,6 +50,7 @@ describe('machine resource visibility and demand', () => {
         homeA = await homes.addHome({ name: 'Home A', serverUrl: 'https://resource-home-a.test', accountId: 'owner', currentAccount: true });
         homeB = await homes.addHome({ name: 'Home B', serverUrl: 'https://resource-home-b.test', accountId: 'owner-b', currentAccount: true });
         boundary.visibility = 'visible';
+        boundary.presented = true;
         vi.stubGlobal('document', documentBoundary);
         await import('./machineRpc');
         boundary.appState?.emit('active');
@@ -94,12 +102,109 @@ describe('machine resource visibility and demand', () => {
         storage.setState({ machineListByServerId: { [homeA]: [machine] }, machineListStatusByServerId: { [homeA]: 'idle' } });
         boundary.rpc.mockRejectedValue(new RpcError('RPC method not available', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE));
         const keys = [{ serverId: homeA, machineId: 'machine-a' }];
+        const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+        const Presentation = ({ children }: React.PropsWithChildren) => React.createElement(PluginSurfaceFocusEligibilityProvider, {
+            active: boundary.presented, presentationActive: boundary.presented, children,
+        });
+        const hook = await renderHook(() => {
+            useMachineResourceLiveDemand(keys, { detail: 'summary' });
+            return useMachineResourceSummary(keys[0]!);
+        }, { wrapper: Presentation });
+        await flushHookEffects({ cycles: 3, turns: 3 });
+        expect(hook.getCurrent()).toEqual({ kind: 'not_reported', reason: 'older_happier' });
+        const reads = boundary.rpc.mock.calls.length;
+        boundary.presented = false;
+        await hook.rerender();
+        boundary.presented = true;
+        await hook.rerender();
+        await flushHookEffects({ cycles: 3, turns: 3 });
+        expect(boundary.rpc).toHaveBeenCalledTimes(reads);
+        await act(async () => { storage.setState({ machineListByServerId: { [homeA]: [{ ...machine, daemonStateVersion: 2 }] } }); });
+        await flushHookEffects({ cycles: 3, turns: 3 });
+        expect(boundary.rpc).toHaveBeenCalledTimes(reads + 1);
+        await hook.unmount();
+    });
+
+    it('recovers standalone Overview after daemon version changes without retrying an unchanged unsupported daemon', async () => {
+        const { useMachineVitalsOverview } = await import('./useMachineVitalsOverview');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        const machine = createMachineFixture({ id: 'machine-a', active: true, activeAt: Date.now(), daemonStateVersion: 1 });
+        storage.setState({ machineListByServerId: { [homeA]: [machine] }, machineListStatusByServerId: { [homeA]: 'idle' } });
+        boundary.rpc.mockRejectedValue(new RpcError('RPC method not available', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE));
+        // No Summary helper is mounted: the Overview/Metric demand must carry its own version.
+        const hook = await renderHook(() => useMachineVitalsOverview({ serverId: homeA, machineId: machine.id, range: '1h' }));
+        try {
+            await flushHookEffects({ cycles: 3, turns: 3 });
+            expect(hook.getCurrent().status).toBe('not_reported');
+            const reads = boundary.rpc.mock.calls.length;
+            await act(async () => { hook.getCurrent().retry(); });
+            await hook.rerender();
+            await flushHookEffects({ cycles: 3, turns: 3 });
+            expect(boundary.rpc).toHaveBeenCalledTimes(reads);
+            boundary.rpc.mockImplementation(async input => {
+                if (input.method === 'daemon.vitals.watch') {
+                    const answer = createDeferred<unknown>();
+                    input.signal?.addEventListener('abort', () => answer.resolve({ changed: false }), { once: true });
+                    return answer.promise;
+                }
+                if (input.method === 'machines.vitals.history.get') return {
+                    range: '1h', bucketMs: 60_000, points: [], today: { rxBytes: 0, txBytes: 0 },
+                };
+                return { state: 'reporting', sample: null, series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } };
+            });
+            await act(async () => { storage.setState({ machineListByServerId: { [homeA]: [{ ...machine, daemonStateVersion: 2 }] } }); });
+            await flushHookEffects({ cycles: 3, turns: 3 });
+            expect(boundary.rpc.mock.calls.length).toBeGreaterThan(reads);
+            expect(hook.getCurrent().status).toBe('ready');
+            expect(hook.getCurrent().history?.range).toBe('1h');
+        } finally {
+            await hook.unmount();
+        }
+    });
+
+    it('projects slow and repeated watch failures while retaining the held summary, then clears the issue on recovery', async () => {
+        const { useMachineResourceLiveDemand } = await import('./useMachineResourceLiveDemand');
+        const { useMachineResourceSummary } = await import('./useMachineResourceSummary');
+        const { machineResourceStore } = await import('./machineResourceStore');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        const sampledAt = Date.now();
+        const machine = createMachineFixture({ id: 'machine-a', activeAt: sampledAt });
+        storage.setState({ machineListByServerId: { [homeA]: [machine] }, machineListStatusByServerId: { [homeA]: 'idle' } });
+        const watches: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+        boundary.rpc.mockImplementation(async input => {
+            if (input.method === 'daemon.vitals.watch') {
+                const answer = createDeferred<unknown>();
+                watches.push(answer);
+                input.signal?.addEventListener('abort', () => answer.resolve({ changed: false }), { once: true });
+                return answer.promise;
+            }
+            return { state: 'reporting', sample: { v: 1, sampledAt, intervalMs: 15_000,
+                cpu: { reported: true, busyPct: 20 }, memory: { reported: true, totalBytes: 100, availableBytes: 80, usedBytes: 20, pressure: { level: 'calm', source: 'psi' } },
+                disk: { reported: true, volumes: [] }, network: { reported: true, rxBps: 12, txBps: 3 } },
+                series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } };
+        });
+        const keys = [{ serverId: homeA, machineId: 'machine-a', expectedAccountId: 'owner' }];
         const hook = await renderHook(() => {
             useMachineResourceLiveDemand(keys, { detail: 'summary' });
             return useMachineResourceSummary(keys[0]!);
         });
         await flushHookEffects({ cycles: 3, turns: 3 });
-        expect(hook.getCurrent()).toEqual({ kind: 'not_reported', reason: 'older_happier' });
+        const good = hook.getCurrent();
+        expect(good).toMatchObject({ kind: 'reporting', freshness: 'live', summary: { sampledAt } });
+        await act(async () => watches[0]!.reject(new Error('watch deadline')));
+        await flushHookEffects();
+        const slow = hook.getCurrent();
+        expect(slow).toMatchObject({ kind: 'reporting', freshness: 'held', readStatus: 'slow' });
+        expect(slow?.kind === 'reporting' ? slow.summary : null).toBe(good?.kind === 'reporting' ? good.summary : null);
+        await act(async () => watches[1]!.reject(new Error('watch deadline')));
+        await flushHookEffects();
+        expect(hook.getCurrent()).toMatchObject({ kind: 'reporting', freshness: 'held', readStatus: 'error' });
+        expect(watches).toHaveLength(2);
+        await act(async () => { await machineResourceStore.retry({ ...keys[0]!, view: 'summary' }); });
+        expect(hook.getCurrent()).toMatchObject({ kind: 'reporting', freshness: 'live', summary: { sampledAt } });
+        expect(hook.getCurrent()).not.toHaveProperty('readStatus');
         await hook.unmount();
     });
 

@@ -10,7 +10,7 @@ import {
 import { resolveArchiveSymlinkTargets } from '@happier-dev/release-runtime/archiveSymlinkContainment';
 
 import { openLocalUploadSourceReader, type LocalUploadSource } from '@/sync/runtime/files/localUploadSourceReader';
-import type { BulkTransferFileDestination } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/bulkTransferFileDestination';
+import type { BulkTransferFileDestination } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { createTransferManifestHasher } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferManifestHasher';
 
 const FILE_TYPE = 0o170000;

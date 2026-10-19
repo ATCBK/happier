@@ -38,10 +38,12 @@ function apply(state: MachineProcessesState, update: ProcessUpdate): MachineProc
         : retain(state, { ...state, reason: update.reason, status: update.reason === 'older_happier' ? 'not_supported' : 'error' });
 }
 export function createMachineProcessesStore(clients: MachineProcessesClients) {
+    const storeKey = (input: MachineProcessesKey) => JSON.stringify([input.serverId ?? null, input.accountId ?? null, input.machineId, input.scope, input.view, input.detailToken ?? null]);
+    const daemonVersions = new Map<string, number>();
     const store: SharedSubscriptionStore<MachineProcessesKey, MachineProcessesState, ProcessUpdate, MachineProcessesClients['snapshotClient'], MachineProcessesClients['watchClient']> = createSharedSubscriptionStore({
         emptyState: EMPTY_MACHINE_PROCESSES_STATE, createState: () => EMPTY_MACHINE_PROCESSES_STATE,
         normalizeInput: input => ({ ...input, serverId: input.serverId ?? null }),
-        storeKey: input => JSON.stringify([input.serverId ?? null, input.accountId ?? null, input.machineId, input.scope, input.view, input.detailToken ?? null]),
+        storeKey,
         defaultSnapshotClient: clients.snapshotClient, defaultWatchClient: clients.watchClient, retainState: true, watchAfterRefresh: true,
         beginRefresh: (state, input): MachineProcessesState => state.answer || !input.detailToken ? state : store.getState({ ...input, detailToken: undefined }),
         shouldWatch: state => state.status === 'ready',
@@ -65,12 +67,18 @@ export function createMachineProcessesStore(clients: MachineProcessesClients) {
     return { getState(input: MachineProcessesKey) {
         const state = store.getState(input);
         return state.answer || !input.detailToken ? state : store.getState({ ...input, detailToken: undefined });
-    }, observe: store.observe, demand: (input: MachineProcessesKey, listener: () => void = () => {}) => {
-        const release = store.subscribe(input, listener);
-        store.invalidate(input);
-        return release;
-    },
-        read: store.read, retry: store.invalidate, reset: store.reset };
+    }, observe: store.observe, demand: (input: MachineProcessesKey, listener: () => void = () => {}) => store.subscribe(input, listener),
+        read: store.read, retry: store.invalidate,
+        /** Fresh daemon publication recovers a failed read; healthy parked watches already own freshness. */
+        daemonStateChanged(input: MachineProcessesKey, version: number | null | undefined) {
+            if (version == null) return;
+            const key = storeKey(input);
+            if (daemonVersions.get(key) === version) return;
+            daemonVersions.set(key, version);
+            const state = store.getState(input);
+            if (state.status === 'error' || state.status === 'unavailable' || state.status === 'not_supported') store.invalidate(input);
+        },
+        reset() { store.reset(); daemonVersions.clear(); } };
 }
 export const machineProcessesStore = createMachineProcessesStore({
     snapshotClient: async input => (await import('./machineProcessesRpc')).fetchMachineProcessesViaMachineRpc(input),

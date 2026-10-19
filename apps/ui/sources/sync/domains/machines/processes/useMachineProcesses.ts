@@ -15,6 +15,9 @@ export function useMachineProcesses(input: Omit<MachineProcessesKey, 'accountId'
     const getSnapshot = React.useCallback(() => accountId ? machineProcessesStore.getState(key) : EMPTY_MACHINE_PROCESSES_STATE, [accountId, key]);
     const state = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     React.useEffect(() => {
+        if (accountId) machineProcessesStore.daemonStateChanged(key, target.daemonStateVersion);
+    }, [accountId, key, target.daemonStateVersion]);
+    React.useEffect(() => {
         if (!active || !binding) return;
         const release = machineProcessesStore.demand(key);
         const retirement = binding.onRetire(release);

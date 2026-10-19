@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { createManualSystemTaskRunner } from '@/dev/testkit/harness/manualSystemTaskRunner';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { storage } from '@/sync/domains/state/storageStore';
 import { readLocalDaemonSharedState, publishLocalDaemonStatus } from '@/components/settings/machines/localControl/localDaemonSharedState';
@@ -14,11 +14,16 @@ import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/
 import { setDesktopLoginStartMode } from '@/components/settings/desktop/desktopLoginStart';
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+installDisconnectedServerSocketBoundary();
 vi.mock('expo-router/build/link/href', () => ({ resolveHref: vi.fn() }));
 vi.mock('@/config', () => ({ config: { variant: 'production', identityVariant: 'stable' } }));
 vi.mock('@/text', async () => ({ ...(await import('@/dev/testkit/mocks/text')).createTextModuleMock() }));
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
-const { createMachineConnectionActionDeps } = await import('./machineConnectionActionDeps');
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
 
 afterEach(() => { standardCleanup(); publishAppliedActiveServerRuntimeAvailability(false); vi.unstubAllGlobals(); });
 
@@ -35,7 +40,7 @@ async function fixture(mode: 'tauri' | 'native' = 'tauri') {
     const manual = createManualSystemTaskRunner(mode);
     publishLocalDaemonStatus(manual.runner, status);
     vi.stubGlobal('isTauri', true);
-    const executor = createActionExecutor(createMachineConnectionActionDeps({ runner: manual.runner }) as unknown as ActionExecutorDeps);
+    const executor = createDefaultActionExecutor({ homeRuntimeRunner: manual.runner });
     return { serverId, manual, executor, context: { surface: 'ui', authority: 'present_user', serverId } as const };
 }
 

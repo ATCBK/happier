@@ -11,6 +11,11 @@ import {
     failLocalServiceLauncherRefresh,
 } from './store';
 import type { LocalServiceLauncherSnapshot, LocalServiceLauncherState } from './types';
+import {
+    getLocalServiceInventoryState,
+    subscribeLocalServiceInventoryStore,
+    type LocalServiceInventorySnapshotClient,
+} from '../inventory/sharedStore';
 
 export type LocalServiceLauncherSnapshotClient = (
     input: LocalServiceLauncherSnapshotClientInput,
@@ -22,7 +27,7 @@ export type LocalServiceLauncherStoreKeyInput = Readonly<{
     sessionId?: string | null;
     scope?: 'workspace' | 'machine' | null;
     workspaceRoot?: string | null;
-    projection?: 'managed_bindings';
+    projection?: 'managed_bindings' | null;
     accountId?: string | null;
 }>;
 
@@ -72,8 +77,6 @@ function entryMatches(
 ): boolean {
     const entry = normalizeInput(entryInput);
     return entry.machineId === publishInput.machineId
-        && entry.projection === (publishInput.projection ?? null)
-        && entry.accountId === (publishInput.accountId ?? null)
         && (publishInput.serverId === undefined || entry.serverId === (publishInput.serverId ?? null))
         && (publishInput.sessionId === undefined || entry.sessionId === (publishInput.sessionId ?? null))
         && (publishInput.scope === undefined || entry.scope === (publishInput.scope ?? null))
@@ -131,7 +134,14 @@ const store = createSharedSubscriptionStore<
     ),
     applySnapshot: applyLocalServiceLauncherSnapshot,
     matchesPublish: entryMatches,
+    // An Action's response only covers the scope it read. Other affected consumers
+    // refresh their own projection rather than adopting a machine-wide/other-Session feed.
+    snapshotCoversEntry: (entry, _snapshot, published) => storeKey(entry) === storeKey(normalizeInput(published)),
 });
+
+// Freshness belongs to the launcher store, including complete managed-binding reads made
+// outside a Services page. All projections share the inventory's one parked Machine watch.
+const inventorySubscriptions = new Map<string, { input: LocalServiceLauncherStoreKeyInput; count: number; dispose(): void }>();
 
 export function getLocalServiceLauncherState(
     input: LocalServiceLauncherStoreKeyInput,
@@ -147,13 +157,60 @@ export function readLocalServiceLauncherStore(input: LocalServiceLauncherStoreKe
 export function subscribeLocalServiceLauncherStore(
     input: LocalServiceLauncherStoreKeyInput,
     listener: () => void,
-    options?: Readonly<{ snapshotClient?: LocalServiceLauncherSnapshotClient; nowMs?: () => number }>,
+    options?: Readonly<{ snapshotClient?: LocalServiceLauncherSnapshotClient; nowMs?: () => number;
+        inventorySnapshotClient?: LocalServiceInventorySnapshotClient }>,
 ): () => void {
-    return store.subscribe(input, listener, options);
+    const key = storeKey(normalizeInput(input));
+    let subscription = inventorySubscriptions.get(key);
+    if (!subscription) {
+        const inventoryKey = { machineId: input.machineId, serverId: input.serverId };
+        let generation = getLocalServiceInventoryState(inventoryKey).generatedAt;
+        const dispose = subscribeLocalServiceInventoryStore(inventoryKey, () => {
+            const next = getLocalServiceInventoryState(inventoryKey).generatedAt;
+            if (next === generation) return;
+            generation = next;
+            // Even the initial scan can finish after a cached launcher response. Keep
+            // declaration hydration independent of that scan, then reconcile its result.
+            if (next !== null) store.invalidate(input);
+        }, options?.inventorySnapshotClient ? { snapshotClient: options.inventorySnapshotClient } : undefined);
+        subscription = { input, count: 0, dispose };
+        inventorySubscriptions.set(key, subscription);
+    }
+    subscription.count++;
+    const unsubscribe = store.subscribe(input, listener, options);
+    let active = true;
+    return () => {
+        if (!active) return;
+        active = false;
+        unsubscribe();
+        if (--subscription.count === 0) {
+            subscription.dispose();
+            inventorySubscriptions.delete(key);
+        }
+    };
 }
 
 export function invalidateLocalServiceLauncherStore(input: LocalServiceLauncherStoreKeyInput): void {
     store.invalidate(input);
+}
+
+/** External native operations change every subscribed scope/projection on the affected Machine. */
+export function invalidateLocalServiceLauncherStores(input: Pick<LocalServiceLauncherStoreKeyInput, 'machineId' | 'serverId'>): void {
+    const scope = { ...input, serverId: input.serverId ?? null };
+    for (const subscription of inventorySubscriptions.values()) {
+        if (entryMatches(subscription.input, scope)) store.invalidate(subscription.input);
+    }
+}
+
+/** A successful explicit scan may return the same generation. Recover failed derived
+ * reads without making healthy projections re-read unchanged inventory. */
+export function recoverLocalServiceLauncherStores(input: Pick<LocalServiceLauncherStoreKeyInput, 'machineId' | 'serverId'>): void {
+    const scope = { ...input, serverId: input.serverId ?? null };
+    for (const subscription of inventorySubscriptions.values()) {
+        if (entryMatches(subscription.input, scope) && store.getState(subscription.input).refreshStatus === 'error') {
+            store.invalidate(subscription.input);
+        }
+    }
 }
 
 export function publishLocalServiceLauncherSnapshot(
@@ -164,5 +221,7 @@ export function publishLocalServiceLauncherSnapshot(
 }
 
 export function resetLocalServiceLauncherStoreForTests(): void {
+    for (const subscription of inventorySubscriptions.values()) subscription.dispose();
+    inventorySubscriptions.clear();
     store.reset();
 }

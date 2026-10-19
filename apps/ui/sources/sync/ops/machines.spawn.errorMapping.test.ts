@@ -1,13 +1,13 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
-import { createSocketIoAckTimeoutError } from '@happier-dev/sync-client';
 import { AccountEncryptionModeResponseSchema, AccountSettingsV2GetResponseSchema, SessionModelSelectionV1Schema, SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
-import { createMachineFixture } from '@/dev/testkit';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 let storage: typeof import('@/sync/domains/state/storage').storage;
+let createSocketIoAckTimeoutError: typeof import('@happier-dev/sync-client').createSocketIoAckTimeoutError;
 let createSpawnAttemptKeyForFreshSpawnOptions: typeof import('@/sync/domains/session/spawn/spawnAttemptKey').createSpawnAttemptKeyForFreshSpawnOptions;
 let readSpawnAttemptCustodyState: typeof import('@/sync/domains/session/spawn/spawnAttemptNonceStore').readSpawnAttemptCustodyState;
 
@@ -64,19 +64,21 @@ describe('machineSpawnNewSession error mapping', () => {
     });
   }
 
-  beforeAll(async () => {
-    // Admit one real runtime. Per-case graph reloads retained every Sync owner
-    // and exhausted the worker heap before the custody cases could finish.
-    vi.resetModules();
-    network = await installSessionOpsNetworkBoundary();
-    await loadSyncSingletonForTests();
-    ({ storage } = await import('@/sync/domains/state/storage'));
-    ({ createSpawnAttemptKeyForFreshSpawnOptions } = await import('@/sync/domains/session/spawn/spawnAttemptKey'));
-    ({ readSpawnAttemptCustodyState } = await import('@/sync/domains/session/spawn/spawnAttemptNonceStore'));
-    baseline = storage.getState();
-  });
-
   beforeEach(async () => {
+    // Disposal retires the external Socket factory as well as HTTP and
+    // credentials. Install a fresh boundary for every case; the cached SDK
+    // import dispatches through its current factory without reloading Sync.
+    network = await installSessionOpsNetworkBoundary();
+    if (!storage) {
+      // The public SDK barrel also captures Socket.IO. Load it only after the
+      // network boundary, so its real transport retains the fixture factory.
+      ({ createSocketIoAckTimeoutError } = await import('@happier-dev/sync-client'));
+      await loadSyncSingletonForTests();
+      ({ storage } = await import('@/sync/domains/state/storage'));
+      ({ createSpawnAttemptKeyForFreshSpawnOptions } = await import('@/sync/domains/session/spawn/spawnAttemptKey'));
+      ({ readSpawnAttemptCustodyState } = await import('@/sync/domains/session/spawn/spawnAttemptNonceStore'));
+      baseline = storage.getState();
+    }
     network.resetRequests();
     const { getPersistenceStorage } = await import('@/sync/domains/state/persistenceStorage');
     getPersistenceStorage().clearAll();
@@ -133,8 +135,6 @@ describe('machineSpawnNewSession error mapping', () => {
     vi.clearAllTimers();
     vi.useRealTimers();
   });
-
-  afterAll(async () => { await network.dispose(); });
 
   it('uses one current-only Provider-safe RPC so an older daemon refuses before spawn', async () => {
     machineRpcWithServerScopeMock.mockRejectedValue(
@@ -1438,21 +1438,31 @@ describe('machineSpawnNewSession error mapping', () => {
   });
 
   it('returns pending when spawn nonce polling expires before settlement', async () => {
-    machineRpcWithServerScopeMock.mockResolvedValue({ status: 'pending' });
+    vi.useFakeTimers();
+    try {
+      machineRpcWithServerScopeMock.mockResolvedValue({ status: 'pending' });
 
-    const machines = await import('./machines');
-    const resolveUntilSettled = (machines as Record<string, unknown>).machineResolveSpawnSessionByNonceUntilSettled;
+      const machines = await import('./machines');
+      const resolveUntilSettled = (machines as Record<string, unknown>).machineResolveSpawnSessionByNonceUntilSettled;
 
-    expect(typeof resolveUntilSettled).toBe('function');
-    if (typeof resolveUntilSettled !== 'function') return;
+      expect(typeof resolveUntilSettled).toBe('function');
+      if (typeof resolveUntilSettled !== 'function') return;
 
-    await expect(resolveUntilSettled({
-      machineId: 'machine-1',
-      spawnNonce: 'spawn-nonce-still-pending',
-      timeoutMs: 0,
-      pollIntervalMs: 0,
-    })).resolves.toEqual({ status: 'pending' });
-    expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(1);
+      // The zero-duration contract still admits its first probe. Keep the
+      // clock fixed while the genuine boundary returns its immediate ACK,
+      // rather than spending the one-millisecond probe floor on setup.
+      const resolution = resolveUntilSettled({
+        machineId: 'machine-1',
+        spawnNonce: 'spawn-nonce-still-pending',
+        timeoutMs: 0,
+        pollIntervalMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(resolution).resolves.toEqual({ status: 'pending' });
+      expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('maps legacy daemon error envelopes into a structured spawn error result', async () => {

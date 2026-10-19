@@ -47,6 +47,9 @@ import { isMachineRpcTimeoutError } from '@/sync/runtime/orchestration/serverSco
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { stopSessionViaDaemonMachineRpc } from './sessionStopStrategy';
+import { runWithHomeCredentialRequestSignal } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import {
     MACHINE_ENCRYPT_RAW_ATTRIBUTION_EVENTS,
     measureMachineEncryptRawAttribution,
@@ -804,27 +807,51 @@ export type MachineBashRequest =
 export async function machineStopSession(
     machineId: string,
     sessionId: string,
-    options?: Readonly<{ serverId?: string | null }>,
+    options?: Readonly<{
+        serverId?: string | null;
+        /** The Account captured by the original fallback confirmation. */
+        scope?: ServerAccountScope;
+        /** Withdraws the observer; after issuance only credential retirement cancels the physical wait. */
+        signal?: AbortSignal;
+    }>,
 ): Promise<MachineStopSessionResult> {
-    const result = await stopSessionViaDaemonMachineRpc({
-        machineId,
-        sessionId,
-        serverId: options?.serverId,
+    const serverId = options?.scope?.serverId ?? options?.serverId ?? getActiveServerSnapshot().serverId;
+    if (!serverId) return { ok: false, error: 'action_home_not_found', errorCode: 'action_home_not_found' };
+    const observer = options?.signal;
+    const withdrawn = (): MachineStopSessionResult => ({ ok: false,
+        error: 'Session Stop observation was withdrawn', errorCode: 'MACHINE_RPC_ABORTED' });
+    if (observer?.aborted) return withdrawn();
+    const beforeIssuance = new AbortController();
+    let issued = false;
+    const withdrawBeforeIssuance = () => { if (!issued) beforeIssuance.abort(); };
+    observer?.addEventListener('abort', withdrawBeforeIssuance, { once: true });
+    // A mounted observer may leave, but an issued physical Stop remains in the
+    // original Account's custody. Never cancel/replay it just because a view unmounts.
+    const operation = runWithHomeCredentialRequestSignal(serverId, async (credentialSignal): Promise<MachineStopSessionResult> => {
+        const cancellation = mergeAbortSignals([credentialSignal, beforeIssuance.signal]);
+        try {
+            const result = await stopSessionViaDaemonMachineRpc({
+                machineId, sessionId, serverId,
+                ...(options?.scope ? { accountId: options.scope.accountId } : {}),
+                signal: cancellation.signal,
+                onIssued: () => {
+                    issued = true;
+                    observer?.removeEventListener('abort', withdrawBeforeIssuance);
+                },
+            });
+            if (result.type === 'stopped') return { ok: true, status: 'stopped' };
+            if (result.type === 'requested') return { ok: true, status: 'requested' };
+            return { ok: false, error: result.message, ...(result.errorCode ? { errorCode: result.errorCode } : {}) };
+        } finally { cancellation.dispose(); }
+    }).finally(() => observer?.removeEventListener('abort', withdrawBeforeIssuance));
+    if (!observer) return await operation;
+    return await new Promise<MachineStopSessionResult>((resolve, reject) => {
+        const withdraw = () => { observer.removeEventListener('abort', withdraw); resolve(withdrawn()); };
+        observer.addEventListener('abort', withdraw, { once: true });
+        operation.then(result => { observer.removeEventListener('abort', withdraw); resolve(result); },
+            error => { observer.removeEventListener('abort', withdraw); reject(error); });
+        if (observer.aborted) withdraw();
     });
-    if (result.type === 'stopped') {
-        return { ok: true, status: 'stopped' };
-    }
-    if (result.type === 'requested') {
-        return { ok: true, status: 'requested' };
-    }
-    if (result.errorCode) {
-        return {
-            ok: false,
-            error: result.message,
-            errorCode: result.errorCode,
-        };
-    }
-    return { ok: false, error: result.message };
 }
 
 /**

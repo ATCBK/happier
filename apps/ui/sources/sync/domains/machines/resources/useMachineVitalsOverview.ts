@@ -18,7 +18,7 @@ export function useMachineVitalsOverview(input: MachineResourceKey & Readonly<{ 
     const enabled = target.enabled && (hosted || focused);
     const key = React.useMemo(() => ({ ...target.key, view: 'overview' as const }), [target.key]);
     const historyKey = React.useMemo(() => ({ ...target.key, range: input.range }), [input.range, target.key]);
-    useMachineResourceLiveDemand([target.key], { detail: 'overview', enabled });
+    useMachineResourceLiveDemand([{ ...target.key, daemonStateVersion: target.daemonStateVersion }], { detail: 'overview', enabled });
     const subscribe = React.useCallback((listener: () => void) => machineResourceStore.observe(key, listener), [key]);
     const getSnapshot = React.useCallback(() => target.accountMatches ? machineResourceStore.getState(key) : EMPTY_MACHINE_RESOURCE_STATE, [key, target.accountMatches]);
     const subscribeHistory = React.useCallback((listener: () => void) => machineResourceStore.observeHistory(historyKey, listener), [historyKey]);

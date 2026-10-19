@@ -4,11 +4,13 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { useMachineDaemonReadIdentities } from '../useMachineDaemonReadTarget';
 import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
-import { EMPTY_MACHINE_RESOURCE_STATE, isMachineResourceStateStale, machineResourceStore } from './machineResourceStore';
+import { EMPTY_MACHINE_RESOURCE_STATE, isMachineResourceStateStale, machineResourceStore, type MachineResourceState } from './machineResourceStore';
 import type { MachineResourceKey } from './machineRpc';
 
 export type MachineResourceAvailability =
     | Readonly<{ kind: 'reporting'; summary: MachineResourceSummaryV1 | null; freshness: 'live' | 'held' | 'stale';
+        /** A failed watch retains values while its existing observation lifecycle recovers. */
+        readStatus?: 'slow' | 'error';
         /** Canonical attention is separate from transient metric values; absence is unknown. */
         attention?: MachineResourceAttentionV1 | null }>
     | Readonly<{ kind: 'never_sampled' }>
@@ -20,6 +22,11 @@ const OLDER_HAPPIER: MachineResourceAvailability = { kind: 'not_reported', reaso
 const UNSUPPORTED: MachineResourceAvailability = { kind: 'not_reported', reason: 'unsupported' };
 const UNAVAILABLE: MachineResourceAvailability = { kind: 'unavailable' };
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** The one reading of a held state's failed watch or read: surfaces say it from here, never from the raw status. */
+export function readMachineResourceReadStatus(state: Pick<MachineResourceState, 'status'>): 'slow' | 'error' | undefined {
+    return state.status === 'slow' || state.status === 'error' ? state.status : undefined;
+}
 
 /** Row-local read of already demanded/warmed state; this hook is deliberately passive. */
 export function useMachineResourceSummary(input: MachineResourceKey): MachineResourceAvailability | null {
@@ -66,9 +73,11 @@ export function useMachineResourceSummary(input: MachineResourceKey): MachineRes
             ? state.snapshot.sample?.sampledAt ?? null : null;
         const publishedReaderFailed = publication?.reason === 'reader_failed'
             && (reportingAt === null || (publication.since !== null && publication.since >= reportingAt));
+        const readStatus = readMachineResourceReadStatus(state);
         const freshness = stale || publishedReaderFailed ? 'stale'
-            : !viewed || !online || state.status === 'error' || state.snapshot?.state === 'unavailable' ? 'held' : 'live';
+            : !viewed || !online || state.status === 'slow' || state.status === 'error' || state.snapshot?.state === 'unavailable' ? 'held' : 'live';
         return { kind: 'reporting', summary: state.summary, freshness,
+            ...(readStatus ? { readStatus } : {}),
             attention: publishedAttention ?? state.snapshot?.attention ?? null };
     }, [machine, online, publication, publishedAttention, stale, state, target.accountMatches, viewed]);
 }

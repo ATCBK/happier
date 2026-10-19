@@ -9,11 +9,15 @@ import { sessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock
 import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { MachineResourceKey } from './machineRpc';
 
 export type MachineResourceFleetAttention = Readonly<{
+    accountScope: ServerAccountScope | null;
     needsYou: readonly MachineResourceKey[];
     look: readonly Readonly<{ machineKey: string; reasonKey: string }>[];
+    /** Positive sampler evidence: absence from look alone may instead mean offline or unknown. */
+    reportingMachineKeys: readonly string[];
     lastAutomaticActionAt: number | null;
     headline: Readonly<{ machineKey: MachineResourceKey; reason: MachineResourceReasonV1 }> | null;
 }>;
@@ -44,7 +48,7 @@ export function useMachineResourceFleetAttention(): MachineResourceFleetAttentio
             if (entry.lastAutomaticAction) lastAutomaticActionAt = Math.max(lastAutomaticActionAt ?? 0, entry.lastAutomaticAction.at);
         }
         // Only the published consumer projection participates in subscription equality.
-        return JSON.stringify({ needsYou, look, lastAutomaticActionAt, headline });
+        return JSON.stringify({ accountScope: scope, needsYou, look, reportingMachineKeys: attention.reportingMachineKeys, lastAutomaticActionAt, headline });
     }, [readMachines, serverId, scope]);
     const subscribe = React.useCallback((listener: () => void) => {
         const token = {};

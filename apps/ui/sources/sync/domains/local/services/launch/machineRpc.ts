@@ -157,6 +157,7 @@ export async function openLocalServiceLauncherPreviewViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_OPEN_PREVIEW,
             payload,
+            signal: input.signal,
         });
         if (isRpcUnavailableResult(raw)) {
             return { ok: false, reason: 'unavailable' };
@@ -190,6 +191,7 @@ export async function registerLocalServiceLauncherPreviewViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_REGISTER_PREVIEW,
             payload,
+            signal: input.signal,
         });
         if (isRpcUnavailableResult(raw)) {
             return { ok: false, reason: 'unavailable' };

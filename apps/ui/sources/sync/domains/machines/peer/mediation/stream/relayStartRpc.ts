@@ -20,6 +20,7 @@ export async function startMachineLiveStreamRelayViaMachineRpc(input: Readonly<{
     serverId?: string | null;
     startRequest: MachineLiveStreamStartRequestV1;
     timeoutMs?: number;
+    signal?: AbortSignal;
 }>): Promise<MachineLiveStreamRelayStartRpcResult> {
     try {
         const payload = DaemonMachineLiveStreamRelayStartRequestV1Schema.parse({
@@ -32,6 +33,7 @@ export async function startMachineLiveStreamRelayViaMachineRpc(input: Readonly<{
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LIVE_STREAM_RELAY_START,
             payload,
+            signal: input.signal,
             ...(typeof input.timeoutMs === 'number' ? { timeoutMs: input.timeoutMs } : {}),
         });
         if (isRpcMethodNotFoundResult(raw)) {

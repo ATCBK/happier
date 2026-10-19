@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import {
     RunnerActivationCreateRequestV1Schema,
@@ -47,14 +47,14 @@ import {
 
 import type { ServerFetch } from '@/sync/http/client';
 
-const RunnerActivationCreateResponseV1Schema = z.object({
+const RunnerActivationCreateResponseV1Schema = z.strictObject({
     status: z.literal('created'),
     activation: RunnerActivationProjectionV1Schema,
-}).strict();
-const RunnerActivationReviewResponseV1Schema = z.object({
+});
+const RunnerActivationReviewResponseV1Schema = z.strictObject({
     status: z.literal('stored'),
     review: RunnerActivationReviewV1Schema,
-}).strict();
+});
 
 export type RunnerActivationClientErrorCode =
     | 'malformed_request'
@@ -104,7 +104,11 @@ function classifyFailureStatus(status: number): Readonly<{ code: RunnerActivatio
     return { code: 'request_failed', retryable: false };
 }
 
-async function parseResponse<T>(response: Response, schema: z.ZodType<T>): Promise<T> {
+type ResponseSchema<T> = Readonly<{
+    safeParse(value: unknown): { success: true; data: T } | { success: false };
+}>;
+
+async function parseResponse<T>(response: Response, schema: ResponseSchema<T>): Promise<T> {
     const payload: unknown = await response.json().catch(() => null);
     if (!response.ok) {
         const { code, retryable } = classifyFailureStatus(response.status);
@@ -118,7 +122,7 @@ async function parseResponse<T>(response: Response, schema: z.ZodType<T>): Promi
 async function requestAndParse<T>(
     request: ServerFetch,
     path: string,
-    schema: z.ZodType<T>,
+    schema: ResponseSchema<T>,
     init?: RequestInit,
 ): Promise<T> {
     try {
