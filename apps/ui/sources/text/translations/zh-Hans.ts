@@ -6707,6 +6707,8 @@ const zhHansValues = {
       daemonUnavailableBody:
         "Happier 无法连接到此设备上的守护进程。它可能离线、仍在启动，或与服务器断开连接。",
       tryAgain: "请重试",
+      permissionAnswerUnconfirmed: "回答已发送，但无法确认是否送达。智能体处理完该请求后，此提示会消失。",
+      permissionCheckAgain: "重新检查",
       contactSupport: "如果问题持续存在，请联系支持",
       sessionNotFound: "会话未找到",
       voiceSessionFailed: "启动语音会话失败",

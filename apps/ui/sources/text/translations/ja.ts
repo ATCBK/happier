@@ -7296,6 +7296,8 @@ localTailscale: {
       daemonUnavailableBody:
         "このマシン上のデーモンに接続できません。オフライン、起動中、またはサーバーから切断されている可能性があります。",
       tryAgain: "再試行してください",
+      permissionAnswerUnconfirmed: "回答を送信しましたが、届いたか確認できませんでした。エージェントがリクエストを完了すると解消されます。",
+      permissionCheckAgain: "再確認",
       contactSupport: "問題が続く場合はサポートにお問い合わせください",
       sessionNotFound: "セッションが見つかりません",
       voiceSessionFailed: "音声セッションの開始に失敗しました",

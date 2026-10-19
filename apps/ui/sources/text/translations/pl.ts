@@ -6830,6 +6830,8 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       daemonUnavailableBody:
         "Happier nie może połączyć się z demonem na tej maszynie. Może być offline, w trakcie uruchamiania lub odłączony od serwera.",
       tryAgain: "Spróbuj ponownie",
+      permissionAnswerUnconfirmed: "Odpowiedź wysłana, ale nie udało się potwierdzić, że dotarła. Zniknie, gdy agent zamknie prośbę.",
+      permissionCheckAgain: "Sprawdź ponownie",
       contactSupport:
         "Skontaktuj się z pomocą techniczną, jeśli problem będzie się powtarzał",
       sessionNotFound: "Sesja nie została znaleziona",

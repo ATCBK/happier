@@ -6949,6 +6949,8 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         daemonUnavailableBody:
             'Happier erreicht den Daemon auf diesem Rechner nicht. Er ist womöglich offline, startet noch oder ist vom Server getrennt.',
         tryAgain: 'Versuch es noch einmal',
+        permissionAnswerUnconfirmed: 'Antwort gesendet, aber wir konnten nicht bestätigen, dass sie angekommen ist. Das erledigt sich, sobald der Agent die Anfrage abschließt.',
+        permissionCheckAgain: 'Erneut prüfen',
         contactSupport: 'Wende dich an den Support, wenn das Problem bleibt',
         sessionNotFound: 'Session nicht gefunden',
         voiceSessionFailed: 'Voice-Session konnte nicht gestartet werden',

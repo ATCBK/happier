@@ -8223,6 +8223,8 @@ const enErrors = {
   daemonUnavailableBody:
     'Happier can’t reach the daemon on this machine. It may be offline, still starting, or disconnected from the server.',
   tryAgain: 'Please try again',
+  permissionAnswerUnconfirmed: 'Answer sent, but we couldn’t confirm it arrived. This clears once the agent settles the request.',
+  permissionCheckAgain: 'Check again',
   contactSupport: 'Contact support if the problem persists',
   sessionNotFound: 'Session not found',
   voiceSessionFailed: 'Failed to start voice session',
@@ -8411,7 +8413,7 @@ const enNewSession = {
   ...acpCatalogTranslationExtension.newSession,
   // Used by new-session screen and launch flows
   title: 'Start New Session',
-  selectAiProfileTitle: 'Select AI Profile',
+  selectAiProfileTitle: 'Select AI profile',
   selectAiProfileDescription:
     'Select an AI profile to apply environment variables and defaults to your session.',
   changeProfile: 'Change Profile',

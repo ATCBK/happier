@@ -6413,6 +6413,8 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         daemonUnavailableBody:
             'Happier no pot connectar amb el dimoni en aquesta màquina. Pot estar fora de línia, iniciant-se o desconnectat del servidor.',
         tryAgain: 'Torna-ho a provar',
+        permissionAnswerUnconfirmed: 'Resposta enviada, però no hem pogut confirmar que hagi arribat. Això desapareix quan l’agent tanqui la sol·licitud.',
+        permissionCheckAgain: 'Torna a comprovar',
         contactSupport: 'Contacta amb el suport si el problema persisteix',
         sessionNotFound: 'Sessió no trobada',
         voiceSessionFailed: 'Ha fallat l\'inici de la sessió de veu',

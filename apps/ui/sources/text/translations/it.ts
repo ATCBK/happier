@@ -7207,6 +7207,8 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
       daemonUnavailableBody:
         "Happier non riesce a raggiungere il daemon su questa macchina. Potrebbe essere offline, in avvio o disconnesso dal server.",
       tryAgain: "Per favore riprova",
+      permissionAnswerUnconfirmed: "Risposta inviata, ma non abbiamo potuto confermare che sia arrivata. Si risolve quando l’agente chiude la richiesta.",
+      permissionCheckAgain: "Controlla di nuovo",
       contactSupport: "Contatta l'assistenza se il problema persiste",
       sessionNotFound: "Sessione non trovata",
       voiceSessionFailed: "Avvio della sessione vocale non riuscito",

@@ -7095,6 +7095,8 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
       daemonUnavailableBody:
         "O Happier não consegue acessar o daemon nesta máquina. Ele pode estar offline, iniciando ou desconectado do servidor.",
       tryAgain: "Por favor, tente novamente",
+      permissionAnswerUnconfirmed: "Resposta enviada, mas não foi possível confirmar que chegou. Isso se resolve quando o agente encerrar o pedido.",
+      permissionCheckAgain: "Verificar novamente",
       contactSupport: "Entre em contato com o suporte se o problema persistir",
       sessionNotFound: "Sessão não encontrada",
       voiceSessionFailed: "Falha ao iniciar sessão de voz",

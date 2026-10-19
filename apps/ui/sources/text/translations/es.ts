@@ -6982,6 +6982,8 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
       daemonUnavailableBody:
         "Happier no puede comunicarse con el daemon en esta máquina. Puede estar sin conexión, iniciándose o desconectado del servidor.",
       tryAgain: "Intenta de nuevo",
+      permissionAnswerUnconfirmed: "Respuesta enviada, pero no pudimos confirmar que llegó. Se resolverá cuando el agente cierre la solicitud.",
+      permissionCheckAgain: "Comprobar de nuevo",
       contactSupport: "Contacta soporte si el problema persiste",
       sessionNotFound: "Sesión no encontrada",
       voiceSessionFailed: "Falló al iniciar sesión de voz",

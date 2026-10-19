@@ -6814,6 +6814,8 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       daemonUnavailableBody:
         "Happier n’arrive pas à joindre le daemon sur cette machine. Il est peut-être hors ligne, en cours de démarrage ou déconnecté du serveur.",
       tryAgain: "Réessaie",
+      permissionAnswerUnconfirmed: "Réponse envoyée, mais nous n’avons pas pu confirmer qu’elle est arrivée. Cela disparaît dès que l’agent clôt la demande.",
+      permissionCheckAgain: "Vérifier à nouveau",
       contactSupport: "Contacte le support si le problème persiste",
       sessionNotFound: "Session introuvable",
       voiceSessionFailed: "Impossible de démarrer la session vocale",
