@@ -10,10 +10,13 @@ export type SessionPending = {
     messages: PendingMessage[];
     discarded: DiscardedPendingMessage[];
     isLoaded: boolean;
+    /** Initial main-queue read; settlement never fabricates a loaded or empty snapshot. */
+    readState?: 'loading' | 'error';
 };
 
 export type PendingDomain = {
     sessionPending: Record<string, SessionPending>;
+    setPendingReadState: (sessionId: string, readState: NonNullable<SessionPending['readState']>) => void;
     applyPendingLoaded: (sessionId: string) => void;
     applyPendingSnapshot: (sessionId: string, snapshot: Readonly<{
         messages: PendingMessage[];
@@ -219,6 +222,7 @@ function replacePendingBucket<S extends PendingDomain & PendingDomainDependencie
         && nextMessages === previousMessages
         && nextDiscarded === previousDiscarded
         && existing.isLoaded === snapshot.isLoaded
+        && (existing.readState === undefined || !snapshot.isLoaded)
     ) {
         return state;
     }
@@ -230,6 +234,7 @@ function replacePendingBucket<S extends PendingDomain & PendingDomainDependencie
                 messages: nextMessages,
                 discarded: nextDiscarded,
                 isLoaded: snapshot.isLoaded,
+                ...(!snapshot.isLoaded && existing?.readState ? { readState: existing.readState } : {}),
             },
         },
     };
@@ -244,6 +249,13 @@ export function createPendingDomain<S extends PendingDomain & PendingDomainDepen
 }): PendingDomain {
     return {
         sessionPending: {},
+        setPendingReadState: (sessionId, readState) => set(state => {
+            const existing = state.sessionPending[sessionId];
+            if (existing?.isLoaded || existing?.readState === readState) return state;
+            return { ...state, sessionPending: { ...state.sessionPending, [sessionId]: {
+                ...(existing ?? { messages: [], discarded: [], isLoaded: false }), readState,
+            } } };
+        }),
         applyPendingLoaded: (sessionId: string) => set((state) => {
             const existing = state.sessionPending[sessionId];
             if (existing?.isLoaded === true) return state;
@@ -254,7 +266,7 @@ export function createPendingDomain<S extends PendingDomain & PendingDomainDepen
                     [sessionId]: {
                         messages: existing?.messages ?? [],
                         discarded: existing?.discarded ?? [],
-                        isLoaded: true
+                        isLoaded: true,
                     }
                 }
             };
@@ -327,6 +339,7 @@ export function createPendingDomain<S extends PendingDomain & PendingDomainDepen
                 sessionPending: {
                     ...state.sessionPending,
                     [sessionId]: {
+                        ...existing,
                         messages: next,
                         discarded: existing.discarded,
                         isLoaded: existing.isLoaded

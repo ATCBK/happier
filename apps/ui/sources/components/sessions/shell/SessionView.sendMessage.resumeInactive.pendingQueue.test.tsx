@@ -237,7 +237,7 @@ let resetQuotaSnapshot: ProviderAccountUsageSnapshotV1 | null = null;
 let heldResetQuotaRead: Readonly<{ entered(): void; release: Promise<void> }> | null = null;
 let managedInspectAskFirst = false;
 let managedWakeMachine: ManagedMachineV1 | null = null;
-let pendingReadOverride: (() => Response) | null = null;
+let pendingReadOverride: (() => Response | Promise<Response>) | null = null;
 let inventoryReadOverride: (() => Promise<Response>) | null = null;
 let managedReadGate: Promise<void> | null = null;
 let approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
@@ -596,7 +596,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         (globalThis as { __DEV__?: boolean }).__DEV__ = previousDev;
     });
 
-    it.each(['managed_power_required', null] as const)(
+    it.each(['managed_power_required', null, 'initial-pending-failure'] as const)(
         'keeps the mounted wake line loading until Sync inventory and the protected read answer (hold: %s)', async holdReason => {
         const { getSyncSingleton } = await import('@/sync/runtime/getSyncSingleton');
         const controller = { machineId: 'controller', installationId: 'controller-installation' };
@@ -609,6 +609,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         });
         const inventory = deferred<void>();
         const observation = deferred<void>();
+        const pendingRead = deferred<void>();
         managedReadGate = observation.promise;
         inventoryReadOverride = async () => {
             await inventory.promise;
@@ -616,11 +617,15 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
                 ...createPlainMachineRowFixture({ id, accountId: 'account-a' }), active: false, activeAt: 0,
             })));
         };
-        pendingReadOverride = () => Response.json({ pending: [{ localId: 'wake-message', messageRole: 'user',
+        const pendingResponse = () => Response.json({ pending: [{ localId: 'wake-message', messageRole: 'user',
             requestedAction: { v: 1, kind: 'enqueue' }, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Keep my message' } } },
             status: 'queued', deliveryStatus: { status: 'queued' }, position: 0, createdAt: 200, updatedAt: 200,
-            ...(holdReason ? { activationHoldReason: holdReason } : {}),
+            ...(holdReason === 'managed_power_required' ? { activationHoldReason: holdReason } : {}),
         }] });
+        pendingReadOverride = holdReason === 'initial-pending-failure' ? async () => {
+            await pendingRead.promise;
+            throw new Error('Pending transport unavailable');
+        } : pendingResponse;
         // A reload has no Machine inventory or pending read yet. Let the real
         // Sync readers apply the responses rather than injecting projected rows.
         storage.setState({ machines: {}, machineListByServerId: {}, machineListStatusByServerId: {}, sessionPending: {} });
@@ -633,6 +638,32 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         const badge = () => (findAgentInput(screen).props.statusBadges as AgentInputStatusBadge[])
             .find(candidate => candidate.key === 'session-managedWake');
         try {
+            if (holdReason === 'initial-pending-failure') {
+                const initialRead = getSyncSingleton().fetchPendingMessages('s1').catch(error => error);
+                await act(async () => { inventory.resolve(); observation.resolve(); await inventoryRead; });
+                await vi.waitFor(() => {
+                    const content = badge()?.renderPopover?.({ open: true, anchorRef: { current: null }, onRequestClose: () => {} });
+                    expect(React.isValidElement<{ projection: { observedAt?: number } }>(content) && content.props.projection.observedAt).toBe(10);
+                });
+                expect(badge()?.testID).toBe('session.managedWake.loading.badge');
+                await act(async () => { pendingRead.resolve(); expect(await initialRead).toBeInstanceOf(Error); });
+                await vi.waitFor(() => expect(badge()?.testID).toBe('session.managedWake.deliveryUnknown.badge'));
+                expect(storage.getState().sessionPending.s1?.isLoaded ?? false).toBe(false);
+                pendingReadOverride = pendingResponse;
+                await act(async () => { await getSyncSingleton().fetchPendingMessages('s1'); });
+                await vi.waitFor(() => expect(badge()?.testID).toBe('session.managedWake.agentStartFailed.badge'));
+                const retained = storage.getState().sessionPending.s1!.messages;
+                pendingReadOverride = () => { throw new Error('Pending refresh unavailable'); };
+                await act(async () => {
+                    await expect(getSyncSingleton().fetchPendingMessages('s1')).rejects.toThrow('Pending refresh unavailable');
+                });
+                expect(storage.getState().sessionPending.s1!.messages).toBe(retained);
+                expect(badge()?.testID).toBe('session.managedWake.agentStartFailed.badge');
+                expect(pendingWrites()).toHaveLength(0);
+                expect(actionWrites()).toHaveLength(0);
+                expect(resumeCalls()).toHaveLength(0);
+                return;
+            }
             await act(async () => { await getSyncSingleton().fetchPendingMessages('s1'); });
             expect(storage.getState().sessionPending.s1).toMatchObject({ isLoaded: true, messages: [{ localId: 'wake-message' }] });
             expect(badge()?.testID).toBe('session.managedWake.loading.badge');
@@ -661,7 +692,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             expect(actionWrites()).toHaveLength(0);
             expect(resumeCalls()).toHaveLength(0);
         } finally {
-            inventory.resolve(); observation.resolve();
+            inventory.resolve(); observation.resolve(); pendingRead.resolve();
             await inventoryRead;
             await screen.unmount();
         }

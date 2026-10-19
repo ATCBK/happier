@@ -2031,14 +2031,6 @@ async function fetchAndApplyPendingMessagesV2Owned(
     refreshToken: PendingSnapshotRefreshToken,
 ): Promise<void> {
     const { sessionId, request } = params;
-    try {
-    if (isDemoModeActive()) {
-        storage.getState().applyPendingSnapshot(sessionId, {
-            messages: storage.getState().sessionPending[sessionId]?.messages ?? [],
-            discarded: [],
-        });
-        return;
-    }
     // This refresh may apply only while it is BOTH the latest registered refresh and not invalidated.
     const isRefreshTokenAuthoritative = (): boolean =>
         latestPendingSnapshotRefreshByScopedSession.get(refreshKey) === refreshToken
@@ -2055,8 +2047,17 @@ async function fetchAndApplyPendingMessagesV2Owned(
     })();
         return isScopeCurrent && isRefreshTokenAuthoritative();
     };
+    try {
+    if (isDemoModeActive()) {
+        storage.getState().applyPendingSnapshot(sessionId, {
+            messages: storage.getState().sessionPending[sessionId]?.messages ?? [],
+            discarded: [],
+        });
+        return;
+    }
     const sessionEncryption = await refreshToken.sessionEncryptionAtCapture ?? null;
     if (!await isRefreshScopeCurrent()) return;
+    if (!params.recipient) storage.getState().setPendingReadState(sessionId, 'loading');
     const response = await request(`${pendingQueuePath(sessionId, params.recipient)}?includeDiscarded=1`, { method: 'GET', cache: 'no-store' });
     if (!await isRefreshScopeCurrent()) return;
     // A refresh that cannot answer for its scope clears only that scope's discarded history: an
@@ -2246,6 +2247,11 @@ async function fetchAndApplyPendingMessagesV2Owned(
             ...visible.discarded,
         ],
     });
+    } catch (error) {
+        // The same exact-scope/token owner publishes failure without claiming a
+        // snapshot loaded or discarding retained content. Run reads do not settle main hydration.
+        if (!params.recipient && await isRefreshScopeCurrent()) storage.getState().setPendingReadState(sessionId, 'error');
+        throw error;
     } finally {
         if (latestPendingSnapshotRefreshByScopedSession.get(refreshKey) === refreshToken) {
             latestPendingSnapshotRefreshByScopedSession.delete(refreshKey);

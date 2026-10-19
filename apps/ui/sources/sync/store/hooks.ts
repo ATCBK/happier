@@ -1874,7 +1874,7 @@ function hasTerminalPrimaryTurnStatus(status: PrimaryTurnStatusV1 | null | undef
 export function useSessionPendingMessages(
   sessionId: string,
   recipient?: PendingMessage['recipient'],
-): { messages: PendingMessage[]; discarded: DiscardedPendingMessage[]; isLoaded: boolean } {
+): { messages: PendingMessage[]; discarded: DiscardedPendingMessage[]; isLoaded: boolean; readState?: 'loading' | 'error' } {
   const normalizedSessionId = normalizeSessionId(sessionId);
   const messages = getStorage()(useShallow((state) =>
     (state.sessionPending[normalizedSessionId]?.messages ?? emptyArray)
@@ -1885,7 +1885,8 @@ export function useSessionPendingMessages(
       .filter((message) => isPendingMessageForRecipient(message, recipient))
   ));
   const isLoaded = getStorage()((state) => state.sessionPending[normalizedSessionId]?.isLoaded ?? false);
-  return React.useMemo(() => ({ messages, discarded, isLoaded }), [messages, discarded, isLoaded]);
+  const readState = getStorage()((state) => state.sessionPending[normalizedSessionId]?.readState);
+  return React.useMemo(() => ({ messages, discarded, isLoaded, readState }), [messages, discarded, isLoaded, readState]);
 }
 
 export function useSessionListMeaningfulActivityAt(sessionId: string): number | null {
