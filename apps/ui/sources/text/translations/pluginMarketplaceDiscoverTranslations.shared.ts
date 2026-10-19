@@ -58,6 +58,7 @@ export const installReviewSections = {
     credentialRequestFiles: ({ files }: { files: string }) => `Files: ${files}`,
     realm: { web: 'web', ios: 'iOS', android: 'Android', daemon: 'daemon' },
     phase: { settings: 'settings', prepare: 'preparation', connection: 'connection', speech: 'speech' },
+    evidenceLabel: { integrity: 'Integrity', signature: 'Signature', provenance: 'Provenance', curation: 'Catalog review', happier: 'Happier version', publisher: 'Publisher' },
     runtimeApi: ({ version }: { version: number }) => `Runtime API ${version}`,
     source: ({ kind, locator }: { kind: string; locator: string }) => `${kind}: ${locator}`,
     sourceKind: { path: 'Local path', archive: 'Archive', npm: 'npm package' },

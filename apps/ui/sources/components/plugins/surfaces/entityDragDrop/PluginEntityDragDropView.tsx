@@ -143,7 +143,7 @@ function MountedPluginEntityDragSource(props: DragSourceProps & Readonly<{
     };
     const rowOperation = {
         // A row menu item: the menu already names its row, so the verb alone (the grip keeps the full name).
-        id: 'entity.move', label: t('hints.move'), disabled: !enabled,
+        id: 'entity.move', label: t('commandPalette.hints.move'), disabled: !enabled,
         onSelect: () => { if (!isKeyboardCarrying()) handleStagedKey(' ', false); },
         onKeyDown: (key: string, event: unknown) => {
             const input = event as Readonly<{ repeat?: boolean }>;
