@@ -1456,6 +1456,7 @@ Declaration: `dist/index.d.ts`
 Declaration: `dist/advanced/index.d.ts`
 
 - type `FindSurfaceRegistrationHost` from `dist/advanced/index.d.ts`
+- value `HAPPIER_COLLECTION_RAIL_WIDTH_PX` from `dist/advanced/index.d.ts`
 - value `HAPPIER_MAX_RENDERABLE_IMAGE_BYTES` from `dist/advanced/index.d.ts`
 - value `HAPPIER_MAX_RENDERABLE_IMAGE_PIXELS` from `dist/advanced/index.d.ts`
 - value `HAPPIER_RENDERABLE_IMAGE_CONTENT_TYPE` from `dist/advanced/index.d.ts`
@@ -1489,6 +1490,7 @@ Declaration: `dist/advanced/index.d.ts`
 - value `materializeHappierRenderableImage` from `dist/advanced/index.d.ts`
 - value `pluginUiResourceReferenceKey` from `dist/advanced/index.d.ts`
 - value `pluginUiResourceReferenceLabel` from `dist/advanced/index.d.ts`
+- value `resolveHappierRowTitleMetaPlacement` from `dist/advanced/index.d.ts`
 - value `useClaimedPluginUiSurfaceNotice` from `dist/advanced/index.d.ts`
 - value `useFindSurfaceRegistrationWithHost` from `dist/advanced/index.d.ts`
 - value `useOptionalPluginUiScrollActivityTracker` from `dist/advanced/index.d.ts`

@@ -1260,7 +1260,8 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
   const peekActionId = 'collection.peek';
   const secondaryActions = [
     ...(actions.onSecondaryAction === undefined ? [] : actions.secondaryActions ?? []),
-    ...(peekable ? [{ id: peekActionId, label: translate('happier.plugin-ui.collection.peek', 'Peek {title}').replace('{title}', title) }] : []),
+    // The menu is already named for its row ("More actions for …"), so its item is the verb alone.
+    ...(peekable ? [{ id: peekActionId, label: translate('happier.plugin-ui.collection.peekAction', 'Peek') }] : []),
   ];
   const onSecondaryAction = (id: string) => {
     if (id === peekActionId) toggle(itemKey);
