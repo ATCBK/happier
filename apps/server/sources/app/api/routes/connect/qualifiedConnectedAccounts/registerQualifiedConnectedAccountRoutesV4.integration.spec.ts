@@ -834,6 +834,21 @@ describe("qualified Connected Account V4 route family (integration)", () => {
             expect(group.state.lastSwitchAt).toBe(selectedAt);
             expect(group.state.lastSwitchReason).toBe(selection === "automatic" ? "usage_limit" : "manual");
             expect(group.state.activeSince).toEqual({ accountId: backup.accountId, atMs: selectedAt });
+            const beforeNoOp = await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
+            const beforeRows = await db.connectedServiceAuthGroup.findMany({ where: { accountId: account.id }, include: { members: true } });
+            for (const runtimeState of [
+                { memberStates: [] },
+                { state: { lastSwitchAt: 1, status: "ready" }, memberStates: [] },
+                { memberStates: group.members.map(member => ({ connectedAccountId: member.connectedAccountId, state: member.state })) },
+            ]) {
+                const equal = await app.inject({ method: "PATCH", url: "/v4/connect/qualified/group/runtime-state", headers,
+                    payload: { service, groupId: groupRef.groupId, expectedGeneration: group.generation,
+                        expectedIncarnation: group.incarnation, expectedRuntimeStateRevision: group.runtimeStateRevision, runtimeState } });
+                expect(equal.statusCode, equal.body).toBe(200);
+                expect(equal.json().group).toEqual(group);
+                expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } })).toEqual(beforeNoOp);
+                expect(await db.connectedServiceAuthGroup.findMany({ where: { accountId: account.id }, include: { members: true } })).toEqual(beforeRows);
+            }
             const repeated = await app.inject({
                 method: "POST", url: "/v4/connect/qualified/group/active-account", headers,
                 payload: {

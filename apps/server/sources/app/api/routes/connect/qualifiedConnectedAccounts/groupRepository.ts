@@ -4,6 +4,7 @@ import { QualifiedConnectedAccountGroupCreateV4Schema, QualifiedConnectedAccount
 import { clearConnectedServiceAuthGroupMemberRuntimeBlockers, readConnectedServiceManualActiveProfileRuntimeBlocker } from '@happier-dev/protocol/connect/connectedServiceAuthGroupMemberRuntimeStatePolicy';
 import { type QualifiedConnectedAccountGroupV4, type QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import type { Prisma } from "@prisma/client";
+import { isDeepStrictEqual } from "node:util";
 
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
@@ -1202,6 +1203,22 @@ export async function patchQualifiedConnectedAccountGroupRuntimeState(
             !membersByConnectedAccountId.has(member.connectedAccountId))) {
             return { status: "member_not_found" };
         }
+        const nextStateJson = patch.runtimeState.state === undefined ? current.stateJson
+            : encodeQualifiedGroupStateForActiveAccount({
+                currentStateJson: current.stateJson,
+                nextState: patch.runtimeState.state,
+                previousActiveAccountId: current.activeConnectedAccountId,
+                nextActiveAccountId: current.activeConnectedAccountId,
+            });
+        if (isDeepStrictEqual(
+            parseStoredJson(ConnectedServiceAuthGroupStateV1Schema, nextStateJson),
+            parseStoredJson(ConnectedServiceAuthGroupStateV1Schema, current.stateJson),
+        ) && patch.runtimeState.memberStates.every(member => isDeepStrictEqual(
+            member.state,
+            parseStoredJson(ConnectedServiceAuthGroupMemberStateV1Schema, membersByConnectedAccountId.get(member.connectedAccountId)!.stateJson),
+        ))) {
+            return { status: "written", group: toQualifiedConnectedAccountGroup(current) };
+        }
         const write = await tx.connectedServiceAuthGroup.updateMany({
             where: {
                 id: current.id,
@@ -1212,12 +1229,7 @@ export async function patchQualifiedConnectedAccountGroupRuntimeState(
             data: {
                 ...(patch.runtimeState.state !== undefined
                     ? {
-                        stateJson: encodeQualifiedGroupStateForActiveAccount({
-                            currentStateJson: current.stateJson,
-                            nextState: patch.runtimeState.state,
-                            previousActiveAccountId: current.activeConnectedAccountId,
-                            nextActiveAccountId: current.activeConnectedAccountId,
-                        }),
+                        stateJson: nextStateJson,
                     }
                     : {}),
                 runtimeStateRevision: { increment: 1 },
