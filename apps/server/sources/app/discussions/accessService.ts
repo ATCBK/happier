@@ -26,7 +26,7 @@ import { RECIPIENT_READINESS_SELECT } from "@/app/session/encryption/sessionData
 import { applyResourceRecipientKeyEnvelopesInTx, mayManageResourceGrants, projectResourceRecipientCensus,
     projectResourceRecipientEnvelope, validateResourceGrantPrincipalInTx, validateResourceRecipientEnvelopeCommit,
     type ResourceRecipientEnvelopeStorageAdapter } from "@/app/teams/resourceGrantAccess";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { acquireDiscussionMutationAccountsInTx, discussionContextStorageAdapter, discussionGrantStorageAdapter, isDiscussionAccountCredentialAdmittedInTx, resolveDiscussionAudienceInTx,
     resolveDiscussionContextInTx, type DiscussionStorageMode } from "./access";
@@ -312,8 +312,13 @@ export async function removeDiscussionParticipantInTx(tx: Tx, input: DiscussionA
     if (!parsed.success) return discussionFailure("discussion_invalid_content");
     const participant = parsed.data.participant;
     if (participant.kind === "account") return removeDiscussionGrantInTx(tx, { ...input, request: { principal: participant } });
+    const capturedModelSessionId = participant.kind === "model"
+        ? (await tx.discussionParticipant.findUnique({ where: { discussionId_participantSlotId: {
+            discussionId: input.discussionId, participantSlotId: participant.participantSlotId,
+        } }, select: { sessionId: true } }))?.sessionId ?? null : null;
     await acquireDiscussionMutationAccountsInTx(tx, { ...input,
-        additionalSessionIds: participant.kind === 'session' ? [participant.sessionId] : [] });
+        additionalSessionIds: participant.kind === 'session' ? [participant.sessionId]
+            : capturedModelSessionId ? [capturedModelSessionId] : [] });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
     if (!mayManageResourceGrants(context.access)) return discussionFailure("discussion_access_forbidden");
@@ -321,15 +326,25 @@ export async function removeDiscussionParticipantInTx(tx: Tx, input: DiscussionA
         ...(participant.kind === "model" ? { participantSlotId: participant.participantSlotId }
             : { sessionId: participant.sessionId }) } });
     if (row && participant.kind === "model" && row.modelLaunch == null) return discussionFailure("discussion_subject_ineligible");
+    if (participant.kind === "model" && (row?.sessionId ?? null) !== capturedModelSessionId) {
+        throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+    }
     const changed = Boolean(row && !row.removedAt);
     if (row && changed) {
+        if (row.modelLaunch != null) {
+            // Retire the nullable binding before touching its Follow/reply
+            // children. The birth owner's matching CAS cannot bind a new
+            // Session after this attempt captured an unbound model slot.
+            const retired = await tx.discussionParticipant.updateMany({ where: { discussionId: input.discussionId,
+                participantSlotId: row.participantSlotId, removedAt: null, sessionId: row.sessionId },
+                data: { removedAt: new Date() } });
+            if (retired.count !== 1) throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
         if (row.sessionId) {
             await withdrawDiscussionInputRepliesInTx(tx, { discussionId: input.discussionId, participantSessionId: row.sessionId });
             await detachDiscussionFollowSourceInTx(tx, { discussionId: input.discussionId, destinationSessionId: row.sessionId });
         }
-        if (row.modelLaunch != null) await tx.discussionParticipant.update({ where: { discussionId_participantSlotId: {
-            discussionId: input.discussionId, participantSlotId: row.participantSlotId } }, data: { removedAt: new Date() } });
-        else await tx.discussionParticipant.delete({ where: { discussionId_participantSlotId: {
+        if (row.modelLaunch == null) await tx.discussionParticipant.delete({ where: { discussionId_participantSlotId: {
             discussionId: input.discussionId, participantSlotId: row.participantSlotId } } });
         await markDiscussionReadersChangedInTx({ tx, discussionId: input.discussionId, accessChanged: true });
     }
