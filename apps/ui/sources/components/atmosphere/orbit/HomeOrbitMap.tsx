@@ -5,9 +5,8 @@ import {
   Pressable,
   StyleSheet as RNStyleSheet,
   View,
-  type ViewStyle,
 } from 'react-native';
-import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle as SvgCircle, Line as SvgLine, Text as SvgText } from 'react-native-svg';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { PlanetCanvas } from '@/components/atmosphere/PlanetCanvas';
@@ -17,6 +16,10 @@ import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
 import type { HomeOrbitScene } from './homeOrbitScene';
+
+// react-native-svg's web WebShape forwards CSS style; its native Circle/Line declarations omit it.
+const Circle = SvgCircle as React.ComponentType<React.ComponentProps<typeof SvgCircle> & { style?: React.CSSProperties }>;
+const Line = SvgLine as React.ComponentType<React.ComponentProps<typeof SvgLine> & { style?: React.CSSProperties }>;
 
 /** Dots outside a preview fade to this strength; the previewed ones grow (lab L4 "reach map hover"). */
 const PREVIEW_FADED_OPACITY = 0.16;
@@ -360,7 +363,7 @@ export const HomeOrbitMap = React.memo(function HomeOrbitMap(
 });
 
 /** A web-only CSS style on an SVG element (transition, transform-box), typed as the element's style prop. */
-type SvgWebStyle = ViewStyle | undefined;
+type SvgWebStyle = React.CSSProperties | undefined;
 
 type TravelPhase = Readonly<{ id: string; at: 'from' | 'go' }> | null;
 

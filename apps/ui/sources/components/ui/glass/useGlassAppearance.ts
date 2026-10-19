@@ -4,7 +4,7 @@ import { useApplySettings } from '@/sync/store/settingsWriters';
 import { useGlassMaterialSettings } from './useGlassMaterialSettings';
 
 import {
-    readGlassMaterials, readGlassPreset, resolveGlassIntensitySettingsDelta, resolveGlassTintSettingsDelta, type GlassTintStep,
+    readGlassMaterials, readGlassPreset, readGlassTintIntensity, resolveGlassIntensitySettingsDelta, resolveGlassTintSettingsDelta,
     resolveGlassPresetSettingsDelta,
     type GlassPreset, type GlassSurfaceGroup,
 } from './glassMaterial';
@@ -20,10 +20,10 @@ export function useGlassAppearance() {
         materials: readGlassMaterials(settings),
         preset: readGlassPreset(settings),
         intensity: glassBlurIntensity ?? 'regular',
-        tint: glassTintIntensity ?? 'subtle',
+        tint: readGlassTintIntensity(glassTintIntensity),
         selectPreset: (preset: GlassPreset) => apply(resolveGlassPresetSettingsDelta(settings, preset)),
         setIntensity: (intensity: 'light' | 'regular' | 'strong') => apply(resolveGlassIntensitySettingsDelta(settings, intensity)),
-        setTint: (tint: GlassTintStep) => apply(resolveGlassTintSettingsDelta(settings, tint)),
+        setTint: (tint: number) => apply(resolveGlassTintSettingsDelta(settings, tint)),
         setSurfaceMode: (group: GlassSurfaceGroup, mode: 'glass' | 'solid') => apply(resolveGlassSurfaceModeSettingsDelta(settings, group, mode)),
     }), [apply, settings, glassBlurIntensity, glassTintIntensity]);
 }

@@ -24,7 +24,7 @@ export type PersonalizeFlowPorts = Readonly<{
     writeAccount: (delta: SettingsWriteDelta) => void;
     writeLocal: (delta: Partial<LocalSettings>) => void;
     /** The theme owner: stores the mode and applies it to the running app. */
-    applyTheme: (mode: ThemeModeChoice) => void | Promise<void>;
+    applyTheme: (mode: ThemeModeChoice) => void | boolean | Promise<void | boolean>;
     readProgress: () => PersonalizeProgress;
     writeProgress: (progress: PersonalizeProgress) => void;
     /** Marks `setup:personalize` done through the Home setup owner. */
@@ -46,7 +46,7 @@ export function createPersonalizeFlowActions(ports: PersonalizeFlowPorts) {
                 const write = resolvePersonalizeStepWrite(step, draft, ports.readAccount(), ports.readLocal());
                 if (write.account) ports.writeAccount(write.account);
                 if (write.local) ports.writeLocal(write.local);
-                if (write.theme) await ports.applyTheme(write.theme);
+                if (write.theme && await ports.applyTheme(write.theme) === false) return { ok: false, error: null };
                 ports.writeProgress(recordPersonalizeStepSaved(ports.readProgress(), step));
             } catch (error) {
                 return { ok: false, error };

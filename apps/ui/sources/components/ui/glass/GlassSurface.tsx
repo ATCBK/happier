@@ -11,13 +11,14 @@ import { useReduceTransparency } from '@/hooks/ui/useReduceTransparency';
 import { getBlurViewComponent, isNativeBlurAvailable } from './blurMaterial';
 import { getGlassViewComponent, useLiquidGlassAvailable } from './liquidGlass';
 import { resolveGlassCapability } from './resolveGlassCapability';
-import { GLASS_BLUR_INTENSITY, GLASS_BLUR_RADIUS_PX, resolveGlassBackdropMap, resolveGlassSurfaceMaterial, type FloatingSurfaceRole, type GlassSurfaceGroup } from './glassMaterial';
+import { GLASS_BLUR_INTENSITY, GLASS_BLUR_RADIUS_PX, resolveGlassBackdropMap, resolveGlassSurfaceMaterial, type FloatingSurfaceRole, type GlassFloatingCoat, type GlassSurfaceGroup } from './glassMaterial';
 import { useGlassMaterialSettings } from './useGlassMaterialSettings';
 import { useGlassRuntimeEnvironment } from './glassRuntimeEnvironment';
 import { glassElementsCoatColor, glassSurfaceBackgroundColor, glassSurfaceTintColor, resolveGlassSurfacePlaneMaterial, glassSurfacePlaneBackdropStyle, type AtmosphereContentCoat } from './glassSurfacePaint';
 import { useGlassMaterialColorResolver } from './useGlassSurfaceColor';
 import { parseThemeColor } from '@/theme/parseThemeColor';
 import { GLASS_BACKED_FAINT_INK_SHARE, GLASS_QUIET_INK_WEB_TOKENS, GlassBackedInkContext, glassQuietThemeInks, glassThemeInkWebStyle, resolveGlassBackedInk, resolveGlassPictureInk } from './glassBackedInk';
+import { GlassLivePictureBackdropContext } from './livePictureBackdrop';
 
 const retainSolidColor = (input: Readonly<{ color: string }>) => input.color;
 const withMaterialOpacity = (color: string, opacity: number) => parseThemeColor(color)?.alpha(opacity).rgb().string() ?? color;
@@ -140,7 +141,10 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     const intensity = props.blurIntensity ?? GLASS_BLUR_INTENSITY[material.blur as keyof typeof GLASS_BLUR_INTENSITY];
     const toneReduceTransparency = reduceTransparency || environment.reduceTransparency === true;
     // Resolving the fixed point reads live theme variables from the document; do it once per input change.
-    const panel = props.floatingRole === 'panel' && group === 'floating';
+    // Over a live picture (arbitrary pixels) every floating surface takes Strong's panel coat; over the plain
+    // page that coat still lands on the floating paint, so only the picture case changes.
+    const overLivePicture = React.useContext(GlassLivePictureBackdropContext);
+    const panel: GlassFloatingCoat = group !== 'floating' ? false : overLivePicture ? 'livePicture' : props.floatingRole === 'panel';
     const [tintColor, backdropTone, panelCoatOpacity] = React.useMemo(() => {
         const toneEnvironment = { ...environment, reduceTransparency: toneReduceTransparency };
         // The solid paint this surface shows over the plain page: the glass resolves to it there.
@@ -203,7 +207,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     // Faint ink on glass with a picture (or the live desktop) behind it gets a stronger step, on every
     // platform. Ordinary pages and unbacked glass keep the theme's secondary ink.
     const backed = translucent && props.plane !== true && (group === 'card' || group === 'floating')
-        && (environment.atmosphereBehind === 'band' || environment.atmosphereBehind === 'wallpaper'
+        && (environment.atmosphereBehind === 'band' || environment.atmosphereBehind === 'wallpaper' || overLivePicture
             || (environment.desktopWindow === true && environment.nativeWindowMaterialLive === true));
     // Where the cleared page is the Wallpaper picture itself, its quiet ink steps up to the primary ink.
     const onPicture = isContentOverWallpaper(plane, environment);
@@ -291,7 +295,7 @@ const WEB_CORNER_RADII = ['borderRadius', 'borderTopLeftRadius', 'borderTopRight
 function renderGlassMaterialSurface(input: Parameters<HappierMaterialSurfaceRender>[0], floatingRole?: FloatingSurfaceRole): React.ReactElement {
     return <GlassSurface
         surfaceGroup={input.role} finishRole={input.finishRole ?? 'card'} nested={input.role === 'floating' ? input.nested : true}
-        floatingRole={floatingRole}
+        floatingRole={floatingRole ?? input.floatingRole}
         gradient={input.gradient}
         style={input.style as StyleProp<ViewStyle>} testID={input.testID} onLayout={input.onLayout} accessibilityLabel={input.accessibilityLabel}
     >{input.children}</GlassSurface>;

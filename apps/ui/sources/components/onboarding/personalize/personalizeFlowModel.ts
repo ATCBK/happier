@@ -8,7 +8,7 @@ import {
     resolveThinkingDisplayChoiceDelta,
     type ThinkingDisplayChoice,
 } from '@/components/settings/session/thinkingDisplayChoice';
-import { readGlassPreset, resolveGlassPresetSettingsDelta, type GlassMaterialChoice, type GlassMaterialSettings } from '@/components/ui/glass/glassMaterial';
+import { readGlassPreset, readGlassTintIntensity, resolveGlassPresetSettingsDelta, type GlassMaterialChoice, type GlassMaterialSettings } from '@/components/ui/glass/glassMaterial';
 import {
     resolveSessionListLayoutChoice,
     resolveSessionListLayoutSettingsDelta,
@@ -72,7 +72,7 @@ export function readPersonalizeChoices(account: Settings, local: Pick<LocalSetti
         glassSettings: {
             glassBlurEnabled: account.glassBlurEnabled,
             glassBlurIntensity: account.glassBlurIntensity,
-            glassTintIntensity: account.glassTintIntensity,
+            glassTintIntensity: readGlassTintIntensity(account.glassTintIntensity),
             glassSurfaceMaterials: account.glassSurfaceMaterials,
         },
         transcriptLayout: account.transcriptGroupingMode === 'linear' ? 'linear' : 'turns',

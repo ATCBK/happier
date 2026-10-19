@@ -30,6 +30,7 @@ describe('Personalize choices', () => {
             glassSettings: {
                 glassBlurEnabled: account.glassBlurEnabled,
                 glassBlurIntensity: account.glassBlurIntensity,
+                glassTintIntensity: 12,
                 glassSurfaceMaterials: account.glassSurfaceMaterials,
             },
             transcriptLayout: 'turns',

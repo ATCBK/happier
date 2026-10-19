@@ -152,7 +152,7 @@ export function usePersonalizeFlow(params: Readonly<{ initialPage?: PersonalizeP
         saving.current = false;
         if (!isCurrent()) return false;
         if (!result.ok) {
-            setStatus('failed');
+            setStatus(result.error === null ? 'idle' : 'failed');
             return false;
         }
         if (page === 'look') restoreThemePreview();

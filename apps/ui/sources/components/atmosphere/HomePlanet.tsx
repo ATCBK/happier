@@ -17,6 +17,7 @@ import {
   homePlanetSceneOptions,
   homeRiseFootFade,
   homeRiseLimb,
+  projectPlanetBand,
   type HomePane,
   type HomePlanetPlacement,
   type HomePlanetStyle,
@@ -38,6 +39,8 @@ export type HomePlanetLook = Readonly<{
   theme: 'light' | 'dark';
   phone: boolean;
   hero: HomePlanetHero | null;
+  /** A Project's band depth in the pane: the planet stays above it (see `projectPlanetBand`). */
+  band?: number;
 }>;
 
 /**
@@ -46,10 +49,12 @@ export type HomePlanetLook = Readonly<{
  */
 export function useHomePlanetOptions(look: HomePlanetLook, retypeTime: number | null = null): PlanetSceneOptions | null {
   const { pane, placement, hero, phone, theme, style, digits } = look;
+  const projectBand = look.band ? projectPlanetBand(look.band) : null;
   const widgets = hero ? hero.nextTop !== null : undefined;
-  const ready = placement !== 'rise' || hero !== null;
-  const limb =
-    placement === 'rise' && hero && hero.composerTop !== null ? homeRiseLimb(hero.composerTop) : undefined;
+  const ready = placement !== 'rise' || hero !== null || projectBand !== null;
+  const limb = placement !== 'rise' ? undefined
+    : projectBand ? projectBand.riseLimb
+      : hero && hero.composerTop !== null ? homeRiseLimb(hero.composerTop) : undefined;
   const fadeTo = homePlanetFootFade(look)?.to;
   return React.useMemo(() => {
     if (!ready || pane.width <= 0 || pane.height <= 0) return null;
@@ -63,8 +68,9 @@ export function useHomePlanetOptions(look: HomePlanetLook, retypeTime: number | 
 }
 
 /** Rise's ordered foot fade before the widgets, in the pane (lab `layout()`); none for the other placements. */
-export function homePlanetFootFade(look: Pick<HomePlanetLook, 'placement' | 'hero' | 'phone'>) {
+export function homePlanetFootFade(look: Pick<HomePlanetLook, 'placement' | 'hero' | 'phone' | 'band'>) {
   const { placement, hero, phone } = look;
+  if (look.band) return projectPlanetBand(look.band).fade;
   return placement === 'rise' && hero && hero.nextTop !== null
     ? homeRiseFootFade({ aboveBottom: hero.aboveBottom, nextTop: hero.nextTop, phone })
     : undefined;
@@ -84,6 +90,8 @@ export const HomePlanet = React.memo(function HomePlanet(
     theme: 'light' | 'dark';
     phone: boolean;
     hero: HomePlanetHero | null;
+    /** A Project's band: the planet is drawn only above it, ending in the ordered foot fade. */
+    band?: number;
     /** Hidden while a send dissolves the page or a picture has taken over. */
     hidden: boolean;
     leave: 'climb' | 'fade';

@@ -2,10 +2,10 @@ import Color from 'color';
 import { parseThemeColor } from '@/theme/parseThemeColor';
 import { GLASS_BACKED_FAINT_INK_SHARE } from './glassBackedInk';
 export { readThemeDocumentColor as readGlassDocumentColor } from '@/theme/parseThemeColor';
-import { readGlassMaterials, readGlassPreset, readGlassTintedMaterials } from '@happier-dev/protocol/actions/settings/glassPreferenceMutations';
+import { DEFAULT_GLASS_TINT_INTENSITY, readGlassMaterials, readGlassPreset, readGlassTintedMaterials, readGlassTintIntensity, resolveGlassTintValues } from '@happier-dev/protocol/actions/settings/glassPreferenceMutations';
 import type { GlassMaterialSettings, GlassSurfaceGroup, GlassSurfaceMaterial } from '@happier-dev/protocol/actions/settings/glassPreferenceMutations';
-export { GLASS_PRESETS, GLASS_SURFACE_GROUPS, GLASS_BLUR_STEPS, GLASS_BLUR_INTENSITY, GLASS_BLUR_RADIUS_PX, glassPresetMaterials, readGlassMaterials, readGlassPreset, readGlassTintedMaterials, resolveGlassPresetSettingsDelta, resolveGlassSurfaceSettingsDelta, resolveGlassIntensitySettingsDelta, resolveGlassTintSettingsDelta, GLASS_TINT_STEPS } from '@happier-dev/protocol/actions/settings/glassPreferenceMutations';
-export type { GlassBlurStep, GlassTintStep, GlassSurfaceGroup, GlassSurfaceMaterial, GlassSurfaceMaterials, GlassPreset, GlassMaterialChoice, GlassMaterialSettings } from '@happier-dev/protocol/actions/settings/glassPreferenceMutations';
+export { GLASS_PRESETS, GLASS_SURFACE_GROUPS, GLASS_BLUR_STEPS, GLASS_BLUR_INTENSITY, GLASS_BLUR_RADIUS_PX, glassPresetMaterials, readGlassMaterials, readGlassPreset, readGlassTintedMaterials, readGlassTintIntensity, resolveGlassPresetSettingsDelta, resolveGlassSurfaceSettingsDelta, resolveGlassIntensitySettingsDelta, resolveGlassTintSettingsDelta } from '@happier-dev/protocol/actions/settings/glassPreferenceMutations';
+export type { GlassBlurStep, GlassSurfaceGroup, GlassSurfaceMaterial, GlassSurfaceMaterials, GlassPreset, GlassMaterialChoice, GlassMaterialSettings } from '@happier-dev/protocol/actions/settings/glassPreferenceMutations';
 
 export type GlassMaterialEnvironment = Readonly<{
     desktopWindow?: boolean;
@@ -63,22 +63,6 @@ export function resolveGlassSurfaceMaterial(settings: GlassMaterialSettings, gro
 }
 
 /**
- * How much of the backdrop shows through a named-preset glass surface (k in out = k·X + c), per tint.
- * Over the plain page the glass lands on its own paint (the fixed point). Dark floating glass over an
- * ordinary page passes the page through (k = 1), as monocode's blur does. Over a picture
- * (`atmosphereBehind`), k drops only as far as primary ink needs 4.5:1 over the balloons' bright sky;
- * Strong also compresses ordinary pages for a frosted look. Light hangs its band from white.
- */
-export const GLASS_BACKDROP_COMPRESSION = {
-    subtle: { plain: { card: { dark: 1, light: 0.43 }, floating: { dark: 1, light: 0.43 } },
-        picture: { card: { dark: 0.6, light: 0.43 }, floating: { dark: 0.55, light: 0.43 } } },
-    medium: { plain: { card: { dark: 1, light: 0.43 }, floating: { dark: 1, light: 0.43 } },
-        picture: { card: { dark: 0.45, light: 0.43 }, floating: { dark: 0.45, light: 0.43 } } },
-    strong: { plain: { card: { dark: 0.7, light: 0.3 }, floating: { dark: 0.7, light: 0.3 } },
-        picture: { card: { dark: 0.35, light: 0.3 }, floating: { dark: 0.35, light: 0.3 } } },
-} as const;
-
-/**
  * The plain page a surface stands on and the solid paint it shows there. Theme variables are resolved live.
  * `ink` is the theme's primary ink: with a measured picture tone, default glass keeps it legible, also under
  * `controlFill`, the translucent fill a control nested in the glass paints over it (a bordered pill).
@@ -96,10 +80,23 @@ export type GlassBackdropMap = Readonly<{ tone: string; coat: string | null; opa
  * panels such as Add widget, About this widget or Workflow run inputs) carry the page at a heavy coat
  * behind their blur, as monocode's modals do (the page colour at 55% in dark at Subtle); menus,
  * tooltips and small popovers keep the tint's hair (owner, 2026-10-16). Over the plain page a panel
- * still lands on its floating paint. Medium and Strong scale up from Subtle.
+ * still lands on its floating paint. Coats interpolate with the global tint.
  */
 export type FloatingSurfaceRole = 'menu' | 'panel';
-export const GLASS_PANEL_COATS = { subtle: 0.55, medium: 0.7, strong: 0.85 } as const;
+/**
+ * The coat a floating surface carries: the tint's hair (`false`), the tint's panel coat (`true`), or,
+ * over a live picture (a shared screen or browser page: arbitrary pixels, not atmosphere), Strong's
+ * panel coat, so a black terminal never turns a light menu into a grey wash of itself. Only the shipped
+ * default glass takes it: a customized preset, blur or tint applies as set there too (owner, 2026-10-04).
+ */
+export type GlassFloatingCoat = boolean | 'livePicture';
+const GLASS_LIVE_PICTURE_PANEL_COAT = resolveGlassTintValues(100).panelCoat;
+
+/** The glass the app ships with: the Auto preset at regular blur and the default tint. Anything else is the person's choice. */
+function isDefaultGlassAppearance(settings: GlassMaterialSettings): boolean {
+    return readGlassPreset(settings) === 'auto' && (settings.glassBlurIntensity ?? 'regular') === 'regular'
+        && readGlassTintIntensity(settings.glassTintIntensity) === DEFAULT_GLASS_TINT_INTENSITY;
+}
 
 const toneNumber = (value: number) => String(Math.round(value * 1000) / 1000);
 const parseRgb = (value: string): readonly [number, number, number] | null => {
@@ -111,7 +108,7 @@ const parseRgb = (value: string): readonly [number, number, number] | null => {
 
 /**
  * Solves against the applied, rounded filter including clipping and saturation. A neutral lift is
- * used only where a feasible coat carries the target. Saturated authored fills can exceed that coat's
+ * used only where a feasible coat carries the target and k < 1 − α. Saturated authored fills can exceed that coat's
  * gamut: raise α just enough to reach every channel, dropping the lift when that permits a thinner
  * feasible coat, rather than clamp the coat.
  * This is colour feasibility for named materials, never a legibility floor on custom opacity.
@@ -129,11 +126,12 @@ function solveGlassFixedPoint(compression: number, alpha: number, ground: GlassB
     };
     const saturatedPage = saturate(page);
     const spread = solid.map((value, channel) => value - compression * saturatedPage[channel]!);
-    const lift = Math.max(0, (Math.max(...spread) - alpha) / (1 - alpha));
-    const filter = (neutralLift: number) => {
+    const allowLift = compression < 1 - alpha;
+    const lift = allowLift ? Math.max(0, (Math.max(...spread) - alpha) / (1 - alpha)) : 0;
+    const filter = (neutralLift: number, unliftedScale = scale) => {
         if (neutralLift === 0) return {
-            tone: `brightness(${toneNumber(scale)}) saturate(1.05)`,
-            backdrop: saturate(page.map(value => clamp(value * Number(toneNumber(scale))))),
+            tone: `brightness(${toneNumber(unliftedScale)}) saturate(1.05)`,
+            backdrop: saturate(page.map(value => clamp(value * Number(toneNumber(unliftedScale))))),
         };
         // Evaluate the exact rounded CSS coefficients, clamping at each filter boundary.
         const total = Number(toneNumber(scale + neutralLift));
@@ -152,7 +150,17 @@ function solveGlassFixedPoint(compression: number, alpha: number, ground: GlassB
     }));
     let opacity = alpha;
     let coat = coatFor(opacity);
-    if (coat.some(value => value < 0 || value > 1)) {
+    const infeasible = () => coat.some(value => value < -0.002 || value > 1.002);
+    if (!allowLift) {
+        // Without a lift, thicken the coat and re-derive the brightness at that coat, so the backdrop
+        // keeps exactly k. The required coat grows with its own brightness, so this converges in a few steps.
+        for (let step = 0; step < 8 && infeasible(); step++) {
+            opacity = feasibleOpacity(backdrop);
+            ({ tone, backdrop } = filter(0, compression / (1 - opacity)));
+            coat = coatFor(opacity);
+        }
+        coat = coat.map(clamp);
+    } else if (coat.some(value => value < 0 || value > 1)) {
         opacity = feasibleOpacity(backdrop);
         const unlifted = filter(0);
         const unliftedOpacity = feasibleOpacity(unlifted.backdrop);
@@ -226,24 +234,28 @@ function legibleCompression(compression: number, dark: boolean, tone: GlassAtmos
  * use the fixed-point model; picture-backed shell planes keep a dimming tone under their heavy coat.
  * Custom, Solid, Reduce Transparency and unbacked surfaces return null and paint exactly as set.
  */
-export function resolveGlassBackdropMap(settings: GlassMaterialSettings, group: GlassSurfaceGroup, dark: boolean, environment: GlassMaterialEnvironment = {}, ground: GlassBackdropGround | null = null, panel = false): GlassBackdropMap | null {
+export function resolveGlassBackdropMap(settings: GlassMaterialSettings, group: GlassSurfaceGroup, dark: boolean, environment: GlassMaterialEnvironment = {}, ground: GlassBackdropGround | null = null, panel: GlassFloatingCoat = false): GlassBackdropMap | null {
     const wallpaperPlane = environment.atmosphereBehind === 'wallpaper' && (group === 'chrome' || group === 'sidebar');
     if ((group !== 'floating' && group !== 'card' && !wallpaperPlane) || readGlassPreset(settings) === 'custom') return null;
     const { opacity } = resolveGlassSurfaceMaterial(settings, group, environment).material;
     if (opacity === 1) return null;
     if (group === 'floating' || group === 'card') {
         const picture = environment.atmosphereBehind === 'band' || environment.atmosphereBehind === 'wallpaper';
-        const tint = settings.glassTintIntensity ?? 'subtle';
-        if (group === 'floating' && panel) {
+        const tint = resolveGlassTintValues(settings.glassTintIntensity);
+        // A customized appearance over a live picture is the plain floating surface it would be anywhere else.
+        const coat = panel === 'livePicture' && !isDefaultGlassAppearance(settings) ? false : panel;
+        if (group === 'floating' && coat) {
             // The heavy coat carries the panel: the backdrop passes at most at 1 − α, never brightened.
-            const alpha = GLASS_PANEL_COATS[tint];
-            const compression = legibleCompression(Math.min(1 - alpha, dark ? 1 : GLASS_BACKDROP_COMPRESSION[tint].plain.floating.light), dark, picture ? environment.atmosphereTone : undefined, ground);
+            const alpha = coat === 'livePicture' ? Math.max(tint.panelCoat, GLASS_LIVE_PICTURE_PANEL_COAT) : tint.panelCoat;
+            const compression = legibleCompression(Math.min(1 - alpha, dark ? 1 : tint.lightCompression), dark, picture ? environment.atmosphereTone : undefined, ground);
             return { opacity: alpha, ...solveGlassFixedPoint(compression, alpha, ground) };
         }
         // Every tint lands on the surface's own solid paint over the plain page, its warm hue included;
-        // Subtle only carries that paint in a thinner coat, so the picture shows through more.
-        return solveGlassFixedPoint(legibleCompression(GLASS_BACKDROP_COMPRESSION[tint][picture ? 'picture' : 'plain'][group][dark ? 'dark' : 'light'], dark, picture ? environment.atmosphereTone : undefined, ground),
-            opacity, ground);
+        // Lower tints carry that paint in a thinner coat, so the picture shows through more.
+        const compression = dark ? picture ? tint.pictureDarkCompression : tint.plainDarkCompression : tint.lightCompression;
+        // Light never brightens the backdrop past the page. At k = 1 the coat thickens only as far
+        // as the paint needs, keeping k exact without a neutral lift.
+        return solveGlassFixedPoint(legibleCompression(dark ? compression : Math.min(compression, 1 - opacity), dark, picture ? environment.atmosphereTone : undefined, ground), opacity, ground);
     }
     // Shell planes over a wallpaper carry most of their own paint; the tone only tames highlights.
     return { tone: dark ? 'brightness(0.65) saturate(1.05)'
@@ -251,6 +263,6 @@ export function resolveGlassBackdropMap(settings: GlassMaterialSettings, group: 
 }
 
 /** The backdrop filter of `resolveGlassBackdropMap`, or '' when the surface keeps its exact paint. */
-export function resolveGlassBackdropTone(settings: GlassMaterialSettings, group: GlassSurfaceGroup, dark: boolean, environment: GlassMaterialEnvironment = {}, ground: GlassBackdropGround | null = null, panel = false): string {
+export function resolveGlassBackdropTone(settings: GlassMaterialSettings, group: GlassSurfaceGroup, dark: boolean, environment: GlassMaterialEnvironment = {}, ground: GlassBackdropGround | null = null, panel: GlassFloatingCoat = false): string {
     return resolveGlassBackdropMap(settings, group, dark, environment, ground, panel)?.tone ?? '';
 }

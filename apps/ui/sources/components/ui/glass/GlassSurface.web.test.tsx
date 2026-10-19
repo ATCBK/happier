@@ -1,9 +1,16 @@
 import * as React from 'react';
 import Color from 'color';
 import { act, type ReactTestInstance } from 'react-test-renderer';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flattenTestStyle, renderScreen, standardCleanup } from '@/dev/testkit';
 import { glassContrastRatio, renderGlassOver } from '@/dev/testkit/glassBackdrop';
+
+const browser = await vi.hoisted(async () => {
+    const { installBrowserRuntimeForTests } = await import('@/dev/testkit/harness/browserRuntimeHarness');
+    return installBrowserRuntimeForTests({ url: 'https://happier.test' });
+});
+beforeEach(() => { vi.stubGlobal('document', browser.document); });
+afterAll(() => { browser.restore(); });
 
 // The web renderer is the platform boundary; material policy, settings and reconciliation stay real.
 vi.mock('react-native', async () => {
@@ -44,11 +51,20 @@ afterEach(() => {
     themeMode.dark = false;
     standardCleanup();
     act(() => storage.setState(previousState, true));
+    document.body.replaceChildren();
 });
 
 function DraftInput() {
     const [value, setValue] = React.useState('');
     return React.createElement('DraftInput', { testID: 'draft', value, onChangeText: setValue });
+}
+
+// Host-rendered Pressables have no DOM node; give their focus event a real browser target.
+function createFocusedBrowserButton() {
+    const button = document.createElement('button');
+    document.body.append(button);
+    button.focus();
+    return button;
 }
 
 function hasBackdrop(node: ReactTestInstance): boolean {
@@ -176,7 +192,7 @@ describe('web glass material', () => {
                 ['floating', 'none', theme.colors.edge.floatingFill],
             ] as const) {
                 // Medium paints the surface's own fill over the page; Subtle's hair of ink is covered in glassMaterial.test.
-                const settings = { glassSurfaceMaterials: glassPresetMaterials('auto'), glassTintIntensity: 'medium' as const };
+                const settings = { glassSurfaceMaterials: glassPresetMaterials('auto'), glassTintIntensity: 50 };
                 const screen = await renderScreen(<GlassMaterialSettingsProvider value={settings}>
                     <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind }}>
                         <GlassSurface surfaceGroup={group} finishRole={null} solidColor={solid}><DraftInput /></GlassSurface>
@@ -210,7 +226,7 @@ describe('web glass material', () => {
         const { glassPresetMaterials, resolveGlassSurfaceMaterial } = await import('./glassMaterial');
         const { darkTheme } = await import('@/theme');
         themeMode.dark = true;
-        const settings = { glassSurfaceMaterials: glassPresetMaterials('auto') };
+        const settings = { glassSurfaceMaterials: glassPresetMaterials('auto'), glassTintIntensity: 50 };
         const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
         const secondaryOverride = (node: ReactTestInstance | null | undefined) => (flattenTestStyle(node?.props.style) as Record<string, string> | null)?.['--colors-text-secondary'];
         for (const [group, atmosphereBehind, backed] of [
@@ -225,7 +241,7 @@ describe('web glass material', () => {
             if (!backed) {
                 expect(override).toBeUndefined();
             } else {
-                // Over the balloons' brightest sky at Subtle, faint ink reaches about 3:1.
+                // Over the balloons' brightest sky at Medium, faint ink reaches about 3:1 (Subtle passes the picture through).
                 const backdrop = screen.findAll(hasBackdrop)[0]!;
                 const style = flattenTestStyle(backdrop.props.style) as Record<string, string>;
                 const coat = /color-mix\(in srgb, (rgba?\([^)]*\)|#[0-9a-f]+) /i.exec(style.backgroundColor!)?.[1];
@@ -273,7 +289,7 @@ describe('web glass material', () => {
             standardCleanup();
         }
     });
-    it('steps the tertiary meta inside a card up to the secondary faint ink on glass with a picture behind it, and leaves unbacked glass alone', async () => {
+    it('steps the tertiary meta and the composer\'s chip and placeholder ink inside a card up to the secondary faint ink on glass with a picture behind it, and leaves unbacked glass alone', async () => {
         const { Text } = await import('@/components/ui/text/Text');
         const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
         const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
@@ -291,12 +307,23 @@ describe('web glass material', () => {
                     <GlassSurface testID="glass" surfaceGroup={group} finishRole={null}>
                         <Text style={{ color: darkTheme.colors.text.secondary }}>Secondary line</Text>
                         <Text style={{ color: darkTheme.colors.text.tertiary }}>Meta line</Text>
+                        <Text style={{ color: darkTheme.colors.composer.chipTint }}>Chip line</Text>
+                        <Text style={{ color: darkTheme.colors.input.placeholder }}>Placeholder line</Text>
                     </GlassSurface>
                 </GlassRuntimeEnvironmentProvider>
             </GlassMaterialSettingsProvider>);
+            const webInk = (flattenTestStyle(screen.findHostByTestId('glass')?.props.style) as Record<string, string> | null) ?? {};
             if (!backed) {
                 expect(inkOf(screen, 'Meta line')).toBe(darkTheme.colors.text.tertiary);
+                expect(inkOf(screen, 'Chip line')).toBe(darkTheme.colors.composer.chipTint);
+                expect(webInk['--colors-composer-chip-tint']).toBeUndefined();
             } else {
+                // The composer's chips and placeholder are the faintest ink it draws: they take the same faint step,
+                // the one the default coat cap protects, from JavaScript and from the web stylesheet alike.
+                expect(inkOf(screen, 'Chip line')).toBe(inkOf(screen, 'Secondary line'));
+                expect(inkOf(screen, 'Placeholder line')).toBe(inkOf(screen, 'Secondary line'));
+                expect(webInk['--colors-composer-chip-tint']).toBe(webInk['--colors-text-secondary']);
+                expect(webInk['--colors-input-placeholder']).toBe(webInk['--colors-text-secondary']);
                 const secondary = Color(inkOf(screen, 'Secondary line') as string);
                 const tertiary = Color(inkOf(screen, 'Meta line') as string);
                 // Over a picture the theme's own tertiary cannot hold its contrast: it takes the faint-ink step, the secondary's own.
@@ -307,23 +334,12 @@ describe('web glass material', () => {
             }
             standardCleanup();
         }
-                        <Text style={{ color: darkTheme.colors.composer.chipTint }}>Chip line</Text>
-                        <Text style={{ color: darkTheme.colors.input.placeholder }}>Placeholder line</Text>
     });
     it('derives default glass from the measured picture: the theme ink keeps its contrast over a picture that runs against the theme, and custom glass applies as set', async () => {
         const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
-            const webInk = (flattenTestStyle(screen.findHostByTestId('glass')?.props.style) as Record<string, string> | null) ?? {};
         const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
         const { glassPresetMaterials, GLASS_SURFACE_GROUPS, resolveGlassSurfaceMaterial } = await import('./glassMaterial');
-                expect(inkOf(screen, 'Chip line')).toBe(darkTheme.colors.composer.chipTint);
-                expect(webInk['--colors-composer-chip-tint']).toBeUndefined();
         const { GLASS_BACKED_FAINT_INK_SHARE } = await import('./glassBackedInk');
-                // The composer's chips and placeholder are the faintest ink it draws: they take the same faint step,
-                // the one the default coat cap protects, from JavaScript and from the web stylesheet alike.
-                expect(inkOf(screen, 'Chip line')).toBe(inkOf(screen, 'Secondary line'));
-                expect(inkOf(screen, 'Placeholder line')).toBe(inkOf(screen, 'Secondary line'));
-                expect(webInk['--colors-composer-chip-tint']).toBe(webInk['--colors-text-secondary']);
-                expect(webInk['--colors-input-placeholder']).toBe(webInk['--colors-text-secondary']);
         const { darkTheme, lightTheme } = await import('@/theme');
         const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
         const toneOf = (backdrop: [number, number, number]) => { const l = Color.rgb(backdrop).luminosity(); return { dark: l, light: l, focus: l }; };
@@ -466,6 +482,8 @@ describe('web glass material', () => {
         const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
         const { glassPresetMaterials } = await import('./glassMaterial');
         const { FloatingOverlay } = await import('@/components/ui/overlays/FloatingOverlay');
+        const { HappierSurface } = await import('@happier-dev/plugin-ui/presentation');
+        const { renderThemeMaterialSurface } = await import('./GlassSurface');
         const { darkTheme } = await import('@/theme');
         themeMode.dark = true;
         const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
@@ -483,6 +501,8 @@ describe('web glass material', () => {
         for (const panel of [
             await paint(<GlassSurface surfaceGroup="floating" floatingRole="panel"><DraftInput /></GlassSurface>),
             await paint(<FloatingOverlay role="panel" scrollEnabled={false}><DraftInput /></FloatingOverlay>),
+            // A plugin's anchored panel reaches the same owner through the public material request.
+            await paint(<HappierSurface materialRole="floating" floatingRole="panel" renderMaterialSurface={renderThemeMaterialSurface}><DraftInput /></HappierSurface>),
         ]) {
             expect(panel.opacity).toBeGreaterThanOrEqual(0.5);
             renderGlassOver({ filter: panel.filter, coat: panel.coat!, opacity: panel.opacity!, backdrop: page })
@@ -492,7 +512,60 @@ describe('web glass material', () => {
         for (const menu of [
             await paint(<GlassSurface surfaceGroup="floating"><DraftInput /></GlassSurface>),
             await paint(<FloatingOverlay scrollEnabled={false}><DraftInput /></FloatingOverlay>),
+            await paint(<HappierSurface materialRole="floating" renderMaterialSurface={renderThemeMaterialSurface}><DraftInput /></HappierSurface>),
         ]) expect(menu.opacity === null || menu.opacity <= 0.07).toBe(true);
+    });
+    it('gives a menu opened over a live picture the panel coat (the glass owner decides it for every floating surface there), so its ink stays legible over arbitrary pixels', async () => {
+        const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
+        const { glassPresetMaterials } = await import('./glassMaterial');
+        const { GlassLivePictureBackdropContext } = await import('./livePictureBackdrop');
+        const { FloatingOverlay } = await import('@/components/ui/overlays/FloatingOverlay');
+        const { lightTheme } = await import('@/theme');
+        themeMode.dark = false;
+        const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
+        const screen = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto') }}>
+            <GlassLivePictureBackdropContext.Provider value>
+                <FloatingOverlay scrollEnabled={false}><DraftInput /></FloatingOverlay>
+            </GlassLivePictureBackdropContext.Provider>
+        </GlassMaterialSettingsProvider>);
+        const style = flattenTestStyle(screen.findAll(hasBackdrop)[0]!.props.style) as Record<string, string>;
+        standardCleanup();
+        const mix = /color-mix\(in srgb, (rgba?\([^)]*\)|#[0-9a-f]+) (\d+(?:\.\d+)?)%, transparent\)/i.exec(style.backgroundColor!);
+        expect(mix).not.toBeNull();
+        const opacity = Number(mix![2]) / 100;
+        expect(opacity).toBeGreaterThanOrEqual(0.5);
+        // A black terminal under light-theme ink: the menu's primary ink keeps body-text contrast.
+        const over = renderGlassOver({ filter: style.backdropFilter!, coat: rgb(mix![1]!), opacity, backdrop: [0, 0, 0] });
+        expect(Color.rgb(over).contrast(Color(lightTheme.colors.text.primary))).toBeGreaterThanOrEqual(4.5);
+    });
+    it('applies a customized tint exactly as set over a live picture, as it would anywhere else (only the shipped default takes the readable coat)', async () => {
+        const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
+        const { glassPresetMaterials } = await import('./glassMaterial');
+        const { GlassLivePictureBackdropContext } = await import('./livePictureBackdrop');
+        const { FloatingOverlay } = await import('@/components/ui/overlays/FloatingOverlay');
+        themeMode.dark = false;
+        const coatOf = async (settings: Parameters<typeof GlassMaterialSettingsProvider>[0]['value'], overLivePicture: boolean) => {
+            const screen = await renderScreen(<GlassMaterialSettingsProvider value={settings}>
+                <GlassLivePictureBackdropContext.Provider value={overLivePicture}>
+                    <FloatingOverlay scrollEnabled={false}><DraftInput /></FloatingOverlay>
+                </GlassLivePictureBackdropContext.Provider>
+            </GlassMaterialSettingsProvider>);
+            const style = flattenTestStyle(screen.findAll(hasBackdrop)[0]!.props.style) as Record<string, string>;
+            standardCleanup();
+            const mix = /color-mix\(in srgb, (?:rgba?\([^)]*\)|#[0-9a-f]+) (\d+(?:\.\d+)?)%, transparent\)/i.exec(style.backgroundColor!);
+            return { opacity: mix ? Number(mix[1]) / 100 : null, filter: style.backdropFilter };
+        };
+        const materials = glassPresetMaterials('auto');
+        for (const glassTintIntensity of [0, 30]) {
+            const custom = { glassSurfaceMaterials: materials, glassTintIntensity };
+            const over = await coatOf(custom, true);
+            expect(over).toEqual(await coatOf(custom, false));
+            expect(over.opacity === null || over.opacity <= 0.07).toBe(true);
+        }
+        // The default stays the readable coat, with the tint unset or set to the shipped value.
+        for (const settings of [{ glassSurfaceMaterials: materials }, { glassSurfaceMaterials: materials, glassTintIntensity: 12 }]) {
+            expect((await coatOf(settings, true)).opacity).toBeGreaterThanOrEqual(0.85 - 1e-9);
+        }
     });
     it('keeps rendering glass whose paint is a live theme variable rather than a concrete colour', async () => {
         themeMode.dark = true;
@@ -515,7 +588,7 @@ describe('web glass material', () => {
         const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
         const { glassPresetMaterials } = await import('./glassMaterial');
         const sectionTint = 'rgba(255,255,255,0.014)';
-        const scene = (atmosphereBehind: 'wallpaper' | 'none') => <GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto'), glassTintIntensity: 'medium' }}>
+        const scene = (atmosphereBehind: 'wallpaper' | 'none') => <GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto'), glassTintIntensity: 50 }}>
             <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind }}>
                 <GlassSurface testID="page-sheet" surfaceGroup="card" nested finishRole="card" solidColor={sectionTint}><DraftInput /></GlassSurface>
             </GlassRuntimeEnvironmentProvider>
@@ -581,7 +654,8 @@ describe('web glass material', () => {
         const { darkTheme } = await import('@/theme');
         act(() => storage.setState({ settings: { ...previousState.settings, ...resolvePreset(previousState.settings, 'clear') } }));
         const screen = await renderScreen(<GlassSurface surfaceGroup="floating" finishRole={null}><DraftInput /></GlassSurface>);
-        const paints = () => screen.findAll(node => typeof node.type === 'string' && String(flattenTestStyle(node.props.style)?.backgroundColor).includes('--happier-glass-floating-background-color'));
+        // The coat is the CSS material variable, or a concrete mix when the fixed point raised its alpha.
+        const paints = () => screen.findAll(node => typeof node.type === 'string' && /--happier-glass-floating-background-color|^color-mix\(/.test(String(flattenTestStyle(node.props.style)?.backgroundColor)));
         expect(paints()).toHaveLength(1);
         // The glass coat is solved so the faint coat over the page lands on the floating paper (fixed-point test above).
         expect(String(flattenTestStyle(paints()[0]!.props.style)?.backgroundColor)).not.toContain(darkTheme.colors.edge.floatingFill);
@@ -618,7 +692,12 @@ describe('web glass material', () => {
             const finishPaints = () => paints().filter(node => String(flattenTestStyle(node.props.style)?.backgroundImage).includes(finishInk));
             expect(finishPaints()).toHaveLength(1);
             const target = screen.findAll(node => typeof node.type === 'string' && node.props.accessibilityLabel === 'focus action')[0]!;
-            await act(async () => { target.props.onFocus?.({ nativeEvent: {} }); });
+            const browserTarget = createFocusedBrowserButton();
+            document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+            await act(async () => { target.props.onFocus?.({ target: browserTarget, nativeEvent: {} }); });
+            expect(finishPaints()).toHaveLength(1);
+            document.dispatchEvent(new browser.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+            await act(async () => { target.props.onFocus?.({ target: browserTarget, nativeEvent: {} }); });
             expect(finishPaints()).toHaveLength(0);
             if (fixture.type === FAB || fixture.type === PrimaryCircleIconButton) expect(paints()).toHaveLength(1);
             await screen.unmount();
@@ -648,7 +727,9 @@ describe('web glass material', () => {
                 expect(target().props.disabled).toBe(false);
                 await act(async () => { target().props.onPress({ nativeEvent: {} }); });
                 expect(callback).toHaveBeenCalledTimes(2);
-                await act(async () => { target().props.onFocus({ nativeEvent: {} }); });
+                const browserTarget = createFocusedBrowserButton();
+                document.dispatchEvent(new browser.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+                await act(async () => { target().props.onFocus({ target: browserTarget, nativeEvent: {} }); });
                 expect(screen.findAll(node => typeof node.type === 'string' && String(flattenTestStyle(node.props.style)?.backgroundImage).includes(finishInk))).toHaveLength(0);
                 await screen.unmount();
             }
@@ -742,7 +823,9 @@ describe('web glass material', () => {
         const screen = await renderScreen(scene('surface'));
         const paints = () => screen.findAll(node => typeof node.type === 'string' && typeof flattenTestStyle(node.props.style)?.backgroundImage === 'string');
         expect(paints()).toHaveLength(1);
-        await act(async () => { screen.findHostByTestId('card')?.props.onFocus({ nativeEvent: {} }); });
+        const browserTarget = createFocusedBrowserButton();
+        document.dispatchEvent(new browser.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+        await act(async () => { screen.findHostByTestId('card')?.props.onFocus({ target: browserTarget, nativeEvent: {} }); });
         expect(paints()).toHaveLength(0);
         await screen.update(scene('flat'));
         expect(paints()).toHaveLength(0);

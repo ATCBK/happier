@@ -38,5 +38,10 @@ export const GradientSurface = React.memo(function GradientSurface(props: Gradie
 function combinedWebGradientStyle(gradient: SurfaceGradient | null | undefined, overlay: SurfaceGradient | null | undefined, clip: boolean) {
     const base = happierSurfaceGradientWebStyle(gradient, clip);
     const top = happierSurfaceGradientWebStyle(overlay, clip);
-    return base && top ? { ...top, backgroundImage: `${top.backgroundImage}, ${base.backgroundImage}` } : top ?? base;
+    if (!base || !top) return top ?? base;
+    // Each layer keeps its own extent: a banded finish stays a strip over the full-height base.
+    const layer = <K extends 'backgroundSize' | 'backgroundPosition' | 'backgroundRepeat'>(key: K, full: string) => `${top[key] ?? full}, ${base[key] ?? full}`;
+    return top.backgroundSize || base.backgroundSize
+        ? { ...top, backgroundImage: `${top.backgroundImage}, ${base.backgroundImage}`, backgroundSize: layer('backgroundSize', '100% 100%'), backgroundPosition: layer('backgroundPosition', 'top'), backgroundRepeat: layer('backgroundRepeat', 'no-repeat') }
+        : { ...top, backgroundImage: `${top.backgroundImage}, ${base.backgroundImage}` };
 }

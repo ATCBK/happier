@@ -13,7 +13,7 @@ import {
 } from './personalizeFlowModel';
 
 /** Account, device and visit-memory storage are the persistence boundaries; the flow logic above them is real. */
-function createHarness(options: Readonly<{ failAccountWrites?: boolean }> = {}) {
+function createHarness(options: Readonly<{ failAccountWrites?: boolean; declineTheme?: boolean }> = {}) {
     let account: Settings = settingsDefaults;
     let local: LocalSettings = localSettingsDefaults;
     let progress: PersonalizeProgress = EMPTY_PERSONALIZE_PROGRESS;
@@ -27,7 +27,11 @@ function createHarness(options: Readonly<{ failAccountWrites?: boolean }> = {}) 
             account = applySettings(account, delta);
         },
         writeLocal: (delta) => { local = applyLocalSettings(local, delta); },
-        applyTheme: (mode) => { local = applyLocalSettings(local, { themePreference: mode }); },
+        applyTheme: (mode) => {
+            if (options.declineTheme) return false;
+            local = applyLocalSettings(local, { themePreference: mode });
+            return true;
+        },
         readProgress: () => progress,
         writeProgress: (next) => { progress = next; },
         completeSetup: () => { completed.push('personalize'); },
@@ -43,6 +47,14 @@ function createHarness(options: Readonly<{ failAccountWrites?: boolean }> = {}) 
 }
 
 describe('Personalize flow actions', () => {
+    it('keeps a declined theme step and its progress unsaved', async () => {
+        const flow = createHarness({ declineTheme: true });
+        const before = flow.local().themePreference;
+        expect(await flow.actions.saveStep('look', { ...flow.actions.readCurrentChoices(), theme: 'dark' }))
+            .toEqual({ ok: false, error: null });
+        expect(flow.local().themePreference).toBe(before);
+        expect(flow.progress()).toEqual(EMPTY_PERSONALIZE_PROGRESS);
+    });
     it('saves each step on Next through its writers and remembers where to resume', async () => {
         const flow = createHarness();
         const draft = readPersonalizeChoices(flow.account(), flow.local());
