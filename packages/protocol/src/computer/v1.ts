@@ -10,6 +10,10 @@ const CoordinateSchema = lazyZodSchema(() => z.number());
 const DimensionSchema = lazyZodSchema(() => z.number().check(z.positive()));
 export const ComputerAccessV1Schema = lazyZodSchema(() => z.enum(['see', 'use']));
 export type ComputerAccessV1 = z.infer<typeof ComputerAccessV1Schema>;
+/** Omitted selection access requests use; a human picker's initial choice is separate. */
+export function resolveComputerAccess(access: ComputerAccessV1 | null | undefined): ComputerAccessV1 {
+  return access ?? 'use';
+}
 const TargetLabelSchema = BrowserActiveTargetV1Schema.shape.label;
 
 /** Placement is a Machine Action fact; target identity does not confer Session authority. */

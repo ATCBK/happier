@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
 import { BrowserHttpUrlV1Schema } from '../url.js';
+import { LocalServicePreviewServiceTargetV1Schema, refineLocalServicePreviewServiceBindingV1 } from '../../local/services/preview/v1.js';
 
 export const BrowserTargetDisplayV1Schema = lazyZodSchema(() => z.strictObject({
     title: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
@@ -21,7 +22,8 @@ export const BrowserLocalServicePreviewTargetV1Schema = lazyZodSchema(() => (<T 
   kind: z.literal('localServicePreview'),
   sessionId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
   machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
-})));
+  serviceTarget: z.optional(LocalServicePreviewServiceTargetV1Schema),
+})).check(z.superRefine(refineLocalServicePreviewServiceBindingV1)));
 export type BrowserLocalServicePreviewTargetV1 = z.infer<typeof BrowserLocalServicePreviewTargetV1Schema>;
 
 export const BrowserHostedPluginWebTargetV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BrowserTargetBaseV1Schema, {

@@ -139,6 +139,17 @@ export const BrowserCommandDispatchResultV1Schema = lazyZodSchema(() => z.discri
 ]));
 export type BrowserCommandDispatchResultV1 = z.infer<typeof BrowserCommandDispatchResultV1Schema>;
 
+/** Acceptance is observed through the existing Machine Action operation owner. */
+export const BrowserOpenViewInProgressV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  status: z.literal('in_progress'),
+  phase: z.literal('browser_runtime_provisioning'),
+  commandId: BrowserOpenViewCommandV1Schema.shape.commandId,
+  browserSessionId: BrowserOpenViewCommandV1Schema.shape.browserSessionId,
+  viewId: BrowserOpenViewCommandV1Schema.shape.viewId,
+  operationId: z.string().check(z.trim(), z.minLength(1)),
+}));
+
 /** Workspace opening reports the selected presentation effect, not page-load completion. */
 export const BrowserWorkspaceOpenResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BrowserCommandDispatchResultV1Schema._zod.def.options[0], {

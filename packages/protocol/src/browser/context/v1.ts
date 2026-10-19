@@ -268,6 +268,8 @@ const BrowserContextSnapshotRectV1Schema = lazyZodSchema(() => z.strictObject({
 export const BrowserContextSnapshotAxNodeV1Schema = lazyZodSchema(() => z.strictObject({
     role: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
     name: z.optional(z.string().check(z.maxLength(256))),
+    /** Current non-secret editable text, under the existing per-node text budget. */
+    value: z.optional(z.string().check(z.maxLength(256))),
   }));
 export type BrowserContextSnapshotAxNodeV1 = z.infer<typeof BrowserContextSnapshotAxNodeV1Schema>;
 

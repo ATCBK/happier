@@ -1,6 +1,31 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
+export const NativeSshTunnelPurposeSchema = lazyZodSchema(() => z.enum(['server-http', 'server-websocket', 'relay-runtime']));
+export type NativeSshTunnelPurpose = z.infer<typeof NativeSshTunnelPurposeSchema>;
+export const NativeSshTunnelStatusSchema = lazyZodSchema(() => z.enum(['starting', 'ready', 'degraded', 'failed', 'stopped']));
+export type NativeSshTunnelStatus = z.infer<typeof NativeSshTunnelStatusSchema>;
+export const NativeSshTunnelLeaseSchema = lazyZodSchema(() => z.strictObject({
+  leaseId: z.string(), key: z.string(), remoteHostId: z.string(), localUrl: z.optional(z.string()),
+  channelMode: z.literal('loopback-port'), purpose: NativeSshTunnelPurposeSchema, status: NativeSshTunnelStatusSchema,
+  startedAt: z.string(), expiresAt: z.optional(z.string()),
+}));
+export type NativeSshTunnelLease = Readonly<z.infer<typeof NativeSshTunnelLeaseSchema>>;
+export const NativeSshTunnelLimitationSchema = lazyZodSchema(() => z.strictObject({
+  id: z.string(), severity: z.enum(['info', 'warning', 'error']),
+  reason: z.enum(['authentication-failed', 'foreground-only', 'host-key-mismatch', 'host-key-rejected', 'host-key-untrusted',
+    'loopback-bind-failed', 'native-module-unavailable', 'remote-service-unreachable', 'platform-suspended', 'network-captive-portal']),
+  message: z.string(),
+}));
+export type NativeSshTunnelLimitation = Readonly<z.infer<typeof NativeSshTunnelLimitationSchema>>;
+export const NativeSshTunnelSnapshotSchema = lazyZodSchema(() => z.strictObject({
+  leases: z.array(NativeSshTunnelLeaseSchema), platformLimitations: z.array(NativeSshTunnelLimitationSchema),
+}));
+export type NativeSshTunnelSnapshot = Readonly<{
+  leases: readonly NativeSshTunnelLease[];
+  platformLimitations: readonly NativeSshTunnelLimitation[];
+}>;
+
 export const SSH_TUNNEL_SYSTEM_TASK_KINDS = Object.freeze({
   ensure: 'daemon.sshTunnel.ensure.v1',
   list: 'daemon.sshTunnel.list.v1',

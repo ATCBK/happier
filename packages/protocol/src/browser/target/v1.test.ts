@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { LocalServiceLaunchTargetV1Schema } from '../../local/services/launcher/v1.js';
 
 type BrowserTargetModule = typeof import('./v1.js');
 
@@ -7,6 +8,27 @@ async function loadBrowserTargetModule(): Promise<BrowserTargetModule | null> {
 }
 
 describe('browser view target v1 protocol', () => {
+  it('preserves a sessionless managed preview binding through the launcher and refuses mismatched authority', async () => {
+    const { BrowserViewTargetV1Schema } = await import('./v1.js');
+    const target = {
+      kind: 'localServicePreview', targetId: 'preview_123', machineId: 'machine_123',
+      serviceTarget: {
+        kind: 'managed_service', machineId: 'machine_123', managedServiceId: 'service_123',
+        cwd: '/repo/web', declaration: { workspaceRefId: 'workspace_123', selection: { kind: 'manifest', name: 'web' } },
+      },
+    };
+    const result = BrowserViewTargetV1Schema.safeParse(target);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const launcher = LocalServiceLaunchTargetV1Schema.parse({
+      id: 'preview:preview_123', source: 'registered_preview', machineId: target.machineId,
+      title: 'Web', confidence: 'high', state: 'available', browserTarget: result.data,
+    });
+    expect(launcher.browserTarget).toEqual(target);
+    expect(BrowserViewTargetV1Schema.safeParse({ ...target, machineId: 'another_machine' }).success).toBe(false);
+    expect(BrowserViewTargetV1Schema.safeParse({ ...target, sessionId: 'session_123' }).success).toBe(false);
+  });
+
   it('accepts local service preview targets and preserves display identity', async () => {
     const mod = await loadBrowserTargetModule();
 

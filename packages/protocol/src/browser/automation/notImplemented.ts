@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { BrowserAutomationActionKindV1Schema } from './v1.js';
 
@@ -29,7 +29,7 @@ export const BROWSER_AUTOMATION_NOT_IMPLEMENTED_ACTION_KINDS = [
  * to the union is published automatically and a verb removed from it stops being published.
  */
 export const BrowserAutomationImplementedActionKindV1Schema =
-  lazyZodSchema(() => z.enum(BrowserAutomationActionKindV1Schema.options).exclude(BROWSER_AUTOMATION_NOT_IMPLEMENTED_ACTION_KINDS));
+  lazyZodSchema(() => (<const Values extends readonly string[], const Excluded extends readonly Values[number][]>(values: Values, excluded: Excluded) => { for (const value of excluded) if (!values.includes(value)) throw new Error(`Key ${value} not found in enum`); return z.enum(values.filter((value): value is Exclude<Values[number], Excluded[number]> => !excluded.some(item => item === value))); })(z.enum(BrowserAutomationActionKindV1Schema.options).options, BROWSER_AUTOMATION_NOT_IMPLEMENTED_ACTION_KINDS));
 export type BrowserAutomationImplementedActionKindV1 = z.infer<
   typeof BrowserAutomationImplementedActionKindV1Schema
 >;

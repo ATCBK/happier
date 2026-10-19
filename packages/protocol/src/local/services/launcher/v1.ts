@@ -133,6 +133,8 @@ export const LocalServiceLaunchTargetV1Schema = lazyZodSchema(() => z.strictObje
     confidence: LocalServiceInventoryConfidenceV1Schema,
     state: LocalServiceLaunchTargetStateV1Schema,
     unavailableReason: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    /** Exact Machine whose Project native-binding census could not settle. */
+    unavailableMachineId: z.optional(WorkspaceRefV1WriteSchema.shape.machineId),
     actions: z._default(z.array(LocalServiceLaunchTargetActionV1Schema), []),
     browserTarget: z.optional(BrowserViewTargetV1Schema),
   }).check(z.superRefine((target, ctx) => {

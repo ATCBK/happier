@@ -208,7 +208,12 @@ export const LocalServiceActionResultV1Schema = lazyZodSchema(() => z.strictObje
   })));
 export type LocalServiceActionResultV1 = z.infer<typeof LocalServiceActionResultV1Schema>;
 
-export const DaemonLocalServiceActionExecuteRequestV1Schema = LocalServiceActionRequestV1Schema;
+// Preview Open uses its Machine Action RPC and the canonical preview lifecycle DTO.
+// This retained aggregate accepts only controls with the audited result envelope below.
+export const DaemonLocalServiceActionExecuteRequestV1Schema = lazyZodSchema(() => LocalServiceActionRequestV1Schema.check(z.refine(
+  request => request.action !== 'open_preview',
+  { path: ['action'], message: 'Preview Open requires its dedicated Machine Action RPC.' },
+)));
 export type DaemonLocalServiceActionExecuteRequestV1 = z.infer<
   typeof DaemonLocalServiceActionExecuteRequestV1Schema
 >;
