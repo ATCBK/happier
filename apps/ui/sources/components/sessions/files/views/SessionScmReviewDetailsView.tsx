@@ -1065,6 +1065,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
         explain={explain}
         onExplainChange={setExplain}
         commitsCount={commitsCount}
+        fileCount={effectiveSnapshot ? shownScopeFileCount : null}
         proposeCommits={proposeCommits}
         onProposeCommits={proposeCommits ? () => selectView('commits') : null}
         onStartReview={openReviewLauncher}

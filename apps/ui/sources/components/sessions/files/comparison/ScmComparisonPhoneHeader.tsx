@@ -22,7 +22,8 @@ export function ScmComparisonPhoneHeader(props: Readonly<{
     onSelectView: (view: SessionScmReviewView) => void;
     /** Leaves the comparison (closes its Details tab). A host with nowhere to go back to (the Project companion) passes none, and no arrow is drawn. */
     onBack?: (() => void) | null;
-    onStartReview: () => void;
+    /** Null when the comparison has nothing to review: the row is not offered. */
+    onStartReview: (() => void) | null;
     reviewDisabled?: boolean;
     reviewDisabledReason?: string | null;
     onProposeCommits?: (() => void) | null;
@@ -40,9 +41,9 @@ export function ScmComparisonPhoneHeader(props: Readonly<{
     const sectionItems = scmComparisonMenuSectionItems;
     const items: DropdownMenuItem[] = [
         ...untitled.flatMap((section) => sectionItems(section, '')),
-        { id: 'start-review', testID: 'scm-comparison-start-review', title: t('scmComparison.startReview'), category: '',
+        ...(props.onStartReview ? [{ id: 'start-review', testID: 'scm-comparison-start-review', title: t('scmComparison.startReview'), category: '',
             icon: <Icon name="shield-check" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />,
-            disabled: props.reviewDisabled, subtitle: props.reviewDisabledReason ?? undefined },
+            disabled: props.reviewDisabled, subtitle: props.reviewDisabledReason ?? undefined }] : []),
         ...(props.onProposeCommits ? [{ id: 'propose-commits', title: t('scmComparison.proposeCommits'), category: '',
             icon: <Icon name="git-commit" size={ICON_SIZE.sm} color={theme.colors.text.secondary} /> }] : []),
         ...props.views.map((view) => ({ id: `view:${view}`, title: resolveSessionScmReviewViewLabel(view),
@@ -65,7 +66,7 @@ export function ScmComparisonPhoneHeader(props: Readonly<{
                 const view = props.views.find((candidate) => id === `view:${candidate}`);
                 if (selectScmComparisonMenuItem(sections, id)) return;
                 if (view) props.onSelectView(view);
-                else if (id === 'start-review' && !props.reviewDisabled) props.onStartReview();
+                else if (id === 'start-review' && !props.reviewDisabled) props.onStartReview?.();
                 else if (id === 'propose-commits') props.onProposeCommits?.();
             }}
             trigger={({ toggle }) => <IconButton testID="scm-comparison-phone-more" iconName="dots-three" variant="plain"

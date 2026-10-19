@@ -76,6 +76,10 @@ async function mount(comparison: SessionScmReviewComparison) {
         (knownComparison) => useSessionCapturedScmComparison({ sessionId, serverId, comparison, knownComparison }), { initialProps: null });
 }
 
+// Review is only offered for a comparison that changed something.
+const changedFile = { path: 'src/changed.ts', changeKind: 'modified', binary: false, generated: false, lockfile: false,
+    evidence: { state: 'available', unifiedDiff: 'diff --git a/src/changed.ts b/src/changed.ts\n--- a/src/changed.ts\n+++ b/src/changed.ts\n@@ -1 +1 @@\n-old\n+new\n' }, occurrences: [] } as const;
+
 describe('Files reads the canonical captured comparison through authenticated RPC', () => {
     it('restores a published walkthrough for Files Explain without first opening Walkthrough', async () => {
         const source = { kind: 'commit' as const, commit: 'saved-head' };
@@ -250,7 +254,7 @@ describe('Files reads the canonical captured comparison through authenticated RP
         const result = ScmDiffSummaryResultSchema.parse({ resultId: 'saved-result', revision: 1, canUndo: false,
             output: { success: true, resultId: 'saved-result', revision: 1, sourceKey: id, metadata: { sourceKey: id, source },
                 comparison: { id, source, repository: { rootPath: '/repo/exact' }, endpoints: { before: 'old-before', after: 'old-after' },
-                    inventory: { state: 'complete', files: [], reasons: [] } }, requestedOutputs: ['walkthrough'],
+                    inventory: { state: 'complete', files: [changedFile], reasons: [] } }, requestedOutputs: ['walkthrough'],
                 outputs: { walkthrough: { state: 'pending' } }, analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } });
         loadSavedScmDiffSummaryResult({ sessionId: 'capture-commit', scope, result });
         boundary.savedResponse = { success: true, result };
@@ -264,7 +268,7 @@ describe('Files reads the canonical captured comparison through authenticated RP
     it('keeps captured Files readable and disables review with a reason when its Machine goes offline', async () => {
         const source = { kind: 'commit' as const, commit: 'old-ref' };
         const comparison = ScmComparisonSchema.parse({ id: 'offline-comparison', source, repository: { rootPath: '/repo/exact' }, endpoints: {},
-            inventory: { state: 'complete', files: [], reasons: [] } });
+            inventory: { state: 'complete', files: [changedFile], reasons: [] } });
         boundary.response = { success: true, comparison, metadata: { sourceKey: comparison.id, source } };
         const hook = await mount(source);
         await hook.unmount();

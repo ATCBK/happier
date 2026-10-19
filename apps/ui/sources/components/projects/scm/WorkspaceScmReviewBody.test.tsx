@@ -42,6 +42,34 @@ describe('WorkspaceScmReviewBody', () => {
     expect(withState.findHostByTestId('propose')).toBeNull();
   });
 
+  it('offers no review actions when the comparison has no changes, and offers them again once it has some', async () => {
+    const { WorkspaceScmReviewBody } = await import('./WorkspaceScmReviewBody');
+    const props = {
+      comparison: null,
+      view: 'files' as const,
+      scopeLabel: 'Pending changes',
+      scopeOptions: [],
+      onSelectComparison: vi.fn(),
+      onSelectView: vi.fn(),
+      explain: false,
+      onExplainChange: vi.fn(),
+      onStartReview: vi.fn(),
+      onProposeCommits: vi.fn(),
+      proposeCommits: <Text testID="propose">Propose commits</Text>,
+      renderFiles: ({ renderBarLeading, barTrailing }: { renderBarLeading: (coverage: { fileCount: number; added: number; removed: number; linesKnown: boolean }) => React.ReactNode; barTrailing?: React.ReactNode }) => (
+        <>{renderBarLeading({ fileCount: 0, added: 0, removed: 0, linesKnown: false })}{barTrailing}</>
+      ),
+      renderWalkthrough: () => null,
+    };
+    const empty = await renderScreen(<WorkspaceScmReviewBody {...props} fileCount={0} />);
+    expect(empty.findHostByTestId('scm-comparison-start-review')).toBeNull();
+    expect(empty.findHostByTestId('propose')).toBeNull();
+
+    const changed = await renderScreen(<WorkspaceScmReviewBody {...props} fileCount={3} />);
+    expect(changed.findHostByTestId('scm-comparison-start-review')).not.toBeNull();
+    expect(changed.findHostByTestId('propose')).not.toBeNull();
+  });
+
   it('puts a review\'s status in Start review\'s place on the wide bar and keeps Start review one choice away in the menu', async () => {
     const { WorkspaceScmReviewBody } = await import('./WorkspaceScmReviewBody');
     const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');

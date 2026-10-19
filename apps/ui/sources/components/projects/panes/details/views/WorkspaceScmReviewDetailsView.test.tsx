@@ -54,7 +54,7 @@ async function mountWithRows(kind: 'exact' | 'missing' | 'ambiguous') {
 describe('WorkspaceScmReviewDetailsView', () => {
     it('offers Start review at the actual workspace comparison without opening a Session', async () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
-            request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo' }) } : undefined });
+            request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo', entries: CHANGED_ENTRIES }) } : undefined });
         fixture.storage.setState({ sessions: {} });
         const screen = await fixture.render(<WorkspaceScmReviewDetailsView scopeId="project:wr"
             machineId="m1" serverId={fixture.home.id} rootPath="/repo" />);
@@ -65,6 +65,17 @@ describe('WorkspaceScmReviewDetailsView', () => {
         expect(opened?.props).toMatchObject({ machineId: 'm1', cwd: '/repo', serverId: fixture.home.id, comparison: { kind: 'workingTree' } });
         expect(opened?.props).not.toHaveProperty('sessionId');
         expect(fixture.requests.some(request => request.targetId === 's1')).toBe(false);
+    });
+    it('offers no review or commit proposal for a checkout with no changes', async () => {
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
+            request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo' }) } : undefined });
+        fixture.storage.setState({ sessions: {} });
+        const screen = await fixture.render(<WorkspaceScmReviewDetailsView scopeId="project:wr-empty"
+            machineId="m1" serverId={fixture.home.id} rootPath="/repo" />);
+        await flushHookEffects({ cycles: 20 });
+        expect(screen.findByTestId('scm-comparison-bar')).toBeTruthy();
+        expect(screen.findByTestId('scm-comparison-start-review')).toBeNull();
+        expect(screen.findByTestId('scm-comparison-propose-commits')).toBeNull();
     });
     it('captures separately authorized Session evidence with Session qualification on its admitted Machine', async () => {
         const captured = { id: 'session-evidence', source: { kind: 'session' as const, sessionId: 's1' },
