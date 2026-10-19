@@ -44,11 +44,11 @@ describe('safeRouterBack', () => {
             navigation: {
                 canGoBack: () => true,
             },
-            fallbackHref: '/fallback',
+            fallbackHref: '/inbox',
         });
 
         expect(backSpy).not.toHaveBeenCalled();
-        expect(replaceSpy).toHaveBeenCalledWith('/fallback');
+        expect(replaceSpy).toHaveBeenCalledWith('/inbox');
     });
 
     it('uses the destination router on web even when browser history points to another route owner', () => {
@@ -89,7 +89,7 @@ describe('safeRouterBack', () => {
             navigation: {
                 canGoBack: () => true,
             },
-            fallbackHref: '/fallback',
+            fallbackHref: '/inbox',
         });
 
         expect(backSpy).toHaveBeenCalled();
@@ -98,7 +98,7 @@ describe('safeRouterBack', () => {
 
         vi.runAllTimers();
 
-        expect(replaceSpy).toHaveBeenCalledWith('/fallback');
+        expect(replaceSpy).toHaveBeenCalledWith('/inbox');
     });
 
     it('does not replace with the URL fallback on native when location is stale', () => {
@@ -117,7 +117,7 @@ describe('safeRouterBack', () => {
             navigation: {
                 canGoBack: () => true,
             },
-            fallbackHref: '/fallback',
+            fallbackHref: '/inbox',
         });
 
         expect(backSpy).toHaveBeenCalled();
@@ -145,7 +145,7 @@ describe('safeRouterBack', () => {
             navigation: {
                 canGoBack: () => true,
             },
-            fallbackHref: '/fallback',
+            fallbackHref: '/inbox',
         });
 
         vi.runAllTimers();
@@ -170,11 +170,11 @@ describe('safeRouterBack', () => {
                     routes: [{ key: 'only-route' }],
                 }),
             },
-            fallbackHref: '/fallback',
+            fallbackHref: '/inbox',
         });
 
         expect(backSpy).not.toHaveBeenCalled();
-        expect(replaceSpy).toHaveBeenCalledWith('/fallback');
+        expect(replaceSpy).toHaveBeenCalledWith('/inbox');
     });
 
     it('prefers navigation.goBack over router.back when the local navigator can handle back', () => {
@@ -195,7 +195,7 @@ describe('safeRouterBack', () => {
                     routes: [{ key: 'previous-route' }, { key: 'current-route' }],
                 }),
             },
-            fallbackHref: '/fallback',
+            fallbackHref: '/inbox',
         });
 
         expect(navigationGoBackSpy).toHaveBeenCalledTimes(1);
@@ -223,7 +223,7 @@ describe('safeRouterBack', () => {
                     routes: [{ key: 'previous-route' }, { key: 'current-route' }],
                 }),
             },
-            fallbackHref: '/fallback',
+            fallbackHref: '/inbox',
         });
 
         vi.runAllTimers();

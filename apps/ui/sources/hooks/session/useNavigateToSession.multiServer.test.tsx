@@ -18,18 +18,31 @@ installSessionRouteCommonModuleMocks({
 const { createSessionFixture, renderScreen } = await import('@/dev/testkit');
 const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
 const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
+const { installBrowserRuntimeForTests } = await import('@/dev/testkit/harness/browserRuntimeHarness');
 const { installSessionPaneRuntimeTestHarness } = await import('@/components/sessions/panes/sessionPaneRuntimeTestHarness');
 const { storage } = await import('@/sync/domains/state/storageStore');
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
+// The route fixture is web, so tab focus needs the actual Window/sessionStorage
+// boundary before the Account and pane lifetime starts.
+beforeEach(async () => { browser = await installBrowserRuntimeForTests({ url: 'https://session-pane.test/' }); });
+afterEach(() => { browser?.restore(); });
 const runtime = installSessionPaneRuntimeTestHarness();
 let otherHome: Awaited<ReturnType<typeof import('@/sync/domains/server/serverProfiles').upsertServerProfile>>;
 let navigate: Navigate;
 let NavigationProbe: React.FC;
 let telemetryEnabled = false;
+let rollbackOtherHomeCredentials: (() => Promise<boolean>) | undefined;
 
 beforeEach(async () => {
     routerNavigate.mockClear();
     const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
     otherHome = await upsertServerProfile({ serverUrl: 'https://navigation-other.test', name: 'Other Home' });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = await TokenStorage.getCredentialsForServerUrl('https://session-pane.test', { serverId: runtime.serverId });
+    if (!credentials) throw new Error('The navigation fixture has no restored Account credential');
+    const write = await TokenStorage.setCredentialsForServerUrlWithRollback(otherHome.serverUrl, { serverId: otherHome.id }, credentials);
+    if (!write) throw new Error('The navigation fixture could not credential its second Home');
+    rollbackOtherHomeCredentials = () => write.rollback();
     // Two real saved Homes share this synthetic plain Account. HTTP is the
     // external boundary; connection selection and Account admission remain real.
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
@@ -54,6 +67,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+    vi.restoreAllMocks();
+    await rollbackOtherHomeCredentials?.();
+    rollbackOtherHomeCredentials = undefined;
     const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
     const { clearSessionUiTelemetryMarks } = await import('@/sync/runtime/performance/sessionUiTelemetry');
     clearSessionUiTelemetryMarks();

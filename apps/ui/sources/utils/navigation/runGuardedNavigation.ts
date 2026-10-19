@@ -21,6 +21,7 @@ const mountedTabGuards = new Map<string, ActiveUnsavedChangesGuard>();
 let activeBrowserEntry: Readonly<{ href: string; state: unknown }> | null = null;
 let authorizedBrowserTraversal = false;
 const guardsInFlight = new WeakSet<RefLike<boolean>>();
+const guardsContinuing = new WeakSet<RefLike<boolean>>();
 
 export function getActiveUnsavedChangesGuard(): ActiveUnsavedChangesGuard | null {
     return activeUnsavedChangesGuard;
@@ -84,7 +85,7 @@ export function runUnsavedChangesGuard(
             : true;
     }
 
-    if (!guard.prepareGuard && !guard.isDirtyRef.current) {
+    if (!guard.isDirtyRef.current && (!guard.prepareGuard || guardsContinuing.has(guard.isDirtyRef))) {
         const continuation = navigate();
         return continuation
             ? continuation.then(() => true)
@@ -99,6 +100,17 @@ export function runUnsavedChangesGuard(
 
     guardsInFlight.add(guard.isDirtyRef);
 
+    // Router dispatch can synchronously re-enter workspace admission. Only
+    // that admitted call stack skips preparation; a later intent still flushes.
+    const continueNavigation = (continuation = navigate) => {
+        guardsContinuing.add(guard.isDirtyRef);
+        try {
+            return continuation();
+        } finally {
+            guardsContinuing.delete(guard.isDirtyRef);
+        }
+    };
+
     const run = async (): Promise<boolean> => {
         try {
             await guard.prepareGuard?.();
@@ -108,7 +120,7 @@ export function runUnsavedChangesGuard(
 
         if (!guard.isDirtyRef.current) {
             try {
-                await navigate();
+                await continueNavigation();
             } catch {
                 return false;
             }
@@ -132,7 +144,7 @@ export function runUnsavedChangesGuard(
             try {
                 guard.isDirtyRef.current = false;
                 await guard.onDiscard?.();
-                await (intent === 'history' && guard.onHistoryLeave ? guard.onHistoryLeave : navigate)();
+                await continueNavigation(intent === 'history' && guard.onHistoryLeave ? guard.onHistoryLeave : navigate);
             } catch {
                 guard.isDirtyRef.current = wasDirty;
                 if (guard.ignoreRef && wasIgnored !== undefined) guard.ignoreRef.current = wasIgnored;
@@ -162,7 +174,7 @@ export function runUnsavedChangesGuard(
             return true;
         }
         try {
-            await navigate();
+            await continueNavigation();
         } catch {
             guard.isDirtyRef.current = wasDirty;
             return false;
