@@ -11,7 +11,7 @@ import { useReduceTransparency } from '@/hooks/ui/useReduceTransparency';
 import { getBlurViewComponent, isNativeBlurAvailable } from './blurMaterial';
 import { getGlassViewComponent, useLiquidGlassAvailable } from './liquidGlass';
 import { resolveGlassCapability } from './resolveGlassCapability';
-import { GLASS_BLUR_INTENSITY, GLASS_BLUR_RADIUS_PX, resolveGlassBackdropMap, resolveGlassSurfaceMaterial, type FloatingSurfaceRole, type GlassFloatingCoat, type GlassSurfaceGroup } from './glassMaterial';
+import { GLASS_BLUR_INTENSITY, GLASS_BLUR_RADIUS_PX, readGlassPreset, resolveGlassBackdropMap, resolveGlassSurfaceMaterial, type FloatingSurfaceRole, type GlassFloatingCoat, type GlassSurfaceGroup } from './glassMaterial';
 import { useGlassMaterialSettings } from './useGlassMaterialSettings';
 import { useGlassRuntimeEnvironment } from './glassRuntimeEnvironment';
 import { glassElementsCoatColor, glassSurfaceBackgroundColor, glassSurfaceTintColor, resolveGlassSurfacePlaneMaterial, glassSurfacePlaneBackdropStyle, type AtmosphereContentCoat } from './glassSurfacePaint';
@@ -159,7 +159,13 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
         ] as const;
     }, [solidColor, theme, settings, group, environment, toneReduceTransparency, panel, props.translucentColor]);
 
-    const capability = props.enabled === false || props.atmosphereCoat === 'opaque' || (transparentPlane && Platform.OS !== 'web')
+    // A floating surface opened from inside another (Inputs over the Run now panel, a select in a dialog)
+    // has controls behind it, not atmosphere: under every named preset it stands on its own floating paint
+    // rather than blurring them into a haze (glass is never stacked on glass). A Custom table applies as set.
+    const overFloating = group === 'floating' && props.nested !== true && containingSurface?.group === 'floating'
+        && readGlassPreset(settings) !== 'custom';
+    const enabled = props.enabled !== false && !overFloating;
+    const capability = !enabled || props.atmosphereCoat === 'opaque' || (transparentPlane && Platform.OS !== 'web')
         ? 'solid'
         : resolveGlassCapability({
             liquidGlassAvailable,
@@ -171,7 +177,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
             settings,
             surfaceGroup: group,
         });
-    const inheritsTranslucentMaterial = props.nested === true && containingSurface?.group === group && containingSurface?.translucent === true && material.opacity < 1 && props.enabled !== false;
+    const inheritsTranslucentMaterial = props.nested === true && containingSurface?.group === group && containingSurface?.translucent === true && material.opacity < 1 && enabled;
 
     let nativeBackdrop: React.ReactNode = null;
     if (!inheritsTranslucentMaterial && capability === 'liquidGlass') {
@@ -200,9 +206,9 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     }
 
     // Inheritance follows the rendered tier, not a preference whose SDK may be unavailable.
-    const translucent = material.opacity < 1 && props.enabled !== false && (transparentPlane || (Platform.OS === 'web'
+    const translucent = material.opacity < 1 && enabled && (transparentPlane || (Platform.OS === 'web'
         ? capability === 'webBlur' || group === 'card' : capability === 'tint' || Platform.OS === 'android' || Boolean(nativeBackdrop) || inheritsTranslucentMaterial));
-    const cleared = transparentPlane && props.enabled !== false;
+    const cleared = transparentPlane && enabled;
     const plane = React.useMemo(() => ({ group, finish: Boolean(gradient) || Boolean(inheritsFinish), translucent, cleared }), [cleared, group, gradient, inheritsFinish, translucent]);
     // Faint ink on glass with a picture (or the live desktop) behind it gets a stronger step, on every
     // platform. Ordinary pages and unbacked glass keep the theme's secondary ink.
@@ -227,8 +233,8 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     const withBackedInk = (children: React.ReactNode) => <GlassBackedInkContext.Provider value={ownInk ?? inheritedInk}>{children}</GlassBackedInkContext.Provider>;
 
     if (Platform.OS !== 'web') {
-        const backgroundColor = transparentPlane && props.enabled !== false ? 'transparent' : nativeBackdrop || inheritsTranslucentMaterial ? 'transparent'
-            : (capability === 'tint' || Platform.OS === 'android') && props.enabled !== false
+        const backgroundColor = transparentPlane && enabled ? 'transparent' : nativeBackdrop || inheritsTranslucentMaterial ? 'transparent'
+            : (capability === 'tint' || Platform.OS === 'android') && enabled
                 ? withMaterialOpacity(tintColor, material.opacity) : solidColor;
         // Only the SDK background changes tier. Input/scroll/selection state
         // must stay under the same native parent when a preset or OS choice changes.
@@ -241,7 +247,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
                 <HappierSurfaceGradientLayer gradient={gradient} borderRadius={typeof borderRadius === 'number' ? borderRadius : undefined} /></View>
             <GlassSurfaceGroupContext.Provider value={plane}>
                 <HappierMaterialRoleProvider role={group} finish={plane.finish} translucentColor={props.translucentColor ?? theme.colors.surface.selected}
-                    resolveMaterialColor={props.enabled === false || material.opacity === 1 || (Platform.OS === 'ios' && capability !== 'tint' && !nativeBackdrop && !inheritsTranslucentMaterial && !transparentPlane) ? retainSolidColor : resolveMaterialColor}>
+                    resolveMaterialColor={!enabled || material.opacity === 1 || (Platform.OS === 'ios' && capability !== 'tint' && !nativeBackdrop && !inheritsTranslucentMaterial && !transparentPlane) ? retainSolidColor : resolveMaterialColor}>
                     {withBackedInk(props.children)}
                 </HappierMaterialRoleProvider>
             </GlassSurfaceGroupContext.Provider>
@@ -273,7 +279,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
             surfaceGroup: group,
             backdropTone: inheritsTranslucentMaterial ? undefined : backdropTone,
         }) as unknown as ViewStyle
-        : { backgroundColor: props.enabled === false || (group === 'card' && material.opacity === 1) ? solidColor
+        : { backgroundColor: !enabled || (group === 'card' && material.opacity === 1) ? solidColor
             : glassSurfaceBackgroundColor(group === 'card' ? tintColor : solidColor, group, group === 'card' ? false : props.nested, false) };
     return (
         <View {...viewProps} style={[props.style, { backgroundColor: 'transparent' }, finishLift, backedInkStyle]}>
@@ -281,7 +287,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
             <View {...{ dataSet: { happyGlassBackdrop: 'true' } }} style={[StyleSheet.absoluteFillObject, webMaterialLayerShape(props.style), paint, happierSurfaceGradientWebStyle(gradient, !theme.dark)]} />
             <GlassSurfaceGroupContext.Provider value={plane}>
                 <HappierMaterialRoleProvider role={group} finish={plane.finish} translucentColor={props.translucentColor ?? theme.colors.surface.selected}
-                    resolveMaterialColor={props.enabled === false || material.opacity === 1 ? retainSolidColor : resolveMaterialColor}>
+                    resolveMaterialColor={!enabled || material.opacity === 1 ? retainSolidColor : resolveMaterialColor}>
                     {withBackedInk(props.children)}
                 </HappierMaterialRoleProvider>
             </GlassSurfaceGroupContext.Provider>

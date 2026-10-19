@@ -892,10 +892,38 @@ describe('web glass material', () => {
         // The material really blurs on web (the floating group keeps its blur in a browser)...
         expect(screen.findAll(hasBackdrop).length).toBeGreaterThan(0);
         // ...yet neither the content nor a nested floating surface sits inside a backdrop root, so a menu,
-        // tooltip or nested popover inside this surface blurs the page behind it, not an empty plane.
+        // tooltip or nested popover inside this surface never paints over an empty plane.
         const draft = screen.findHostByTestId('draft');
         expect(draft).not.toBeNull();
         expect(backdropAncestors(draft!).length).toBe(0);
+    });
+
+    it('paints a floating surface opened over another floating surface solid under a named preset, so it never blurs the controls beneath it into a haze, while a Custom table applies as set', async () => {
+        const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
+        const { glassPresetMaterials } = await import('./glassMaterial');
+        const { FloatingOverlay } = await import('@/components/ui/overlays/FloatingOverlay');
+        const backdropsIn = (screen: Awaited<ReturnType<typeof renderScreen>>, testID: string) => screen.findAll(hasBackdrop)
+            .filter(node => { for (let parent = node.parent; parent; parent = parent.parent) if (parent.props?.testID === testID) return true; return false; });
+        useAutoPreset();
+        const shipped = await renderScreen(
+            <FloatingOverlay role="panel" scrollEnabled={false}>
+                <GlassSurface testID="inner" surfaceGroup="floating"><DraftInput /></GlassSurface>
+            </FloatingOverlay>,
+        );
+        // The Run now panel keeps its glass; the Inputs popover opened from it stands on its own paint.
+        expect(shipped.findAll(hasBackdrop)).toHaveLength(1);
+        expect(backdropsIn(shipped, 'inner')).toHaveLength(0);
+        standardCleanup();
+        // A person's own named preset (Everywhere at strong blur) follows the same rule.
+        act(() => storage.setState({ settings: { ...storage.getState().settings, ...resolvePreset(storage.getState().settings, 'everywhere'), glassBlurIntensity: 'strong' } }));
+        const named = await renderScreen(<GlassSurface surfaceGroup="floating"><GlassSurface testID="inner" surfaceGroup="floating"><DraftInput /></GlassSurface></GlassSurface>);
+        expect(named.findAll(hasBackdrop)).toHaveLength(1);
+        expect(backdropsIn(named, 'inner')).toHaveLength(0);
+        standardCleanup();
+        const custom = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: { ...glassPresetMaterials('everywhere'), floating: { blur: 'light' as const, opacity: 0.2 } } }}>
+            <GlassSurface surfaceGroup="floating"><GlassSurface testID="inner" surfaceGroup="floating"><DraftInput /></GlassSurface></GlassSurface>
+        </GlassMaterialSettingsProvider>);
+        expect(backdropsIn(custom, 'inner')).toHaveLength(1);
     });
 
     it('keeps the content mounted when the user turns blur off and back on', async () => {
