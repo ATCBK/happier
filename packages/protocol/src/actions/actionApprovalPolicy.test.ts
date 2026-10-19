@@ -34,6 +34,26 @@ async function loadRoutingResolver() {
 }
 
 describe('isApprovalRequiredByActionsSettings', () => {
+  it('keeps publication claim approval on the awaiting plugin invocation', () => {
+    const actionId = 'reviews.comments.claimPublicationDispatch';
+    const spec = getActionSpec(actionId);
+    expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS,
+      context: { surface: 'plugin', authority: 'account_automation' },
+    })).toEqual({ required: true, flow: 'blocking', result: 'required' });
+
+    // Public UI ingress still returns durable approval custody; only the
+    // awaiting plugin continuation needs the actual claimed correlations.
+    expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS,
+      context: { surface: 'ui', authority: 'present_user' },
+    })).toEqual({ required: true, flow: 'deferred', result: 'required' });
+    const waived = normalizeActionsSettingsV1({ v: 1,
+      approvalWaivedSurfaces: { [actionId]: ['plugin'] },
+    });
+    expect(resolveActionApprovalRouting({ actionId, spec, settings: waived,
+      context: { surface: 'plugin', authority: 'account_automation' },
+    }).required).toBe(false);
+  });
+
   it.each(['reviews.comments.transition', 'reviews.comments.bulkTransition', 'reviews.comments.edit', 'reviews.comments.reply'] as const)(
     'admits reversible %s directly on UI while honoring Settings confirmation', actionId => {
       const spec = getActionSpec(actionId);
