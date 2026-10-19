@@ -16,6 +16,7 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import type { MarkdownInlineReferences } from '@/components/markdown/MarkdownView';
@@ -34,9 +35,6 @@ import { WalkthroughEditorialHeader } from './WalkthroughEditorialHeader';
 import { WalkthroughKeyboardShortcuts } from './WalkthroughKeyboardShortcuts';
 import {
   WalkthroughInventory,
-  WalkthroughNotice,
-  WalkthroughNoticeButton,
-  WalkthroughNoticeLink,
   WalkthroughOtherChanges,
 } from './WalkthroughLifecycle';
 import { WalkthroughStopSection } from './WalkthroughStopSection';
@@ -107,7 +105,8 @@ export type WalkthroughViewProps = Readonly<{
   /** The owning machine is unreachable; the last-loaded reading stays readable. */
   offline?: Readonly<{ machine: string; time: string }> | null;
   /** A visible update to the saved result (a structured refinement), with Undo when the owner offers it. */
-  update?: Readonly<{ message: React.ReactNode; onUndo?: () => void }> | null;
+  /** What a refinement changed: its lead ("Merged stops 2 and 3") and, when it says more, the rest of the sentence. */
+  update?: Readonly<{ title: string; description?: string; onUndo?: () => void }> | null;
   onRetry?: () => void;
   onChooseModel?: () => void;
   /** The typed refusal or failure of the last generation, drawn as a notice over whatever reading is shown. */
@@ -385,28 +384,27 @@ export const WalkthroughView = React.memo(function WalkthroughView(
     );
   if (props.endedConversation && !props.offline) {
     notices.push(
-      <WalkthroughNotice
+      <AttentionBanner
         key="ended"
+        presentation="strip"
         testID="walkthrough-notice-ended"
         tone="neutral"
-        icon="chat-circle-dots"
-        message={t('walkthroughStart.ended')}
-        actions={
-          <>
-            {props.endedConversation.onStartNew ? (
-              <WalkthroughNoticeButton
-                testID="walkthrough-start-conversation"
-                label={t('walkthroughStart.newConversation')}
-                onPress={props.endedConversation.onStartNew}
-              />
-            ) : null}
-            <WalkthroughNoticeLink
-              testID="walkthrough-ask-session"
-              label={t('walkthroughStart.askSession')}
-              onPress={props.endedConversation.onAskSession}
-            />
-          </>
+        iconName="chat-circle-dots"
+        title={t('walkthroughStart.ended')}
+        action={
+          props.endedConversation.onStartNew
+            ? {
+                testID: 'walkthrough-start-conversation',
+                label: t('walkthroughStart.newConversation'),
+                onPress: props.endedConversation.onStartNew,
+              }
+            : null
         }
+        secondaryAction={{
+          testID: 'walkthrough-ask-session',
+          label: t('walkthroughStart.askSession'),
+          onPress: props.endedConversation.onAskSession,
+        }}
       />,
     );
   }
@@ -423,20 +421,22 @@ export const WalkthroughView = React.memo(function WalkthroughView(
   }
   if (props.update) {
     notices.push(
-      <WalkthroughNotice
+      <AttentionBanner
         key="update"
+        presentation="strip"
         testID="walkthrough-notice-update"
         tone="neutral"
-        icon="path"
-        message={props.update.message}
-        actions={
-          props.update.onUndo ? (
-            <WalkthroughNoticeLink
-              testID="walkthrough-undo"
-              label={t('walkthrough.notice.undo')}
-              onPress={props.update.onUndo}
-            />
-          ) : undefined
+        iconName="path"
+        title={props.update.title}
+        description={props.update.description}
+        secondaryAction={
+          props.update.onUndo
+            ? {
+                testID: 'walkthrough-undo',
+                label: t('walkthrough.notice.undo'),
+                onPress: props.update.onUndo,
+              }
+            : null
         }
       />,
     );
@@ -470,7 +470,6 @@ export const WalkthroughView = React.memo(function WalkthroughView(
         key="failed"
         testID="walkthrough"
         failure={failure}
-        phone={phone}
         onChooseModel={props.offline ? undefined : props.onChooseModel}
         onEnableExplain={props.offline ? undefined : props.onEnableExplain}
         onRetry={props.offline ? undefined : props.onRetry}
@@ -479,23 +478,24 @@ export const WalkthroughView = React.memo(function WalkthroughView(
   }
   if (reading.phase === 'cancelled') {
     notices.push(
-      <WalkthroughNotice
+      <AttentionBanner
         key="cancelled"
+        presentation="strip"
         testID="walkthrough-notice-cancelled"
         tone="neutral"
-        icon="stop-circle"
-        message={t('walkthrough.notice.cancelled')}
+        iconName="stop-circle"
+        title={t('walkthrough.notice.cancelled')}
       />,
     );
   }
   if (reading.source.inventoryState !== 'complete') {
     notices.push(
-      <WalkthroughNotice
+      <AttentionBanner
         key="incomplete"
+        presentation="strip"
         testID="walkthrough-notice-incomplete"
         tone="warning"
-        icon="warning"
-        message={t('walkthrough.notice.incomplete')}
+        title={t('walkthrough.notice.incomplete')}
       />,
     );
   }

@@ -8,7 +8,7 @@ import { ScmComparisonHeader } from './ScmComparisonHeader';
 import { buildCapturedComparisonFiles } from './capturedComparisonFiles';
 import { resolveFilesComparisonLabel } from './filesComparison';
 import { scmReviewComparisonOfCaptured } from '@/sync/domains/scm/diffSummary/selection';
-import { WalkthroughNotice } from '@/components/sessions/files/walkthrough/WalkthroughLifecycle';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -63,8 +63,8 @@ export function CapturedComparisonFilesView(props: Readonly<{
             : { success: false, error: projected.unavailableByPath.get(path) ?? t('scmComparison.unsupportedReason') };
     }, [projected]);
     return <View testID="captured-comparison-files" style={{ flex: 1, minHeight: 0 }}>
-        {props.comparison.inventory.state !== 'complete' ? <WalkthroughNotice testID="captured-inventory-incomplete" tone="warning" icon="warning"
-            message={t('walkthrough.evidence.unavailable', { reason: props.comparison.inventory.reasons.join(' · ') })} /> : null}
+        {props.comparison.inventory.state !== 'complete' ? <AttentionBanner presentation="strip" testID="captured-inventory-incomplete" tone="warning"
+            title={t('walkthrough.evidence.unavailable', { reason: props.comparison.inventory.reasons.join(' · ') })} /> : null}
         {props.comparison.freshness === 'stale' || props.comparison.freshness === 'unknown' ? <SurfaceFreshnessLine testID="captured-comparison-freshness" tone="warning"
             reason={t(props.comparison.freshness === 'stale' ? 'scmComparison.capturedStale' : 'scmComparison.capturedFreshnessUnknown')} /> : null}
         <ChangedFilesReview activeReviewFile={props.activeReviewFile} theme={theme} sessionId={props.sessionId}

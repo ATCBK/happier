@@ -15,7 +15,7 @@ import { useWalkthroughReviewedMarks } from '@/components/sessions/files/walkthr
 import { presentStartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
 import { useReviewComposerHandoff } from '@/components/sessions/reviews/comments/useReviewComposerHandoff';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { WalkthroughNotice } from '@/components/sessions/files/walkthrough/WalkthroughLifecycle';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { useSession, useSetting } from '@/sync/domains/state/storage';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 import { t } from '@/text';
@@ -91,7 +91,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
             startedReviewRunIds={startedReviewRunIds}
             renderBar={renderBar} onShowFiles={onShowFiles} onOpenFile={onShowFiles} onOpenComposer={goToComposer} />}
         renderFiles={(chrome) => <>
-            {captured.error ? <WalkthroughNotice testID="captured-comparison-error" tone="warning" icon="warning" message={captured.error} /> : null}
+            {captured.error ? <AttentionBanner presentation="strip" testID="captured-comparison-error" tone="warning" title={captured.error} /> : null}
             {captured.comparison ? <CapturedComparisonFilesView activeReviewFile={activeReviewFile} comparison={captured.comparison} sessionId={props.sessionId}
                 comparisonChrome={chrome} initialCollapsedPaths={mountedInitialReviewState.collapsedPaths}
                 onCollapsedPathsChange={onCollapsedPathsChange} initialScrollTop={mountedInitialReviewState.scrollTop}

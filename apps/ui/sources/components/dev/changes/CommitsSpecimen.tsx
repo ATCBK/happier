@@ -131,7 +131,7 @@ function CommitsFrame(props: Readonly<{ proposal: CommitProposal; phone: boolean
                 onSelectView={noop} onBack={noop} onStartReview={noop} /> : <CommitsBar />}
             <CommitProposalView proposal={props.proposal} phase="ready" branch="v0.3" modelLabel="Opus 5.5"
                 layout={props.phone ? 'phone' : 'wide'} actions={props.actions} active={false}
-                failureNotice={props.failure ? <ScmDiffSummaryFailureNotice testID="commit-proposal" failure={props.failure} phone={props.phone}
+                failureNotice={props.failure ? <ScmDiffSummaryFailureNotice testID="commit-proposal" failure={props.failure}
                     onChooseModel={noop} onEnableExplain={noop} onRetry={noop} /> : undefined} />
         </View>
     );

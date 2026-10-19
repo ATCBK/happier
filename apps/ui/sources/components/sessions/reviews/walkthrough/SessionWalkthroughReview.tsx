@@ -6,7 +6,7 @@ import type { WalkthroughReviewSlots } from '@/components/sessions/files/walkthr
 import { SessionAgentPendingPrompts } from '@/components/sessions/agents/list/SessionAgentPendingPrompts';
 import { resolveSessionAgentActivityPresentation } from '@/components/sessions/agents/presentation/sessionAgentActivityPresentation';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
-import { WalkthroughNotice, WalkthroughNoticeButton } from '@/components/sessions/files/walkthrough/WalkthroughLifecycle';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import type { WalkthroughPhase } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { ReviewFindingDecisionControl, type ReviewFindingDecision } from '@/components/sessions/reviews/findings/ReviewFindingRow';
 import { findCommentForFinding, readReviewFindingDecision } from '@/components/sessions/reviews/findings/reviewFindingComment';
@@ -42,10 +42,9 @@ function WalkthroughReviewPendingInputs(props: Readonly<{
         const presentation = entry ? resolveSessionAgentActivityPresentation({ entry, subagent }) : null;
         if (!subagent || !presentation?.attention) return null;
         return <React.Fragment key={runId}>
-            <WalkthroughNotice testID={`walkthrough-review-needs-you:${runId}`} tone="warning" icon="chat-circle-dots"
-                message={`${presentation.title} · ${presentation.attention.description}`}
-                actions={<WalkthroughNoticeButton testID={`walkthrough-review-open-question:${runId}`} label={t('common.open')}
-                    onPress={() => setOpenRunId(runId)} />} />
+            <AttentionBanner presentation="strip" testID={`walkthrough-review-needs-you:${runId}`} tone="warning" iconName="chat-circle-dots"
+                title={`${presentation.title} · ${presentation.attention.description}`}
+                action={{ testID: `walkthrough-review-open-question:${runId}`, label: t('common.open'), onPress: () => setOpenRunId(runId) }} />
             {openRunId === runId ? <AppSessionTranscriptSourceProvider sessionId={props.sessionId} serverId={props.scope.serverId} navigation="none">
                 <SessionAgentPendingPrompts sessionId={props.sessionId} serverId={props.scope.serverId}
                     session={session} subagent={subagent} fallback={null} />
@@ -97,32 +96,25 @@ export function useSessionWalkthroughReviewPresentation(params: Readonly<{
         const seeded = review.narrationMode === 'seeded_narrator';
         const reviewers = summary.engineLabels.join(t('reviewWalkthrough.and'));
         const readNotice = summary.state === 'unavailable' ? (
-            <WalkthroughNotice testID="walkthrough-review-read-unavailable" tone="warning" icon="warning"
-                message={t('common.requestFailed')}
-                actions={<WalkthroughNoticeButton testID="walkthrough-review-read-retry" label={t('common.retry')}
-                    onPress={() => { fireAndForget(review.retry(), { tag: 'SessionWalkthroughReview.retry' }); }} />} />
+            <AttentionBanner presentation="strip" testID="walkthrough-review-read-unavailable" tone="warning"
+                title={t('common.requestFailed')}
+                action={{ testID: 'walkthrough-review-read-retry', label: t('common.retry'),
+                    onPress: () => { fireAndForget(review.retry(), { tag: 'SessionWalkthroughReview.retry' }); } }} />
         ) : summary.state === 'partial' && summary.failedEngineLabels.length > 0 ? (
-            <WalkthroughNotice
+            <AttentionBanner
+                presentation="strip"
                 testID="walkthrough-notice-partial-review"
                 tone="danger"
-                icon="x-circle"
-                message={(
-                    <Text style={styles.notice}>
-                        <Text style={styles.noticeStrong}>{t('reviewWalkthrough.partial.failed', { engines: summary.failedEngineLabels.join(t('reviewWalkthrough.and')) })}</Text>
-                        {` ${t('reviewWalkthrough.partial.notClean')}`}
-                        {summary.finishedEngineLabels.length > 0
-                            ? ` ${t('reviewWalkthrough.partial.finishedWith', { engines: summary.finishedEngineLabels.join(t('reviewWalkthrough.and')), count: summary.total })}`
-                            : ''}
-                    </Text>
-                )}
-                actions={onRetryReviewEngines && summary.failedEngineIds.length > 0 ? (
-                    <WalkthroughNoticeButton
-                        testID="walkthrough-retry-review-engine"
-                        icon="arrows-clockwise"
-                        label={t('reviewWalkthrough.partial.retry', { engine: summary.failedEngineLabels.join(t('reviewWalkthrough.and')) })}
-                        onPress={() => onRetryReviewEngines(summary.failedEngineIds)}
-                    />
-                ) : undefined}
+                title={t('reviewWalkthrough.partial.failed', { engines: summary.failedEngineLabels.join(t('reviewWalkthrough.and')) })}
+                description={t('reviewWalkthrough.partial.notClean') + (summary.finishedEngineLabels.length > 0
+                    ? ` ${t('reviewWalkthrough.partial.finishedWith', { engines: summary.finishedEngineLabels.join(t('reviewWalkthrough.and')), count: summary.total })}`
+                    : '')}
+                action={onRetryReviewEngines && summary.failedEngineIds.length > 0 ? {
+                    testID: 'walkthrough-retry-review-engine',
+                    icon: 'arrows-clockwise',
+                    label: t('reviewWalkthrough.partial.retry', { engine: summary.failedEngineLabels.join(t('reviewWalkthrough.and')) }),
+                    onPress: () => onRetryReviewEngines(summary.failedEngineIds),
+                } : null}
             />
         ) : null;
         const notice = <>
@@ -183,8 +175,6 @@ export function ReviewExplainFindingsButton(props: Readonly<{ running: boolean; 
 }
 
 const styles = StyleSheet.create((theme) => ({
-    notice: { ...Typography.variant('body'),  color: theme.colors.text.secondary,  },
-    noticeStrong: { color: theme.colors.text.primary, ...Typography.default('semiBold') },
     explaining: {
         flexDirection: 'row',
         alignItems: 'center',

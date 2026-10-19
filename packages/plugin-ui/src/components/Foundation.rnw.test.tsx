@@ -309,6 +309,34 @@ describe('foundation presentation families', () => {
     mount.unmount();
   });
 
+  it('draws a strip banner as one band sentence whose title leads only when a description finishes it', () => {
+    const mount = mountFoundation(
+      <>
+        <Banner presentation="strip" testID="failed" tone="danger" title="Writing stopped at stop 3" description="Anthropic is overloaded." />
+        <Banner presentation="strip" testID="cancelled" tone="neutral" title="Writing was cancelled." />
+      </>,
+    );
+
+    const failed = mount.container.querySelector<HTMLElement>('[data-testid="failed"]')!;
+    // A failure is announced; the band spans its pane instead of being a rounded card.
+    expect(failed.getAttribute('role')).toBe('alert');
+    expect(['', '0px']).toContain(getComputedStyle(failed).borderTopLeftRadius);
+    // One sentence: the title is a lead run inside it, set apart by weight, and the description follows on its line.
+    const lead = [...failed.querySelectorAll<HTMLElement>('*')].find((node) => node.textContent === 'Writing stopped at stop 3' && node.children.length === 0)!;
+    expect(lead.parentElement?.textContent).toBe('Writing stopped at stop 3 Anthropic is overloaded.');
+    const weight = (node: HTMLElement) => { const value = getComputedStyle(node).fontWeight; return value === 'bold' ? 700 : Number(value) || 400; };
+    expect(weight(lead)).toBeGreaterThan(weight(lead.parentElement!));
+
+    const cancelled = mount.container.querySelector<HTMLElement>('[data-testid="cancelled"]')!;
+    expect(cancelled.getAttribute('role')).toBe('status');
+    // Alone, the title is the one quiet sentence: nothing inside it is set apart as a lead.
+    const words = [...cancelled.querySelectorAll<HTMLElement>('*')].filter((node) => node.textContent === 'Writing was cancelled.' && node.children.length === 0);
+    expect(words).toHaveLength(1);
+    expect(Number(getComputedStyle(words[0]!).fontWeight) || 400).toBeLessThan(600);
+
+    mount.unmount();
+  });
+
   it('draws stacked shares as one named image, each share at its width in its tone', () => {
     const context = createSurfaceContext();
     const mount = mountFoundation(

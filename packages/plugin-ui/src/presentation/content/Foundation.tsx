@@ -1,5 +1,5 @@
 import { isValidElement, useState, type ReactNode } from 'react';
-import { Platform, View, type ViewStyle } from 'react-native';
+import { Platform, StyleSheet, View, type ViewStyle } from 'react-native';
 
 import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
 import {
@@ -22,6 +22,7 @@ import { HAPPIER_PRESS_FEEDBACK_V1 } from '../interaction/pressFeedback.js';
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import { resolveHappierPageTextStyle } from '../layout/pageText.js';
 import { HappierDataHatch } from './Hatch.js';
+import { HAPPIER_FRESHNESS_LINE_METRICS } from '../state/InfoState.js';
 import { useHappierMaterialColorResolver } from '../layout/Surface.js';
 
 export type HappierMetadataEntry = Readonly<{
@@ -521,6 +522,15 @@ export function HappierBanner(
     renderPoint?: (point: HappierBannerPoint, index: number) => ReactNode;
     announce?: 'alert' | 'status' | 'none';
     accessibilityLiveRegion?: 'polite' | 'assertive';
+    /**
+     * `card` (default): a notice that takes a section's place in a page. `strip`: the compact band across
+     * the top of a pane or reading surface, on the freshness line's measures (inset fill, ink hairlines
+     * above and below, one line of meta text). Its title leads in the ink of the words when a description
+     * follows it, else it is the one quiet sentence; the actions keep the line's end and move beneath the
+     * words when both do not fit, ending at the band's trailing edge on a narrow pane. Points and the
+     * full-width compact action belong to the card.
+     */
+    presentation?: 'card' | 'strip';
   }>,
 ) {
   const paintColor = useHappierMaterialColorResolver();
@@ -528,6 +538,7 @@ export function HappierBanner(
   const color = props.theme.colors[HAPPIER_TONE_COLOR_TOKEN[props.tone]];
   const typography = useOptionalHappierUiTypography();
   const [narrow, setNarrow] = useState(false);
+  if (props.presentation === 'strip') return <HappierBannerStrip {...props} />;
   const fullWidthAction =
     narrow && props.compactActionPlacement === 'full-width';
   const actionBelow = narrow || props.actionPlacement === 'below' || (props.points?.length ?? 0) > 0;
@@ -688,5 +699,93 @@ export function HappierBanner(
     </View>
   ) : (
     banner
+  );
+}
+
+/** The banner's `strip` presentation; see {@link HappierBanner}. */
+function HappierBannerStrip(props: Parameters<typeof HappierBanner>[0]) {
+  const metrics = HAPPIER_FRESHNESS_LINE_METRICS;
+  const typography = useOptionalHappierUiTypography();
+  const paintColor = useHappierMaterialColorResolver();
+  const [narrow, setNarrow] = useState(false);
+  const color = props.theme.colors[HAPPIER_TONE_COLOR_TOKEN[props.tone]];
+  const role =
+    props.announce === 'none'
+      ? undefined
+      : (props.announce ?? (isHappierBannerUrgent(props.tone) ? 'alert' : 'status'));
+  const meta = resolveHappierTypeRoleStyle('meta', props.theme, typography);
+  const lead = props.description
+    ? { ...resolveHappierTypeRoleStyle('meta', props.theme, typography, 'semiBold'), color: props.theme.colors.text }
+    : null;
+  return (
+    <View
+      role={role}
+      accessibilityRole={role === 'alert' ? 'alert' : undefined}
+      accessibilityLiveRegion={
+        props.accessibilityLiveRegion ??
+        (role === undefined ? undefined : role === 'alert' ? 'assertive' : 'polite')
+      }
+      testID={props.testID}
+      onLayout={(event) => {
+        const width = event.nativeEvent.layout.width;
+        if (Number.isFinite(width) && width > 0) setNarrow(width < HAPPIER_PAGE_METRICS.rowStackBelowWidthPx);
+        props.onLayout?.(event);
+      }}
+      style={[
+        {
+          flexDirection: narrow ? 'column' : 'row',
+          flexWrap: narrow ? 'nowrap' : 'wrap',
+          alignItems: narrow ? 'stretch' : 'center',
+          columnGap: metrics.gapPx,
+          rowGap: 6,
+          minHeight: metrics.minHeightPx,
+          paddingLeft: metrics.paddingStartPx,
+          paddingRight: metrics.paddingEndPx,
+          paddingVertical: narrow ? 8 : 6,
+          backgroundColor: paintColor(props.backgroundColor ?? props.theme.colors.surface, 'transparent'),
+          // The edges stay ink hairlines in every tone: a tinted rule reads heavier than the words.
+          borderTopWidth: StyleSheet.hairlineWidth,
+          borderBottomWidth: StyleSheet.hairlineWidth,
+          borderColor: props.borderColor ?? props.theme.colors.divider,
+        },
+        props.style,
+      ]}
+    >
+      {props.backgroundColor ? null : (
+        <View
+          pointerEvents={Platform.OS === 'web' ? undefined : 'none'}
+          style={{
+            position: 'absolute', top: 0, right: 0, bottom: 0, left: 0,
+            ...(Platform.OS === 'web' ? { pointerEvents: 'none' } : {}),
+            backgroundColor: props.tone === 'neutral' || props.tone === 'secondary' || props.tone === 'muted' ? props.theme.colors.text : color,
+            opacity: props.tone === 'neutral' || props.tone === 'secondary' || props.tone === 'muted' ? 0.025 : 0.08,
+          }}
+        />
+      )}
+      {/* The words keep their natural width as the line's basis, so actions that do not fit wrap under
+          them instead of squeezing the sentence into a one-word column. */}
+      <View style={{ flexDirection: 'row', alignItems: props.details ? 'flex-start' : 'center', gap: metrics.gapPx,
+        flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 }}>
+        {props.icon ? (
+          <View style={props.details ? { marginTop: (metrics.text.lineHeight - metrics.glyphPx) / 2 } : null}>{props.icon}</View>
+        ) : null}
+        <View style={{ flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 }}>
+          {props.titleContent ?? (
+            <HappierText style={{ ...meta, color: props.theme.colors.secondaryText }}>
+              {lead ? <HappierText style={lead}>{props.title}</HappierText> : props.title}
+              {props.description ? ` ${props.description}` : null}
+            </HappierText>
+          )}
+          {props.details}
+        </View>
+      </View>
+      {props.action ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 0,
+          ...(narrow ? { alignSelf: 'flex-end' } : { marginLeft: 'auto' }) }}>
+          {props.action}
+        </View>
+      ) : null}
+      {props.dismiss ? <View style={{ flexShrink: 0 }}>{props.dismiss}</View> : null}
+    </View>
   );
 }

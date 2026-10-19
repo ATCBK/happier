@@ -233,7 +233,7 @@ describe('WalkthroughView (lab WT1-A)', () => {
         const failed = await renderScreen(view({ ...COMPLETE, walkthrough: { state: 'failed', value: SPECIMEN_WALKTHROUGH, reason: 'overloaded' } }));
         expect(failed.findHostByTestId('walkthrough-notice-failed')?.props.accessibilityRole).toBe('alert');
         const quiet = await renderScreen(view(COMPLETE, {
-            update: { message: 'Merged stops 2 and 3', onUndo: vi.fn() },
+            update: { title: 'Merged stops 2 and 3', onUndo: vi.fn() },
             stale: { onRefresh: vi.fn() },
         }));
         for (const testID of ['walkthrough-notice-update', 'walkthrough-notice-stale']) {

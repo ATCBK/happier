@@ -251,12 +251,8 @@ export const WALKTHROUGH_SPECIMEN_FRAMES: readonly WalkthroughSpecimenFrame[] = 
                 view={{
                     ...base(phone ? 'phone' : 'wide'),
                     update: {
-                        message: (
-                            <Text style={styles.update}>
-                                <Text style={styles.updateStrong}>Merged stops 2 and 3</Text>
-                                {' into “One key for the modal and the sheet”. Your title “Narrow windows, same modal” was kept; nothing else changed.'}
-                            </Text>
-                        ),
+                        title: 'Merged stops 2 and 3',
+                        description: 'into “One key for the modal and the sheet”. Your title “Narrow windows, same modal” was kept; nothing else changed.',
                         onUndo: noop,
                     },
                 }}
@@ -290,6 +286,4 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.base,
     },
     grabber: { alignSelf: 'center', width: 36, height: 5, borderRadius: 3, marginTop: theme.space.s8, backgroundColor: theme.colors.border.strong },
-    update: { fontSize: 13, lineHeight: 19, color: theme.colors.text.secondary, ...Typography.default() },
-    updateStrong: { color: theme.colors.text.primary, ...Typography.default('semiBold') },
 }));

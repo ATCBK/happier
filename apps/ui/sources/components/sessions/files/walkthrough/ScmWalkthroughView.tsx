@@ -267,7 +267,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                 onOpenFile={props.onOpenFile}
                 onShowFiles={props.onShowFiles}
                 // The band is the way back from the last change; without Undo the reading's own provenance marks carry it.
-                update={saved?.updateNotice && onUndo ? { message: t('walkthrough.saved.updated'), onUndo } : null}
+                update={saved?.updateNotice && onUndo ? { title: t('walkthrough.saved.updated'), onUndo } : null}
                 stale={capturedComparison?.freshness === 'stale' ? { ...(canSend && launch.canLaunchExecutionRuns ? { onRefresh: () => {
                     if (!bound.isCurrent()) return;
                     if (!modelAvailable) modelChoice.choose();
