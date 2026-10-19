@@ -124,7 +124,7 @@ function createFixtureHostApi(context: SurfaceContext, state: FixtureState): Plu
         version: () => ({
             apiVersion: PLUGIN_UI_HOST_API_VERSION_V1,
             wireVersion: 1,
-            methods: ['context', 'readResource', 'executeAction', 'openSurface', 'openExternalLink'],
+            methods: ['context', 'readResource', 'executeAction', 'admitAction', 'openSurface', 'openExternalLink'],
         }),
         context: async () => context,
         widgetArea: unsupported,
@@ -134,6 +134,8 @@ function createFixtureHostApi(context: SurfaceContext, state: FixtureState): Plu
             return {};
         }) as PluginUiHostApi['executeAction'],
         selectActionInput: unsupported,
+        // The gallery's Account writer is fixture-local, like its Action transport.
+        admitAction: async () => true,
         readEntityDragItem: unsupported,
         updateEntityDragDrop: unsupported,
         watchEntityDragDrop: unsupported,
@@ -148,6 +150,7 @@ function createFixtureHostApi(context: SurfaceContext, state: FixtureState): Plu
         watchResource: unsupported,
         activeComposer: unsupported,
         readComposer: unsupported,
+        readDiscussionComposer: unsupported,
         watchComposer: unsupported,
         applyComposer: unsupported,
         focusComposer: unsupported,

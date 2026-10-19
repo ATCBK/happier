@@ -233,6 +233,9 @@ function createDemoSurfaceHost(initial: SurfaceContext): DemoSurfaceHost {
         selectActionInput: async () => {
             throw new Error('dev surface has no Action input selector');
         },
+        admitAction: async () => {
+            throw new Error('dev surface has no Account Action admission');
+        },
         openNewSession: async () => {
             throw new Error('dev surface cannot open New Session');
         },
@@ -254,6 +257,9 @@ function createDemoSurfaceHost(initial: SurfaceContext): DemoSurfaceHost {
             throw new Error('dev surface has no Composer');
         },
         readComposer: async () => {
+            throw new Error('dev surface has no Composer');
+        },
+        readDiscussionComposer: async () => {
             throw new Error('dev surface has no Composer');
         },
         watchComposer: async () => {
