@@ -663,9 +663,29 @@ function packageRuntimeExportTarget(packageJson, exportKey, realm, resolutionCon
   }
   if (packageExports && typeof packageExports === 'object') {
     const hasSubpathKeys = Object.keys(packageExports).some((key) => key.startsWith('.'));
-    const exportValue = hasSubpathKeys
-      ? packageExports[exportKey]
-      : exportKey === '.' ? packageExports : undefined;
+    if (hasSubpathKeys) {
+      // Exact entries, including explicit null exclusions, win over patterns.
+      if (Object.hasOwn(packageExports, exportKey)) {
+        return selectConditionalExportTarget(packageExports[exportKey], realm, resolutionCondition);
+      }
+      // Node's PACKAGE_IMPORTS_EXPORTS_RESOLVE ranks a single-star pattern by
+      // longest prefix, then longest complete key (the more specific trailer).
+      const patterns = Object.keys(packageExports)
+        .filter(key => key.startsWith('./') && key.indexOf('*') >= 0 && key.indexOf('*') === key.lastIndexOf('*'))
+        .sort((left, right) => right.indexOf('*') - left.indexOf('*') || right.length - left.length);
+      for (const pattern of patterns) {
+        const star = pattern.indexOf('*');
+        const prefix = pattern.slice(0, star);
+        const trailer = pattern.slice(star + 1);
+        if (!exportKey.startsWith(prefix) || exportKey.length <= prefix.length
+          || !exportKey.endsWith(trailer) || exportKey.length < pattern.length) continue;
+        const matched = exportKey.slice(prefix.length, exportKey.length - trailer.length);
+        const selected = selectConditionalExportTarget(packageExports[pattern], realm, resolutionCondition);
+        return selected === null ? null : selected.split('*').join(matched);
+      }
+      return null;
+    }
+    const exportValue = exportKey === '.' ? packageExports : undefined;
     const selected = selectConditionalExportTarget(exportValue, realm, resolutionCondition);
     if (selected) return selected;
   }

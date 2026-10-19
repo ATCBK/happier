@@ -354,6 +354,7 @@ const INVENTORY = Object.freeze({
       realm: 'daemon',
     }),
     ...[
+      ['HOSTED_HTML_GUEST_BOOTSTRAP_SCRIPT', 'value', 'src/host/ui/hostedHtmlGuestBootstrap.generated.ts'],
       ['decodePluginUiClipboardReadResult', 'value', 'src/host/ui/hostApiCodecs.ts'],
       ['decodePluginUiConfirmResult', 'value', 'src/host/ui/hostApiCodecs.ts'],
       ['encodePluginUiDiagnostic', 'value', 'src/host/ui/hostApiCodecs.ts'],
@@ -497,6 +498,7 @@ async function createPackageFixture(root = undefined) {
       ].join('\n'),
   );
   await writeFixtureFile(root, 'src/host/ui/index.ts', [
+    "export { HOSTED_HTML_GUEST_BOOTSTRAP_SCRIPT } from './hostedHtmlGuestBootstrap.generated.js';",
     "export type { PluginUiHostApiDecodeResult } from './hostApiCodecs.js';",
     "export { decodePluginUiClipboardReadResult } from './hostApiCodecs.js';",
     "export { decodePluginUiResourceContent } from './hostApiCodecs.js';",
@@ -504,6 +506,7 @@ async function createPackageFixture(root = undefined) {
     "export { encodePluginUiDiagnostic } from './hostApiCodecs.js';",
     '',
   ].join('\n'));
+  await writeFixtureFile(root, 'src/host/ui/hostedHtmlGuestBootstrap.generated.ts', 'export const HOSTED_HTML_GUEST_BOOTSTRAP_SCRIPT = "";\n');
   await writeFixtureFile(root, 'src/host/ui/hostApiCodecs.ts', [
     'export type PluginUiHostApiDecodeResult<T> = Readonly<{ ok: true; value: T }>;',
     'export function decodePluginUiClipboardReadResult(): PluginUiHostApiDecodeResult<string> { return { ok: true, value: "" }; }',
@@ -2410,6 +2413,49 @@ test('browser value closures accept a safe installed package selected by browser
   }
 });
 
+test('runtime dependency wildcard exports preserve conditional targets and Node specificity', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'plugin-sdk-api-surface-wildcard-exports-'));
+  const root = join(workspaceRoot, 'packages/plugin-sdk');
+  const installedRoot = join(workspaceRoot, 'node_modules/@fixture/wildcard-exports');
+  try {
+    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
+      private: true,
+      workspaces: { packages: ['packages/plugin-sdk'] },
+    }, null, 2)}\n`);
+    await createPackageFixture(root);
+    await addPortableValueFixture(root, 'any', [
+      "import { installedValue as locale } from '@fixture/wildcard-exports/locales/en.js';",
+      "import { installedValue as nested } from '@fixture/wildcard-exports/locales/nested/en.js';",
+      "import { installedValue as exact } from '@fixture/wildcard-exports/locales/exact.js';",
+      'export const PortableValue = locale + nested + exact;',
+    ].join('\n'));
+    await writeFixtureFile(installedRoot, 'package.json', `${JSON.stringify({
+      name: '@fixture/wildcard-exports',
+      type: 'module',
+      exports: {
+        './locales/*': './unsafe.js',
+        './locales/*.js': { import: './safe/*.js', default: './unsafe.js' },
+        './locales/nested/*': './safe/*',
+        './locales/exact.js': './safe/en.js',
+      },
+    }, null, 2)}\n`);
+    await writeFixtureFile(installedRoot, 'safe/en.js', 'export const installedValue = 1;\n');
+    await writeFixtureFile(installedRoot, 'unsafe.js', "import { readFileSync } from 'node:fs';\nexport const installedValue = readFileSync;\n");
+
+    const result = runJsonCli(root);
+
+    assert.equal(result.status, 0, result.stderr);
+    const packageJson = JSON.parse(await readFile(join(installedRoot, 'package.json'), 'utf8'));
+    packageJson.exports['./locales/en.js'] = null;
+    await writeFixtureFile(installedRoot, 'package.json', JSON.stringify(packageJson));
+    const blocked = runJsonCli(root);
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stderr, /cannot resolve runtime package export @fixture\/wildcard-exports\/locales\/en\.js/u);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test('portable dependency export conditions follow declaration order', async (t) => {
   for (const scenario of [
     {
@@ -2644,6 +2690,42 @@ test('any value closures resolve extensionless deep subpaths from legacy package
     const result = runJsonCli(root);
 
     assert.equal(result.status, 0, result.stderr);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('value closures resolve conditional wildcard exports without reviving private exact subpaths', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'plugin-sdk-api-surface-pattern-'));
+  const root = join(workspaceRoot, 'packages/plugin-sdk');
+  const packageName = 'portable-pattern';
+  const installedRoot = join(workspaceRoot, 'node_modules', packageName);
+  try {
+    await writeFixtureFile(workspaceRoot, 'package.json', `${JSON.stringify({
+      private: true, workspaces: { packages: ['packages/plugin-sdk'] },
+    }, null, 2)}\n`);
+    await createPackageFixture(root);
+    await addPortableValueFixture(root, 'browser',
+      `import { installedValue } from '${packageName}/v4/locales/en.js';\nexport const PortableValue = installedValue;\n`);
+    await writeFixtureFile(installedRoot, 'package.json', `${JSON.stringify({
+      name: packageName, type: 'module', exports: {
+        './v4/*': './unsafe/*',
+        './v4/locales/*': { browser: './v4/locales/*', default: './unsafe/*' },
+        './v4/locales/private.js': null,
+      },
+    }, null, 2)}\n`);
+    await writeFixtureFile(installedRoot, 'v4/locales/en.js', 'export const installedValue = 1;\n');
+    await writeFixtureFile(installedRoot, 'unsafe/locales/en.js',
+      "import { readFileSync } from 'node:fs';\nexport const installedValue = readFileSync;\n");
+    const accepted = runJsonCli(root);
+    assert.equal(accepted.status, 0, accepted.stderr);
+
+    await writeFixtureFile(root, 'src/actions/portableValue.ts',
+      `/** @moduleRealm browser */\nimport { installedValue } from '${packageName}/v4/locales/private.js';\nexport const PortableValue = installedValue;\n`);
+    await writeFixtureFile(installedRoot, 'v4/locales/private.js', 'export const installedValue = 1;\n');
+    const refused = runJsonCli(root);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /cannot resolve runtime package export portable-pattern\/v4\/locales\/private\.js/u);
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }
