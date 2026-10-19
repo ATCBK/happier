@@ -10,10 +10,10 @@ import {
 import {
     getComposerMediaContentAvailability,
     uploadComposerMediaStageFromReader,
+    createTransferManifestHasher,
     type ComposerMediaStageUploadResult,
 } from '@/sync/domains/transfers/runtime/transferRuntime';
-import { createTransferManifestHasher } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferManifestHasher';
-import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
+import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { runTransferFinalizeRecovery } from '@/components/transfers/recovery/runTransferFinalizeRecovery';
 import { t } from '@/text';
 import { nativePickFiles, type NativePickedFile } from '@/utils/files/nativePickFiles';
@@ -162,6 +162,7 @@ export async function pickAndStageComposerMedia(input: Readonly<{
             if (isTransferFinalizeRecoveryFailure<ComposerMediaStageUploadResult>(staged)) {
                 const recoveryResult = await runTransferFinalizeRecovery({
                     recovery: staged.recovery,
+                    signal: input.signal,
                     title: t('transferRecovery.title'),
                     message: t('transferRecovery.message'),
                 });

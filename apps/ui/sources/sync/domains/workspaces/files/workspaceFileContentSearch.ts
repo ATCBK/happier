@@ -1,4 +1,4 @@
-import type { WorkspaceFileSearchFileV1 } from '@happier-dev/protocol';
+import type { DaemonWorkspaceFileSearchResponse, WorkspaceFileSearchFileV1 } from '@happier-dev/protocol';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { machineWorkspaceFileSearch } from '@/sync/ops/machineWorkspaceFileSearch';
@@ -7,7 +7,8 @@ export type WorkspaceFileContentSearchPage = Readonly<{
     items: readonly WorkspaceFileSearchFileV1[];
     hasMore: boolean;
     coverage: 'complete' | 'partial' | 'unavailable';
-    error?: 'update_required' | 'invalid_pattern' | 'transport_failed' | 'account_unavailable' | 'root_not_allowed' | 'ripgrep_unavailable' | 'ripgrep_failed';
+    error?: Extract<DaemonWorkspaceFileSearchResponse, { ok: false }>['code']
+        | 'update_required' | 'transport_failed' | 'account_unavailable';
 }>;
 
 export async function searchWorkspaceFileContents(input: Readonly<{

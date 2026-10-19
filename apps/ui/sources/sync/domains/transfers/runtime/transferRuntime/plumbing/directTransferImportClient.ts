@@ -263,7 +263,13 @@ async function readJsonResponse(response: Response, maxBytes: number, signal: Ab
         signal,
     });
     const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
-    return JSON.parse(text) as unknown;
+    try {
+        return JSON.parse(text) as unknown;
+    } catch (cause) {
+        // Parser diagnostics can quote the untrusted body. Finalize/cleanup
+        // callers keep their existing outcome normalization around this error.
+        throw new Error('Direct import chunk returned an unsupported response', { cause });
+    }
 }
 
 async function readFinalizeRecoveryRequiredResponse(

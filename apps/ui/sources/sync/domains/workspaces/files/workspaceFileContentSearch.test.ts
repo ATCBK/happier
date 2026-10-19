@@ -53,6 +53,8 @@ describe('searchWorkspaceFileContents', () => {
         await expect(searchWorkspaceFileContents(input)).resolves.toMatchObject({ coverage: 'unavailable', error: 'update_required' });
         rpc.call.mockResolvedValueOnce({ ok: false, code: 'invalid_pattern' });
         await expect(searchWorkspaceFileContents(input)).resolves.toMatchObject({ coverage: 'unavailable', error: 'invalid_pattern' });
+        rpc.call.mockResolvedValueOnce({ ok: false, code: 'root_not_found' });
+        await expect(searchWorkspaceFileContents(input)).resolves.toMatchObject({ coverage: 'unavailable', error: 'root_not_found' });
         rpc.call.mockRejectedValueOnce(new Error('disconnected'));
         await expect(searchWorkspaceFileContents(input)).resolves.toMatchObject({ coverage: 'unavailable', error: 'transport_failed' });
         rpc.call.mockResolvedValueOnce({ ok: true, files: [], hasMore: false });

@@ -56,6 +56,7 @@ describe('machineWorkspaceFileList', () => {
     it('preserves missing-method, transport/admission and invalid-response outcomes through filename search', async () => {
         const { searchWorkspaceFiles, WorkspaceFileSearchUnavailableError } = await import('@/sync/domains/workspaces/files/workspaceFileSearch');
         const cases = [
+            { ack: { ok: true, result: { ok: false, errorCode: 'root_not_found' } }, code: 'root_not_found' },
             { ack: { ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE, error: 'missing' }, code: 'method_unavailable' },
             { ack: { ok: false, errorCode: 'MACHINE_RPC_FAILED', error: 'transport' }, code: 'transport_failed' },
             { ack: { ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN, error: 'admission' }, code: 'transport_failed' },

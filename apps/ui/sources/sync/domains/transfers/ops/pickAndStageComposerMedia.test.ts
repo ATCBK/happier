@@ -10,7 +10,7 @@ const getComposerMediaContentAvailabilitySpy = vi.hoisted(() => vi.fn());
 const runTransferFinalizeRecoveryMock = vi.hoisted(() => vi.fn());
 
 vi.mock('expo-document-picker', () => documentPicker);
-vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({
+vi.mock('@/sync/domains/transfers/runtime/transferRuntime/families/composerMediaStageTransfers', () => ({
     getComposerMediaContentAvailability: (params: unknown) => getComposerMediaContentAvailabilitySpy(params),
     uploadComposerMediaStageFromReader: (params: unknown) => uploadComposerMediaStageFromReaderSpy(params),
 }));
@@ -21,6 +21,8 @@ vi.mock('@/components/transfers/recovery/runTransferFinalizeRecovery', () => ({
 
 const executionTarget = { serverId: 'server-1', machineId: 'machine-1' } as const;
 const owner = { pluginId: 'acme.issues', localId: 'issue' } as const;
+// Load the real public export graph during collection, outside behavior budgets.
+const { pickAndStageComposerMedia } = await import('./pickAndStageComposerMedia');
 
 describe('pickAndStageComposerMedia', () => {
     afterEach(() => {
@@ -32,8 +34,6 @@ describe('pickAndStageComposerMedia', () => {
 
     it('does not open the picker when the target daemon does not negotiate Composer media content', async () => {
         getComposerMediaContentAvailabilitySpy.mockResolvedValueOnce({ available: false });
-
-        const { pickAndStageComposerMedia } = await import('./pickAndStageComposerMedia');
 
         await expect(pickAndStageComposerMedia({
             executionTarget,
@@ -84,8 +84,6 @@ describe('pickAndStageComposerMedia', () => {
             await params.fileReader.close();
             return { success: true, handle };
         });
-
-        const { pickAndStageComposerMedia } = await import('./pickAndStageComposerMedia');
 
         await expect(pickAndStageComposerMedia({
             executionTarget,
@@ -148,8 +146,6 @@ describe('pickAndStageComposerMedia', () => {
             response: { success: true, handle },
         });
 
-        const { pickAndStageComposerMedia } = await import('./pickAndStageComposerMedia');
-
         await expect(pickAndStageComposerMedia({
             executionTarget,
             owner,
@@ -171,8 +167,6 @@ describe('pickAndStageComposerMedia', () => {
             canceled: false,
             assets: [{ file, uri: 'blob:notes', name: 'notes.pdf', mimeType: 'application/pdf' }],
         });
-
-        const { pickAndStageComposerMedia } = await import('./pickAndStageComposerMedia');
 
         await expect(pickAndStageComposerMedia({
             executionTarget,

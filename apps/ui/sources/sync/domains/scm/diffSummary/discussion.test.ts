@@ -39,12 +39,29 @@ describe('SCM discussion target', () => {
         for (const overrides of [
             { run: { ...run, interaction: undefined } },
             { run: { ...run, status: 'succeeded' as const } },
+            { canControlExecutionRuns: false },
+        ]) expect(target(overrides)).toEqual({ kind: 'unavailable' });
+    });
+
+    it('keeps restored conversation availability unknown until the exact live Run is observed', () => {
+        for (const overrides of [
+            { runId: null },
+            { run: null },
+            { run: null, canControlExecutionRuns: false },
+            { run: undefined },
             { runId: 'different-writer' },
             { source: 'transcript_fallback' as const },
             { source: 'daemon_fallback' as const },
-            { canControlExecutionRuns: false },
-            { run: null },
-        ]) expect(target(overrides)).toEqual({ kind: 'unavailable' });
+        ]) expect(target(overrides)).toEqual({ kind: 'unknown' });
+    });
+
+    it('waits for the admitted current Run to publish its retained interaction without declaring it ended', () => {
+        expect(target({ run: { ...run, interaction: undefined, lifecycle: { v: 1, state: 'current' } } }))
+            .toEqual({ kind: 'unknown' });
+        expect(target({ run: { ...run, lifecycle: { v: 1, state: 'current' } } }))
+            .toMatchObject({ kind: 'continue', needsResume: false });
+        expect(target({ run: { ...run, interaction: undefined, lifecycle: { v: 1, state: 'unavailable' } } }))
+            .toEqual({ kind: 'unavailable' });
     });
 
     it('uses the lifecycle owner to offer Resume for a lost recoverable writer', () => {

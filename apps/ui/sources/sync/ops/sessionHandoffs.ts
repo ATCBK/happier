@@ -57,6 +57,10 @@ function normalizeId(value: unknown): string { return typeof value === 'string' 
 function readError(raw: unknown): HandoffErrorResult | null {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const record = raw as Record<string, unknown>;
+    if (raw instanceof Error) {
+        const errorCode = readRpcErrorCode(raw);
+        if (errorCode) return { ok: false, errorCode, errorMessage: raw.message };
+    }
     if (record.ok !== false && typeof record.error !== 'string') return null;
     const status = SessionHandoffStatusSchema.safeParse(record.status);
     const handoffId = normalizeId(record.handoffId) || (status.success ? status.data.handoffId : '');
@@ -133,7 +137,7 @@ async function requestCoordinator(options: StartSessionHandoffOptions): Promise<
                 error: 'Workspace sync requires a newer daemon',
             };
         }
-        return { ok: false, errorCode: 'UNEXPECTED', error: error instanceof Error ? error.message : 'Failed to start session handoff' };
+        return readError(error) ?? { ok: false, errorCode: 'UNEXPECTED', error: error instanceof Error ? error.message : 'Failed to start session handoff' };
     }
 }
 
@@ -240,7 +244,7 @@ export async function getSessionHandoffStatus(params: Readonly<{ machineId: stri
         const error = readError(raw); if (error) return error;
         const status = SessionHandoffStatusSchema.safeParse((raw as Record<string, unknown> | null)?.status ?? raw);
         return status.success ? { ok: true, status: status.data } : { ok: false, errorCode: 'UNEXPECTED', errorMessage: 'Unsupported session handoff status from daemon' };
-    } catch (error) { return { ok: false, errorCode: 'UNEXPECTED', errorMessage: error instanceof Error ? error.message : 'Failed to read session handoff status' }; }
+    } catch (error) { return readError(error) ?? { ok: false, errorCode: 'UNEXPECTED', errorMessage: error instanceof Error ? error.message : 'Failed to read session handoff status' }; }
 }
 
 export async function cancelSessionHandoff(params: Readonly<{ machineId: string; handoffId: string; reason?: string; serverId?: string | null }>): Promise<Readonly<{ ok: true; status?: SessionHandoffStatus }> | HandoffErrorResult> {
@@ -249,5 +253,5 @@ export async function cancelSessionHandoff(params: Readonly<{ machineId: string;
         const error = readError(raw); if (error) return error;
         const status = SessionHandoffStatusSchema.safeParse((raw as Record<string, unknown> | null)?.status);
         return { ok: true, ...(status.success ? { status: status.data } : {}) };
-    } catch (error) { return { ok: false, errorCode: 'UNEXPECTED', errorMessage: error instanceof Error ? error.message : 'Failed to cancel session handoff' }; }
+    } catch (error) { return readError(error) ?? { ok: false, errorCode: 'UNEXPECTED', errorMessage: error instanceof Error ? error.message : 'Failed to cancel session handoff' }; }
 }

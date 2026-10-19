@@ -2,7 +2,7 @@ import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
 import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
-import { FilesystemGetDirectoryTreeOutputSchema, FilesystemListDirectoryOutputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import { FilesystemGetDirectoryTreeOutputSchema, FilesystemListDirectoryOutputSchema, type FilesystemTreeNode } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { invokeWorkspaceFileSystemAction, invokeWorkspaceFileSystemMutation, type WorkspaceFileSystemMutationResponse } from './actionInvocation';
 
 export type WorkspaceFileSystemTarget = Readonly<{
@@ -77,14 +77,7 @@ export async function workspaceListDirectory(
     }
 }
 
-export type WorkspaceTreeNode = Readonly<{
-    name: string;
-    path: string;
-    type: 'file' | 'directory';
-    size?: number;
-    modified?: number;
-    children?: WorkspaceTreeNode[];
-}>;
+export type WorkspaceTreeNode = FilesystemTreeNode;
 
 export type WorkspaceGetDirectoryTreeResponse =
     | Readonly<{ success: true; tree: WorkspaceTreeNode }>

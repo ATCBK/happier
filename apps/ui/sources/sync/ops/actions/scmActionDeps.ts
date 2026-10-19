@@ -11,7 +11,10 @@ import { createAccountKvJsonTransport } from '@/sync/ops/account/accountKvJsonTr
 import { scmReviewComparisonMatchesSource } from '@/sync/domains/scm/diffSummary/selection';
 
 /** Admission and schemas belong to Actions; repository policy belongs to SCM. */
-export function createUiScmAction(account?: LazyActionAccountContext): NonNullable<ActionExecutorDeps['scmActionExecute']> {
+export function createUiScmAction(
+    account?: LazyActionAccountContext,
+    options?: Readonly<{ onDispatched?: () => void }>,
+): NonNullable<ActionExecutorDeps['scmActionExecute']> {
     return async ({ actionId, input, context }) => {
         context.signal?.throwIfAborted();
         account?.assertCurrent();
@@ -131,6 +134,7 @@ export function createUiScmAction(account?: LazyActionAccountContext): NonNullab
                 }
                 return { success: true, deleted, failures };
             }
+            options?.onDispatched?.();
             const result = await runMachineScmRpcWithFallback(target.machineId, method, request, {
                 serverId, accountId, signal: context.signal,
             });
@@ -142,6 +146,7 @@ export function createUiScmAction(account?: LazyActionAccountContext): NonNullab
         // Like the CLI Action adapter, Session Actions cannot substitute another
         // repository. The general SCM facade still owns caller-relative paths.
         const sessionRequest = actionId === 'scm.repository.clone' ? request : { ...request, cwd: undefined };
+        options?.onDispatched?.();
         const result = await runSessionScmRpc(sessionId, method, sessionRequest, serverId, context.signal, accountId,
             actionId === 'scm.pullRequest.prepareWorktree' ? (resolved) => ({ ...resolved, sourcePath: resolved.cwd }) : undefined);
         account?.assertResultCurrent(getActionSpec(actionId).sideEffectClass);

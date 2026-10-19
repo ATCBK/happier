@@ -22,6 +22,10 @@ installDisconnectedServerSocketBoundary(socket => {
 
 const { storage } = await import('@/sync/domains/state/storage');
 const { resolveMachineCarrierRoute } = await import('./machineCarrierHttpLease');
+// Load real entry points before observing operation-only network admission;
+// cold graph loading otherwise lets unrelated Account bootstrap join the trace.
+const { downloadDaemonWorkspaceFileToDestination } = await import('../families/workspaceFileTransfers');
+const { uploadSessionAttachmentFromReaderViaMachineCarrier } = await import('../families/uploadSessionAttachmentFromReaderViaMachineCarrier');
 
 describe('mandatory finite machine carrier admission', () => {
     let serverId: string;
@@ -30,14 +34,21 @@ describe('mandatory finite machine carrier admission', () => {
 
     beforeEach(async () => {
         installHomeGovernanceBoundaries(homes);
-        serverId = await homes.addHome({ name: 'Admission Home', serverUrl: 'https://machine-admission.example.test', accountId: 'account-a' });
+        serverId = await homes.addHome({ name: 'Admission Home', serverUrl: 'https://machine-admission.example.test',
+            accountId: 'account-a' });
         connection = await restoreServerAccountForTest({ serverUrl: 'https://machine-admission.example.test', accountId: 'account-a', request: homes.request });
         expect(serverId).not.toBe('');
         networkRequests.length = 0;
         socketMachineRpc.mockReset();
         socketMachineRpc.mockResolvedValue({ success: false, error: 'Unexpected machine RPC' });
         storage.setState({ machines: {}, machineListByServerId: {} });
-        setRuntimeFetch(async (input) => {
+        setRuntimeFetch(async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            // Account capture may legitimately read its Home baseline. The
+            // admission contract forbids feature/Machine/grant/byte work, not
+            // authentication or Account currentness reads.
+            if (!path.startsWith('/v1/features') && !path.startsWith('/v1/machines')
+                && !path.startsWith('/machine-transfers/')) return await homes.request(input, init);
             networkRequests.push(String(input));
             return new Response('{}', { status: 503 });
         });
@@ -74,7 +85,6 @@ describe('mandatory finite machine carrier admission', () => {
 
     it('refuses a workspace download before prepare without touching legacy bulk transports', async () => {
         const cleanup = vi.fn(async () => {});
-        const { downloadDaemonWorkspaceFileToDestination } = await import('../families/workspaceFileTransfers');
 
         const result = await downloadDaemonWorkspaceFileToDestination({
             machineId: 'machine-admission',
@@ -96,7 +106,6 @@ describe('mandatory finite machine carrier admission', () => {
 
     it('refuses an attachment upload before prepare and still closes the reader', async () => {
         const close = vi.fn(async () => {});
-        const { uploadSessionAttachmentFromReaderViaMachineCarrier } = await import('../families/uploadSessionAttachmentFromReaderViaMachineCarrier');
 
         const result = await uploadSessionAttachmentFromReaderViaMachineCarrier({
             machineId: 'machine-admission',

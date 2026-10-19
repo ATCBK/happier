@@ -20,6 +20,7 @@ type Entry = {
     listeners: Set<() => void>;
     inFlight: Promise<WorkspaceSyncStatusV1 | null> | null;
     admissionGeneration: number;
+    requestController: AbortController | null;
 };
 
 const entries = new Map<string, Entry>();
@@ -27,6 +28,7 @@ type ControllerRead = {
     scopes: Map<string, Readonly<{ scope: WorkspaceSyncStatusScope; generation: number }>>;
     inFlight: Promise<void>;
     invalidated: boolean;
+    controller: AbortController;
 };
 
 const controllerReads = new Map<string, ControllerRead>();
@@ -44,7 +46,7 @@ function entryFor(scope: WorkspaceSyncStatusScope): Entry {
     const key = keyFor(scope);
     const existing = entries.get(key);
     if (existing) return existing;
-    const entry: Entry = { scope, snapshot: IDLE_SNAPSHOT, listeners: new Set(), inFlight: null, admissionGeneration: 0 };
+    const entry: Entry = { scope, snapshot: IDLE_SNAPSHOT, listeners: new Set(), inFlight: null, admissionGeneration: 0, requestController: null };
     entries.set(key, entry);
     return entry;
 }
@@ -65,7 +67,26 @@ export function getWorkspaceSyncStatusSnapshot(scope: WorkspaceSyncStatusScope):
 export function subscribeWorkspaceSyncStatus(scope: WorkspaceSyncStatusScope, listener: () => void): () => void {
     const entry = entryFor(scope);
     entry.listeners.add(listener);
-    return () => entry.listeners.delete(listener);
+    return () => {
+        entry.listeners.delete(listener);
+        if (entry.listeners.size > 0) return;
+        entry.admissionGeneration += 1;
+        entry.requestController?.abort();
+        entry.requestController = null;
+        entry.inFlight = null;
+        if (entry.snapshot.phase === 'loading' || entry.snapshot.phase === 'refreshing') {
+            publish(entry, { ...entry.snapshot, phase: 'idle', error: null });
+        }
+        const key = controllerKeyFor(scope);
+        const read = controllerReads.get(key);
+        read?.scopes.delete(keyFor(scope));
+        // Mounted summary consumers subscribe before admitting a shared list read.
+        // One departing relationship must not cancel another relationship's read.
+        if (read && ![...read.scopes.values()].some(value => entryFor(value.scope).listeners.size > 0)) {
+            controllerReads.delete(key);
+            read.controller.abort();
+        }
+    };
 }
 
 export function setWorkspaceSyncStatus(scope: WorkspaceSyncStatusScope, status: WorkspaceSyncStatusV1): void {
@@ -87,7 +108,11 @@ export function invalidateWorkspaceSyncStatuses(controller: Readonly<{
 }>): void {
     const scopes: WorkspaceSyncStatusScope[] = [];
     const currentRead = controllerReads.get(controllerKeyFor(controller));
-    if (currentRead) currentRead.invalidated = true;
+    if (currentRead) {
+        currentRead.invalidated = true;
+        controllerReads.delete(controllerKeyFor(controller));
+        currentRead.controller.abort();
+    }
     for (const entry of entries.values()) {
         if (controllerKeyFor(entry.scope) !== controllerKeyFor(controller)) continue;
         entry.admissionGeneration += 1;
@@ -106,7 +131,9 @@ export function refreshWorkspaceSyncStatus(scope: WorkspaceSyncStatusScope): Pro
         error: null,
     });
     const admissionGeneration = entry.admissionGeneration;
-    const inFlight = getWorkspaceSyncStatus(scope).then(
+    const controller = new AbortController();
+    entry.requestController = controller;
+    const inFlight = getWorkspaceSyncStatus({ ...scope, signal: controller.signal }).then(
         (status) => {
             if (entry.admissionGeneration !== admissionGeneration) return entry.snapshot.status;
             const retainedStatus = statusesEqual(entry.snapshot.status, status) ? entry.snapshot.status : status;
@@ -120,7 +147,10 @@ export function refreshWorkspaceSyncStatus(scope: WorkspaceSyncStatusScope): Pro
             throw error;
         },
     ).finally(() => {
-        entry.inFlight = null;
+        if (entry.inFlight === inFlight) {
+            entry.inFlight = null;
+            entry.requestController = null;
+        }
     });
     entry.inFlight = inFlight;
     return inFlight;
@@ -132,7 +162,8 @@ export async function refreshWorkspaceSyncStatuses(scopes: readonly WorkspaceSyn
     for (const scope of scopes) controllers.set(controllerKeyFor(scope), scope);
     await Promise.all([...controllers].map(async ([key, controller]) => {
         const current = controllerReads.get(key);
-        const read: ControllerRead = current ?? { scopes: new Map(), inFlight: Promise.resolve(), invalidated: false };
+        const read: ControllerRead = current ?? { scopes: new Map(), inFlight: Promise.resolve(), invalidated: false,
+            controller: new AbortController() };
         for (const scope of scopes.filter((candidate) => controllerKeyFor(candidate) === key)) {
             const entry = entryFor(scope);
             const previous = read.scopes.get(keyFor(scope));
@@ -146,8 +177,8 @@ export async function refreshWorkspaceSyncStatuses(scopes: readonly WorkspaceSyn
             }
         }
         if (current) return await current.inFlight;
-        read.inFlight = listWorkspaceSyncStatuses(controller).then((statuses) => {
-            if (read.invalidated) return;
+        read.inFlight = listWorkspaceSyncStatuses({ ...controller, signal: read.controller.signal }).then((statuses) => {
+            if (read.invalidated || read.controller.signal.aborted) return;
             const byId = new Map(statuses
                 .filter((status) => status.controllerMachineId === controller.controllerMachineId)
                 .map((status) => [status.relationshipId, status] as const));
@@ -162,14 +193,14 @@ export async function refreshWorkspaceSyncStatuses(scopes: readonly WorkspaceSyn
         }, (error: unknown) => {
             for (const { scope, generation } of read.scopes.values()) {
                 const entry = entryFor(scope);
-                if (!read.invalidated && entry.admissionGeneration === generation) {
+                if (!read.invalidated && !read.controller.signal.aborted && entry.admissionGeneration === generation) {
                     publish(entry, { phase: 'error', status: entry.snapshot.status, error });
                 }
             }
             throw error;
         }).finally(async () => {
             if (controllerReads.get(key) === read) controllerReads.delete(key);
-            if (read.invalidated) {
+            if (read.invalidated && !read.controller.signal.aborted) {
                 const pending = [...read.scopes.values()].filter(({ scope }) => {
                     const entry = entryFor(scope);
                     return entry.listeners.size > 0;
@@ -183,6 +214,8 @@ export async function refreshWorkspaceSyncStatuses(scopes: readonly WorkspaceSyn
 }
 
 export function resetWorkspaceSyncStatusStoreForTests(): void {
+    for (const entry of entries.values()) entry.requestController?.abort();
+    for (const read of controllerReads.values()) read.controller.abort();
     entries.clear();
     controllerReads.clear();
 }

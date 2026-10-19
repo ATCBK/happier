@@ -169,6 +169,7 @@ export type ScmDiffSummaryFailurePresentation =
     | Readonly<{ reason: 'modelUnavailable'; messageKey: 'walkthrough.generationFailure.modelUnavailable'; nextAction: 'chooseModel'; nextActionKey: 'walkthrough.notice.chooseModel' }>
     | Readonly<{ reason: 'machineUnavailable'; messageKey: 'walkthrough.generationFailure.machineUnavailable'; nextAction: 'reconnectMachine'; nextActionKey: 'walkthrough.generationFailure.reconnectMachine' }>
     | Readonly<{ reason: 'disabled'; messageKey: 'walkthrough.generationFailure.disabled'; nextAction: 'enableExplain'; nextActionKey: 'walkthrough.generationFailure.enableExplain' }>
+    | Readonly<{ reason: 'cancelled'; messageKey: 'walkthrough.notice.cancelled'; nextAction: 'retry'; nextActionKey: 'walkthrough.notice.tryAgain' }>
     | Readonly<{ reason: 'generationFailed'; messageKey: 'walkthrough.notice.failedGeneric'; nextAction: 'retry'; nextActionKey: 'walkthrough.notice.tryAgain' }>;
 
 /** A walkthrough that stopped for a reason nobody classified; the native reason and code stay in diagnostics. */
@@ -185,6 +186,9 @@ export const SCM_DIFF_SUMMARY_DISABLED_FAILURE = {
 
 function presentScmDiffSummaryFailure(error: NonNullable<ScmDiffSummaryEntry['error']>): ScmDiffSummaryFailurePresentation {
     switch (error.code) {
+        case 'generation_cancelled':
+            return { reason: 'cancelled', messageKey: 'walkthrough.notice.cancelled',
+                nextAction: 'retry', nextActionKey: 'walkthrough.notice.tryAgain' };
         case 'invalid_parameters':
         case 'invalid_action_transport_input':
         case 'INVALID_REQUEST':
@@ -270,7 +274,8 @@ function errorFromOutput(output: ScmDiffSummaryGenerateOutput | null | undefined
     for (const kind of input.outputs ?? ['summary']) {
         const progress = output.outputs?.[kind];
         if (progress?.state === 'failed' || progress?.state === 'cancelled') {
-            return { message: progress.reason ?? SCM_DIFF_SUMMARY_NO_REASON_MESSAGE };
+            return { message: progress.reason ?? SCM_DIFF_SUMMARY_NO_REASON_MESSAGE,
+                ...(progress.state === 'cancelled' && progress.reasonCode ? { code: progress.reasonCode } : {}) };
         }
     }
     return null;

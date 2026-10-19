@@ -26,6 +26,7 @@ import {
     isRetryableDirectTransferEndpointError,
 } from './directTransferEndpointRetry';
 import {
+    createMachineCarrierTransportFailure,
     MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR,
     MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE,
     rebaseMachineCarrierHttpEndpoint,
@@ -118,6 +119,16 @@ const DIRECT_TRANSFER_CHUNK_RESPONSE_MAX_BYTES = 1024 * 1024;
 
 function isObject(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseDirectExportJson(text: string): unknown {
+    try {
+        return JSON.parse(text) as unknown;
+    } catch (cause) {
+        // SyntaxError messages can quote untrusted response/plaintext bytes.
+        // Keep the cause locally without projecting that preview to callers.
+        throw new Error('Direct export download unavailable', { cause });
+    }
 }
 
 function isDirectTransferExportPrepareSuccess(value: unknown): value is Extract<DirectTransferExportPrepareResponse, { success: true }> {
@@ -229,6 +240,9 @@ async function prepareDirectTransferExport(params: Readonly<{
             timeoutMs: requestTimeoutMs,
             method: RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE,
             payload: params.request,
+            // Source preparation may fetch a pinned registry tree or scan a
+            // native skill. Its lifetime belongs to the caller, not a byte request.
+            operationTimeoutMs: null,
             signal: params.signal ?? undefined,
         });
         }
@@ -413,7 +427,7 @@ async function runtimeFetchJsonWithDirectTransferTimeout(
             signal: requestSignal.signal,
         });
         const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
-        return JSON.parse(text) as unknown;
+        return parseDirectExportJson(text);
     } catch (error) {
         if (!params.signal?.aborted && requestSignal.signal.aborted) {
             throw new DirectTransferRequestTimeoutError(error);
@@ -537,6 +551,7 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
     for (const [index, candidate] of carrierRoute.endpointCandidates.entries()) {
         completionCandidate = candidate;
         const hasMoreCandidates = index + 1 < carrierRoute.endpointCandidates.length;
+        let requestingPeer = false;
         try {
             const manifestHasher = createTransferManifestHasher();
             const { requestUrl, authorizationHeader } = extractDirectPeerRequestAuth(candidate, Boolean(params.httpOriginOverride || carrierRoute.releaseCarrier));
@@ -545,6 +560,7 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
                 ...(authorizationHeader ? { authorization: authorizationHeader } : {}),
             };
 
+            requestingPeer = true;
             const openJson = await runtimeFetchJsonWithDirectTransferTimeout(
                 buildDirectExportEndpoint(requestUrl, 'open'),
                 {
@@ -559,6 +575,7 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
                     request: carrierRoute.request,
                 },
             );
+            requestingPeer = false;
             if (
                 !isDirectTransferOpenResponse(openJson)
                 || openJson.transferId !== prepare.transferId
@@ -578,6 +595,7 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
                     sizeBytes: prepare.sizeBytes,
                 }),
                 readChunk: async ({ index }) => {
+                    requestingPeer = true;
                     const chunkJson = await runtimeFetchJsonWithDirectTransferTimeout(
                         buildDirectExportEndpoint(requestUrl, 'chunks', index),
                         {
@@ -595,6 +613,7 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
                             request: carrierRequest,
                         },
                     );
+                    requestingPeer = false;
                     const parsedChunk = TransferChunkEnvelopeSchema.safeParse(chunkJson);
                     if (
                         !parsedChunk.success
@@ -615,6 +634,7 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
                 finalize: async () => ({ success: true as const }),
                 recipientSecretKeySeed: recipientKeyPair.recipientSecretKeySeed,
                 writeBytes: async (bytes) => {
+                    requestingPeer = false;
                     if (writtenPlaintextBytes + bytes.byteLength > preparedSizeBytes) {
                         throw new Error('Downloaded size exceeded expected size');
                     }
@@ -629,6 +649,7 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
                 if (params.signal?.aborted) {
                     return await returnCanceled();
                 }
+                failure = { error: download.error, ...(download.errorCode ? { errorCode: download.errorCode } : {}) };
                 break;
             }
 
@@ -645,11 +666,18 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
             completedManifestHash = manifestHash;
             break;
         } catch (error) {
-            failure = { error: error instanceof Error ? error.message : 'Direct export download unavailable' };
+            // A destination/verification failure is not a failed carrier, even
+            // when a local adapter happens to use a connectivity-like message.
+            const transportFailure = requestingPeer && isRetryableDirectTransferEndpointError(error);
+            const cause = carrierRoute.releaseCarrier && !params.signal?.aborted && transportFailure
+                ? createMachineCarrierTransportFailure(error) : error;
+            failure = { error: cause instanceof Error ? cause.message : 'Direct export download unavailable',
+                ...(cause instanceof Error && 'errorCode' in cause && typeof cause.errorCode === 'string'
+                    ? { errorCode: cause.errorCode } : {}) };
             if (params.signal?.aborted) {
                 return await returnCanceled();
             }
-            if (hasMoreCandidates && isRetryableDirectTransferEndpointError(error)) {
+            if (hasMoreCandidates && transportFailure) {
                 await resetBulkTransferDestinationAfterCandidateFailure(params.destination);
                 const resetFailure = await initializeDestination();
                 if (resetFailure) {
@@ -682,16 +710,8 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
         return completed;
     }
 
-    await cleanupFailedDestination(new Error(carrierRoute?.releaseCarrier && !params.signal?.aborted
-        ? MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR
-        : 'Direct export download unavailable'));
-    return carrierRoute?.releaseCarrier && !params.signal?.aborted
-        ? {
-            ok: false,
-            error: MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR,
-            errorCode: MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE,
-        }
-        : { ok: false, error: 'Direct export download unavailable' };
+    await cleanupFailedDestination(new Error(failure.error));
+    return { ok: false, ...failure };
     } finally {
         if (prepared.filesystemDestinationId && !destinationClosed) {
             const outcome = {
@@ -801,8 +821,10 @@ export async function downloadBulkJsonPayloadViaDirectExport<TPayload>(params: R
     }
     carrierRoute = acquiredRoute;
 
+    let failure: Readonly<{ error: string; errorCode?: string }> = { error: 'Direct export download unavailable' };
     for (const [index, candidate] of carrierRoute.endpointCandidates.entries()) {
         const hasMoreCandidates = index + 1 < carrierRoute.endpointCandidates.length;
+        let requestingPeer = false;
         try {
             const { requestUrl, authorizationHeader } = extractDirectPeerRequestAuth(candidate, Boolean(params.httpOriginOverride || carrierRoute.releaseCarrier));
             const headers = {
@@ -810,6 +832,7 @@ export async function downloadBulkJsonPayloadViaDirectExport<TPayload>(params: R
                 ...(authorizationHeader ? { authorization: authorizationHeader } : {}),
             };
 
+            requestingPeer = true;
             const openJson = await runtimeFetchJsonWithDirectTransferTimeout(
                 buildDirectExportEndpoint(requestUrl, 'open'),
                 {
@@ -824,6 +847,7 @@ export async function downloadBulkJsonPayloadViaDirectExport<TPayload>(params: R
                     request: carrierRoute.request,
                 },
             );
+            requestingPeer = false;
             if (!isDirectTransferOpenResponse(openJson) || openJson.transferId !== prepare.transferId) {
                 throw new Error('Direct export open returned invalid metadata');
             }
@@ -838,6 +862,7 @@ export async function downloadBulkJsonPayloadViaDirectExport<TPayload>(params: R
             const chunks: Uint8Array[] = [];
             let totalBytes = 0;
             for (let sequence = 0; sequence < openJson.totalChunks; sequence += 1) {
+                requestingPeer = true;
                 const chunkJson = await runtimeFetchJsonWithDirectTransferTimeout(
                         buildDirectExportEndpoint(requestUrl, 'chunks', sequence),
                         {
@@ -855,6 +880,7 @@ export async function downloadBulkJsonPayloadViaDirectExport<TPayload>(params: R
                             request: carrierRoute.request,
                         },
                 );
+                requestingPeer = false;
                 const parsedChunk = TransferChunkEnvelopeSchema.safeParse(chunkJson);
                 if (
                     !parsedChunk.success
@@ -900,7 +926,7 @@ export async function downloadBulkJsonPayloadViaDirectExport<TPayload>(params: R
                 throw new Error('Direct export payload manifest mismatch');
             }
 
-            const parsedJson = JSON.parse(new TextDecoder('utf-8', { fatal: false }).decode(payloadBytes));
+            const parsedJson = parseDirectExportJson(new TextDecoder('utf-8', { fatal: false }).decode(payloadBytes));
             const parsedPayload = params.parsePayload(parsedJson);
             if (parsedPayload === null) {
                 return {
@@ -910,19 +936,19 @@ export async function downloadBulkJsonPayloadViaDirectExport<TPayload>(params: R
             }
             return { ok: true, payload: parsedPayload };
         } catch (error) {
-            if (params.signal?.aborted || !hasMoreCandidates || !isRetryableDirectTransferEndpointError(error)) {
+            const transportFailure = requestingPeer && isRetryableDirectTransferEndpointError(error);
+            const cause = carrierRoute.releaseCarrier && !params.signal?.aborted && transportFailure
+                ? createMachineCarrierTransportFailure(error) : error;
+            failure = { error: cause instanceof Error ? cause.message : 'Direct export download unavailable',
+                ...(cause instanceof Error && 'errorCode' in cause && typeof cause.errorCode === 'string'
+                    ? { errorCode: cause.errorCode } : {}) };
+            if (params.signal?.aborted || !hasMoreCandidates || !transportFailure) {
                 break;
             }
         }
     }
 
-    return carrierRoute?.releaseCarrier && !params.signal?.aborted
-        ? {
-            ok: false,
-            error: MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR,
-            errorCode: MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE,
-        }
-        : { ok: false, error: 'Direct export download unavailable' };
+    return { ok: false, ...failure };
     } finally {
         await prepared.releaseExport();
         await Promise.resolve(carrierRoute?.releaseCarrier?.()).catch(() => undefined);

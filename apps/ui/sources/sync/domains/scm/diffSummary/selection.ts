@@ -1,7 +1,13 @@
-import type { ScmComparison, ScmComparisonSource, ScmDiffSummaryOutputKind, ScmDiffSummaryOutputs } from '@happier-dev/protocol/scm';
+import type { ScmComparison, ScmComparisonSource, ScmComparisonView, ScmDiffSummaryOutputKind, ScmDiffSummaryOutputs } from '@happier-dev/protocol/scm';
 import type { ScmDiffSummaryState } from './state';
 
 type SourceSelector = (ScmComparisonSource | ScmReviewComparisonSelector) & Readonly<{ comparisonId?: string }>;
+
+/** Shared by semantic navigation and the comparison surface's reading-view fallback. */
+export function scmReviewViewUnavailableReason(view: ScmComparisonView,
+    comparison: Pick<ScmReviewComparisonSelector, 'kind'> | null | undefined): 'commits_require_working_tree' | null {
+    return view === 'commits' && comparison?.kind !== 'workingTree' ? 'commits_require_working_tree' : null;
+}
 
 /** Only a terminal attempt with no published value needs an older saved output. */
 export function scmDiffSummaryOutputNeedsPublishedFallback(output: ScmDiffSummaryOutputs[ScmDiffSummaryOutputKind]): boolean {

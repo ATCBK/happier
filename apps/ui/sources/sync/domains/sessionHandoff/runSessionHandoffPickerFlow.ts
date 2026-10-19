@@ -22,6 +22,7 @@ import {
     executeSessionHandoffAction,
     type ExecuteSessionHandoffActionResult,
 } from './executeSessionHandoffAction';
+import type { SessionHandoffUiAvailability } from './resolveSessionHandoffUiAvailability';
 
 type ExecuteAction = (
     actionId: 'session.handoff',
@@ -41,8 +42,10 @@ export async function runSessionHandoffPickerFlow(args: Readonly<{
     sourceMachineId?: string | null;
     serverId: string | null;
     placement: ActionUiPlacement;
+    availability?: SessionHandoffUiAvailability;
     operationStore?: Pick<ActionOperationStore, 'getSnapshot' | 'subscribe'>;
 }>): Promise<ExecuteSessionHandoffActionResult | null> {
+    if (args.availability?.available === false) return null;
     let closePicker = () => {};
     let setAwaitingAdmission = (_awaiting: boolean) => {};
     let setInlineError = (_code: string | null) => {};

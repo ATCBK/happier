@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkspaceFileDownloadHarness } from '@/dev/testkit/harness/workspaceFileDownloadHarness';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
 import { createSessionFilePreviewSource } from './createSessionFilePreviewSource';
 
 // Keep real carrier modules loaded across cases; only their OS/network inputs vary.
@@ -19,7 +20,9 @@ describe('shared web file preview buffering budget', () => {
     async function createRealWebPreviewHarness() {
         // A desktop WebView uses the same web Blob preview, with genuine OS IPC
         // and HTTP boundaries; admission, grants, encryption and byte sinks stay real.
-        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: async (command: string) => {
+        const credentials = createDesktopSecureStorageBoundary();
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: async (command: string, args?: Readonly<Record<string, unknown>>) => {
+            if (command.startsWith('desktop_secure_storage_')) return await credentials.invoke(command, args);
             if (command === 'iroh_get_availability') return { available: true };
             if (command === 'iroh_get_application_endpoint') return { endpointId: 'b'.repeat(64) };
             if (command === 'iroh_start_machine_tunnel') return { leaseId: 'preview-desktop-lease', localPort: 48126 };

@@ -7,6 +7,8 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import type { AuthContextType } from '@/auth/context/AuthContext';
 
 const rpc = vi.hoisted(() => vi.fn());
+// The in-place confirmation is the only mocked boundary; the Action executor and policy stay real.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: rpc }));
 
 const harness = createHomeGovernanceHarness();

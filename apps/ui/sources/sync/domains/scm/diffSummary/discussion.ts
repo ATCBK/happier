@@ -5,6 +5,7 @@ import type { ScmDiffSummaryResult } from '@happier-dev/protocol/scm/diffSummary
 import { buildSessionExecutionRunRouteHref } from '@/components/sessions/agents/navigation/buildSessionExecutionRunRouteHref';
 
 export type ScmDiffSummaryDiscussionTarget =
+    | Readonly<{ kind: 'unknown' }>
     | Readonly<{ kind: 'unavailable' }>
     | Readonly<{
         kind: 'continue';
@@ -34,17 +35,20 @@ export function selectScmDiffSummaryStopDiscussionContext(
 export function resolveScmDiffSummaryDiscussionTarget(params: Readonly<{
     sessionId: string;
     serverId?: string | null;
-    runId: string;
+    runId: string | null;
     run: ExecutionRunPublicState | null | undefined;
     source: 'session_rpc' | 'transcript_fallback' | 'daemon_fallback';
     canControlExecutionRuns: boolean;
 }>): ScmDiffSummaryDiscussionTarget {
-    if (!params.canControlExecutionRuns || params.source !== 'session_rpc' || params.run?.runId !== params.runId) {
-        return { kind: 'unavailable' };
-    }
+    // Restoring saved output precedes observing its Run. Missing or reconstructed
+    // evidence cannot establish whether that conversation is still available.
+    if (!params.runId || params.source !== 'session_rpc' || params.run?.runId !== params.runId) return { kind: 'unknown' };
+    if (!params.canControlExecutionRuns) return { kind: 'unavailable' };
+    // Admission publishes the current Run before native interaction is ready.
+    if (params.run.status === 'running' && params.run.lifecycle?.state === 'current' && !params.run.interaction) return { kind: 'unknown' };
     const affordances = resolveExecutionRunInteractionAffordances(params.run);
     if (!affordances.canSend && !affordances.canResume) return { kind: 'unavailable' };
-    const href = buildSessionExecutionRunRouteHref(params);
+    const href = buildSessionExecutionRunRouteHref({ ...params, runId: params.runId });
     if (!href) return { kind: 'unavailable' };
     return {
         kind: 'continue', recipient: { kind: 'execution_run', runId: params.runId },

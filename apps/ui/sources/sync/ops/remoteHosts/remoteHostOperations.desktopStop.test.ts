@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { createActionExecutor } from '@happier-dev/protocol/actions';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -35,6 +37,33 @@ const [{ createUiRemoteHostActionExecuteV1 }, { captureLazyActionAccountContext 
 ]);
 
 afterEach(async () => { await standardCleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); await home.reset(); });
+
+it('returns active desktop tunnel inventory to an agent through Action admission and the existing system task', async () => {
+    const specs: unknown[] = [];
+    vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'tauri');
+    installDesktopOsBoundary(async (command, args) => {
+        if (command === 'start_system_task') {
+            specs.push(JSON.parse(String(args.specJson)));
+            return { taskId: 'desktop-list-action' };
+        }
+        if (command === 'get_system_task_snapshot') return { events: [], result: {
+            protocolVersion: 1, taskId: 'desktop-list-action', ok: true, data: { ok: true, tunnels: [] },
+        } };
+        throw new Error(`Unexpected desktop command: ${command}`);
+    });
+    const serverId = await home.addHome({ name: 'Desktop inventory', serverUrl: 'https://desktop-inventory.test', accountId: 'owner' });
+    const account = await captureLazyActionAccountContext(serverId);
+    try {
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            remoteHostActionExecute: createUiRemoteHostActionExecuteV1(account),
+        }));
+        expect(await executor.execute('remote_hosts.tunnel.list', {}, { surface: 'agent',
+            authority: 'account_automation', bypassApprovals: true }))
+            .toMatchObject({ ok: true, result: { status: 'completed', taskId: 'desktop-list-action',
+                result: { ok: true, data: { ok: true, tunnels: [] } } } });
+        expect(specs).toEqual([{ protocolVersion: 1, kind: 'daemon.sshTunnel.list.v1', params: {} }]);
+    } finally { account.dispose(); }
+});
 
 it('starts the exact desktop stop task and leaves terminal failure settlement with the incumbent runner', async () => {
     const specs: unknown[] = [];

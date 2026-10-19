@@ -249,7 +249,7 @@ describe('session handoff UI request client', () => {
             serverId: 'srv_fx14_owned',
         })).resolves.toMatchObject({
             ok: false,
-            errorCode: 'UNEXPECTED',
+            errorCode: 'RPC_METHOD_NOT_AVAILABLE',
         });
     });
 

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DaemonWorkspaceFileListRequestSchema, DaemonWorkspaceFileListResponseSchema, WORKSPACE_FILE_LIST_MAX_RESULTS } from '@happier-dev/protocol/machines/workspaceFiles';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 const machineRipgrepMock = vi.fn();
@@ -716,6 +717,28 @@ describe('workspaceFileSearch', () => {
         expect(page.corpusTruncated).toBe(false);
         expect(page.hasMore).toBe(true);
     });
+
+    it.each([1001, WORKSPACE_FILE_LIST_MAX_RESULTS, WORKSPACE_FILE_LIST_MAX_RESULTS + 1])(
+        'preserves glob pages of %i paths up to the Protocol ceiling', async (requestedLimit) => {
+            const paths = Array.from({ length: requestedLimit }, (_, index) => `file-${index}.ts`);
+            machineRipgrepMock.mockImplementation((_machineId: string, input: unknown) => {
+                const request = DaemonWorkspaceFileListRequestSchema.parse(input);
+                const limit = request.limit ?? WORKSPACE_FILE_LIST_MAX_RESULTS;
+                return DaemonWorkspaceFileListResponseSchema.parse({
+                    ok: true, paths: paths.slice(0, limit), truncated: paths.length > limit,
+                });
+            });
+            const { searchWorkspaceFiles } = await import('./workspaceFileSearch');
+            const page = await searchWorkspaceFiles({
+                scope: SCOPE_A, mode: 'glob', query: '*.ts', resultType: 'file',
+                limit: requestedLimit, includeCoverage: true,
+            });
+            const expectedPaths = paths.slice(0, WORKSPACE_FILE_LIST_MAX_RESULTS);
+            expect(page.items.map((item) => item.fullPath)).toEqual(expectedPaths);
+            expect(page.corpusTruncated).toBe(requestedLimit > WORKSPACE_FILE_LIST_MAX_RESULTS);
+            expect(page.hasMore).toBe(requestedLimit > WORKSPACE_FILE_LIST_MAX_RESULTS);
+        },
+    );
 
     it('queries globs directly without warming or contaminating the workspace fuzzy corpus', async () => {
         machineRipgrepMock

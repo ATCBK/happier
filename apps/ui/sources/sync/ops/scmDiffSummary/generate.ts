@@ -1,3 +1,4 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import type {
     BackendTargetRefV2,
     ExecutionRunGetRequest,
@@ -141,7 +142,7 @@ function readRunResponse(value: unknown): ExecutionRunGetResponse | null {
 function readStructuredOutput(response: ExecutionRunGetResponse): ScmDiffSummaryGenerateOutput | null {
     const latestToolResult = ScmDiffSummaryGenerateOutputSchema.safeParse(response.latestToolResult);
     if (latestToolResult.success) return latestToolResult.data;
-    if (response.structuredMeta?.kind === 'scm_diff_summary.v1') {
+    if (response.structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary) {
         const payload = response.structuredMeta.payload;
         const parsed = ScmDiffSummaryGenerateOutputSchema.safeParse(payload);
         if (parsed.success) return parsed.data;

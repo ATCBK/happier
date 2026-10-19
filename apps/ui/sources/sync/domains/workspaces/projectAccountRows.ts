@@ -37,3 +37,21 @@ const read = () => {
 export function useProjectAccountRows() {
     return React.useSyncExternalStore(subscribe, read, read);
 }
+
+const doNotSubscribe = () => () => {};
+const readUnavailableWorkspaceRefs = () => undefined;
+/** The complete opened checkout census, shared by subscriptions and pure projections. */
+export function readProjectAccountWorkspaceRefs(state: Parameters<typeof readCurrentProjectAccountRows>[0]): readonly WorkspaceRefV1[] | undefined {
+    const rows = readCurrentProjectAccountRows(state);
+    return rows?.status === 'ready' && rows.coverage === 'complete' ? rows.workspaceRefs : undefined;
+}
+const readWorkspaceRefs = () => {
+    const state = readRegisteredStorageState();
+    return state ? readProjectAccountWorkspaceRefs(state) : undefined;
+};
+
+/** Demand only the opened checkout facts; unrelated Project records retain the selected identity. */
+export function useProjectAccountWorkspaceRefs(enabled: boolean): readonly WorkspaceRefV1[] | undefined {
+    const snapshot = enabled ? readWorkspaceRefs : readUnavailableWorkspaceRefs;
+    return React.useSyncExternalStore(enabled ? subscribe : doNotSubscribe, snapshot, snapshot);
+}

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setImmediate } from 'node:timers/promises';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { createManualSystemTaskRunner } from '@/dev/testkit/harness/manualSystemTaskRunner';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -14,14 +14,19 @@ import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/sett
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+installDisconnectedServerSocketBoundary();
 const { storage } = await import('@/sync/domains/state/storageStore');
 vi.mock('expo-router/build/link/href', () => ({ resolveHref: vi.fn() }));
 vi.mock('@/config', () => ({ config: { variant: 'production', identityVariant: 'stable' } }));
 // This native rendering package is outside the task process and never renders here.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({ splitStreamingRevealTextParts: () => [] }));
 vi.mock('@/text', async () => ({ ...(await import('@/dev/testkit/mocks/text')).createTextModuleMock() }));
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
-const { createMachineConnectionActionDeps } = await import('./machineConnectionActionDeps');
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
 
 afterEach(() => { standardCleanup(); publishAppliedActiveServerRuntimeAvailability(false); vi.unstubAllGlobals(); });
 describe('SSH machine Action task lifetime', () => {
@@ -57,10 +62,10 @@ describe('SSH machine Action task lifetime', () => {
         harness.answer(serverId, 'POST /v1/account/entity-rows/remote-hosts', { body: { status: 'updated', revision: 5, cursor: 1 } });
         const manual = createManualSystemTaskRunner('native');
         vi.stubGlobal('isTauri', true);
-        const executor = createActionExecutor(createMachineConnectionActionDeps({ runner: manual.runner }) as unknown as ActionExecutorDeps);
+        const executor = createDefaultActionExecutor({ homeRuntimeRunner: manual.runner });
         const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId };
         const started = await executor.execute('machines.add.ssh.start', source === 'saved'
-            ? { serverId, savedHost: { hostId: host.id, expectedRevision: 4 } }
+            ? { serverId, savedHostId: host.id, expectedHostRevision: 4 }
             : { serverId, host: 'build-box', username: 'dev', authMode: 'password' }, context);
         const { discardMachineAddFlowDraft } = await import('@/components/machines/add/machineAddFlowStore');
         try {
@@ -104,7 +109,7 @@ describe('SSH machine Action task lifetime', () => {
         const before = readMachineAddFlowDraft();
         const manual = createManualSystemTaskRunner('native');
         vi.stubGlobal('isTauri', true);
-        const executor = createActionExecutor(createMachineConnectionActionDeps({ runner: manual.runner }) as unknown as ActionExecutorDeps);
+        const executor = createDefaultActionExecutor({ homeRuntimeRunner: manual.runner });
         try {
             expect(await executor.execute('machines.add.ssh.start', { serverId, host: 'build-box' }, { surface: 'ui', authority: 'present_user', serverId }))
                 .toMatchObject({ ok: false, errorCode: 'ssh_auth_mode_unavailable' });
@@ -119,8 +124,7 @@ describe('SSH machine Action task lifetime', () => {
         storage.setState({ settingsScope: { serverId, accountId: 'alice' }, machineListByServerId: { [serverId]: [] } });
         const manual = createManualSystemTaskRunner('native');
         vi.stubGlobal('isTauri', true);
-        const deps = createMachineConnectionActionDeps({ runner: manual.runner });
-        const executor = createActionExecutor(deps as unknown as ActionExecutorDeps);
+        const executor = createDefaultActionExecutor({ homeRuntimeRunner: manual.runner });
         const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId };
         const started = await executor.execute('machines.add.ssh.start', { serverId, host: 'build-box', authMode: 'password' }, context);
         expect(started).toEqual({ ok: true, result: { taskId: expect.any(String) } });

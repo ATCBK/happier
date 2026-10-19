@@ -2,7 +2,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { FilesystemCopyInputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { callGuardedMachineRpcWithPolicy } from '@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc';
-import type { LazyActionAccountContext } from './actionAccountContext';
+import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import type { FilesystemActionId } from '@happier-dev/protocol/actions/filesystemActionFamily';
 
 /** Private mounted byte delivery; never serialized into Action input or approval custody. */
@@ -52,7 +52,7 @@ export function createUiFilesystemAction(account?: LazyActionAccountContext, del
                     import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease'),
                     import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/preparedFilesystemCopy'),
                     import('./actionAccountContext'),
-                    import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/filesystemTransferActionClient'),
+                    import('@/sync/domains/transfers/runtime/transferRuntime'),
                 ]);
                 const sourceAccount = copy.source.serverId === account.serverId ? account
                     : await captureLazyActionAccountContext(copy.source.serverId, context.signal);
@@ -81,11 +81,11 @@ export function createUiFilesystemAction(account?: LazyActionAccountContext, del
         }
         const method = spec.bindings?.rpcMethod;
         if (!method) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
-        const result = await callGuardedMachineRpcWithPolicy<unknown, unknown>({
+        const result = await withActionAccountRequestSignal(account, context.signal, signal => callGuardedMachineRpcWithPolicy<unknown, unknown>({
             machineId: target.machineId, serverId: account?.serverId ?? context.serverId,
-            accountId: account?.accountId ?? context.runtimeAccountId, method, payload: input, signal: context.signal,
+            accountId: account?.accountId ?? context.runtimeAccountId, method, payload: input, signal,
             requestId: context.actionRequestId ?? undefined,
-        });
+        }));
         account?.assertResultCurrent(spec.sideEffectClass);
         return result;
     };

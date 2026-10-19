@@ -21,6 +21,8 @@ function setScmSettings(fixture: Readonly<{ settings: Partial<Settings> }>) {
 
 type MachineScmTestCall = (machineId: string, request: Record<string, unknown>) => Promise<unknown>;
 
+// The in-place confirmation is the only mocked boundary; the Action executor and policy stay real.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: machineRpcWithServerScopeMock,
 }));
@@ -175,7 +177,9 @@ describe('machineScm', () => {
         await expect(machineScmLogList(
             'machine-1',
             { cwd: '/repo', query: 'fix login' },
-        )).rejects.toMatchObject({ name: 'ZodError' });
+        )).rejects.toMatchObject({
+            issues: [expect.objectContaining({ code: 'unrecognized_keys', keys: ['authoritativeScope'] })],
+        });
     });
 
     it('rethrows transport failure as cancellation instead of backend-unavailable when the caller aborted', async () => {

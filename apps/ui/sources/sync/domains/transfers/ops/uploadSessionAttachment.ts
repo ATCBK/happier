@@ -6,7 +6,7 @@ import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
 import {
     isTransferFinalizeRecoveryFailure,
     type TransferFinalizeRecoveryFailure,
-} from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
+} from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { SessionAttachmentsUploadFinalizeResponse, SessionAttachmentTransferContext } from '@/sync/domains/transfers/runtime/transferRuntime/families/sessionAttachmentTransfers';
 import type { SessionAttachmentHandleV1 } from '@happier-dev/protocol';
 
@@ -109,11 +109,19 @@ export async function sessionAttachmentsUploadFile(args: Readonly<{
     messageLocalId: string;
     config: AttachmentsUploadConfig;
     onProgress?: (progress: AttachmentsUploadProgress) => void;
+    signal?: AbortSignal;
+    isCurrent?: () => boolean;
 }>): Promise<SessionAttachmentsUploadFileResult> {
+    const isCurrent = () => !args.signal?.aborted && (args.isCurrent?.() ?? true);
+    const assertCurrent = () => {
+        if (!isCurrent()) throw new Error('Upload canceled');
+    };
     try {
+        assertCurrent();
         let described = describeUploadSource(args.file);
         if (described.sizeBytes < 0) {
             const resolved = await resolveSizeBytesWithTimeout(args.file);
+            assertCurrent();
             if (!resolved.ok) {
                 return { success: false, error: resolved.error };
             }
@@ -139,14 +147,25 @@ export async function sessionAttachmentsUploadFile(args: Readonly<{
             await reader.close();
         };
         try {
+            assertCurrent();
             const transferContext = args.transferContext
-                ?? (await import('@/sync/sync')).sync.getSessionAttachmentTransferContext(args.sessionId);
+                ?? (await import('@/sync/sync')).sync.getSessionAttachmentTransferContext(args.sessionId,
+                    args.sessionTarget ? { purpose: 'attachmentUpload', target: args.sessionTarget } : undefined);
+            assertCurrent();
+            if (args.sessionTarget && !transferContext) {
+                return { success: false, error: 'Session attachment scope is unavailable' };
+            }
             const bulkUpload = await uploadDaemonSessionAttachmentFromReader({
                 session: args.sessionTarget ?? args.sessionId,
                 transferContext,
                 fileReader: {
                     sizeBytes: described.sizeBytes,
-                    readBytes: async (offset, length) => await reader.readBytes(offset, length),
+                    readBytes: async (offset, length) => {
+                        assertCurrent();
+                        const bytes = await reader.readBytes(offset, length);
+                        assertCurrent();
+                        return bytes;
+                    },
                     close: async () => await closeReaderOnce(),
                 },
                 request: {
@@ -160,6 +179,7 @@ export async function sessionAttachmentsUploadFile(args: Readonly<{
                 },
                 onProgress: args.onProgress
                     ? (progress) => {
+                        if (!isCurrent()) return;
                         try {
                             args.onProgress?.(progress);
                         } catch {
@@ -167,7 +187,9 @@ export async function sessionAttachmentsUploadFile(args: Readonly<{
                         }
                     }
                     : null,
+                ...(args.signal ? { signal: args.signal } : {}),
             });
+            assertCurrent();
 
             if (bulkUpload.success !== true) {
                 if (isTransferFinalizeRecoveryFailure<SessionAttachmentsUploadFinalizeResponse>(bulkUpload)) {

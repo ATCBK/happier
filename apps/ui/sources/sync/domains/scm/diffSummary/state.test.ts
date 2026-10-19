@@ -129,6 +129,16 @@ describe('SCM diff summary state', () => {
         });
     });
 
+    it('retains the typed cancellation code from the strict saved-result reader', () => {
+        const result = ScmDiffSummaryResultSchema.parse({ resultId: 'result_1', revision: 1, canUndo: false,
+            output: { ...pending, revision: 1, outputs: { walkthrough: {
+                state: 'cancelled', reasonCode: 'generation_cancelled',
+            } } } });
+        const state = applyScmDiffSummaryEvent(observe(pending), { type: 'saved_result', key: 'progressive', result, observedAtMs: 140 });
+        expect(selectScmDiffSummaryViewModel(state, 'progressive')).toMatchObject({ status: 'failed',
+            error: { code: 'generation_cancelled', reason: 'cancelled', messageKey: 'walkthrough.notice.cancelled' } });
+    });
+
     it('projects each output independently while preserving a later explicit admission refusal', () => {
         const original = observe({ ...pending, outputs: {
             walkthrough: { state: 'failed', reason: 'Narration failed' },

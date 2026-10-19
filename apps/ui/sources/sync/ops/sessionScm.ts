@@ -131,8 +131,16 @@ async function callScmPreferMachineTransport<
 // Actions and typed facades share the exact session target/path transport owner.
 export { callScmPreferMachineTransport as runSessionScmRpc };
 
+/** What the person and the pane need from one SCM write: whether they already answered it, and when it really starts. */
+export type SessionScmWriteCall = Readonly<{
+    /** The person already answered this exact press in a dialog of their own, so the Action's default confirmation is not asked again. */
+    confirmedByPerson?: boolean;
+    /** Fires when the admitted Action is about to reach the Machine: after any in-place confirmation, never for a decline or a pending approval. */
+    onDispatched?: () => void;
+}>;
+
 async function callScmPreferMachine<T extends { success: boolean; error?: string; errorCode?: string }, R extends { cwd?: string; backendPreference?: unknown }>(
-    sessionId: string, method: string, request: R, serverId?: string | null,
+    sessionId: string, method: string, request: R, serverId?: string | null, call?: SessionScmWriteCall,
 ): Promise<T | ScmRpcFailure> {
     if (getScmRpcSideEffectClass(method) === 'read' && method !== RPC_METHODS.SCM_PULL_REQUEST_OPEN_COMPOSE) {
         return normalizeUiScmFacadeResult<T>(await callScmPreferMachineTransport<T, R>(sessionId, method, request, serverId));
@@ -143,11 +151,14 @@ async function callScmPreferMachine<T extends { success: boolean; error?: string
     const { createDefaultActionExecutor } = await import('./actions/defaultActionExecutor');
     // Preserve the ordinary facade's caller-relative path contract through its
     // existing Session target owner, beneath canonical Action admission.
-    const executor = createDefaultActionExecutor({ scmActionExecute: ({ input, context }) =>
-        callScmPreferMachineTransport(sessionId, method, input as R, context.serverId ?? serverId, context.signal, context.runtimeAccountId) });
+    const executor = createDefaultActionExecutor({ scmActionExecute: ({ input, context }) => {
+        call?.onDispatched?.();
+        return callScmPreferMachineTransport(sessionId, method, input as R, context.serverId ?? serverId, context.signal, context.runtimeAccountId);
+    } });
     const result: unknown = await invokeUiScmAction({ actionId, input: request, schema, executor,
         context: { defaultSessionId: sessionId, externalActionTarget: { kind: 'session', sessionId },
             ...(serverId ? { serverId } : {}),
+            ...(call?.confirmedByPerson ? { presentUserConfirmation: { actionId } } : {}),
         } });
     return normalizeUiScmFacadeResult<T>(result);
 }
@@ -221,12 +232,14 @@ export async function sessionScmChangeDiscard(
     sessionId: string,
     request: ScmChangeDiscardRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmChangeDiscardResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmChangeDiscardResponse, ScmChangeDiscardRequest>(
         sessionId,
         RPC_METHODS.SCM_CHANGE_DISCARD,
         request,
         serverId,
+        options,
     );
 }
 
@@ -247,12 +260,14 @@ export async function sessionScmCommitUndoLast(
     sessionId: string,
     request: ScmCommitUndoLastRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmCommitUndoLastResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmCommitUndoLastResponse, ScmCommitUndoLastRequest>(
         sessionId,
         RPC_METHODS.SCM_COMMIT_UNDO_LAST,
         request,
         serverId,
+        options,
     );
 }
 
@@ -273,12 +288,14 @@ export async function sessionScmCommitBackout(
     sessionId: string,
     request: ScmCommitBackoutRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmCommitBackoutResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmCommitBackoutResponse, ScmCommitBackoutRequest>(
         sessionId,
         RPC_METHODS.SCM_COMMIT_BACKOUT,
         request,
         serverId,
+        options,
     );
 }
 
@@ -286,12 +303,14 @@ export async function sessionScmRemoteFetch(
     sessionId: string,
     request: ScmRemoteRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmRemoteResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmRemoteResponse, ScmRemoteRequest>(
         sessionId,
         RPC_METHODS.SCM_REMOTE_FETCH,
         request,
         serverId,
+        options,
     );
 }
 
@@ -299,12 +318,14 @@ export async function sessionScmRemotePush(
     sessionId: string,
     request: ScmRemoteRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmRemoteResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmRemoteResponse, ScmRemoteRequest>(
         sessionId,
         RPC_METHODS.SCM_REMOTE_PUSH,
         request,
         serverId,
+        options,
     );
 }
 
@@ -312,12 +333,14 @@ export async function sessionScmRemotePull(
     sessionId: string,
     request: ScmRemoteRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmRemoteResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmRemoteResponse, ScmRemoteRequest>(
         sessionId,
         RPC_METHODS.SCM_REMOTE_PULL,
         request,
         serverId,
+        options,
     );
 }
 
@@ -338,12 +361,14 @@ export async function sessionScmBranchCreate(
     sessionId: string,
     request: ScmBranchCreateRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmBranchCreateResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmBranchCreateResponse, ScmBranchCreateRequest>(
         sessionId,
         RPC_METHODS.SCM_BRANCH_CREATE,
         request,
         serverId,
+        options,
     );
 }
 
@@ -351,12 +376,14 @@ export async function sessionScmBranchCheckout(
     sessionId: string,
     request: ScmBranchCheckoutRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmBranchCheckoutResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmBranchCheckoutResponse, ScmBranchCheckoutRequest>(
         sessionId,
         RPC_METHODS.SCM_BRANCH_CHECKOUT,
         request,
         serverId,
+        options,
     );
 }
 
@@ -364,12 +391,14 @@ export async function sessionScmBranchMerge(
     sessionId: string,
     request: ScmBranchIntegrationRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmBranchIntegrationResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmBranchIntegrationResponse, ScmBranchIntegrationRequest>(
         sessionId,
         RPC_METHODS.SCM_BRANCH_MERGE,
         request,
         serverId,
+        options,
     );
 }
 
@@ -377,12 +406,14 @@ export async function sessionScmBranchRebase(
     sessionId: string,
     request: ScmBranchIntegrationRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmBranchIntegrationResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmBranchIntegrationResponse, ScmBranchIntegrationRequest>(
         sessionId,
         RPC_METHODS.SCM_BRANCH_REBASE,
         request,
         serverId,
+        options,
     );
 }
 
@@ -390,12 +421,14 @@ export async function sessionScmBranchOperationContinue(
     sessionId: string,
     request: ScmBranchOperationControlRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmBranchIntegrationResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmBranchIntegrationResponse, ScmBranchOperationControlRequest>(
         sessionId,
         RPC_METHODS.SCM_BRANCH_OPERATION_CONTINUE,
         request,
         serverId,
+        options,
     );
 }
 
@@ -403,17 +436,19 @@ export async function sessionScmBranchOperationAbort(
     sessionId: string,
     request: ScmBranchOperationControlRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmBranchIntegrationResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmBranchIntegrationResponse, ScmBranchOperationControlRequest>(
         sessionId,
         RPC_METHODS.SCM_BRANCH_OPERATION_ABORT,
         request,
         serverId,
+        options,
     );
 }
 
-export async function sessionScmBranchOperationSkip(sessionId: string, request: ScmBranchOperationControlRequest, serverId?: string | null): Promise<ScmBranchIntegrationResponse | ScmRpcFailure> {
-    return callScmPreferMachine(sessionId, RPC_METHODS.SCM_BRANCH_OPERATION_SKIP, request, serverId);
+export async function sessionScmBranchOperationSkip(sessionId: string, request: ScmBranchOperationControlRequest, serverId?: string | null, options?: SessionScmWriteCall): Promise<ScmBranchIntegrationResponse | ScmRpcFailure> {
+    return callScmPreferMachine(sessionId, RPC_METHODS.SCM_BRANCH_OPERATION_SKIP, request, serverId, options);
 }
 
 export async function sessionScmConflictAcceptSide(sessionId: string, request: ScmConflictAcceptSideRequest, serverId?: string | null): Promise<ScmBranchIntegrationResponse | ScmRpcFailure> {
@@ -441,12 +476,14 @@ export async function sessionScmRemoteAdd(
     sessionId: string,
     request: ScmRemoteAddRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmRemoteManagementResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmRemoteManagementResponse, ScmRemoteAddRequest>(
         sessionId,
         RPC_METHODS.SCM_REMOTE_ADD,
         request,
         serverId,
+        options,
     );
 }
 
@@ -454,12 +491,14 @@ export async function sessionScmRemoteSetUrl(
     sessionId: string,
     request: ScmRemoteSetUrlRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmRemoteManagementResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmRemoteManagementResponse, ScmRemoteSetUrlRequest>(
         sessionId,
         RPC_METHODS.SCM_REMOTE_SET_URL,
         request,
         serverId,
+        options,
     );
 }
 
@@ -467,12 +506,14 @@ export async function sessionScmRemoteRemove(
     sessionId: string,
     request: ScmRemoteRemoveRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmRemoteManagementResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmRemoteManagementResponse, ScmRemoteRemoveRequest>(
         sessionId,
         RPC_METHODS.SCM_REMOTE_REMOVE,
         request,
         serverId,
+        options,
     );
 }
 
@@ -597,12 +638,14 @@ export async function sessionScmStashCreate(
     sessionId: string,
     request: ScmStashCreateRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmStashCreateResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmStashCreateResponse, ScmStashCreateRequest>(
         sessionId,
         RPC_METHODS.SCM_STASH_CREATE,
         request,
         serverId,
+        options,
     );
 }
 
@@ -610,12 +653,14 @@ export async function sessionScmStashDrop(
     sessionId: string,
     request: ScmStashDropRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmStashDropResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmStashDropResponse, ScmStashDropRequest>(
         sessionId,
         RPC_METHODS.SCM_STASH_DROP,
         request,
         serverId,
+        options,
     );
 }
 
@@ -623,12 +668,14 @@ export async function sessionScmStashPop(
     sessionId: string,
     request: ScmStashPopRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmStashPopResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmStashPopResponse, ScmStashPopRequest>(
         sessionId,
         RPC_METHODS.SCM_STASH_POP,
         request,
         serverId,
+        options,
     );
 }
 
@@ -636,12 +683,14 @@ export async function sessionScmStashApply(
     sessionId: string,
     request: ScmStashApplyRequest,
     serverId?: string | null,
+    options?: SessionScmWriteCall,
 ): Promise<ScmStashApplyResponse | ScmRpcFailure> {
     return await callScmPreferMachine<ScmStashApplyResponse, ScmStashApplyRequest>(
         sessionId,
         RPC_METHODS.SCM_STASH_APPLY,
         request,
         serverId,
+        options,
     );
 }
 

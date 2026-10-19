@@ -16,8 +16,7 @@ import {
     type DirectTransferImportOpenRequest,
 } from './directTransferImportClient';
 import {
-    MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR,
-    MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE,
+    createMachineCarrierTransportFailure,
 } from './machineCarrierHttpLease';
 import type { MachineCarrierHttpLease } from './machineCarrierHttpLease';
 import { isRetryableDirectTransferEndpointError } from './directTransferEndpointRetry';
@@ -78,6 +77,7 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
     try {
         for (const [candidateIndex, baseUrl] of prepared.session.baseUrls.entries()) {
             const hasMoreCandidates = candidateIndex + 1 < prepared.session.baseUrls.length;
+            let requestingPeer = false;
             try {
                 let finalizeRecoveryFailure: TransferFinalizeRecoveryFailure<TResponse> | null = null;
                 const result = await uploadInChunks<
@@ -93,7 +93,10 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
                 >({
                     totalBytes: params.fileReader.sizeBytes,
                     initialChunkIndex: nextChunkIndex,
-                    readBytes: async (offset, length) => await params.fileReader.readBytes(offset, length),
+                    readBytes: async (offset, length) => {
+                        requestingPeer = false;
+                        return await params.fileReader.readBytes(offset, length);
+                    },
                     init: async () => ({
                         success: true,
                         uploadId: prepared.session.uploadId,
@@ -102,6 +105,7 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
                         expiresAt: prepared.session.expiresAt,
                     }),
                     sendChunk: async (request) => {
+                        requestingPeer = true;
                         const response = await sendDirectImportChunk({
                             baseUrl,
                             index: request.index,
@@ -111,18 +115,21 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
                             signal: params.signal ?? null,
                             request: prepared.session.request,
                         });
+                        requestingPeer = false;
                         if (response.success === true) {
                             nextChunkIndex = request.index + 1;
                         }
                         return response;
                     },
                     finalize: async () => {
+                        requestingPeer = true;
                         const finalizeResponse = await finalizeDirectImportSession({
                             baseUrl,
                             timeoutMs: params.timeoutMs ?? null,
                             signal: params.signal ?? null,
                             request: prepared.session.request,
                         });
+                        requestingPeer = false;
                         if (finalizeResponse.success !== true) {
                             if (
                                 finalizeResponse.errorCode
@@ -245,14 +252,22 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
                 // success and risks replaying work the peer already accepted.
                 break;
             } catch (error) {
+                // Endpoint retryability only identifies transport failure while
+                // requesting the peer. Local readers/crypto can throw the same
+                // error text, and authoritative responses retain their own cause.
+                const transportFailure = requestingPeer && isRetryableDirectTransferEndpointError(error);
+                const cause = prepared.session.releaseCarrier && !params.signal?.aborted && transportFailure
+                    ? createMachineCarrierTransportFailure(error) : error;
                 lastFailure = {
                     success: false,
-                    error: error instanceof Error ? error.message : 'Direct import upload unavailable',
+                    error: cause instanceof Error ? cause.message : 'Direct import upload unavailable',
+                    ...(cause instanceof Error && 'errorCode' in cause && typeof cause.errorCode === 'string'
+                        ? { errorCode: cause.errorCode } : {}),
                 };
                 if (
                     params.signal?.aborted
                     || !hasMoreCandidates
-                    || !isRetryableDirectTransferEndpointError(error)
+                    || !transportFailure
                 ) {
                     break;
                 }
@@ -283,14 +298,6 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
         if (cleanupFailure) {
             return cleanupFailure;
         }
-    }
-
-    if (prepared.session.releaseCarrier && !params.signal?.aborted) {
-        return {
-            success: false,
-            error: MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR,
-            errorCode: MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE,
-        };
     }
 
     return lastFailure ?? {

@@ -18,6 +18,7 @@ type Entry = {
     listeners: Set<() => void>;
     inFlight: Promise<WorkspaceSyncConflictListV1> | null;
     admissionGeneration: number;
+    controller: AbortController | null;
 };
 
 const entries = new Map<string, Entry>();
@@ -33,7 +34,7 @@ function entryFor(scope: WorkspaceSyncStatusScope): Entry {
     const key = keyFor(scope);
     const current = entries.get(key);
     if (current) return current;
-    const created: Entry = { scope, snapshot: IDLE_SNAPSHOT, listeners: new Set(), inFlight: null, admissionGeneration: 0 };
+    const created: Entry = { scope, snapshot: IDLE_SNAPSHOT, listeners: new Set(), inFlight: null, admissionGeneration: 0, controller: null };
     entries.set(key, created);
     return created;
 }
@@ -50,17 +51,24 @@ export function getWorkspaceSyncConflictSnapshot(scope: WorkspaceSyncStatusScope
 export function subscribeWorkspaceSyncConflicts(scope: WorkspaceSyncStatusScope, listener: () => void): () => void {
     const entry = entryFor(scope);
     entry.listeners.add(listener);
-    return () => entry.listeners.delete(listener);
+    return () => {
+        entry.listeners.delete(listener);
+        if (entry.listeners.size > 0 || !entry.inFlight) return;
+        entry.admissionGeneration += 1;
+        entry.controller?.abort();
+        entry.controller = null;
+        entry.inFlight = null;
+        publish(entry, { ...entry.snapshot, phase: 'idle', error: null });
+    };
 }
 
 export function invalidateWorkspaceSyncConflicts(scope: WorkspaceSyncStatusScope): void {
     const entry = entryFor(scope);
     entry.admissionGeneration += 1;
     if (entry.inFlight) {
-        if (entry.listeners.size === 0) {
-            publish(entry, { ...entry.snapshot, phase: 'idle', error: null });
-        }
-        return;
+        entry.controller?.abort();
+        entry.controller = null;
+        entry.inFlight = null;
     }
     if (entry.listeners.size > 0) {
         void refreshWorkspaceSyncConflicts(scope).catch(() => undefined);
@@ -134,18 +142,20 @@ export function refreshWorkspaceSyncConflicts(scope: WorkspaceSyncStatusScope): 
         error: null,
     });
     const admissionGeneration = entry.admissionGeneration;
+    const controller = new AbortController();
+    entry.controller = controller;
     let inFlight!: Promise<WorkspaceSyncConflictListV1>;
-    inFlight = listWorkspaceSyncConflicts(scope).then(
+    inFlight = listWorkspaceSyncConflicts({ ...scope, signal: controller.signal }).then(
         (page) => applyPage(entry, page, null, admissionGeneration),
         (error: unknown) => {
-            if (entry.admissionGeneration === admissionGeneration) {
+            if (!controller.signal.aborted && entry.admissionGeneration === admissionGeneration) {
                 publish(entry, { ...entry.snapshot, phase: 'error', error });
             }
             throw error;
         },
     ).finally(() => {
-        if (entry.inFlight === inFlight) entry.inFlight = null;
-        if (entry.admissionGeneration !== admissionGeneration && entry.listeners.size > 0) {
+        if (entry.inFlight === inFlight) { entry.inFlight = null; entry.controller = null; }
+        if (!controller.signal.aborted && entry.admissionGeneration !== admissionGeneration && entry.listeners.size > 0) {
             void refreshWorkspaceSyncConflicts(scope).catch(() => undefined);
         }
     });
@@ -165,18 +175,20 @@ export function loadMoreWorkspaceSyncConflicts(scope: WorkspaceSyncStatusScope):
     const previous = entry.snapshot.list;
     publish(entry, { ...entry.snapshot, phase: 'loading_more', error: null });
     const admissionGeneration = entry.admissionGeneration;
+    const controller = new AbortController();
+    entry.controller = controller;
     let inFlight!: Promise<WorkspaceSyncConflictListV1>;
-    inFlight = listWorkspaceSyncConflicts({ ...scope, cursor }).then(
+    inFlight = listWorkspaceSyncConflicts({ ...scope, cursor, signal: controller.signal }).then(
         (page) => applyPage(entry, page, previous, admissionGeneration),
         (error: unknown) => {
-            if (entry.admissionGeneration === admissionGeneration) {
+            if (!controller.signal.aborted && entry.admissionGeneration === admissionGeneration) {
                 publish(entry, { ...entry.snapshot, phase: 'error', error });
             }
             throw error;
         },
     ).finally(() => {
-        if (entry.inFlight === inFlight) entry.inFlight = null;
-        if (entry.admissionGeneration !== admissionGeneration && entry.listeners.size > 0) {
+        if (entry.inFlight === inFlight) { entry.inFlight = null; entry.controller = null; }
+        if (!controller.signal.aborted && entry.admissionGeneration !== admissionGeneration && entry.listeners.size > 0) {
             void refreshWorkspaceSyncConflicts(scope).catch(() => undefined);
         }
     });
@@ -185,5 +197,6 @@ export function loadMoreWorkspaceSyncConflicts(scope: WorkspaceSyncStatusScope):
 }
 
 export function resetWorkspaceSyncConflictStoreForTests(): void {
+    for (const entry of entries.values()) entry.controller?.abort();
     entries.clear();
 }

@@ -22,7 +22,7 @@ import { captureLazyActionAccountContext, type LazyActionAccountContext } from '
 import type { RelayAccessTaskTarget } from '@happier-dev/cli-common/systemTasks';
 import { getRemoteHostTrustedHostKeyStore } from '@/sync/domains/remoteHosts/hostKeys/trustedHostKeyStore';
 import { getNativeSshTunnelRuntime } from '@/sync/runtime/nativeSshTunnels/runtime';
-import { buildSshTunnelStopSystemTaskSpec } from '@/components/systemTasks/specs/localControl/buildSshTunnelSystemTaskSpec';
+import { buildSshTunnelListSystemTaskSpec, buildSshTunnelStopSystemTaskSpec } from '@/components/systemTasks/specs/localControl/buildSshTunnelSystemTaskSpec';
 import { settleClientSystemTaskAction } from '@/sync/ops/actions/systemTaskActionSettlement';
 import { createSshSystemTaskPromptContinuation } from '@/components/systemTasks/ssh/answerSshSystemTaskPrompt';
 
@@ -128,6 +128,14 @@ export function createUiRemoteHostActionExecuteV1(account: LazyActionAccountCont
             : { status: 'unavailable' as const, reason: result.reason };
         try {
             assertCurrent();
+            if (request.actionId === 'remote_hosts.tunnel.list') {
+                const runner = getDefaultSystemTaskRunner();
+                if (runner.mode === 'native') return { ok: true, result: { status: 'listed', native: getNativeSshTunnelRuntime().listTunnels() } };
+                if (runner.mode !== 'tauri') throw new RemoteHostOperationError('desktop_host_required');
+                const taskId = await runner.start(buildSshTunnelListSystemTaskSpec());
+                return { ok: true, result: await settleClientSystemTaskAction(runner,
+                    { status: 'task_started', taskId }, context, account.assertAccountCurrent) };
+            }
             if (request.actionId === 'remote_hosts.tunnel.stop') {
                 if (request.input.target.kind === 'native') {
                     if (getDefaultSystemTaskRunner().mode !== 'native') throw new RemoteHostOperationError('native_host_required');

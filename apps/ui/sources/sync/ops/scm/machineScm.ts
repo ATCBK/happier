@@ -99,6 +99,10 @@ export type MachineScmCallOptions = Readonly<{
     accountId?: string | null;
     signal?: AbortSignal;
     authorization?: SocketRpcAuthorizationContext;
+    /** The person already answered this exact press in a dialog of their own (a choice), so the Action's default confirmation is not asked again. */
+    confirmedByPerson?: boolean;
+    /** Fires when the admitted Action is about to reach the Machine: after any in-place confirmation, never for a decline or a pending approval. */
+    onDispatched?: () => void;
 }>;
 
 type MachineScmRpcRequest = Readonly<{
@@ -203,10 +207,12 @@ async function callMachineScm<T extends { success: boolean; error?: string; erro
     const schema = getActionSpec(actionId).outputSchema;
     if (!schema) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED, error: 'The SCM Action has no result contract.' };
     const result: unknown = await invokeUiScmAction({ actionId, input: request, schema,
+        ...(options?.onDispatched ? { onDispatched: options.onDispatched } : {}),
         context: { externalActionTarget: { kind: 'machine', machineId },
             ...(options?.serverId ? { serverId: options.serverId } : {}),
             ...(options?.accountId ? { expectedAccountId: options.accountId } : {}),
             ...(options?.signal ? { signal: options.signal } : {}),
+            ...(options?.confirmedByPerson ? { presentUserConfirmation: { actionId } } : {}),
         } });
     return normalizeUiScmFacadeResult<T>(result);
 }
