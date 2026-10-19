@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { ConnectedServiceAuthGroupPolicyV1Schema } from "@happier-dev/protocol";
+import { AccountProfileResponseSchema, ConnectedServiceAuthGroupPolicyV1Schema } from "@happier-dev/protocol";
 
 import { db } from "@/storage/db";
 import { auth } from "@/app/auth/auth";
@@ -337,6 +337,7 @@ describe("Account profile (integration)", () => {
                         }),
                         displayName: "Codex Main",
                         activeProfileId: "work",
+                        activeConnectedAccountId: "work",
                         generation: 3,
                         policyJson: JSON.stringify(ConnectedServiceAuthGroupPolicyV1Schema.parse({})),
                     },
@@ -711,9 +712,9 @@ describe("Account profile (integration)", () => {
         );
     });
 
-    it("GET /v1/account/profile keeps V4 groups visible while legacy group projection is disabled", async () => {
+    it.each([true, false])("GET /v1/account/profile derives active group truth from V4 with legacy projection enabled=%s", async (legacyGroupsEnabled) => {
         harness.resetEnv({
-            HAPPIER_FEATURE_CONNECTED_SERVICES_ACCOUNT_GROUPS__ENABLED: "0",
+            HAPPIER_FEATURE_CONNECTED_SERVICES_ACCOUNT_GROUPS__ENABLED: legacyGroupsEnabled ? "1" : "0",
             HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional",
             HAPPIER_FEATURE_ENCRYPTION__DEFAULT_ACCOUNT_MODE: "plain",
             HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_CREDENTIALS_AT_REST:
@@ -774,6 +775,13 @@ describe("Account profile (integration)", () => {
                     });
                 expect(group.status).toBe("written");
 
+                // Retained qualified groups can have no legacy shadow. The V4
+                // active account, also consumed by spawn, remains authoritative.
+                await db.connectedServiceAuthGroup.updateMany({
+                    where: { accountId: account.id, groupId: "codex-main" },
+                    data: { activeProfileId: null },
+                });
+
                 const response = await app.inject({
                     method: "GET",
                     url: "/v1/account/profile",
@@ -781,11 +789,16 @@ describe("Account profile (integration)", () => {
                 });
 
                 expect(response.statusCode).toBe(200);
-                const body = response.json() as any;
+                const body = AccountProfileResponseSchema.parse(response.json());
                 expect(body.connectedServicesV2).toEqual([
                     expect.objectContaining({
                         serviceId: "openai-codex",
-                        groups: [],
+                        groups: legacyGroupsEnabled ? [expect.objectContaining({
+                            groupId: "codex-main",
+                            activeProfileId: identity.connectedAccountId,
+                            generation: body.connectedAccountGroupsV4[0]?.generation,
+                            memberProfileIds: [identity.connectedAccountId],
+                        })] : [],
                     }),
                 ]);
                 expect(body.connectedAccountGroupsV4).toEqual([

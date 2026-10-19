@@ -11,7 +11,7 @@ import {
     resolveLegacyServiceIdForQualifiedConnectedAccountService,
 } from "../connect/qualifiedConnectedAccounts/identity";
 import {
-    listAllQualifiedConnectedAccountGroupsForLegacyProjectionInTx,
+    listAllQualifiedConnectedAccountGroupsInTx,
 } from "../connect/qualifiedConnectedAccounts/groupRepository";
 
 type ConnectedServiceProfileStatus =
@@ -65,12 +65,6 @@ type QualifiedConnectedAccountLegacyProjection = Awaited<
     >
 >[number];
 
-type QualifiedConnectedAccountGroupLegacyProjection = Awaited<
-    ReturnType<
-        typeof listAllQualifiedConnectedAccountGroupsForLegacyProjectionInTx
-    >
->[number];
-
 function addAccountProfilesToServices(params: Readonly<{
     accounts: ReadonlyArray<QualifiedConnectedAccountLegacyProjection>;
     servicesById: Map<ConnectedServiceId, ConnectedServiceServiceProjection>;
@@ -102,11 +96,10 @@ function addAccountProfilesToServices(params: Readonly<{
 }
 
 function addAuthGroupsToServices(params: Readonly<{
-    groups: ReadonlyArray<QualifiedConnectedAccountGroupLegacyProjection>;
+    groups: readonly QualifiedConnectedAccountGroupV4[];
     servicesById: Map<ConnectedServiceId, ConnectedServiceServiceProjection>;
 }>): void {
-    for (const projection of params.groups) {
-        const group = projection.group;
+    for (const group of params.groups) {
         const serviceId =
             resolveLegacyServiceIdForQualifiedConnectedAccountService(
                 group.ref.service,
@@ -123,11 +116,7 @@ function addAuthGroupsToServices(params: Readonly<{
         existing.groups.push({
             groupId: group.ref.groupId,
             displayName: group.displayName,
-            activeProfileId:
-                projection.activeProfileId !== null
-                && memberProfileIds.includes(projection.activeProfileId)
-                    ? projection.activeProfileId
-                    : null,
+            activeProfileId: group.activeConnectedAccountId,
             generation: group.generation,
             memberProfileIds,
         });
@@ -153,20 +142,16 @@ export async function buildAccountConnectedServicesProjection(params: Readonly<{
     const connectedAccountsV4 = accountProjections.map(
         (projection) => projection.account,
     );
-    const groupProjections =
-        await listAllQualifiedConnectedAccountGroupsForLegacyProjectionInTx(
+    const connectedAccountGroupsV4 =
+        await listAllQualifiedConnectedAccountGroupsInTx(
             params.tx,
             {
                 accountId: params.accountId,
             },
         );
-    const connectedAccountGroupsV4 = groupProjections.map(
-        (projection) => projection.group,
-    );
-
     if (params.includeGroups) {
         addAuthGroupsToServices({
-            groups: groupProjections,
+            groups: connectedAccountGroupsV4,
             servicesById,
         });
     }

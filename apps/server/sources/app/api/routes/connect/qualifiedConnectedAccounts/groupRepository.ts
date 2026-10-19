@@ -185,10 +185,7 @@ async function listQualifiedConnectedAccountGroupsByFilter(
         accountId: string;
         service?: QualifiedConnectedAccountServiceRef;
     }>,
-): Promise<Array<Readonly<{
-    group: QualifiedConnectedAccountGroupV4;
-    activeProfileId: string | null;
-}>>> {
+): Promise<QualifiedConnectedAccountGroupV4[]> {
     const service = params.service
         ? QualifiedConnectedAccountServiceRefSchema.parse(params.service)
         : null;
@@ -248,28 +245,13 @@ async function listQualifiedConnectedAccountGroupsByFilter(
         }
         return true;
     });
-    return preparedRows.map((row) => ({
-        group: toQualifiedConnectedAccountGroup(row),
-        activeProfileId: row.activeProfileId,
-    }));
+    return preparedRows.map(toQualifiedConnectedAccountGroup);
 }
 
 export async function listAllQualifiedConnectedAccountGroupsInTx(
     tx: QualifiedGroupListStorage,
     params: Readonly<{ accountId: string }>,
 ): Promise<QualifiedConnectedAccountGroupV4[]> {
-    const projections =
-        await listQualifiedConnectedAccountGroupsByFilter(tx, params);
-    return projections.map((projection) => projection.group);
-}
-
-export async function listAllQualifiedConnectedAccountGroupsForLegacyProjectionInTx(
-    tx: QualifiedGroupListStorage,
-    params: Readonly<{ accountId: string }>,
-): Promise<Array<Readonly<{
-    group: QualifiedConnectedAccountGroupV4;
-    activeProfileId: string | null;
-}>>> {
     return await listQualifiedConnectedAccountGroupsByFilter(tx, params);
 }
 
@@ -279,9 +261,7 @@ export async function listQualifiedConnectedAccountGroups(
         service: QualifiedConnectedAccountServiceRef;
     }>,
 ): Promise<QualifiedConnectedAccountGroupV4[]> {
-    const projections =
-        await listQualifiedConnectedAccountGroupsByFilter(db, params);
-    return projections.map((projection) => projection.group);
+    return await listQualifiedConnectedAccountGroupsByFilter(db, params);
 }
 
 const qualifiedGroupInclude = {
@@ -543,25 +523,6 @@ export async function readQualifiedConnectedAccountGroup(
 ): Promise<QualifiedConnectedAccountGroupV4 | null> {
     const row = await readQualifiedGroupRowInTx(db, params);
     return row ? toQualifiedConnectedAccountGroup(row) : null;
-}
-
-export async function readQualifiedConnectedAccountGroupForLegacyProjection(
-    params: Readonly<{
-        accountId: string;
-        service: QualifiedConnectedAccountServiceRef;
-        groupId: string;
-    }>,
-): Promise<Readonly<{
-    group: QualifiedConnectedAccountGroupV4;
-    activeProfileId: string | null;
-}> | null> {
-    const row = await readQualifiedGroupRowInTx(db, params);
-    return row
-        ? {
-            group: toQualifiedConnectedAccountGroup(row),
-            activeProfileId: row.activeProfileId,
-        }
-        : null;
 }
 
 export type QualifiedConnectedAccountGroupMutationResult =
