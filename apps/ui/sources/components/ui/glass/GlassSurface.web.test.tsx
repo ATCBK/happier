@@ -288,7 +288,7 @@ describe('web glass material', () => {
         ] as const) {
             const screen = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto') }}>
                 <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind }}>
-                    <GlassSurface surfaceGroup={group} finishRole={null}>
+                    <GlassSurface testID="glass" surfaceGroup={group} finishRole={null}>
                         <Text style={{ color: darkTheme.colors.text.secondary }}>Secondary line</Text>
                         <Text style={{ color: darkTheme.colors.text.tertiary }}>Meta line</Text>
                     </GlassSurface>
@@ -307,12 +307,23 @@ describe('web glass material', () => {
             }
             standardCleanup();
         }
+                        <Text style={{ color: darkTheme.colors.composer.chipTint }}>Chip line</Text>
+                        <Text style={{ color: darkTheme.colors.input.placeholder }}>Placeholder line</Text>
     });
     it('derives default glass from the measured picture: the theme ink keeps its contrast over a picture that runs against the theme, and custom glass applies as set', async () => {
         const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
+            const webInk = (flattenTestStyle(screen.findHostByTestId('glass')?.props.style) as Record<string, string> | null) ?? {};
         const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
         const { glassPresetMaterials, GLASS_SURFACE_GROUPS, resolveGlassSurfaceMaterial } = await import('./glassMaterial');
+                expect(inkOf(screen, 'Chip line')).toBe(darkTheme.colors.composer.chipTint);
+                expect(webInk['--colors-composer-chip-tint']).toBeUndefined();
         const { GLASS_BACKED_FAINT_INK_SHARE } = await import('./glassBackedInk');
+                // The composer's chips and placeholder are the faintest ink it draws: they take the same faint step,
+                // the one the default coat cap protects, from JavaScript and from the web stylesheet alike.
+                expect(inkOf(screen, 'Chip line')).toBe(inkOf(screen, 'Secondary line'));
+                expect(inkOf(screen, 'Placeholder line')).toBe(inkOf(screen, 'Secondary line'));
+                expect(webInk['--colors-composer-chip-tint']).toBe(webInk['--colors-text-secondary']);
+                expect(webInk['--colors-input-placeholder']).toBe(webInk['--colors-text-secondary']);
         const { darkTheme, lightTheme } = await import('@/theme');
         const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
         const toneOf = (backdrop: [number, number, number]) => { const l = Color.rgb(backdrop).luminosity(); return { dark: l, light: l, focus: l }; };

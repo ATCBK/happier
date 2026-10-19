@@ -2,7 +2,7 @@ import * as React from 'react';
 import { describe, expect, it } from 'vitest';
 
 import { renderHook } from '@/dev/testkit';
-import { GlassBackedInkContext, resolveGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
+import { GlassBackedInkContext, glassQuietThemeInks, resolveGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
 
 import { BUILT_IN_THEME_PROFILES } from '@/theme/profiles/builtInThemeProfiles';
 import { resolveThemeProfile } from '@/theme/profiles/resolveThemeProfile';
@@ -31,13 +31,13 @@ describe('plugin UI semantic theme projection (§3.3, UI-D12)', () => {
     it('gives a plugin surface on backed glass the material\'s stronger faint ink, and keeps the theme\'s ink elsewhere', async () => {
         const theme = themeFor(null, 'light');
         const projected = projectPluginUiTheme(theme);
-        const backed = resolveGlassBackedInk(theme.colors.text.primary, theme.colors.text.secondary, theme.colors.text.tertiary);
+        const backed = resolveGlassBackedInk(theme.colors.text.primary, theme.colors.text.secondary, glassQuietThemeInks(theme.colors));
         const onGlass = await renderHook(() => usePluginUiThemeOnGlass(projected), {
             wrapper: ({ children }) => React.createElement(GlassBackedInkContext.Provider, { value: backed }, children),
         });
         const stepped = onGlass.getCurrent();
         expect(stepped.colors.secondaryText).toBe(backed.secondary);
-        expect(stepped.colors.mutedText).toBe(backed.tertiary?.ink);
+        expect(stepped.colors.mutedText).toBe(backed.quiet?.ink);
         expect(stepped.colors.text).toBe(projected.colors.text);
         const plain = await renderHook(() => usePluginUiThemeOnGlass(projected));
         expect(plain.getCurrent()).toBe(projected);

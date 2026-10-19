@@ -12,8 +12,11 @@ export const GLASS_BACKED_FAINT_INK_SHARE = 0.7;
 export type GlassBackedInk = Readonly<{
   themeSecondary: string;
   secondary: string;
-  /** The theme's tertiary ink and the stronger step it takes on backed glass (not on the picture plane, which uses `picture`). */
-  tertiary?: Readonly<{ themeInk: string; ink: string }>;
+  /**
+   * The theme's other quiet inks (tertiary meta, the composer's chips and placeholder) and the faint step they all
+   * take on backed glass, the one the default coat cap protects (not on the picture plane, which uses `picture`).
+   */
+  quiet?: Readonly<{ themeInks: readonly string[]; ink: string }>;
   /** Only where the page itself is the picture: the theme's other quiet inks, and the ink they take there. */
   picture?: Readonly<{ themeInks: readonly string[]; ink: string }>;
 }>;
@@ -26,20 +29,29 @@ export const GlassBackedInkContext = React.createContext<GlassBackedInk | null>(
   null,
 );
 
-/** The stronger faint ink for a backed material, derived from the theme's primary ink. */
+/**
+ * The stronger faint ink for a backed material, derived from the theme's primary ink. Every quiet ink the theme
+ * draws text in takes it: no text on backed glass is fainter than the step the coat cap keeps legible.
+ */
 export function resolveGlassBackedInk(
   primary: string,
   themeSecondary: string,
-  themeTertiary: string,
+  themeQuietInks: readonly string[],
 ): GlassBackedInk {
-  const step = (share: number, webToken: string, themeInk: string) =>
-    parseThemeColor(primary)?.alpha(share).rgb().string() ??
-    (Platform.OS === 'web' ? webToken : themeInk);
+  const faint = parseThemeColor(primary)?.alpha(GLASS_BACKED_FAINT_INK_SHARE).rgb().string();
   return {
     themeSecondary,
-    secondary: step(GLASS_BACKED_FAINT_INK_SHARE, 'var(--colors-text-secondary)', themeSecondary),
-    tertiary: { themeInk: themeTertiary, ink: step(GLASS_BACKED_FAINT_INK_SHARE, 'var(--colors-text-tertiary)', themeTertiary) },
+    secondary: faint ?? (Platform.OS === 'web' ? 'var(--colors-text-secondary)' : themeSecondary),
+    ...(faint ? { quiet: { themeInks: themeQuietInks, ink: faint } } : null),
   };
+}
+
+/** The web stylesheet tokens of the theme's quiet inks, which backed glass redefines to its faint step. */
+export const GLASS_QUIET_INK_WEB_TOKENS = ['--colors-text-secondary', '--colors-text-tertiary', '--colors-composer-chip-tint', '--colors-input-placeholder'] as const;
+
+/** The theme's quiet inks besides the secondary (`GLASS_QUIET_INK_WEB_TOKENS` names their web tokens). */
+export function glassQuietThemeInks(colors: Readonly<{ text: { tertiary: string }; composer: { chipTint: string }; input: { placeholder: string } }>): readonly string[] {
+  return [colors.text.tertiary, colors.composer.chipTint, colors.input.placeholder];
 }
 
 /**
@@ -101,7 +113,7 @@ export function useGlassBackedInk(): (
     (color: string | undefined) =>
       ink === null || color === undefined ? color
         : color === ink.themeSecondary ? ink.secondary
-        : ink.tertiary !== undefined && color === ink.tertiary.themeInk ? ink.tertiary.ink
+        : ink.quiet?.themeInks.includes(color) ? ink.quiet.ink
         : ink.picture?.themeInks.includes(color) ? ink.picture.ink
         : color,
     [ink],

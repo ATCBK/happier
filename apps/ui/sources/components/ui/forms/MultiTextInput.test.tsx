@@ -489,6 +489,31 @@ describe('MultiTextInput', () => {
         expect(input.props.style.boxShadow).toBeUndefined();
     });
 
+    it('draws the placeholder in the caller\'s ink, stepped to the faint ink on backed glass, on web and native alike', async () => {
+        const { GlassBackedInkContext, glassQuietThemeInks, resolveGlassBackedInk } = await import('@/components/ui/glass/glassBackedInk');
+        const { lightTheme } = await import('@/theme');
+        const chip = lightTheme.colors.composer.chipTint;
+        const backed = resolveGlassBackedInk(lightTheme.colors.text.primary, lightTheme.colors.text.secondary, glassQuietThemeInks(lightTheme.colors));
+        const placeholderOf = async (platform: 'web' | 'ios', ink: typeof backed | null, color?: string) => {
+            nativeBoundary.platform = platform;
+            const { MultiTextInput } = await import(platform === 'web' ? './MultiTextInput.web' : './MultiTextInput');
+            const tree = (await renderScreen(<GlassBackedInkContext.Provider value={ink}>
+                {React.createElement(MultiTextInput as unknown as React.ComponentType<Record<string, unknown>>, {
+                    value: '', placeholder: 'What would you like to work on?', placeholderTextColor: color, onChangeText: () => {},
+                })}
+            </GlassBackedInkContext.Provider>)).tree;
+            const input = tree.findByType((platform === 'web' ? 'textarea' : 'TextInput') as any);
+            const value = platform === 'web' ? input.props.style['--happier-placeholder-color'] : input.props.placeholderTextColor;
+            await standardCleanup();
+            return value;
+        };
+        for (const platform of ['web', 'ios'] as const) {
+            expect(await placeholderOf(platform, null)).toBe(lightTheme.colors.input.placeholder);
+            expect(await placeholderOf(platform, null, chip)).toBe(chip);
+            expect(await placeholderOf(platform, backed, chip)).toBe(backed.secondary);
+        }
+    });
+
     it('uses the caller textStyle font size as the scaled web textarea base', async () => {
         setFontScale(1.25);
 

@@ -17,7 +17,7 @@ import { useGlassRuntimeEnvironment } from './glassRuntimeEnvironment';
 import { glassElementsCoatColor, glassSurfaceBackgroundColor, glassSurfaceTintColor, resolveGlassSurfacePlaneMaterial, glassSurfacePlaneBackdropStyle, type AtmosphereContentCoat } from './glassSurfacePaint';
 import { useGlassMaterialColorResolver } from './useGlassSurfaceColor';
 import { parseThemeColor } from '@/theme/parseThemeColor';
-import { GLASS_BACKED_FAINT_INK_SHARE, GlassBackedInkContext, glassThemeInkWebStyle, resolveGlassBackedInk, resolveGlassPictureInk } from './glassBackedInk';
+import { GLASS_BACKED_FAINT_INK_SHARE, GLASS_QUIET_INK_WEB_TOKENS, GlassBackedInkContext, glassQuietThemeInks, glassThemeInkWebStyle, resolveGlassBackedInk, resolveGlassPictureInk } from './glassBackedInk';
 
 const retainSolidColor = (input: Readonly<{ color: string }>) => input.color;
 const withMaterialOpacity = (color: string, opacity: number) => parseThemeColor(color)?.alpha(opacity).rgb().string() ?? color;
@@ -215,8 +215,8 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     const ownInk = React.useMemo(() => onPicture
         ? resolveGlassPictureInk({ primary: theme.colors.text.primary, page: theme.colors.surface.base, themeSecondary: theme.colors.text.secondary,
             themeQuietInks: [theme.colors.text.tertiary, theme.colors.button.secondary.tint], pictureInk })
-        : backed ? resolveGlassBackedInk(theme.colors.text.primary, theme.colors.text.secondary, theme.colors.text.tertiary) : null,
-        [onPicture, backed, pictureInk, theme.colors.text.primary, theme.colors.surface.base, theme.colors.text.secondary, theme.colors.text.tertiary, theme.colors.button.secondary.tint]);
+        : backed ? resolveGlassBackedInk(theme.colors.text.primary, theme.colors.text.secondary, glassQuietThemeInks(theme.colors)) : null,
+        [onPicture, backed, pictureInk, theme.colors]);
     // Text and icons that receive the faint tokens from JavaScript take them from this scope. Like the
     // web stylesheet tokens, they inherit through nested surfaces; the provider stays mounted so a tier
     // change never remounts the content.
@@ -249,9 +249,8 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     const backedInkStyle = onPicture && ownInk
         ? { '--colors-text-primary': ownInk.secondary, '--colors-text-secondary': ownInk.secondary, '--colors-text-tertiary': ownInk.secondary } as unknown as ViewStyle
         : backed || inheritedInk !== containingInk
-        ? { ...glassThemeInkWebStyle(theme.colors.text), ...(backed ? {
-            '--colors-text-secondary': `color-mix(in srgb, ${theme.colors.text.primary} ${GLASS_BACKED_FAINT_INK_SHARE * 100}%, transparent)`,
-            '--colors-text-tertiary': `color-mix(in srgb, ${theme.colors.text.primary} ${GLASS_BACKED_FAINT_INK_SHARE * 100}%, transparent)` } : null) } as unknown as ViewStyle : null;
+        ? { ...glassThemeInkWebStyle(theme.colors.text), ...(backed ? Object.fromEntries(GLASS_QUIET_INK_WEB_TOKENS.map(token =>
+            [token, `color-mix(in srgb, ${theme.colors.text.primary} ${GLASS_BACKED_FAINT_INK_SHARE * 100}%, transparent)`])) : null) } as unknown as ViewStyle : null;
     // Web paints the material on its own layer beneath the content, in every tier, so a tier change
     // never moves the content to another parent. A CSS `backdrop-filter` makes its element a backdrop
     // root: on the surface itself it would cut everything inside (a menu, tooltip or popover opened

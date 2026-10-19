@@ -3628,6 +3628,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 <View style={styles.actionButtonsContainer}>
                                 <View
                                     style={[
+                                        placeholderTextColor={theme.colors.composer.chipTint}
                                         screenWidth < 420 ? styles.actionButtonsColumnNarrow : styles.actionButtonsColumn,
                                         isMobileLayoutWidth(screenWidth) ? styles.actionButtonsColumnMobile : null,
                                     ]}
@@ -3835,6 +3836,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 <View style={styles.actionButtonsContainer}>
                                     <View
                                         style={[
+                                        placeholderTextColor={theme.colors.composer.chipTint}
                                             screenWidth < 420 ? styles.actionButtonsColumnNarrow : styles.actionButtonsColumn,
                                             isMobileLayoutWidth(screenWidth) ? styles.actionButtonsColumnMobile : null,
                                         ]}

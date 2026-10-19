@@ -4,6 +4,7 @@ import { View, type TextStyle } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { scaleTextStyle } from '@/components/ui/text/uiFontScale';
+import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
 import { useLocalSetting } from '@/sync/store/hooks';
 import { extractWebAttachmentFilesFromDataTransfer } from '@/utils/files/webAttachmentDataTransfer';
 import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone.web';
@@ -68,6 +69,8 @@ interface MultiTextInputProps {
     value: string;
     onChangeText: (text: string) => void;
     placeholder?: string;
+    /** The placeholder's ink: a theme token, which backed glass steps up like any quiet ink. Defaults to `input.placeholder`. */
+    placeholderTextColor?: string;
     maxHeight?: number;
     editable?: boolean;
     paddingTop?: number;
@@ -202,7 +205,10 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         paddingRight: props.paddingRight,
         ...scaledTextStyle,
         caretColor: theme.colors.input.text,
-    }), [
+        // `theme.css` paints the raw textarea's placeholder from it.
+        '--happier-placeholder-color': placeholderInk,
+    }) as WebTextareaStyle, [
+        placeholderInk,
         props.paddingBottom,
         props.paddingLeft,
         props.paddingRight,
@@ -235,6 +241,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             const pendingText = pendingChangeTextRef.current;
             if (pendingText === null) return;
             emitChangeText(pendingText);
+    const placeholderInk = useGlassBackedInk()(props.placeholderTextColor ?? theme.colors.input.placeholder);
         }, TEXT_INPUT_LARGE_TEXT_CHANGE_DEBOUNCE_MS);
     }, [clearPendingChangeTimer, emitChangeText]);
 
