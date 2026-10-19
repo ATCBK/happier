@@ -24,10 +24,11 @@ import {
     TriagePullRequestStatusResultV1Schema,
     TriageEntryRefV1Schema,
     TriageTaskWriteResultV1Schema,
+    TriageSourcesContributionProtocolV1,
 } from '@happier-dev/triage-protocol/v1';
 
 import { PLUGIN_MANIFEST } from '../manifest.js';
-import { TriageCreateTaskActionInputV1Schema, TriageEditTaskActionInputV1Schema, TriageTransitionTaskActionInputV1Schema } from './tasksProtocol.js';
+import { TriageCreateTaskActionInputV1Schema, TriageEditTaskActionInputV1Schema, TriageTransitionTaskActionInputV1Schema, TriageTaskDraftV1Schema } from './tasksProtocol.js';
 import {
     TriageMountedSourceInsertInputV1Schema,
     TriageMountedSourceRevealInputV1Schema,
@@ -75,6 +76,8 @@ import {
 import {
     TriageLinkEntryToSessionActionResultV1Schema,
     TriageLinkEntryToSessionInputV1Schema,
+    TriageReadSourceSessionLinksInputV1Schema,
+    TriageReadSourceSessionLinksResultV1Schema,
 } from './sessionLinksProtocol.js';
 import {
     TriageListPinnedEntriesInputV1Schema,
@@ -140,6 +143,7 @@ const structurallyBoundedSchemas = {
     administerSourceInstanceInput: TriageSourceAdministrationActionInputV1Schema,
     administerSourceInstanceResult: TriageSourceAdministrationActionResultV1Schema,
     readConfiguredInstancesInput: TriageReadConfiguredSourceInstancesInputV1Schema,
+    readSourceSessionLinksInput: TriageReadSourceSessionLinksInputV1Schema,
 } as const satisfies Readonly<Record<string, MeasurableSchemaV1>>;
 
 /**
@@ -169,6 +173,8 @@ const ownerBoundedSchemas = {
 const structurallyUnboundedSchemas = {
     // Linked Sessions follow the real relationship set, not a local count quota.
     readEntryDetailResult: TriageReadEntryDetailResultV1Schema,
+    taskDraftInput: TriageTaskDraftV1Schema,
+    readSourceSessionLinksResult: TriageReadSourceSessionLinksResultV1Schema,
     // Live task relations/native transitions and write fields follow provider
     // data. The host envelope, rather than a per-task membership cap, owns size.
     listEntriesResult: TriageListEntriesResultV1Schema,
@@ -257,6 +263,14 @@ const measuredSchemas = {
     ...structurallyBoundedSchemas,
     ...ownerBoundedSchemas,
     ...structurallyUnboundedSchemas,
+    // The built-in source now declares these same public source-role schemas.
+    // Their finite maxima and provider-sized witnesses are exercised by the
+    // protocol owner's maximumEncodedResult suite, not a second local catalog.
+    ...Object.fromEntries(Object.entries(TriageSourcesContributionProtocolV1.operations)
+        .flatMap(([role, operation]) => [
+            [`source/${role}/input`, operation.declaration.input.schema],
+            [`source/${role}/result`, operation.declaration.resultSchema],
+        ])),
 };
 
 function admits(value: unknown): boolean {
