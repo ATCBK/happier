@@ -195,6 +195,7 @@ function readTranscriptObservationMetadata(message: TranscriptObservationMetadat
             ? { transcriptObservationProvenance: message.transcriptObservationProvenance }
             : {}),
         ...(message.deliveryResolution !== undefined ? { deliveryResolution: message.deliveryResolution } : {}),
+        ...(message.followDeliveryProjection !== undefined ? { followDeliveryProjection: message.followDeliveryProjection } : {}),
         ...(message.messageActionReference !== undefined ? { messageActionReference: message.messageActionReference } : {}),
     };
 }
@@ -210,6 +211,7 @@ function areTranscriptObservationMetadataEqual(
             right.transcriptObservationProvenance,
         )
         && areTranscriptSemanticValuesEqual(left.deliveryResolution, right.deliveryResolution)
+        && areTranscriptSemanticValuesEqual(left.followDeliveryProjection, right.followDeliveryProjection)
         && areMessageActionReferencesEqual(left.messageActionReference, right.messageActionReference);
 }
 
@@ -1073,6 +1075,9 @@ function convertReducerMessageToMessage(
             : {}),
         ...(reducerMsg.deliveryResolution !== undefined
             ? { deliveryResolution: reducerMsg.deliveryResolution }
+            : {}),
+        ...(reducerMsg.followDeliveryProjection !== undefined
+            ? { followDeliveryProjection: reducerMsg.followDeliveryProjection }
             : {}),
             ...(reducerMsg.messageActionReference !== undefined
             ? { messageActionReference: reducerMsg.messageActionReference }

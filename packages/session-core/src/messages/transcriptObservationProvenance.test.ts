@@ -6,6 +6,18 @@ import {
 } from "./transcriptObservationProvenance.js";
 
 describe('applyTranscriptObservationMetadata', () => {
+    it('keeps only a valid current Follow delivery projection and retracts stale success', () => {
+        const target = { followDeliveryProjection: { status: 'woke', reason: null } } as {
+            followDeliveryProjection?: { status: 'woke' | 'queued'; reason: null };
+        };
+        applyTranscriptObservationMetadata(target, {
+            followDeliveryProjection: { status: 'queued', reason: null },
+        });
+        expect(target.followDeliveryProjection).toEqual({ status: 'queued', reason: null });
+        applyTranscriptObservationMetadata(target, {});
+        expect(target.followDeliveryProjection).toBeUndefined();
+    });
+
     it('fails closed for an absent or malformed message action reference while retaining a valid replacement', () => {
         const initialReference = {
             v: 1,
