@@ -16,6 +16,38 @@ function buildMetadata(overrides: Partial<Metadata> = {}): Metadata {
 }
 
 describe('writeUiSessionStateField', () => {
+    it('sets and clears a source-bound explanatory reason without changing runtime state', async () => {
+        let metadata = buildMetadata({ work: { memoryEnabled: true }, runtimeActivityState: 'active' });
+        const runtimeActivityState = metadata.runtimeActivityState;
+        const writes: string[] = [];
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            sessionStateFieldSet: async write => {
+                const result = await writeUiSessionStateField({
+                    sessionId: write.sessionId, fieldId: write.fieldId, value: write.value,
+                    metadataReason: 'reason-action',
+                    updateSessionMetadataWithRetry: async (id, updater) => {
+                        writes.push(id);
+                        metadata = updater(metadata);
+                        return { version: 5 };
+                    },
+                });
+                return result.ok ? { ...result, sessionId: write.sessionId, reason: write.value } : result;
+            },
+        }));
+        const context = { surface: 'agent' as const, defaultSessionId: 'other',
+            actionCaller: { kind: 'session' as const, sessionId: 'worker', starterDepth: 0, turnDepth: 0 } };
+        expect(await executor.execute('session.status.set_reason', { reason: 'Waiting for the local build' }, context))
+            .toMatchObject({ ok: true, result: { ok: true, version: 5 } });
+        expect(metadata.work).toEqual({ memoryEnabled: true, statusReason: 'Waiting for the local build' });
+        expect(metadata).not.toHaveProperty('sessionWorkStateV1');
+        expect(metadata.runtimeActivityState).toBe(runtimeActivityState);
+        expect(await executor.execute('session.status.set_reason', { reason: 'Done', sessionId: 'other' }, context))
+            .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+        expect(writes).toEqual(['worker']);
+        expect(await executor.execute('session.status.set_reason', { reason: null },
+            { surface: 'ui', authority: 'present_user', defaultSessionId: 'worker' })).toMatchObject({ ok: true });
+        expect(metadata.work).toEqual({ memoryEnabled: true });
+    });
     it('applies registered Bot and view Actions through real bindings to Account persistence', async () => {
         let metadata = buildMetadata({ summary: { text: 'Keep', updatedAt: 1 },
             work: { sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: 'Keep' }, viewPreferences: { showToolCalls: true } } });

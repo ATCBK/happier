@@ -45,7 +45,7 @@ describe('useNewSessionCapabilities', () => {
         transport.mockReset();
         transport.mockResolvedValue(previewResponse);
     });
-    async function seedPortableCatalogs() {
+    async function seedPortableCatalogs(enabled = true) {
         const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
         const account = await captureLazyActionAccountContext(serverId);
         let skillId: string;
@@ -56,7 +56,7 @@ describe('useNewSessionCapabilities', () => {
             skillId = created.artifactId;
         } finally { account.dispose(); }
         const rules = createPromptLibraryCatalogBoundary({ records: [{ key: 'skill-rules', value: { v: 1, rules: [{
-            id: 'review-everywhere', skillId, target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1,
+            id: 'review-everywhere', skillId, target: { t: 'allMachines' }, enabled, createdAt: 1, updatedAt: 1,
         }] } }] });
         homes.answer(serverId, PROMPT_LIBRARY_ROWS_ROUTE_V1, { select: async () => ({ body: await (await rules.handle(PROMPT_LIBRARY_ROWS_ROUTE_V1))!.json() }) });
         const catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'server-portable', name: 'portable',
@@ -106,6 +106,28 @@ describe('useNewSessionCapabilities', () => {
         expect(SpawnCapabilitiesPreviewOutputV1Schema.safeParse(hook.getCurrent().preview).success).toBe(true);
         expect(transport.mock.calls.some(([input]) => isPreviewRequest(input))).toBe(false);
     });
+    it('rechecks the Account catalog on draft reopen and admits a newly created Off skill for this Session', async () => {
+        await seedPortableCatalogs();
+        const { useNewSessionCapabilities } = await import('./useNewSessionCapabilities');
+        const hook = await renderHook(() => {
+            const [selection, setSelection] = React.useState<SessionCapabilitySelectionV1>({});
+            return useNewSessionCapabilities({ machineId: null, directory: '/repo', agentId: 'codex',
+                targetServerId: serverId, portableOnly: true, selection, setSelection });
+        });
+        await act(async () => { hook.getCurrent().demandPreview(); });
+        await vi.waitFor(() => expect(hook.getCurrent().previewStatus).toBe('ready'));
+        const skillId = await seedPortableCatalogs(false);
+        expect(hook.getCurrent().preview?.skills.items.some(item => item.id === skillId)).toBe(false);
+        await act(async () => { hook.getCurrent().demandPreview(); });
+        await vi.waitFor(() => expect(hook.getCurrent().preview?.skills.items.find(item => item.id === skillId))
+            .toMatchObject({ selected: false, selectable: true, reason: 'rule_off' }));
+        await act(async () => { hook.getCurrent().setItem('skill', skillId, 'on'); });
+        await vi.waitFor(() => expect(hook.getCurrent().preview?.skills.items.find(item => item.id === skillId))
+            .toMatchObject({ selected: true, selectable: true, reason: 'session_added', sessionOverride: 'added' }));
+        expect(SpawnCapabilitiesPreviewOutputV1Schema.safeParse(hook.getCurrent().preview).success).toBe(true);
+        expect(transport.mock.calls.some(([input]) => isPreviewRequest(input))).toBe(false);
+    });
+
     it('observes a host acknowledgment from metadata even while a demanded preview still says pending', async () => {
         const sessionId = 'c123456789012345678901234';
         const metadata = { machineId: 'machine-1', path: '/repo', host: 'host', flavor: 'codex',

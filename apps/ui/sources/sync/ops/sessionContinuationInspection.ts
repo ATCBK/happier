@@ -41,6 +41,7 @@ export type InspectSessionContinuationOnMachineInput = Readonly<{
     serverId: string | null;
     sessionId: string;
     selection: SessionAgentTransitionSelectionV1;
+    signal?: AbortSignal;
 }>;
 
 export type InspectSessionContinuationsOnMachineInput = Readonly<{
@@ -48,6 +49,7 @@ export type InspectSessionContinuationsOnMachineInput = Readonly<{
     serverId: string | null;
     sessionId: string;
     selections: readonly SessionAgentTransitionSelectionV1[];
+    signal?: AbortSignal;
 }>;
 
 /**
@@ -70,6 +72,7 @@ export async function inspectSessionContinuationOnMachine(
             serverId: input.serverId,
             method: RPC_METHODS.SESSION_CONTINUATION_INSPECT,
             payload,
+            ...(input.signal ? { signal: input.signal } : {}),
         });
     } catch (error) {
         return readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
@@ -104,6 +107,7 @@ export async function inspectSessionContinuationsOnMachine(
             serverId: input.serverId,
             method: RPC_METHODS.SESSION_CONTINUATION_INSPECT_BATCH,
             payload,
+            ...(input.signal ? { signal: input.signal } : {}),
         });
     } catch (error) {
         if (readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) {
@@ -113,6 +117,7 @@ export async function inspectSessionContinuationsOnMachine(
                     serverId: input.serverId,
                     sessionId: input.sessionId,
                     selection,
+                    ...(input.signal ? { signal: input.signal } : {}),
                 })
             )));
         }

@@ -9,20 +9,26 @@ import {
     readSpawnAttemptCustodyState,
     settleSpawnAttemptCustodyFromActionOperation,
 } from '@/sync/domains/session/spawn/spawnAttemptNonceStore';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
-const frontDoorExecute = vi.hoisted(() => vi.fn());
-
-vi.mock('./frontDoorRuntimeActionExecutor', () => ({
-    createFrontDoorActionExecute: () => frontDoorExecute,
-}));
+const frontDoorExecute = vi.fn<(...args: Parameters<import('./frontDoorRuntimeActionExecutor').FrontDoorActionExecute>) => Promise<ActionExecuteResult>>();
 
 import {
     buildManualSessionCreationKey,
     completeManualSessionSpawnNewActionCustody,
-    executeManualSessionSpawnNewAction,
-    executeSessionSpawnNewAction,
+    executeManualSessionSpawnNewAction as executeManualSessionSpawnNewActionImpl,
+    executeSessionSpawnNewAction as executeSessionSpawnNewActionImpl,
     type StrictSessionSpawnNewInput,
 } from './sessionSpawnNewAction';
+
+// An embedding host can supply its own Action executor. Hold that public
+// system boundary while the front door, strict parsing and custody stay real.
+const executeSessionSpawnNewAction = (...args: Parameters<typeof executeSessionSpawnNewActionImpl>) =>
+    executeSessionSpawnNewActionImpl(args[0], args[1], { execute: frontDoorExecute });
+const executeManualSessionSpawnNewAction = (...args: Parameters<typeof executeManualSessionSpawnNewActionImpl>) =>
+    executeManualSessionSpawnNewActionImpl(args[0], args[1], {
+        ...args[2], executeAction: args[2].executeAction ?? executeSessionSpawnNewAction,
+    });
 
 const input: StrictSessionSpawnNewInput = {
     creationKey: SessionCreationKeyV1Schema.parse('new-session-attempt-1'),
@@ -192,11 +198,11 @@ describe('executeSessionSpawnNewAction tracking', () => {
 
     it.each([
         [{
-            ok: true,
+            ok: true as const,
             result: { type: 'error', code: 'organization_invalid', retryable: false },
         }],
         [{
-            ok: false,
+            ok: false as const,
             errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
             error: 'RPC method not available',
         }],

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { MetadataSchema } from '@happier-dev/session-core/state';
+import { prepareDiscussionSelectionHandoff } from '@/components/discussions/prepareDiscussionSelectionHandoff';
+import { DiscussionMessageV1Schema } from '@happier-dev/protocol/discussions/models';
+import { createDiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 
 import {
     clearSessionInitialPromptV1,
@@ -41,22 +44,36 @@ describe('sessionInitialPromptV1', () => {
     });
 
     it('round-trips an exact Discussion selection source without Run draft correlation', () => {
+        const prepared = prepareDiscussionSelectionHandoff({
+            serverId: 'server-a',
+            discussionId: 'discussion-a',
+            selectedMessageIds: ['message-4', 'message-2'],
+            messages: ['message-2', 'message-4'].map((id, index) => {
+                const content = { v: 1 as const, parts: [{ t: 'text' as const, text: id }] };
+                const committed = DiscussionMessageV1Schema.parse({
+                    id, discussionId: 'discussion-a', localId: null, seq: index + 1,
+                    authorAccountId: 'alice', accountActor: null, producerV1: null,
+                    content: { t: 'plain', v: content }, mentionedAccountIds: [], createdAt: 1,
+                });
+                return { ...committed, content, messageRef: createDiscussionMessageRefV1({ serverId: 'server-a', discussionId: committed.discussionId }, committed) };
+            }),
+            resolveAccountLabel: () => 'Alice',
+            format: 'plain',
+            roleLabels: { user: 'User', assistant: 'Assistant' },
+            agentAttributionLabel: 'Via Agent',
+        });
+        expect(prepared).not.toBeNull();
         const metadata = writeSessionInitialPromptV1({
             metadata: MetadataSchema.parse({}),
             text: 'selected messages',
             mode: 'append',
             createdAtMs: 2,
-            source: {
-                kind: 'session_discussion',
-                sessionId: 'session-a',
-                discussionId: 'discussion-a',
-                messageIds: ['message-2', 'message-4'],
-            },
+            source: prepared!.source,
         });
 
         expect(readSessionInitialPromptV1(metadata)?.source).toEqual({
-            kind: 'session_discussion',
-            sessionId: 'session-a',
+            kind: 'discussion',
+            serverId: 'server-a',
             discussionId: 'discussion-a',
             messageIds: ['message-2', 'message-4'],
         });
@@ -67,13 +84,13 @@ describe('sessionInitialPromptV1', () => {
         const metadata = {
             ...MetadataSchema.parse({}),
             sessionInitialPromptV1: {
-                v: 1,
+                v: 1 as const,
                 text: 'selected messages',
-                mode: 'append',
+                mode: 'append' as const,
                 createdAtMs: 2,
                 source: {
-                    kind: 'session_discussion',
-                    sessionId: 'session-a',
+                    kind: 'discussion' as const,
+                    serverId: 'server-a',
                     discussionId: 'discussion-a',
                     messageIds: ['message-2'],
                     draftCorrelationId: 'draft-a',
@@ -83,7 +100,7 @@ describe('sessionInitialPromptV1', () => {
         };
 
         expect(readSessionInitialPromptV1(metadata)?.source).toEqual({
-            kind: 'session_discussion', sessionId: 'session-a', discussionId: 'discussion-a', messageIds: ['message-2'],
+            kind: 'discussion', serverId: 'server-a', discussionId: 'discussion-a', messageIds: ['message-2'],
         });
         expect(readSessionInitialPromptV1(metadata)?.source).not.toHaveProperty('draftCorrelationId');
     });

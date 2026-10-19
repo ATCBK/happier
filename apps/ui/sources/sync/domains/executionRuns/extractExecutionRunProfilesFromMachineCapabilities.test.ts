@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractExecutionRunProfilesFromMachineCapabilitiesState } from './extractExecutionRunsBackendsFromMachineCapabilities';
+import { extractExecutionRunProfilesFromMachineCapabilitiesState, resolveExecutionRunsCapabilityRead } from './extractExecutionRunsBackendsFromMachineCapabilities';
 
 describe('extractExecutionRunProfilesFromMachineCapabilitiesState', () => {
     it('accepts only qualified profiles with canonical source custody', () => {
@@ -31,5 +31,23 @@ describe('extractExecutionRunProfilesFromMachineCapabilitiesState', () => {
             available: true,
             defaults: { retention: 'resumable', runClass: 'bounded', io: 'streaming' },
         }]);
+    });
+});
+
+describe('resolveExecutionRunsCapabilityRead', () => {
+    const answered = { backends: { claude: { available: true, intents: ['review'] } } };
+    const loaded = (entry: unknown) => ({ status: 'loaded', snapshot: { response: { results: { 'tool.executionRuns': entry } } } });
+
+    it('reads an unanswered Machine as reading or unreadable, never as a refusal', () => {
+        expect(resolveExecutionRunsCapabilityRead({ status: 'idle' })).toBe('reading');
+        expect(resolveExecutionRunsCapabilityRead({ status: 'loading' })).toBe('reading');
+        expect(resolveExecutionRunsCapabilityRead({ status: 'error' })).toBe('unreadable');
+        expect(resolveExecutionRunsCapabilityRead(loaded({ ok: false, error: { message: 'boom' } }))).toBe('unreadable');
+    });
+
+    it('treats a reported backend map, or a Machine without the capability, as answered', () => {
+        expect(resolveExecutionRunsCapabilityRead(loaded({ ok: true, data: answered }))).toBe('answered');
+        expect(resolveExecutionRunsCapabilityRead({ status: 'error', snapshot: { response: { results: { 'tool.executionRuns': { ok: true, data: answered } } } } })).toBe('answered');
+        expect(resolveExecutionRunsCapabilityRead({ status: 'not-supported' })).toBe('answered');
     });
 });

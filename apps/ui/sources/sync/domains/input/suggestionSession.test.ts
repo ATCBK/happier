@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { storage } from '@/sync/domains/state/storage';
 
 import {
     buildComposerSessionTokenSlug,
     projectComposerSessionSuggestionItems,
+    readComposerSessionSuggestionDisplay,
     type ComposerSessionSuggestionState,
 } from './suggestionSession';
 
@@ -43,6 +46,53 @@ function state(args: Readonly<{
 }
 
 describe('composer session suggestion source (D-7, D-8)', () => {
+    it('reads an admitted hidden Session display only from its exact Home, without inventory eligibility', () => {
+        const previous = storage.getState();
+        const id = 'same-session-id';
+        const row = createSessionListRenderableSessionFixture({ id, metadata: {
+            name: 'Review worker', path: '/Users/reviewer/project', homeDir: '/Users/reviewer',
+            host: 'Review machine', machineId: 'review-machine', flavor: 'codex', hiddenSystemSession: true,
+        } });
+        storage.setState({
+            sessions: { [id]: createSessionFixture({ id, serverId: 'server-a', metadata: {
+                name: 'Other Home title', path: '/private/other-home', host: 'Other Home machine',
+                machineId: 'other-machine', flavor: 'claude',
+            } }) },
+            sessionListRowsByServerId: { 'server-b': { [id]: row } },
+            machines: {}, machineListByServerId: {},
+        });
+        try {
+            expect(readComposerSessionSuggestionDisplay({ serverId: 'server-b', sessionId: id })).toMatchObject({
+                id, title: 'Review worker', agentId: 'codex', machineId: 'review-machine',
+                workspaceLabel: 'Review machine', serverId: 'server-b',
+            });
+            expect(projectComposerSessionSuggestionItems(storage.getState(), {
+                serverId: 'server-b', currentSessionId: null,
+            })).toEqual([]);
+            expect(readComposerSessionSuggestionDisplay({ serverId: 'server-c', sessionId: id })).toBeNull();
+        } finally {
+            storage.setState(previous, true);
+        }
+    });
+
+    it('uses the Work identity for a managed Session without exposing its private folder or inventing an Agent', () => {
+        const previous = storage.getState();
+        const id = 'managed-model-session';
+        storage.setState({ sessions: { [id]: createSessionFixture({ id, serverId: 'server-b', metadata: {
+            name: 'Model reviewer', path: '/private/model-backing-folder', host: 'Review box',
+            machineId: 'review-machine', sessionDirectoryV1: { v: 1, kind: 'managed' },
+        } }) }, machines: {}, machineListByServerId: {} });
+        try {
+            const display = readComposerSessionSuggestionDisplay({ serverId: 'server-b', sessionId: id });
+            expect(display).toMatchObject({ title: 'Model reviewer', workspaceLabel: 'Review box',
+                agentId: null, agentLabel: null, machineId: 'review-machine' });
+            expect(JSON.stringify(display)).not.toContain('/private/model-backing-folder');
+            expect(readComposerSessionSuggestionDisplay({ serverId: 'server-b', sessionId: 'uncached-member' })).toBeNull();
+        } finally {
+            storage.setState(previous, true);
+        }
+    });
+
     it('projects only the carried identity through the same current Session eligibility', () => {
         const current = state({ byServer: { 'server-a': [renderable('selected'), renderable('neighbor'),
             renderable('archived', { archivedAt: 42 }), renderable('current')] } });

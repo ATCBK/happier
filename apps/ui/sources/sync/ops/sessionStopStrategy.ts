@@ -164,6 +164,7 @@ export async function stopSessionViaDaemonMachineRpc(params: Readonly<{
     serverId?: string | null;
     accountId?: string;
     signal?: AbortSignal;
+    onIssued?: () => void;
 }>): Promise<DaemonMachineSessionStopAttempt> {
     try {
         const response = await machineRpcWithServerScope<unknown, { sessionId: string }>({
@@ -182,7 +183,7 @@ export async function stopSessionViaDaemonMachineRpc(params: Readonly<{
             operationTimeoutMs: null,
             // Stop is safe to reroute only before emission. Once issued, replaying the
             // same session id can terminate a replacement that resumed after the first exit.
-            onIssued: () => {},
+            onIssued: params.onIssued ?? (() => {}),
         });
         const strictResult = readStrictStopSessionResult(response);
         if (strictResult?.status === 'stopped') return { type: 'stopped' };

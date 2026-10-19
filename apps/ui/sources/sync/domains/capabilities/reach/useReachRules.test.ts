@@ -9,6 +9,7 @@ import { applyMcpServerCatalogSnapshot, resetMcpServerCatalogSnapshotsForTests }
 import { resetMcpServerCatalogEngineForTests } from '@/sync/engine/settings/mcpServerCatalogEngine';
 import { applyPromptLibraryCatalogSnapshot, resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { resetPromptLibraryCatalogEngineForTests } from '@/sync/engine/settings/promptLibraryCatalogEngine';
+import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 
 installSettingsViewCommonModuleMocks({ storage: 'real' });
 const boundary = vi.hoisted(() => ({ execute: vi.fn() }));
@@ -20,6 +21,7 @@ const { useReachRules } = await import('./useReachRules');
 const scope = { serverId: 'reach-home', accountId: 'reach-account' };
 const initial: ReachRuleV1 = { id: 'everywhere', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 };
 beforeEach(() => {
+    retirePresentationNotice();
     boundary.execute.mockReset();
     getStorage().setState({ settingsScope: scope, profileScope: scope, settings: settingsParse({}) });
     applyMcpServerCatalogSnapshot(scope, { status: 'ready', revision: 1, authority: 'active', diagnostics: [], catalog: {
@@ -93,6 +95,25 @@ describe.each(['mcp_server', 'skill'] as const)('%s reach rules authoring', kind
             items: [{ [kind === 'skill' ? 'skillId' : 'serverId']: 'server' }],
             change: { kind: 'replace', rules: [{ target: off.target, enabled: false }] } }]);
         expect(hook.getCurrent().rules).toEqual([off]);
+    });
+    it('offers notice Undo only after acknowledgement and restores the server-returned previous rules', async () => {
+        const pending = createDeferred<unknown>();
+        const concurrent = { ...initial, enabled: false, updatedAt: 2 };
+        const written = { ...initial, updatedAt: 3 };
+        boundary.execute.mockReturnValueOnce(pending.promise);
+        const hook = await renderHook(() => useReachRules(kind, 'server'));
+        let write!: Promise<unknown>;
+        act(() => { write = hook.getCurrent().change({ kind: 'write', write: { place: initial.target, state: 'on' } }); });
+        expect(readPresentationNotice()?.undo).toBeUndefined();
+        await act(async () => { pending.resolve({ ok: true, result: { ok: true, revision: 3,
+            items: [item([written], [concurrent])] } }); await write; });
+        boundary.execute.mockResolvedValueOnce({ ok: true, result: { ok: true, revision: 4,
+            items: [item([concurrent], [written])] } });
+        expect(readPresentationNotice()?.undo).toBeDefined();
+        await act(async () => { readPresentationNotice()?.undo?.run(); });
+        expect(boundary.execute.mock.calls.at(-1)?.[1]).toEqual({
+            items: [{ [kind === 'skill' ? 'skillId' : 'serverId']: 'server' }],
+            change: { kind: 'replace', rules: [{ target: initial.target, enabled: false }] } });
     });
     it('keeps an unreadable catalog unavailable rather than presenting an empty ready value', async () => {
         const hook = await renderHook(() => useReachRules(kind, 'server'));

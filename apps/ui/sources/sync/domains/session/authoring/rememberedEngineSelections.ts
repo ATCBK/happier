@@ -3,16 +3,16 @@ import { AcpConfigOptionOverridesV1Schema, type AcpConfigOptionOverridesV1 } fro
 import { buildBackendTargetKeyV2, BackendTargetKeyV2Schema, parseBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2Input, type BackendTargetKeyV2, type PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { SessionModelSelectionV1Schema, type SessionModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import * as zMini from 'zod/mini';
 
-const RememberedEngineSelectionV1Schema = z.object({
+const RememberedEngineSelectionV1Schema = z.strictObject({
     v: z.literal(1),
     modelSelection: zMini.nullable(SessionModelSelectionV1Schema),
-    acpSessionModeId: z.string().trim().min(1).nullable().optional(),
+    acpSessionModeId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
     sessionConfigOptionOverrides: zMini.optional(zMini.nullable(AcpConfigOptionOverridesV1Schema)),
-    updatedAt: z.number().finite().nonnegative(),
-}).strict();
+    updatedAt: z.number().check(z.nonnegative()),
+});
 const StoredRememberedEngineSelectionV1Schema = createStoredReadSchema(RememberedEngineSelectionV1Schema);
 const StoredSessionModelSelectionV1Schema = createStoredReadSchema(SessionModelSelectionV1Schema);
 
@@ -104,7 +104,7 @@ function normalizeRememberedSelectionForScope(scopeKey: string, raw: unknown): u
     };
 }
 
-export const RememberedEngineSelectionsByScopeV1Schema = z.preprocess((value) => {
+export const RememberedEngineSelectionsByScopeV1Schema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
     const record = value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
         : {};
@@ -124,7 +124,7 @@ export const RememberedEngineSelectionsByScopeV1Schema = z.preprocess((value) =>
             return parsed.success ? [[normalizedScopeKey, parsed.data]] : [];
         }),
     );
-}, z.record(z.string().min(1), RememberedEngineSelectionV1Schema).default({}));
+}), z._default(z.record(z.string().check(z.minLength(1)), RememberedEngineSelectionV1Schema), {}));
 
 export type RememberedEngineSelectionsByScopeV1 = z.infer<typeof RememberedEngineSelectionsByScopeV1Schema>;
 

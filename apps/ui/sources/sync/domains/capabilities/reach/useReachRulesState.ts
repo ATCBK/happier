@@ -23,8 +23,8 @@ type PendingChange = {
     resolve: (result: ReachRulesWriteResult) => void;
 };
 type State = {
-    key: string; rules: ReachRulesV1; written: ReachRulesV1; revision: number | 'absent';
-    previous: ReachRulesV1 | null; pending: PendingChange[]; running: boolean; mounted: boolean;
+    rules: ReachRulesV1; written: ReachRulesV1; revision: number | 'absent';
+    previous: ReachRulesV1 | null; pending: PendingChange[]; running: boolean; active: boolean;
     publishOptimistic?: (rules: ReachRulesV1 | null) => void;
 };
 
@@ -39,43 +39,33 @@ function project(state: State): ReachRulesV1 {
     }, state.written);
 }
 
-/** One optimistic owner; reads never replace a newer acknowledged write with an older projection. */
-export function useReachRulesState(source: ReachRulesSource, execute: ExecuteReachRules,
+/** One optimistic/Undo owner, retained by the operation whose lifetime it serves. */
+export function createReachRulesController(source: ReachRulesSource, execute: ExecuteReachRules,
     publishOptimistic?: (rules: ReachRulesV1 | null) => void) {
-    const [, render] = React.useState(0);
-    const latest = React.useRef(source);
-    latest.current = source;
-    const owner = React.useRef<State | null>(null);
-    if (!owner.current || owner.current.key !== source.key) owner.current = { key: source.key, rules: source.rules,
-        written: source.rules, revision: source.revision, previous: null, pending: [], running: false, mounted: true, publishOptimistic };
-    const state = owner.current;
-    const publish = React.useCallback((current: State, operation = false) => {
+    let latest = source;
+    let latestExecute = execute;
+    const state: State = { rules: source.rules,
+        written: source.rules, revision: source.revision, previous: null, pending: [], running: false, active: true, publishOptimistic };
+    let snapshot = { rules: state.rules, revision: state.revision };
+    const listeners = new Set<() => void>();
+    const publish = (current: State, operation = false) => {
         const next = project(current);
         if (operation) current.publishOptimistic?.(current.pending.length ? next : null);
-        if (JSON.stringify(next) === JSON.stringify(current.rules)) return;
-        current.rules = next;
-        if (owner.current === current && current.mounted) render(value => value + 1);
-    }, []);
-    React.useEffect(() => {
-        state.mounted = true;
-        return () => { state.mounted = false; if (state.pending.length) state.publishOptimistic?.(null); };
-    }, [state]);
-    React.useLayoutEffect(() => {
-        if (source.status !== 'ready' || source.revision === 'absent') return;
-        if (state.revision !== 'absent' && source.revision < state.revision) return;
-        state.written = source.rules;
-        state.revision = source.revision;
-        publish(state);
-    }, [source.rules, source.revision, source.status, state, publish]);
+        const sameRules = JSON.stringify(next) === JSON.stringify(current.rules);
+        if (sameRules && snapshot.revision === current.revision) return;
+        if (!sameRules) current.rules = next;
+        snapshot = { rules: current.rules, revision: current.revision };
+        for (const listener of listeners) listener();
+    };
 
-    const drain = React.useCallback(async (current: State) => {
+    const drain = async (current: State) => {
         if (current.running) return;
         current.running = true;
         while (current.pending.length > 0) {
             const operation = current.pending[0]!;
             let result: ReachRulesWriteResult;
-            if (owner.current !== current || !current.mounted) result = { ok: false, message: 'scope-retired' };
-            else if (latest.current.status === 'unavailable') result = { ok: false, message: 'catalog_unavailable' };
+            if (!current.active) result = { ok: false, message: 'scope-retired' };
+            else if (latest.status === 'unavailable') result = { ok: false, message: 'catalog_unavailable' };
             else {
                 try {
                     const receipt = source.kind === 'skill'
@@ -101,16 +91,15 @@ export function useReachRulesState(source: ReachRulesSource, execute: ExecuteRea
             operation.resolve(result);
         }
         current.running = false;
-    }, [source.kind, source.itemId, publish]);
+    };
 
-    const change = React.useCallback((input: ReachRulesChangeV1): Promise<ReachRulesWriteResult> => {
-        if (owner.current !== state || !state.mounted) return Promise.resolve({ ok: false, message: 'scope-retired' });
-        if (latest.current.status !== 'ready') return Promise.resolve({ ok: false, message: 'catalog_unavailable' });
+    const change = (input: ReachRulesChangeV1): Promise<ReachRulesWriteResult> => {
+        if (!state.active) return Promise.resolve({ ok: false, message: 'scope-retired' });
+        if (latest.status !== 'ready') return Promise.resolve({ ok: false, message: 'catalog_unavailable' });
         const parsed = ReachRulesChangeV1Schema.safeParse(input);
         if (!parsed.success) return Promise.resolve({ ok: false, message: 'invalid_action_input' });
         return new Promise(resolve => {
-            const operation: PendingChange = { change: parsed.data, nowMs: Date.now(), ids: [], execute, resolve };
-            state.previous = state.rules;
+            const operation: PendingChange = { change: parsed.data, nowMs: Date.now(), ids: [], execute: latestExecute, resolve };
             state.pending.push(operation);
             try { publish(state, true); }
             catch (error) {
@@ -120,8 +109,35 @@ export function useReachRulesState(source: ReachRulesSource, execute: ExecuteRea
             }
             void drain(state);
         });
-    }, [state, execute, publish, drain]);
-    const undoLast = React.useCallback(() => state.previous ? change({ kind: 'replace', rules: reachRulesToDraftsV1(state.previous) })
-        : Promise.resolve<ReachRulesWriteResult>({ ok: true }), [state, change]);
-    return { rules: source.valueAvailable ? state.rules : source.rules, revision: state.revision, status: source.status, change, undoLast };
+    };
+    const undoLast = () => state.previous ? change({ kind: 'replace', rules: reachRulesToDraftsV1(state.previous) })
+        : Promise.resolve<ReachRulesWriteResult>({ ok: false, message: 'nothing_to_undo' });
+    return { change, undoLast, getSnapshot: () => snapshot,
+        subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+        activate() { state.active = true; },
+        retire() { state.active = false; if (state.pending.length) state.publishOptimistic?.(null); },
+        updateSource(next: ReachRulesSource, nextExecute = latestExecute) {
+            latest = next;
+            latestExecute = nextExecute;
+            if (next.status !== 'ready' || next.revision === 'absent') return;
+            if (state.revision !== 'absent' && next.revision < state.revision) return;
+            state.written = next.rules;
+            state.revision = next.revision;
+            publish(state);
+        },
+    };
+}
+
+/** Mounted editors retire their controller; an approval request retains the same owner outside a view. */
+export function useReachRulesState(source: ReachRulesSource, execute: ExecuteReachRules,
+    publishOptimistic?: (rules: ReachRulesV1 | null) => void) {
+    const controller = React.useMemo(() => createReachRulesController(source, execute, publishOptimistic), [source.key]);
+    React.useLayoutEffect(() => { controller.updateSource(source, execute); });
+    React.useEffect(() => {
+        controller.activate();
+        return () => controller.retire();
+    }, [controller]);
+    const snapshot = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+    return { rules: source.valueAvailable ? snapshot.rules : source.rules, revision: snapshot.revision,
+        status: source.status, change: controller.change, undoLast: controller.undoLast };
 }

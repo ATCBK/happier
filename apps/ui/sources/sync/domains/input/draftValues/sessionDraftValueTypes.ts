@@ -1,9 +1,9 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { nullable, omit } from 'zod/mini';
 
 import { ComposerAgentContinuationIntentV1Schema, SessionAgentTransitionInputV1Schema } from '@happier-dev/protocol/sessions/agentTransition';
 import { ComposerAttachmentDraftV1Schema, MAX_COMPOSER_ATTACHMENT_INSTANCES_V1, type ComposerAttachmentDraftV1 } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
-import { SessionDiscussionSelectionSourceV1Schema, type SessionDiscussionSelectionSourceV1 } from '@happier-dev/protocol/sessions/discussions/content';
+import { DiscussionSelectionSourceV1Schema, type DiscussionSelectionSourceV1 } from '@happier-dev/protocol/discussions/content';
 import type { ComposerReferenceMentionPayloadV1 } from '@happier-dev/protocol/runtime/input/composerReferenceProviderV1';
 import { ParticipantRecipientV1Schema, type ParticipantRecipientV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import { PendingRequestedActionV1Schema, type PendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
@@ -40,17 +40,17 @@ type DeepReadonly<T> = T extends string | number | boolean | bigint | symbol | n
  * against the exact draft snapshot, then projects only `{ kind, ref, token }` downstream.
  */
 const StructuredInputMentionBaseSchema = z.object({
-    tokenText: z.string().min(1),
-    start: z.number().int().min(0),
-    end: z.number().int().min(1),
+    tokenText: z.string().check(z.minLength(1)),
+    start: z.number().check(z.int(), z.minimum(0)),
+    end: z.number().check(z.int(), z.minimum(1)),
 });
 
-export const ComposerVendorPluginMentionSchema = StructuredInputMentionBaseSchema.extend({
+export const ComposerVendorPluginMentionSchema = z.extend(StructuredInputMentionBaseSchema, {
     kind: z.literal('vendorPlugin'),
-    vendorPluginRef: z.string().min(1),
-    label: z.string().min(1).optional(),
-    backendId: z.string().min(1).optional(),
-    agentId: z.string().min(1).optional(),
+    vendorPluginRef: z.string().check(z.minLength(1)),
+    label: z.optional(z.string().check(z.minLength(1))),
+    backendId: z.optional(z.string().check(z.minLength(1))),
+    agentId: z.optional(z.string().check(z.minLength(1))),
 });
 export type ComposerVendorPluginMention = Readonly<z.infer<typeof ComposerVendorPluginMentionSchema>>;
 
@@ -61,18 +61,18 @@ export type ComposerVendorPluginMention = Readonly<z.infer<typeof ComposerVendor
  * catalog identity a send-time resolver needs; none of them may be dropped by
  * the draft round trip.
  */
-export const ComposerSkillMentionSchema = StructuredInputMentionBaseSchema.extend({
+export const ComposerSkillMentionSchema = z.extend(StructuredInputMentionBaseSchema, {
     kind: z.literal('skill'),
-    id: z.string().min(1).optional(),
-    name: z.string().min(1),
-    path: z.string().min(1).optional(),
-    displayName: z.string().min(1).optional(),
-    description: z.string().min(1).optional(),
-    origin: z.string().min(1).optional(),
-    projectionKind: z.string().min(1).optional(),
-    projectionRef: z.string().min(1).optional(),
-    backendId: z.string().min(1).optional(),
-    agentId: z.string().min(1).optional(),
+    id: z.optional(z.string().check(z.minLength(1))),
+    name: z.string().check(z.minLength(1)),
+    path: z.optional(z.string().check(z.minLength(1))),
+    displayName: z.optional(z.string().check(z.minLength(1))),
+    description: z.optional(z.string().check(z.minLength(1))),
+    origin: z.optional(z.string().check(z.minLength(1))),
+    projectionKind: z.optional(z.string().check(z.minLength(1))),
+    projectionRef: z.optional(z.string().check(z.minLength(1))),
+    backendId: z.optional(z.string().check(z.minLength(1))),
+    agentId: z.optional(z.string().check(z.minLength(1))),
 });
 export type ComposerSkillMention = Readonly<z.infer<typeof ComposerSkillMentionSchema>>;
 
@@ -83,11 +83,11 @@ const KNOWN_COMPOSER_MENTION_KINDS: ReadonlySet<string> = new Set(['vendorPlugin
  * transmission inert. It is never reinterpreted as a known kind, and a *malformed* known
  * kind is not laundered into it either — the arm refuses the known kind names outright.
  */
-export const ComposerUnknownMentionSchema = StructuredInputMentionBaseSchema.extend({
-    kind: z.string().min(1).refine((kind) => !KNOWN_COMPOSER_MENTION_KINDS.has(kind), {
+export const ComposerUnknownMentionSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(StructuredInputMentionBaseSchema, {
+    kind: z.string().check(z.minLength(1), z.refine((kind) => !KNOWN_COMPOSER_MENTION_KINDS.has(kind), {
         message: 'Known mention kinds must satisfy their own schema',
-    }),
-}).passthrough();
+    })),
+}));
 /**
  * Declared without the passthrough catch-all so the union keeps discriminating
  * property access; the *runtime* schema still preserves a newer build's extra
@@ -124,10 +124,10 @@ export const ComposerStructuredInputMentionSchema = z.union([
     ComposerVendorPluginMentionSchema,
     ComposerSkillMentionSchema,
     ComposerUnknownMentionSchema,
-]).refine((mention) => mention.end > mention.start, {
+]).check(z.refine((mention) => mention.end > mention.start, {
     path: ['end'],
     message: 'Mention end must be greater than start.',
-});
+}));
 export type ComposerStructuredInputMention =
     | ComposerVendorPluginMention
     | ComposerSkillMention
@@ -199,16 +199,13 @@ export type ComposerStructuredInputMentionPayload =
  * a single element failed, which is silent user-data loss on the one field that survives an
  * app restart. A malformed element now drops alone.
  */
-export const ComposerStructuredInputMentionsSchema = z.preprocess(
-    (value) => {
+export const ComposerStructuredInputMentionsSchema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
         if (!Array.isArray(value)) return value;
         const surviving = value.filter((entry) => ComposerStructuredInputMentionSchema.safeParse(entry).success);
         // A stored list where nothing at all survives is an unreadable field, not an empty
         // draft, so it is dropped exactly as before. Partial corruption keeps its survivors.
         return value.length > 0 && surviving.length === 0 ? undefined : surviving;
-    },
-    z.array(ComposerStructuredInputMentionSchema),
-);
+    }), z.array(ComposerStructuredInputMentionSchema));
 
 /**
  * The nested Agent-continuation draft holds the reader's next-message choice —
@@ -231,63 +228,63 @@ export const ComposerStructuredInputMentionsSchema = z.preprocess(
  * that cannot be reconstructed from a post-dispatch screen (notably raw text
  * and attachment draft identities) without introducing another draft record.
  */
-const SessionArmedAgentContinuationSubmissionCurrentnessSourceSchema = z.object({
+const SessionArmedAgentContinuationSubmissionCurrentnessSourceSchema = z.strictObject({
     text: z.string(),
     // Read with the sibling exact text so stale ranges cannot regain custody.
     mentions: z.array(z.unknown()),
-    composerAttachments: z.array(ComposerAttachmentDraftV1Schema).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1),
-    attachmentDraftIds: z.array(z.string().trim().min(1)).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1),
-    nextPromptPermissionModeMutationId: z.string().min(1).optional(),
-}).strict();
+    composerAttachments: z.array(ComposerAttachmentDraftV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)),
+    attachmentDraftIds: z.array(z.string().check(z.trim(), z.minLength(1))).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)),
+    nextPromptPermissionModeMutationId: z.optional(z.string().check(z.minLength(1))),
+});
 
 /**
  * The nested submission snapshot consumes the same exact-range reader as the
  * top-level editable draft; it never reconstructs occurrence identity from text.
  */
 export const SessionArmedAgentContinuationSubmissionCurrentnessSchema =
-    SessionArmedAgentContinuationSubmissionCurrentnessSourceSchema.transform((currentness) => ({
+    z.pipe(SessionArmedAgentContinuationSubmissionCurrentnessSourceSchema, z.transform((currentness) => ({
         ...currentness,
         mentions: parseComposerStructuredInputMentionsForText(
             currentness.mentions,
             currentness.text,
         ).mentions,
-    }));
+    })));
 export type SessionArmedAgentContinuationSubmissionCurrentness = DeepReadonly<
     z.infer<typeof SessionArmedAgentContinuationSubmissionCurrentnessSchema>
 >;
 
-export const SessionArmedAgentContinuationSubmissionSchema = z.object({
-    localId: z.string().trim().min(1),
+export const SessionArmedAgentContinuationSubmissionSchema = z.strictObject({
+    localId: z.string().check(z.trim(), z.minLength(1)),
     input: SessionAgentTransitionInputV1Schema,
-    currentness: SessionArmedAgentContinuationSubmissionCurrentnessSchema.optional(),
-}).strict().superRefine((submission, context) => {
+    currentness: z.optional(SessionArmedAgentContinuationSubmissionCurrentnessSchema),
+}).check(z.superRefine((submission, context) => {
     if (submission.input.localId === submission.localId) return;
     context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['input', 'localId'],
         message: 'The submitted input must carry the armed continuation localId.',
     });
-});
+}));
 export type SessionArmedAgentContinuationSubmission = DeepReadonly<
     z.infer<typeof SessionArmedAgentContinuationSubmissionSchema>
 >;
 
-export const SessionArmedAgentContinuationSchema = z.object({
-    backendTargetKey: z.string().trim().min(1),
+export const SessionArmedAgentContinuationSchema = z.strictObject({
+    backendTargetKey: z.string().check(z.trim(), z.minLength(1)),
     intent: ComposerAgentContinuationIntentV1Schema,
     /**
      * What the detail pane called the chosen model, when the composer's engine chip
      * names it. Optional because a target on its own defaults has no model to name,
      * and because the intent — not this display snapshot — is what gets sent.
      */
-    modelLabel: z.string().min(1).nullable().optional(),
+    modelLabel: z.optional(z.nullable(z.string().check(z.minLength(1)))),
     /**
      * Written before dispatch so a remount retries the same logical message.
      * This is the exact user-message snapshot, not a transition receipt,
      * acknowledgement or persisted result state.
      */
-    submission: SessionArmedAgentContinuationSubmissionSchema.optional(),
-}).strict();
+    submission: z.optional(SessionArmedAgentContinuationSubmissionSchema),
+});
 export type SessionArmedAgentContinuation = DeepReadonly<z.infer<typeof SessionArmedAgentContinuationSchema>>;
 
 export type SessionDraftValueByFieldId = Readonly<{
@@ -302,7 +299,7 @@ export type SessionDraftValueByFieldId = Readonly<{
     'structuredInput.composerAttachments': readonly ComposerAttachmentDraftV1[];
     'structuredInput.mentions': readonly ComposerStructuredInputMention[];
     /** Descriptive origin retained with selected Discussion text until accepted handoff. */
-    'structuredInput.sessionDiscussionSelectionSourceV1': Omit<SessionDiscussionSelectionSourceV1, 'draftCorrelationId'>;
+    'structuredInput.sessionDiscussionSelectionSourceV1': Omit<DiscussionSelectionSourceV1, 'draftCorrelationId'>;
 }>;
 
 export type SessionDraftValueFieldId = keyof SessionDraftValueByFieldId;
@@ -311,10 +308,10 @@ export const SESSION_DRAFT_VALUE_SCHEMAS = {
     'routing.recipient': nullable(ParticipantRecipientV1Schema),
     'routing.agentContinuation': SessionArmedAgentContinuationSchema,
     'routing.executionRunRequestedAction': PendingRequestedActionV1Schema,
-    'structuredInput.composerAttachments': z.array(ComposerAttachmentDraftV1Schema).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1),
+    'structuredInput.composerAttachments': z.array(ComposerAttachmentDraftV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)),
     'structuredInput.mentions': ComposerStructuredInputMentionsSchema,
-    'structuredInput.sessionDiscussionSelectionSourceV1': omit(SessionDiscussionSelectionSourceV1Schema, { draftCorrelationId: true }),
-} satisfies Readonly<Record<SessionDraftValueFieldId, z.ZodType>>;
+    'structuredInput.sessionDiscussionSelectionSourceV1': omit(DiscussionSelectionSourceV1Schema, { draftCorrelationId: true }),
+} satisfies Readonly<Record<SessionDraftValueFieldId, z.core.$ZodType>>;
 
 export type SessionDraftValueEnvelope<FieldId extends SessionDraftValueFieldId = SessionDraftValueFieldId> = Readonly<{
     v: 1;

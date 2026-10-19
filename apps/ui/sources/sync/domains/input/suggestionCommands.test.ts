@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { PromptInvocationsV1Schema } from '@happier-dev/protocol/prompts/library/promptInvocationsV1';
 
 import { storage } from '../state/storage';
 
@@ -17,10 +18,11 @@ describe('suggestionCommands', () => {
         expect(getAllCommands(null).some(row => row.command === 'stale')).toBe(false);
     });
     it('merges pre-session native commands with provider commands while preserving local built-in and template precedence', async () => {
-        storage.setState({ sessions: {}, settings: { promptInvocationsV1: { v: 1, entries: [{
+        const invocations = PromptInvocationsV1Schema.parse({ v: 1, entries: [{
             id: 'local-template', token: '/template', title: 'Local template',
             target: { kind: 'doc', artifactId: 'local-doc' }, behavior: 'insert', allowArgs: false, availableIn: 'global',
-        }] } } } as any);
+        }] });
+        storage.setState({ sessions: {} });
         const { searchCommands } = await import('./suggestionCommands');
         const nativeCommands = [
             { command: 'project-check', description: 'Check this project' },
@@ -30,7 +32,6 @@ describe('suggestionCommands', () => {
             { command: 'memory', description: 'Open project memory' },
         ];
 
-        const invocations = storage.getState().settings.promptInvocationsV1;
         expect(await searchCommands(null, 'project-check', { nativeCommands, invocations }))
             .toEqual([{ command: 'project-check', description: 'Check this project' }]);
         const commands = await searchCommands(null, '', { nativeCommands, invocations, limit: 100 });
@@ -53,10 +54,9 @@ describe('suggestionCommands', () => {
     });
 
     it('offers session-only prompts only when the addressed session exists', async () => {
-        const settings = { ...storage.getState().settings, promptInvocationsV1: { v: 1 as const, entries: [{ id: 'local', token: '/local', title: 'Local', target: { kind: 'doc' as const, artifactId: 'doc' }, behavior: 'insert' as const, allowArgs: false, availableIn: 'session_only' as const }] } };
-        storage.setState({ settings });
+        const invocations = PromptInvocationsV1Schema.parse({ v: 1, entries: [{ id: 'local', token: '/local', title: 'Local', target: { kind: 'doc', artifactId: 'doc' }, behavior: 'insert', allowArgs: false, availableIn: 'session_only' }] });
         const { getAllCommands } = await import('./suggestionCommands');
-        const options = { invocations: settings.promptInvocationsV1 };
+        const options = { invocations };
         expect(getAllCommands(null, options).some((c) => c.command === 'local')).toBe(false);
         expect(getAllCommands('missing', options).some((c) => c.command === 'local')).toBe(false);
         storage.setState({ sessions: { s1: { metadata: undefined } } } as any);
@@ -139,30 +139,20 @@ describe('suggestionCommands', () => {
     });
 
     it('includes configured prompt template invocations', async () => {
+        const invocations = PromptInvocationsV1Schema.parse({ v: 1, entries: [{
+            id: 't1', token: '/foo', title: 'Foo template', target: { kind: 'doc', artifactId: 'a1' },
+            behavior: 'insert', allowArgs: true, availableIn: 'global',
+        }] });
         storage.setState({
             sessions: { s1: { metadata: undefined } },
             settings: {
                 experiments: true,
                 featureToggles: { 'execution.runs': true },
-                promptInvocationsV1: {
-                    v: 1,
-                    entries: [
-                        {
-                            id: 't1',
-                            token: '/foo',
-                            title: 'Foo template',
-                            target: { kind: 'doc', artifactId: 'a1' },
-                            behavior: 'insert',
-                            allowArgs: true,
-                            availableIn: 'global',
-                        },
-                    ],
-                },
             },
         } as any);
 
         const { getAllCommands } = await import('./suggestionCommands');
-        const commands = getAllCommands('s1', { invocations: storage.getState().settings.promptInvocationsV1 });
+        const commands = getAllCommands('s1', { invocations });
         expect(commands.find((c) => c.command === 'foo')).toMatchObject({
             command: 'foo',
             promptInvocation: {
@@ -187,39 +177,23 @@ describe('suggestionCommands', () => {
     });
 
     it('dedupes prompt template tokens against existing action/default commands', async () => {
+        const invocations = PromptInvocationsV1Schema.parse({ v: 1, entries: [{
+            id: 't1', token: '/clear', title: 'Clear template', target: { kind: 'doc', artifactId: 'a1' },
+            behavior: 'insert', allowArgs: false, availableIn: 'global',
+        }, {
+            id: 't2', token: '/h.review', title: 'Review template', target: { kind: 'doc', artifactId: 'a2' },
+            behavior: 'insert', allowArgs: true, availableIn: 'global',
+        }] });
         storage.setState({
             sessions: { s1: { metadata: undefined } },
             settings: {
                 experiments: true,
                 featureToggles: { 'execution.runs': true },
-                promptInvocationsV1: {
-                    v: 1,
-                    entries: [
-                        {
-                            id: 't1',
-                            token: '/clear',
-                            title: 'Clear template',
-                            target: { kind: 'doc', artifactId: 'a1' },
-                            behavior: 'insert',
-                            allowArgs: false,
-                            availableIn: 'global',
-                        },
-                        {
-                            id: 't2',
-                            token: '/h.review',
-                            title: 'Review template',
-                            target: { kind: 'doc', artifactId: 'a2' },
-                            behavior: 'insert',
-                            allowArgs: true,
-                            availableIn: 'global',
-                        },
-                    ],
-                },
             },
         } as any);
 
         const { getAllCommands } = await import('./suggestionCommands');
-        const commands = getAllCommands('s1', { invocations: storage.getState().settings.promptInvocationsV1 });
+        const commands = getAllCommands('s1', { invocations });
         expect(commands.filter((c) => c.command === 'clear').length).toBe(1);
         expect(commands.filter((c) => c.command === 'h.review').length).toBe(1);
     });

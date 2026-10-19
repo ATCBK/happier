@@ -31,6 +31,22 @@ export function extractExecutionRunsBackendsFromMachineCapabilitiesState(state: 
   return backends as any;
 }
 
+/**
+ * What the Machine's execution-run capability read has told us so far. `reading` and `unreadable` are
+ * both "no answer": only `answered` may say what the Machine offers, and only an answered read that
+ * offers nothing is a refusal.
+ */
+export type ExecutionRunsCapabilityRead = 'reading' | 'unreadable' | 'answered';
+
+export function resolveExecutionRunsCapabilityRead(state: any): ExecutionRunsCapabilityRead {
+  if (extractExecutionRunsBackendsFromMachineCapabilitiesState(state) !== null) return 'answered';
+  const status = state?.status;
+  // A daemon with no capability protocol answers by saying so; that is the Machine not offering it.
+  if (status === 'not-supported') return 'answered';
+  if (status === 'idle' || status === 'loading') return 'reading';
+  return 'unreadable';
+}
+
 export function extractExecutionRunProfilesFromMachineCapabilitiesState(state: unknown): readonly ExecutionRunProfileCapability[] {
   const snapshot = isRecord(state) && isRecord(state.snapshot) && isRecord(state.snapshot.response)
     ? state.snapshot.response

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { PluginProjectionV2Schema, RPC_METHODS } from '@happier-dev/protocol';
 import { SkillListItemV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
@@ -50,6 +50,8 @@ const { McpServerCatalogV1Schema } = await import('@happier-dev/protocol/mcp/ser
 const { PromptLibraryRecordV1Schema } = await import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1');
 const { WorkspaceRefV1Schema } = await import('@happier-dev/protocol/workspaces/workspaceRefV1');
 const before = storage.getState();
+// Global cleanup retires runtimeFetch after each case; reinstall the network boundary before use.
+beforeEach(() => network.resetRequests());
 it.each(['skill', 'mcp_server'] as const)('%s mounts Account Project choices and writes Only/Except with D33 precedence', async kind => {
     const serverUrl = 'https://project-places.test';
     await network.addHome(serverUrl, 'project-places-account');
@@ -81,6 +83,7 @@ it.each(['skill', 'mcp_server'] as const)('%s mounts Account Project choices and
     await act(async () => storage.setState({ settingsVersion: 42 }));
     expect(placesHook.getCurrent().projects).toBe(firstProjects);
     const writes: Array<{ actionId: string; change: import('@happier-dev/protocol/reach/reachRulesChangeV1').ReachRulesChangeV1 }> = [];
+    const acknowledgments: unknown[] = [];
     let persisted: import('@happier-dev/protocol/reach/reachRuleV1').ReachRulesV1 = [];
     let revision = 1;
     let nextId = 0;
@@ -92,6 +95,8 @@ it.each(['skill', 'mcp_server'] as const)('%s mounts Account Project choices and
     // Only durable-row and library reads/writes are substituted; admission, Actions, mutation,
     // receipt schemas, optimistic state, places, sentence and resolver remain real.
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+        // The native confirmation dialog is a host boundary; policy still decides whether to open it.
+        presentUserActionConfirmation: async () => true,
         skillRules: {
             serverId: scope.serverId,
             assertCurrent: () => { expect(storage.getState().settingsScope).toEqual(scope); },
@@ -126,8 +131,15 @@ it.each(['skill', 'mcp_server'] as const)('%s mounts Account Project choices and
     const execute: import('./useReachRulesState').ExecuteReachRules = async (actionId, input) => {
         const parsed = (actionId === 'skills.rules.set' ? SkillsRulesSetInputV1Schema : McpRulesSetInputV1Schema).parse(input);
         writes.push({ actionId, change: parsed.change });
-        return executor.execute(actionId, input, { surface: 'ui', authority: 'present_user',
-            actionCaller: { kind: 'host' }, serverId: scope.serverId });
+        try {
+            const receipt = await executor.execute(actionId, input, { surface: 'ui', authority: 'present_user',
+                actionCaller: { kind: 'host' }, serverId: scope.serverId });
+            acknowledgments.push(receipt);
+            return receipt;
+        } catch (error) {
+            acknowledgments.push(error);
+            throw error;
+        }
     };
     function ProjectControl() {
         const places = kind === 'skill' ? useSkillPlaces() : useMcpAddPlaces();
@@ -147,6 +159,7 @@ it.each(['skill', 'mcp_server'] as const)('%s mounts Account Project choices and
     expect(menu.props.items.flatMap((item: { id: string }) => item.id)).toContain('project:project-key');
     expect(menu.props.items.flatMap((item: { id: string }) => item.id)).not.toContain('project:foreign-project');
     await choose('account-project:addMenu', 'project:project-key');
+    expect(acknowledgments).toEqual([{ ok: true, result: expect.objectContaining({ ok: true }) }]);
     expect(writes[0]).toMatchObject({ actionId: kind === 'skill' ? 'skills.rules.set' : 'mcp.rules.set',
         change: { kind: 'replace', rules: [{ target: { t: 'project', projectKey: 'project-key' }, enabled: true }] } });
     const summaryText = async (renderer = screen) => {
@@ -200,7 +213,7 @@ it.each(['skill', 'mcp_server'] as const)('%s mounts Account Project choices and
     await placesHook.unmount();
 });
 afterEach(async () => { await standardCleanup(); storage.setState(before, true); clearDaemonMergedProjectionCacheForTests();
-    resetAcpCatalogSnapshotsForTests(); network.resetRequests(); });
+    resetAcpCatalogSnapshotsForTests(); });
 afterAll(() => network.dispose());
 
 it('composes installed Machine publication and real catalog demand into passive skill-plan reach', async () => {
@@ -238,7 +251,7 @@ it('composes installed Machine publication and real catalog demand into passive 
         await act(async () => {
             const entry = await loadDaemonMergedProjectionCacheEntry({ machineId: 'online', serverId: scope.serverId,
                 accountLifetime: facts.getCurrent().credentials.binding! });
-            expect(entry).toMatchObject({ kind: 'ready' });
+            expect(entry, JSON.stringify({ entry, methods: network.requests.map(request => request.method) })).toMatchObject({ kind: 'ready' });
         });
         const machines = facts.getCurrent().reach.machines;
         expect(machines[0]?.agentDeclarationsById).toEqual(projection.agentsById);

@@ -114,6 +114,10 @@ export function projectNewSessionDraftSyncedAuthoringFields(params: Readonly<{
         : null);
     return projectSyncedSessionAuthoringFields({
         targetType: 'new_session',
+        sessionName: draft.sessionName ?? null,
+        initialSessionFacts: draft.initialSessionFacts ?? null,
+        memoryEnabled: draft.memoryEnabled ?? null,
+        promptStack: draft.promptStack ?? null,
         executionTarget,
         ...(draft.temporaryComputerActivationRef !== undefined
             ? { temporaryComputerActivationRef: draft.temporaryComputerActivationRef }

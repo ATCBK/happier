@@ -4,6 +4,7 @@ import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/op
 import { actionOperationSelectors } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { readSpawnSessionRpcTimeoutMsFromEnv } from './spawnSessionRpcTimeout';
 
 export function buildManualSessionCreationKey(userAttemptId: string) {
     const normalized = userAttemptId.trim();
@@ -29,14 +30,17 @@ export async function readManualSessionSpawnOperationDetails(
     scope: ServerAccountScope,
     operation: ActionOperationSnapshotV1,
     shouldContinue: () => boolean = () => true,
+    options: Readonly<{ waitForTerminal?: true; signal?: AbortSignal }> = {},
 ): Promise<ActionOperationSnapshotV1 | null> {
     if (!shouldContinue()) return null;
-    if (operation.state !== 'succeeded' || operation.result !== undefined) return operation;
+    if (!options.waitForTerminal && (operation.state !== 'succeeded' || operation.result !== undefined)) return operation;
     const { getActionOperation } = await import('@/sync/ops/actionOperations');
     if (!shouldContinue()) return null;
     const response = await getActionOperation({
         serverId: scope.serverId, accountId: scope.accountId,
         machineId: operation.scope.machineId, operationId: operation.operationId,
+        ...(options.waitForTerminal ? { waitForTerminal: true, timeoutMs: readSpawnSessionRpcTimeoutMsFromEnv() } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
     });
     if (!shouldContinue()) return null;
     if (response.kind !== 'found'
@@ -47,37 +51,46 @@ export async function readManualSessionSpawnOperationDetails(
         || response.operation.scope.machineId !== operation.scope.machineId
         || response.operation.scope.sessionId !== operation.scope.sessionId
         || response.operation.revision < operation.revision
-        || response.operation.state !== 'succeeded'
-        || response.operation.result === undefined) {
+        || (options.waitForTerminal ? !['succeeded', 'failed', 'cancelled'].includes(response.operation.state)
+            : response.operation.state !== 'succeeded')
+        || response.operation.state === 'succeeded' && response.operation.result === undefined) {
         throw new Error('action_operation_result_unavailable');
     }
     return response.operation;
 }
 
-/** Observe daemon custody until settlement or the originating draft's retirement. */
+/** Join the operation owner: foreign requester revisions are withheld from the custodian push stream. */
 export async function awaitManualSessionSpawnOperation(
     scope: ServerAccountScope,
     userAttemptId: string,
     signal: AbortSignal,
+    machineId: string,
 ): Promise<ActionOperationSnapshotV1 | null> {
-    const operation = await new Promise<ActionOperationSnapshotV1 | null>(resolve => {
-        let unsubscribe = () => {};
-        const finish = (operation: ActionOperationSnapshotV1 | null) => {
-            unsubscribe();
-            signal.removeEventListener('abort', abort);
-            resolve(operation);
-        };
-        const abort = () => finish(null);
-        const read = () => {
-            const operation = readManualSessionSpawnOperation(scope, userAttemptId);
-            if (operation && (operation.state === 'succeeded' || operation.state === 'failed' || operation.state === 'cancelled')) {
-                finish(operation);
-            }
-        };
-        unsubscribe = actionOperationStore.subscribe(read);
-        signal.addEventListener('abort', abort, { once: true });
-        if (signal.aborted) abort();
-        else read();
-    });
-    return operation ? await readManualSessionSpawnOperationDetails(scope, operation, () => !signal.aborted) : null;
+    if (signal.aborted) return null;
+    try {
+        const { listActionOperations } = await import('@/sync/ops/actionOperations');
+        const transport = { serverId: scope.serverId, accountId: scope.accountId, machineId, signal,
+            timeoutMs: readSpawnSessionRpcTimeoutMsFromEnv() };
+        let operation = readManualSessionSpawnOperation(scope, userAttemptId);
+        if (operation?.scope.machineId !== machineId) operation = null;
+        let cursor: string | undefined;
+        const cursors = new Set<string>();
+        while (!operation && !signal.aborted) {
+            const page = await listActionOperations({ ...transport, request: cursor ? { cursor } : {} });
+            if (signal.aborted) return null;
+            operation = page.items.find(candidate => candidate.actionId === 'session.spawn_new'
+                && candidate.scope.accountId === scope.accountId && candidate.scope.machineId === machineId
+                && (candidate.requestId === userAttemptId || candidate.requestId === buildManualSessionCreationKey(userAttemptId))) ?? null;
+            if (!page.nextCursor || cursors.has(page.nextCursor)) break;
+            cursors.add(page.nextCursor);
+            cursor = page.nextCursor;
+        }
+        if (signal.aborted) return null;
+        if (!operation) throw new Error('action_operation_result_unavailable');
+        return await readManualSessionSpawnOperationDetails(scope, operation, () => !signal.aborted, { waitForTerminal: true, signal });
+    } catch (error) {
+        // Retiring this observation does not reject the daemon-owned operation.
+        if (signal.aborted) return null;
+        throw error;
+    }
 }

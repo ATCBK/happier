@@ -35,6 +35,7 @@ export type RunSessionAgentTransitionInput = Readonly<{
     machineId: string;
     serverId: string | null;
     request: SessionAgentTransitionRequestV1;
+    signal?: AbortSignal;
 }>;
 
 export async function runSessionAgentTransitionOnMachine(
@@ -55,6 +56,7 @@ export async function runSessionAgentTransitionOnMachine(
             serverId: input.serverId,
             method: RPC_METHODS.SESSION_AGENT_TRANSITION,
             payload,
+            ...(input.signal ? { signal: input.signal } : {}),
             // `session.agentTransition` is a canonical Session-write, so it
             // carries the same edit proof every sibling Session-write machine
             // RPC carries. The server rejects a classified call with no

@@ -267,7 +267,7 @@ describe('describeEffectivePermissionMode', () => {
 
         expect(reasonCodes(res)).toContain('read_only_best_effort');
         expect(res.notes).toEqual([
-            'Mapped to dontAsk for this provider.',
+            'Mapped to plan for this provider.',
             'Trusted provider-native or direct writes remain best effort under this provider’s own policy.',
         ]);
         expect(res.notes.join(' ')).not.toContain('mapped to Default');

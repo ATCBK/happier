@@ -45,6 +45,9 @@ vi.mock('@/sync/ops/sessionDrafts/sessionDraftRepository', () => ({
     isSessionDraftRemoteAcknowledged: (...args: Parameters<SessionDraftRepository['isSessionDraftRemoteAcknowledged']>) => (
         state.repository ? state.repository.isSessionDraftRemoteAcknowledged(...args) : state.acknowledged
     ),
+    getSessionComposerDraftSnapshot: (...args: Parameters<SessionDraftRepository['getSessionComposerDraftSnapshot']>) => (
+        state.repository ? state.repository.getSessionComposerDraftSnapshot(...args) : null
+    ),
     getSessionDraftSnapshot: (...args: Parameters<SessionDraftRepository['getSessionDraftSnapshot']>) => (
         state.repository ? state.repository.getSessionDraftSnapshot(...args) : null
     ),
@@ -90,8 +93,8 @@ describe('migrateLegacySessionDrafts', () => {
         } } };
         Reflect.set(state.draftValues['session-a']!, 'toString', { v: 1, lastEditedAt: 1, value: 'retired field' });
         await migrateLegacySessionDrafts(scope);
-        expect(state.repository.getSessionDraftSnapshot(scope, { kind: 'session', sessionId: 'session-a' })?.document)
-            .toMatchObject({ composer: { text: { value: 'Keep draft' }, attachments: { value: [attachment] } } });
+        expect(state.repository.getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId: 'session-a' })?.composer)
+            .toMatchObject({ text: { value: 'Keep draft' }, attachments: { value: [attachment] } });
     });
 
     it('projects all legacy owners into the repository while preserving local sources until remote acknowledgement', async () => {
@@ -302,7 +305,7 @@ describe('migrateLegacySessionDrafts', () => {
         await repository.flushSessionDraft({ scope, address });
         const editedCanonicalDocument = repository.getSessionDraftSnapshot(scope, address)?.document;
         await migrateLegacySessionDrafts(scope);
-        expect(repository.getSessionDraftSnapshot(scope, address)?.document.composer.text.value).toBe('Edited canonical draft');
+        expect(repository.getSessionComposerDraftSnapshot(scope, address)?.composer.text.value).toBe('Edited canonical draft');
         expect(state.sessionDrafts).toEqual({ 'session-a': text });
         expect(state.draftValues).toHaveProperty('session-a');
         expect(state.draftValues['session-a']['structuredInput.mentions'].value).toEqual(legacy);

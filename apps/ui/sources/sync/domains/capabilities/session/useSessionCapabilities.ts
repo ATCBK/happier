@@ -14,7 +14,8 @@ import { readSessionCapabilityAgentFactsV1, readCapabilityLaunchRestartFromMetad
 
 type ItemKind = SessionCapabilitiesSetInputV1['kind'];
 type ItemState = SessionCapabilitiesSetInputV1['state'];
-export type SessionCapabilityWriteResult = Readonly<{ ok: true }> | Readonly<{ ok: false; message: string }>;
+/** `previous` is the override the Action replaced (IR-77): what Undo resends, and what tells an add from a removal. */
+export type SessionCapabilityWriteResult = Readonly<{ ok: true; previous?: ItemState }> | Readonly<{ ok: false; message: string }>;
 type Preview = Extract<SessionCapabilitiesGetOutputV1, { ok: true }>;
 type Operation = Readonly<{ kind: ItemKind; id: string; state: ItemState; reason?: string;
     resolve: (value: SessionCapabilityWriteResult) => void }>;
@@ -99,7 +100,7 @@ export function useSessionCapabilities(sessionId: string, suppliedMetadata?: unk
                     if (parsed?.success && parsed.data.ok) {
                         current.written = setSessionCapabilitySelectionItemV1(current.written, op.kind, op.id, parsed.data.state);
                         current.previous = { kind: op.kind, id: op.id, state: parsed.data.previous };
-                        outcome = { ok: true };
+                        outcome = { ok: true, previous: parsed.data.previous };
                     } else outcome = { ok: false, message: !result.ok ? result.errorCode ?? result.error
                         : parsed?.success && !parsed.data.ok ? parsed.data.code : 'invalid_action_output' };
                 }
@@ -122,7 +123,9 @@ export function useSessionCapabilities(sessionId: string, suppliedMetadata?: unk
         const currentPending = readPendingCapabilityApplyV1(sessionMetadata);
         if (sessionMetadata === null || sessionMetadata === undefined) return preview?.pendingApply ?? currentPending;
         const currentApply = readCapabilitySelectionApplyV1(sessionMetadata);
-        const refusal = currentApply.mcp ?? currentApply.skills;
+        // The aggregate notice selects MCP first when both kinds are pending.
+        // Never label it with the other kind's refusal while its own record is absent.
+        const refusal = currentPending.mcp ? currentApply.mcp : currentApply.skills;
         return { ...currentPending, ...(refusal ? { reason: refusal.reason, ...(refusal.restartBy ? { restartBy: refusal.restartBy } : {}) } : {}) };
     }, [sessionMetadata, preview?.pendingApply]);
     // Apply notices read the host's admitted facts even before the detail preview is demanded.

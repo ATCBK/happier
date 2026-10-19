@@ -7,9 +7,12 @@ import { storage } from '@/sync/domains/state/storage';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
-import { resolveSessionGoalExecutionCapabilities } from '@/sync/domains/session/control/sessionGoalExecutionCapabilities';
+import { hasRuntimeSessionGoalControls, resolveSessionGoalExecutionCapabilities } from '@/sync/domains/session/control/sessionGoalExecutionCapabilities';
 import { t } from '@/text';
 import { readMachineControlTargetForSession } from './sessionMachineTarget';
+import { readGoalOperationResult, type SessionGoalOperationResult } from './sessionGoalOperationResult';
+
+export type { SessionGoalOperationResult } from './sessionGoalOperationResult';
 
 export type SessionGoalMutationRequest = Readonly<{
     objective?: string;
@@ -18,54 +21,38 @@ export type SessionGoalMutationRequest = Readonly<{
     resumeInactiveWithInitialGoal?: boolean;
 }>;
 
-export type SessionGoalOperationResult =
-    | Readonly<{ ok: true }>
-    | Readonly<{ ok: false; error: string; errorCode?: string }>;
-
 type SessionGoalOptions = Readonly<{ serverId?: string | null; signal?: AbortSignal }>;
 
 function goalError(errorCode: string): SessionGoalOperationResult {
     return { ok: false, error: errorCode, errorCode };
 }
 
-function readGoalOperationResult(response: unknown): SessionGoalOperationResult {
-    if (response && typeof response === 'object') {
-        const raw = response as Record<string, unknown>;
-        if (raw.ok === true) return { ok: true };
-        if (typeof raw.error === 'string') {
-            return { ok: false, error: raw.error, ...(typeof raw.errorCode === 'string' ? { errorCode: raw.errorCode } : {}) };
-        }
-        if (SessionWorkStateGetResponseV1Schema.safeParse(raw).success) return { ok: true };
-    }
-    return { ok: false, error: t('session.workState.goal.errorUnsupportedResponse') };
-}
-
 function readGoalExecutionAvailability(sessionId: string) {
     const state = storage.getState();
     const session = state.sessions?.[sessionId];
-    if (session?.active === true) {
-        return { ...resolveSessionGoalExecutionCapabilities({ session }), machineAvailable: true };
-    }
     const target = readMachineControlTargetForSession(sessionId);
-    if (!target) return { canSet: false, canClear: false, machineAvailable: false };
-    const machine = state.machines?.[target.machineId] ?? state.machineDisplayById?.[target.machineId] ?? null;
-    return { ...resolveSessionGoalExecutionCapabilities({ session: session ?? { active: false }, machine }), machineAvailable: true };
+    const machine = target ? state.machines?.[target.machineId] ?? state.machineDisplayById?.[target.machineId] ?? null : null;
+    return {
+        ...resolveSessionGoalExecutionCapabilities({ session: session ?? { active: false }, machine }),
+        machineAvailable: target !== null || (session !== undefined && hasRuntimeSessionGoalControls(session)),
+    };
 }
 
 async function runGoalRpc(sessionId: string, operation: 'get' | 'set' | 'clear', payload: Record<string, unknown>, opts?: SessionGoalOptions): Promise<unknown> {
     opts?.signal?.throwIfAborted();
     const serverId = opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId);
-    if (storage.getState().sessions?.[sessionId]?.active === false) {
+    const session = storage.getState().sessions?.[sessionId];
+    if (session && !hasRuntimeSessionGoalControls(session)) {
         const target = readMachineControlTargetForSession(sessionId);
         if (!target) return goalError('session_goal_control_machine_unavailable');
-        return await machineRpcWithServerScope({ machineId: target.machineId, serverId,
+        return await machineRpcWithServerScope({ machineId: target.machineId, serverId, operationTimeoutMs: null,
             method: operation === 'get' ? RPC_METHODS.DAEMON_SESSION_GOAL_GET
                 : operation === 'clear' ? RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR
                     : payload.resumeInactiveWithInitialGoal === true ? RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2 : RPC_METHODS.DAEMON_SESSION_GOAL_SET,
             payload: { sessionId, ...payload }, ...(opts?.signal ? { signal: opts.signal } : {}) });
     }
     const { resumeInactiveWithInitialGoal: _wake, ...sessionPayload } = payload;
-    return await sessionRpcWithServerScope({ sessionId, serverId,
+    return await sessionRpcWithServerScope({ sessionId, serverId, timeoutMs: null,
         method: operation === 'get' ? SESSION_RPC_METHODS.SESSION_GOAL_GET
             : operation === 'clear' ? SESSION_RPC_METHODS.SESSION_GOAL_CLEAR : SESSION_RPC_METHODS.SESSION_GOAL_SET,
         payload: sessionPayload, ...(opts?.signal ? { signal: opts.signal } : {}) });

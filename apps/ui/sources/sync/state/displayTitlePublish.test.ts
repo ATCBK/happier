@@ -66,13 +66,14 @@ describe('displayTitlePublish', () => {
     });
 
     it('maps UI metadata port failures to session-state publish errors', async () => {
+        const cause = Object.assign(new Error('private metadata write detail'), { code: 'conflict' });
         await expect(publishDisplayTitleToMetadata({
             sessionId: 's1',
             title: 'Published title',
             updateSessionMetadataWithRetry: async () => {
-                throw Object.assign(new Error('conflict'), { code: 'conflict' });
+                throw cause;
             },
-        })).rejects.toThrow('Session state metadata update failed: conflict');
+        })).rejects.toMatchObject({ cause });
     });
 
     it('publishes metadata-derived title mutations through the UI engine', async () => {

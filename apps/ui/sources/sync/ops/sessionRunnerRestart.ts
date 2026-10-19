@@ -1,4 +1,4 @@
-import { RestartSessionRunnerRequestV1Schema, RestartSessionRunnerResultV1Schema, type RestartSessionRunnerResultV1 } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
+import { buildSessionRunnerRuntimeRefreshRequestV1, readSessionRunnerRestartIdentityGuardV1, RestartSessionRunnerResultV1Schema, type RestartSessionRunnerResultV1 } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
 import { RestartSessionRunnerRequestV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
 import { SessionProviderBindingSecurityChangeConfirmationV1Schema, type SessionProviderBindingMetadataV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { SessionRunnerRuntimeStateV1Schema, SessionRunnerStatusGetRequestV1Schema, type SessionRunnerRuntimeStateV1, type SessionRunnerStatusGetRequestV1 } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
@@ -17,6 +17,7 @@ import { delay } from '@/utils/timing/time';
 type RestartSessionRunnerInput = Readonly<{
     runtimeState: SessionRunnerRuntimeStateV1;
     serverId?: string | null;
+    signal?: AbortSignal;
 }>;
 
 export type RestartStaleSessionRunnerResult = RestartSessionRunnerResultV1;
@@ -31,6 +32,7 @@ type GetSessionRunnerRuntimeStatusInput = Readonly<{
     sessionId: string;
     machineId: string;
     serverId?: string | null;
+    signal?: AbortSignal;
 }>;
 
 export type FetchedSessionRunnerRuntimeStatus = Readonly<{
@@ -84,61 +86,6 @@ function readNonEmptyString(value: unknown): string | null {
     return trimmed.length > 0 ? trimmed : null;
 }
 
-function buildVersionUnknownResult(
-    sessionId: string,
-    reasonCode: 'current_entrypoint_unknown' | 'runner_entrypoint_unknown',
-): RestartSessionRunnerResultV1 {
-    return buildResult({
-        sessionId,
-        status: 'version_unknown',
-        reasonCode,
-    });
-}
-
-function readRestartIdentityGuard(
-    runtimeState: SessionRunnerRuntimeStateV1,
-): Readonly<{
-    expectedRunnerPid: number;
-    expectedProcessCommandHash: string;
-    expectedRunnerEntrypointIdentity: string;
-}> | RestartSessionRunnerResultV1 {
-    const expectedRunnerPid = runtimeState.runner.pid ?? null;
-    if (expectedRunnerPid == null) {
-        return buildResult({
-            sessionId: runtimeState.sessionId,
-            status: 'runner_not_active',
-            reasonCode: 'no_tracked_process',
-        });
-    }
-
-    const expectedProcessCommandHash = readNonEmptyString(runtimeState.runner.processCommandHash);
-    if (!expectedProcessCommandHash) {
-        return buildVersionUnknownResult(runtimeState.sessionId, 'runner_entrypoint_unknown');
-    }
-
-    const expectedRunnerEntrypointIdentity = runtimeState.runner.entrypointSource === 'unknown'
-        ? null
-        : readNonEmptyString(runtimeState.runner.runtimeId);
-    if (!expectedRunnerEntrypointIdentity) {
-        return buildVersionUnknownResult(runtimeState.sessionId, 'runner_entrypoint_unknown');
-    }
-
-    const currentEntrypointIdentity = runtimeState.daemon.currentEntrypointSource === 'unknown'
-        ? null
-        : readNonEmptyString(runtimeState.daemon.currentEntrypointVersion);
-    if (!currentEntrypointIdentity) {
-        return buildVersionUnknownResult(runtimeState.sessionId, 'current_entrypoint_unknown');
-    }
-
-    return {
-        expectedRunnerPid,
-        expectedProcessCommandHash,
-        expectedRunnerEntrypointIdentity,
-    };
-}
-
-// The daemon owns a 60-second restart completion window; transport must outlive it.
-const SESSION_RUNNER_RESTART_RPC_TIMEOUT_MS = 90_000;
 // Preserve the source restart owner's observation policy for delayed daemon publication.
 const SESSION_RUNNER_RESTART_OBSERVE_ATTEMPTS = 8;
 const SESSION_RUNNER_RESTART_OBSERVE_INTERVAL_MS = 1_500;
@@ -150,6 +97,7 @@ async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRun
     request: Request;
     reconcileMode?: 'if_stale' | 'force_current_cli';
 }>): Promise<RestartSessionRunnerResultV1> {
+    input.signal?.throwIfAborted();
     const machineId = input.runtimeState.machineId?.trim() ?? '';
     if (machineId.length === 0) return buildUnsupportedDaemonResult(input.runtimeState.sessionId);
     let result: RestartSessionRunnerResultV1;
@@ -159,7 +107,9 @@ async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRun
             serverId: input.serverId ?? undefined,
             method: input.method,
             payload: input.request,
-            timeoutMs: SESSION_RUNNER_RESTART_RPC_TIMEOUT_MS,
+            // Child work can defer replacement; caller cancellation owns this wait.
+            operationTimeoutMs: null,
+            ...(input.signal ? { signal: input.signal } : {}),
             authorization: {
                 kind: SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_WRITE,
                 sessionId: input.runtimeState.sessionId,
@@ -178,6 +128,7 @@ async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRun
                 diagnostics: { errorCode: 'invalid_response' },
             });
     } catch (error) {
+        input.signal?.throwIfAborted();
         if (isUnsupportedDaemonError(error)) {
             return buildUnsupportedDaemonResult(input.runtimeState.sessionId);
         }
@@ -197,10 +148,12 @@ async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRun
     ].includes(result.status)) return result;
 
     for (let attempt = 0; attempt < SESSION_RUNNER_RESTART_OBSERVE_ATTEMPTS; attempt += 1) {
+        input.signal?.throwIfAborted();
         const state = await getSessionRunnerRuntimeStatus({
             sessionId: input.runtimeState.sessionId,
             machineId,
             serverId: input.serverId,
+            signal: input.signal,
         });
         const replaced = state?.runner.pid != null && state.runner.pid !== input.runtimeState.runner.pid;
         const landed = replaced || (input.reconcileMode === 'if_stale' && state?.versionState === 'current');
@@ -214,32 +167,13 @@ async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRun
     return result;
 }
 
-async function requestSessionRunnerRestart(
-    input: RestartSessionRunnerInput,
-    mode: 'if_stale' | 'force_current_cli',
-): Promise<RestartSessionRunnerResultV1> {
-    const identityGuard = readRestartIdentityGuard(input.runtimeState);
-    if ('ok' in identityGuard) return identityGuard;
-    const request = RestartSessionRunnerRequestV1Schema.parse({
-        sessionId: input.runtimeState.sessionId,
-        mode,
-        reason: 'ui_stale_runner_banner',
-        expectedRunnerPid: identityGuard.expectedRunnerPid,
-        expectedProcessCommandHash: identityGuard.expectedProcessCommandHash,
-        expectedRunnerEntrypointIdentity: identityGuard.expectedRunnerEntrypointIdentity,
-    });
-    return await sendSessionRunnerRestartRequest({
-        ...input,
-        method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART,
-        request,
-        reconcileMode: mode,
-    });
-}
-
 export async function restartSessionRunnerOnCurrentRuntime(
     input: RestartSessionRunnerInput,
 ): Promise<RestartSessionRunnerResultV1> {
-    return await requestSessionRunnerRestart(input, 'if_stale');
+    const request = buildSessionRunnerRuntimeRefreshRequestV1(input.runtimeState);
+    if ('ok' in request) return request;
+    return await sendSessionRunnerRestartRequest({ ...input,
+        method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART, request, reconcileMode: 'if_stale' });
 }
 
 export async function restartSessionRunnerForProviderBindingChange(
@@ -248,7 +182,7 @@ export async function restartSessionRunnerForProviderBindingChange(
     if (!input.runnerProcessIdentity) {
         return buildUnsupportedDaemonResult(input.runtimeState.sessionId);
     }
-    const identityGuard = readRestartIdentityGuard(input.runtimeState);
+    const identityGuard = readSessionRunnerRestartIdentityGuardV1(input.runtimeState);
     if ('ok' in identityGuard) return identityGuard;
     const nextFingerprint = readNonEmptyString(input.nextBindingSecurityFingerprint);
     const confirmation = input.launchBinding && nextFingerprint
@@ -274,6 +208,7 @@ export async function restartSessionRunnerForProviderBindingChange(
     return await sendSessionRunnerRestartRequest({
         runtimeState: input.runtimeState,
         serverId: input.serverId,
+        signal: input.signal,
         method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2,
         request,
     });
@@ -295,12 +230,14 @@ async function getSessionRunnerRuntimeStatusV1Fallback(
             serverId: input.serverId ?? undefined,
             method: RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_GET,
             payload,
+            ...(input.signal ? { signal: input.signal } : {}),
         });
         if (isRpcMethodNotFoundResult(raw) || isUnsupportedDaemonError(raw)) return null;
         const parsed = SessionRunnerRuntimeStateV1Schema.safeParse(raw);
         if (!parsed.success || parsed.data.sessionId !== payload.sessionId) return null;
         return { state: parsed.data, runnerProcessIdentity: null };
     } catch {
+        input.signal?.throwIfAborted();
         return null;
     }
 }
@@ -317,6 +254,7 @@ export async function getSessionRunnerRuntimeStatusSnapshot(
             serverId: input.serverId ?? undefined,
             method: RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET,
             payload,
+            ...(input.signal ? { signal: input.signal } : {}),
         });
         if (!isRpcMethodNotFoundResult(raw) && !isUnsupportedDaemonError(raw)) {
             const parsed = SessionRunnerRuntimeStatusV2Schema.safeParse(raw);
@@ -328,6 +266,7 @@ export async function getSessionRunnerRuntimeStatusSnapshot(
             }
         }
     } catch {
+        input.signal?.throwIfAborted();
         // Additive V2 may be absent on supported older daemons; V1 remains the status fallback.
     }
     return await getSessionRunnerRuntimeStatusV1Fallback(input, payload);

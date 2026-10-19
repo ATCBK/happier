@@ -10,7 +10,7 @@ export type MachineExecutionRunsListResult =
 
 export async function machineExecutionRunsList(
     machineId: string,
-    opts?: Readonly<{ serverId?: string | null; accountId?: string | null }>,
+    opts?: Readonly<{ serverId?: string | null; accountId?: string | null; signal?: AbortSignal }>,
 ): Promise<MachineExecutionRunsListResult> {
     try {
         const response = await machineRpcWithServerScope<unknown, {}>({
@@ -19,6 +19,7 @@ export async function machineExecutionRunsList(
             accountId: opts?.accountId,
             method: RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST,
             payload: {},
+            ...(opts?.signal ? { signal: opts.signal } : {}),
         });
         if (!response || typeof response !== 'object' || !Array.isArray((response as any).runs)) {
             return { ok: false, error: 'Unsupported response from machine RPC' };

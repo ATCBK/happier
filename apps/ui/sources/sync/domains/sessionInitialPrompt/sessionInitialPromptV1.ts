@@ -2,9 +2,9 @@ import { omit } from 'zod/mini';
 import type { Metadata } from '@happier-dev/session-core/state';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import {
-    SessionDiscussionSelectionSourceV1Schema,
-    type SessionDiscussionSelectionSourceV1,
-} from '@happier-dev/protocol/sessions/discussions/content';
+    DiscussionSelectionSourceV1Schema,
+    type DiscussionSelectionSourceV1,
+} from '@happier-dev/protocol/discussions/content';
 
 export type SessionInitialPromptV1 = Readonly<{
     v: 1;
@@ -13,10 +13,10 @@ export type SessionInitialPromptV1 = Readonly<{
     createdAtMs: number;
     sourceMessageIds?: ReadonlyArray<string>;
     sourceSessionId?: string;
-    source?: Omit<SessionDiscussionSelectionSourceV1, 'draftCorrelationId'>;
+    source?: Omit<DiscussionSelectionSourceV1, 'draftCorrelationId'>;
 }>;
 
-const SessionInitialPromptDiscussionSourceV1Schema = omit(SessionDiscussionSelectionSourceV1Schema, {
+const SessionInitialPromptDiscussionSourceV1Schema = omit(DiscussionSelectionSourceV1Schema, {
     draftCorrelationId: true,
 });
 
@@ -68,7 +68,7 @@ export function writeSessionInitialPromptV1(params: Readonly<{
     createdAtMs: number;
     sourceMessageIds?: ReadonlyArray<string> | null;
     sourceSessionId?: string | null;
-    source?: Omit<SessionDiscussionSelectionSourceV1, 'draftCorrelationId'> | null;
+    source?: Omit<DiscussionSelectionSourceV1, 'draftCorrelationId'> | null;
 }>): Metadata {
     const text = typeof params.text === 'string' ? params.text : String(params.text ?? '');
     if (!text.trim()) return params.metadata;

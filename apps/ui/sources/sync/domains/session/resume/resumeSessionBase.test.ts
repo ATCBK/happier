@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as catalog from '@/agents/catalog/catalog';
+import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import type { ResumeCapabilityOptions } from '@/agents/runtime/resumeCapabilities';
 import { buildResumeSessionBaseOptionsFromSession } from './resumeSessionBase';
 
 const CODEX_AGENT_TARGET = {
@@ -99,17 +101,17 @@ beforeEach(() => {
 });
 
 /**
- * Configured ACP resume is gated by the Account's own declaration that the
- * backend supports `session/load`, so a configured-target expectation must
- * declare the backend the Session names.
+ * Configured ACP resume is gated by the current destination catalog's
+ * declaration that the backend supports `session/load`.
  */
-function accountSettingsWithLoadCapableBackends(
+function resumeOptionsWithLoadCapableBackends(
     backendIds: readonly string[],
-): Record<string, unknown> {
+): ResumeCapabilityOptions {
     return {
-        acpCatalogSettingsV1: {
-            v: 2,
-            backends: backendIds.map((id) => ({
+        accountSettings: {},
+        acpCatalogSnapshot: { status: 'ready', revision: 1, record: AcpCatalogRecordV1Schema.parse({
+            v: 1,
+            definitions: backendIds.map((id) => ({
                 id,
                 name: id,
                 title: `Custom ${id}`,
@@ -119,7 +121,7 @@ function accountSettingsWithLoadCapableBackends(
                 createdAt: 1,
                 updatedAt: 2,
             })),
-        },
+        }) },
     };
 }
 
@@ -236,9 +238,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
                     connectedServicesUpdatedAt: 1357,
                 },
             } as any,
-            resumeCapabilityOptions: {
-                accountSettings: accountSettingsWithLoadCapableBackends(['custom-claude']),
-            },
+            resumeCapabilityOptions: resumeOptionsWithLoadCapableBackends(['custom-claude']),
         })).toEqual({
             sessionId: 's1',
             machineId: 'm1',
@@ -485,9 +485,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
                     },
                 },
             } as any,
-            resumeCapabilityOptions: {
-                accountSettings: accountSettingsWithLoadCapableBackends(['custom-backend', 'custom-kiro']),
-            },
+            resumeCapabilityOptions: resumeOptionsWithLoadCapableBackends(['custom-backend', 'custom-kiro']),
         })).toEqual({
             sessionId: 's1',
             machineId: 'm1',
@@ -506,9 +504,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
                     flavor: 'acp:custom-kiro',
                 },
             } as any,
-            resumeCapabilityOptions: {
-                accountSettings: accountSettingsWithLoadCapableBackends(['custom-kiro']),
-            },
+            resumeCapabilityOptions: resumeOptionsWithLoadCapableBackends(['custom-kiro']),
         })).toEqual({
             sessionId: 's1',
             machineId: 'm1',
@@ -533,9 +529,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
                     },
                 },
             } as any,
-            resumeCapabilityOptions: {
-                accountSettings: accountSettingsWithLoadCapableBackends(['custom-kiro']),
-            },
+            resumeCapabilityOptions: resumeOptionsWithLoadCapableBackends(['custom-kiro']),
         })).toEqual({
             sessionId: 's1',
             machineId: 'm1',
@@ -565,9 +559,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
                     },
                 },
             } as any,
-            resumeCapabilityOptions: {
-                accountSettings: accountSettingsWithLoadCapableBackends(['custom-backend', 'custom-kiro']),
-            },
+            resumeCapabilityOptions: resumeOptionsWithLoadCapableBackends(['custom-backend', 'custom-kiro']),
         })).toEqual({
             sessionId: 's1',
             machineId: 'm1',
@@ -609,9 +601,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
         expect(buildResumeSessionBaseOptionsFromSession({
             sessionId: 's1',
             session: configuredSession,
-            resumeCapabilityOptions: {
-                accountSettings: accountSettingsWithLoadCapableBackends(['custom-kiro']),
-            },
+            resumeCapabilityOptions: resumeOptionsWithLoadCapableBackends(['custom-kiro']),
         })).toBeNull();
 
         // Declared, but explicitly without `session/load` support.
@@ -619,10 +609,10 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
             sessionId: 's1',
             session: configuredSession,
             resumeCapabilityOptions: {
-                accountSettings: {
-                    acpCatalogSettingsV1: {
-                        v: 2,
-                        backends: [{
+                accountSettings: {},
+                acpCatalogSnapshot: { status: 'ready', revision: 1, record: AcpCatalogRecordV1Schema.parse({
+                        v: 1,
+                        definitions: [{
                             id: 'custom-backend',
                             name: 'custom-backend',
                             title: 'Custom Kiro',
@@ -632,8 +622,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
                             createdAt: 1,
                             updatedAt: 2,
                         }],
-                    },
-                },
+                }) },
             },
         })).toBeNull();
     });

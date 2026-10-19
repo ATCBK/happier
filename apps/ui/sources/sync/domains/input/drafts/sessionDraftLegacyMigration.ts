@@ -24,6 +24,7 @@ import {
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import {
     flushSessionDraft,
+    getSessionComposerDraftSnapshot,
     getSessionDraftSnapshot,
     isSessionDraftRemoteAcknowledged,
     listNewSessionDraftProjections,
@@ -168,6 +169,7 @@ export async function migrateLegacySessionDrafts(scope: ServerAccountScope): Pro
     for (const sessionId of sessionIds) {
         const address = { kind: 'session', sessionId } as const;
         const captured = getSessionDraftSnapshot(scope, address);
+        const capturedComposer = getSessionComposerDraftSnapshot(scope, address);
         const alreadyCaptured = captured?.localSupplement.legacyExistingSessionDraftV1 === true;
         const { patch, fullyProjected } = buildExistingPatch(legacyTexts[sessionId], legacyValues[sessionId]);
         if (!alreadyCaptured && Object.keys(patch).length > 0) {
@@ -181,8 +183,8 @@ export async function migrateLegacySessionDrafts(scope: ServerAccountScope): Pro
         // positionless references. Their acknowledged empty projection is not
         // evidence those retained references reached canonical custody. Never
         // overwrite a subsequently edited document to repair that old capture.
-        const capturedMentions = captured ? parseComposerStructuredInputMentionsForText(
-            captured.document.composer.mentions?.value ?? [], captured.document.composer.text.value,
+        const capturedMentions = capturedComposer ? parseComposerStructuredInputMentionsForText(
+            capturedComposer.composer.mentions?.value ?? [], capturedComposer.composer.text.value,
         ).mentions : [];
         const referencesCaptured = !alreadyCaptured || (patch.mentions ?? []).every(mention => (
             capturedMentions.some(current => pluginJsonValuesEqual(current, mention))
