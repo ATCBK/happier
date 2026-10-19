@@ -4,7 +4,7 @@ import type { ActionExecute, ActionExecutionOptions } from '../types.js';
 import { bindPublicActionInput, correspondenceOptions } from './boundActionCall.js';
 
 export type HappierSessionExecutionRunSendInput = Readonly<Omit<
-  PublicActionInputById['session.message.send'], 'sessionId' | 'message' | 'recipient' | 'wait'
+  Extract<PublicActionInputById['session.message.send'], { message: string }>, 'sessionId' | 'message' | 'recipient' | 'wait' | 'reply' | 'returnToSessionId'
 >>;
 export type HappierSessionExecutionRunHistoryInput = Readonly<Omit<
   PublicActionInputById['session.transcript.get'], 'sessionId' | 'scope' | 'sidechainId' | 'projection'
@@ -35,16 +35,19 @@ export function createSessionExecutionRuns<TOptions extends ActionExecutionOptio
 }>): HappierSessionExecutionRuns<TOptions> {
   const { sessionId, execute, optionsForSession } = params;
   // Caller fields first, bound identity last: an untyped JavaScript object can
-  // never retarget the handle's Session, recipient or wait mode.
+  // never retarget the handle's Session, recipient or reply mode.
   const sendInput = (
     runId: string,
     message: string,
     input: HappierSessionExecutionRunSendInput,
-    wait: boolean,
+    reply: 'none' | 'wait',
     requestId?: string,
-  ) => bindPublicActionInput('session.message.send', {
-    ...input, sessionId, message, recipient: { kind: 'execution_run', runId }, wait,
-  }, requestId);
+  ) => {
+    const { wait: _legacyWait, ...fields } = { ...input, wait: undefined };
+    return bindPublicActionInput('session.message.send', {
+      ...fields, sessionId, message, recipient: { kind: 'execution_run', runId }, reply,
+    }, requestId);
+  };
 
   return Object.freeze({
     get: (runId: string): HappierSessionExecutionRun<TOptions> => Object.freeze({
@@ -54,12 +57,12 @@ export function createSessionExecutionRuns<TOptions extends ActionExecutionOptio
       // same way an Action failure does, never as a synchronous throw.
       send: async (message, input = {}, options) => await execute(
         'session.message.send',
-        sendInput(runId, message, input, false, options?.requestId),
+        sendInput(runId, message, input, 'none', options?.requestId),
         optionsForSession(options),
       ),
       sendAndWait: async (message, input = {}, options) => await execute(
         'session.message.send',
-        sendInput(runId, message, input, true, options?.requestId),
+        sendInput(runId, message, input, 'wait', options?.requestId),
         optionsForSession(options),
       ),
       history: async (input = {}, options) => {

@@ -165,10 +165,17 @@ Session automatically. The same handle therefore works at daemon-local and
 server endpoints without duplicating `sessionId` in an execution target. An
 explicit target remains available when deliberate machine pinning is needed.
 
-For a correlated send that settles only after the target Session becomes idle,
+For a correlated send that observes the exact submitted input's outcome,
 use `session.sendAndWait(message, input?, executionOptions?)`. It calls the
-canonical `session.message.send` Action with `wait: true`; `input` can include
-the retry-safe `localId` and `timeoutSeconds`. It does not start a second wait.
+canonical `session.message.send` Action with `reply: 'wait'` in 0.3 development;
+`input` can include the retry-safe `localId` and `timeoutSeconds`. Ending
+observation does not cancel admitted work. It does not start a second idle or
+Run-lifetime wait. Predecessor boolean `wait` remains accepted at the Action
+ingress for existing callers, separately from the canonical reply field.
+The development client checks the selected executor's advertised schema before
+a canonical `wait` or `return` send, or a send carrying `structuredInput`. Unsupported reply or structured-reference semantics fail before
+input submission, including on endpoints that would otherwise ignore unknown
+fields. The check shares the original caller's target, cancellation and lifetime.
 
 ### Development-only live Sessions
 
@@ -434,6 +441,15 @@ reconcile an uncertain mutation outcome, generate and retain the ID in your own
 code and pass it as `options.requestId`. Request IDs are correlation unless the
 Action's own contract gives them idempotency semantics; the SDK provides no
 receipt store or automatic retry subsystem.
+
+For `workflow.trigger.run_now` in 0.3 development, the SDK projects the input's
+`idempotencyKey` into the signed request envelope, including for encrypted
+Accounts. Reuse that key with the same token to rejoin one manual occurrence
+across fresh requests; different tokens have separate identities. Without a
+key, the signed request ID supplies the retry identity. Keys are not secret:
+keep private content and credentials out of them. The daemon refuses a key that
+differs from the decoded input, and the server rechecks the token's current
+Automation grant before admitting the Run.
 
 The environment lookup in the example is caller code. `connect()` requires its
 `token` option and never reads `HAPPIER_TOKEN`, a CLI profile, or any credential
