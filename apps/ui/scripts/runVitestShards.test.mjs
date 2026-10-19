@@ -21,12 +21,13 @@ const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = dirname(scriptsDir);
 const runnerPath = join(scriptsDir, 'runVitestShards.mjs');
 
-test('partition admission leaves a CPU for each transform server and its worker', () => {
-  assert.equal(resolveVitestShardConcurrency({}, ['--concurrency=8'], 12), 6);
-  assert.equal(resolveVitestShardConcurrency({}, ['--concurrency=8'], 48), 8);
-  assert.equal(resolveVitestShardConcurrency({ HAPPIER_UI_VITEST_SHARD_CONCURRENCY: '8' }, [], 4), 2);
-  assert.equal(resolveVitestShardConcurrency({}, ['--concurrency=8'], 1), 1);
-  assert.equal(resolveVitestShardConcurrency({}, [], 48), 1);
+test('partition admission accounts for each transform server and its full canonical fork pool', () => {
+  assert.equal(resolveVitestShardConcurrency({}, ['--concurrency=8'], 12, 4), 2);
+  assert.equal(resolveVitestShardConcurrency({}, ['--concurrency=8'], 48, 4), 8);
+  assert.equal(resolveVitestShardConcurrency({ HAPPIER_UI_VITEST_SHARD_CONCURRENCY: '8' }, [], 4, 2), 1);
+  assert.equal(resolveVitestShardConcurrency({}, ['--concurrency=8'], 1, 1), 1);
+  assert.equal(resolveVitestShardConcurrency({}, [], 48, 4), 1);
+  assert.equal(resolveVitestShardConcurrency({}, ['--concurrency=8'], 12, 1), 6);
 });
 
 test('the containing job owns the default deadline while explicit diagnostic watchdogs remain available', () => {
@@ -45,7 +46,7 @@ for (const scenario of [
   { name: 'invalid supplied budget through canonical config', env: { HAPPIER_VITEST_MAX_WORKERS: 'invalid' }, args: [], workers: Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))) },
   { name: 'selected-file worker budget', partition: false, env: { HAPPIER_VITEST_MAX_WORKERS: '2', VITEST_UI_MAX_FORKS: '1' }, args: [], workers: 2 },
   { name: 'parallel partitions include transform-server CPU', env: {}, args: ['--concurrency=8'], shards: 8, fileCount: 16,
-    workers: Math.min(4, Math.max(1, Math.floor(availableParallelism() / Math.min(8, Math.max(1, Math.floor(availableParallelism() / 2)))) - 1)) },
+    workers: Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))) },
   { name: 'parallel native minimum worker arguments', env: { HAPPIER_VITEST_MAX_WORKERS: '2' },
     args: ['--concurrency=8', '--minWorkers=2'], shards: 8, fileCount: 16, workers: 2, minWorkers: 2 },
 ]) {
