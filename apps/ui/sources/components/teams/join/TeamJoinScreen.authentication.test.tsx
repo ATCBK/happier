@@ -19,7 +19,7 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { AuthEntryProjectionV1Schema } from '@happier-dev/protocol/auth/entry';
-import { setActiveServerId, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
+import { resolveServerProfileScopeIdForIdentifier, setActiveServerId, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 installTokenStorageWebPlatformMocks();
@@ -59,14 +59,20 @@ it.each(['none', 'retry', 'new_invitation'] as const)('reaches the admitted prof
     const otherServerId = await home.addHome({ name: 'Other Home', serverUrl: 'https://other-home.test',
         serverIdentityId: otherIdentity, accountId: 'other-account', credentials: otherCredentials, teamsEnabled: true });
     answerSavedAccountInvitation(serverId, identity, 'admitted-account');
+    // The saved target uses a device-local profile reference; authenticated
+    // Account scope uses the Home's stable identity, as the real join host does.
     const renderEntry = (targetServerId: string, accountId: string, token: string) => <AuthProvider initialCredentials={otherCredentials}>
         <TeamAuthEntrySurface target={{ kind: 'saved_profile', profileRef: targetServerId }}
-            invitation={{ token, accountScope: { serverId: targetServerId, accountId } }}
+            invitation={{ token, accountScope: { serverId: resolveServerProfileScopeIdForIdentifier(targetServerId), accountId } }}
             onSelectAction={() => { throw new Error('The saved Account must join without authentication'); }}
             onAdmissionComplete={() => {}} />
     </AuthProvider>;
     const screen = await renderScreen(renderEntry(serverId, 'admitted-account', 'a'.repeat(43)));
     await waitForHomeGovernance(() => expect(screen.findByTestId('team-auth-entry-join'), screen.getTextContent()).not.toBeNull());
+    expect(home.requestsFor('/v1/auth/entry').map(request => ({
+        serverId: request.serverId,
+        authenticatedAsAdmittedAccount: request.token === credentials.token,
+    }))).toEqual([{ serverId, authenticatedAsAdmittedAccount: true }]);
     const identityHeading = screen.findByTestId('team-auth-entry-team-name');
     const writeStorage = MMKV.prototype.set;
     // Profile selection uses the native SDK boundary in this Node renderer,
@@ -94,6 +100,13 @@ it.each(['none', 'retry', 'new_invitation'] as const)('reaches the admitted prof
                 await waitForHomeGovernance(() => expect(screen.findByTestId('team-auth-entry-join'), screen.getTextContent()).not.toBeNull());
                 await screen.pressByTestIdAsync('team-auth-entry-join');
                 expect(home.requestsFor('/v1/team-invitations/accept')).toHaveLength(2);
+                expect(home.requestsFor('/v1/team-invitations/accept').map(request => ({
+                    serverId: request.serverId,
+                    authenticatedAsExpectedAccount: request.token === (request.serverId === serverId ? credentials.token : otherCredentials.token),
+                }))).toEqual([
+                    { serverId, authenticatedAsExpectedAccount: true },
+                    { serverId: otherServerId, authenticatedAsExpectedAccount: true },
+                ]);
                 expect(screen.findByTestId('team-auth-entry-destination-home-retry')).toBeNull();
                 expect(screen.findByTestId('team-auth-entry-admission-complete-name-field'), screen.getTextContent()).not.toBeNull();
                 return;

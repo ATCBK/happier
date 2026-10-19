@@ -2,6 +2,9 @@ import * as React from 'react';
 import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { renderScreen, standardCleanup, flushHookEffects, createRootLayoutFeaturesResponse } from '@/dev/testkit';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { storage } from '@/sync/domains/state/storageStore';

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
+import { RestoreIndexEmbedded } from './RestoreIndexEmbedded';
 
 type ReactActEnvironmentGlobal = typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -21,10 +22,6 @@ vi.mock('@/utils/platform/desktopHost', () => ({
 
 vi.mock('@/utils/platform/platform', () => ({
     isRunningOnMac: () => false,
-}));
-
-vi.mock('@/utils/platform/webMobileHeuristics', () => ({
-    isWebMobileLikeQrScannerHost: ({ width }: { width: number; height: number }) => width <= 430,
 }));
 
 vi.mock('@/utils/platform/qrScannerSupport', () => ({
@@ -50,7 +47,6 @@ vi.mock('@/components/account/restore/RestoreQrView', () => ({
 
 describe('RestoreIndexEmbedded (Tauri desktop)', () => {
     it('defaults to the QR view even when the window is phone-sized (uses physical screen size heuristics)', async () => {
-        vi.resetModules();
         lastScanProps = null;
         lastQrProps = null;
 
@@ -62,8 +58,6 @@ describe('RestoreIndexEmbedded (Tauri desktop)', () => {
 
         const onBack = vi.fn();
         const onOpenSecretKeyLogin = vi.fn();
-        const { RestoreIndexEmbedded } = await import('./RestoreIndexEmbedded');
-
         let tree!: renderer.ReactTestRenderer;
         try {
             await act(async () => {

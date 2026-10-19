@@ -2,44 +2,32 @@ import React from 'react';
 import { act, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createRootLayoutFeaturesResponse, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createRootLayoutFeaturesResponse, flushHookEffects, renderHook, renderScreen as renderScreenWithProviders, standardCleanup } from '@/dev/testkit';
 import type { IModal } from '@/modal';
-import type { AuthCredentialLifecycleResult } from '@/auth/context/AuthContext';
-import type { AccountEncryptionFirstKeyRecoveryHandle } from '@/sync/ops/account/accountEncryptionFirstKeyExternalAuth';
-import type { PendingSetupIntent } from '@/sync/domains/pending/pendingSetupIntent.shared';
 import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
 import type { AuthEntryOptions } from '@/components/account/auth/useAuthEntryOptions';
 import type { HomeAuthenticationAction } from '@/auth/capabilities/authMethodCapabilities';
 
-import { WizardModalShell } from '../ui/WizardModalShell';
-import { WizardChoiceRow } from '../ui/WizardChoiceRow';
-import { storage } from '@/sync/domains/state/storageStore';
+import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-const initialStorageState = storage.getState();
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('@/utils/web/reactDomCjs', async () =>
+    (await import('@/dev/testkit/mocks/reactDomCjs')).createReactDomCjsRendererMock());
+installDisconnectedServerSocketBoundary();
 
 const reactNativeMockState = vi.hoisted(() => ({
     os: 'web' as 'web' | 'ios' | 'android',
 }));
 
-const configuredServerUrlEnvMockState = vi.hoisted(() => ({
-    value: null as string | null,
-}));
 
-const runtimeActiveMockState = vi.hoisted(() => ({
-    value: true,
-}));
 
 const desktopHostMockState = vi.hoisted(() => ({
     kind: 'tauri' as 'tauri' | 'electron' | null,
-}));
-
-const relayAccessWizardMockState = vi.hoisted(() => ({
-    providerId: 'lan' as 'lan' | 'cloudflareNamed' | 'tailscaleServe' | 'tailscaleFunnel',
-    latestProps: null as Record<string, unknown> | null,
-    renderedDetailsStep: null as null | 'lan' | 'cloudflareNamed' | 'tailscaleServe' | 'tailscaleFunnel',
-    emitSelectedProviderFromEffect: false,
-    effectSelectionProviderId: 'lan' as 'lan' | 'cloudflareNamed' | 'tailscaleServe' | 'tailscaleFunnel',
-    effectSelectionNotificationCount: 0,
 }));
 
 function directChildTestIDs(node: { props: { children?: React.ReactNode } } | null | undefined): string[] {
@@ -67,207 +55,44 @@ function findAllInCurrentWizardBodyByType(screen: Readonly<{
         ?? screen.findAllByType(type);
 }
 
-vi.mock('@/components/onboarding/steps/relayAccess/RelayAccessLanUrlStep', () => ({
-    RelayAccessLanUrlStep: (_props: Record<string, unknown>) => {
-        relayAccessWizardMockState.renderedDetailsStep = 'lan';
-        return null;
-    },
-}));
-
-vi.mock('@/components/onboarding/steps/relayAccess/RelayAccessCloudflareNamedTunnelStep', () => ({
-    RelayAccessCloudflareNamedTunnelStep: (_props: Record<string, unknown>) => {
-        relayAccessWizardMockState.renderedDetailsStep = 'cloudflareNamed';
-        return null;
-    },
-}));
-
-vi.mock('@/components/onboarding/steps/relayAccess/RelayAccessTailscalePrerequisitesStep', () => ({
-    RelayAccessTailscalePrerequisitesStep: (props: Record<string, unknown>) => {
-        const providerId = props.providerId;
-        relayAccessWizardMockState.renderedDetailsStep = providerId === 'tailscaleFunnel' ? 'tailscaleFunnel' : 'tailscaleServe';
-        return null;
-    },
-}));
-
 const expoRouterSpies = vi.hoisted(() => ({
     push: vi.fn(),
     replace: vi.fn(),
 }));
 
-const setPendingSetupIntentMock = vi.hoisted(() => vi.fn<(value: PendingSetupIntent) => void>());
-const getPendingSetupIntentMock = vi.hoisted(() => vi.fn<() => PendingSetupIntent | null>(() => null));
-const clearPendingSetupIntentMock = vi.hoisted(() => vi.fn());
-const activeServerSnapshotMock = vi.hoisted(() => ({
-    serverId: 'relay-profile',
-    serverUrl: 'https://relay.example.test',
-    activeLocalRelayUrl: null as string | null,
-    generation: 1,
-}));
-const activeServerSubscriptionMock = vi.hoisted(() => {
-    const listeners = new Set<(snapshot: typeof activeServerSnapshotMock) => void>();
-    return {
-        reset: () => listeners.clear(),
-        getListenerCount: () => listeners.size,
-        emit: () => {
-            const snapshot = { ...activeServerSnapshotMock };
-            for (const listener of listeners) listener(snapshot);
-        },
-        subscribe: (listener: (snapshot: typeof activeServerSnapshotMock) => void) => {
-            listeners.add(listener);
-            return () => {
-                listeners.delete(listener);
-            };
-        },
-    };
-});
-const listServerProfilesMock = vi.hoisted(() => vi.fn<() => ServerProfile[]>(() => []));
-const removeServerProfileUiActionMock = vi.hoisted(() => vi.fn<
-    (_params: unknown) => Promise<AuthCredentialLifecycleResult>
->(async () => ({ kind: 'completed' })));
-const presentFirstKeyCredentialLifecycleMock = vi.hoisted(() => vi.fn(async (params: {
-    run: () => Promise<AuthCredentialLifecycleResult>;
-    onCompleted?: () => void | Promise<void>;
-}) => {
-    const result = await params.run();
-    if (result.kind === 'completed') {
-        await params.onCompleted?.();
-    }
-}));
-const serverProfilesSubscriptionMock = vi.hoisted(() => {
-    let generation = 0;
-    const listeners = new Set<(generation: number) => void>();
-    return {
-        getGeneration: () => generation,
-        reset: () => {
-            generation = 0;
-            listeners.clear();
-        },
-        bump: () => {
-            generation += 1;
-            for (const listener of listeners) listener(generation);
-        },
-        subscribe: (listener: (generation: number) => void) => {
-            listeners.add(listener);
-            return () => {
-                listeners.delete(listener);
-            };
-        },
-    };
-});
 const modalConfirmMock = vi.hoisted(() => vi.fn(async (_title?: string, _message?: string, _options?: unknown) => true));
-const webQrScannerSupportedMock = vi.hoisted(() => ({ value: false }));
-const webMobileLikeQrScannerHostMock = vi.hoisted(() => ({
-    value: false,
-    lastArgs: null as null | { width: number; height: number },
+const runtimeFetchMock = vi.hoisted(() => vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>());
+const nativeTaskScene = vi.hoisted(() => ({
+    nextResult: null as import('@happier-dev/protocol').SystemTaskResult | null,
+    specs: [] as Array<import('@happier-dev/protocol').SystemTaskSpec & { taskId: string }>,
 }));
-const setActiveServerAndSwitchMock = vi.hoisted(() => vi.fn(async () => true));
-const upsertActivateAndSwitchServerMock = vi.hoisted(() => vi.fn(async () => true));
-const getResetToDefaultServerIdMock = vi.hoisted(() => vi.fn(() => 'cloud-profile'));
-const getServerProfileByIdMock = vi.hoisted(() => vi.fn<(serverId: string) => ServerProfile | null>((serverId: string) => (
-    serverId === 'cloud-profile'
-        ? {
-            id: 'cloud-profile',
-            name: 'Happier Cloud',
-            serverUrl: 'https://api.happier.dev',
-            createdAt: 0,
-            updatedAt: 0,
-            lastUsedAt: 0,
-            source: 'preconfigured' as const,
-        }
-        : null
-)));
-const getOrCreateHappierCloudServerProfileMock = vi.hoisted(() => vi.fn(() => ({
-    id: 'cloud-profile',
-    name: 'Happier Cloud',
-    serverUrl: 'https://api.happier.dev',
-    createdAt: 0,
-    updatedAt: 0,
-    lastUsedAt: 0,
-    source: 'preconfigured' as const,
-})));
-const runtimeFetchMock = vi.hoisted(() => vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith('/v1/features') || url.endsWith('/v1/features/authenticated')) {
-        return Response.json(createRootLayoutFeaturesResponse());
-    }
-    if (
-        url.includes('https://unreachable-relay.example.test')
-        && url.endsWith('/health')
-    ) {
-        return new Response(JSON.stringify({ ok: false }), { status: 404, headers: { 'content-type': 'application/json' } });
-    }
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
-}));
-const systemTaskRunnerState = vi.hoisted(() => {
-    const state = {
-        nextResult: null as import('@happier-dev/protocol').SystemTaskResult | null,
-        startMock: vi.fn(async (_spec: unknown) => 'task_prepare_tailscale_1'),
-        cancelMock: vi.fn(async () => {}),
-        respondMock: vi.fn(async () => {}),
-        getSnapshotMock: vi.fn((taskId: string) => {
-            const result = state.nextResult;
-            if (!result || result.taskId !== taskId) {
-                return null;
-            }
-            return {
-                taskId,
-                status: result.ok ? 'succeeded' : 'failed',
-                currentStepId: null,
-                latestMessage: result.ok ? null : result.error.message,
-                awaitingInput: false,
-                cancelRequested: false,
-                events: [],
-                result,
-            };
-        }),
-        subscribeMock: vi.fn((taskId: string, _listenerOrOnEvent?: unknown, onResult?: (result: import('@happier-dev/protocol').SystemTaskResult) => void) => {
-            const result = state.nextResult;
-            if (result && typeof onResult === 'function') {
-                queueMicrotask(() => {
-                    onResult({ ...result, taskId });
-                });
-            }
-            return () => {};
-        }),
-    };
-    return state;
-});
+const nativeSecureStore = vi.hoisted(() => new Map<string, string>());
 
-const remoteSshChecklistMock = vi.hoisted(() => {
-    const spy = vi.fn();
-    return {
-        spy,
-        module: {
-            RemoteSshChecklistStep: (props: any) => {
-                spy(props);
-                React.useEffect(() => {
-                    props.onWizardPrimaryChange?.({
-                        label: 'Run remote setup',
-                        disabled: false,
-                        onPress: () => undefined,
-                    });
-                    return () => props.onWizardPrimaryChange?.(null);
-                }, [props.onWizardPrimaryChange]);
+// The real production singleton constructs its runner over the canonical native process boundary.
+vi.mock('@/components/systemTasks/createSystemTaskBridge', () => ({ createSystemTaskBridge: () => nativeTasks.bridge }));
 
-                return React.createElement('View' as any, { testID: props.testID ?? 'remote-ssh-checklist-mock' });
+installTokenStorageWebPlatformMocks({
+    // This file switches to iOS as well as exercising the browser credential port.
+    secureStore: () => ({
+        getItemAsync: async (key: string) => nativeSecureStore.get(key) ?? null,
+        setItemAsync: async (key: string, value: string) => { nativeSecureStore.set(key, value); },
+        deleteItemAsync: async (key: string) => { nativeSecureStore.delete(key); },
+    }),
+    reactNative: async () => {
+        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+        return createReactNativeWebMock({
+            useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
+            Platform: {
+                get OS() {
+                    return reactNativeMockState.os;
+                },
             },
-        },
-    };
-});
-
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({
-        Platform: {
-            get OS() {
-                return reactNativeMockState.os;
+            AppState: {
+                currentState: 'active',
+                addEventListener: vi.fn(() => ({ remove: vi.fn() })),
             },
-        },
-        AppState: {
-            currentState: 'active',
-            addEventListener: vi.fn(() => ({ remove: vi.fn() })),
-        },
-    });
+        });
+    },
 });
 
 vi.mock('react-native-unistyles', async () => {
@@ -279,181 +104,10 @@ vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ params: {}, router: expoRouterSpies }).module;
 });
-vi.mock('@/sync/domains/server/readConfiguredServerUrlEnv', () => ({
-    readConfiguredServerUrlEnv: () => configuredServerUrlEnvMockState.value,
-}));
-vi.mock('@/sync/domains/pending/pendingSetupIntent', () => ({
-    setPendingSetupIntent: (value: PendingSetupIntent) => setPendingSetupIntentMock(value),
-    getPendingSetupIntent: () => getPendingSetupIntentMock(),
-    clearPendingSetupIntent: () => clearPendingSetupIntentMock(),
-}));
-vi.mock('@/utils/platform/desktopHost', () => ({
+vi.mock('@/utils/platform/desktopHost', async importOriginal => ({
+    ...await importOriginal<typeof import('@/utils/platform/desktopHost')>(),
     desktopHostKind: () => desktopHostMockState.kind,
-    isDesktopHost: () => false,
-}));
-vi.mock('@/utils/platform/platform', () => ({
-    isRunningOnMac: () => false,
-}));
-vi.mock('@/utils/runtime/isRuntimeActive', () => ({
-    isRuntimeActive: () => runtimeActiveMockState.value,
-}));
-vi.mock('@/utils/platform/qrScannerSupport', () => ({
-    isWebQrScannerSupported: () => webQrScannerSupportedMock.value,
-}));
-vi.mock('@/utils/platform/webMobileHeuristics', () => ({
-    isWebMobileLikeQrScannerHost: (args: { width: number; height: number }) => {
-        webMobileLikeQrScannerHostMock.lastArgs = args;
-        return webMobileLikeQrScannerHostMock.value;
-    },
-}));
-vi.mock('../checklists/remoteSsh/RemoteSshChecklistStep', () => remoteSshChecklistMock.module);
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ isAuthenticated: false }),
-}));
-vi.mock('@/auth/providers/registry', () => ({
-    getAuthProvider: () => null,
-}));
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => activeServerSnapshotMock,
-    subscribeActiveServer: (listener: (snapshot: typeof activeServerSnapshotMock) => void) => activeServerSubscriptionMock.subscribe(listener),
-    isActiveServerSelectionExplicit: () => false,
-    upsertServerProfileOnly: (profile: { serverUrl: string }) => ({
-        id: `profile:${profile.serverUrl}`,
-        name: profile.serverUrl,
-        serverUrl: profile.serverUrl,
-    }),
-}));
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    HAPPIER_CLOUD_SERVER_URL: 'https://api.happier.dev',
-    DEFAULT_ACCOUNT_SERVICE_ENDPOINT: { url: 'https://api.happier.dev', displayName: 'Happier Cloud', source: 'default' },
-    loadHomeViewState: () => null,
-    subscribeHomeViewState: () => () => {},
-    updateHomeViewState: (update: (current: {
-        version: 1;
-        groups: never[];
-        activeTargetKind: null;
-        activeTargetId: null;
-    }) => unknown) => update({ version: 1, groups: [], activeTargetKind: null, activeTargetId: null }),
-    getResetToDefaultServerId: () => getResetToDefaultServerIdMock(),
-    getServerProfileById: (serverId: string) => getServerProfileByIdMock(serverId),
-    listServerProfiles: () => listServerProfilesMock(),
-    getOrCreateHappierCloudServerProfile: () => getOrCreateHappierCloudServerProfileMock(),
-    getServerProfilesGeneration: () => serverProfilesSubscriptionMock.getGeneration(),
-    subscribeServerProfiles: (listener: (generation: number) => void) => serverProfilesSubscriptionMock.subscribe(listener),
-}));
-vi.mock('@/utils/system/runtimeFetch', () => ({
-    runtimeFetch: (input: RequestInfo | URL, init?: RequestInit) => runtimeFetchMock(input, init),
-}));
-vi.mock('@/components/systemTasks', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/components/systemTasks')>();
-    return {
-        ...actual,
-        getDefaultSystemTaskRunner: () => ({
-            mode: 'tauri' as const,
-            start: systemTaskRunnerState.startMock,
-            cancel: systemTaskRunnerState.cancelMock,
-            respond: systemTaskRunnerState.respondMock,
-            getSnapshot: systemTaskRunnerState.getSnapshotMock,
-            subscribe: systemTaskRunnerState.subscribeMock,
-        }),
-        useSystemTaskSnapshot: (runner: {
-            subscribe: (taskId: string, onEvent?: ((event: unknown) => void) | undefined, onResult?: ((result: import('@happier-dev/protocol').SystemTaskResult) => void) | undefined) => () => void;
-        }, taskId: string | null) => {
-            const [snapshot, setSnapshot] = React.useState<import('@/components/systemTasks/types').SystemTaskRunState | null>(null);
-
-            React.useEffect(() => {
-                if (!taskId) {
-                    setSnapshot(null);
-                    return;
-                }
-
-                let disposed = false;
-                setSnapshot({
-                    taskId,
-                    status: 'running',
-                    currentStepId: null,
-                    latestMessage: null,
-                    awaitingInput: false,
-                    cancelRequested: false,
-                    events: [],
-                    result: null,
-                });
-
-                const unsubscribe = runner.subscribe(taskId, undefined, (result) => {
-                    if (disposed) return;
-                    setSnapshot({
-                        taskId,
-                        status: result.ok ? 'succeeded' : 'failed',
-                        currentStepId: null,
-                        latestMessage: result.ok ? null : result.error.message,
-                        awaitingInput: false,
-                        cancelRequested: false,
-                        events: [],
-                        result,
-                    });
-                });
-
-                return () => {
-                    disposed = true;
-                    unsubscribe();
-                };
-            }, [runner, taskId]);
-
-            return snapshot;
-        },
-    };
-});
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
-    isSameServerUrl: (left: string, right: string) => left === right,
-    normalizeServerUrl: (value: string) => String(value).trim() === 'not a url' ? null : value,
-    upsertActivateAndSwitchServer: upsertActivateAndSwitchServerMock,
-    setActiveServerAndSwitch: setActiveServerAndSwitchMock,
-}));
-vi.mock('@/components/onboarding/restore/RestoreIndexEmbedded', () => ({
-    RestoreIndexEmbedded: (props: Record<string, unknown>) => React.createElement('RestoreIndexEmbedded', props),
-    resolveReverseQrTargetProfileId: () => null,
-}));
-vi.mock('@/components/onboarding/restore/SecretKeyLoginEmbedded', () => ({
-    SecretKeyLoginEmbedded: (props: Record<string, unknown>) => React.createElement('SecretKeyLoginEmbedded', props),
-}));
-vi.mock('@/components/onboarding/restore/LostAccessEmbedded', () => ({
-    LostAccessEmbedded: () => null,
-}));
-vi.mock('@/components/onboarding/steps/webDesktop/WebDesktopRelayHostHandoffContent', () => ({
-    WebDesktopRelayHostHandoffContent: (props: Record<string, unknown>) => React.createElement('WebDesktopRelayHostHandoffContent', props),
-}));
-vi.mock('@/components/onboarding/steps/webDesktop/WebDesktopBackgroundServiceHandoffContent', () => ({
-    WebDesktopBackgroundServiceHandoffContent: (props: Record<string, unknown>) => React.createElement('WebDesktopBackgroundServiceHandoffContent', props),
-}));
-vi.mock('../checklists/relayHostLocal/RelayHostLocalChecklistStep', () => ({
-    RelayHostLocalChecklistStep: (props: Record<string, unknown>) => {
-        React.useEffect(() => {
-            (props.onStatusChange as ((status: { relayUrl: string | null }) => void) | undefined)?.({ relayUrl: 'http://localhost:31337' });
-        }, [props.onStatusChange]);
-        return React.createElement('RelayHostLocalChecklistStep', props);
-    },
-}));
-vi.mock('@/components/settings/server/localControl/LocalRelayAccessControlSection', () => ({
-    LocalRelayAccessControlSection: (props: Record<string, unknown>) => {
-        relayAccessWizardMockState.latestProps = props;
-        const selectedProviderId = (
-            (props.wizardSelectedProviderId as 'lan' | 'cloudflareNamed' | 'tailscaleServe' | 'tailscaleFunnel' | null | undefined)
-            ?? relayAccessWizardMockState.effectSelectionProviderId
-        );
-        React.useEffect(() => {
-            if (!relayAccessWizardMockState.emitSelectedProviderFromEffect) {
-                return;
-            }
-            relayAccessWizardMockState.effectSelectionNotificationCount += 1;
-            (props.onWizardSelectedProviderIdChange as ((
-                providerId: 'lan' | 'cloudflareNamed' | 'tailscaleServe' | 'tailscaleFunnel'
-            ) => void) | undefined)?.(selectedProviderId);
-        }, [props.onWizardSelectedProviderIdChange, selectedProviderId]);
-        return React.createElement('LocalRelayAccessControlSection', props);
-    },
-}));
-vi.mock('@/components/ui/lists/SelectableRow', () => ({
-    SelectableRow: (props: Record<string, unknown>) => React.createElement('SelectableRow', props),
+    isDesktopHost: () => desktopHostMockState.kind !== null,
 }));
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
@@ -462,24 +116,23 @@ vi.mock('@expo/vector-icons/Ionicons', () => ({
     default: 'Ionicons',
     Ionicons: 'Ionicons',
 }));
+const modalShowMock = vi.hoisted(() => vi.fn<IModal['show']>((config) => {
+    queueMicrotask(() => config.onRequestClose?.());
+    return 'wizard-modal';
+}));
 const modalAlertAsyncMock = vi.hoisted(() => vi.fn<IModal['alertAsync']>());
 
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({
         spies: {
+            show: modalShowMock,
             confirm: (title, message, options) => modalConfirmMock(title, message, options),
             alert: () => undefined,
             alertAsync: modalAlertAsyncMock,
         },
     }).module;
 });
-vi.mock('@/components/serverProfiles/removeServerProfileUiAction', () => ({
-    removeServerProfileUiAction: (params: unknown) => removeServerProfileUiActionMock(params),
-}));
-vi.mock('@/components/account/presentFirstKeyCredentialLifecycle', () => ({
-    presentFirstKeyCredentialLifecycle: presentFirstKeyCredentialLifecycleMock,
-}));
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({
@@ -513,6 +166,111 @@ vi.mock('@/text/i18n', () => ({
     tLoose: (key: string) => key,
 }));
 
+const configuredServerEnvKeys = [
+    'EXPO_PUBLIC_HAPPIER_SERVER_URL', 'EXPO_PUBLIC_HAPPY_SERVER_URL', 'EXPO_PUBLIC_SERVER_URL',
+    'EXPO_PUBLIC_HAPPY_PRECONFIGURED_SERVERS', 'EXPO_PUBLIC_HAPPY_SERVER_CONTEXT',
+] as const;
+const originalServerEnvironment = new Map(configuredServerEnvKeys.map(key => [key, process.env[key]]));
+for (const key of configuredServerEnvKeys) process.env[key] = '';
+
+const { createManualSystemTaskBridge } = await import('@/dev/testkit/harness/manualSystemTaskRunner');
+const nativeTasks = createManualSystemTaskBridge();
+const startNativeTask = nativeTasks.bridge.start.getMockImplementation()!;
+const subscribeNativeTask = nativeTasks.bridge.subscribe.getMockImplementation()!;
+nativeTasks.bridge.start.mockImplementation(async (spec) => {
+    const taskId = await startNativeTask(spec);
+    nativeTaskScene.specs.push({ ...spec, taskId });
+    return taskId;
+});
+nativeTasks.bridge.subscribe.mockImplementation(async (taskId, listener) => {
+    const dispose = await subscribeNativeTask(taskId, listener);
+    const spec = nativeTaskScene.specs.find(entry => entry.taskId === taskId);
+    const data: import('@happier-dev/protocol').SystemTaskJsonValue = spec?.kind === 'relay.runtime.status.v1' ? {
+        installed: true, dataPresent: true, healthy: true, relayUrl: 'http://localhost:31337',
+        service: { active: true, enabled: true },
+    } : spec?.kind === 'daemon.service.status.v1' ? {
+        serviceInstalled: false, daemonRunning: false, needsAuth: false, machineId: null,
+    } : spec?.kind === 'daemon.service.relay.disconnect.v1' ? { outcome: 'no_service' }
+        : spec?.kind === 'relay.access.status.v1' ? { configured: false, providerId: null, status: { state: 'disabled', shareUrl: null } }
+        : spec?.kind === 'local.ssh.discoverConfiguredHosts.v1' ? { hosts: [] }
+        : null;
+    const result = spec?.kind === 'tailscale.ensureReady.v1' ? nativeTaskScene.nextResult : null;
+    if (result || data) queueMicrotask(() => nativeTasks.emitResult(taskId,
+        result ? { ...result, taskId } : { protocolVersion: 1, taskId, ok: true, data },
+    ));
+    return dispose;
+});
+
+// Install transport/platform ports before evaluating the actual Home and UI graph.
+const { createHomeGovernanceHarness, installHomeGovernanceBoundaries } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+const profiles = await import('@/sync/domains/server/serverProfiles');
+const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { WizardModalShell } = await import('../ui/WizardModalShell');
+const { WizardChoiceRow } = await import('../ui/WizardChoiceRow');
+const { clearPendingSetupIntent, getPendingSetupIntent } = await import('@/sync/domains/pending/pendingSetupIntent');
+const { AuthProvider } = await import('@/auth/context/AuthContext');
+const { RestoreIndexEmbedded } = await import('@/components/onboarding/restore/RestoreIndexEmbedded');
+const { SecretKeyLoginEmbedded } = await import('@/components/onboarding/restore/SecretKeyLoginEmbedded');
+const { RelayHostLocalChecklistStep } = await import('../checklists/relayHostLocal/RelayHostLocalChecklistStep');
+const { RemoteSshChecklistStep } = await import('../checklists/remoteSsh/RemoteSshChecklistStep');
+const { LocalRelayAccessControlSection } = await import('@/components/settings/server/localControl/LocalRelayAccessControlSection');
+const { RelayAccessLanUrlStep } = await import('@/components/onboarding/steps/relayAccess/RelayAccessLanUrlStep');
+const { RelayAccessCloudflareNamedTunnelStep } = await import('@/components/onboarding/steps/relayAccess/RelayAccessCloudflareNamedTunnelStep');
+const { RelayAccessTailscalePrerequisitesStep } = await import('@/components/onboarding/steps/relayAccess/RelayAccessTailscalePrerequisitesStep');
+await import('./OnboardingWizardSurface');
+const initialStorageState = storage.getState();
+
+function SignedOutAuth({ children }: React.PropsWithChildren) {
+    return <AuthProvider initialCredentials={null}>{children}</AuthProvider>;
+}
+
+function renderScreen(element: React.ReactElement) {
+    const props = element.props;
+    if (props && typeof props === 'object' && 'isDesktopShell' in props && props.isDesktopShell === false) desktopHostMockState.kind = null;
+    return renderScreenWithProviders(element, { wrapper: SignedOutAuth });
+}
+
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | null = null;
+const savedHomes = new Map<string, ServerProfile>();
+const originalStorageScope = process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
+
+async function saveHomeProfiles(fixtures: readonly ServerProfile[]) {
+    for (const fixture of fixtures) {
+        const id = await homes.addHome({ name: fixture.name, serverUrl: fixture.serverUrl, accountId: null, active: false });
+        const profile = profiles.getServerProfileById(id);
+        if (!profile) throw new Error('The real profile owner did not save the Home');
+        savedHomes.set(fixture.id, profile);
+    }
+}
+
+function homeProfileRef(alias: string): string {
+    if (alias === 'active') return profiles.getActiveServerSnapshot().serverId;
+    return savedHomes.get(alias)?.id ?? alias;
+}
+
+function homeRowTestId(alias: string): string {
+    return `onboarding-wizard-relay:profile:${homeProfileRef(alias)}`;
+}
+
+async function focusHomeAtAddress(serverUrl: string) {
+    if (!serverUrl) return;
+    let profile = profiles.resolveUniqueServerProfileByUrl(serverUrl);
+    if (!profile) {
+        const id = await homes.addHome({ name: serverUrl, serverUrl, accountId: null, active: false });
+        profile = profiles.getServerProfileById(id);
+    }
+    if (!profile) throw new Error('The real profile owner did not save the focused Home');
+    await profiles.setActiveServerId(profile.id, { scope: 'device' });
+}
+
+function expectFocusedHome(serverUrl: string) {
+    expect(profiles.getActiveServerSnapshot().serverUrl).toBe(serverUrl);
+    expect(profiles.resolveUniqueServerProfileByUrl(serverUrl)).not.toBeNull();
+}
+
 const baseHomeTarget = { kind: 'saved_profile', profileRef: 'relay-profile' } as const;
 const generatedKeyAuthenticationAction = {
     method: { id: 'key_challenge', enabledActions: [{ id: 'provision', mode: 'keyed' }] },
@@ -537,47 +295,44 @@ const baseAuthOptions = {
 } satisfies AuthEntryOptions;
 
 describe('OnboardingWizardSurface', () => {
-    beforeEach(() => {
-        try {
-            Object.defineProperty(globalThis.document, 'visibilityState', { value: 'visible', configurable: true });
-        } catch {
-            // ignore
-        }
-        setPendingSetupIntentMock.mockReset();
-        getPendingSetupIntentMock.mockReset();
-        clearPendingSetupIntentMock.mockReset();
-        setActiveServerAndSwitchMock.mockReset();
-        upsertActivateAndSwitchServerMock.mockReset();
-        systemTaskRunnerState.nextResult = null;
-        systemTaskRunnerState.startMock.mockReset();
-        systemTaskRunnerState.cancelMock.mockReset();
-        systemTaskRunnerState.respondMock.mockReset();
-        systemTaskRunnerState.getSnapshotMock.mockReset();
-        systemTaskRunnerState.subscribeMock.mockReset();
-        getOrCreateHappierCloudServerProfileMock.mockReset();
+    beforeEach(async () => {
+        nativeSecureStore.clear();
+        browser = await installBrowserRuntimeForTests({ url: 'https://app.happier.dev' });
+        // The desktop credential owner uses OS-protected storage even in a web renderer.
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: createDesktopSecureStorageBoundary().invoke });
+        process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = `wizard_${Date.now()}_${Math.random()}`;
+        reactNativeMockState.os = 'web';
+        for (const key of configuredServerEnvKeys) process.env[key] = '';
+
+        desktopHostMockState.kind = 'tauri';
+        // The real connection singleton survives each fixture browser/storage replacement.
+        profiles.resetServerProfilesRuntimeForTests({ preserveGenerations: true });
+        savedHomes.clear();
+        await homes.reset();
+        installHomeGovernanceBoundaries(homes);
+        setRuntimeFetch((input, init) => runtimeFetchMock(input, init));
+        runtimeFetchMock.mockReset().mockImplementation(async (input, init) => {
+            const url = String(input);
+            if (url.includes('https://unreachable-relay.example.test') && url.endsWith('/health')) return new Response(null, { status: 404 });
+            if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) return Response.json({ status: 'ok' });
+            if (url.endsWith('/v1/features') || url.endsWith('/v1/features/authenticated')) return Response.json(createRootLayoutFeaturesResponse());
+            return homes.request(input, init);
+        });
+        await loadSyncSingletonForTests();
+        clearPendingSetupIntent();
+        nativeTaskScene.nextResult = null;
+        nativeTaskScene.specs.length = 0;
+        nativeTasks.bridge.start.mockClear();
+        nativeTasks.bridge.cancel.mockClear();
+        nativeTasks.bridge.respond.mockClear();
         expoRouterSpies.push.mockReset();
         expoRouterSpies.replace.mockReset();
-        webQrScannerSupportedMock.value = false;
-        webMobileLikeQrScannerHostMock.value = false;
-        webMobileLikeQrScannerHostMock.lastArgs = null;
-        reactNativeMockState.os = 'web';
-        configuredServerUrlEnvMockState.value = null;
-        runtimeActiveMockState.value = true;
-        desktopHostMockState.kind = 'tauri';
-        activeServerSnapshotMock.serverId = 'relay-profile';
-        activeServerSnapshotMock.serverUrl = '';
-        activeServerSnapshotMock.activeLocalRelayUrl = null;
-        getResetToDefaultServerIdMock.mockReturnValue('cloud-profile');
-        listServerProfilesMock.mockReturnValue([]);
-        modalConfirmMock.mockReset();
-        modalConfirmMock.mockImplementation(async () => true);
-        removeServerProfileUiActionMock.mockReset();
-        removeServerProfileUiActionMock.mockResolvedValue({ kind: 'completed' });
-        presentFirstKeyCredentialLifecycleMock.mockClear();
-        serverProfilesSubscriptionMock.reset();
-        relayAccessWizardMockState.emitSelectedProviderFromEffect = false;
-        relayAccessWizardMockState.effectSelectionProviderId = 'lan';
-        relayAccessWizardMockState.effectSelectionNotificationCount = 0;
+
+
+
+        modalConfirmMock.mockReset().mockResolvedValue(true);
+        modalAlertAsyncMock.mockReset().mockResolvedValue();
+        modalShowMock.mockClear();
         storage.setState(initialStorageState, true);
     });
 
@@ -801,10 +556,11 @@ describe('OnboardingWizardSurface', () => {
             configurable: true,
         });
 
-        webQrScannerSupportedMock.value = true;
+        Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: vi.fn() } });
+        Object.defineProperty(navigator, 'userAgent', { configurable: true, value: 'iPhone' });
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
-        await renderScreen(
+        const screen = await renderScreen(
             React.createElement(OnboardingWizardSurface, {
                 layout: 'portrait',
                 isDesktopShell: true,
@@ -813,55 +569,49 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
 
-        expect(webMobileLikeQrScannerHostMock.lastArgs).toEqual({ width: 1440, height: 900 });
+        const { WelcomeDecisionPanel } = await import('../preAuth/WelcomeDecisionPanel');
+        expect(screen.findByType(WelcomeDecisionPanel as never).props.canScanQr).toBe(false);
 
         Object.defineProperty(globalThis, 'screen', { value: originalScreen, configurable: true });
     });
 
     it('routes relay access LAN choice to the shared prereqs step', async () => {
-        relayAccessWizardMockState.providerId = 'lan';
-        relayAccessWizardMockState.renderedDetailsStep = null;
-        relayAccessWizardMockState.latestProps = null;
 
-        const relaySelectionHelpers = await import('./relaySelection/relaySelectionHelpers');
-        const selectionSpy = vi.spyOn(relaySelectionHelpers, 'buildDefaultRelaySelection').mockReturnValue({
-            choiceId: 'thisComputer',
-            serverUrl: 'http://127.0.0.1:3005',
-            relayProfileId: null,
-            locked: false,
-        });
 
-        try {
+
+
+        await focusHomeAtAddress('http://127.0.0.1:3005');
+        {
             const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
             const screen = await renderScreen(
                 React.createElement(OnboardingWizardSurface, {
                     layout: 'portrait',
                     isDesktopShell: true,
-                    initialStepId: 'relay_access',
+                    initialStepId: 'relay_select',
                     authEntryOptions: baseAuthOptions,
                 }),
             );
 
-            await flushHookEffects({ cycles: 2, turns: 2 });
+            await pressOnboarding(screen, 'onboarding-wizard-relay:thisComputer');
+            await pressOnboarding(screen, 'onboarding-wizard-primary');
+            await pressOnboarding(screen, 'onboarding-wizard-primary');
             expect(screen.findByType(WizardModalShell as never).props.title).toBe('setupOnboarding.relayAccessWizardTitle');
-            expect(relayAccessWizardMockState.latestProps).toBeTruthy();
-            expect(typeof (relayAccessWizardMockState.latestProps as any)?.onWizardRequestProviderDetails).toBe('function');
+            expect(screen.findByType(LocalRelayAccessControlSection as never)?.props).toBeTruthy();
+            expect(typeof (screen.findByType(LocalRelayAccessControlSection as never)?.props as any)?.onWizardRequestProviderDetails).toBe('function');
 
             await act(async () => {
-                (relayAccessWizardMockState.latestProps as any)?.onWizardRequestProviderDetails?.('lan');
+                (screen.findByType(LocalRelayAccessControlSection as never)?.props as any)?.onWizardRequestProviderDetails?.('lan');
             });
             await flushHookEffects({ cycles: 2, turns: 2 });
 
             expect(screen.findByType(WizardModalShell as never).props.title).toBe('setupOnboarding.relayAccessWizardTitle');
-            expect(relayAccessWizardMockState.renderedDetailsStep).toBe('lan');
-        } finally {
-            selectionSpy.mockRestore();
+            expect(screen.findAllByType(RelayAccessLanUrlStep as never)).toHaveLength(1);
         }
     });
 
     it('keeps relay access wizard callbacks stable across parent rerenders', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
-        activeServerSnapshotMock.activeLocalRelayUrl = 'http://localhost:53288';
+        await focusHomeAtAddress('https://api.happier.dev');
+        browser?.reconfigureUrl('http://localhost:53288');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -874,25 +624,11 @@ describe('OnboardingWizardSurface', () => {
         );
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const thisComputerRow = screen.findByTestId('onboarding-wizard-relay:thisComputer')!;
-        await act(async () => {
-            await thisComputerRow.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 2, turns: 2 });
+        await pressOnboarding(screen, 'onboarding-wizard-relay:thisComputer');
+        await pressOnboarding(screen, 'onboarding-wizard-primary');
+        await pressOnboarding(screen, 'onboarding-wizard-primary');
 
-        const continueButton = screen.findByTestId('onboarding-wizard-primary')!;
-        await act(async () => {
-            await continueButton.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 1, turns: 1 });
-
-        const continueAfterRelayHosting = screen.findByTestId('onboarding-wizard-primary')!;
-        await act(async () => {
-            await continueAfterRelayHosting.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 1, turns: 1 });
-
-        const firstProps = relayAccessWizardMockState.latestProps as {
+        const firstProps = screen.findByType(LocalRelayAccessControlSection as never)?.props as {
             onWizardSelectedProviderIdChange: unknown;
             onWizardRequestProviderDetails: unknown;
         } | null;
@@ -903,27 +639,28 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const nextProps = relayAccessWizardMockState.latestProps as {
+        const nextProps = screen.findByType(LocalRelayAccessControlSection as never)?.props as {
             onWizardSelectedProviderIdChange: unknown;
             onWizardRequestProviderDetails: unknown;
         } | null;
         expect(nextProps).toBeTruthy();
         expect(nextProps?.onWizardSelectedProviderIdChange).toBe(firstProps?.onWizardSelectedProviderIdChange);
         expect(nextProps?.onWizardRequestProviderDetails).toBe(firstProps?.onWizardRequestProviderDetails);
+        expect(screen.findByType(LocalRelayAccessControlSection as never).props.wizardSelectedProviderId).toBe('cloudflareNamed');
         expect((nextProps as { serverProfileId?: unknown } | null)?.serverProfileId).toEqual(expect.any(String));
 
-        const localRelayAccessSection = screen.findByType('LocalRelayAccessControlSection' as never) as unknown as {
-            props: { target?: { kind: 'local' } | { kind: 'ssh'; ssh: { target: string; auth: 'agent' | 'keyfile' | 'password' } } };
+        const localRelayAccessSection = screen.findByType(LocalRelayAccessControlSection as never) as unknown as {
+            props: React.ComponentProps<typeof LocalRelayAccessControlSection>;
         };
         expect(localRelayAccessSection).toBeTruthy();
         expect(localRelayAccessSection.props.target).toEqual({ kind: 'local' });
     });
 
     it('settles after a single relay access provider sync effect', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
-        activeServerSnapshotMock.activeLocalRelayUrl = 'http://localhost:53288';
-        relayAccessWizardMockState.emitSelectedProviderFromEffect = true;
-        relayAccessWizardMockState.effectSelectionProviderId = 'lan';
+        await focusHomeAtAddress('https://api.happier.dev');
+        browser?.reconfigureUrl('http://localhost:53288');
+
+
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -936,70 +673,52 @@ describe('OnboardingWizardSurface', () => {
         );
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const thisComputerRow = screen.findByTestId('onboarding-wizard-relay:thisComputer')!;
-        await act(async () => {
-            await thisComputerRow.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 2, turns: 2 });
+        await pressOnboarding(screen, 'onboarding-wizard-relay:thisComputer');
+        await pressOnboarding(screen, 'onboarding-wizard-primary');
+        await pressOnboarding(screen, 'onboarding-wizard-primary');
 
-        const continueButton = screen.findByTestId('onboarding-wizard-primary')!;
-        await act(async () => {
-            await continueButton.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 3, turns: 3 });
-
-        const continueAfterRelayHosting = screen.findByTestId('onboarding-wizard-primary')!;
-        await act(async () => {
-            await continueAfterRelayHosting.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 1, turns: 1 });
-
-        const localRelayAccessSection = screen.findByType('LocalRelayAccessControlSection' as never) as unknown as {
-            props: { target?: { kind: 'local' } | { kind: 'ssh'; ssh: { target: string; auth: 'agent' | 'keyfile' | 'password' } } };
+        const localRelayAccessSection = screen.findByType(LocalRelayAccessControlSection as never) as unknown as {
+            props: React.ComponentProps<typeof LocalRelayAccessControlSection>;
         };
         expect(localRelayAccessSection).toBeTruthy();
         expect(localRelayAccessSection.props.target).toEqual({ kind: 'local' });
-        expect(relayAccessWizardMockState.effectSelectionNotificationCount).toBe(1);
+        const selectedProvider = localRelayAccessSection.props.wizardSelectedProviderId;
+        expect(selectedProvider).toBe('localOnly');
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(screen.findByType(LocalRelayAccessControlSection as never).props.wizardSelectedProviderId).toBe(selectedProvider);
     });
 
     it('routes relay access Cloudflare choice to the shared prereqs step', async () => {
-        relayAccessWizardMockState.providerId = 'cloudflareNamed';
-        relayAccessWizardMockState.renderedDetailsStep = null;
-        relayAccessWizardMockState.latestProps = null;
 
-        const relaySelectionHelpers = await import('./relaySelection/relaySelectionHelpers');
-        const selectionSpy = vi.spyOn(relaySelectionHelpers, 'buildDefaultRelaySelection').mockReturnValue({
-            choiceId: 'thisComputer',
-            serverUrl: 'http://127.0.0.1:3005',
-            relayProfileId: null,
-            locked: false,
-        });
 
-        try {
+
+
+        await focusHomeAtAddress('http://127.0.0.1:3005');
+        {
             const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
             const screen = await renderScreen(
                 React.createElement(OnboardingWizardSurface, {
                     layout: 'portrait',
                     isDesktopShell: true,
-                    initialStepId: 'relay_access',
+                    initialStepId: 'relay_select',
                     authEntryOptions: baseAuthOptions,
                 }),
             );
 
-            await flushHookEffects({ cycles: 2, turns: 2 });
+            await pressOnboarding(screen, 'onboarding-wizard-relay:thisComputer');
+            await pressOnboarding(screen, 'onboarding-wizard-primary');
+            await pressOnboarding(screen, 'onboarding-wizard-primary');
             expect(screen.findByType(WizardModalShell as never).props.title).toBe('setupOnboarding.relayAccessWizardTitle');
-            expect(relayAccessWizardMockState.latestProps).toBeTruthy();
-            expect(typeof (relayAccessWizardMockState.latestProps as any)?.onWizardRequestProviderDetails).toBe('function');
+            expect(screen.findByType(LocalRelayAccessControlSection as never)?.props).toBeTruthy();
+            expect(typeof (screen.findByType(LocalRelayAccessControlSection as never)?.props as any)?.onWizardRequestProviderDetails).toBe('function');
 
             await act(async () => {
-                (relayAccessWizardMockState.latestProps as any)?.onWizardRequestProviderDetails?.('cloudflareNamed');
+                (screen.findByType(LocalRelayAccessControlSection as never)?.props as any)?.onWizardRequestProviderDetails?.('cloudflareNamed');
             });
             await flushHookEffects({ cycles: 2, turns: 2 });
 
             expect(screen.findByType(WizardModalShell as never).props.title).toBe('setupOnboarding.relayAccessWizardTitle');
-            expect(relayAccessWizardMockState.renderedDetailsStep).toBe('cloudflareNamed');
-        } finally {
-            selectionSpy.mockRestore();
+            expect(screen.findAllByType(RelayAccessCloudflareNamedTunnelStep as never)).toHaveLength(1);
         }
     });
 
@@ -1007,43 +726,36 @@ describe('OnboardingWizardSurface', () => {
         'tailscaleServe',
         'tailscaleFunnel',
     ] as const)('routes relay access %s choice to the shared prereqs step', async (providerId) => {
-        relayAccessWizardMockState.providerId = providerId;
-        relayAccessWizardMockState.renderedDetailsStep = null;
-        relayAccessWizardMockState.latestProps = null;
 
-        const relaySelectionHelpers = await import('./relaySelection/relaySelectionHelpers');
-        const selectionSpy = vi.spyOn(relaySelectionHelpers, 'buildDefaultRelaySelection').mockReturnValue({
-            choiceId: 'thisComputer',
-            serverUrl: 'http://127.0.0.1:3005',
-            relayProfileId: null,
-            locked: false,
-        });
 
-        try {
+
+
+        await focusHomeAtAddress('http://127.0.0.1:3005');
+        {
             const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
             const screen = await renderScreen(
                 React.createElement(OnboardingWizardSurface, {
                     layout: 'portrait',
                     isDesktopShell: true,
-                    initialStepId: 'relay_access',
+                    initialStepId: 'relay_select',
                     authEntryOptions: baseAuthOptions,
                 }),
             );
 
-            await flushHookEffects({ cycles: 2, turns: 2 });
+            await pressOnboarding(screen, 'onboarding-wizard-relay:thisComputer');
+            await pressOnboarding(screen, 'onboarding-wizard-primary');
+            await pressOnboarding(screen, 'onboarding-wizard-primary');
             expect(screen.findByType(WizardModalShell as never).props.title).toBe('setupOnboarding.relayAccessWizardTitle');
-            expect(relayAccessWizardMockState.latestProps).toBeTruthy();
-            expect(typeof (relayAccessWizardMockState.latestProps as any)?.onWizardRequestProviderDetails).toBe('function');
+            expect(screen.findByType(LocalRelayAccessControlSection as never)?.props).toBeTruthy();
+            expect(typeof (screen.findByType(LocalRelayAccessControlSection as never)?.props as any)?.onWizardRequestProviderDetails).toBe('function');
 
             await act(async () => {
-                (relayAccessWizardMockState.latestProps as any)?.onWizardRequestProviderDetails?.(providerId);
+                (screen.findByType(LocalRelayAccessControlSection as never)?.props as any)?.onWizardRequestProviderDetails?.(providerId);
             });
             await flushHookEffects({ cycles: 2, turns: 2 });
 
             expect(screen.findByType(WizardModalShell as never).props.title).toBe('setupOnboarding.relayAccessWizardTitle');
-            expect(relayAccessWizardMockState.renderedDetailsStep).toBe(providerId);
-        } finally {
-            selectionSpy.mockRestore();
+            expect(screen.findByType(RelayAccessTailscalePrerequisitesStep as never).props.providerId).toBe(providerId);
         }
     });
 
@@ -1073,6 +785,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('hides Happier Cloud when setup surface policy denies it (no implicit profile creation)', async () => {
+        const profilesBeforeRender = profiles.listServerProfiles();
         const previousDeny = process.env.EXPO_PUBLIC_HAPPIER_BUILD_FEATURES_DENY;
         process.env.EXPO_PUBLIC_HAPPIER_BUILD_FEATURES_DENY = 'setup.relay.allowHappierCloud';
         try {
@@ -1086,7 +799,7 @@ describe('OnboardingWizardSurface', () => {
                 }),
             );
 
-            expect(getOrCreateHappierCloudServerProfileMock).not.toHaveBeenCalled();
+            expect(profiles.listServerProfiles()).toEqual(profilesBeforeRender);
             expect(screen.findByTestId('onboarding-wizard-relay:cloud')).toBeNull();
         } finally {
             if (previousDeny === undefined) delete process.env.EXPO_PUBLIC_HAPPIER_BUILD_FEATURES_DENY;
@@ -1095,6 +808,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('shows Happier Cloud when allowed without creating a server profile during render', async () => {
+        const profilesBeforeRender = profiles.listServerProfiles();
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
             React.createElement(OnboardingWizardSurface, {
@@ -1106,12 +820,13 @@ describe('OnboardingWizardSurface', () => {
         );
 
         expect(screen.findByTestId('onboarding-wizard-relay:cloud')).toBeTruthy();
-        expect(getOrCreateHappierCloudServerProfileMock).not.toHaveBeenCalled();
+        expect(profiles.listServerProfiles()).toEqual(profilesBeforeRender);
     });
 
     it('creates the canonical cloud profile from welcome auth actions only after user intent', async () => {
-        listServerProfilesMock.mockReturnValue([]);
-        activeServerSnapshotMock.serverUrl = '';
+        const profilesBeforeRender = profiles.listServerProfiles();
+        await saveHomeProfiles([]);
+        await focusHomeAtAddress('');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -1122,7 +837,7 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
 
-        expect(getOrCreateHappierCloudServerProfileMock).not.toHaveBeenCalled();
+        expect(profiles.listServerProfiles()).toEqual(profilesBeforeRender);
 
         await act(async () => {
             await screen.findByTestId('onboarding-wizard-primary')!.props.onPress?.();
@@ -1146,12 +861,12 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(getOrCreateHappierCloudServerProfileMock).toHaveBeenCalledTimes(1);
-        expect(setActiveServerAndSwitchMock).toHaveBeenCalledWith({
-            serverId: 'cloud-profile',
-            scope: 'device',
-        });
-        expect(upsertActivateAndSwitchServerMock).not.toHaveBeenCalled();
+        expect(profiles.resolveUniqueServerProfileByUrl('https://api.happier.dev')).not.toBeNull();
+        expectFocusedHome('https://api.happier.dev');
+        const cloud = profiles.resolveUniqueServerProfileByUrl('https://api.happier.dev');
+        expect(cloud).not.toBeNull();
+        expect(profiles.getActiveServerSnapshot().serverId).toBe(profiles.resolveServerProfileScopeId(cloud!));
+        expect(profiles.listServerProfiles().filter(profile => profile.serverUrl === 'https://api.happier.dev')).toHaveLength(1);
     });
 
     it('hides manual relay URL entry when setup surface policy denies it', async () => {
@@ -1217,13 +932,13 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
 
-        const restoreStep = screen.findByType('RestoreIndexEmbedded' as never) as unknown as ReactTestInstance;
+        const restoreStep = screen.findByType(RestoreIndexEmbedded as never) as unknown as ReactTestInstance;
         await act(async () => {
             (restoreStep.props as any).onOpenSecretKeyLogin?.();
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(screen.findAllByType('SecretKeyLoginEmbedded' as never)).toHaveLength(1);
+        expect(screen.findAllByType(SecretKeyLoginEmbedded as never)).toHaveLength(1);
     });
 
     it('navigates back to the auth step from the restore step', async () => {
@@ -1237,7 +952,7 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
 
-        expect(screen.findAllByType('RestoreIndexEmbedded' as never)).toHaveLength(1);
+        expect(screen.findAllByType(RestoreIndexEmbedded as never)).toHaveLength(1);
 
         const backButton = screen.findByTestId('onboarding-wizard-back')!;
         await act(async () => {
@@ -1245,7 +960,7 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(findAllInCurrentWizardBodyByType(screen, 'RestoreIndexEmbedded' as never)).toHaveLength(0);
+        expect(findAllInCurrentWizardBodyByType(screen, RestoreIndexEmbedded as never)).toHaveLength(0);
         expect(screen.findAllByTestId('onboarding-wizard-welcome-auth')).toHaveLength(0);
         expect(screen.findByTestId('welcome-decision-panel')).toBeTruthy();
         expect(screen.findByTestId('onboarding-wizard-lost-access')).toBeTruthy();
@@ -1262,7 +977,7 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
 
-        const restoreStep = screen.findByType('RestoreIndexEmbedded' as never) as unknown as ReactTestInstance;
+        const restoreStep = screen.findByType(RestoreIndexEmbedded as never) as unknown as ReactTestInstance;
         await act(async () => {
             (restoreStep.props as any).onNavigationLockChange?.(true);
         });
@@ -1282,7 +997,7 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
 
-        expect(screen.findAllByType('RestoreIndexEmbedded' as never)).toHaveLength(1);
+        expect(screen.findAllByType(RestoreIndexEmbedded as never)).toHaveLength(1);
 
         const skipButton = screen.findByTestId('onboarding-wizard-skip')!;
         await act(async () => {
@@ -1290,16 +1005,15 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(findAllInCurrentWizardBodyByType(screen, 'RestoreIndexEmbedded' as never)).toHaveLength(0);
-        expect(findAllInCurrentWizardBodyByType(screen, 'SecretKeyLoginEmbedded' as never)).toHaveLength(0);
+        expect(findAllInCurrentWizardBodyByType(screen, RestoreIndexEmbedded as never)).toHaveLength(0);
+        expect(findAllInCurrentWizardBodyByType(screen, SecretKeyLoginEmbedded as never)).toHaveLength(0);
         expect(screen.findByTestId('welcome-decision-panel')).toBeTruthy();
     });
 
     it('dispatches the exact selected Home authority without switching ambient focus', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
-        getResetToDefaultServerIdMock.mockReturnValue('cloud-profile');
-        const selectedHomeTarget = { kind: 'saved_profile', profileRef: 'relay-b' } as const;
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('https://api.happier.dev');
+
+        await saveHomeProfiles([
             {
                 id: 'relay-b',
                 name: 'Relay B',
@@ -1311,8 +1025,10 @@ describe('OnboardingWizardSurface', () => {
             },
         ]);
 
+        const selectedHomeTarget = { kind: 'saved_profile', profileRef: homeProfileRef('relay-b') } as const;
         const onContinueWithHomeAuthentication = vi.fn(async () => undefined);
 
+        const focusBeforeAction = profiles.getActiveServerSnapshot();
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
             React.createElement(OnboardingWizardSurface, {
@@ -1321,7 +1037,7 @@ describe('OnboardingWizardSurface', () => {
                 authEntryOptions: {
                     ...baseAuthOptions,
                     homeTarget: selectedHomeTarget,
-                    observedHomeServerIdentityId: 'relay-b',
+                    observedHomeServerIdentityId: homeProfileRef('relay-b'),
                 },
                 onContinueWithHomeAuthentication,
             }),
@@ -1333,7 +1049,7 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const relayRow = screen.findByTestId('onboarding-wizard-relay:profile:relay-b')!;
+        const relayRow = screen.findByTestId(homeRowTestId('relay-b'))!;
         await act(async () => {
             await relayRow.props.onPress?.();
         });
@@ -1349,7 +1065,7 @@ describe('OnboardingWizardSurface', () => {
 
         await pressOnboarding(screen, 'welcome-primary-start');
 
-        expect(upsertActivateAndSwitchServerMock).not.toHaveBeenCalled();
+        expect(profiles.getActiveServerSnapshot()).toMatchObject(focusBeforeAction);
         expect(onContinueWithHomeAuthentication).toHaveBeenCalledWith(
             expect.objectContaining({
                 method: generatedKeyAuthenticationAction.method,
@@ -1365,11 +1081,10 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('keeps welcome auth actions pinned to the explicit active relay instead of the configured default relay', async () => {
-        configuredServerUrlEnvMockState.value = 'http://127.0.0.1:3009';
+        process.env.EXPO_PUBLIC_HAPPIER_SERVER_URL = 'http://127.0.0.1:3009';
 
-        activeServerSnapshotMock.serverId = 'relay-override';
-        activeServerSnapshotMock.serverUrl = 'https://relay-override.example.test';
-        activeServerSnapshotMock.activeLocalRelayUrl = null;
+        await focusHomeAtAddress('https://relay-override.example.test');
+        browser?.reconfigureUrl('https://app.happier.dev');
 
         const onContinueWithHomeAuthentication = vi.fn(async () => undefined);
 
@@ -1392,9 +1107,7 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(upsertActivateAndSwitchServerMock).not.toHaveBeenCalledWith(expect.objectContaining({
-            serverUrl: 'http://127.0.0.1:3009',
-        }));
+        expectFocusedHome('https://relay-override.example.test');
         expect(onContinueWithHomeAuthentication).toHaveBeenCalledWith(
             expect.objectContaining({
                 execution: { kind: 'generated_key' },
@@ -1407,7 +1120,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('keeps the welcome relay hint visible when the active relay supplies the URL', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -1422,7 +1135,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('updates the active relay footer hint when the active server snapshot changes', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -1433,14 +1146,14 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
         await flushHookEffects({ cycles: 1, turns: 1 });
-        expect(activeServerSubscriptionMock.getListenerCount()).toBeGreaterThan(0);
+        expect(profiles.getActiveServerSnapshot().serverUrl).toBe('https://relay.example.test');
 
         const relayLine = screen.findByTestId('onboarding-wizard-relay-hint-line')!;
         expect(String(relayLine.props.children)).toContain('relay.example.test');
 
-        activeServerSnapshotMock.serverUrl = 'https://relay-other.example.test';
+        await focusHomeAtAddress('https://relay-other.example.test');
         await act(async () => {
-            activeServerSubscriptionMock.emit();
+            // The real profile write above published its subscription.
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
@@ -1449,7 +1162,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('does not render a duplicate relay selection action inside the welcome body', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -1464,9 +1177,21 @@ describe('OnboardingWizardSurface', () => {
         expect(screen.findAllByTestId('onboarding-wizard-change-relay')).toHaveLength(0);
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
+        await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
+        clearPendingSetupIntent();
+        await homes.reset();
         storage.setState(initialStorageState, true);
+        browser?.restore();
+        browser = null;
+        vi.unstubAllGlobals();
+        for (const [key, value] of originalServerEnvironment) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+        if (originalStorageScope === undefined) delete process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
+        else process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = originalStorageScope;
     });
 
     it('can start on relay selection when initialStepId is provided', async () => {
@@ -1485,7 +1210,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('updates the active relay row when the active server changes', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
             React.createElement(OnboardingWizardSurface, {
@@ -1496,16 +1221,16 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
 
-        const before = screen.findByTestId('onboarding-wizard-relay:profile:active')!;
+        const before = screen.findByProps({ testID: homeRowTestId('active') });
         expect(before.props.subtitle).toBe('https://relay.example.test');
 
         await act(async () => {
-            activeServerSnapshotMock.serverUrl = 'https://relay-other.example.test';
-            activeServerSubscriptionMock.emit();
+            await focusHomeAtAddress('https://relay-other.example.test');
+            // The real profile write above published its subscription.
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const after = screen.findByTestId('onboarding-wizard-relay:profile:active')!;
+        const after = screen.findByProps({ testID: homeRowTestId('active') });
         expect(after.props.subtitle).toBe('https://relay-other.example.test');
     });
 
@@ -1531,7 +1256,7 @@ describe('OnboardingWizardSurface', () => {
             await continueButton.props.onPress?.();
         });
 
-        expect(setPendingSetupIntentMock).toHaveBeenCalledWith({
+        expect(getPendingSetupIntent()).toEqual({
             branch: 'thisComputer',
             phase: 'awaiting_auth',
             relayUrl: 'https://api.happier.dev',
@@ -1554,12 +1279,12 @@ describe('OnboardingWizardSurface', () => {
             await skipButton.props.onPress?.();
         });
 
-        expect(setPendingSetupIntentMock).not.toHaveBeenCalled();
+        expect(getPendingSetupIntent()).toBeNull();
         expect(screen.findByTestId('onboarding-wizard-relay:cloud')).toBeTruthy();
     });
 
     it('fast-paths from welcome to the restore login screen when a non-cloud relay is already selected', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -1579,8 +1304,8 @@ describe('OnboardingWizardSurface', () => {
             await loginButton.props.onPress?.();
         });
 
-        expect(screen.findAllByType('RestoreIndexEmbedded' as never)).toHaveLength(1);
-        expect(setPendingSetupIntentMock).toHaveBeenCalledWith({
+        expect(screen.findAllByType(RestoreIndexEmbedded as never)).toHaveLength(1);
+        expect(getPendingSetupIntent()).toEqual({
             branch: 'thisComputer',
             phase: 'awaiting_auth',
             relayUrl: 'https://relay.example.test',
@@ -1592,13 +1317,13 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(findAllInCurrentWizardBodyByType(screen, 'RestoreIndexEmbedded' as never)).toHaveLength(0);
+        expect(findAllInCurrentWizardBodyByType(screen, RestoreIndexEmbedded as never)).toHaveLength(0);
         expect(screen.findByTestId('welcome-decision-panel')).toBeTruthy();
         expect(screen.findByTestId('onboarding-wizard-relay-hint')).toBeTruthy();
     });
 
     it('hides duplicate relay escape-hatch actions when the selected relay is unreachable on the welcome step', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -1619,8 +1344,8 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('renders the welcome body block and selected server hint with clear back navigation', async () => {
-        activeServerSnapshotMock.serverUrl = '';
-        activeServerSnapshotMock.activeLocalRelayUrl = 'http://localhost:31337';
+        await focusHomeAtAddress('http://localhost:31337');
+        browser?.reconfigureUrl('http://localhost:31337');
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
             React.createElement(OnboardingWizardSurface, {
@@ -1634,7 +1359,7 @@ describe('OnboardingWizardSurface', () => {
         expect(screen.findByTestId('onboarding-wizard-logotype')).toBeTruthy();
         expect(screen.findAllByTestId('onboarding-wizard-welcome-showcase')).toHaveLength(0);
 
-        const startButton = screen.findByTestId('onboarding-wizard-primary')!;
+        const startButton = screen.findByTestId('welcome-use-different-home')!;
         await act(async () => {
             await startButton.props.onPress?.();
         });
@@ -1658,7 +1383,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('runs anonymous account creation from the welcome decision primary action', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
         const onContinueWithHomeAuthentication = vi.fn();
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
@@ -1712,7 +1437,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('uses the provider execution tuple for the New here primary action', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
         const onContinueWithHomeAuthentication = vi.fn();
         const providerAction = {
             method: { id: 'github', enabledActions: [{ id: 'provision', mode: 'keyed' }] },
@@ -1750,7 +1475,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('uses the mTLS primary action for managed certificate login states', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
         const onContinueWithHomeAuthentication = vi.fn();
         const mtlsAction = {
             method: { id: 'mtls', enabledActions: [{ id: 'login', mode: 'keyless' }] },
@@ -1792,7 +1517,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('keeps restore navigation available while auth capability loading is unresolved', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -1813,8 +1538,8 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('shows welcome decision actions when the relay is already known', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('https://relay.example.test');
+        await saveHomeProfiles([
             {
                 id: 'cloud-profile',
                 name: 'Happier Cloud',
@@ -1843,8 +1568,8 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('leaves relay selection on the shell footer instead of rendering a duplicate welcome body action', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('https://relay.example.test');
+        await saveHomeProfiles([
             {
                 id: 'cloud-profile',
                 name: 'Happier Cloud',
@@ -1870,9 +1595,9 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('shows auth actions on welcome after the user picks a saved relay and returns back to the intro', async () => {
-        activeServerSnapshotMock.serverUrl = '';
-        getResetToDefaultServerIdMock.mockReturnValue('');
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('');
+
+        await saveHomeProfiles([
             {
                 id: 'relay-b',
                 name: 'Relay B',
@@ -1893,13 +1618,15 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
 
-        const startButton = screen.findByTestId('onboarding-wizard-primary')!;
+        // Saving the first Home makes it the active Home; enter selection through
+        // Welcome's actual change-Home action rather than its sign-in primary.
+        const startButton = screen.findByTestId('welcome-use-different-home')!;
         await act(async () => {
             await startButton.props.onPress?.();
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const relayRow = screen.findByTestId('onboarding-wizard-relay:profile:relay-b')!;
+        const relayRow = screen.findByTestId(homeRowTestId('relay-b'))!;
         await act(async () => {
             await relayRow.props.onPress?.();
         });
@@ -1917,9 +1644,9 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('opens secret key login without waiting for a redundant active-server switch, then returns to restore and welcome', async () => {
-        activeServerSnapshotMock.serverUrl = '';
-        getResetToDefaultServerIdMock.mockReturnValue('');
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('');
+
+        await saveHomeProfiles([
             {
                 id: 'relay-b',
                 name: 'Relay B',
@@ -1930,12 +1657,7 @@ describe('OnboardingWizardSurface', () => {
                 source: 'manual',
             },
         ]);
-        upsertActivateAndSwitchServerMock
-            .mockResolvedValueOnce(true)
-            .mockImplementationOnce(async () => {
-                await new Promise<void>((resolve) => setTimeout(resolve, 50));
-                return true;
-            });
+
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -1946,13 +1668,13 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
 
-        const startButton = screen.findByTestId('onboarding-wizard-primary')!;
+        const startButton = screen.findByTestId('welcome-use-different-home')!;
         await act(async () => {
             await startButton.props.onPress?.();
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const relayRow = screen.findByTestId('onboarding-wizard-relay:profile:relay-b')!;
+        const relayRow = screen.findByTestId(homeRowTestId('relay-b'))!;
         await act(async () => {
             await relayRow.props.onPress?.();
         });
@@ -1971,11 +1693,11 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const restoreStep = screen.findByType('RestoreIndexEmbedded' as never) as unknown as ReactTestInstance;
+        const restoreStep = screen.findByType(RestoreIndexEmbedded as never) as unknown as ReactTestInstance;
         act(() => {
             void (restoreStep.props as any).onOpenSecretKeyLogin?.();
         });
-        expect(screen.findAllByType('SecretKeyLoginEmbedded' as never)).toHaveLength(1);
+        expect(screen.findAllByType(SecretKeyLoginEmbedded as never)).toHaveLength(1);
 
         const backFromSecretKey = screen.findByTestId('onboarding-wizard-back')!;
         await act(async () => {
@@ -1983,8 +1705,8 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(findAllInCurrentWizardBodyByType(screen, 'SecretKeyLoginEmbedded' as never)).toHaveLength(0);
-        expect(findAllInCurrentWizardBodyByType(screen, 'RestoreIndexEmbedded' as never)).toHaveLength(1);
+        expect(findAllInCurrentWizardBodyByType(screen, SecretKeyLoginEmbedded as never)).toHaveLength(0);
+        await vi.waitFor(() => expect(findAllInCurrentWizardBodyByType(screen, RestoreIndexEmbedded as never)).toHaveLength(1));
 
         const backFromRestore = screen.findByTestId('onboarding-wizard-back')!;
         await act(async () => {
@@ -1992,14 +1714,14 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(findAllInCurrentWizardBodyByType(screen, 'RestoreIndexEmbedded' as never)).toHaveLength(0);
+        expect(findAllInCurrentWizardBodyByType(screen, RestoreIndexEmbedded as never)).toHaveLength(0);
         expect(screen.findByTestId('welcome-decision-panel')).toBeTruthy();
     });
 
     it('opens lost access without waiting for a redundant active-server switch', async () => {
-        activeServerSnapshotMock.serverUrl = '';
-        getResetToDefaultServerIdMock.mockReturnValue('');
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('');
+
+        await saveHomeProfiles([
             {
                 id: 'relay-b',
                 name: 'Relay B',
@@ -2010,12 +1732,7 @@ describe('OnboardingWizardSurface', () => {
                 source: 'manual',
             },
         ]);
-        upsertActivateAndSwitchServerMock
-            .mockResolvedValueOnce(true)
-            .mockImplementationOnce(async () => {
-                await new Promise<void>((resolve) => setTimeout(resolve, 50));
-                return true;
-            });
+
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2026,8 +1743,8 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
 
-        await pressOnboarding(screen, 'onboarding-wizard-primary');
-        const relayRow = screen.findByTestId('onboarding-wizard-relay:profile:relay-b')!;
+        await pressOnboarding(screen, 'welcome-use-different-home');
+        const relayRow = screen.findByTestId(homeRowTestId('relay-b'))!;
         await act(async () => {
             await relayRow.props.onPress?.();
         });
@@ -2044,7 +1761,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('only advances to relay URL entry after pressing Continue when selecting the custom relay option', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
+        await focusHomeAtAddress('https://api.happier.dev');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2076,7 +1793,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('prefills the relay URL entry input with the currently selected relay URL when available', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://prefilled.relay.test';
+        await focusHomeAtAddress('https://prefilled.relay.test');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2111,7 +1828,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('routes the auth view change-relay action back to the wizard relay selection step', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2129,7 +1846,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('threads Tauri Personal Home hosting capability to auth without opening setup', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2148,7 +1865,7 @@ describe('OnboardingWizardSurface', () => {
 
     it('does not advertise Personal Home hosting in the non-hosting Electron desktop shell', async () => {
         desktopHostMockState.kind = 'electron';
-        activeServerSnapshotMock.serverUrl = 'https://relay.example.test';
+        await focusHomeAtAddress('https://relay.example.test');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2166,14 +1883,15 @@ describe('OnboardingWizardSurface', () => {
     type PreAuthMatrixPlatform = 'desktop' | 'web' | 'native';
     type RenderedOnboardingScreen = Awaited<ReturnType<typeof renderScreen>>;
 
-    const setPreAuthMatrixPlatform = (platform: PreAuthMatrixPlatform) => {
+    const setPreAuthMatrixPlatform = async (platform: PreAuthMatrixPlatform) => {
+        desktopHostMockState.kind = platform === 'desktop' ? 'tauri' : null;
         reactNativeMockState.os = platform === 'native' ? 'ios' : 'web';
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
-        activeServerSnapshotMock.activeLocalRelayUrl = null;
+        await focusHomeAtAddress('https://api.happier.dev');
+        browser?.reconfigureUrl('https://app.happier.dev');
     };
 
     const renderPreAuthRelayMatrix = async (platform: PreAuthMatrixPlatform) => {
-        setPreAuthMatrixPlatform(platform);
+        await setPreAuthMatrixPlatform(platform);
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         return renderScreen(
             React.createElement(OnboardingWizardSurface, {
@@ -2186,11 +1904,17 @@ describe('OnboardingWizardSurface', () => {
     };
 
     const pressOnboarding = async (screen: RenderedOnboardingScreen, testID: string) => {
-        const node = screen.findByTestId(testID);
-        expect(node).toBeTruthy();
-        await act(async () => {
-            await node?.props.onPress?.();
+        if (testID === 'onboarding-wizard-primary' && screen.findAllByType(RelayHostLocalChecklistStep as never).length > 0) {
+            // This fixture's OS status reply is healthy. Observe it before choosing Continue,
+            // rather than starting an installation from the initial not-yet-inspected checklist.
+            await vi.waitFor(() => expect(screen.getTextContent().match(/common\.done/g)?.length ?? 0).toBeGreaterThanOrEqual(2));
+        }
+        await vi.waitFor(() => {
+            const node = screen.findByTestId(testID);
+            expect(node).toBeTruthy();
+            expect(node?.props.disabled === true || node?.props.accessibilityState?.disabled === true).toBe(false);
         });
+        await screen.pressByTestIdAsync(testID);
         await flushHookEffects({ cycles: 2, turns: 2 });
     };
 
@@ -2244,11 +1968,7 @@ describe('OnboardingWizardSurface', () => {
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
         expect(getOnboardingStepId(screen)).toBe('auth');
-        expect(upsertActivateAndSwitchServerMock).toHaveBeenLastCalledWith({
-            serverUrl: `https://${platform}.custom-relay.example.test`,
-            source: 'url',
-            scope: 'device',
-        });
+        expectFocusedHome(`https://${platform}.custom-relay.example.test`);
     });
 
     it.each([
@@ -2256,7 +1976,7 @@ describe('OnboardingWizardSurface', () => {
         ['web', 'web'],
         ['native', 'native'],
     ] as const)('characterizes saved relay profile selection on %s', async (_label, platform) => {
-        listServerProfilesMock.mockReturnValue([
+        await saveHomeProfiles([
             {
                 id: `saved-${platform}`,
                 name: `${platform} saved relay`,
@@ -2269,22 +1989,19 @@ describe('OnboardingWizardSurface', () => {
         ]);
         const screen = await renderPreAuthRelayMatrix(platform);
 
-        await pressOnboarding(screen, `onboarding-wizard-relay:profile:saved-${platform}`);
+        await pressOnboarding(screen, homeRowTestId(`saved-${platform}`));
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
         expect(getOnboardingStepId(screen)).toBe('auth');
-        expect(upsertActivateAndSwitchServerMock).toHaveBeenLastCalledWith({
-            serverUrl: `https://${platform}.saved-relay.example.test`,
-            source: 'url',
-            scope: 'device',
-        });
+        expectFocusedHome(`https://${platform}.saved-relay.example.test`);
     });
 
     it('continues from the default active saved relay without reactivating it', async () => {
         const activeRelayUrl = 'http://happier-repo-dev-a1cc5e0671.localhost:53288';
-        setPreAuthMatrixPlatform('web');
-        activeServerSnapshotMock.serverUrl = activeRelayUrl;
-        listServerProfilesMock.mockReturnValue([
+        await setPreAuthMatrixPlatform('web');
+        await focusHomeAtAddress(activeRelayUrl);
+        browser?.reconfigureUrl(activeRelayUrl);
+        await saveHomeProfiles([
             {
                 id: 'active-local-relay',
                 name: 'happier-repo-dev-a1cc5e0671',
@@ -2296,6 +2013,7 @@ describe('OnboardingWizardSurface', () => {
             },
         ]);
 
+        const focusBeforeAction = profiles.getActiveServerSnapshot();
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
             <OnboardingWizardSurface
@@ -2309,7 +2027,7 @@ describe('OnboardingWizardSurface', () => {
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
         expect(getOnboardingStepId(screen)).toBe('auth');
-        expect(upsertActivateAndSwitchServerMock).not.toHaveBeenCalled();
+        expect(profiles.getActiveServerSnapshot()).toMatchObject(focusBeforeAction);
     });
 
     it.each([
@@ -2339,8 +2057,8 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('guides web users to continue on desktop when selecting "On this computer"', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
-        activeServerSnapshotMock.activeLocalRelayUrl = null;
+        await focusHomeAtAddress('https://api.happier.dev');
+        browser?.reconfigureUrl('https://app.happier.dev');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2376,8 +2094,8 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('routes desktop users to the local relay hosting checklist when selecting "On this computer" and the local relay bind URL is unreachable', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
-        activeServerSnapshotMock.activeLocalRelayUrl = 'http://localhost:53288';
+        await focusHomeAtAddress('https://api.happier.dev');
+        browser?.reconfigureUrl('http://localhost:53288');
 
         const previousFetchImpl = runtimeFetchMock.getMockImplementation();
         runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2423,8 +2141,8 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('still routes desktop users to the local relay hosting checklist when selecting "On this computer" and the local relay bind URL is reachable', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
-        activeServerSnapshotMock.activeLocalRelayUrl = 'http://localhost:53288';
+        await focusHomeAtAddress('https://api.happier.dev');
+        browser?.reconfigureUrl('http://localhost:53288');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2451,12 +2169,12 @@ describe('OnboardingWizardSurface', () => {
         await flushHookEffects({ cycles: 1, turns: 1 });
 
         expect(screen.findByTestId('onboarding-wizard-relay-host-local')).toBeTruthy();
-        expect(screen.findAllByType('LocalRelayAccessControlSection' as never)).toHaveLength(0);
+        expect(screen.findAllByType(LocalRelayAccessControlSection as never)).toHaveLength(0);
     });
 
     it('does not treat *.localhost URLs as a true local relay runtime bind URL for the "On this computer" fast-path', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
-        activeServerSnapshotMock.activeLocalRelayUrl = 'http://happier-repo-dev-a1cc5e0671.localhost:19364';
+        await focusHomeAtAddress('https://api.happier.dev');
+        browser?.reconfigureUrl('http://happier-repo-dev-a1cc5e0671.localhost:19364');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2488,8 +2206,8 @@ describe('OnboardingWizardSurface', () => {
     it('treats native as a handoff flow: enables "On your computer" and routes to the handoff step', async () => {
         reactNativeMockState.os = 'ios';
 
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
-        activeServerSnapshotMock.activeLocalRelayUrl = null;
+        await focusHomeAtAddress('https://api.happier.dev');
+        browser?.reconfigureUrl('https://app.happier.dev');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2501,7 +2219,7 @@ describe('OnboardingWizardSurface', () => {
             }),
         );
 
-        const thisComputerRow = screen.findByTestId('onboarding-wizard-relay:thisComputer')!;
+        const thisComputerRow = screen.findByProps({ testID: 'onboarding-wizard-relay:thisComputer' });
         expect(thisComputerRow.props.disabled).toBe(false);
         expect(thisComputerRow.props.title).toBe('setupOnboarding.relayOnYourComputerTitle');
 
@@ -2525,8 +2243,8 @@ describe('OnboardingWizardSurface', () => {
     ])('routes %s users through background service handoff after saving a relay url from the "On this computer" handoff', async (_label, os) => {
         reactNativeMockState.os = os;
 
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
-        activeServerSnapshotMock.activeLocalRelayUrl = null;
+        await focusHomeAtAddress('https://api.happier.dev');
+        browser?.reconfigureUrl('https://app.happier.dev');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2569,6 +2287,7 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 4, turns: 4 });
 
+        await vi.waitFor(() => expect(screen.findByTestId('onboarding-wizard-background-service-handoff')).not.toBeNull());
         const backgroundServiceHandoff = screen.findByTestId('onboarding-wizard-background-service-handoff');
         expect(backgroundServiceHandoff).not.toBeNull();
         expect(directChildTestIDs(backgroundServiceHandoff).slice(0, 2)).toEqual([
@@ -2591,7 +2310,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('skips relay URL entry when a custom relay has already been resolved', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://api.happier.dev';
+        await focusHomeAtAddress('https://api.happier.dev');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -2637,7 +2356,7 @@ describe('OnboardingWizardSurface', () => {
 
         expect(screen.findByTestId('onboarding-wizard-relay:customUrl')).not.toBeNull();
 
-        const activeRelayRow = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:active' } as never);
+        const activeRelayRow = screen.findByProps({ testID: homeRowTestId('active') } as never);
         expect(activeRelayRow?.props.selected).toBe(true);
         expect(screen.findByProps({ testID: 'onboarding-wizard-relay:customUrl' } as never)?.props.selected).toBe(false);
 
@@ -2678,10 +2397,11 @@ describe('OnboardingWizardSurface', () => {
             await continueToPlanButton.props.onPress?.();
         });
 
-        expect(screen.findByType('RelayHostLocalChecklistStep' as never)).toBeTruthy();
+        expect(screen.findByType(RelayHostLocalChecklistStep as never)).toBeTruthy();
     });
 
     it('requires explicit relay switch confirmation after hosting a local relay', async () => {
+        const focusBeforeAction = profiles.getActiveServerSnapshot();
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
             React.createElement(OnboardingWizardSurface, {
@@ -2709,22 +2429,14 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(screen.findByType('RelayHostLocalChecklistStep' as never)).toBeTruthy();
+        expect(screen.findByType(RelayHostLocalChecklistStep as never)).toBeTruthy();
 
-        const continueAfterHosted = screen.findByTestId('onboarding-wizard-primary')!;
-        await act(async () => {
-            await continueAfterHosted.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 1, turns: 1 });
+        await pressOnboarding(screen, 'onboarding-wizard-primary');
 
-        expect(upsertActivateAndSwitchServerMock).not.toHaveBeenCalled();
-        expect(screen.findByType('LocalRelayAccessControlSection' as never)).toBeTruthy();
+        expect(profiles.getActiveServerSnapshot()).toMatchObject(focusBeforeAction);
+        await vi.waitFor(() => expect(screen.findByType(LocalRelayAccessControlSection as never)).toBeTruthy());
 
-        const continueAfterAccess = screen.findByTestId('onboarding-wizard-primary')!;
-        await act(async () => {
-            await continueAfterAccess.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 1, turns: 1 });
+        await pressOnboarding(screen, 'onboarding-wizard-primary');
 
         expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy();
 
@@ -2740,7 +2452,7 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(upsertActivateAndSwitchServerMock).toHaveBeenCalledWith(expect.objectContaining({ serverUrl: 'http://localhost:31337' }));
+        expectFocusedHome('http://localhost:31337');
         expect(screen.findByTestId('onboarding-wizard-lost-access')).not.toBeNull();
     });
 
@@ -2772,22 +2484,14 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(screen.findByType('RelayHostLocalChecklistStep' as never)).toBeTruthy();
+        expect(screen.findByType(RelayHostLocalChecklistStep as never)).toBeTruthy();
 
-        const continueAfterHosted = screen.findByTestId('onboarding-wizard-primary')!;
-        await act(async () => {
-            await continueAfterHosted.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 1, turns: 1 });
+        await pressOnboarding(screen, 'onboarding-wizard-primary');
 
-        expect(screen.findByType('LocalRelayAccessControlSection' as never)).toBeTruthy();
+        await vi.waitFor(() => expect(screen.findByType(LocalRelayAccessControlSection as never)).toBeTruthy());
         expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeNull();
 
-        const continueAfterAccess = screen.findByTestId('onboarding-wizard-primary')!;
-        await act(async () => {
-            await continueAfterAccess.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 1, turns: 1 });
+        await pressOnboarding(screen, 'onboarding-wizard-primary');
 
         expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy();
     });
@@ -2956,7 +2660,7 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const remoteChecklistProps = remoteSshChecklistMock.spy.mock.calls.at(-1)?.[0] as {
+        const remoteChecklistProps = screen.findByType(RemoteSshChecklistStep as never)?.props as {
             onCompleted?: (payload: {
                 machineId: string | null;
                 relayRuntimeUrl: string | null;
@@ -2990,12 +2694,12 @@ describe('OnboardingWizardSurface', () => {
         await flushHookEffects({ cycles: 1, turns: 1 });
 
         await act(async () => {
-            remoteChecklistProps?.onRequestAdvance?.();
+            screen.findByType(RemoteSshChecklistStep as never).props.onRequestAdvance?.();
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(screen.findByType('LocalRelayAccessControlSection' as never)).toBeTruthy();
-        expect((screen.findByType('LocalRelayAccessControlSection' as never) as unknown as {
+        await vi.waitFor(() => expect(screen.findByType(LocalRelayAccessControlSection as never)).toBeTruthy());
+        expect((screen.findByType(LocalRelayAccessControlSection as never) as unknown as {
             props: { target?: { kind: 'local' } | { kind: 'ssh'; ssh: { target: string; auth: 'agent' | 'keyfile' | 'password' } } };
         }).props.target).toEqual({
             kind: 'ssh',
@@ -3006,11 +2710,7 @@ describe('OnboardingWizardSurface', () => {
         });
         expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeNull();
 
-        const continueAfterRelayAccess = screen.findByTestId('onboarding-wizard-primary')!;
-        await act(async () => {
-            await continueAfterRelayAccess.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 1, turns: 1 });
+        await pressOnboarding(screen, 'onboarding-wizard-primary');
 
         expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy();
     });
@@ -3043,7 +2743,7 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const remoteChecklistProps = remoteSshChecklistMock.spy.mock.calls.at(-1)?.[0] as {
+        const remoteChecklistProps = screen.findByType(RemoteSshChecklistStep as never)?.props as {
             onCompleted?: (payload: {
                 machineId: string | null;
                 relayRuntimeUrl: string | null;
@@ -3076,21 +2776,18 @@ describe('OnboardingWizardSurface', () => {
         await flushHookEffects({ cycles: 1, turns: 1 });
 
         await act(async () => {
-            remoteChecklistProps?.onRequestAdvance?.();
+            screen.findByType(RemoteSshChecklistStep as never).props.onRequestAdvance?.();
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
+        await vi.waitFor(() => expect(screen.findByType(LocalRelayAccessControlSection as never)).toBeTruthy());
         await act(async () => {
-            (relayAccessWizardMockState.latestProps as { onShareUrlChange?: (value: string | null) => void } | null)
+            (screen.findByType(LocalRelayAccessControlSection as never)?.props as { onShareUrlChange?: (value: string | null) => void } | null)
                 ?.onShareUrlChange?.('https://remote-share.example.test');
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const continueAfterRelayAccess = screen.findByTestId('onboarding-wizard-primary')!;
-        await act(async () => {
-            await continueAfterRelayAccess.props.onPress?.();
-        });
-        await flushHookEffects({ cycles: 1, turns: 1 });
+        await pressOnboarding(screen, 'onboarding-wizard-primary');
 
         const confirmBody = screen.findByTestId('onboarding-wizard-confirmSwitchRelay')!;
         expect(String(confirmBody.props.relayUrl ?? screen.getTextContent())).toContain('remote-share.example.test');
@@ -3101,10 +2798,8 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(upsertActivateAndSwitchServerMock).toHaveBeenCalledWith(expect.objectContaining({
-            serverUrl: 'https://remote-share.example.test',
-        }));
-        expect(setPendingSetupIntentMock).toHaveBeenCalledWith(expect.objectContaining({
+        expectFocusedHome('https://remote-share.example.test');
+        expect(getPendingSetupIntent()).toEqual(expect.objectContaining({
             relayUrl: 'https://remote-share.example.test',
         }));
     });
@@ -3126,8 +2821,7 @@ describe('OnboardingWizardSurface', () => {
                 ? previousFetchImpl(input, init)
                 : new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
         });
-        systemTaskRunnerState.startMock.mockResolvedValueOnce('task_prepare_tailscale_1');
-        systemTaskRunnerState.nextResult = {
+        nativeTaskScene.nextResult = {
             protocolVersion: 1,
             taskId: 'task_prepare_tailscale_1',
             ok: true,
@@ -3165,7 +2859,7 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const remoteChecklistProps = remoteSshChecklistMock.spy.mock.calls.at(-1)?.[0] as {
+        const remoteChecklistProps = screen.findByType(RemoteSshChecklistStep as never)?.props as {
             onCompleted?: (payload: {
                 machineId: string | null;
                 relayRuntimeUrl: string | null;
@@ -3198,14 +2892,12 @@ describe('OnboardingWizardSurface', () => {
         await flushHookEffects({ cycles: 1, turns: 1 });
 
         await act(async () => {
-            remoteChecklistProps?.onRequestAdvance?.();
+            screen.findByType(RemoteSshChecklistStep as never).props.onRequestAdvance?.();
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const continueAfterRelayAccess = screen.findByTestId('onboarding-wizard-primary')!;
-        await act(async () => {
-            await continueAfterRelayAccess.props.onPress?.();
-        });
+        await vi.waitFor(() => expect(screen.findByType(LocalRelayAccessControlSection as never)).toBeTruthy());
+        await pressOnboarding(screen, 'onboarding-wizard-primary');
         await flushHookEffects({ cycles: 4, turns: 4 });
 
         expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy();
@@ -3220,7 +2912,7 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 6, turns: 6 });
 
-        expect(systemTaskRunnerState.startMock).toHaveBeenCalledWith({
+        expect(nativeTasks.bridge.start).toHaveBeenCalledWith({
             protocolVersion: 1,
             kind: 'tailscale.ensureReady.v1',
             params: {
@@ -3266,8 +2958,8 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('shows a prefilled relay as a selectable row and selects it by default', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay-b.example.test';
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('https://relay-b.example.test');
+        await saveHomeProfiles([
             {
                 id: 'relay-a',
                 name: 'Relay A',
@@ -3299,8 +2991,8 @@ describe('OnboardingWizardSurface', () => {
         );
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(screen.findByProps({ testID: 'onboarding-wizard-relay:profile:relay-a' } as never)).toBeTruthy();
-        const relayRow = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:relay-b' } as never);
+        expect(screen.findByProps({ testID: homeRowTestId('relay-a') } as never)).toBeTruthy();
+        const relayRow = screen.findByProps({ testID: homeRowTestId('relay-b') } as never);
         expect(relayRow).toBeTruthy();
         expect(relayRow?.props.selected).toBe(true);
         expect(screen.findByTestId('onboarding-wizard-relay:customUrl')).toBeTruthy();
@@ -3308,9 +3000,10 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('continues from the default active saved relay without requiring the user to reselect it', async () => {
-        activeServerSnapshotMock.serverId = 'relay-real';
-        activeServerSnapshotMock.serverUrl = 'http://localhost:53288';
-        listServerProfilesMock.mockReturnValue([
+
+        await focusHomeAtAddress('http://localhost:53288');
+        browser?.reconfigureUrl('http://localhost:53288');
+        await saveHomeProfiles([
             {
                 id: 'relay-real',
                 name: 'Current Relay',
@@ -3322,6 +3015,7 @@ describe('OnboardingWizardSurface', () => {
             },
         ]);
 
+        const focusBeforeAction = profiles.getActiveServerSnapshot();
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
             React.createElement(OnboardingWizardSurface, {
@@ -3334,18 +3028,18 @@ describe('OnboardingWizardSurface', () => {
         await flushHookEffects({ cycles: 1, turns: 1 });
 
         expect(screen.findByProps({
-            testID: 'onboarding-wizard-relay:profile:relay-real',
+            testID: homeRowTestId('relay-real'),
         } as never)?.props.selected).toBe(true);
 
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
         expect(screen.findByTestId('welcome-decision-panel')).toBeTruthy();
         expect(screen.findByTestId('onboarding-wizard-relay-url-input')).toBeNull();
-        expect(upsertActivateAndSwitchServerMock).not.toHaveBeenCalled();
+        expect(profiles.getActiveServerSnapshot()).toMatchObject(focusBeforeAction);
     });
 
     it('marks an unreachable saved relay as unavailable and offers a retry action', async () => {
-        listServerProfilesMock.mockReturnValue([
+        await saveHomeProfiles([
             {
                 id: 'relay-offline',
                 name: 'Offline Relay',
@@ -3369,12 +3063,12 @@ describe('OnboardingWizardSurface', () => {
 
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const relayRow = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:relay-offline' } as never);
+        const relayRow = screen.findByProps({ testID: homeRowTestId('relay-offline') } as never);
         expect(relayRow?.props.disabled).toBe(false);
         expect(relayRow?.props.dimmed).toBe(true);
         expect(relayRow?.props.menuActions?.some((action: any) => action.id === 'retry')).toBe(true);
         const selectableRow = screen.findByProps({
-            testID: 'onboarding-wizard-relay:profile:relay-offline',
+            testID: homeRowTestId('relay-offline'),
             variant: 'selectable',
         } as never);
         expect(selectableRow?.props.title).toBe('Offline Relay');
@@ -3390,8 +3084,8 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('does not auto-select another relay when removing the selected saved relay', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay-a.example.test';
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('https://relay-a.example.test');
+        await saveHomeProfiles([
             {
                 id: 'relay-a',
                 name: 'Relay A',
@@ -3424,7 +3118,7 @@ describe('OnboardingWizardSurface', () => {
 
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const relayRow = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:relay-a' } as never);
+        const relayRow = screen.findByProps({ testID: homeRowTestId('relay-a') } as never);
         expect(relayRow?.props.selected).toBe(true);
 
         await act(async () => {
@@ -3433,18 +3127,18 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(removeServerProfileUiActionMock).toHaveBeenCalled();
+        await vi.waitFor(() => expect(profiles.getServerProfileById(homeProfileRef('relay-a'))).toBeNull());
 
-        const relayARowAfter = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:relay-a' } as never);
-        const relayBRowAfter = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:relay-b' } as never);
-        expect(relayARowAfter?.props.selected).toBe(false);
+        const relayARowsAfter = screen.findAllByProps({ testID: homeRowTestId('relay-a') } as never);
+        const relayBRowAfter = screen.findByProps({ testID: homeRowTestId('relay-b') } as never);
+        expect(relayARowsAfter).toHaveLength(0);
         expect(relayBRowAfter?.props.selected).toBe(false);
         expect(screen.findByTestId('onboarding-wizard-primary')!.props.disabled).toBe(true);
     });
 
     it('keeps the selected saved relay when marked custody blocks profile removal', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay-a.example.test';
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('https://relay-a.example.test');
+        await saveHomeProfiles([
             {
                 id: 'relay-a',
                 name: 'Relay A',
@@ -3455,10 +3149,18 @@ describe('OnboardingWizardSurface', () => {
                 source: 'manual',
             },
         ]);
-        removeServerProfileUiActionMock.mockResolvedValueOnce({
-            kind: 'finish_encryption_setup',
-            recovery: {} as AccountEncryptionFirstKeyRecoveryHandle,
-        });
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const profile = profiles.getServerProfileById(homeProfileRef('relay-a'))!;
+        const createdAt = Date.now();
+        expect(await TokenStorage.setPendingExternalAuth({
+            provider: 'github', proof: 'proof', secret: 'marked-secret',
+            serverId: profile.id, serverUrl: profile.serverUrl, returnTo: '/settings/account',
+            accountEncryptionFirstKey: {
+                accountId: 'account-1', requestDigest: `aemrb1_${'A'.repeat(43)}`,
+                requestJson: '{"toMode":"e2ee"}', createdAt, expiresAt: createdAt + 600000,
+                pending: 'oauth-pending', migrationSubmissionAttempted: true,
+            },
+        })).toBe(true);
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -3472,16 +3174,17 @@ describe('OnboardingWizardSurface', () => {
 
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const relayRow = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:relay-a' } as never);
+        const relayRow = screen.findByProps({ testID: homeRowTestId('relay-a') } as never);
         await act(async () => {
             const removeAction = relayRow?.props.menuActions?.find((action: any) => action.id === 'remove');
             await removeAction?.onPress?.();
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(presentFirstKeyCredentialLifecycleMock).toHaveBeenCalledTimes(1);
+        expect(modalShowMock).toHaveBeenCalledTimes(1);
+        expect(profiles.getServerProfileById(profile.id)).not.toBeNull();
         const relayRowAfter = screen.findByProps({
-            testID: 'onboarding-wizard-relay:profile:relay-a',
+            testID: homeRowTestId('relay-a'),
         } as never);
         expect(relayRowAfter?.props.selected).toBe(true);
         expect(screen.findByTestId('onboarding-wizard-primary')!.props.disabled).toBe(false);
@@ -3489,7 +3192,7 @@ describe('OnboardingWizardSurface', () => {
 
     it('removes a saved relay even when modal confirm is unavailable', async () => {
         modalConfirmMock.mockImplementation(async () => false);
-        activeServerSnapshotMock.serverUrl = 'https://relay-a.example.test';
+        await focusHomeAtAddress('https://relay-a.example.test');
         const profilesState: ServerProfile[] = [
             {
                 id: 'relay-a',
@@ -3510,16 +3213,7 @@ describe('OnboardingWizardSurface', () => {
                 source: 'manual',
             },
         ];
-        listServerProfilesMock.mockImplementation(() => profilesState.slice());
-        removeServerProfileUiActionMock.mockImplementation(async (params: any) => {
-            const id = String(params?.profileId ?? '').trim();
-            const index = profilesState.findIndex((profile) => profile.id === id);
-            if (index >= 0) {
-                profilesState.splice(index, 1);
-                serverProfilesSubscriptionMock.bump();
-            }
-            return { kind: 'completed' };
-        });
+        await saveHomeProfiles(profilesState);
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -3533,27 +3227,27 @@ describe('OnboardingWizardSurface', () => {
 
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const relayRow = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:relay-a' } as never);
+        const relayRow = screen.findByProps({ testID: homeRowTestId('relay-a') } as never);
         expect(relayRow?.props.selected).toBe(true);
 
-        const callCountBefore = removeServerProfileUiActionMock.mock.calls.length;
+        expect(profiles.getServerProfileById(homeProfileRef('relay-a'))).not.toBeNull();
         await act(async () => {
             const removeAction = relayRow?.props.menuActions?.find((action: any) => action.id === 'remove');
             await removeAction?.onPress?.();
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(removeServerProfileUiActionMock.mock.calls.length).toBeGreaterThan(callCountBefore);
-        const relayARowAfter = screen.findAll((node) => node.props?.testID === 'onboarding-wizard-relay:profile:relay-a');
-        const relayBRowAfter = screen.findAll((node) => node.props?.testID === 'onboarding-wizard-relay:profile:relay-b');
+        await vi.waitFor(() => expect(profiles.getServerProfileById(homeProfileRef('relay-a'))).toBeNull());
+        const relayARowAfter = screen.findAll((node) => node.props?.testID === homeRowTestId('relay-a'));
+        const relayBRowAfter = screen.findAll((node) => node.props?.testID === homeRowTestId('relay-b'));
         expect(relayARowAfter).toHaveLength(0);
         expect(relayBRowAfter.length).toBeGreaterThan(0);
         expect(screen.findByTestId('onboarding-wizard-primary')!.props.disabled).toBe(true);
     });
 
     it('does not show a saved relay row as selected when the user selected the “On this computer” option', async () => {
-        activeServerSnapshotMock.activeLocalRelayUrl = 'http://localhost:53288';
-        listServerProfilesMock.mockReturnValue([
+        browser?.reconfigureUrl('http://localhost:53288');
+        await saveHomeProfiles([
             {
                 id: 'local-relay',
                 name: 'Local Relay',
@@ -3583,14 +3277,14 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const localRelayRow = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:local-relay' } as never);
+        const localRelayRow = screen.findByProps({ testID: homeRowTestId('local-relay') } as never);
         expect(screen.findByProps({ testID: 'onboarding-wizard-relay:thisComputer' } as never)?.props.selected).toBe(true);
         expect(localRelayRow?.props.selected).toBe(false);
     });
 
     it('renders a single-line relay footer and keeps Cloud from showing a custom URL footer', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://relay-b.example.test';
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('https://relay-b.example.test');
+        await saveHomeProfiles([
             {
                 id: 'relay-b',
                 name: 'Relay B',
@@ -3626,8 +3320,8 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('keeps an unreachable preselected relay selected and disables continue until a reachable relay is selected', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://unreachable-relay.example.test';
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('https://unreachable-relay.example.test');
+        await saveHomeProfiles([
             {
                 id: 'relay-offline',
                 name: 'Offline Relay',
@@ -3660,7 +3354,7 @@ describe('OnboardingWizardSurface', () => {
 
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const offlineRow = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:relay-offline' } as never);
+        const offlineRow = screen.findByProps({ testID: homeRowTestId('relay-offline') } as never);
         expect(offlineRow?.props.selected).toBe(true);
         expect(offlineRow?.props.disabled).toBe(false);
 
@@ -3670,7 +3364,7 @@ describe('OnboardingWizardSurface', () => {
         const cloudRow = screen.findByProps({ testID: 'onboarding-wizard-relay:cloud' } as never);
         expect(cloudRow?.props.selected).toBe(false);
 
-        const okRow = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:relay-ok' } as never);
+        const okRow = screen.findByProps({ testID: homeRowTestId('relay-ok') } as never);
         await act(async () => {
             await okRow?.props.onPress?.();
         });
@@ -3695,10 +3389,11 @@ describe('OnboardingWizardSurface', () => {
                 : new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
         });
 
-        activeServerSnapshotMock.serverUrl = '';
-        activeServerSnapshotMock.activeLocalRelayUrl = null;
-        listServerProfilesMock.mockReturnValue([]);
+        await focusHomeAtAddress('');
+        browser?.reconfigureUrl('https://app.happier.dev');
+        await saveHomeProfiles([]);
 
+        const focusBeforeAction = profiles.getActiveServerSnapshot();
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
             React.createElement(OnboardingWizardSurface, {
@@ -3736,7 +3431,7 @@ describe('OnboardingWizardSurface', () => {
 
         expect(getOnboardingStepId(screen)).toBe('relay_enter_url');
         expect(screen.findByTestId('onboarding-wizard-relay-url-input')?.props.value).toBe('https://typed-unreachable-relay.example.test');
-        expect(upsertActivateAndSwitchServerMock).not.toHaveBeenCalled();
+        expect(profiles.getActiveServerSnapshot()).toMatchObject(focusBeforeAction);
 
         runtimeFetchMock.mockImplementation(previousFetchImpl ?? (async (input: RequestInfo | URL, init?: RequestInit) => new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } })));
     });
@@ -3908,7 +3603,7 @@ describe('OnboardingWizardSurface', () => {
         const previousLocation = globalWithLocation.location;
         try {
             reactNativeMockState.os = 'web';
-            runtimeActiveMockState.value = true;
+
             try {
                 Object.defineProperty(globalThis, 'location', { value: { protocol: 'https:' }, configurable: true });
             } catch {
@@ -3922,9 +3617,9 @@ describe('OnboardingWizardSurface', () => {
             }
             expect((globalThis as any).location?.protocol).toBe('https:');
 
-            activeServerSnapshotMock.serverUrl = '';
-            activeServerSnapshotMock.activeLocalRelayUrl = null;
-            listServerProfilesMock.mockReturnValue([
+            await focusHomeAtAddress('');
+            browser?.reconfigureUrl('https://app.happier.dev');
+            await saveHomeProfiles([
                 {
                     id: 'local-http',
                     name: 'Local HTTP',
@@ -3948,7 +3643,7 @@ describe('OnboardingWizardSurface', () => {
 
             await flushHookEffects({ cycles: 4, turns: 4 });
 
-            const localRow = screen.findByTestId('onboarding-wizard-relay:profile:local-http')!;
+            const localRow = screen.findByTestId(homeRowTestId('local-http'))!;
             await act(async () => {
                 await localRow.props.onPress?.();
             });
@@ -3965,8 +3660,8 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('keeps a prefilled local relay selected instead of auto-switching to This computer when it is unreachable', async () => {
-        activeServerSnapshotMock.serverUrl = 'http://localhost:53288';
-        activeServerSnapshotMock.activeLocalRelayUrl = 'http://localhost:53288';
+        await focusHomeAtAddress('http://localhost:53288');
+        browser?.reconfigureUrl('http://localhost:53288');
         const previousFetchImpl = runtimeFetchMock.getMockImplementation();
         runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = String(input);
@@ -3980,7 +3675,7 @@ describe('OnboardingWizardSurface', () => {
                 ? previousFetchImpl(input, init)
                 : new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
         });
-        listServerProfilesMock.mockReturnValue([]);
+        await saveHomeProfiles([]);
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -3994,7 +3689,7 @@ describe('OnboardingWizardSurface', () => {
 
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const localRelayRow = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:active' } as never);
+        const localRelayRow = screen.findByProps({ testID: homeRowTestId('active') } as never);
         expect(localRelayRow?.props.selected).toBe(true);
         expect(localRelayRow?.props.disabled).toBe(false);
         expect(screen.findByProps({ testID: 'onboarding-wizard-relay:thisComputer' } as never)?.props.selected).toBe(false);
@@ -4005,9 +3700,9 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('keeps the active local relay selected instead of auto-switching to This computer when it is unreachable', async () => {
-        activeServerSnapshotMock.serverUrl = 'http://localhost:53288';
-        activeServerSnapshotMock.activeLocalRelayUrl = 'http://localhost:53288';
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('http://localhost:53288');
+        browser?.reconfigureUrl('http://localhost:53288');
+        await saveHomeProfiles([
             {
                 id: 'local-relay',
                 name: 'Local Relay',
@@ -4040,15 +3735,15 @@ describe('OnboardingWizardSurface', () => {
 
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        expect(screen.findByProps({ testID: 'onboarding-wizard-relay:profile:local-relay' } as never)?.props.selected).toBe(true);
+        expect(screen.findByProps({ testID: homeRowTestId('local-relay') } as never)?.props.selected).toBe(true);
         expect(screen.findByProps({ testID: 'onboarding-wizard-relay:thisComputer' } as never)?.props.selected).toBe(false);
         expect(screen.getTextContent()).toContain('http://localhost:53288');
     });
 
     it('selects a single saved relay row when multiple profiles share the same server URL', async () => {
-        activeServerSnapshotMock.serverUrl = 'https://duplicate-relay.example.test';
-        activeServerSnapshotMock.activeLocalRelayUrl = null;
-        listServerProfilesMock.mockReturnValue([
+        await focusHomeAtAddress('https://duplicate-relay.example.test');
+        browser?.reconfigureUrl('https://app.happier.dev');
+        await saveHomeProfiles([
             {
                 id: 'dup-1',
                 name: 'Duplicate One',
@@ -4081,11 +3776,13 @@ describe('OnboardingWizardSurface', () => {
 
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const first = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:dup-1' } as never);
-        const second = screen.findByProps({ testID: 'onboarding-wizard-relay:profile:dup-2' } as never);
-
-        expect(first?.props.selected).toBe(true);
-        expect(second?.props.selected).toBe(false);
+        // The profile writer and reader coalesce equivalent unqualified endpoints.
+        // A second saved fixture must not create a second selected surface row.
+        expect(homeProfileRef('dup-1')).toBe(homeProfileRef('dup-2'));
+        const rows = screen.findAllByType(WizardChoiceRow as never)
+            .filter(row => row.props.testID === homeRowTestId('dup-1'));
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.props.selected).toBe(true);
     });
 
     it('disables continuing when the canonical cloud relay is unreachable and offers a retry affordance', async () => {
@@ -4103,8 +3800,8 @@ describe('OnboardingWizardSurface', () => {
                 : new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
         });
 
-        activeServerSnapshotMock.serverUrl = '';
-        listServerProfilesMock.mockReturnValue([]);
+        await focusHomeAtAddress('');
+        await saveHomeProfiles([]);
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -4156,8 +3853,8 @@ describe('OnboardingWizardSurface', () => {
             return previousFetchImpl ? previousFetchImpl(input, init) : new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
         });
 
-        activeServerSnapshotMock.serverUrl = 'http://localhost:59331';
-        listServerProfilesMock.mockReturnValue([]);
+        await focusHomeAtAddress('http://localhost:59331');
+        await saveHomeProfiles([]);
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -4214,37 +3911,16 @@ describe('OnboardingWizardSurface', () => {
             await primaryButton.props.onPress?.();
         });
 
-        expect(setActiveServerAndSwitchMock).toHaveBeenCalledWith(expect.objectContaining({ serverId: 'cloud-profile' }));
-        expect(upsertActivateAndSwitchServerMock).not.toHaveBeenCalled();
+        expectFocusedHome('https://api.happier.dev');
+        const cloud = profiles.resolveUniqueServerProfileByUrl('https://api.happier.dev');
+        expect(cloud).not.toBeNull();
+        expect(profiles.getActiveServerSnapshot().serverId).toBe(profiles.resolveServerProfileScopeId(cloud!));
+        expect(profiles.listServerProfiles().filter(profile => profile.serverUrl === 'https://api.happier.dev')).toHaveLength(1);
         expect(screen.findByTestId('onboarding-wizard-lost-access')).not.toBeNull();
     });
 
     it('treats Happier Cloud as https://api.happier.dev even when the reset-to-default server differs', async () => {
-        getResetToDefaultServerIdMock.mockImplementation(() => 'selfhost-profile');
-        getServerProfileByIdMock.mockImplementation((serverId: string) => (
-            serverId === 'selfhost-profile'
-                ? {
-                    id: 'selfhost-profile',
-                    name: 'Self hosted',
-                    serverUrl: 'https://selfhosted.example.test',
-                    createdAt: 0,
-                    updatedAt: 0,
-                    lastUsedAt: 0,
-                    source: 'url' as const,
-                }
-                : serverId === 'cloud-profile'
-                    ? {
-                        id: 'cloud-profile',
-                        name: 'Happier Cloud',
-                        serverUrl: 'https://api.happier.dev',
-                        createdAt: 0,
-                        updatedAt: 0,
-                        lastUsedAt: 0,
-                        source: 'preconfigured' as const,
-                    }
-                    : null
-        ));
-        setActiveServerAndSwitchMock.mockClear();
+        await focusHomeAtAddress('https://selfhosted.example.test');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -4269,10 +3945,7 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(setActiveServerAndSwitchMock).toHaveBeenCalledWith({
-            serverId: 'cloud-profile',
-            scope: 'device',
-        });
+        expectFocusedHome('https://api.happier.dev');
     });
 
 });

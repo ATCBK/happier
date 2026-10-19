@@ -1,5 +1,8 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { renderScreen, standardCleanup } from '@/dev/testkit';

@@ -2,11 +2,13 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen as renderFixtureScreen } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
+import * as enrolledHomeOpening from '@/auth/pairing/openEnrolledHome';
 import { AuthProvider } from '@/auth/context/AuthContext';
 import { useAuth } from '@/auth/context/AuthContext';
 import { initializeTerminalRouteRuntimeForTests } from '@/__tests__/routes/(app)/terminal/terminalRouteTestHelpers';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
-import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createDirectoryHttpFixture } from '@/sync/ops/accountDirectory/accountDirectoryTestFixtures';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -18,6 +20,7 @@ import {
     resolveServerProfileScopeId,
     setAccountServiceEndpoint,
     setActiveServerId,
+    subscribeActiveServer,
 } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { AccountDirectorySession } from '@/sync/domains/accountDirectory/accountDirectorySession';
@@ -26,6 +29,8 @@ import { cancelPendingDirectoryHomeEnrollment, getPendingDirectoryHomeEnrollment
 import { ENROLLMENT_POLL_IDLE_DELAY_MS } from '@/auth/enrollment/enrollmentPollingBackoff';
 
 installTokenStorageWebPlatformMocks();
+// Hoist the web platform before static Auth/credential imports can capture a native shim instance.
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
@@ -78,6 +83,7 @@ const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serv
 const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
 const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
 const { useMountedActionExecution } = await import('@/components/approvals/useMountedActionExecution');
+const { getAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
 const { createArtifactStoreBoundary } = await import('@/dev/testkit/harness/artifactStoreBoundary');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -113,15 +119,9 @@ function actionTitle(testID: string): string | undefined {
 
 describe('exact invoking-surface continuation', () => {
     let fixture: ReturnType<typeof createDirectoryHttpFixture>;
-    let restore: () => void;
-    let locks: ReturnType<typeof installWebLockManagerMock>;
-    beforeEach(() => {
-        restore = installLocalStorageMock().restore;
-        vi.stubGlobal('sessionStorage', globalThis.localStorage);
-        vi.stubGlobal('window', { localStorage: globalThis.localStorage, sessionStorage: globalThis.sessionStorage,
-            location: { origin: 'https://app.happier.dev' }, addEventListener: vi.fn(), removeEventListener: vi.fn() });
-        vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: vi.fn(), removeEventListener: vi.fn() });
-        locks = installWebLockManagerMock();
+    let browserRuntime: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
+    beforeEach(async () => {
+        browserRuntime = await installBrowserRuntimeForTests({ url: 'https://app.happier.dev' });
         resetServerFeaturesClientForTests();
         fixture = createDirectoryHttpFixture();
         boundary.request.mockImplementation(fixture.request);
@@ -136,8 +136,8 @@ describe('exact invoking-surface continuation', () => {
         await cancelPendingDirectoryHomeEnrollment();
         await disconnectActiveServerConnection();
         resetServerFeaturesClientForTests();
-        locks.restore();
-        restore();
+        browserRuntime?.restore();
+        browserRuntime = undefined;
         vi.unstubAllGlobals();
         currentReader = null;
         activateCurrent = undefined;
@@ -182,10 +182,8 @@ describe('exact invoking-surface continuation', () => {
         });
         await adoptHomeProfile({ descriptor: fixture.home.connectionDescriptor,
             source: 'account-directory', descriptorAuthority: 'current_connection_observation', suggestedName: fixture.home.label });
-        // The live QA Home advertises no Account Service. The dev specimen must therefore use the
-        // device's already-selected journey service without changing that Home's truthful policy.
-        await setAccountServiceEndpoint({ url: fixture.service.endpointUrl,
-            serverIdentityId: fixture.service.serverIdentityId, source: 'user' });
+        // An authenticated self-hosted Home does not require a selected Account Service. The
+        // fresh test store intentionally keeps that selection absent.
         connection = await restoreServerAccountForTest({ serverUrl: 'https://home-a.test', accountId: 'alice',
             request: async (url) => {
                 const path = new URL(String(url)).pathname;
@@ -267,8 +265,22 @@ describe('exact invoking-surface continuation', () => {
         { cancelOriginal: false, secondCard: false, requestApproval: true, revokeCredential: true },
         { cancelOriginal: false, secondCard: false, requestApproval: true, cancelDecision: true },
     ])('opens a Home from the actual authenticated mounted continuation despite its authorized focus change ($cancelOriginal cancellation, $secondCard second card, $requestApproval approval, $revokeCredential revocation, $cancelDecision decision cancellation)', async ({ cancelOriginal, secondCard, requestApproval, revokeCredential, cancelDecision }) => {
+        // Only the credential-read race needs an asynchronous OS vault; the other cases remain browser flows.
+        const vault = revokeCredential ? createDesktopSecureStorageBoundary() : null;
+        let nativeReadGate: Promise<void> | null = null;
+        let nativeReadStarted = false;
+        let targetScopeId = '';
+        if (vault) vi.stubGlobal('__TAURI_INTERNALS__', { invoke: async (command: string, args?: Record<string, unknown>) => {
+            if (command === 'desktop_secure_storage_read' && nativeReadGate
+                && getActiveServerSnapshot().serverId === targetScopeId) {
+                nativeReadStarted = true;
+                await nativeReadGate;
+            }
+            return vault.invoke(command, args);
+        } });
         const target = await adoptHomeProfile({ descriptor: fixture.home.connectionDescriptor,
             source: 'account-directory', descriptorAuthority: 'current_connection_observation', suggestedName: fixture.home.label });
+        targetScopeId = resolveServerProfileScopeId(target);
         await adoptHomeProfile({ descriptor: { serverUrl: 'https://home-a.test', homeServerIdentityId: 'home-a' }, source: 'manual' });
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://home-a.test', accountId: 'alice',
             request: async (url) => {
@@ -279,14 +291,36 @@ describe('exact invoking-surface continuation', () => {
                 if (path === '/v1/kv/bulk') return Response.json({ values: [] });
                 return Response.json({}, { status: 404 });
             } });
+        try {
+        expect(await TokenStorage.setCredentialsForServerUrl(fixture.home.canonicalServerUrl,
+            { serverId: target.id }, connection.credentials)).toBe(true);
+        let rotatedVaultEntry: readonly [string, string] | undefined;
+        if (vault) {
+            const rotated = { ...connection.credentials, token: `${connection.credentials.token}-rotated` };
+            const prepared = await TokenStorage.setCredentialsForServerUrlWithRollback('https://home-a.test',
+                { serverId: connection.serverId }, rotated);
+            if (!prepared) throw new Error('Expected the canonical credential writer to prepare replacement bytes');
+            rotatedVaultEntry = [...vault.values.entries()].find(([, value]) => {
+                try { return JSON.parse(value).token === rotated.token; } catch { return false; }
+            });
+            await prepared.rollback();
+            expect(rotatedVaultEntry, JSON.stringify({
+                vaultEntries: vault.values.size,
+                host: (await import('@/utils/platform/desktopHost')).desktopHostKind(),
+                platform: (await import('react-native')).Platform.OS,
+            })).toBeDefined();
+        }
         const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'alice', encryptionMode: 'plain' });
         const requestHome = async (url: RequestInfo | URL, init?: RequestInit) => {
-            const path = new URL(String(url)).pathname;
+            const requestUrl = new URL(String(url));
+            const path = requestUrl.pathname;
             const artifactResponse = artifacts.handle(path, init);
             if (artifactResponse) return await artifactResponse;
             if (path === '/v1/auth/ping') return Response.json({});
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === '/v1/account/encryption/currentness') {
+                return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            }
             if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
             if (path === '/v1/kv/bulk') return Response.json({ values: [] });
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
@@ -299,7 +333,6 @@ describe('exact invoking-surface continuation', () => {
             session: new AccountDirectorySession({ endpoint: fixture.service.endpointUrl, serverIdentityId: fixture.service.serverIdentityId }, { capability: fixture.service.capability }),
             intent: { kind: 'enroll' as const, homeServerIdentityId: fixture.home.homeServerIdentityId } };
         routerHarness.replace?.mockClear();
-        try {
             screen = await renderFixtureScreen(<AuthProvider initialCredentials={connection.credentials}>
                 <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider><CurrentUiContextActionHost />
                     <CurrentReaderProbe /><PluginSurfaceFocusEligibilityProvider active currentUiContextActive><AccountServiceContinuation input={input}
@@ -339,22 +372,18 @@ describe('exact invoking-surface continuation', () => {
             }
             let releaseFocus!: () => void;
             const focusRead = new Promise<void>(resolve => { releaseFocus = resolve; });
-            let awaitingFocusRead = false;
-            let revoked = false;
-            // Secure storage is external: let the real focus owner stage Home B
-            // and retire Home A's command while its credential read is pending.
-            vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async serverUrl => {
-                if (serverUrl === fixture.home.canonicalServerUrl && !awaitingFocusRead) {
-                    awaitingFocusRead = true;
-                    await focusRead;
-                }
-                // Same Account, replaced credential: an Account-id-only
-                // settlement fallback must not borrow its successor token.
-                if (revoked && serverUrl === 'https://home-a.test') return { ...connection.credentials, token: `${connection.credentials.token}-rotated` };
-                return connection.credentials;
-            });
+            nativeReadGate = vault ? focusRead : null;
             let decision: ReturnType<typeof executor.execute> | undefined;
             const decisionCancellation = new AbortController();
+            let focusObserved = false;
+            let focusReceiptStatus: unknown;
+            const stopFocusObservation = subscribeActiveServer(snapshot => {
+                if (snapshot.serverId !== targetScopeId || focusObserved) return;
+                focusObserved = true;
+                if (approvalId) focusReceiptStatus = JSON.parse(artifacts.readPlainBody(approvalId) ?? 'null')?.status;
+                if (cancelOriginal) cancellation.abort();
+                if (cancelDecision) decisionCancellation.abort();
+            });
             try {
                 if (approvalId) {
                     decision = executor.execute('approval.request.decide', { artifactId: approvalId, decision: 'approve' }, {
@@ -368,14 +397,17 @@ describe('exact invoking-surface continuation', () => {
                 } else await screen.pressByTestIdAsync('account-service-continuation-home_enrolled-action');
                 await vi.waitFor(async () => {
                     await act(async () => {});
-                    expect(awaitingFocusRead).toBe(true);
+                    expect(focusObserved).toBe(true);
                     expect(original?.retirementSignal.aborted).toBe(true);
                 });
-                if (approvalId) expect(JSON.parse(artifacts.readPlainBody(approvalId) ?? 'null')).toMatchObject({ status: 'executing' });
-                if (cancelOriginal) cancellation.abort();
-                if (revokeCredential) revoked = true;
-                if (cancelDecision) decisionCancellation.abort();
-            } finally { releaseFocus(); }
+                if (approvalId) expect(focusReceiptStatus).toBe('executing');
+                if (revokeCredential) {
+                    await vi.waitFor(() => expect(nativeReadStarted).toBe(true));
+                    if (!vault || !rotatedVaultEntry) throw new Error('Expected the Desktop vault replacement fixture');
+                    // Another OS-vault writer is not serialized behind this process's held migration read.
+                    await vault.invoke('desktop_secure_storage_write', { key: rotatedVaultEntry[0], value: rotatedVaultEntry[1] });
+                }
+            } finally { releaseFocus(); nativeReadGate = null; stopFocusObservation(); }
             if (decision) {
                 const settled = await decision;
                 if (revokeCredential || cancelDecision) {
@@ -475,25 +507,25 @@ describe('exact invoking-surface continuation', () => {
         expect(onBack).toHaveBeenCalledOnce();
     });
 
-    it('opens an enrolled Home through the canonical focus owner and lands on it', async () => {
-        // Web focuses a Home per tab, so the tab store is part of the real path.
-        const tabStorage = installLocalStorageMock();
-        vi.stubGlobal('sessionStorage', globalThis.localStorage);
-        tabStorage.restore();
-        vi.stubGlobal('window', { localStorage: globalThis.localStorage, sessionStorage: globalThis.sessionStorage,
-            location: { origin: 'https://app.happier.dev' }, addEventListener: vi.fn(), removeEventListener: vi.fn() });
-        vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    it('opens an enrolled Home through the canonical focus owner and lands on it', async ({ onTestFinished }) => {
+        // Home focus uses the browser's complete tab storage and event boundary.
+        browserRuntime!.reconfigureUrl('https://app.happier.dev');
         const profile = await adoptHomeProfile({
             descriptor: fixture.home.connectionDescriptor,
             source: 'account-directory',
             descriptorAuthority: 'current_connection_observation',
             suggestedName: fixture.home.label,
         });
+        // home_enrolled is emitted after this exact Home's Account credential has been committed.
+        expect(await TokenStorage.setCredentialsForServerUrl(fixture.home.canonicalServerUrl,
+            { serverId: profile.id }, { token: fixture.token })).toBe(true);
         const input = { service: fixture.service,
             credentialTokenDigest: ACCOUNT_CREDENTIAL_TOKEN_DIGEST,
             session: new AccountDirectorySession({ endpoint: fixture.service.endpointUrl, serverIdentityId: fixture.service.serverIdentityId }, { capability: fixture.service.capability }),
             intent: { kind: 'enroll' as const, homeServerIdentityId: fixture.home.homeServerIdentityId } };
         const onBack = vi.fn();
+        const openOwner = vi.spyOn(enrolledHomeOpening, 'openEnrolledHomeOrReturnToShell');
+        onTestFinished(() => openOwner.mockRestore());
         routerHarness.replace?.mockClear();
         vi.mocked(Modal.alertAsync).mockClear();
         screen = await renderScreen(<AccountServiceContinuation input={input}
@@ -504,6 +536,8 @@ describe('exact invoking-surface continuation', () => {
         expect(actionTitle('account-service-continuation-home_enrolled-action')).toBe('Open Home B');
         expect(actionTitle('account-service-continuation-home_enrolled-secondary-action')).toBe('Back');
         await screen.pressByTestIdAsync('account-service-continuation-home_enrolled-action');
+        await vi.waitFor(() => expect(openOwner).toHaveBeenCalledTimes(1));
+        await act(async () => { expect(await openOwner.mock.results[0]!.value).toBe('opened'); });
 
         // The canonical owner focused the enrolled Home in this tab and landed on the shell.
         await vi.waitFor(() => expect(routerHarness.replace).toHaveBeenCalledWith('/'));
@@ -517,7 +551,7 @@ describe('exact invoking-surface continuation', () => {
     });
 
     it('keeps the enrolled-Home card when the user declines to retry a failed open', async () => {
-        await adoptHomeProfile({
+        const target = await adoptHomeProfile({
             descriptor: fixture.home.connectionDescriptor,
             source: 'account-directory',
             descriptorAuthority: 'current_connection_observation',
@@ -530,28 +564,66 @@ describe('exact invoking-surface continuation', () => {
         const onBack = vi.fn();
         routerHarness.replace?.mockClear();
         vi.mocked(Modal.alertAsync).mockClear();
-        const readCredentials = TokenStorage.getCredentialsForServerUrl;
-        // Credential persistence is external to the focus owner. Its failed
-        // target read exercises the real switch/rollback and recovery card.
-        const credentialRead = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (serverUrl, options) => {
-            if (serverUrl === fixture.home.canonicalServerUrl) throw new Error('secure storage read failed');
-            return readCredentials(serverUrl, options);
-        });
+        const requestHome = async (url: RequestInfo | URL) => {
+            const requestUrl = new URL(String(url));
+            if (requestUrl.pathname === '/v1/auth/ping') return Response.json({});
+            if (requestUrl.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (requestUrl.pathname === '/v1/account/encryption/currentness') {
+                return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            }
+            if (requestUrl.pathname === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+            if (requestUrl.pathname === '/v1/kv/bulk') return Response.json({ values: [] });
+            if (requestUrl.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            return Response.json({}, { status: 404 });
+        };
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://failed-open-origin.test',
+            accountId: 'alice', request: requestHome });
+        expect(await TokenStorage.setCredentialsForServerUrl(fixture.home.canonicalServerUrl,
+            { serverId: target.id }, connection.credentials)).toBe(true);
+        setRuntimeFetch(requestHome);
+        boundary.request.mockImplementation((endpoint, path) => requestHome(`${endpoint}${path}`));
         try {
-            screen = await renderScreen(<AccountServiceContinuation input={input}
-                result={{ kind: 'home_enrolled', homeServerIdentityId: fixture.home.homeServerIdentityId }}
-                onResult={() => {}} onBack={onBack} />);
-            await screen.pressByTestIdAsync('account-service-continuation-home_enrolled-action');
+            screen = await renderFixtureScreen(<AuthProvider initialCredentials={connection.credentials}>
+                <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider><CurrentUiContextActionHost />
+                    <CurrentReaderProbe /><PluginSurfaceFocusEligibilityProvider active currentUiContextActive>
+                        <AccountServiceContinuation input={input}
+                            result={{ kind: 'home_enrolled', homeServerIdentityId: fixture.home.homeServerIdentityId }}
+                            onResult={() => {}} onBack={onBack} />
+                    </PluginSurfaceFocusEligibilityProvider>
+                </CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
+            </AuthProvider>);
+            await vi.waitFor(() => expect(currentReader?.readCurrentUiContext()?.commands.some(({ id }) => {
+                const command = currentReader?.resolveCurrentUiCommand(id)?.command;
+                return command?.kind === 'accountHomeContinuation' && command.operation === 'open';
+            })).toBe(true));
+            // Fail only the browser's addressed tab-focus write. Credential reads
+            // and current-card admission remain available on the invoking Home.
+            vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+            const setItem = window.Storage.prototype.setItem;
+            const storageWrite = vi.spyOn(window.Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+                if (key === 'activeServerId' && value === target.id) throw new Error('Tab focus storage unavailable');
+                setItem.call(this, key, value);
+            });
+            const openOwner = vi.spyOn(enrolledHomeOpening, 'openEnrolledHomeOrReturnToShell');
+            try {
+                await screen.pressByTestIdAsync('account-service-continuation-home_enrolled-action');
+                await vi.waitFor(() => expect(openOwner).toHaveBeenCalledOnce());
+                expect(storageWrite).toHaveBeenCalledWith('activeServerId', target.id);
+                const openOutcome = await openOwner.mock.results[0]!.value;
+                expect(openOutcome, JSON.stringify({ selected: getActiveServerSnapshot().serverId,
+                    applied: getAppliedActiveServerSnapshot().serverId,
+                    origin: connection.serverId, target: target.id, navigation: routerHarness.replace?.mock.calls })).toBe('returned_to_shell');
+                await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalledWith('Home B', expect.anything(), expect.anything()));
+            }
+            finally { openOwner.mockRestore(); storageWrite.mockRestore(); }
+            expect(onBack).not.toHaveBeenCalled();
+            expect(routerHarness.replace).not.toHaveBeenCalled();
+            expect(actionTitle('account-service-continuation-home_enrolled-action')).toBe('Open Home B');
         } finally {
-            credentialRead.mockRestore();
+            await screen?.unmount();
+            screen = undefined;
+            await connection.dispose();
         }
-
-        // The owner asked whether to retry and the user cancelled: nothing moved and
-        // the card still offers Open and Back rather than silently leaving the host.
-        await vi.waitFor(() => expect(Modal.alertAsync).toHaveBeenCalledWith('Home B', expect.anything(), expect.anything()));
-        expect(onBack).not.toHaveBeenCalled();
-        expect(routerHarness.replace).not.toHaveBeenCalled();
-        expect(actionTitle('account-service-continuation-home_enrolled-action')).toBe('Open Home B');
     });
 
     it('stops offering Open when the enrolled Home has no saved profile to open', async () => {
