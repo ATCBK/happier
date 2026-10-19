@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 import { z } from 'zod/mini';
-import { assertMcpToolPolicyInvocation, assertMcpToolPolicySecrets, type AgentMcpToolPolicyCallObservation, type AgentMcpToolPolicyInvocation } from './mcpToolPolicyContract.js';
+import { assertMcpToolPolicyInvocation, assertMcpToolPolicySecrets, runAgentMcpToolPolicyContract, type AgentMcpToolPolicyCallObservation, type AgentMcpToolPolicyInvocation } from './mcpToolPolicyContract.js';
 
 const permission = { server: 'server__a', serverId: 'catalog:a', tool: 'read', decision: 'approved', prompted: true, order: 1 } as const;
 const call = { server: 'server__a', tool: 'read', order: 2 } as const;
@@ -52,4 +52,35 @@ describe('MCP contract evidence sensitivity', () => {
             server: 'server__a', serverId: 'catalog:a', tool: 'read', calls: [call],
             invocation: { outcome: 'completed', permissions: [{ ...permission, prompted: false, decision: 'denied' }] } })).toThrow();
     });
+});
+
+// The fake Agent is the contract's self-test subject. Register its suite through
+// the real runner so ordinary barrel admission cannot make these helpers inert.
+runAgentMcpToolPolicyContract({
+    agent: {
+        id: 'runner-fixture', title: 'Runner fixture', primary: 'sessions', runtime: { kind: 'custom' },
+        capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+    },
+    async openSession() {
+        return {
+            async send() { return { status: 'admitted' }; },
+            async cancel() { return { status: 'notRunning' }; },
+            async updateConfiguration() { return { status: 'applied', changed: [] }; },
+            watch() { return { dispose() {} }; },
+            async dispose() {},
+        };
+    },
+    observeLaunch: () => ({ argv: [], env: {}, acpSessionNew: null, appServerRequests: [], filesWritten: [], runtimeEvents: [] }),
+    async invokeTool() { throw new Error('The unsupported Agent cannot invoke MCP tools.'); },
+    fixtureServer: {
+        async prepare() {
+            return { servers: [
+                { key: 'a', serverId: 'server-a', title: 'Duplicate', tool: 'read', config: { command: 'fixture' } },
+                { key: 'b', serverId: 'server-b', title: 'Duplicate', tool: 'read', config: { command: 'fixture' } },
+            ], secrets: [] };
+        },
+        observeCalls: () => [],
+        async setPolicy() {},
+        async dispose() {},
+    },
 });

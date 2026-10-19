@@ -1,7 +1,7 @@
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, isAbsolute, sep } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { requireVitestContractRunner } from './vitestContractRunner.js';
 import type { AgentContribution } from '../agents.js';
 import type { AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionSkillDelivery } from '../agentRuntime/session.js';
 import type { ObservedAgentLaunch } from './observeAgentLaunch.js';
@@ -71,6 +71,7 @@ function comparableLaunch(launch: ObservedAgentLaunch): unknown {
 
 /** Register the manifest's observable launch contracts; the plugin supplies genuine boundary adapters. */
 export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractInput): void {
+    const { afterEach, beforeEach, describe, expect, it } = requireVitestContractRunner();
     const capability = 'skills' in input.agent.capabilities ? input.agent.capabilities.skills : undefined;
     const acpDefinition = 'runtime' in input.agent && input.agent.runtime.kind === 'acp' ? input.agent.runtime.definition : undefined;
     const acpDelivery = acpDefinition?.skills?.sessionDelivery;

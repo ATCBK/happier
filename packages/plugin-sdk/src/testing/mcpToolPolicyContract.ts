@@ -3,7 +3,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createReadStream } from 'node:fs';
-import { afterEach, beforeEach, describe, it } from 'vitest';
+import { requireVitestContractRunner } from './vitestContractRunner.js';
 import { projectMcpToolLaunchPolicyV1 } from '@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1';
 import { AgentSessionConfigurationSnapshotV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import type { AgentContribution } from '../agents.js';
@@ -146,6 +146,7 @@ function configuration(mode: AgentPermissionIntent): AgentSessionConfigurationSn
 /** Register K7/K8/K8b/K8c/K9 using actual leaf invocation and actual server receipts.
  * Boundary fixtures characterize wiring; only the separate real-vendor probes admit declarations. */
 export function runAgentMcpToolPolicyContract(input: AgentMcpToolPolicyContractInput): void {
+    const { afterEach, beforeEach, describe, it } = requireVitestContractRunner();
     const tools = 'tools' in input.agent.capabilities ? input.agent.capabilities.tools : undefined;
     const declared = tools?.mcpToolControl;
     const control = declared ?? input.candidateControl;
@@ -251,12 +252,10 @@ export function runAgentMcpToolPolicyContract(input: AgentMcpToolPolicyContractI
             it('does not claim K8/K8b/K8c support when the declaration is absent', () => assert.equal(declared, undefined));
             return;
         }
-        it('K8 applies Off/Ask/Allow through real calls', async () => {
-            for (const setting of ['off', 'ask', 'allow'] as const) {
-                const runtime = await open(setting);
-                if (control.approval === 'native') await assertNative(runtime, projection(setting, 'default'));
-                await invoke(runtime, setting, 0, 'once', setting === 'off' && control.off === 'hidden');
-            }
+        it.each(['off', 'ask', 'allow'] as const)('K8 applies %s through real calls', async setting => {
+            const runtime = await open(setting);
+            if (control.approval === 'native') await assertNative(runtime, projection(setting, 'default'));
+            await invoke(runtime, setting, 0, 'once', setting === 'off' && control.off === 'hidden');
         });
         it('K8 preserves the mode ceiling on the next real call', async () => {
             const runtime = await open('allow');
