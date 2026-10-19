@@ -50,7 +50,9 @@ import { readWidgetDescriptor } from '@/components/widgets/widgetCatalog';
 import { resolveWidgetSizeChoicesV1, canPromoteSessionWidgetDefinitionSourceV1, projectWidgetDefinitionPromotionBindingsV1, type WidgetInputBindingsV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 import { renderWidgetSizeMenuSection, stepWidgetSizeControl, type WidgetSizeControl } from '@/components/widgets/frame/WidgetSizeControl';
 import { useWidgetInstanceDescriptor } from '@/components/widgets/surface/useWidgetInstanceDescriptor';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useUser } from '@/sync/domains/state/storage';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { resolveBoardWidgetProvenance } from '@/components/widgets/boardWidgetProvenance';
 import type { SessionPluginRuntimeState } from '@/components/sessions/plugins/useSessionPluginRuntime';
@@ -255,12 +257,14 @@ const stylesheet = StyleSheet.create((theme) => ({
 function itemProvenance(
     item: SessionBoardItemProjection,
     runtime: SessionPluginRuntimeState | undefined,
+    viewerAccountId: string | undefined,
+    posterDisplayName: string | null,
 ): ReturnType<typeof resolveBoardWidgetProvenance> | null {
     if (item.state.kind !== 'ready') return null;
     return resolveBoardWidgetProvenance(
         item.state.item.source,
         runtime?.pluginUiProjection ?? null,
-        { snapshot: item.state.item.snapshot !== undefined },
+        { snapshot: item.state.item.snapshot, viewerAccountId, posterDisplayName },
     );
 }
 
@@ -339,7 +343,10 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
     });
 
     const title = resolveSessionBoardItemTitle(state);
-    const provenance = itemProvenance(props.item, props.pluginRuntime);
+    const sameHome = !!viewerScope && (!props.serverId || areServerProfileIdentifiersEquivalent(viewerScope.serverId, props.serverId));
+    const poster = useUser(sameHome && state.kind === 'ready' ? state.item.snapshot?.postedByAccountId : undefined);
+    const provenance = itemProvenance(props.item, props.pluginRuntime, sameHome ? viewerScope?.accountId : undefined,
+        poster ? formatAccountDisplayName(poster) : null);
     // One header grammar at every density (F1): mark · title · source · meta · controls.
     const section = props.frame === 'section';
     const reply = props.frame === 'reply';

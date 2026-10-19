@@ -29,6 +29,6 @@ export function buildWidgetSnapshotBoardUpsertV1(input: WidgetSnapshotPostInputV
     itemId: args.itemId, expectedItemRevision: null, placement: args.placement,
     item: { v: 1, title: args.title, frame: 'card', height: { mode: 'auto', fallback: 'regular' },
       source: { kind: 'declarative', document: args.preview.document },
-      snapshot: { asOf: args.preview.asOf, provenance: args.preview.provenance } },
+      snapshot: { asOf: args.preview.asOf, provenance: args.preview.provenance, postedByAccountId: args.surface.accountId } },
   });
 }

@@ -9198,6 +9198,8 @@ const sessionBoardTranslations = { it: {
                 table: 'Tabella',
                 interactiveView: 'Vista interattiva',
                 snapshot: 'Istantanea',
+                snapshotByYou: 'Istantanea creata da te',
+                snapshotBy: ({ name }) => `Istantanea di ${name}`,
                 pluginMissing: ({ pluginId }) => `Da ${pluginId} · non installato`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },

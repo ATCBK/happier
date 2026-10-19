@@ -9198,6 +9198,8 @@ const sessionBoardTranslations = { ca: {
                 table: 'Taula',
                 interactiveView: 'Vista interactiva',
                 snapshot: 'Instantània',
+                snapshotByYou: 'Instantània teva',
+                snapshotBy: ({ name }) => `Instantània de ${name}`,
                 pluginMissing: ({ pluginId }) => `De ${pluginId} · no instal·lat`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },

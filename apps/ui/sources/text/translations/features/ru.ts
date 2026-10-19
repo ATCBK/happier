@@ -9218,6 +9218,8 @@ const sessionBoardTranslations = { ru: {
                 table: 'Таблица',
                 interactiveView: 'Интерактивный вид',
                 snapshot: 'Снимок',
+                snapshotByYou: 'Ваш снимок',
+                snapshotBy: ({ name }) => `Снимок от ${name}`,
                 pluginMissing: ({ pluginId }) => `Из ${pluginId} · не установлен`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },

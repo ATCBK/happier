@@ -9183,6 +9183,8 @@ const sessionBoardTranslations = { 'zh-Hant': {
                 table: '表格',
                 interactiveView: '互動檢視',
                 snapshot: '快照',
+                snapshotByYou: '你發佈的快照',
+                snapshotBy: ({ name }) => `${name}發佈的快照`,
                 pluginMissing: ({ pluginId }) => `來自 ${pluginId} · 未安裝`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },

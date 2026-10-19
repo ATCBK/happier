@@ -9188,6 +9188,8 @@ const sessionBoardTranslations = { ja: {
                 table: '表',
                 interactiveView: 'インタラクティブビュー',
                 snapshot: 'スナップショット',
+                snapshotByYou: 'あなたのスナップショット',
+                snapshotBy: ({ name }) => `${name}のスナップショット`,
                 pluginMissing: ({ pluginId }) => `${pluginId} · 未インストール`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SessionSurfaceItemV1Schema } from '../sessions/board/item.js';
+import { SessionSurfaceItemV1Schema, SessionSurfaceItemV1StoredSchema } from '../sessions/board/item.js';
 import { WidgetSnapshotPostInputV1Schema, buildWidgetSnapshotBoardUpsertV1, projectWidgetSnapshotPreviewV1 } from './widgetSnapshotV1.js';
 import { freezePluginDeclarativeDataNodeV1 } from '../plugins/contributions/ui/declarativeDataV1.js';
 import { PluginDeclarativeDocumentV1Schema } from '../plugins/contributions/ui/declarativeDocumentAuthoringV1.js';
@@ -58,7 +58,11 @@ describe('frozen widget Board content', () => {
   it('publishes exactly the admitted preview and rejects hidden live or executable state', () => {
     const upsert = buildWidgetSnapshotBoardUpsertV1(input);
     expect(upsert.item.source).toEqual({ kind: 'declarative', document: preview.document });
-    expect(upsert.item.snapshot).toEqual({ asOf: preview.asOf, provenance: preview.provenance });
+    expect(upsert.item.snapshot).toEqual({ asOf: preview.asOf, provenance: preview.provenance, postedByAccountId: 'viewer-a' });
+    expect(SessionSurfaceItemV1StoredSchema.parse({ ...upsert.item, snapshot: { ...upsert.item.snapshot, future: true } }).snapshot)
+      .toEqual(upsert.item.snapshot);
+    // The posting Account is admitted host scope, never part of the caller's preview.
+    expect(WidgetSnapshotPostInputV1Schema.safeParse({ ...input, preview: { ...preview, postedByAccountId: 'other' } }).success).toBe(false);
     for (const root of [
       { ...preview.document.root, data: { kind: 'value', value: { number: 7, credential: 'hidden' } }, value: { path: ['number'], type: 'number' } },
       { kind: 'stack', children: [{ kind: 'action', hostAction: 'session.message.send', label: 'Publish' }] },

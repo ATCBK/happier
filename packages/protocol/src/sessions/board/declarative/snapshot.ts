@@ -7,6 +7,8 @@ import { freezePluginDeclarativeDataNodeV1, isPluginDeclarativeDataNodeV1, type 
 export const WidgetSnapshotMetadataV1Schema = lazyZodSchema(() => z.strictObject({
   asOf: z.iso.datetime(),
   provenance: z.array(z.strictObject({ label: z.string().check(z.trim(), z.minLength(1)), digest: z.optional(z.string().check(z.trim(), z.minLength(1))) })),
+  /** Presentation attribution from the posting Action's admitted Account; older snapshots omit it. */
+  postedByAccountId: z.optional(z.string().check(z.trim(), z.minLength(1))),
 }));
 export type WidgetSnapshotMetadataV1 = z.infer<typeof WidgetSnapshotMetadataV1Schema>;
 
@@ -33,7 +35,7 @@ export const WidgetSnapshotDocumentV1Schema = lazyZodSchema(() => SessionSurface
 export type WidgetSnapshotDocumentV1 = z.infer<typeof WidgetSnapshotDocumentV1Schema>;
 
 export const WidgetSnapshotPreviewV1Schema = lazyZodSchema(() => z.strictObject({ v: z.literal(1), document: WidgetSnapshotDocumentV1Schema,
-  ...WidgetSnapshotMetadataV1Schema.shape }));
+  asOf: WidgetSnapshotMetadataV1Schema.shape.asOf, provenance: WidgetSnapshotMetadataV1Schema.shape.provenance }));
 export type WidgetSnapshotPreviewV1 = z.infer<typeof WidgetSnapshotPreviewV1Schema>;
 
 /**

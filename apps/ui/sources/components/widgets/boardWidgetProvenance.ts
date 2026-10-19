@@ -45,10 +45,19 @@ function provenance(label: string, accessibilityLabel?: string): BoardWidgetProv
 export function resolveBoardWidgetProvenance(
     source: SessionSurfaceItemV1['source'],
     projection: PluginUiProjectionModel | null | undefined,
-    options?: Readonly<{ snapshot?: boolean }>,
+    options?: Readonly<{
+        snapshot?: boolean | SessionSurfaceItemV1['snapshot'];
+        viewerAccountId?: string | null;
+        posterDisplayName?: string | null;
+    }>,
 ): BoardWidgetProvenance {
     // A posted snapshot is frozen declarative content; it reads as what it is, not as a note.
-    if (options?.snapshot === true) return provenance(t('sessionBoard.item.provenance.snapshot'));
+    if (options?.snapshot) {
+        const poster = typeof options.snapshot === 'object' ? options.snapshot.postedByAccountId : undefined;
+        if (poster && poster === options.viewerAccountId) return provenance(t('sessionBoard.item.provenance.snapshotByYou'));
+        if (poster && options.posterDisplayName) return provenance(t('sessionBoard.item.provenance.snapshotBy', { name: options.posterDisplayName }));
+        return provenance(t('sessionBoard.item.provenance.snapshot'));
+    }
     if (source.kind === 'declarative') {
         // An agent visual says what it is: a chart or a table, never "Note" for every document.
         const root = (source.document as { root?: { kind?: unknown } } | undefined)?.root?.kind;

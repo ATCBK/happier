@@ -9185,6 +9185,8 @@ const sessionBoardTranslations = { de: {
                 table: 'Tabelle',
                 interactiveView: 'Interaktive Ansicht',
                 snapshot: 'Momentaufnahme',
+                snapshotByYou: 'Momentaufnahme von dir',
+                snapshotBy: ({ name }) => `Momentaufnahme von ${name}`,
                 pluginMissing: ({ pluginId }) => `Von ${pluginId} · nicht installiert`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },

@@ -87,6 +87,10 @@ describe('Session widget provenance', () => {
         const frozen: SessionSurfaceItemV1['source'] = { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Frozen' } } };
         expect(resolveBoardWidgetProvenance(frozen, null, { snapshot: true }).label).toBe('Snapshot');
         expect(resolveBoardWidgetProvenance(frozen, null).label).toBe('Note');
+        const snapshot = { asOf: '2026-10-19T08:00:00.000Z', provenance: [], postedByAccountId: 'poster' };
+        expect(resolveBoardWidgetProvenance(frozen, null, { snapshot, viewerAccountId: 'poster' }).label).toBe('Snapshot by you');
+        expect(resolveBoardWidgetProvenance(frozen, null, { snapshot, viewerAccountId: 'viewer', posterDisplayName: 'Morgan' }).label).toBe('Snapshot by Morgan');
+        expect(resolveBoardWidgetProvenance(frozen, null, { snapshot, viewerAccountId: 'viewer' }).label).toBe('Snapshot');
     });
 
     it('names the plugin id when the plugin is not installed here', () => {

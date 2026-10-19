@@ -9199,6 +9199,8 @@ const sessionBoardTranslations = { fr: {
                 table: 'Tableau',
                 interactiveView: 'Vue interactive',
                 snapshot: 'Instantané',
+                snapshotByYou: 'Instantané par toi',
+                snapshotBy: ({ name }) => `Instantané par ${name}`,
                 pluginMissing: ({ pluginId }) => `De ${pluginId} · non installé`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },

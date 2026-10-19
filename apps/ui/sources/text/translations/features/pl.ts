@@ -9207,6 +9207,8 @@ const sessionBoardTranslations = { pl: {
                 table: 'Tabela',
                 interactiveView: 'Widok interaktywny',
                 snapshot: 'Migawka',
+                snapshotByYou: 'Twoja migawka',
+                snapshotBy: ({ name }) => `Migawka użytkownika ${name}`,
                 pluginMissing: ({ pluginId }) => `Z ${pluginId} · niezainstalowana`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },
