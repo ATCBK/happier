@@ -82,10 +82,10 @@ describe('machine update account scope at the real RPC credential boundary', () 
         });
         refreshMachineUpdateFacts(scope.serverId, 'studio', { accountScope: scope });
         await vi.waitFor(() => expect(network.requests.some(request => request.method === RPC_METHODS.CAPABILITIES_DETECT)).toBe(true));
-        expect(getMachineCapabilitiesCacheState('studio', scope.serverId)?.status).toBe('loading');
+        expect(getMachineCapabilitiesCacheState('studio', scope.serverId, null, scope.accountId)?.status).toBe('loading');
         const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
         await disconnectActiveServerConnection();
-        await vi.waitFor(() => expect(getMachineCapabilitiesCacheState('studio', scope.serverId)?.status).toBe('idle'));
+        await vi.waitFor(() => expect(getMachineCapabilitiesCacheState('studio', scope.serverId, null, scope.accountId)?.status).toBe('idle'));
     });
 
     it('re-reads fresh latest-version facts through the capability cache after an agent update on the initiating Account', async () => {
@@ -102,7 +102,7 @@ describe('machine update account scope at the real RPC credential boundary', () 
         });
         await runMachineItemUpdate(item('agent-fresh-facts', { kind: 'agent-cli', agentId: 'claude' }), { scope });
 
-        await vi.waitFor(() => expect(getMachineCapabilitiesCacheState('studio', scope.serverId)?.status).toBe('loaded'));
+        await vi.waitFor(() => expect(getMachineCapabilitiesCacheState('studio', scope.serverId, null, scope.accountId)?.status).toBe('loaded'));
         const refreshes = network.requests.filter(request => request.method === RPC_METHODS.CAPABILITIES_DETECT);
         expect(refreshes).toEqual([expect.objectContaining({ serverUrl: homeUrl, targetId: 'studio', payload: expect.objectContaining({
             bypassCache: true,

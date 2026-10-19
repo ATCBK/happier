@@ -378,7 +378,7 @@ function FleetCards(
   const thisComputer = useThisComputerCliUpdate();
   const accountScope = useActiveServerAccountScope(props.serverId);
   const runs = useMachineUpdateRuns(props.serverId);
-  const snapshots = useMachinesCapabilitySnapshots(props.serverId, machineIds);
+  const snapshots = useMachinesCapabilitySnapshots(props.serverId, machineIds, accountScope?.accountId);
   const updating = React.useMemo(
     () =>
       new Set(

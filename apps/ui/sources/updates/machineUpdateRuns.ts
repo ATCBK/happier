@@ -3,6 +3,7 @@ import * as React from 'react';
 import { getInstallablesRegistryEntries } from '@/capabilities/installablesRegistry';
 import { buildMachineUpdateFactsRequest } from '@/capabilities/requests';
 import { prefetchMachineCapabilities } from '@/hooks/server/useMachineCapabilitiesCache';
+import { resolveDaemonCapabilitiesCacheKeySalt } from '@/hooks/server/useDaemonScopedMachineCapabilitiesCache';
 import { machineCapabilitiesInvoke, type MachineCapabilitiesInvokeResult } from '@/sync/ops/capabilities';
 import { startAgentInstallJob, waitForAgentInstallJob, type AgentInstallJobStartOptions } from '@/agents/machineAgents/installJobs/installJobStore';
 import type { MachineAgentJob } from '@/agents/machineAgents/machineAgentTypes';
@@ -341,7 +342,8 @@ export function refreshMachineUpdateFacts(serverId: string, machineId: string, o
             || !areServerProfileIdentifiersEquivalent(options.accountScope.serverId, serverId)))) return;
     const controller = new AbortController();
     const retirement = lifetime.onRetire(() => controller.abort());
-    void prefetchMachineCapabilities({ machineId, serverId, signal: controller.signal,
+    void prefetchMachineCapabilities({ machineId, serverId, signal: controller.signal, accountLifetime: lifetime,
+        cacheKeySalt: resolveDaemonCapabilitiesCacheKeySalt({ id: machineId }, serverId) || null,
         request: { ...buildMachineUpdateFactsRequest(), bypassCache: true } }).finally(() => retirement.dispose());
 }
 

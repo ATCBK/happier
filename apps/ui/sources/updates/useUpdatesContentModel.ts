@@ -3,7 +3,7 @@ import * as React from 'react';
 import { useReleaseNotesLauncher, useReleaseNotesUnread } from '@/changelog/releaseNotes';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useMachineAgentsByMachine } from '@/agents/machineAgents/useMachineAgents';
-import { ensureMachineUpdateFactsBackground } from '@/capabilities/ensureAgentInstallablesBackground';
+import { useMachineUpdateFactsBackground } from './useMachineUpdateFactsBackground';
 import { useActiveServerAccountScope, useAllMachines } from '@/sync/domains/state/storage';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
@@ -15,7 +15,7 @@ import { useMountedActionExecution } from '@/components/approvals/useMountedActi
 import { registerUpdatesActionOwner, type UpdatesActionOwner } from './updatesActionRuntime';
 import { isUpdateItemActionable } from './items/updateItem';
 import { getInstallablesRegistryEntries } from '@/capabilities/installablesRegistry';
-import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 
 import { buildMachineUpdateGroups, readUpdatableInstallables, type UpdatesGroup } from './buildMachineUpdateGroups';
 import { buildUpdatesSummary, type UpdatesSummary } from './items/buildUpdatesSummary';
@@ -93,21 +93,12 @@ export function useUpdatesContentModel(): UpdatesContentModel {
         if (thisComputer.machineId) ids.unshift(thisComputer.machineId);
         return ids;
     }, [machines, thisComputer.machineId, updateScope, reachabilityRevision, presenceNowMs]);
-    const onlineKey = onlineMachineIds.join('\u0000');
     // Every machine's cached detect (offline ones keep their last-known rows); only online ones are asked.
     const machineIds = React.useMemo(() => machines.map((machine) => machine.id), [machines]);
     const machineAgents = useMachineAgentsByMachine({ serverId, machineIds, load: true });
-    const snapshots = useMachinesCapabilitySnapshots(serverId, machineIds);
+    const snapshots = useMachinesCapabilitySnapshots(serverId, machineIds, activeHomeScope?.accountId);
     // Opening the surface asks each online machine through the cache's existing freshness policy.
-    React.useEffect(() => {
-        const controller = new AbortController();
-        const retirement = captureActiveServerAccountScopeLifetime()?.onRetire(() => controller.abort());
-        void ensureMachineUpdateFactsBackground({ serverId, machineIds: onlineKey ? onlineKey.split('\u0000') : [], signal: controller.signal });
-        return () => {
-            controller.abort();
-            retirement?.dispose();
-        };
-    }, [activeHomeScope?.accountId, onlineKey, serverId]);
+    useMachineUpdateFactsBackground({ serverId, accountId: activeHomeScope?.accountId, machineIds: onlineMachineIds });
 
     const { groups, remotes, uncheckedMachineCount, factsCheckedAt } = React.useMemo(() => {
         const built = buildMachineUpdateGroups({
