@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { v5 as uuidv5 } from 'uuid';
 import type { z } from 'zod/mini';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ArtifactActionOutputSchemasV1, type ArtifactActionInputV1, type ArtifactStorageUsageV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
@@ -84,8 +85,11 @@ export function createArtifactActionsClient(scope: ServerAccountScope, execute =
     return {
         /** Seed the existing private Discussion draft from the source's captured Home. */
         beginPassageComment: (passage: DocPassageRefV1) => {
-            writeDiscussionSessionDraft({ scope, address: { kind: 'newDiscussion' }, patch: { passage } });
-            return buildDiscussionRouteHref({ target: { kind: 'new', address: { serverId: scope.serverId } } });
+            const draftId = uuidv5(JSON.stringify(['happier.doc-passage-comment-draft.v1', passage.ref.serverId,
+                passage.ref.artifactId, passage.revision.headerVersion, passage.revision.bodyVersion,
+                passage.range.start, passage.range.end]), uuidv5.URL);
+            writeDiscussionSessionDraft({ scope, address: { kind: 'newDiscussion', draftId }, patch: { passage } });
+            return buildDiscussionRouteHref({ target: { kind: 'new', address: { serverId: scope.serverId }, draftId } });
         },
         readDoc: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.read']>) => run('doc.read', input),
         replyToPassage: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.comment.reply']>) => runMutation('doc.comment.reply', input),
