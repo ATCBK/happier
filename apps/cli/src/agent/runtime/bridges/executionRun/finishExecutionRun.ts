@@ -129,7 +129,13 @@ export async function finishExecutionRun(args: Readonly<{
   const controller = args.controllers.get(args.runId);
   const workflowRunId = controller?.kind === 'backend'
     ? controller.workflowRunId ?? controller.workflowObservation?.workflowRunId : undefined;
-  const projected = await materializeReviewFindings({ run: existing, toolResult, structuredMeta,
+  // Closing a retained runtime can settle the exact output already published by
+  // its last turn. Reusing that host-owned object must not repeat comment writes.
+  const reusesPublishedResult = args.next.status === 'succeeded' && toolResult.output !== undefined
+    && toolResult.output === existing.latestToolResult && structuredMeta === existing.structuredMeta;
+  const projected: Awaited<ReturnType<typeof materializeReviewFindings>> = reusesPublishedResult
+    ? { toolResult, structuredMeta }
+    : await materializeReviewFindings({ run: existing, toolResult, structuredMeta,
     expectFindings: args.next.status === 'succeeded' || (args.next.status === 'failed'
       && (args.structuredMeta?.kind === 'review_findings.v2' || args.structuredMeta?.kind === 'review_findings.v1')),
     reviewComments: args.reviewComments, workflowRunId });

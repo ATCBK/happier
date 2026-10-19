@@ -16,6 +16,7 @@ import { writeExecutionRunActivityMarker } from './activityMarkers';
 import type { ExecutionRunState } from './executionRunTypes';
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import { ensureExecutionRun } from './ensureExecutionRun';
+import { buildReviewFindingsV2Payload } from '@/agent/reviews/normalize/buildReviewFindingsV2Payload';
 import { createTestExecutionRunHostRuntime } from './testkit';
 import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import { RetainedExecutionRunRecordSchema, projectExecutionRunHostLoss, projectRetainedExecutionRunState } from './retainedState';
@@ -70,6 +71,28 @@ function bridge() {
 }
 
 describe('execution lifecycle restart recovery', () => {
+  it('retains an already published review at retirement without repeating comment materialization', async () => {
+    const run = { ...state('parent-session', 'resumable'), intent: 'review' as const };
+    const structuredMeta = { kind: 'review_findings.v2', payload: buildReviewFindingsV2Payload({
+      ...run, summary: 'Published review', generatedAtMs: 2,
+      findings: [{ id: 'f1', title: 'Check authorization', category: 'correctness', severity: 'high', summary: 'The condition changed.',
+        comment: { id: 'persisted-comment', state: 'dismissed', serverRevision: 2, sessionId: run.sessionId!,
+          workspace: { machineId: 'fixture-machine', path: directory } } }],
+    }) };
+    const output = { summary: 'Published review', commentIds: ['persisted-comment'] };
+    const runs = new Map([[run.runId, { ...run, structuredMeta, latestToolResult: output }]]);
+    await finishExecutionRun({ runId: run.runId, next: { status: 'succeeded', finishedAtMs: 3 },
+      toolResult: { output }, structuredMeta, runs, controllers: new Map(), budgetRegistry: null,
+      parentProvider: 'test.agent', sendAcp: async () => {}, enqueueMarkerWrite: async (_id, write) => { await write(); },
+      terminalMarkerWritePromises: new Map() });
+    // Publication already persisted the findings. Retirement must not need the
+    // withdrawn Home writer or re-raise a comment dismissed since publication.
+    expect(runs.get(run.runId)).toMatchObject({ status: 'succeeded', latestToolResult: output, structuredMeta });
+    const restarted = bridge();
+    await restarted.recoverRetainedRuns();
+    expect(restarted.get(run.runId)).toMatchObject({ status: 'succeeded', latestToolResult: output, structuredMeta });
+  });
+
   it('redelivers one loss but distinguishes a later resumed host lifetime', () => {
     const retained = projectRetainedExecutionRunState(state('parent-session', 'resumable'));
     const first = projectExecutionRunHostLoss({ ownerPid: 123, ownerProcessStartTimeMs: 10, state: retained }, 30);
