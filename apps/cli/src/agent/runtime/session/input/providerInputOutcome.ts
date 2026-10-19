@@ -58,7 +58,7 @@ type RuntimeRejectedOutcome = Extract<RuntimeExactProviderInputOutcome, Readonly
 type RuntimeCustodyUnknownOutcome = Extract<RuntimeExactProviderInputOutcome, Readonly<{ type: 'input-custody-unknown' }>>;
 type RuntimeDeliveryFailedOutcome = Extract<RuntimeExactProviderInputOutcome, Readonly<{ type: 'input-delivery-failed' }>>;
 
-type SessionProviderInputOutcomeIdentity = Readonly<{
+export type SessionProviderInputOutcomeIdentity = Readonly<{
     localId: string;
     userMessageSeq: number | null;
     userMessageSeqs?: readonly number[];
@@ -358,6 +358,8 @@ export function createSessionProviderInputOutcomeNormalizer(params: Readonly<{
         selection: ProviderBoundModelRef;
     }> | null;
     discardAppliedModel?(localId: string): void;
+    /** Exact retained inputs actually represented by this host-prepared dispatch. */
+    readRepresentedPendingInputs?(localId: string): readonly SessionProviderInputOutcomeIdentity[];
     observeAcceptedEffect?(localId: string, pendingSettlement?: Promise<void>): void;
     discardAcceptedEffect?(localId: string): void;
 }>): (outcome: HostProviderInputOutcomeEvidence) => void {
@@ -367,23 +369,25 @@ export function createSessionProviderInputOutcomeNormalizer(params: Readonly<{
     >();
     const outcomeKey = (sessionId: string, localId: string): string => `${sessionId}\u0000${localId}`;
 
-    return (evidence) => {
-        const outcome = normalizeHostProviderInputOutcome(evidence);
-        if (!outcome) return;
-        const target = params.getTarget();
+    const observeNormalized = (
+        outcome: SessionProviderInputOutcome,
+        target: SessionProviderInputOutcomeTarget,
+        precedingSettlement?: Promise<void>,
+    ): Promise<void> | undefined => {
         if (!target.hasPendingProviderInput(outcome.localId)) {
             if (outcome.kind === 'accepted') {
                 // Context-only host effects, such as a committed Follow wake event, deliberately
                 // have no Pending user-input row. The exact-id registry remains the authority:
                 // an unregistered provider id is a no-op and cannot manufacture an effect.
-                params.observeAcceptedEffect?.(outcome.localId);
+                if (precedingSettlement) params.observeAcceptedEffect?.(outcome.localId, precedingSettlement);
+                else params.observeAcceptedEffect?.(outcome.localId);
             } else if (
                 outcome.kind === 'rejected_before_effect'
                 && isSessionProviderInputOutcomeTerminal(outcome)
             ) {
                 params.discardAcceptedEffect?.(outcome.localId);
             }
-            return;
+            return precedingSettlement;
         }
         const key = outcomeKey(target.sessionId, outcome.localId);
         const decisiveOutcome = decisiveOutcomeBySessionAndLocalId.get(key);
@@ -406,9 +410,10 @@ export function createSessionProviderInputOutcomeNormalizer(params: Readonly<{
             const appliedModel = params.takeAppliedModel?.(outcome.localId) ?? null;
             let settlement: void | Promise<boolean | void>;
             try {
-                settlement = target.observeProviderInputSettlement(
-                    appliedModel ? { ...outcome, appliedModel } : outcome,
-                );
+                const accepted = appliedModel ? { ...outcome, appliedModel } : outcome;
+                settlement = precedingSettlement
+                    ? precedingSettlement.then(() => target.observeProviderInputSettlement(accepted))
+                    : target.observeProviderInputSettlement(accepted);
             } catch (error) {
                 params.observeAcceptedEffect?.(outcome.localId);
                 throw error;
@@ -416,13 +421,85 @@ export function createSessionProviderInputOutcomeNormalizer(params: Readonly<{
             // Native acceptance retires replay custody immediately. Follow
             // receives the existing Pending write to join before its own ACK;
             // the server still verifies durability if that write fails.
-            if (settlement) params.observeAcceptedEffect?.(outcome.localId, settlement.then(
+            const pendingSettlement = settlement ? settlement.then(
                 () => undefined,
                 () => undefined,
-            ));
+            ) : undefined;
+            if (pendingSettlement) params.observeAcceptedEffect?.(outcome.localId, pendingSettlement);
             else params.observeAcceptedEffect?.(outcome.localId);
-            return;
+            return pendingSettlement;
         }
         target.observeProviderInputSettlement(outcome);
     };
+
+    return (evidence) => {
+        const outcome = normalizeHostProviderInputOutcome(evidence);
+        if (!outcome) return;
+        const target = params.getTarget();
+        // The native adapter still proves exactly one primary input. The host
+        // alone knows which retained originals its final prompt represented.
+        // Reuse the same delivery fact and Pending writer, without making those
+        // originals additional Turn/permission witnesses.
+        const represented = [...params.readRepresentedPendingInputs?.(outcome.localId) ?? []]
+            .sort((left, right) => (left.userMessageSeq ?? Number.MAX_SAFE_INTEGER)
+                - (right.userMessageSeq ?? Number.MAX_SAFE_INTEGER));
+        const seen = new Set([outcome.localId]);
+        let precedingSettlement: Promise<void> | undefined;
+        for (const input of represented) {
+            if (seen.has(input.localId)) continue;
+            seen.add(input.localId);
+            precedingSettlement = observeNormalized({ ...outcome, ...input,
+                userMessageSeqs: input.userMessageSeqs }, target, precedingSettlement) ?? precedingSettlement;
+        }
+        observeNormalized(outcome, target, precedingSettlement);
+    };
+}
+
+export type RegisterProviderAcceptedEffect = (
+    localId: string,
+    onAccepted: ((pendingSettlement?: Promise<void>) => void) | null,
+    representedInputs?: readonly SessionProviderInputOutcomeIdentity[],
+) => void;
+
+/** The Session host's single exact-input effect registry and outcome binding. */
+export function createSessionProviderInputOutcomeBinding(params: Omit<
+    Parameters<typeof createSessionProviderInputOutcomeNormalizer>[0],
+    'observeAcceptedEffect' | 'discardAcceptedEffect' | 'readRepresentedPendingInputs'
+>): Readonly<{
+    registerProviderAcceptedEffect: RegisterProviderAcceptedEffect;
+    observeProviderInputOutcome: ReturnType<typeof createSessionProviderInputOutcomeNormalizer>;
+    clearAcceptedEffects(): void;
+}> {
+    const acceptedEffects = new Map<string, {
+        effects: Array<(pendingSettlement?: Promise<void>) => void>;
+        representedInputs: readonly SessionProviderInputOutcomeIdentity[];
+    }>();
+    const registerProviderAcceptedEffect: RegisterProviderAcceptedEffect = (localId, onAccepted, representedInputs) => {
+        if (!onAccepted && !representedInputs?.length) {
+            acceptedEffects.delete(localId);
+            return;
+        }
+        const entry = acceptedEffects.get(localId) ?? { effects: [], representedInputs: [] };
+        if (onAccepted) entry.effects.push(onAccepted);
+        else entry.effects = [];
+        if (representedInputs) entry.representedInputs = representedInputs.map(input => ({ ...input,
+            ...(input.userMessageSeqs ? { userMessageSeqs: [...input.userMessageSeqs] } : {}) }));
+        acceptedEffects.set(localId, entry);
+    };
+    const observeProviderInputOutcome = createSessionProviderInputOutcomeNormalizer({
+        ...params,
+        readRepresentedPendingInputs: localId => acceptedEffects.get(localId)?.representedInputs ?? [],
+        observeAcceptedEffect: (localId, pendingSettlement) => {
+            const entry = acceptedEffects.get(localId);
+            if (!entry) return;
+            acceptedEffects.delete(localId);
+            for (const effect of entry.effects) {
+                try { effect(pendingSettlement); }
+                catch { /* One host effect cannot invalidate authoritative acceptance or another effect. */ }
+            }
+        },
+        discardAcceptedEffect: localId => { acceptedEffects.delete(localId); },
+    });
+    return { registerProviderAcceptedEffect, observeProviderInputOutcome,
+        clearAcceptedEffects: () => { acceptedEffects.clear(); } };
 }

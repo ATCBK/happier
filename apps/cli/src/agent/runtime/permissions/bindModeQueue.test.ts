@@ -220,6 +220,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
       session: sessionHarness.session,
       agentTargetKey: 'agent:happier.agent.opencode/opencode',
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt, mode: PermissionModeQueuedPromptMode) =>
           queueCalls.push({ type: 'push', message, mode }),
         pushIsolate: (message: PermissionModeQueuedPrompt, mode: PermissionModeQueuedPromptMode) =>
@@ -337,6 +338,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     const binding = registerPermissionModeMessageQueueBinding({
       session,
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
@@ -387,6 +389,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     registerPermissionModeMessageQueueBinding({
       session: sessionHarness.session,
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'push', message }),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'isolate', message }),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'clear', message }),
@@ -435,6 +438,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     registerPermissionModeMessageQueueBinding({
       session: sessionHarness.session,
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'push', message }),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'isolate', message }),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'clear', message }),
@@ -654,6 +658,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
         getCommittedUserMessageSeq: (localId: string) => (localId === 'local-seq-1' ? 42 : null),
       },
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
@@ -696,6 +701,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
         getCommittedUserMessageSeq: (localId: string) => (localId === 'local-dup-1' ? 7 : null),
       },
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
@@ -1004,6 +1010,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     registerPermissionModeMessageQueueBinding({
       session: sessionHarness.session,
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => {
           queueCalls.push(message);
         },
@@ -1080,6 +1087,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     registerPermissionModeMessageQueueBinding({
       session,
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push(message),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push(message),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push(message),

@@ -56,7 +56,7 @@ import {
   createSessionProviderInputConsumer,
   PendingQueueMaterializationAuthError,
 } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
-import type { SessionProviderInputRejectedBeforeEffectReason } from '@/agent/runtime/session/input/providerInputOutcome';
+import type { RegisterProviderAcceptedEffect, SessionProviderInputRejectedBeforeEffectReason } from '@/agent/runtime/session/input/providerInputOutcome';
 import type {
   DrainPendingResult,
   MessageBatch,
@@ -707,10 +707,7 @@ export async function runPermissionModePromptLoop(opts: {
    * Registers replay/Follow effects against the exact localId settled by the host's canonical
    * provider-input outcome normalizer. Transport send completion is never provider acceptance.
    */
-  registerProviderAcceptedEffect: (
-    localId: string,
-    onAccepted: ((pendingSettlement?: Promise<void>) => void) | null,
-  ) => void;
+  registerProviderAcceptedEffect: RegisterProviderAcceptedEffect;
   /** Host lifecycle freezes protected cause facts immediately before runtime begin. */
   onBeforeTurnBegin?: (
     input: PermissionModeQueuedPrompt,
@@ -1679,11 +1676,11 @@ export async function runPermissionModePromptLoop(opts: {
         }
         const representedFollowDeliveries = message.message.followDeliveries?.filter(follow =>
           preparedHostContext?.representedFollowLocalInputIds?.includes(follow.localInputId)) ?? [];
-        for (const follow of representedFollowDeliveries) {
-          if (!localIds.includes(follow.localInputId)) localIds.push(follow.localInputId);
-          if (follow.userMessageSeq !== null && !userMessageSeqs.includes(follow.userMessageSeq)) userMessageSeqs.push(follow.userMessageSeq);
-        }
-        if (userMessageSeqs.length) userMessageSeq = Math.max(...userMessageSeqs);
+        const representedPendingInputs = [
+          ...representedFollowDeliveries.map(follow => ({ localId: follow.localInputId, userMessageSeq: follow.userMessageSeq })),
+          ...(message.message.returnedAnswerContext ?? []).flatMap(answer => answer.localId
+            ? [{ localId: answer.localId, userMessageSeq: answer.userMessageSeq }] : []),
+        ].filter(input => input.localId !== localId);
         // Native grammar stays first; the canonical resolved context follows as arguments.
         const dispatchPrompt = preparedDispatch.renderPrompt({
           ...(preparedHostContext && !providerNativeCommand
@@ -1697,7 +1694,7 @@ export async function runPermissionModePromptLoop(opts: {
 
         if (localIds.length > 0 && opts.readActiveModelSelection && opts.onProviderPromptDispatchPrepared) {
           opts.onProviderPromptDispatchPrepared({
-            localIds,
+            localIds: [...new Set([...localIds, ...representedPendingInputs.map(input => input.localId)])],
             selection: opts.readActiveModelSelection(),
           });
         }
@@ -1765,6 +1762,7 @@ export async function runPermissionModePromptLoop(opts: {
                   }
                 }
               : null,
+            representedPendingInputs,
           );
         }
         for (const follow of representedFollowDeliveries) {
@@ -1780,6 +1778,11 @@ export async function runPermissionModePromptLoop(opts: {
         for (const follow of representedFollowDeliveries) {
           opts.messageQueue.discardMatching(prompt => prompt.localId === follow.localInputId
             && Boolean(prompt.followDeliveries?.some(item => item.localInputId === follow.localInputId)));
+        }
+        for (const answer of message.message.returnedAnswerContext ?? []) {
+          if (!answer.localId) continue;
+          opts.messageQueue.discardMatching(prompt => prompt.localId === answer.localId
+            && prompt.returnedAnswer?.delivery === 'next_turn');
         }
         recordPreparationPhase('native_send_entered');
         const providerSend = Object.keys(promptDeliveryMeta).length === 0

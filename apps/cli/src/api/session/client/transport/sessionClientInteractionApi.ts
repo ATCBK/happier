@@ -36,6 +36,7 @@ import type {
     MaterializeNextPendingOptions,
     MaterializeNextPendingResult,
     PendingMaterializationDiagnosticPhase,
+    SessionProviderInputConsumer,
 } from '../../sessionClientPort';
 import { serializeAxiosErrorForLog } from '../../../client/serializeAxiosErrorForLog';
 import { serializeEphemeralSendError } from '../transcript/ephemeralSendOutcome';
@@ -50,7 +51,7 @@ import type { SessionCatchUpRequest } from '../../sessionChangesSyncOnConnect';
 import { coerceSessionUserPromptV1 } from '@happier-dev/protocol/sessions/messages/coerceSessionUserPromptV1';
 import { SessionInputAdmissionReceiptV1Schema, assertSessionInputAdmissionReceiptForRequest, SESSION_INPUT_REQUEST_META_KEY, SESSION_MESSAGE_PROVENANCE_META_KEY, readSessionInputRequest, readSessionInputAuthority, readSessionInputSenderSessionIdV1, readSessionMessageProvenance, settleSessionInputRequestV2, settleSessionMessageProvenanceV1, settleSessionMessageProvenanceV2, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { PENDING_INPUT_PROTOCOL_VERSION_V3 } from '@happier-dev/protocol/clientCompatibility/primitives';
+import { PENDING_INPUT_PROTOCOL_VERSION_V3, PENDING_INPUT_PROTOCOL_VERSION_V5 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import { settleSessionInputRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionBroadcastContainerSchema } from '@happier-dev/protocol/updates';
 import type { SessionInputRequest, SessionInputAuthority, SessionInputSettlementValidationV1 } from '@happier-dev/protocol';
@@ -440,7 +441,7 @@ function reportPendingMaterializationDiagnosticPhase(
 
 export type SessionClientInteractionApi = Readonly<{
     reconcileSessionInputForProviderDispatch: (input: SessionInputProviderDispatchReconciliation) => Promise<SessionInputProviderDispatchAdmission>;
-    onUserMessage: (callback: (data: UserMessage) => boolean | void) => void;
+    onUserMessage: (callback: SessionProviderInputConsumer) => void;
     waitForMetadataUpdate: (abortSignal?: AbortSignal) => Promise<boolean>;
     ensureMetadataSnapshot: (opts?: { timeoutMs?: number; abortSignal?: AbortSignal }) => Promise<Metadata | null>;
     refreshSessionSnapshotFromServerBestEffort: (opts?: { reason?: SessionSnapshotRefreshReason }) => Promise<void>;
@@ -484,7 +485,8 @@ export function createSessionClientInteractionApi(
         getRuntimeActivityRevision?: () => number | null;
         getPendingWakeSeq: () => number;
         getProviderInputBacklog: () => UserMessage[];
-        setProviderInputConsumer: (callback: ((message: UserMessage) => boolean | void) | null) => void;
+        setProviderInputConsumer: (callback: SessionProviderInputConsumer | null) => void;
+        readRetainedContextLocalIds?: () => readonly string[];
         getProviderInputConsumerAttachedAtMs: () => number | null;
         setProviderInputConsumerAttachedAtMs: (value: number | null) => void;
         wakePendingMaterialization: () => void;
@@ -566,6 +568,11 @@ export function createSessionClientInteractionApi(
         if (contractResult.pendingInput === 'indeterminate') {
             return { didMaterialize: false, result: { type: 'retryable_transport' } };
         }
+        const retainedContextLocalIds = target ? [] : [...deps.readRetainedContextLocalIds?.() ?? []];
+        if (retainedContextLocalIds.length > 0
+            && (contractResult.pendingInputProtocolVersion ?? 0) < PENDING_INPUT_PROTOCOL_VERSION_V5) {
+            return { didMaterialize: false, result: { type: 'unsupported', code: 'session_input_target_update_required' } };
+        }
         if (target && (contractResult.pendingInputProtocolVersion ?? 0) < PENDING_INPUT_PROTOCOL_VERSION_V3) {
             return {
                 didMaterialize: false,
@@ -641,6 +648,7 @@ export function createSessionClientInteractionApi(
                         deliveryStateOptIn: true,
                         deliveryTiming: deliveryTiming ?? 'after_foreground_ready',
                         foregroundState: 'ready',
+                        ...(retainedContextLocalIds.length ? { retainedContext: { localIds: retainedContextLocalIds } } : {}),
                         ...(deliveryTiming === 'after_runtime_idle' && opts.expectedRuntimeActivityRevision !== undefined
                             ? { expectedRuntimeActivityRevision: opts.expectedRuntimeActivityRevision }
                             : {}),

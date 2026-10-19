@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentSessionRuntimeEventSchema, type WorkerUpdateV1 } from '@happier-dev/protocol';
 
 import type { Metadata } from '@/api/types';
-import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createAccountEncryptionCurrentnessFixture, createMutableApiSessionClientFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
@@ -93,7 +93,7 @@ async function runSingleSpecialCommand(params: Readonly<{
   text: string;
   localId: string;
   runtime?: ReturnType<typeof createRuntime>;
-  registerProviderAcceptedEffect?: (localId: string, onAccepted: (() => void) | null) => void;
+  registerProviderAcceptedEffect?: (localId: string, onAccepted: ((pendingSettlement?: Promise<void>) => void) | null) => void;
   hostContextOnly?: PreparedHostContextOnly;
   onHostEventCommitted?: (localId: string) => void;
   checkpointLifecycle?: Parameters<typeof runPermissionModePromptLoop>[0]['checkpointLifecycle'];
@@ -309,42 +309,47 @@ describe('context allowance deferral', () => {
 function createRealWakeFollowContext() {
   let authorized = true;
   const delivered = { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null };
-  const observed = { transcriptSeq: 1, readyEventSeq: 0, agentStateVersion: 0, turn: null };
+  const observed = { transcriptSeq: 1, readyEventSeq: 0, agentStateVersion: 0,
+    turn: { id: 'source-turn', status: 'failed' as const } };
   const observation = {
     sourceSessionId: 'source',
     destinationSessionId: 'session-local-special-command',
+    relation: 'manager' as const,
+    attachedAt: 1,
     delivered,
     observed,
     policy: { preset: 'everything' as const },
   };
-  const acknowledgeSessionFollow = vi.fn(async () => ({ ok: false }));
-  const destinationClient = {
+  const acknowledgeSessionFollow = vi.fn(async () => ({ ok: false as const, v: 1 as const, error: 'retryable' as const }));
+  const destinationClient = createMutableApiSessionClientFixture({ sessionId: 'session-local-special-command', overrides: {
     sessionId: 'session-local-special-command',
     runSessionFollowSourceRequest: <T>(input: Readonly<{ request: () => T }>): T => input.request(),
     // This network boundary models a server-admitted wake. Real root/check-in
     // admission is exercised by the server's SQLite composed suite.
     observePendingSessionFollow: vi.fn(async (options?: { wakeAdmission?: unknown }) => ({
-      ok: true,
-      v: 1,
+      ok: true as const,
+      v: 1 as const,
       sessionId: 'session-local-special-command',
       publisherGeneration: '4',
+      currentSourceSessionIds: authorized ? ['source'] : [],
       observations: authorized ? [observation] : [],
       ...(authorized && options?.wakeAdmission ? { wakeAdmission: { status: 'allowed' as const } } : {}),
     })),
     acknowledgeSessionFollow,
-  } as unknown as ApiSessionClient;
+  } });
   const hydrateObservation = createSessionFollowSourceHydrator({
     session: destinationClient,
-    credentials: { token: 'token' } as never,
+    credentials: { token: 'token', encryption: null },
     deps: {
-      resolveSourceTransport: (async () => ({
-        ok: true,
+      resolveSourceTransport: async () => ({
+        ok: true as const,
         sessionId: 'source',
-        rawSession: { id: 'source', encryptionMode: 'plain' },
-        accountEncryptionCurrentness: { mode: 'plain' },
+        rawSession: createSessionRecordFixture({ id: 'source', encryptionMode: 'plain', metadata: '{}', seq: 1,
+          active: true, latestTurnId: 'source-turn', latestTurnStatus: 'failed' }),
+        accountEncryptionCurrentness: createAccountEncryptionCurrentnessFixture(),
         ctx: null,
-        mode: 'plain',
-      })) as never,
+        mode: 'plain' as const,
+      }),
       fetchTranscriptPage: (async () => ({
         messages: [{
           seq: 1,
@@ -359,16 +364,6 @@ function createRealWakeFollowContext() {
         nextBeforeSeq: null,
         nextAfterSeq: null,
       })) as never,
-      projectSourceAwareness: () => ({
-        v: 1,
-        sessionId: 'source',
-        lifecycle: 'ready',
-        runtime: 'idle',
-        freshness: 'live',
-        operational: { primary: 'ready', reasons: ['ready'] },
-        encryption: 'plain',
-        availability: 'complete',
-      }) as never,
     },
   });
   const reconcile = createSessionFollowContextReconciler({
@@ -425,7 +420,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
         acknowledgeAccepted,
       };
     });
-    let accept: (() => void) | null = null;
+    let accept: ((pendingSettlement?: Promise<void>) => void) | null = null;
     const runtime = { ...createRuntime(), prepareHostContext };
 
     await runSingleSpecialCommand({
@@ -444,12 +439,14 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
     expect(sentPrompt.endsWith('ordinary input')).toBe(true);
     expect(acknowledgeAccepted).not.toHaveBeenCalled();
     expect(accept).toBeTypeOf('function');
-    (accept as unknown as () => void)();
+    const pendingSettlement = createDeferred<void>();
+    (accept as unknown as (settlement: Promise<void>) => void)(pendingSettlement.promise);
     expect(acknowledgeAccepted).toHaveBeenCalledWith({
       kind: 'admitted_input',
       localInputId: 'follow-with-acceptance',
       userMessageSeq: null,
-    });
+    }, pendingSettlement.promise);
+    pendingSettlement.resolve();
   });
 
   it('preserves canonical runtime sequences at checkpoint start and final boundaries', async () => {
@@ -559,7 +556,7 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
     });
     expect(runtime.sendTurnPrompt).toHaveBeenCalledOnce();
     expect(runtime.sendTurnPrompt).toHaveBeenCalledWith(
-      expect.stringContaining('<session_follow>'), expect.objectContaining({ localId: wakeLocalId }),
+      expect.stringContaining('<worker_update>'), expect.objectContaining({ localId: wakeLocalId }),
     );
     expect(runtime.sendTurnPrompt.mock.calls[0]![0]).not.toContain('protected human source text');
     expect(result.confirmUserMessageLocallyConsumed).not.toHaveBeenCalled();

@@ -83,6 +83,10 @@ export class MessageQueue2<Mode, Message = string> {
     this.onMessageHandler = handler;
   }
 
+  getContextOnlyMessages(): readonly Message[] {
+    return this.queue.filter(item => item.contextOnly).map(item => item.message);
+  }
+
   push(message: Message, mode: Mode): void {
     if (this.closed) {
       throw new Error('Cannot push to closed queue');

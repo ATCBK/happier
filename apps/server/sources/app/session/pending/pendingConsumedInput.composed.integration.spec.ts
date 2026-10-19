@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { AgentSessionRuntimeEventV1Schema, type AgentSessionRuntimeEvent } from '@happier-dev/protocol';
+import { AgentSessionRuntimeEventV1Schema, renderSessionInputContextPromptV1, type AgentSessionRuntimeEvent } from '@happier-dev/protocol';
 import Fastify from 'fastify';
 import tweetnacl from 'tweetnacl';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -15,6 +15,7 @@ import { enableErrorHandlers } from '@/app/api/utils/enableErrorHandlers';
 import { registerAccountEncryptionRoutes } from '@/app/api/routes/account/registerAccountEncryptionRoutes';
 import { registerSessionListingRoutes } from '@/app/api/routes/session/registerSessionListingRoutes';
 import { registerSessionMessageRoutes } from '@/app/api/routes/session/registerSessionMessageRoutes';
+import { registerSessionFollowRoutes } from '@/app/api/routes/session/registerSessionFollowRoutes';
 import { sessionPendingRoutes } from '@/app/api/routes/session/pendingRoutes';
 import { featuresRoutes } from '@/app/api/routes/features/featuresRoutes';
 import { startSocket } from '@/app/api/socket';
@@ -22,19 +23,19 @@ import { db } from '@/storage/db';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
-import { blockPendingDelivery, deletePendingMessage, enqueuePendingMessage, markPendingDeliveryHandled } from './pendingMessageService';
+import { blockPendingDelivery, deletePendingMessage, enqueuePendingMessage, enqueuePendingMessageByAuthenticatedMachine, markPendingDeliveryHandled } from './pendingMessageService';
 import { createPublicAcpSession } from '../../../../../cli/src/agent/acp/runtime/publicSession/createPublicAcpSession';
 import { createNativeAgentSessionPublications } from '../../../../../cli/src/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications';
 import { createSessionTurnLifecycle } from '../../../../../cli/src/agent/runtime/session/turn/lifecycle';
 import { createNativeAgentSessionOperations } from '../../../../../cli/src/agent/runtime/registry/engineRegistry/nativeAgentSession';
 import { createPluginSessionMediaHostAdapter } from '../../../../../cli/src/agent/runtime/registry/engineRegistry/nativeAgentSessionMedia';
-import { bindSessionProviderInputOutcome, createSessionProviderInputOutcomeNormalizer } from '../../../../../cli/src/agent/runtime/session/input/providerInputOutcome';
+import { bindSessionProviderInputOutcome, createSessionProviderInputOutcomeNormalizer, createSessionProviderInputOutcomeBinding } from '../../../../../cli/src/agent/runtime/session/input/providerInputOutcome';
 import { ApiSessionClient } from '../../../../../cli/src/api/session/sessionClient';
 import { createSessionSocketTransport } from '../../../../../cli/src/api/session/connection/createSessionSocketTransport';
 import { createInitialHostRuntimeActivityMutation } from '../../../../../cli/src/agent/runtime/session/activity/createHostRuntimeActivityProjection';
 import { createTestMetadata } from '../../../../../cli/src/testkit/backends/sessionMetadata';
 import { encodeBase64, encrypt } from '../../../../../cli/src/api/encryption';
-import type { AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentSessionRuntimeContext, AgentSessionRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
 import { writeAcpTestAgentScript } from '../../../../../cli/src/agent/acp/testkit/subprocessHarness';
 import { waitForCondition } from '../../../../../cli/src/testkit/async/waitFor';
 import { MessageQueue2 } from '../../../../../cli/src/agent/runtime/modeMessageQueue';
@@ -42,6 +43,17 @@ import { createSessionProviderInputConsumer } from '../../../../../cli/src/agent
 import { createSessionProviderInputConsumerSessionAdapter } from '../../../../../cli/src/agent/runtime/waitForNextPermissionModeMessage';
 import { createWorkflowOriginContextInputPort } from '../../../../../cli/src/agent/runtime/session/contextOnly/workflowOriginInput';
 import { publishSessionFollowWakeInvalidation } from '../../../../../cli/src/agent/runtime/session/follow/sessionFollowWakeSignal';
+import { registerPermissionModeMessageQueueBinding } from '../../../../../cli/src/agent/runtime/permissions/bindModeQueue';
+import { combinePermissionModeQueuedPrompts, isNextTurnContextQueuedPrompt, appendNextTurnContextToQueuedPrompt,
+    type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '../../../../../cli/src/agent/runtime/permissions/queuedPrompt';
+import { buildTrustedHostSessionInputAdmissionV1, SessionInputRequestV1Schema, withSessionInputRequestV1,
+    SESSION_MESSAGE_PROVENANCE_META_KEY } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionFollowInputV1Schema, deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
+import { createSessionFollowContextReconciler } from '../../../../../cli/src/agent/runtime/session/follow/sessionFollowContextReconciler';
+import { createSessionFollowSourceHydrator } from '../../../../../cli/src/agent/runtime/session/follow/sessionFollowSourceHydrator';
+import { createSessionFollowSourceMaterialResolver } from '../../../../../cli/src/agent/runtime/session/follow/sessionFollowSourceMaterialResolver';
 
 describe('consumed ACP input → host turn → Pending', () => {
     let harness: LightSqliteHarness;
@@ -57,6 +69,7 @@ describe('consumed ACP input → host turn → Pending', () => {
         registerAccountEncryptionRoutes(app);
         registerSessionListingRoutes(app);
         registerSessionMessageRoutes(app);
+        registerSessionFollowRoutes(app);
         sessionPendingRoutes(app);
         featuresRoutes(app);
         startSocket(app);
@@ -67,6 +80,212 @@ describe('consumed ACP input → host turn → Pending', () => {
         await Promise.all([...clients].map(client => client.close()));
         clients.clear();
         vi.unstubAllEnvs();
+    });
+
+    it.each(['retained', 'reconnect', 'successor', 'ordinary-head', 'person-hold', 'omitted'] as const)(
+        'carries a retained quiet Follow original with the next natural Pending input (%s)', async scenario => {
+        harness.resetEnv({ HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED: 'true' });
+        await getOrCreateServerIdentityId();
+        const authentication = createPresentUserSessionAccessAuthentication();
+        const accountSecret = new Uint8Array(32).fill(7);
+        const sessionKey = new Uint8Array(32).fill(11);
+        const metadata = createTestMetadata({ path: harness.baseDir });
+        const owner = await db.account.create({ data: createSignedAccountContentBinding(tweetnacl.box.keyPair.fromSecretKey(accountSecret).publicKey) });
+        const session = await db.session.create({ data: { tag: randomUUID(), accountId: owner.id,
+            metadata: encodeBase64(encrypt(sessionKey, 'dataKey', metadata)) } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id,
+            installationId: randomUUID(), metadata: encodeBase64(encrypt(sessionKey, 'dataKey', {})),
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1] } },
+            operationProtocolCapabilitiesRevision: 1 } });
+        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: session.id, data: 'encrypted' } });
+        const token = await auth.createToken(owner.id, undefined, { kind: 'account', authority: 'present_user' });
+        const credentials = { token, encryption: { type: 'legacy' as const, secret: accountSecret } };
+        const transports: ReturnType<typeof createSessionSocketTransport>[] = [];
+        const createClient = () => {
+            const client = new ApiSessionClient(token, { id: session.id, seq: 0, encryptionMode: 'e2ee',
+            encryptionKey: sessionKey, encryptionVariant: 'dataKey', metadata, metadataVersion: 0,
+            agentState: null, agentStateVersion: 0 }, {
+            metadataAuthority: { kind: 'owner', credentials, readCurrentCredentials: async () => credentials },
+            localMachineId: machine.id,
+            initialRegisteredSessionStateFieldMutations: [createInitialHostRuntimeActivityMutation({
+                sessionId: session.id, agentRuntimeApplicability: 'supported' })],
+            transport: { serverId: 'quiet-input-home', serverUrl: origin, resolveToken: async () => token,
+                createSessionSocketTransport: binding => {
+                    const transport = createSessionSocketTransport({ ...binding, token, serverUrl: origin,
+                        accessKeyBinding: 'preestablished' });
+                    transports.push(transport);
+                    return transport;
+                } },
+        });
+            clients.add(client);
+            return client;
+        };
+        let client = createClient();
+        expect(await client.claimCurrentSessionPublisherAuthorityForStartup()).toMatchObject({ status: 'claimed' });
+        const source = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), seq: 1,
+            encryptionMode: 'plain', metadata: JSON.stringify(metadata) } });
+        const sourceMessage = { localId: 'source-original', seq: 1 };
+        await db.sessionMessage.create({ data: { sessionId: source.id, ...sourceMessage, messageRole: 'agent',
+            content: { t: 'plain', v: {
+                role: 'agent', content: { type: 'codex', data: { type: 'message', message: 'Worker original result' } },
+            } } } });
+        const edge = await db.sessionFollowEdge.create({ data: { destinationSessionId: session.id, sourceSessionId: source.id,
+            sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: source.id }),
+            relation: 'manager', managerSourceSessionId: source.id, policyJson: JSON.stringify({ preset: 'important' }) } });
+        const delivery = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn', event: { kind: 'update_posted' },
+            original: { sourceSessionId: source.id, sourceMessage } });
+        const host = buildTrustedHostSessionInputAdmissionV1('agent');
+        const request = SessionInputRequestV1Schema.parse({ ...host.request, followDeliveryV1: delivery });
+        const quietId = deriveSessionFollowInputLocalIdV1({ destinationSessionId: session.id, original: delivery.original });
+        expect(await enqueuePendingMessageByAuthenticatedMachine({ accountId: owner.id, sourceMachineId: machine.id,
+            targetMachineId: machine.id, sessionId: session.id, localId: quietId,
+            requestedAction: { v: 1, kind: 'enqueue' }, followDeliveryV1: delivery,
+            followRelations: [{ relation: 'manager', attachedAt: edge.attachedAt.getTime() }],
+            content: { t: 'encrypted', c: encodeBase64(encrypt(sessionKey, 'dataKey', {
+                role: 'user', content: { type: 'text', text: '' },
+                meta: withSessionInputRequestV1({ [SESSION_MESSAGE_PROVENANCE_META_KEY]: host.provenance }, request),
+            })) } })).toMatchObject({ status: 'accepted', localId: quietId });
+        const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'mode', {
+            batcher: combinePermissionModeQueuedPrompts, isContextOnly: isNextTurnContextQueuedPrompt,
+            withContext: appendNextTurnContextToQueuedPrompt,
+        });
+        registerPermissionModeMessageQueueBinding({ session: client, queue,
+            getCurrentPermissionMode: () => 'default', setCurrentPermissionMode: () => {} });
+        expect(await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' }))
+            .toMatchObject({ type: 'materialized', localId: quietId });
+        expect(queue.size()).toBe(0);
+        if (scenario === 'reconnect') {
+            const socket = transports.at(-1)!.socket;
+            socket.disconnect();
+            socket.connect();
+            expect(await client.claimCurrentSessionPublisherAuthorityForStartup()).toMatchObject({ status: 'claimed' });
+            expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: {
+                sessionId: session.id, localId: quietId } } })).toMatchObject({
+                deliveryState: 'blocked', deliveryBlockedReason: 'delivery_outcome_uncertain' });
+        }
+        if (scenario === 'successor') {
+            await client.close();
+            clients.delete(client);
+            client = createClient();
+            expect(await client.claimCurrentSessionPublisherAuthorityForStartup()).toMatchObject({ status: 'claimed' });
+        }
+        const ordinaryId = `ordinary-${randomUUID()}`;
+        if (scenario === 'ordinary-head') {
+            expect(await enqueuePendingMessage({ actorUserId: owner.id, sessionId: session.id, localId: ordinaryId, authentication,
+                ciphertext: encodeBase64(encrypt(sessionKey, 'dataKey', { role: 'user', content: { type: 'text', text: 'Earlier human input' } })),
+                requestedAction: { v: 1, kind: 'enqueue' } })).toMatchObject({ ok: true });
+            expect(await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' }))
+                .toMatchObject({ type: 'materialized', localId: ordinaryId });
+        }
+        const humanId = `natural-${randomUUID()}`;
+        const naturalAdmission = await enqueuePendingMessage({ actorUserId: owner.id, sessionId: session.id, localId: humanId, authentication,
+            ciphertext: encodeBase64(encrypt(sessionKey, 'dataKey', { role: 'user', content: { type: 'text', text: 'Continue the work' } })),
+            requestedAction: { v: 1, kind: 'enqueue' } });
+        expect(naturalAdmission, JSON.stringify(naturalAdmission)).toMatchObject({ ok: true });
+        if (scenario === 'person-hold') {
+            await client.updateMetadata(current => ({ ...current, sessionExplicitStopV1: {
+                v: 1, cause: 'explicit_stop', requestId: 'person-stop', requestedAtMs: 100,
+            } }));
+            const consumer = createSessionProviderInputConsumer({ messageQueue: queue,
+                session: createSessionProviderInputConsumerSessionAdapter(client) });
+            expect(await consumer.drainPending({ reason: 'person-held-quiet-context' })).toMatchObject({
+                materialized: 0, stoppedReason: 'materialization_blocked' });
+            expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: {
+                sessionId: session.id, localId: humanId } } })).toMatchObject({ status: 'queued', deliveryState: null });
+            expect(queue.size()).toBe(0);
+            return;
+        }
+        if (scenario === 'successor') {
+            expect(await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).toEqual({ type: 'no_pending' });
+            expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: {
+                sessionId: session.id, localId: quietId } } })).toMatchObject({
+                status: 'queued', deliveryState: 'blocked', deliveryBlockedReason: 'delivery_outcome_uncertain' });
+            return;
+        }
+        if (scenario === 'ordinary-head') {
+            expect(await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' }))
+                .toMatchObject({ type: 'materialized', localId: ordinaryId });
+            expect(await client.reconcilePendingProviderInputCustodyBeforeMaterialization()).toBe(false);
+            expect(await transports.at(-1)!.socket.emitWithAck('pending-materialize-next', {
+                sid: session.id, deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready',
+                retainedContext: { localIds: [quietId] }, unexpectedAuthority: true,
+            })).toMatchObject({ ok: false, error: 'invalid-params' });
+            expect(await transports.at(-1)!.socket.emitWithAck('pending-materialize-next', {
+                sid: session.id, deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready',
+                retainedContext: { localIds: [quietId, ordinaryId] },
+            })).toMatchObject({ ok: false, error: 'invalid-params' });
+            return;
+        }
+        expect(await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' }))
+            .toMatchObject({ type: 'materialized', localId: humanId });
+        const batch = await queue.waitForMessagesAndGetAsString();
+        expect(batch?.message).toMatchObject({ localId: humanId, text: 'Continue the work',
+            followDeliveries: [{ localInputId: quietId, delivery }] });
+        const material = createSessionFollowSourceMaterialResolver();
+        const hydrateObservation = createSessionFollowSourceHydrator({ session: client, credentials,
+            sourceMaterialResolver: material });
+        const reconciler = createSessionFollowContextReconciler({ session: client, hydrateObservation,
+            maxFollowContextUtf8Bytes: scenario === 'omitted' ? 1 : 8192 });
+        const prepared = await reconciler({ signal: new AbortController().signal,
+            followDeliveries: batch!.message.followDeliveries });
+        const representedIds = prepared?.representedFollowLocalInputIds ?? [];
+        expect(representedIds).toEqual(scenario === 'omitted' ? [] : [quietId]);
+        const prompt = renderSessionInputContextPromptV1({ sessionFollowUpdates: prepared?.updates,
+            transformedUserText: batch!.message.text });
+        if (scenario !== 'omitted') expect(prompt).toContain('Worker original result');
+        let emitNative: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+        let sequence = 0;
+        const native: AgentSessionRuntime = {
+            send: async request => {
+                expect(request.inputIds).toEqual([humanId]);
+                expect(request.input.text).toBe(prompt);
+                if (request.delivery.kind !== 'newTurn') throw new Error('Expected natural newTurn');
+                emitNative?.({ kind: 'input-accepted', sessionId: session.id, inputIds: request.inputIds,
+                    delivery: request.delivery, sequence: ++sequence, emittedAtMs: Date.now() });
+                return { status: 'admitted' };
+            },
+            watch: handler => { emitNative = handler; return { dispose: () => { emitNative = undefined; } }; },
+            dispose: async () => undefined,
+        };
+        const runtime = createNativeAgentSessionOperations(native, session.id, undefined, undefined, undefined,
+            undefined, undefined, { context: { signal: new AbortController().signal } as AgentSessionRuntimeContext,
+                cwd: harness.baseDir, connectedAccounts: [], capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+                cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false } });
+        const acceptance = createSessionProviderInputOutcomeBinding({ getTarget: () => client });
+        acceptance.registerProviderAcceptedEffect(humanId, null,
+            representedIds.map(localId => ({ localId, userMessageSeq: null })));
+        for (const localInputId of representedIds) {
+            acceptance.registerProviderAcceptedEffect(localInputId, settlement => {
+                prepared?.acknowledgeAccepted({ kind: 'admitted_input', localInputId, userMessageSeq: null }, settlement);
+            });
+            queue.discardMatching(message => message.localId === localInputId
+                && Boolean(message.followDeliveries?.some(item => item.localInputId === localInputId)));
+        }
+        const unbind = bindSessionProviderInputOutcome({ runtime, observe: acceptance.observeProviderInputOutcome,
+            wakePendingMaterialization: () => client.wakePendingMaterialization() });
+        try {
+            await runtime.sendTurnPrompt(prompt, { localId: humanId, turnId: `turn-${humanId}` });
+            await waitForCondition(async () => (await db.sessionMessage.count({ where: {
+                sessionId: session.id, localId: humanId } })) === 1,
+            { timeoutMs: 5_000, intervalMs: 10, label: `quiet ${scenario} native acceptance` });
+            expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id, localId: humanId } })).toBe(0);
+            if (scenario === 'omitted') {
+                expect(queue.getContextOnlyMessages().map(message => message.localId)).toEqual([quietId]);
+                expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: {
+                    sessionId: session.id, localId: quietId } } })).toMatchObject({ status: 'queued' });
+                expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId: quietId } })).toBe(0);
+            } else {
+                expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id, localId: quietId } })).toBe(0);
+                expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId: quietId } })).toBe(1);
+                await waitForCondition(async () => (await db.sessionFollowEdge.findUniqueOrThrow({
+                    where: { managerSourceSessionId: source.id } })).deliveredTranscriptSeq === 1,
+                { timeoutMs: 5_000, intervalMs: 10, label: 'exact quiet original native-accepted Follow ACK' });
+            }
+        } finally {
+            unbind();
+            await runtime.resetOrDisposeRuntime();
+            material.dispose();
+        }
     });
 
     it.each(['failed', 'lost', 'blocked', 'historical', 'recovered', 'recovery-lost', 'rejected', 'metadata-only-hard-cap'] as const)('settles only witnessed consumption (%s)', async scenario => {

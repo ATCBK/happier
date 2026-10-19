@@ -34,6 +34,8 @@ import type {
 import { prepareSessionInputForProviderDispatch, readStructuredInputPreparationFailure, type SessionInputDispatchServices } from '@/agent/runtime/turns/prepareSessionInputForProviderDispatch';
 import type { RuntimeTurnPromptMeta } from '@/agent/runtime/turns/runtimeTurnOperations';
 import type { HostPreparedContext } from '@/agent/runtime/session/contextOnly/hostContextOnlyInput';
+import type { SessionProviderInputConsumer } from '@/api/session/sessionClientPort';
+import type { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 
 /**
  * Config change carried by a steered message that the backend must own BEFORE the text joins the
@@ -165,7 +167,8 @@ export type InFlightSteerController = Readonly<{
 export function registerPermissionModeMessageQueueBinding(opts: {
   session: PermissionModeQueueSessionBinding;
   agentTargetKey?: string;
-  queue: SpecialCommandQueue<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>;
+  queue: SpecialCommandQueue<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>
+    & Pick<MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>, 'getContextOnlyMessages'>;
   getCurrentPermissionMode: () => PermissionMode | undefined;
   setCurrentPermissionMode: (mode: PermissionMode | undefined) => void;
   inFlightSteer?: InFlightSteerController | null;
@@ -868,7 +871,12 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     currentBindingGeneration += 1;
     handledUserPromptLocalIds.clear();
     handledUserPromptSeqs.clear();
-    session.onUserMessage((message) => handleMessage(session, message));
+    session.onUserMessage(Object.assign((message: UserMessage) => handleMessage(session, message), {
+      readRetainedContextLocalIds: () => session !== currentSession ? [] : [...new Set(
+        opts.queue.getContextOnlyMessages().flatMap(prompt => [prompt.localId, ...(prompt.localIds ?? [])])
+          .filter((localId): localId is string => typeof localId === 'string' && readPendingLocalId(localId) !== null),
+      )],
+    }));
   };
 
   bindSession(opts.session);
@@ -898,7 +906,7 @@ function resolveModelOverrideFromUserMessage(
 }
 
 type PermissionModeQueueSessionBinding = {
-  onUserMessage: (handler: (message: UserMessage) => boolean | void) => void;
+  onUserMessage: (handler: SessionProviderInputConsumer) => void;
   updateMetadata: (updater: (current: Metadata) => Metadata) => Promise<void> | void;
   getMetadataSnapshot?: () => unknown;
   refreshSessionSnapshotFromServerBestEffort?: (opts?: { reason: 'connect' | 'waitForMetadataUpdate' }) => Promise<void>;

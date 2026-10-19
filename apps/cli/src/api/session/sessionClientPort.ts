@@ -1,7 +1,7 @@
 import type { RpcHandlerManagerLike } from '@/api/rpc/types';
 import type { QuestionSessionSnapshot } from '@/agent/permissions/sessionQuestionManager';
 import type { ACPMessageData, ACPProvider, SessionEventMessage } from './sessionMessageTypes';
-import type { AgentState, Metadata } from '../types';
+import type { AgentState, Metadata, UserMessage } from '../types';
 import type {
   LegacyHostSessionSystemRecord as SessionSystemRecord,
   LegacyHostSessionSystemRecordUpsertRequest as SessionSystemRecordUpsertRequest,
@@ -32,6 +32,11 @@ import type { SessionActivityChangedResult } from '@/daemon/sessions/sessionActi
 /** Source-local notification continuation; the outbox still owns commit and cancellation. */
 export type SessionPersonalFollowCommit = Readonly<{ localId: string; committedSequence: number;
   personalFollow?: SessionActivityChangedResult['personalFollow'] }>;
+
+export type SessionProviderInputConsumer = ((message: UserMessage) => boolean | void) & Readonly<{
+  /** Must read the live queue: collected/dispatched inputs are not retained context. */
+  readRetainedContextLocalIds?: () => readonly string[];
+}>;
 
 export type MaterializeNextPendingResult =
   | {

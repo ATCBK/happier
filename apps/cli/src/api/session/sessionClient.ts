@@ -10,7 +10,7 @@ import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { readActiveForegroundAgentRequests, readForegroundAgentRequestFollowEvent } from '@/agent/permissions/activeForegroundRequests';
 import type { SessionActivityChangedResult } from '@/daemon/sessions/sessionActivityChangedContract';
-import type { SessionPersonalFollowCommit } from './sessionClientPort';
+import type { SessionPersonalFollowCommit, SessionProviderInputConsumer } from './sessionClientPort';
 import type { CommittedTranscriptOriginal } from './transcriptPort';
 import { captureSessionFollowRuleSourceEvidence, captureSemanticSessionFollowRuleSourceEvidence, readSessionFollowSemanticSourceEvent } from '@/agent/runtime/session/follow/sessionFollowRuleSourceEvidence';
 import { hasEffectiveSessionGoalChange } from '@/session/goalControls/commitGoalFollowOccurrence';
@@ -554,7 +554,7 @@ export class ApiSessionClient extends EventEmitter {
     private socket!: Socket<ServerToClientEvents, ClientToServerEvents>;
     private userSocket: Socket<ServerToClientEvents, ClientToServerEvents> | null;
     private providerInputBacklog: UserMessage[] = [];
-    private providerInputConsumer: ((message: UserMessage) => boolean | void) | null = null;
+    private providerInputConsumer: SessionProviderInputConsumer | null = null;
     private providerInputConsumerAttachedAtMs: number | null = null;
     readonly rpcHandlerManager: RpcHandlerManager;
     private metadataLock = new AsyncLock();
@@ -1829,6 +1829,8 @@ export class ApiSessionClient extends EventEmitter {
                 : null,
             getPendingWakeSeq: () => this.updateRuntime.getPendingWakeSeq() + this.pendingWakeSeq,
             getProviderInputBacklog: () => this.providerInputBacklog,
+            readRetainedContextLocalIds: () => (this.providerInputConsumer?.readRetainedContextLocalIds?.() ?? [])
+                .filter(localId => this.materializationRuntime.hasPendingQueueMaterializedLocalId(localId)),
             setProviderInputConsumer: (callback) => {
                 this.providerInputConsumer = callback;
             },
@@ -2648,7 +2650,7 @@ export class ApiSessionClient extends EventEmitter {
         scheduleNextStartupCatchUpRetryViaPort({ recoveryRuntime: this.recoveryRuntime });
     }
 
-    onUserMessage(callback: (data: UserMessage) => boolean | void) {
+    onUserMessage(callback: SessionProviderInputConsumer) {
         this.interactionApi.onUserMessage(callback);
     }
 
@@ -5001,10 +5003,12 @@ export class ApiSessionClient extends EventEmitter {
             });
         }
 
+        const retainedContextLocalIds = new Set(this.providerInputConsumer?.readRetainedContextLocalIds?.() ?? []);
         return ![...this.materializationRuntime.pendingQueueMaterializedLocalIds]
             .some((localId) => (
                 !this.executionRunPendingCustody.has(localId)
                 && !this.nonBlockingArchivedPendingDeliveryLocalIds.has(localId)
+                && !retainedContextLocalIds.has(localId)
             ));
     }
 

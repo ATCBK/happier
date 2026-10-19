@@ -188,7 +188,7 @@ import {
 import type { SessionProviderInputConsumer } from '@/agent/runtime/session/input/_types';
 import {
   bindSessionProviderInputOutcome,
-  createSessionProviderInputOutcomeNormalizer,
+  createSessionProviderInputOutcomeBinding,
   type SessionProviderInputOutcomePort,
 } from '@/agent/runtime/session/input/providerInputOutcome';
 import { registerSessionProviderInputAdmissionRpc } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
@@ -2193,32 +2193,7 @@ export async function runHostSessionRuntime(
   });
   permissionHandler.setPermissionMode(initialPermissionMode);
 
-  const acceptedEffectByPendingLocalId = new Map<string, Array<(pendingSettlement?: Promise<void>) => void>>();
-  const registerProviderAcceptedEffect = (
-    localId: string,
-    onAccepted: ((pendingSettlement?: Promise<void>) => void) | null,
-  ): void => {
-    if (!onAccepted) {
-      acceptedEffectByPendingLocalId.delete(localId);
-      return;
-    }
-    const effects = acceptedEffectByPendingLocalId.get(localId);
-    if (effects) effects.push(onAccepted);
-    else acceptedEffectByPendingLocalId.set(localId, [onAccepted]);
-  };
-  const observeAcceptedEffect = (localId: string, pendingSettlement?: Promise<void>): void => {
-    const effects = acceptedEffectByPendingLocalId.get(localId);
-    if (!effects) return;
-    acceptedEffectByPendingLocalId.delete(localId);
-    for (const effect of effects) {
-      try {
-        effect(pendingSettlement);
-      } catch {
-        // Acceptance is authoritative; one settlement cannot invalidate another.
-      }
-    }
-  };
-  const observeProviderInputOutcome = createSessionProviderInputOutcomeNormalizer({
+  const { registerProviderAcceptedEffect, observeProviderInputOutcome, clearAcceptedEffects } = createSessionProviderInputOutcomeBinding({
     getTarget: () => session,
     takeAppliedModel: (localId) => {
       const appliedModel = appliedModelByPendingLocalId.get(localId) ?? null;
@@ -2227,10 +2202,6 @@ export async function runHostSessionRuntime(
     },
     discardAppliedModel: (localId) => {
       appliedModelByPendingLocalId.delete(localId);
-    },
-    observeAcceptedEffect,
-    discardAcceptedEffect: (localId) => {
-      acceptedEffectByPendingLocalId.delete(localId);
     },
   });
   let inputConsumer: SessionProviderInputConsumer<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt> | null = null;
@@ -3992,7 +3963,7 @@ export async function runHostSessionRuntime(
     modelTransitionOwnerCurrent = false;
     modelTransitionCoordinator = null;
     unbindProviderInputOutcome();
-    acceptedEffectByPendingLocalId.clear();
+    clearAcceptedEffects();
     currentLifecycleSession.setSessionRuntimeControls(null);
     config.onAfterStart = originalOnAfterStart;
     sessionStateMetadataObserver.dispose();

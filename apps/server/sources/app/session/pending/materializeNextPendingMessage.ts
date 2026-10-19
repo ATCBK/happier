@@ -37,6 +37,7 @@ import {
 import { reconcilePendingActivationAuthorizationForRemovedRequestInTx } from "@/app/session/pending/pendingActivationAuthorization";
 import { readStoredSessionInputAdmissionReceipt, isSessionInputTargetCurrentForPublisherInTx } from '@/app/session/messages/sessionInputAdmission';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { RetainedPendingContextV1Schema, type RetainedPendingContextV1 } from '@happier-dev/protocol/sessions/pending/retainedPendingContextV1';
 
 type RecipientCursor = SessionRecipientCursor;
 class PublisherAuthorityLostError extends Error {}
@@ -188,6 +189,7 @@ async function resolvePendingProviderRejoinInTx(params: {
     noopDeliveryState: PendingMaterializationDeliveryState;
     targetExecutionRunId: string | null;
     expectedSidechainId: string | null;
+    retainedContextLocalIds: readonly string[];
 }): Promise<PendingMaterializationPublications | null> {
     if (!await hasExactCurrentPublisherAuthorityInTx(
         params.tx,
@@ -211,7 +213,8 @@ async function resolvePendingProviderRejoinInTx(params: {
         },
     });
     const row = await params.tx.sessionPendingMessage.findFirst({
-        where: { sessionId: params.sessionId, targetExecutionRunId: params.targetExecutionRunId, status: "queued", deliveryState: "delivering" },
+        where: { sessionId: params.sessionId, targetExecutionRunId: params.targetExecutionRunId, status: "queued", deliveryState: "delivering",
+            ...(params.retainedContextLocalIds.length ? { localId: { notIn: [...params.retainedContextLocalIds] } } : {}) },
         orderBy: [{ position: "asc" }, { createdAt: "asc" }, { localId: "asc" }],
         select: {
             localId: true,
@@ -358,6 +361,7 @@ type MaterializeNextPendingMessageParams = Readonly<{
     deadlineAtMs?: number;
     targetExecutionRunId?: string | null;
     expectedSidechainId?: string | null;
+    retainedContext?: RetainedPendingContextV1;
 }>;
 
 export async function materializeNextPendingMessage(
@@ -479,6 +483,32 @@ async function materializePendingTargetInTx(
     });
     if (!sessionRow) return { ok: false, error: "session-not-found" };
     if (sessionRow.accountId !== actorUserId) return { ok: false, error: "forbidden" };
+    const retainedContext = params.retainedContext === undefined ? undefined
+        : RetainedPendingContextV1Schema.safeParse(params.retainedContext);
+    if (retainedContext && (!retainedContext.success || params.targetExecutionRunId !== null)) {
+        return { ok: false, error: 'invalid-params' };
+    }
+    const retainedContextLocalIds = retainedContext?.success ? retainedContext.data.localIds : [];
+    if (retainedContextLocalIds.length) {
+        const retainedRows = await tx.sessionPendingMessage.findMany({
+            where: { sessionId, targetExecutionRunId: null, localId: { in: retainedContextLocalIds } },
+            select: { localId: true, status: true, deliveryState: true, deliveryBlockedReason: true,
+                inputAdmissionReceipt: true, autonomousExchangeCause: true },
+        });
+        if (retainedRows.length !== retainedContextLocalIds.length) return { ok: false, error: 'invalid-params' };
+        for (const row of retainedRows) {
+            const receipt = readStoredSessionInputAdmissionReceipt(row.inputAdmissionReceipt);
+            // Local custody alone cannot skip arbitrary FIFO work. Home independently
+            // confirms this is an admitted informational input, already claimed.
+            if (row.status !== 'queued'
+                || !(row.deliveryState === 'delivering' || (row.deliveryState === 'blocked'
+                    && row.deliveryBlockedReason === 'delivery_outcome_uncertain'))
+                || !(receipt?.followDeliveryV1?.delivery === 'next_turn' || row.autonomousExchangeCause === 'returned_answer')
+                || !await isSessionInputTargetCurrentForPublisherInTx(tx, row.inputAdmissionReceipt, params.publisherAuthority)) {
+                return { ok: false, error: 'invalid-params' };
+            }
+        }
+    }
     if (params.targetExecutionRunId === null && (sessionRow.pendingCount ?? 0) <= 0) {
         // pendingCount is a denormalized counter; treat it as a fast-path hint, not a source of truth.
         // If the counter is inconsistent (e.g. race/data corruption), fall back to checking the queue.
@@ -536,6 +566,7 @@ async function materializePendingTargetInTx(
                 noopDeliveryState,
                 targetExecutionRunId: params.targetExecutionRunId,
                 expectedSidechainId: params.expectedSidechainId,
+                retainedContextLocalIds,
             });
             if (rejoin) return rejoin;
 
@@ -549,6 +580,7 @@ async function materializePendingTargetInTx(
                 // custody. They stay visible there without blocking independent
                 // later questions; ordinary blocked FIFO items keep their contract.
                 rows: pendingCandidates.filter(row => {
+                    if (retainedContextLocalIds.includes(row.localId)) return false;
                     if (row.deliveryState !== 'blocked' || row.deliveryBlockedReason !== 'session_input_target_unavailable') return true;
                     const receipt = readStoredSessionInputAdmissionReceipt(row.inputAdmissionReceipt);
                     const address = receipt?.issuer === 'authenticatedMachine' ? receipt.discussionAddressing : undefined;

@@ -11,6 +11,7 @@ import {
 } from "@/app/events/eventRouter";
 import { resolveSessionMessageAccountActor } from "@/app/session/messages/projectSessionMessageAccountActors";
 import { db } from "@/storage/db";
+import { RetainedContextPendingMaterializeRequestV5Schema } from '@happier-dev/protocol/sessions/pending/retainedPendingContextV1';
 import {
     SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1,
     SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_V1,
@@ -2478,6 +2479,14 @@ export function sessionUpdateHandler(
                 try {
                     if (targetRequest && !targetRequest.success) { respond({ ok: false, error: "invalid-params" }); return; }
                     const raw = data && typeof data === "object" ? data as Record<string, unknown> : {};
+                    // Proof-bearing V5 uses the shared closed parent and child;
+                    // incumbent no-proof revisions retain their existing ingress.
+                    const retainedContext = raw.retainedContext === undefined ? undefined
+                        : RetainedContextPendingMaterializeRequestV5Schema.safeParse(raw);
+                    if (retainedContext && (!retainedContext.success || executionRunTarget)) {
+                        respond({ ok: false, error: 'invalid-params' });
+                        return;
+                    }
                     const sid = targetRequest?.success ? targetRequest.data.sessionId : typeof raw.sid === 'string' ? raw.sid : null;
                     if (!sid) {
                         respond({ ok: false, error: 'invalid-params' });
@@ -2518,6 +2527,7 @@ export function sessionUpdateHandler(
                             deliveryState,
                             deliveryTiming,
                             foregroundState,
+                            ...(retainedContext?.success ? { retainedContext: retainedContext.data.retainedContext } : {}),
                             ...(expectedRuntimeActivityRevision !== null ? { expectedRuntimeActivityRevision } : {}),
                             publisherAuthority,
                             targetExecutionRunId: targetRequest?.success ? targetRequest.data.recipient.runId : null,

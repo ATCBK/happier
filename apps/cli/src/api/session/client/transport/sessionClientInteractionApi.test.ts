@@ -205,6 +205,29 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it('holds retained-context materialization on a pre-V5 Home without disabling ordinary input', async () => {
+    // Moving 0.2 at 077db90d advertises Pending revision 2 and ignores new request fields.
+    const socket = createSocketStub();
+    const contractResult = { mode: 'session_sync_v2_pending_input_v1' as const,
+      runtimeActivity: 'v2' as const, pendingInput: 'v1' as const, pendingInputProtocolVersion: 2,
+      publisherAuthority: 'indeterminate' as const, sessionConnectionEpoch: 1, socket };
+    let retained: string[] = ['quiet-original'];
+    const api = createApi({ getSocket: () => socket as never,
+      getSessionSyncPendingInputServerContractResult: () => contractResult,
+      getSessionConnectionSupervisor: () => ({ getState: () => ({ phase: 'online' }) }) as never,
+      readRetainedContextLocalIds: () => retained,
+    });
+    await expect(api.materializeNextPendingMessageSafely()).resolves.toEqual({
+      type: 'unsupported', code: 'session_input_target_update_required',
+    });
+    expect(socketAckMock).not.toHaveBeenCalled();
+    retained = [];
+    socketAckMock.mockResolvedValueOnce({ ok: true, didMaterialize: false,
+      pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 });
+    await expect(api.materializeNextPendingMessageSafely()).resolves.toEqual({ type: 'no_pending' });
+    expect(socketAckMock.mock.calls[0]?.[1]).not.toHaveProperty('retainedContext');
+  });
+
   it('returns the operation-scoped update result for a Run target on a pre-V3 Pending server while main Pending remains usable', async () => {
     const socket = createSocketStub();
     const contractResult = {

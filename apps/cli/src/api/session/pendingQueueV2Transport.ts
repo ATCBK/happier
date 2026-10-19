@@ -19,6 +19,7 @@ import { SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1, SessionPendingAdmissionS
 import { SESSION_PENDING_EXECUTION_RUN_MATERIALIZE_NEXT_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_ACCEPTED_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_BLOCK_EVENT_V2, SessionPendingExecutionRunMaterializeNextRequestV2Schema, SessionPendingExecutionRunMaterializeNextResponseV2Schema, SessionPendingExecutionRunAcceptedRequestV2Schema, SessionPendingExecutionRunAcceptedResponseV2Schema, SessionPendingExecutionRunBlockRequestV2Schema, SessionPendingExecutionRunBlockResponseV2Schema, SessionExecutionRunPendingEnqueueRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
 import { ParticipantExecutionRunRecipientRoutingIdentityV1Schema } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
+import { RetainedContextPendingMaterializeRequestV5Schema, type RetainedPendingContextV1 } from '@happier-dev/protocol/sessions/pending/retainedPendingContextV1';
 import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import type { PendingDeliveryBlockedReason, PendingDeliveryStatusV1, PendingProviderAction, SessionInputRequestEqualityEvidenceV1, SessionInputAdmissionReceiptV1, SessionPendingAdmissionSettlementRequestV1, SessionMessageRole, SessionPendingExecutionRunMaterializeNextRequestV2, SessionPendingExecutionRunAcceptedRequestV2, SessionPendingExecutionRunBlockRequestV2, AcceptedPendingSettlementResponseV1, SessionExecutionRunPendingEnqueueRequestV1 } from '@happier-dev/protocol';
 import { SessionAccessErrorCodeV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
@@ -322,6 +323,7 @@ type PendingMaterializePayload = Readonly<{
     deliveryTiming?: PendingMaterializationDeliveryTiming;
     foregroundState?: PendingClaimForegroundState;
     expectedRuntimeActivityRevision?: number;
+    retainedContext?: RetainedPendingContextV1;
 }>;
 
 export type PendingQueueDeliveryBlockedReason = PendingDeliveryBlockedReason;
@@ -406,6 +408,9 @@ function readPendingMaterializePayload(payload: unknown): PendingMaterializePayl
         throw new Error('Invalid pending queue materialize payload');
     }
     const record = payload as Record<string, unknown>;
+    if (record.retainedContext !== undefined) return RetainedContextPendingMaterializeRequestV5Schema.parse(record);
+    // Incumbent revisions 2–4 sent no retained-context authority. Keep their
+    // established field projection; unfamiliar fields confer no proof meaning.
     if (typeof record.sid !== 'string') {
         throw new Error('Invalid pending queue materialize session id');
     }
@@ -1396,6 +1401,7 @@ async function tryMaterializeNextViaSocket(params: {
     deliveryTiming?: PendingMaterializationDeliveryTiming;
     foregroundState?: PendingClaimForegroundState;
     expectedRuntimeActivityRevision?: number;
+    retainedContext?: RetainedPendingContextV1;
 }): Promise<PendingQueueSocketMaterializeResult> {
     try {
         const rawAck = await emitSocketWithAck<Record<string, unknown>>({
@@ -1409,6 +1415,7 @@ async function tryMaterializeNextViaSocket(params: {
                 ...(params.deliveryStateOptIn === true ? { deliveryState: 'provider' } : {}),
                 ...(params.deliveryTiming ? { deliveryTiming: params.deliveryTiming } : {}),
                 ...(params.foregroundState ? { foregroundState: params.foregroundState } : {}),
+                ...(params.retainedContext ? { retainedContext: params.retainedContext } : {}),
                 ...(typeof params.expectedRuntimeActivityRevision === 'number'
                     ? { expectedRuntimeActivityRevision: params.expectedRuntimeActivityRevision }
                     : {}),
@@ -1566,6 +1573,7 @@ export async function materializeNextPendingQueueV2Message(params: {
     deliveryTiming?: PendingMaterializationDeliveryTiming;
     foregroundState?: PendingClaimForegroundState;
     expectedRuntimeActivityRevision?: number;
+    retainedContext?: RetainedPendingContextV1;
 }): Promise<PendingQueueMaterializeNextResult> {
     const requiresBoundSessionSocket = Boolean(params.deliveryStateOptIn);
     const socketRes = params.socket.connected
@@ -1578,6 +1586,7 @@ export async function materializeNextPendingQueueV2Message(params: {
             deliveryTiming: params.deliveryTiming,
             foregroundState: params.foregroundState,
             expectedRuntimeActivityRevision: params.expectedRuntimeActivityRevision,
+            retainedContext: params.retainedContext,
         })
         : null;
     let res: PendingQueueSocketMaterializeResult | PendingQueueHttpMaterializeResult;

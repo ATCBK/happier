@@ -7194,6 +7194,11 @@
       "types": "./dist/sessions/pending/pendingLocalId.d.ts",
       "default": "./dist/sessions/pending/pendingLocalId.js"
     },
+    "./sessions/pending/retainedPendingContextV1": {
+      "happier-source": "./src/sessions/pending/retainedPendingContextV1.ts",
+      "types": "./dist/sessions/pending/retainedPendingContextV1.d.ts",
+      "default": "./dist/sessions/pending/retainedPendingContextV1.js"
+    },
     "./ssh/hostTrust": {
       "happier-source": "./src/ssh/hostTrust.ts",
       "types": "./dist/ssh/hostTrust.d.ts",
