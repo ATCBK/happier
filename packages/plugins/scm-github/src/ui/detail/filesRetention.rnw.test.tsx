@@ -84,9 +84,10 @@ function changedFilePage(paths: readonly string[], continuation: string | null):
     rows: paths.map((path) => ({
       path,
       status: 'modified',
-      additions: 3,
-      deletions: 1,
-      changes: 4,
+      // A large one-sided change: its exact count is the useful fact, and the empty side says nothing.
+      additions: path === 'src/alpha.ts' ? 1234 : 3,
+      deletions: path === 'src/alpha.ts' ? 0 : 1,
+      changes: path === 'src/alpha.ts' ? 1234 : 4,
       diffAvailable: true,
     })),
     omittedRowCount: 0,
@@ -262,6 +263,16 @@ describe('the mounted GitHub Files panel across a tab leave', () => {
     expect(listedText()).toContain('src/alpha.ts');
     expect(listedText()).toContain('src/gamma.ts');
     expect(readCount(GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.listChangedFiles)).toBe(2);
+  });
+
+  it('draws each changed file\'s line counts with the shared diff-stat readout, exact and one-sided when one side is empty', async () => {
+    const detail = await mountDetail();
+    await openTab(detail, 'Files');
+    expect(listedText()).toContain('src/alpha.ts');
+    expect(listedText()).toContain('+1,234');
+    expect(listedText()).not.toContain('1.2K');
+    expect(listedText()).not.toContain('−0');
+    expect(listedText()).toContain('+3 −1');
   });
 
   it('offers a row\'s copy and open from its quiet overflow, not as two buttons on every row', async () => {

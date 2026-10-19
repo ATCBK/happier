@@ -7,14 +7,19 @@ import {
 
 export type HappierDiffStatKind = 'added' | 'removed';
 
-/** The two counts as they are drawn; a side with nothing to say is `null`. */
+/**
+ * The two counts as they are drawn; a side with nothing to say is `null`. `locale` is the surface's
+ * own number locale when it has one (a plugin formats in the language it renders); absent, the
+ * runtime's.
+ */
 export function formatHappierDiffStat(
   added: number,
   removed: number,
+  options: Readonly<{ locale?: string }> = {},
 ): Readonly<{ added: string | null; removed: string | null }> {
   return {
-    added: added > 0 ? `+${added.toLocaleString()}` : null,
-    removed: removed > 0 ? `−${removed.toLocaleString()}` : null,
+    added: added > 0 ? `+${added.toLocaleString(options.locale)}` : null,
+    removed: removed > 0 ? `−${removed.toLocaleString(options.locale)}` : null,
   };
 }
 
@@ -31,6 +36,8 @@ export type HappierDiffStatProps = Readonly<{
   Text: ComponentType<HappierDiffStatTextProps>;
   added: number;
   removed: number;
+  /** The surface's number locale; see {@link formatHappierDiffStat}. */
+  locale?: string;
   testID?: string;
   /** Draws one count itself (a find-highlighted run); it must keep that side's ink. */
   renderCount?: (kind: HappierDiffStatKind, text: string) => ReactNode;
@@ -46,7 +53,7 @@ export const HappierDiffStat = memo(function HappierDiffStat(
 ): ReactElement | null {
   if (props.added <= 0 && props.removed <= 0) return null;
   const { Text } = props;
-  const counts = formatHappierDiffStat(props.added, props.removed);
+  const counts = formatHappierDiffStat(props.added, props.removed, props.locale === undefined ? {} : { locale: props.locale });
   const count = (kind: HappierDiffStatKind, text: string) =>
     props.renderCount ? (
       props.renderCount(kind, text)

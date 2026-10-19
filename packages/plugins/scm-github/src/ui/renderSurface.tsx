@@ -49,6 +49,7 @@ import {
   Badge,
   Banner,
   Button,
+  DiffStat,
   Divider,
   EmptyState,
   ErrorState,
@@ -70,6 +71,7 @@ import {
   Tabs,
   Text,
   defineUiSurface,
+  formatHappierDiffStat,
   usePluginHostApi,
   usePluginTheme,
   usePluginTranslation,
@@ -111,7 +113,6 @@ import {
 import {
   resolveTriageRowFactStatusToneV1,
   describeTriageSourceFailureV1 as failureDescription,
-  formatTriageCountV1 as formatNumber,
   formatTriageTimestampV1 as formatTimestamp,
   projectTriageDetailFieldTextV1 as fieldValueText,
 } from '@happier-dev/triage-protocol/v1';
@@ -1852,7 +1853,7 @@ function githubOverviewEntries(
           ? 'Refresh to read'
           : pullRequest.additions === undefined || pullRequest.deletions === undefined
             ? 'Unavailable'
-            : `+${formatNumber(locale, pullRequest.additions, 'plain')} −${formatNumber(locale, pullRequest.deletions, 'plain')}`,
+            : githubDiffStatText(pullRequest.additions, pullRequest.deletions, locale),
       },
     );
   }
@@ -2358,11 +2359,10 @@ const CHANGED_FILE_TONES: Readonly<Record<string, 'success' | 'danger' | 'info' 
     copied: 'info',
   });
 
-function changedFileDetail(
-  row: GithubProjectedChangedFileRowV1,
-  locale: string,
-): string {
-  return `+${formatNumber(locale, row.additions, 'compact')} −${formatNumber(locale, row.deletions, 'compact')}`;
+/** A text-only slot's "+53 −5", by the shared diff-stat owner: a side with nothing to say is left out. */
+function githubDiffStatText(additions: number, deletions: number, locale: string): string {
+  const counts = formatHappierDiffStat(additions, deletions, { locale });
+  return [counts.added, counts.removed].filter((count) => count !== null).join(' ') || 'None';
 }
 
 function changedFileSubtitle(text: PluginTranslate, row: GithubProjectedChangedFileRowV1): string | undefined {
@@ -2532,7 +2532,7 @@ function FilesPanel({
             const subtitle = changedFileSubtitle(text, row);
             return subtitle === undefined ? {} : { subtitle };
           })()}
-          detail={changedFileDetail(row, locale)}
+          accessory={<DiffStat added={row.additions} removed={row.deletions} locale={locale} />}
           tone={CHANGED_FILE_TONES[row.status] ?? 'neutral'}
           {...quietRowActions(hostApi, text, {
             copyValue: row.path,
