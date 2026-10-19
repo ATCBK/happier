@@ -2,7 +2,7 @@ import { removeAutomationMachineAssignmentsTx } from "@/app/automations/automati
 import { type MachineKind, isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
 import { isPlainMachineDataKeyMarker, machineStoredContentMatchesAccountMode } from "@happier-dev/protocol/machines/machineStoredContent";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import {
     buildNewMachineUpdate,
     buildUpdateMachineUpdate,
@@ -13,7 +13,7 @@ import { afterTx, type Tx } from "@/storage/inTx";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { serializeMachineKeyBasis } from "./machineSerialization";
-import { readMachineDevcontainerChildInTx } from './managed/managedRows';
+import { acquireManagedMachinePublicationAccountsInTx, readMachineDevcontainerChildInTx } from './managed/managedRows';
 import { linkManagedEnrollmentInTx } from './managed/managedMutations';
 import type { ManagedEnrollmentCorrelationV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { resolveMachineAccessInTx } from './machineAccess';
@@ -47,6 +47,18 @@ export function resolveMachineContentPublicKeyFingerprintForStorage(params: Read
     return isPlainMachineDataKeyMarker(params.dataEncryptionKey) ? null : params.contentPublicKeyFingerprint;
 }
 
+/** Ordinary registration publishes its owner; managed linking also publishes controller/child recipients. */
+export async function acquireMachineRegistrationAccountsInTx(tx: Tx, input: Readonly<{
+    accountId: string; machineId: string; managedEnrollment?: ManagedEnrollmentCorrelationV1;
+}>): Promise<void> {
+    if (input.managedEnrollment) {
+        await acquireManagedMachinePublicationAccountsInTx(tx, input.managedEnrollment,
+            { additionalAccountIds: [input.accountId], additionalMachineIds: [input.machineId] });
+    } else {
+        await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
+    }
+}
+
 export async function createMachineWithInstallationIdentityInTx(
     tx: Tx,
     params: Readonly<{
@@ -67,6 +79,7 @@ export async function createMachineWithInstallationIdentityInTx(
     machine: Awaited<ReturnType<Tx["machine"]["create"]>>;
     machineReplacement: MachineRegistrationReplacementResult | null;
 }>> {
+    await acquireMachineRegistrationAccountsInTx(tx, params);
     // Persistent registration must recheck Account mode in its creation transaction;
     // Runner content is admitted separately against its signed activation facts.
     if (isPersistentMachine(params)) {
@@ -140,7 +153,7 @@ export async function createMachineWithInstallationIdentityInTx(
     afterTx(tx, () => {
         // Legacy inventory subscribers cannot distinguish temporary Machines.
         if (isPersistentMachine(machine)) {
-            const newMachinePayload = buildNewMachineUpdate({ ...machine, devcontainerChild }, cursor, randomKeyNaked(12));
+            const newMachinePayload = buildNewMachineUpdate({ ...machine, devcontainerChild }, cursor.resolveCursor(), randomKeyNaked(12));
             eventRouter.emitUpdate({
                 userId: params.accountId,
                 payload: newMachinePayload,
@@ -150,7 +163,7 @@ export async function createMachineWithInstallationIdentityInTx(
 
         const updatePayload = buildUpdateMachineUpdate(
             machine.id,
-            cursor,
+            cursor.resolveCursor(),
             randomKeyNaked(12),
             { version: 1, value: params.metadata },
             undefined,
@@ -233,7 +246,7 @@ export async function revokeMachineInTx(
             userId: params.accountId,
             payload: buildUpdateMachineUpdate(
                 updated.id,
-                cursor,
+                cursor.resolveCursor(),
                 randomKeyNaked(12),
                 undefined,
                 undefined,

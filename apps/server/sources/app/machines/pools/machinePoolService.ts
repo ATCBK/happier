@@ -12,7 +12,7 @@ import {
     type MachineDaemonPresenceSocketServer,
 } from "../machineDaemonPresence";
 import { selectMachinePoolCandidate } from "@happier-dev/protocol/machines/pools";
-import { clearTeamCredentialBrokerPoolReferencesInTx } from "@/app/teams/credentials/resourceBrokerPoolLifecycle";
+import { acquireTeamCredentialBrokerPoolAdmissionInTx, clearTeamCredentialBrokerPoolReferencesInTx } from "@/app/teams/credentials/resourceBrokerPoolLifecycle";
 import { acquireMachinePoolMutationFenceInTx } from "./machinePoolMutationFence";
 
 const poolAggregate = {
@@ -301,7 +301,8 @@ export async function deleteMachinePool(params: Readonly<{
     io: MachineDaemonPresenceSocketServer;
 }>): Promise<PoolResult<MachinePoolDeleteOutputV1>> {
     const result = await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        const resourceScope = { custodianAccountId: params.accountId, poolId: params.input.poolId };
+        const recheckAdmission = await acquireTeamCredentialBrokerPoolAdmissionInTx(tx, resourceScope);
         const current = await readOwnedPool(tx, params.accountId, params.input.poolId);
         if (!current) return { kind: "not_found" as const };
         if (current.revision !== params.input.expectedRevision) return { kind: "conflict" as const, stored: current };
@@ -310,6 +311,7 @@ export async function deleteMachinePool(params: Readonly<{
             accountId: params.accountId,
             poolId: current.id,
         })) return { kind: "not_found" as const };
+        await recheckAdmission();
         await clearTeamCredentialBrokerPoolReferencesInTx(tx, {
             custodianAccountId: params.accountId,
             poolId: current.id,

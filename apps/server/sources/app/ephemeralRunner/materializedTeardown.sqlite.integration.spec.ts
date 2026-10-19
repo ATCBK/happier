@@ -1,5 +1,6 @@
 import { inTx } from "@/storage/inTx";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { decodeBase64, encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 
 import { createSessionMachineAccessKeyInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { deleteOwnedSession } from "@/app/session/delete/deleteOwnedSession";
@@ -46,7 +47,8 @@ describe("materialized ephemeral Runner Session deletion (SQLite integration)", 
             data: {
                 id: "runner-machine",
                 accountId: account.id,
-                metadata: "{}",
+                metadata: encodePlainMachineStoredContent({ v: 1 }),
+                dataEncryptionKey: Uint8Array.from(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER)),
                 kind: "ephemeral_session_runner",
                 installationId: "runner-installation",
                 installationPublicKey: new Uint8Array(32).fill(7),
@@ -112,7 +114,8 @@ describe("materialized ephemeral Runner Session deletion (SQLite integration)", 
             data: {
                 id: "ordinary-machine",
                 accountId: account.id,
-                metadata: "{}",
+                metadata: encodePlainMachineStoredContent({ v: 1 }),
+                dataEncryptionKey: Uint8Array.from(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER)),
                 kind: "persistent",
             },
         });
