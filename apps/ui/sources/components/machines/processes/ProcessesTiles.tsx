@@ -8,7 +8,7 @@ import {
 import type { MachineResourceAttentionV1 } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
 import type { MachineVitalsSampleV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { MachinePressureIndicator } from '@/components/machines/summary/MachinePressureIndicator';
 import {
   resolveMachineResourceToneColor,
@@ -66,7 +66,7 @@ function Meter(
 ) {
   const { theme } = useUnistyles();
   const reducedMotion = useReducedMotionPreference();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const fill =
     props.tone === 'calm'
       ? theme.colors.text.tertiary

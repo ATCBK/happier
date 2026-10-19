@@ -149,20 +149,22 @@ export function readPluginUiHostTypography(): HappierUiTypography {
 }
 
 /**
- * A plugin surface's theme on the material it is drawn on. Plugin text reads its faint inks from this snapshot
- * rather than through core `Text`, so on glass with a picture behind it (a Home widget card) the snapshot carries the
- * containing material's stronger faint ink (DESIGN.md → Materials): the same step core text takes there. Elsewhere
- * the snapshot is returned as is.
+ * The plugin UI theme a render draws with: the current theme's projection, on the material it is drawn on. Plugin UI
+ * reads its faint inks from this snapshot rather than through core `Text`, so on glass with a picture behind it (a Home
+ * widget card: a table's column headers, a metric's caption, a snapshot's meta) the snapshot carries the containing
+ * material's stronger faint ink (DESIGN.md → Materials), the same step core text takes there. Elsewhere it is the
+ * projection itself. Render code takes its plugin theme here; `projectPluginUiTheme` is the pure projection.
  */
-export function usePluginUiThemeOnGlass(theme: PluginUiThemeV1): PluginUiThemeV1 {
+export function usePluginUiTheme(theme: Theme, spinner?: PluginUiThemeV1['spinner']): PluginUiThemeV1 {
+    const projected = React.useMemo(() => projectPluginUiTheme(theme, spinner), [theme, spinner]);
     const faintInk = useGlassBackedInk();
     return React.useMemo(() => {
-        const secondaryText = faintInk(theme.colors.secondaryText) ?? theme.colors.secondaryText;
-        const mutedText = faintInk(theme.colors.mutedText) ?? theme.colors.mutedText;
-        return secondaryText === theme.colors.secondaryText && mutedText === theme.colors.mutedText
-            ? theme
-            : Object.freeze({ ...theme, colors: Object.freeze({ ...theme.colors, secondaryText, mutedText }) });
-    }, [faintInk, theme]);
+        const secondaryText = faintInk(projected.colors.secondaryText) ?? projected.colors.secondaryText;
+        const mutedText = faintInk(projected.colors.mutedText) ?? projected.colors.mutedText;
+        return secondaryText === projected.colors.secondaryText && mutedText === projected.colors.mutedText
+            ? projected
+            : Object.freeze({ ...projected, colors: Object.freeze({ ...projected.colors, secondaryText, mutedText }) });
+    }, [faintInk, projected]);
 }
 
 /**

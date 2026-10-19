@@ -5,7 +5,7 @@ import { HappierInputField, HappierPressable, happierPageTextMetrics, resolveHap
 import { sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { readInputOptionValue } from '@happier-dev/protocol/inputs';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
 import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
@@ -219,7 +219,7 @@ function ViewerFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>)
  */
 function InputFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const { entry, row } = props;
     // A list input that declares no placeholder would draw as a blank block: say what to type in it.
     const field = React.useMemo(() => (entry.field.widget === 'text_list' && entry.field.placeholder === undefined

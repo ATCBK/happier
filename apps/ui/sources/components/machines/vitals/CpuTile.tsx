@@ -12,7 +12,7 @@ import type {
   MachineVitalsSampleV1,
 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { usageSignatureAccent, withUsageAccentAlpha } from '@/components/settings/usage/usageAccent';
 import {
   ExpandableItem,
@@ -183,7 +183,7 @@ function PerCoreBody(
   props: Readonly<{ cpu: ReportedCpu; host: MachineVitalsHostFactsV1 | null }>,
 ) {
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const { cpu, host } = props;
   const cores = React.useMemo(
     (): readonly CoreLoadBar[] =>

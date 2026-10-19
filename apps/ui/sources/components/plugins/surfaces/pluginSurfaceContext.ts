@@ -24,7 +24,7 @@ import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShel
 import type { PluginSurfaceTargetKind } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import type { PluginSurfaceTargetUndeclaredReason } from '@/sync/domains/plugins/ui/scope/resolveResourceScope';
 
-import { projectPluginUiTheme, usePluginUiThemeOnGlass } from './pluginUiThemeProjection';
+import { usePluginUiTheme } from './pluginUiThemeProjection';
 
 /**
  * The single owner of the public `SurfaceContext` snapshot (§3.2, UI-D11).
@@ -217,7 +217,7 @@ export function usePluginSurfaceEnvironment(
         speed: spinnerSpeed,
         pause: spinnerPause,
     }), [spinnerStyle, spinnerSpeed, spinnerPause]);
-    const pluginTheme = usePluginUiThemeOnGlass(React.useMemo(() => projectPluginUiTheme(theme, spinner), [theme, spinner]));
+    const pluginTheme = usePluginUiTheme(theme, spinner);
     return React.useMemo(() => Object.freeze({
         platform: resolvedPlatform,
         locale,

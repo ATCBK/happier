@@ -2,7 +2,7 @@ import * as React from 'react';
 import { HappierLink } from '@happier-dev/plugin-ui/presentation';
 import { useUnistyles } from 'react-native-unistyles';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Item } from '@/components/ui/lists/Item';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -31,7 +31,7 @@ export function ProviderExternalLink(props: Readonly<{
     url: string;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const label = t(`settingsProviders.links.${props.kind}`);
     const open = React.useCallback(async () => {
         let opened = false;

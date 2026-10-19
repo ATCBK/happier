@@ -4,7 +4,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { HappierSkeletonRows } from '@happier-dev/plugin-ui/presentation';
 import { CollectionLoadingRows } from '@happier-dev/plugin-ui/components';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { PluginSurfacePageHeaderContext } from '@/components/plugins/shared/pluginSurfaceInteractionAvailability';
 import { PageFrame } from '@/components/ui/layout/PageFrame';
 import {
@@ -156,7 +156,7 @@ function PluginSurfaceLoadingSkeleton(props: Readonly<{
     shape: 'list' | 'collection';
 }>): React.ReactElement {
     const { theme } = useUnistyles();
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const pluginTheme = usePluginUiTheme(theme);
     const reducedMotion = useReducedMotionPreference();
     return (
         <View testID={props.testID} style={{ flex: 1, paddingTop: props.shape === 'collection' ? 0 : pluginTheme.spacing.small }}>

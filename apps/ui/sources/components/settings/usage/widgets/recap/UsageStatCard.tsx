@@ -14,7 +14,7 @@ import { createPlanetFrame } from '@happier-dev/brand/planet';
 import { PlanetCanvas } from '@/components/atmosphere/PlanetCanvas';
 import { CompositionStrip, formatHappierDataShare } from '@happier-dev/plugin-ui/presentation';
 import { useUnistyles } from 'react-native-unistyles';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -284,7 +284,7 @@ function MixBar(
 ) {
   const { group, palette } = props;
   const { theme: appTheme } = useUnistyles();
-  const theme = React.useMemo(() => projectPluginUiTheme(appTheme), [appTheme]);
+  const theme = usePluginUiTheme(appTheme);
   const caption = mixCaption(group);
   return (
     <View style={{ gap: 6 }}>

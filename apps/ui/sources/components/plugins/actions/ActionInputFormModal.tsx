@@ -8,7 +8,7 @@ import {
 } from '@happier-dev/plugin-ui/presentation';
 
 import type { CustomModalInjectedProps } from '@/modal';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { ActionInputFields } from '@/components/sessions/actions/ActionInputFields';
 import { useInputFieldOptions } from '@/components/sessions/actions/useInputFieldOptions';
@@ -66,7 +66,7 @@ export function ActionInputFormModal(props: ActionInputFormModalProps): React.Re
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const router = useRouter();
-    const pluginUiTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const pluginUiTheme = usePluginUiTheme(theme);
     const [, refresh] = React.useReducer((value: number) => value + 1, 0);
     const onRetireRef = React.useRef(props.onRetire);
     onRetireRef.current = props.onRetire;

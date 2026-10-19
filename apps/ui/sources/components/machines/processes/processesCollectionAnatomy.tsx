@@ -18,7 +18,7 @@ import type {
   OwnerRowV1,
 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
 import { formatVitalsPercent } from '@/components/machines/vitals/vitalsFormat';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -433,7 +433,7 @@ const ProcessSpark = React.memo(function ProcessSpark(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const series = React.useMemo((): readonly HappierSeries[] | null => {
     const values = (props.samples ?? []).flatMap((sample) =>
       typeof sample.cpuPercent === 'number' ? [sample.cpuPercent] : [],

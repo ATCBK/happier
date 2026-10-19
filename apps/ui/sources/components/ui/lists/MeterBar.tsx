@@ -6,7 +6,7 @@ import { Text } from '@/components/ui/text/Text';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { HappierProgress } from '@happier-dev/plugin-ui/presentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 export type MeterTone = 'success' | 'warning' | 'danger' | 'neutral';
 
@@ -76,7 +76,7 @@ export const MeterBar = React.memo<MeterBarProps>((props) => {
     const styles = stylesheet;
 
     const height = props.height ?? DEFAULT_TRACK_HEIGHT_PX;
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const fill = Number.isFinite(props.fillFraction) ? props.fillFraction : 0;
     // Read the token directly — never apply a runtime opacity/rgba transform to a
     // theme token (web var-ification turns such transforms into silent no-ops).

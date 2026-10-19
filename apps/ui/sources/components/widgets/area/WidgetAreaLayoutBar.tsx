@@ -12,7 +12,7 @@ import {
   happierPageTextMetrics,
 } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import {
@@ -128,7 +128,7 @@ export const WidgetAreaLayoutBar = React.memo(function WidgetAreaLayoutBar(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const tabsTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const tabsTheme = usePluginUiTheme(theme);
   const { testID, labels } = props;
   const selected =
     props.layouts.find((layout) => layout.id === props.selectedId) ??

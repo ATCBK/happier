@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { CapacityBar } from '@happier-dev/plugin-ui/presentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 import { MeterBar, type MeterTone } from '@/components/ui/lists/MeterBar';
 import { Text } from '@/components/ui/text/Text';
@@ -82,7 +82,7 @@ export type UsageMeterRowProps = Readonly<{
  */
 export const UsageMeterRow = React.memo(function UsageMeterRow(props: UsageMeterRowProps) {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const styles = stylesheet;
     const known = props.remainingPct !== null && Number.isFinite(props.remainingPct);
     const remaining = known ? Math.max(0, Math.min(100, Math.round(props.remainingPct!))) : null;

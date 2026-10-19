@@ -14,7 +14,7 @@ import { useProcessesCollectionAnatomy } from '@/components/machines/processes/p
 import { ProcessRowPresence } from '@/components/machines/processes/processesMotion';
 import type { ProcessesItem } from '@/components/machines/processes/processesPresentation';
 import { machineBytesParts } from '@/components/machines/vitals/machineVitalsPresentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -147,7 +147,7 @@ export function MachineProcessesHero(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   return (
     <View style={props.quiet ? styles.quiet : null}>
       <HappierDataMetric

@@ -13,7 +13,7 @@ import {
   type HappierSeriesBucket,
 } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { useUsageSeriesLens } from '@/components/settings/usage/usageSeriesPresentation';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
@@ -53,7 +53,7 @@ export const VitalsHistoryChart = React.memo(function VitalsHistoryChart(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const reducedMotion = useReducedMotionPreference();
   const [width, setWidth] = React.useState(0);
   const onLayout = React.useCallback(

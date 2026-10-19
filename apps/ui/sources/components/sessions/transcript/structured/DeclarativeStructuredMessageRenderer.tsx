@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 import {
     type PluginContributionIdentityV1,
@@ -58,7 +58,7 @@ export function DeclarativeStructuredMessageRenderer(props: Readonly<{
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const find = useStructuredFindState();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const {
         onAction,
         isActionAvailable,

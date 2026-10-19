@@ -19,7 +19,7 @@ import {
     type HappierSelectOption,
 } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { SurfaceStateCard } from '@/components/ui/surfaces';
 import { t } from '@/text';
 import type { ResolveSessionActionFieldOptions } from './sessionActionFieldOptions';
@@ -98,7 +98,7 @@ export function ActionInputFields(props: Readonly<{
     }>) => string | undefined;
 }>) {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
 
     return (
         <InputTypePickerHostProvider enabled={props.fields.some((field) => field.inputType !== undefined)}

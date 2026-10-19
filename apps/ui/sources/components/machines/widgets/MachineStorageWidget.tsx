@@ -10,7 +10,7 @@ import type { MachineResourceReasonV1 } from '@happier-dev/protocol/machines/res
 import type { WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 import type { StorageItemV1 } from '@happier-dev/protocol/storage/storageV1';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { usageSignatureAccent } from '@/components/settings/usage/usageAccent';
 import { beginMachinePageTabIntent } from '@/components/machines/page/machinePageIntent';
 import type { MachinePageTabParams } from '@/components/machines/page/machinePageTabQuery';
@@ -562,7 +562,7 @@ function StorageCapacityLegend(
 ) {
   const language = usePreferredLanguage();
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const { volume, canGoBytes, measuring } = props.view;
   const parts = resolveStorageVolumeParts(volume);
   const segments = React.useMemo(

@@ -3,7 +3,7 @@ import { I18nManager, Platform, Pressable, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierBrandMark } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Text } from '@/components/ui/text/Text';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import type { PluginPermissionPendingGrantRequest } from '@/sync/domains/plugins/permissions/types';
@@ -97,7 +97,7 @@ function describeField(label: string | undefined, value: string): string {
 
 export function PluginPermissionGrantSheet(props: PluginPermissionGrantSheetProps) {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const pluginName = resolvePluginName(props.pendingRequest);
     const scope = describeScope(props.pendingRequest);
     const requester = describeRequester(props.pendingRequest);

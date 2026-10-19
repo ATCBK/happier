@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { CapacityBar, StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Tooltip } from '@/components/ui/overlays/Tooltip';
 import { CapacityRing } from '@/components/ui/progress/CapacityRing';
 import { Text } from '@/components/ui/text/Text';
@@ -214,7 +214,7 @@ function renderInstrument(props: Readonly<{
 /** A level meter through the shared capacity owner: fills by used, coloured by tone. */
 function MachineSummaryMeter(props: Readonly<{ used: number | null; color: string; trackColor: string; width: number | undefined }>) {
     const { theme } = useUnistyles();
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const pluginTheme = usePluginUiTheme(theme);
     return (
         <View style={props.width === undefined ? stylesheet.meterFill : { width: props.width }}>
             <CapacityBar theme={pluginTheme} label="" value={props.used} capacity={1} color={props.color}
@@ -229,7 +229,7 @@ const renderSummaryBucket: NonNullable<React.ComponentProps<typeof StackedSeries
 /** A 5-minute line through the shared chart owner, already scaled by the model (no min–max fit). */
 function MachineSummaryLine(props: Readonly<{ line: readonly (number | null)[]; color: string; width: number; height: number }>) {
     const { theme } = useUnistyles();
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const pluginTheme = usePluginUiTheme(theme);
     const series = React.useMemo(() => [{ id: 'line', label: '', color: props.color,
         points: (props.line.length > 0 ? props.line : [0, 0]).map((y, index) => ({ id: String(index), x: index, y })) }], [props.color, props.line]);
     // No sample yet is not a reading of zero: the line keeps its room and draws nothing (never a flat 0 baseline).

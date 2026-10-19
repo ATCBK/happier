@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierDataChart, HappierDataMetric } from '@happier-dev/plugin-ui/presentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { SheetDismissProvider } from '@/modal/components/card/sheetDragDismiss';
 import { WIDGET_SIZE_POLICY_V1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 
@@ -168,7 +168,7 @@ const HOME_SCOPE = { serverId: 'specimen', accountId: 'specimen', owner: { kind:
 /** The saved query's real body nodes (the public metric and chart) at static data. */
 function StandInSignups(): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const days = [['Thu', 142], ['Fri', 168], ['Sat', 151], ['Sun', 189], ['Mon', 214], ['Tue', 236], ['Wed', 183]] as const;
     return (
         <View style={{ gap: theme.space.s12 }}>

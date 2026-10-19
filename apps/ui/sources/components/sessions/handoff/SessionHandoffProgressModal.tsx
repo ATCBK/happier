@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierProgress } from '@happier-dev/plugin-ui/presentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { SessionHandoffProgressCheckpointSchema, SessionHandoffActionResultV1Schema } from '@happier-dev/protocol/sessions/control/handoff/handoffSchemas';
 import { SESSION_HANDOFF_PROGRESS_FULL_TIMELINE, SESSION_HANDOFF_PROGRESS_FULL_TIMELINE_WITH_SOURCE_SCAN, resolveSessionHandoffProgressTimeline, type SessionHandoffProgressCheckpoint, type SessionHandoffStatus } from '@happier-dev/protocol/sessions/control/handoff/handoffStatus';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
@@ -426,7 +426,7 @@ function translateCheckpoint(checkpoint: SessionHandoffProgressCheckpoint): stri
 
 export function SessionHandoffProgressModal({ onClose, setChrome, title, message, status, operation, serverId, onResume, requestFailure, onOpenConflicts }: Props) {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const styles = stylesheet;
 
     // Keep a monotonic "effective" status so the checkpoint selection never regresses when

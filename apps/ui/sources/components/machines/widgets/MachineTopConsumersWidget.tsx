@@ -24,7 +24,7 @@ import {
 } from '@/components/machines/processes/useProcessesController';
 import { COMPOSITION_INK } from '@/components/machines/vitals/MemoryTile';
 import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import {
@@ -638,7 +638,7 @@ function OwnerComposition(
 ) {
   const language = usePreferredLanguage();
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const segments = React.useMemo(() => {
     const bytes = new Map<string, number>();
     for (const owner of props.answer.owners) {

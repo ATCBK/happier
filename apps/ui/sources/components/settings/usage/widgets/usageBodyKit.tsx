@@ -8,7 +8,7 @@ import type {
   UsageQueryResultSlice,
   UsageQuerySourceState,
 } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
 import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCatalogProjection';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -51,7 +51,7 @@ export type UsageBodyProps = Readonly<{
 
 export function useUsagePluginTheme(): PluginUiThemeV1 {
   const { theme } = useUnistyles();
-  return React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  return usePluginUiTheme(theme);
 }
 
 /** Exact shown dates; a date range does not establish a rolling preset identity. */

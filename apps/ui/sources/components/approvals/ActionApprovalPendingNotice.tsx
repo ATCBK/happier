@@ -4,7 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierApprovalPendingNotice, HappierPressable, type HappierApprovalPendingNoticeTextRender } from '@happier-dev/plugin-ui/presentation';
 import { NoticeLine } from '@/components/ui/lists/NoticeLine';
 import { attentionBannerTextStyles } from '@/components/ui/lists/AttentionBanner';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -122,7 +122,7 @@ const SharedApprovalPendingNotice = React.memo(function SharedApprovalPendingNot
     testID?: string;
 }>) {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const openLabel = props.openLabel ?? t('approvals.review');
     const openTestID = props.testID ? `${props.testID}.open` : undefined;
     if (props.presentation === 'line') {

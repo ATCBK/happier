@@ -14,7 +14,7 @@ import {
     PLUGIN_UI_THEME_COLOR_TOKEN_IDS,
     projectPluginUiTheme,
     readPluginUiHostTypography,
-    usePluginUiThemeOnGlass,
+    usePluginUiTheme,
 } from './pluginUiThemeProjection';
 
 function themeFor(profile: ThemeProfileV1 | null, mode: ThemeProfileMode = 'light') {
@@ -28,19 +28,23 @@ function builtInProfile(index: number): ThemeProfileV1 {
 }
 
 describe('plugin UI semantic theme projection (§3.3, UI-D12)', () => {
-    it('gives a plugin surface on backed glass the material\'s stronger faint ink, and keeps the theme\'s ink elsewhere', async () => {
-        const theme = themeFor(null, 'light');
+    it('gives every plugin UI theme on backed glass the material\'s stronger faint ink, and the theme\'s own ink elsewhere', async () => {
+        // A Home card's table, metric or snapshot draws its column headers and captions in this theme's quiet inks:
+        // on glass with a picture behind it they take the same step core text takes there (FA22 GL1e).
+        const theme = themeFor(null, 'dark');
         const projected = projectPluginUiTheme(theme);
         const backed = resolveGlassBackedInk(theme.colors.text.primary, theme.colors.text.secondary, glassQuietThemeInks(theme.colors));
-        const onGlass = await renderHook(() => usePluginUiThemeOnGlass(projected), {
+        const onGlass = await renderHook(() => usePluginUiTheme(theme), {
             wrapper: ({ children }) => React.createElement(GlassBackedInkContext.Provider, { value: backed }, children),
         });
         const stepped = onGlass.getCurrent();
         expect(stepped.colors.secondaryText).toBe(backed.secondary);
+        expect(stepped.colors.secondaryText).not.toBe(theme.colors.text.secondary);
         expect(stepped.colors.mutedText).toBe(backed.quiet?.ink);
         expect(stepped.colors.text).toBe(projected.colors.text);
-        const plain = await renderHook(() => usePluginUiThemeOnGlass(projected));
-        expect(plain.getCurrent()).toBe(projected);
+        const plain = await renderHook(() => usePluginUiTheme(theme));
+        expect(plain.getCurrent()).toEqual(projected);
+        expect(plain.getCurrent().colors.secondaryText).toBe(theme.colors.text.secondary);
     });
 
     it('projects the host-selected spinner style and timing without replacing its semantic theme', () => {

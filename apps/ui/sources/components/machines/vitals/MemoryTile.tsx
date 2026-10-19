@@ -9,7 +9,7 @@ import type { MachineVitalsSampleV1 } from '@happier-dev/protocol/machines/vital
 
 import { MachinePressureIndicator } from '@/components/machines/summary/MachinePressureIndicator';
 import { formatMachineMemoryPressureSource, resolveMachineResourceToneColor } from '@/components/machines/summary/machineSummaryStripModel';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import {
   usageSignatureAccent,
   withUsageAccentAlpha,
@@ -311,7 +311,7 @@ export const MemoryTile = React.memo(function MemoryTile(
 function MemoryComposition(props: Readonly<{ memory: ReportedMemory }>) {
   const language = usePreferredLanguage();
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const parts = props.memory.composition;
   const segments = React.useMemo(
     () =>

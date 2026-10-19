@@ -18,7 +18,7 @@ import { InputTypePickerHostProvider } from '@/components/sessions/actions/Input
 import { useExecutableParticipantLabel } from '@/components/sessions/authoring/useExecutableParticipantLabel';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { SurfaceStateCard } from '@/components/ui/surfaces';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { PluginContextualResourceStoreProvider } from '@/components/plugins/surfaces/PluginContextualResourceStoreProvider';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldItem } from '@/components/ui/forms/FieldItem';
@@ -447,7 +447,7 @@ export function WorkflowRunInputs(props: Readonly<{
     presentation?: WorkflowRunInputPresentation;
 }>) {
     const { theme } = useUnistyles();
-    const selectTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const selectTheme = usePluginUiTheme(theme);
     const requests = props.fields.map(({ definition }) => ({
         field: workflowInputToFieldHint(definition, props.presentation?.[definition.name]),
         draftInput: props.values,

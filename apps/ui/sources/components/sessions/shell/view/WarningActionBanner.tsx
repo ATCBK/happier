@@ -9,7 +9,7 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { ITEM_SUBTITLE_TEXT_METRICS, ITEM_TITLE_TEXT_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { Text } from '@/components/ui/text/Text';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import type { Theme } from '@/theme';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { SurfaceRim } from '@/components/ui/surfaces/SurfaceRim';
@@ -111,7 +111,7 @@ export function resolveWarningActionBannerToneTokens(
 
 export function WarningActionBanner(props: WarningActionBannerProps): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const { width } = useWindowDimensions();
     const [measuredWidth, setMeasuredWidth] = React.useState<number | null>(null);
     const availableWidth = typeof measuredWidth === 'number' && measuredWidth > 0 ? measuredWidth : width;

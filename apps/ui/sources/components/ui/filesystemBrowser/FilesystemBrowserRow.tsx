@@ -14,7 +14,7 @@ import { isTouchPrimaryPointer } from '@/components/ui/interactiveTargetSize';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { SelectionCheckGlyph, type SelectionCheckState } from '@/components/ui/selection/SelectionCheckGlyph';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 /** How a row hands its actions menu the reveal: open it (a long press) and whether its … is drawn. */
 export type FilesystemBrowserRowActionsControl = Readonly<{
@@ -90,7 +90,7 @@ export type FilesystemBrowserRowProps = Readonly<{
 
 export function FilesystemBrowserRow(props: FilesystemBrowserRowProps): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const phone = useDeviceType() === 'phone';
     const reducedMotion = useReducedMotionPreference();
     const paddingLeft = resolveHappierTreeRowIndentPx(props.node.depth, {

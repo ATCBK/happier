@@ -10,7 +10,7 @@ import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import { PluginContextualResourceState, PluginContextualResourceStoreProvider, type PluginContextualResourceBinding } from '@/components/plugins/surfaces/PluginContextualResourceStoreProvider';
 import { projectDeclarativeDataResourceSnapshot, resolveDeclarativeDataResourceBinding,
     type DeclarativeDataSourceProjection } from '@/components/plugins/surfaces/declarativeDataSource';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { readDeclarativeText, renderDeclarativeNode, type DeclarativeNodeRenderContext } from '@/components/plugins/shared/declarativeNodes';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
@@ -184,7 +184,7 @@ function DataFreshnessLine(props: Readonly<{ testID: string }>): React.ReactElem
 export function DeclarativeWidgetDocument(props: DeclarativeWidgetDocumentProps): React.ReactElement {
     const { theme } = useUnistyles();
     const widgetPresentation = useWidgetPresentation();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const [mountInstanceKey] = React.useState(randomUUID);
     const parsed = React.useMemo(() => PluginDeclarativeDocumentV1Schema.safeParse(props.document), [props.document]);
     const context: DeclarativeNodeRenderContext = { colors: theme.colors, presentationTheme, widgetPresentation,

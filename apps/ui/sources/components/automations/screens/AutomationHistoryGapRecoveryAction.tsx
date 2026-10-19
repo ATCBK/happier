@@ -12,7 +12,7 @@ import {
 } from '@/sync/domains/plugins/availability/projection';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Item } from '@/components/ui/lists/Item';
 import { t } from '@/text';
@@ -93,7 +93,7 @@ export function AutomationHistoryGapRecoveryAction(props: Readonly<{
     const [recovering, setRecovering] = React.useState(false);
     const [recoveryFailed, setRecoveryFailed] = React.useState(false);
     React.useEffect(() => () => operationRef.current?.abort(), []);
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
 
     const canRecover = status !== null
         && origin !== null

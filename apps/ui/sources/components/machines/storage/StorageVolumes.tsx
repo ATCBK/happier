@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { CompositionStrip, happierPageTextMetrics, type CompositionSegment } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { usageSignatureAccent } from '@/components/settings/usage/usageAccent';
 import { formatMachineBytes, formatMachinePartOfWhole } from '@/components/machines/vitals/machineVitalsPresentation';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -39,7 +39,7 @@ export const StorageVolumeRow = React.memo(function StorageVolumeRow(props: Read
     after?: 'cleanup' | 'trashEmpties' }>) {
     const language = usePreferredLanguage();
     const { theme } = useUnistyles();
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const pluginTheme = usePluginUiTheme(theme);
     const { volume } = props;
     const name = storageVolumeName(volume);
     const hint = storageVolumeMountHint(volume);

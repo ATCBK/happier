@@ -13,7 +13,7 @@ import type { MachineRetentionPolicyV1 } from '@happier-dev/protocol/account/set
 import type { RetentionV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { isMachineRetainedWakeEligibleV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { LocalDateTimeEditor } from '@/components/ui/dateTime/LocalDateTimeEditor';
 import { Switch } from '@/components/ui/forms/Switch';
@@ -267,7 +267,7 @@ function KeepField(props: InnerProps) {
 
 function KeepChoices(props: InnerProps) {
   const { theme } = useUnistyles();
-  const radioTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const radioTheme = usePluginUiTheme(theme);
   const choices = React.useMemo(
     () =>
       buildRetentionKindChoices({
