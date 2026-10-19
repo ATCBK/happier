@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
-import { DISCUSSION_HTTP_PATHS_V1, DiscussionDetailsResponseV1Schema, type DiscussionCreateRequestV1 } from '@happier-dev/protocol/discussions/api';
+import { DISCUSSION_HTTP_PATHS_V1, DiscussionDetailsResponseV1Schema, DiscussionPostResponseV1Schema, type DiscussionCreateRequestV1 } from '@happier-dev/protocol/discussions/api';
 
 import { registerDiscussionRoutes } from '@/app/api/routes/discussions/registerDiscussionRoutes';
 import { enableErrorHandlers } from '@/app/api/utils/enableErrorHandlers';
@@ -10,7 +10,10 @@ import { observeLazyPrismaQuery } from '@/app/changes/accountPublicationContenti
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { db, initDbPostgres, shutdownDbClient } from '@/storage/db';
 import type { Tx } from '@/storage/inTx';
+import { kvMutate } from '@/app/kv/kvMutate';
 import { createDiscussion } from './mutations';
+import { archiveDiscussion } from './mutations';
+import { inviteDiscussionParticipant, removeDiscussionGrant, setDiscussionGrant } from './accessService';
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -45,17 +48,209 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('Discussion arch
         enableErrorHandlers(app);
         // Credential verification is the boundary; all routing, authority,
         // projection, native locks and terminal publication remain real.
+        let actorAccountId = owner.id;
         app.decorate('authenticate', async (incoming: FastifyRequest) => {
-            incoming.userId = owner.id; incoming.authAuthority = 'present_user'; incoming.authTokenKind = 'account';
+            incoming.userId = actorAccountId; incoming.authAuthority = 'present_user'; incoming.authTokenKind = 'account';
         });
         registerDiscussionRoutes(app);
         await app.ready();
         const initialCursor = (await db.account.findUniqueOrThrow({ where: { id: owner.id }, select: { seq: true } })).seq;
-        return { owner, discussionId, initialCursor, app, close: async () => {
+        return { owner, discussionId, initialCursor, app, setActor: (accountId: string) => { actorAccountId = accountId; }, close: async () => {
             await app.close();
             await db.account.delete({ where: { id: owner.id } });
         } };
     }
+
+    it('appends after a same-Account publisher commits between discovery and Account admission without conflict retries', async () => {
+        const current = await fixture();
+        const maxRetries = process.env.HAPPIER_DB_TX_MAX_RETRIES;
+        process.env.HAPPIER_DB_TX_MAX_RETRIES = '0';
+        const original = db.$transaction;
+        let publishingPeer = false;
+        let published = false;
+        let attempts = 0;
+        const payload = { localId: randomUUID(), content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Concurrent append' }] } }, mentionedAccountIds: [] };
+        // Schedule a genuine KV publication at the Prisma query boundary. All
+        // route, append, lock, retry and terminal publication logic stays real.
+        db.$transaction = new Proxy(original, { apply(target, receiver, args) {
+            const operation: unknown = args[0];
+            const options: unknown = args[1];
+            if (publishingPeer || typeof operation !== 'function'
+                || options && typeof options === 'object' && Reflect.get(options, 'isolationLevel') === 'RepeatableRead') {
+                return Reflect.apply(target, receiver, args);
+            }
+            attempts++;
+            return Reflect.apply(target, receiver, [async (tx: Tx) => Reflect.apply(operation, undefined, [new Proxy(tx, {
+                get(owner, property, proxyReceiver) {
+                    const member: unknown = Reflect.get(owner, property, proxyReceiver);
+                    if (property !== '$queryRawUnsafe' || typeof member !== 'function') return member;
+                    return (...queryArgs: unknown[]) => {
+                        const query: unknown = Reflect.apply(member, owner, queryArgs);
+                        if (!/FROM "Account".*FOR KEY SHARE/.test(String(queryArgs[0])) || published) return query;
+                        return observeLazyPrismaQuery(query, () => ({ started() {}, settled() {} }), async () => {
+                            if (published) return;
+                            published = true;
+                            publishingPeer = true;
+                            try {
+                                expect(await kvMutate({ uid: current.owner.id }, [{ key: `append-peer-${randomUUID()}`,
+                                    value: 'cGVlcg==', version: -1 }])).toMatchObject({ success: true });
+                            } finally { publishingPeer = false; }
+                        });
+                    };
+                },
+            })]), ...args.slice(1)]);
+        } });
+        try {
+            const response = await current.app.inject({ method: 'POST',
+                url: DISCUSSION_HTTP_PATHS_V1.messages.replace(':discussionId', current.discussionId), payload });
+            expect(published).toBe(true);
+            expect(response.statusCode, response.body).toBe(200);
+            const posted = DiscussionPostResponseV1Schema.parse(response.json());
+            expect(posted).toMatchObject({ messageSeq: 2, message: { localId: payload.localId, seq: 2 } });
+            expect(await db.account.findUniqueOrThrow({ where: { id: current.owner.id } })).toMatchObject({ seq: current.initialCursor + 2 });
+            expect(attempts).toBe(1);
+        } finally {
+            db.$transaction = original;
+            if (maxRetries === undefined) delete process.env.HAPPIER_DB_TX_MAX_RETRIES;
+            else process.env.HAPPIER_DB_TX_MAX_RETRIES = maxRetries;
+            await current.close();
+        }
+    });
+
+    it('replays a newly invited same-Account Session before extending locks past the Discussion parent', async () => {
+        const current = await fixture();
+        const session = await db.session.create({ data: { accountId: current.owner.id, tag: randomUUID(),
+            encryptionMode: 'plain', metadata: '{}' } });
+        const original = db.$transaction;
+        const attempts: string[][] = [];
+        let inviting = false;
+        let invited = false;
+        // The real invite commits after the captured cohort was admitted, but
+        // before append obtains its parent. No internal owner is replaced.
+        db.$transaction = new Proxy(original, { apply(target, receiver, args) {
+            const operation: unknown = args[0];
+            const options: unknown = args[1];
+            if (inviting || typeof operation !== 'function'
+                || options && typeof options === 'object' && Reflect.get(options, 'isolationLevel') === 'RepeatableRead') {
+                return Reflect.apply(target, receiver, args);
+            }
+            const queries: string[] = [];
+            attempts.push(queries);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => Reflect.apply(operation, undefined, [new Proxy(tx, {
+                get(owner, property, proxyReceiver) {
+                    const member: unknown = Reflect.get(owner, property, proxyReceiver);
+                    if (property !== '$queryRawUnsafe' || typeof member !== 'function') return member;
+                    return (...queryArgs: unknown[]) => {
+                        const sql = String(queryArgs[0]);
+                        queries.push(sql);
+                        const query: unknown = Reflect.apply(member, owner, queryArgs);
+                        if (!/FROM "Discussion".*FOR NO KEY UPDATE/.test(sql) || invited) return query;
+                        return observeLazyPrismaQuery(query, () => ({ started() {}, settled() {} }), async () => {
+                            if (invited) return;
+                            invited = true;
+                            inviting = true;
+                            try {
+                                expect(await inviteDiscussionParticipant({ authentication, actorAccountId: current.owner.id,
+                                    discussionId: current.discussionId, request: { participant: { kind: 'session', sessionId: session.id } } }))
+                                    .toMatchObject({ ok: true });
+                            } finally { inviting = false; }
+                        });
+                    };
+                },
+            })]), ...args.slice(1)]);
+        } });
+        try {
+            const response = await current.app.inject({ method: 'POST',
+                url: DISCUSSION_HTTP_PATHS_V1.messages.replace(':discussionId', current.discussionId),
+                payload: { localId: randomUUID(), content: { t: 'plain', v: { v: 1,
+                    parts: [{ t: 'text', text: 'Current participant cohort' }] } }, mentionedAccountIds: [] } });
+            expect(response.statusCode, response.body).toBe(200);
+            expect(invited).toBe(true);
+            expect(attempts).toHaveLength(2);
+            expect(attempts[0].filter(sql => /FROM "Session".*FOR NO KEY UPDATE/.test(sql))).toEqual([]);
+            const admittedSession = attempts[1].findIndex(sql => /FROM "Session".*FOR NO KEY UPDATE/.test(sql));
+            const admittedDiscussion = attempts[1].findIndex(sql => /FROM "Discussion".*FOR NO KEY UPDATE/.test(sql));
+            expect(admittedSession).toBeGreaterThan(-1);
+            expect(admittedDiscussion).toBeGreaterThan(admittedSession);
+        } finally { db.$transaction = original; await db.session.delete({ where: { id: session.id } }); await current.close(); }
+    });
+
+    it('rejoins concurrent identical append IDs before allocating another Discussion sequence', async () => {
+        const current = await fixture();
+        const payload = { localId: randomUUID(), content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Same occurrence' }] } }, mentionedAccountIds: [] };
+        const append = () => current.app.inject({ method: 'POST',
+            url: DISCUSSION_HTTP_PATHS_V1.messages.replace(':discussionId', current.discussionId), payload });
+        const responses: Array<ReturnType<typeof append>> = [];
+        try {
+            await db.$transaction(async holder => {
+                await holder.$queryRaw`SELECT "id" FROM "Discussion" WHERE "id" = ${current.discussionId} FOR UPDATE`;
+                let finished = 0;
+                const start = () => { const response = append(); responses.push(response); void response.finally(() => { finished++; }); };
+                for (let count = 1; count <= 2; count++) {
+                    start();
+                    let waiting = 0;
+                    while (finished === 0 && waiting < count) {
+                        const [row] = await db.$queryRaw<Array<{ waiting: number }>>`
+                            SELECT COUNT(*)::int AS waiting FROM pg_stat_activity WHERE datname = current_database()
+                                AND cardinality(pg_blocking_pids(pid)) > 0 AND query LIKE '%Discussion%'
+                        `;
+                        waiting = row.waiting;
+                    }
+                    expect(waiting).toBe(count);
+                }
+            });
+            const results = await Promise.all(responses);
+            for (const result of results) expect(result.statusCode, result.body).toBe(200);
+            const messages = results.map(result => DiscussionPostResponseV1Schema.parse(result.json()));
+            expect(messages[1].message.id).toBe(messages[0].message.id);
+            expect(messages.map(result => result.messageSeq)).toEqual([2, 2]);
+            expect(await db.discussionMessage.count({ where: { discussionId: current.discussionId, localId: payload.localId } })).toBe(1);
+            expect(await db.discussion.findUniqueOrThrow({ where: { id: current.discussionId } })).toMatchObject({ messageSeq: 2 });
+            expect(await db.account.findUniqueOrThrow({ where: { id: current.owner.id } })).toMatchObject({ seq: current.initialCursor + 1 });
+        } finally { await Promise.allSettled(responses); await current.close(); }
+    });
+
+    it.each(['archive', 'revoke'] as const)('rechecks %s committed while an append waits for its Discussion parent', async change => {
+        const current = await fixture();
+        const reader = await db.account.create({ data: { encryptionMode: 'plain' } });
+        expect(await setDiscussionGrant({ authentication, actorAccountId: current.owner.id, discussionId: current.discussionId,
+            request: { principal: { kind: 'account', accountId: reader.id }, accessLevel: 'edit' } })).toMatchObject({ ok: true });
+        current.setActor(reader.id);
+        const original = db.$transaction;
+        let changed = false;
+        db.$transaction = new Proxy(original, { apply(target, receiver, args) {
+            const operation: unknown = args[0];
+            if (typeof operation !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => Reflect.apply(operation, undefined, [new Proxy(tx, {
+                get(owner, property, proxyReceiver) {
+                    const member: unknown = Reflect.get(owner, property, proxyReceiver);
+                    if (property !== '$queryRawUnsafe' || typeof member !== 'function') return member;
+                    return (...queryArgs: unknown[]) => {
+                        const query: unknown = Reflect.apply(member, owner, queryArgs);
+                        if (!/FROM "Discussion".*FOR NO KEY UPDATE/.test(String(queryArgs[0])) || changed) return query;
+                        return observeLazyPrismaQuery(query, () => ({ started() {}, settled() {} }), async () => {
+                            if (changed) return;
+                            changed = true;
+                            const result = change === 'archive'
+                                ? await archiveDiscussion({ authentication, actorAccountId: current.owner.id, discussionId: current.discussionId })
+                                : await removeDiscussionGrant({ authentication, actorAccountId: current.owner.id, discussionId: current.discussionId,
+                                    request: { principal: { kind: 'account', accountId: reader.id } } });
+                            expect(result).toMatchObject({ ok: true });
+                        });
+                    };
+                },
+            })]), ...args.slice(1)]);
+        } });
+        try {
+            const response = await current.app.inject({ method: 'POST', url: DISCUSSION_HTTP_PATHS_V1.messages.replace(':discussionId', current.discussionId),
+                payload: { localId: randomUUID(), content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Must stay unsent' }] } }, mentionedAccountIds: [] } });
+            expect(changed).toBe(true);
+            expect(response.statusCode, response.body).toBe(change === 'archive' ? 409 : 403);
+            expect(response.json()).toEqual({ error: change === 'archive' ? 'discussion_archived' : 'discussion_post_denied' });
+            expect(await db.discussionMessage.count({ where: { discussionId: current.discussionId } })).toBe(1);
+            expect(await db.discussion.findUniqueOrThrow({ where: { id: current.discussionId } })).toMatchObject({ messageSeq: 1 });
+        } finally { db.$transaction = original; await current.close(); await db.account.delete({ where: { id: reader.id } }); }
+    });
 
     it.each(['archive', 'restore'] as const)('commits %s across a concurrent Account cursor writer without conflict retries', async intent => {
         const current = await fixture(intent === 'restore');
@@ -191,7 +386,7 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('Discussion arch
                 while (finished === 0 && waiting < 1) {
                     const [row] = await db.$queryRaw<Array<{ waiting: number }>>`
                         SELECT COUNT(*)::int AS waiting FROM pg_stat_activity WHERE datname = current_database()
-                            AND cardinality(pg_blocking_pids(pid)) > 0 AND query LIKE '%UPDATE%Discussion%'
+                            AND cardinality(pg_blocking_pids(pid)) > 0 AND query LIKE '%Discussion%'
                     `;
                     waiting = row.waiting;
                 }
@@ -200,7 +395,7 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('Discussion arch
                 while (finished === 0 && waiting < 2) {
                     const [row] = await db.$queryRaw<Array<{ waiting: number }>>`
                         SELECT COUNT(*)::int AS waiting FROM pg_stat_activity WHERE datname = current_database()
-                            AND cardinality(pg_blocking_pids(pid)) > 0 AND query LIKE '%UPDATE%Discussion%'
+                            AND cardinality(pg_blocking_pids(pid)) > 0 AND query LIKE '%Discussion%'
                     `;
                     waiting = row.waiting;
                 }

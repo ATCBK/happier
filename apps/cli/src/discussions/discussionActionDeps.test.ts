@@ -144,8 +144,9 @@ describe('Home Discussion resource transport', () => {
     });
     const executor = createActionExecutor({ discussionAction: action() });
     const participant = { kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source' } };
-    expect(await executor.execute('discussion.create', { ...createInput, participants: [participant] }, context))
-      .toMatchObject({ ok: true, result: { discussion: { id: 'discussion-1' } } });
+    const created = await executor.execute('discussion.create', { ...createInput, participants: [participant] }, context);
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    expect(created).toMatchObject({ ok: true, result: { discussion: { id: 'discussion-1' } } });
     expect(await executor.execute('discussion.invite', { discussionId: 'discussion-1', participant }, context))
       .toMatchObject({ ok: true, result: { changed: true } });
     const writes = axiosRequest.mock.calls.map(([request]) => request)

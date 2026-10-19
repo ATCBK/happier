@@ -104,7 +104,7 @@ import {
     acknowledgeAccountVoiceFollowInTx,
     observePendingAccountVoiceFollowInTx,
 } from "@/app/session/follow/accountFollowService";
-import { createDiscussionInTx, postDiscussionMessageInTx, prepareDiscussionPostMutationAccounts } from "@/app/discussions/mutations";
+import { createDiscussionInTx, postPreparedDiscussionMessageInTx, prepareDiscussionPostMutationAccounts } from "@/app/discussions/mutations";
 import { reconcileDiscussionCreationIdentityRace } from '@/app/discussions/createIdentityReconciliation';
 import type { createSessionPublisherPresence, CurrentSessionPublisherAuthority, SessionPublisherBinding } from "@/app/presence/sessionPublisherPresence";
 import type { TeamCredentialExecutionRunCurrentnessResolver } from "@/app/teams/credentials/providerBrokerAdmission";
@@ -636,13 +636,15 @@ export function sessionUpdateHandler(
                         authority,
                         userId,
                         request.data.sessionId,
+                        undefined,
+                        { lockMachineAuthority: append !== null },
                     )) {
                         return null;
                     }
                     if (request.data.sourceSession && (request.data.sourceSession.sourceSessionId !== request.data.sessionId
                         || !await isSessionInputSourceCurrentInTx(tx, userId, request.data.sourceSession))) return null;
                     return 'discussionId' in publication
-                        ? await postDiscussionMessageInTx(tx, append!)
+                        ? await postPreparedDiscussionMessageInTx(tx, append!)
                         : await createDiscussionInTx(tx, { ...actor, request: publication.request });
                 },
             });

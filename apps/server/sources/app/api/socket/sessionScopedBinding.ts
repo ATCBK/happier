@@ -6,6 +6,7 @@ import { observeSessionScopedBindingStage } from "@/app/monitoring/metrics/sessi
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
 import { readSessionMachineBindingStateInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
+import { getDbProviderFromEnv } from '@/storage/prisma';
 
 export type SessionScopedBindingProof = "owner-session" | "machine-access-key";
 
@@ -68,7 +69,20 @@ export async function hasCurrentSessionScopedMachineAccessInTx(params: Readonly<
     accountId: string;
     machineId: string;
     sessionId: string;
+    /** Prepared append already holds its Account/Session/resource parents. */
+    lockAuthority?: boolean;
 }>): Promise<boolean> {
+    if (params.lockAuthority && getDbProviderFromEnv(process.env, 'postgres') === 'postgres') {
+        const machines = await params.tx.$queryRawUnsafe<Array<{ id: string }>>('SELECT "id" FROM "Machine" WHERE "id" = $1 FOR SHARE', params.machineId);
+        if (machines.length === 0) return false;
+        const keys = await params.tx.$queryRawUnsafe<Array<{ accountId: string }>>(
+            'SELECT "accountId" FROM "AccessKey" WHERE "accountId" = $1 AND "machineId" = $2 AND "sessionId" = $3 FOR SHARE',
+            params.accountId, params.machineId, params.sessionId,
+        );
+        // An absent lookup does not lock a future tuple. Do not borrow a key
+        // created after this authority read from the unlocked ordinary reread.
+        if (keys.length === 0) return false;
+    }
     const accessKey = await params.tx.accessKey.findUnique({
         where: {
             accountId_machineId_sessionId: {

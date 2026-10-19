@@ -316,14 +316,15 @@ async function admitAddressedParticipantsInTx(tx: Tx, input: ExactDiscussion & R
     return discussionSuccess({ addressedSessionIds: addressed.sort(), watcherSessionIds: watchers.sort() });
 }
 
-/** The one append writer owns sequence, retry equality, targets, authorship and after-commit fanout. */
-export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion & Readonly<{
+/** The one append writer owns sequence, retry equality, targets, authorship and fanout.
+ * Both entry points must consume prepareDiscussionPostMutationAccounts for this
+ * exact input on every inTx attempt before invoking this prepared-only writer. */
+export async function postPreparedDiscussionMessageInTx(tx: Tx, input: ExactDiscussion & Readonly<{
     request: DiscussionPostRequestV1; producer?: DiscussionProducerV1; replyReturn?: SessionMessageDiscussionReplyReturnV1;
     draftReview?: { artifactId: string; decidingAccountId: string };
 }>): Promise<DiscussionResult<DiscussionPostResponseV1>> {
     const parsed = DiscussionPostRequestV1Schema.safeParse(input.request);
     if (!parsed.success) return discussionFailure('discussion_invalid_content');
-    await acquireDiscussionMutationAccountsInTx(tx, discussionPostMutationAudience({ ...input, request: parsed.data }));
     const returned = input.replyReturn === undefined ? undefined : SessionMessageDiscussionReplyReturnV1Schema.safeParse(input.replyReturn);
     const runtime = input.authentication.sessionRuntimePrincipal;
     const candidateProducer = input.producer ?? (runtime ? { v: 1 as const, kind: 'agent' as const, sessionId: runtime.sessionId } : undefined);
@@ -343,7 +344,8 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
         const { sessionRuntimePrincipal: _principal, ...accountAuthentication } = authentication;
         authentication = accountAuthentication;
     }
-    const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication });
+    const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId,
+        authentication, lockMembershipAuthority: true });
     if (!context) return discussionFailure('discussion_post_denied');
     const discussion = await readDiscussionRowInTx(tx, input);
     if (!discussion) return discussionFailure('discussion_not_found');
@@ -418,19 +420,19 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
         actors.messages[0]?.accountActor ?? null, actors.messages[0]?.requesterAccountActor ?? null), messageSeq: allocated.messageSeq });
 }
 
-function discussionPostMutationAudience(input: Parameters<typeof postDiscussionMessageInTx>[1]) {
+function discussionPostMutationAudience(input: Parameters<typeof postPreparedDiscussionMessageInTx>[1]) {
     return { ...input, includeParticipantSessions: true, append: { replyTarget: input.request.replyTarget },
         additionalSessionIds: [input.producer?.sessionId, input.authentication.sessionRuntimePrincipal?.sessionId,
             ...(input.request.mentionedSessionIds ?? [])].filter((id): id is string => typeof id === 'string') };
 }
 
 /** Public HTTP and trusted publication refresh the same complete cohort per attempt. */
-export function prepareDiscussionPostMutationAccounts(input: Parameters<typeof postDiscussionMessageInTx>[1]) {
+export function prepareDiscussionPostMutationAccounts(input: Parameters<typeof postPreparedDiscussionMessageInTx>[1]) {
     return prepareDiscussionMutationAccounts(discussionPostMutationAudience(input));
 }
 
-export async function postDiscussionMessage(input: Parameters<typeof postDiscussionMessageInTx>[1]): Promise<DiscussionResult<DiscussionPostResponseV1>> {
-    return inTx(tx => postDiscussionMessageInTx(tx, input), { prepare: () => prepareDiscussionPostMutationAccounts(input) });
+export async function postDiscussionMessage(input: Parameters<typeof postPreparedDiscussionMessageInTx>[1]): Promise<DiscussionResult<DiscussionPostResponseV1>> {
+    return inTx(tx => postPreparedDiscussionMessageInTx(tx, input), { prepare: () => prepareDiscussionPostMutationAccounts(input) });
 }
 
 /** Management depends on the Discussion grant; the source Session's lifecycle is irrelevant. */

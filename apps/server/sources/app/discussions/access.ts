@@ -1,6 +1,9 @@
 import * as privacyKit from "privacy-kit";
 import type { Prisma } from "@prisma/client";
 import type { PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
+import { DiscussionAnchorV1Schema, type DiscussionReplyTargetV1 } from '@happier-dev/protocol/discussions/replyTargets';
+import { acquireArtifactPublicationLocksInTx, resolveArtifactAudienceInTx } from '@/app/artifacts/artifactAccessService';
+import { resolveDiscussionDocTargetInTx } from './docPassages';
 import type { ResourceContextStorageAdapter } from '@/app/session/access/sessionContextInjection';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from "@happier-dev/protocol/storage/artifactStoredContent";
 import { isActiveHomeAccountStatus } from "@happier-dev/protocol/home/governance";
@@ -23,6 +26,7 @@ type DiscussionMutationAudienceInput = Readonly<{
     additionalSessionIds?: readonly string[]; includeParticipantSessions?: boolean;
     additionalGrantPrincipal?: PrincipalRefV1;
     includeDiscussionPublication?: boolean;
+    append?: Readonly<{ replyTarget?: DiscussionReplyTargetV1 }>;
 }>;
 
 async function readDiscussionParticipantSessionIdsInTx(tx: Tx, input: DiscussionMutationAudienceInput) {
@@ -39,10 +43,18 @@ async function readDiscussionParticipantSessionIdsInTx(tx: Tx, input: Discussion
 
 /** One census serves both pre-attempt preparation and in-transaction admission. */
 async function readDiscussionMutationAudienceInTx(tx: Tx, input: DiscussionMutationAudienceInput) {
-    const discussion = await tx.discussion.findUnique({ where: { id: input.discussionId }, select: { ownerAccountId: true } });
+    const discussion = await tx.discussion.findUnique({ where: { id: input.discussionId }, select: { ownerAccountId: true,
+        ...(input.append ? { anchorV1: true } : {}) } });
+    const source = input.append ? await resolveDiscussionDocTargetInTx(tx, { discussionId: input.discussionId,
+        replyTarget: input.append.replyTarget }) : null;
+    const artifactIds = source?.ok && source.value ? [source.value.ref.artifactId] : [];
+    const anchor = input.append ? DiscussionAnchorV1Schema.safeParse(discussion?.anchorV1) : null;
     const sessionIds = [...new Set([
         ...await readDiscussionParticipantSessionIdsInTx(tx, input),
         ...input.additionalSessionIds ?? [],
+        // Only committed quoted-source admission consumes this Session, never
+        // an optional link. A missing source still permits independent chat.
+        ...(anchor?.success && anchor.data.kind === 'session' && anchor.data.messageId ? [anchor.data.sessionId] : []),
     ])];
     const publicationAudience = [
         ...(input.includeDiscussionPublication === false ? [] : await resolveDiscussionAudienceInTx(tx, input.discussionId)),
@@ -56,21 +68,42 @@ async function readDiscussionMutationAudienceInTx(tx: Tx, input: DiscussionMutat
         ...input.additionalAccountIds ?? [],
         ...publicationAudience,
     ];
+    for (const artifactId of artifactIds) additionalAccountIds.push(...await resolveArtifactAudienceInTx(tx, artifactId));
     const audience = await readSessionAccountCursorAudienceInTx(tx, sessionIds, additionalAccountIds);
-    return { ownerAccountId: discussion?.ownerAccountId, sessionIds, additionalAccountIds, audience };
+    return { ownerAccountId: discussion?.ownerAccountId, sessionIds, additionalAccountIds, artifactIds, audience };
 }
 
 async function fenceDiscussionMutationAudienceInTx(tx: Tx, input: DiscussionMutationAudienceInput,
-    { ownerAccountId, sessionIds, additionalAccountIds, audience }: Awaited<ReturnType<typeof readDiscussionMutationAudienceInTx>>) {
+    { ownerAccountId, sessionIds, additionalAccountIds, artifactIds, audience }: Awaited<ReturnType<typeof readDiscussionMutationAudienceInTx>>) {
     await fenceSessionAccountCursorAudienceInTx(tx, audience, sessionIds, additionalAccountIds);
-    const current = await readDiscussionMutationAudienceInTx(tx, input);
     const admittedAccounts = new Set(audience.accountIds);
     const admittedSessions = new Set(sessionIds);
-    if (current.ownerAccountId !== ownerAccountId
-        || current.sessionIds.some(sessionId => !admittedSessions.has(sessionId))
-        || current.audience.accountIds.some(accountId => !admittedAccounts.has(accountId))) {
-        throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+    const admittedProjectionSessions = new Set(audience.projectionSessionIds);
+    const validateCapturedAudience = async () => {
+        const current = await readDiscussionMutationAudienceInTx(tx, input);
+        if (current.ownerAccountId !== ownerAccountId
+            || current.sessionIds.some(sessionId => !admittedSessions.has(sessionId))
+            || current.audience.projectionSessionIds.some(sessionId => !admittedProjectionSessions.has(sessionId))
+            || current.artifactIds.some(artifactId => !artifactIds.includes(artifactId))
+            || current.audience.accountIds.some(accountId => !admittedAccounts.has(accountId))) {
+            throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
+    };
+    await validateCapturedAudience();
+    for (const artifactId of artifactIds) {
+        await acquireArtifactPublicationLocksInTx(tx, artifactId, audience.accountIds, { intent: 'content' });
     }
+    const provider = getDbProviderFromEnv(process.env, 'postgres');
+    // Grants, lifecycle and append retry/sequence decisions share this parent.
+    // SQLite already reserves its single writer before entering domain work.
+    if (provider === 'postgres') {
+        await tx.$queryRawUnsafe('SELECT "id" FROM "Discussion" WHERE "id" = $1 FOR NO KEY UPDATE', input.discussionId);
+    } else if (provider === 'mysql') {
+        await tx.$queryRawUnsafe('SELECT `id` FROM `Discussion` WHERE `id` = ? FOR UPDATE', input.discussionId);
+    }
+    // An invite can commit while this attempt waits for the parent. Replay
+    // before domain admission can discover and lock a new Session after it.
+    await validateCapturedAudience();
     if (input.includeParticipantSessions) {
         // Fanout consumes the actual Follow destinations. A newly observed
         // Session must replay the complete cohort, never acquire a parent lock
@@ -110,17 +143,21 @@ export interface DiscussionContext {
 
 function discussionAccessFactsSelect(actorAccountId?: string) {
     const relations = resourceGrantRelationsSelect(actorAccountId);
+    const memberships = relations.teamGrants.select.team.select.memberships;
+    const membershipSelect = { ...memberships.select, id: true } as const;
     return {
         id: true, ownerAccountId: true, encryptionMode: true,
         ownerAccount: { select: { ...RECIPIENT_READINESS_SELECT, status: true } },
         ...relations,
         teamGrants: { select: { ...relations.teamGrants.select, team: { select: {
             ...relations.teamGrants.select.team.select, id: true, authenticationPolicy: true,
+            memberships: { ...memberships, select: membershipSelect },
         } } } },
         groupGrants: { select: { ...relations.groupGrants.select, teamGroup: { select: {
-            ...relations.groupGrants.select.teamGroup.select, team: { select: {
+            ...relations.groupGrants.select.teamGroup.select, id: true, team: { select: {
                 ...relations.groupGrants.select.teamGroup.select.team.select, id: true, authenticationPolicy: true,
-            } },
+            } }, memberships: { ...relations.groupGrants.select.teamGroup.select.memberships,
+                select: { teamGroupId: true, teamMembershipId: true, teamMembership: { select: membershipSelect } } },
         } } } },
     } as const;
 }
@@ -211,6 +248,7 @@ export async function isDiscussionCredentialCurrentInTx(tx: Tx, input: Readonly<
 /** One admission joins persisted mode, live grants, credentials and the caller's own key. */
 export async function resolveDiscussionContextInTx(tx: Tx, params: Readonly<{
     discussionId: string; accountId: string; authentication: SessionAccessAuthentication;
+    lockMembershipAuthority?: boolean;
 }>): Promise<DiscussionContext | null> {
     const contexts = await resolveDiscussionContextsInTx(tx, { ...params, discussionIds: [params.discussionId] });
     return contexts.get(params.discussionId) ?? null;
@@ -219,21 +257,49 @@ export async function resolveDiscussionContextInTx(tx: Tx, params: Readonly<{
 /** Lists and exact reads share one batched capture and the same grant/key projection. */
 export async function resolveDiscussionContextsInTx(tx: Tx, params: Readonly<{
     discussionIds: readonly string[]; accountId: string; authentication: SessionAccessAuthentication;
+    /** Prepared append holds its resource parents before locking authority rows. */
+    lockMembershipAuthority?: boolean;
 }>): Promise<ReadonlyMap<string, DiscussionContext>> {
     const contexts = new Map<string, DiscussionContext>();
     if (params.discussionIds.length === 0 || !await isDiscussionCredentialCurrentInTx(tx, params)) return contexts;
     const principal = params.authentication.sessionRuntimePrincipal;
-    const [rows, account] = await Promise.all([
-        tx.discussion.findMany({ where: { id: { in: [...params.discussionIds] } }, select: {
+    const readRows = () => tx.discussion.findMany({ where: { id: { in: [...params.discussionIds] } }, select: {
             ...discussionAccessFactsSelect(params.accountId), dataEncryptionKey: true,
             keyEnvelopes: { where: { recipientAccountId: params.accountId }, select: {
                 encryptedDataKey: true, recipientContentPublicKeyFingerprint: true,
             } },
             participants: { where: principal ? { sessionId: principal.sessionId, removedAt: null } : { sessionId: { in: [] } }, select: { sessionId: true } },
-        } }),
+        } });
+    let [rows, account] = await Promise.all([
+        readRows(),
         tx.account.findUnique({ where: { id: params.accountId }, select: RECIPIENT_READINESS_SELECT }),
     ]);
     if (!account) return contexts;
+    if (params.lockMembershipAuthority && getDbProviderFromEnv(process.env, 'postgres') === 'postgres'
+        && rows.some(row => row.teamGrants.length > 0 || row.groupGrants.length > 0)) {
+        const teamIds = teamsFromFacts(rows).map(team => team.id).sort();
+        const lockedMembers = teamIds.length ? await tx.$queryRawUnsafe<Array<{ id: string }>>(
+            'SELECT "id" FROM "TeamMembership" WHERE "accountId" = $1 AND "teamId" = ANY($2::text[]) ORDER BY "id" FOR SHARE',
+            params.accountId, teamIds,
+        ) : [];
+        const groupIds = [...new Set(rows.flatMap(row => row.groupGrants.map(grant => grant.teamGroup.id)))].sort();
+        const lockedGroupMembers = groupIds.length ? await tx.$queryRawUnsafe<Array<{ teamGroupId: string; teamMembershipId: string }>>(
+            'SELECT gm."teamGroupId", gm."teamMembershipId" FROM "TeamGroupMembership" gm JOIN "TeamMembership" m ON m."id" = gm."teamMembershipId" WHERE m."accountId" = $1 AND gm."teamGroupId" = ANY($2::text[]) ORDER BY gm."teamGroupId", gm."teamMembershipId" FOR SHARE OF gm',
+            params.accountId, groupIds,
+        ) : [];
+        // A membership may have disappeared or changed status while SHARE
+        // waited. Only freshly read facts can supply the access decision.
+        rows = await readRows();
+        const lockedMemberIds = new Set(lockedMembers.map(member => member.id));
+        const lockedGroupKeys = new Set(lockedGroupMembers.map(member => JSON.stringify([member.teamGroupId, member.teamMembershipId])));
+        if (rows.some(row => row.teamGrants.some(grant => grant.team.memberships.some(member => !lockedMemberIds.has(member.id)))
+            || row.groupGrants.some(grant => grant.teamGroup.memberships.some(member => !lockedMemberIds.has(member.teamMembership.id)
+                || !lockedGroupKeys.has(JSON.stringify([member.teamGroupId, member.teamMembershipId])))))) {
+            // A newly created lifetime was never locked by this attempt.
+            // Replay the prepared transaction rather than borrowing its access.
+            throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
+    }
     const qualified = await resolveQualifiedSessionTeamIdsInTx(tx, { accountIds: [params.accountId],
         teams: teamsFromFacts(rows), authentication: params.authentication });
     const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(account);
