@@ -1075,7 +1075,6 @@
     "sources/components/inbox/sessionAttention/InboxSessionAttentionHeader.tsx",
     "sources/components/inbox/sessionAttention/inboxSessionPrivacy.ts",
     "sources/components/inbox/workGroups/InboxSessionRowMenu.tsx",
-    "sources/components/inbox/workGroups/InboxWorkGroupSection.tsx",
     "sources/components/inbox/workGroups/InboxWorkItemRow.tsx",
     "sources/components/instrument/charts/DrawnLinePath.web.tsx",
     "sources/components/instrument/gauge/LiquidFill.web.tsx",
