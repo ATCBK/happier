@@ -232,6 +232,15 @@ original solely because its author belongs to another Account. Pending still
 enforces the receiver's check-in before the effect. This changes autonomous
 start accounting, not the separate cross-Account late-return contract above.
 
+Run-caused Session wakes use the receiving side's exchange: the most recent
+protected person-written input in that Session is their root, not an inherited
+root on a later agent input or a fabricated parent input of the Run. With no
+person-written input, the exact Run occurrence supplies the root through its
+existing deterministic Follow input identity. Only an actual new native turn
+spends allowance; quiet Run context and personal Inbox delivery do not. A new
+person-written input resets the receiving exchange. Existing Stop and check-in
+controls still apply; missing parent lineage never creates a separate hold.
+
 Exact Execution Run targets are excluded from this Session check-in count. They
 remain bounded by their own lifecycle; their parent Session's own autonomous
 turns are already counted. They do not inherit the parent's Stop/busy/check-in
@@ -658,6 +667,16 @@ The host queue consumes that original receipt, not reconstructed display facts.
 Required Follow originals use the [runtime preparation recovery](runtime-core.md)
 path for transient Home source reads, retaining their exact Pending identity;
 definitive refusals keep the existing terminal settlement.
+
+Configured Execution Run and Workflow Run Follow inputs retain their exact
+terminal occurrence id or Workflow revision in that receipt. The existing
+destination observation returns an `admitted_run_input`, rather than inventing
+a parent Session frontier. The host rechecks that custody before rendering a
+Run-result reference at provider dispatch. Wake originals start a turn; quiet
+originals join the next real input. Neither executes the stored notice text as
+a command. The same provider-acceptance owner settles the exact Run cursor;
+the Follow ACK names that original and cannot advance it before native input
+acceptance. Replays reuse the admitted input identity, not a new Pending path.
 
 These are development contracts. Target support must be negotiated independently of the existing Queue V2 support; older main-conversation clients continue using the null-target path.
 

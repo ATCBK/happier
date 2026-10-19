@@ -222,6 +222,44 @@ coverage until the last page. Cursors bind the exact Account and inspection dire
 each page applies current access again and does not freeze membership. Private rules are
 returned with the first Following page, rather than repeated on every source page.
 
+In development source, configured Execution Run and Workflow Run follows read
+the Run's own terminal original through the Follow occurrence-route owner.
+Execution Runs retain their terminal occurrence id, including recovered host
+loss; Workflow Runs retain their revision and typed state. Source notifications
+and receiver reconnect both use that read. Session receivers then use the shared
+policy and Pending admission. They do not substitute a parent Session's transcript frontier for a
+Run result. Repeated observations reuse the original's destination-scoped input
+identity; accepted input and source-owned progress determine replay. Mute,
+source access and destination admission are checked again before delivery.
+Run wake admission uses the receiving Session's most recent protected,
+person-written input as its existing check-in root, not a later agent input's
+inherited source root. Without a person input, the exact Run occurrence's
+deterministic destination input is the root. Actual native starts count through
+the existing Pending/check-in owner; quiet delivery and personal Inbox
+acceptance are not starts.
+For Account receivers, the captured authorized Account daemon uses the same
+dispatcher and the existing private Inbox
+notice and personal Follow progress. Only acceptance of that notice advances
+the Run cursor and admits one outward channel attempt; channel success is not
+the acceptance fact. A crash after that acceptance can leave the Inbox notice
+without a channel alert. Explicit Run Follow choices suppress the incumbent
+implicit Workflow report, so the two adapters do not send the same original.
+Discussion personal follows retain the exact Discussion message reference and
+original committed producer classification, but reuse the source-backed
+Discussion Inbox item rather than creating a second private notice with a
+separate read lifecycle. The existing personal Follow progress admits the
+outward channel attempt.
+
+Private, encrypted person Follow settings are not evaluated by Home. Evaluation
+belongs to the Account's own online app/daemon context; the captured authorized
+daemon performs the private outward-channel dispatch. With no evaluator online,
+the app's next-open Account invalidation and badge refresh recover Discussion
+attention through the existing source-backed Inbox reader, not a new server
+notifier or an app-side outward Follow publisher. Existing Discussion grant
+owners establish that reader's cursor; Follow does not create another read
+cursor. Discussion participant, mention and request alerts remain on C3's
+existing server path. `submitSessionActivityRemoteAlerts` remains Session-only.
+
 **The direct-share rule.** An explicit `mark-read` / `mark-unread` is admitted for *any* active
 Account holding `readTranscript` — a direct-share recipient with `view` access included — and
 seeds that Account's own read-state row through the single tracking-entry seam
@@ -275,8 +313,8 @@ being live yet. There is no released 0.3 Mute UI claim here.
 ## First-class Home Discussions (development)
 
 The 0.3 development refactor makes a Discussion an independent Home resource, with its
-own owner, grants, encryption mode and data key. An optional Session or identity-only Doc
-anchor is a source link: it neither grants access nor owns the Discussion's lifecycle.
+own owner, grants, encryption mode and data key. An optional Session, identity-only Doc
+or Task anchor is a source link: it neither grants access nor owns the Discussion's lifecycle.
 A Doc anchor reuses the existing `{ ref, revision }` reference with its exact Home; it
 carries no passage or grants. The Session People pane is an anchored-list consumer of the
 same Discussion owner. Archiving or deleting a source does not archive or delete the
@@ -369,6 +407,25 @@ excludes already admitted people and backing Sessions; candidate labels and read
 display facts, not permission to invite, start work or disclose content. The hook runs only
 when selection is demanded and retires with its captured Account lifetime.
 
+Operational `discussion.invite` accepts a SessionTarget in `participant.sessionId`;
+`discussion.create` accepts independently-one SessionTarget operands in Session entries
+of `participants`. The shared Action SessionTarget front door resolves these before
+approval and storage. A `discussion:` selector reads that Home's authorized current
+executable roster, including bound model Sessions, without requiring a fabricated source
+Session. Unbound model selections are not executable participants. A model launch's saved
+client Home label is not membership authority; the admitted roster and concrete Session
+admission remain authoritative.
+
+An initial invitation array creates one Discussion and first message, not one resource
+per target. Approval custody retains the concrete targets and their participant slots;
+replay does not enumerate the selector again. The UI repository retains those same concrete
+participants in its existing create intent for uncertain-response retries. Removal and
+answer-policy operands remain exact participant identities. Selection neither supplies a
+grant nor makes a runtime's Discussion key ready: initial Session admission reuses the
+existing invitation owner inside the create transaction, and a refusal rolls back the
+resource, initial grants, bindings and first post. Account recipient-envelope preparation
+remains separate from executable Session admission.
+
 The ordinary Discussion `@` picker uses the shared Session-reference suggestion kind.
 Its current roster admits existing Sessions/Bots and bound model backing Sessions; a
 cached Session title supplies display only and cannot admit an outsider. An unbound model
@@ -401,6 +458,22 @@ results from mutations, and mark list results incomplete.
 Current summaries are not cutoff snapshots; U2's admitted `discussion.read` remains the bounded
 content port for that turn.
 
+`useDiscussionListSearch` searches the captured Account's already-opened Discussion
+titles, participant display names and available source labels. A nonempty query demands
+`DiscussionRepository.loadCompleteList` for the selected active or archived corpus,
+continuing the ordinary list's retained cursor rather than creating a second list or a
+server content query. The Home column omits `anchorSessionId`; an anchored pane may
+explicitly supply it. Existing presentation filters apply to the resulting items.
+Message bodies, opaque ids and ciphertext are not search inputs. Partial page/read failures
+retain received matches and expose the repository's error and completeness state.
+
+The returned `DiscussionListSearchSnapshot.sourceLabelsUnavailable` is an active-query
+availability fact: a referenced Session/qualified Doc has no usable opened label, or a
+Task label producer is absent. It triggers neither fetching nor loading and does not make
+the corpus incomplete. When the query is empty, the flag is false because source-label
+availability is not demanded. Source labels reuse scoped Session naming and decrypted
+Account Artifact headers; a foreign Home or Account's same raw id cannot supply a label.
+
 The data binding `useDiscussionListRows` exposes transient attention facts through
 `buildDiscussionListAttention`, consuming the Inbox owner's strict approval-Artifact reader
 and the existing private mention cursor. `attentionReason` is `draft_waiting`, then
@@ -430,6 +503,12 @@ while attention is demanded, Doc Artifact changes refresh that same projection; 
 in-flight page cannot restore a proposal after a newer owner refresh. Cached, unmounted
 threads are not hydrated merely because the Inbox is open. Account retirement and explicit
 read refusal withdraw the corresponding projection.
+
+Summary `lastReadSeq` is the viewing Account's private, nullable cursor, not a participant
+read receipt. Grant entry can initialize that cursor at the current message sequence;
+this baseline does not establish that the person read those messages. The admitted
+participant roster and human presence projection expose no peer read frontier. Presence
+can describe viewers and typing, but cannot supply a “read up to” marker for another person.
 
 Participant profile display uses `useDiscussionParticipantProfiles` over the admitted roster,
 batching the existing people API under the captured Home/Account. Its required `accountLifetime`
@@ -530,11 +609,64 @@ anchored quote. Create, quote and question keep distinct retained retry ids;
 uncertain responses retry those identities and current admission, not a new
 Discussion or model slot. Multiple reviewers currently return the typed
 `fresh_opinions_unavailable` result before effects: this path cannot substitute
-a Session origin or local multi-reviewer loop for FIN's Discussion Workflow
-start/result contract. The controller and optional committed-answer opener are
+a Session origin or local multi-reviewer loop for the missing Fresh opinions
+builtin. The controller and optional committed-answer opener are
 data bindings; rendered L7 composition and loaded desktop/phone validation are
 still integration work, not released availability. The separate background
 Agent Second opinion role is unchanged.
+
+### Discussion Pattern bindings (development integration)
+
+Discussion Run uses the existing Pattern picker, composer and `workflow.run.start`
+owner. Its Discussion origin names a committed addressing message; admission
+resolves and freezes that message's actual sequence, not a caller-authored
+cutoff. A draft is posted through the ordinary Discussion submit/rejoin owner
+only on explicit Run. Opening the picker or reviewing inputs posts nothing.
+Uncertain post and Run-start responses retain their respective original ids.
+The submitted question is the reviewed main text input, committed as ordinary
+unaddressed Discussion content; it must not also start the separate Ask fanout.
+
+The Workflow input owner reads Discussion context through the authorized C3
+paging and encryption owners. Addressing context stays at the frozen question;
+`discussion_context` with scope `so_far` captures the current readable frontier
+once in the invocation's existing materialized input. Recovery reuses that input
+rather than widening it with later replies. Missing keys or revoked access do
+not become plaintext or an empty-history fallback.
+
+Accepted Session-executed leaf output publishes through the existing trusted Discussion publisher
+after the exact invocation result is durable. The original input, accepted turn,
+Run, invocation, attempt and executing Session must agree. The sole append
+transaction records the canonical C2 `publicationRef` for a published answer and settles
+the original; recovery rejoins that identity rather than executing the Agent or
+posting a generic final answer again. Structural Workflow containers do not
+publish duplicate answer bodies. Private-draft review remains with its existing
+Discussion approval owner; accepting a Workflow result does not release a held draft.
+Selected model participant slots use C3's
+ordinary reservation and Session birth; implicit Workflow execution leaves keep
+their existing Run-step ownership.
+Ordinary admitted replies use the existing default approval policy; explicit
+Require settings still apply. A known publication refusal becomes actionable
+Run attention. Retrying its structural root reuses the completed leaf and input
+instead of executing the Agent again; an unknown transport result stays uncertain.
+Current Discussion reply delivery requires Session-executed steps. A
+`detached_run` leaf has no consumed C2 Discussion-result producer and is refused
+before start effects; ordinary non-Discussion detached runs are unchanged.
+Existing participant Sessions must also be supported by the Run Account's
+current execution authority; a shared Home is not cross-Account delegation.
+
+Discussion timeline bindings query the existing managed Run list/store by
+Discussion origin, with the captured Home and Account lifetime. Header and
+controls use managed lifecycle/progress and the existing Run detail actions,
+not native Session Workflow activity. Another round uses the same accepted-start
+preparation and `workflow.run.start` replay intent, whose owner supplies prior
+results. Discussion access does not grant access to private Run content.
+
+These are data/hooks for the Discussion composition owner, not a claim that the
+visible Run header or controls have been mounted or validated in a loaded app.
+Fresh opinions remains unavailable until its canonical builtin exists.
+`workflow.definition.capture` is not registered, so Save as pattern reports
+`workflow_definition_capture_unavailable`; it does not create a local graph,
+save through a different Action or run automatically.
 
 ### Model participant birth (development integration)
 
