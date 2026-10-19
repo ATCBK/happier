@@ -297,7 +297,9 @@ describe('mounted WorkBoard Action settlement', () => {
         await act(async () => { expect(await hook.getCurrent().dispatch({ kind: 'widget_add', boardId: 'new-board',
             ref: { surface: { serverId: b.home.id, accountId: 'board-account', owner: { kind: 'workBoard', boardId: 'new-board' } }, instanceId: 'invalid' },
             instance: { v: 1, id: 'invalid', definition: { kind: 'builtin', id: 'changes' }, bindings: { session: { kind: 'value', value: 'invalid-session-address' } } },
-        })).toMatchObject({ status: 'refused', code: 'widget_inputs_invalid' }); });
+        })).toMatchObject({ status: 'refused', code: 'widget_inputs_invalid',
+            // The Home's own reason rides along, so the Add can say what is wrong instead of a general sentence.
+            details: { fields: [expect.objectContaining({ path: 'session', status: 'invalid' })] } }); });
         expect(b.rows.get('new-board')).toBe(before);
         expect(hook.getCurrent().board?.widgets ?? []).toEqual([]);
         expect(hook.getCurrent().save.failure).toMatchObject({ reason: 'invalidValue', intent: { kind: 'widget_add' } });

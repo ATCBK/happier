@@ -156,7 +156,8 @@ export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'sc
             const unknown = code === 'outcome_unknown' || code === 'approval_execution_outcome_unknown';
             if (isCurrent() && queue.getState().failure === previousFailure) queue.recordFailure(intent, code === 'board_not_found' ? 'not_found'
                 : code === 'invalid_parameters' || code === 'widget_inputs_invalid' ? 'invalidValue' : 'unavailable');
-            return { status: unknown ? 'unknown' : 'refused', code: unknown ? 'board_write_unknown' : code };
+            const details = !result.ok && !unknown ? result.details : undefined;
+            return { status: unknown ? 'unknown' : 'refused', code: unknown ? 'board_write_unknown' : code, ...(details !== undefined ? { details } : {}) };
         };
         return { ...queue, dispatch, retry: () => {
             const failure = queue.getState().failure;

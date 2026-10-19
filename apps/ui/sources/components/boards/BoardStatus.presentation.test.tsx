@@ -52,6 +52,7 @@ installMessageViewCommonModuleMocks({
 });
 vi.unmock('@/components/ui/icons/Icon');
 vi.unmock('@/components/ui/avatar/Avatar');
+vi.mock('@/sync/sync', async () => ({ sync: (await import('@/dev/testkit/mocks/sync')).createSessionListHydrationSyncBoundary() }));
 vi.mock('react-native-reanimated', async () => {
     const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
     const web = await vi.importActual<typeof import('react-native-web')>('react-native-web');

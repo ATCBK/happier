@@ -44,7 +44,8 @@ import {
 } from './boardCards';
 import { projectBoardMembership, type BoardMembership } from './boardMembership';
 import { fromStoredSessionListFilter } from '@/components/sessions/shell/search/storedSessionListFilter';
-import { createBoardSessionSourceProjection, readBoardMachineSourceState, readBoardPagedEntitySourceState, readBoardSessionHomeObservation, shouldLoadNextBoardEntityPage } from './boardEntityBinding';
+import { isSessionListHomeOpening } from '@/sync/domains/session/listing/sessionListHomeObservation';
+import { createBoardSessionSourceProjection, readBoardMachineSourceState, readBoardPagedEntitySourceState, shouldLoadNextBoardEntityPage } from './boardEntityBinding';
 import { useBoardTaskItems } from './useBoardTaskItems';
 
 /**
@@ -69,15 +70,14 @@ export function useBoardAddSources(homes: BoardHomes) {
     const machineLists = useMachineListByServerId();
     const library = useWorkflowDefinitionLibrary();
     const runs = useWorkflowRunWindow('all');
-    const sessionPhases = getStorage()(useShallow(state => homes.mountedServerIds.map(serverId =>
-        readBoardSessionHomeObservation(state.concurrentSessionListCacheByServerId, serverId)?.phase)));
+    const sessionsOpening = getStorage()(state => homes.mountedServerIds.some(serverId => isSessionListHomeOpening(state, serverId)));
     const machinesLoading = getStorage()(state => homes.mountedServerIds.some(serverId => {
         const inventory = resolveServerScopedMachineInventory<Machine>({ serverId, activeServerId: '', activeMachines: [],
             machineListByServerId: state.machineListByServerId, machineListStatusByServerId: state.machineListStatusByServerId });
         return inventory.status === 'loading' || inventory.machines === null && inventory.status !== 'error' && inventory.status !== 'signedOut';
     }));
     return { rowsByServerId, machineLists, library, runs, loading: {
-        sessions: sessionPhases.some(phase => !phase || phase === 'loading' || phase === 'refreshing'),
+        sessions: sessionsOpening,
         workflows: homes.activeServerId !== null && (library.status === 'loading' || library.loadingMore),
         runs: homes.activeServerId !== null && (runs.status === 'loading' || runs.loadingMore),
         machines: machinesLoading,

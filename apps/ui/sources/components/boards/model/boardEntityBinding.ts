@@ -1,7 +1,7 @@
 import { buildWorkBoardItemKeyV1, type BoardItemRefV1 } from '@happier-dev/protocol/boards/workBoardV1';
 
 import { resolveServerScopedMachineInventory } from '@/sync/domains/machines/resolveServerScopedMachines';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { readSessionListHomeObservationForServerId } from '@/sync/domains/session/listing/sessionListHomeObservation';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { isSessionRetiredForServer, type SessionsDomain } from '@/sync/store/domains/sessions';
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -9,13 +9,6 @@ import type { WorkflowRunWindow } from '@/components/workflows/library/workflowL
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
 type BoardEntitySourceState = 'ready' | 'loading' | 'settled' | 'retired' | 'failed';
-
-export function readBoardSessionHomeObservation(
-    cache: SessionsDomain['concurrentSessionListCacheByServerId'], serverId: string,
-) {
-    const key = Object.keys(cache).find(key => areServerProfileIdentifiersEquivalent(key, serverId));
-    return key ? cache[key]?.listObservation ?? null : null;
-}
 
 /** A settled cache miss is unavailable here, not evidence that a Session was deleted. */
 export function readBoardSessionSourceState(
@@ -26,7 +19,7 @@ export function readBoardSessionSourceState(
     const { serverId, id } = ref.qualifiedId;
     if (readSessionListRowForServerId(state.sessionListRowsByServerId, serverId, id)) return 'ready';
     if (isSessionRetiredForServer(state.deletedSessionIds, id, serverId)) return 'retired';
-    const observation = readBoardSessionHomeObservation(state.concurrentSessionListCacheByServerId, serverId);
+    const observation = readSessionListHomeObservationForServerId(state.concurrentSessionListCacheByServerId, serverId);
     if (observation?.phase === 'error' || observation?.phase === 'offline') return 'failed';
     if ((!observation || observation.phase === 'loading' || observation.phase === 'refreshing') && previous && previous !== 'loading') return previous;
     return observation && (observation.lastSuccessAt !== null || observation.phase === 'ready') ? 'settled' : 'loading';
