@@ -43,15 +43,18 @@ describe('Provider legacy review captured Account', () => {
         const waivedActions = ['launch_profiles.legacy.convert'] as const;
         const machines = [createMachineFixture({ id: 'machine-shared' })];
         const { serverId } = await account.restore({ accountId: 'account-a', waivedActions, machines });
-        let modalId: string | null = null;
+        let modalKind: ReturnType<typeof useVisibleModalKind> = null;
+        function HostStatus() {
+            modalKind = useVisibleModalKind();
+            return null;
+        }
         const onConfirmed = vi.fn(async () => {});
-        const onClose = vi.fn(() => { if (modalId) Modal.hide(modalId); });
         const profile = AIBackendProfileSchema.parse({ id: 'deepseek', name: 'Original Account profile',
             environmentVariables: [{ name: 'OPENAI_BASE_URL', value: 'https://api.deepseek.test/v1', isSecret: false }] });
-        const screen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
+        const screen = await renderScreen(<ModalProvider><HostStatus /></ModalProvider>);
         await act(async () => {
-            modalId = Modal.show({ component: LegacyProfileMigrationReview, props: {
-                machineId: 'machine-shared', serverId, profile, secretBindings: {}, onConfirmed, onClose,
+            Modal.show({ component: LegacyProfileMigrationReview, props: {
+                machineId: 'machine-shared', serverId, profile, secretBindings: {}, onConfirmed,
             } });
         });
         const press = async (title: string) => {
@@ -77,7 +80,7 @@ describe('Provider legacy review captured Account', () => {
             await waitForHomeGovernance(() => expect(screen.find(node => node.props.title === t('settingsProviders.migration.confirm')).props.loading).toBe(false));
             expect(machineRpc).toHaveBeenCalledOnce();
             expect(onConfirmed).not.toHaveBeenCalled();
-            expect(onClose).not.toHaveBeenCalled();
+            expect(modalKind).toBe('custom');
         } finally {
             releaseResponse();
         }
@@ -86,13 +89,11 @@ describe('Provider legacy review captured Account', () => {
         const waivedActions = ['launch_profiles.legacy.convert', 'launch_profiles.legacy.resolve_conflict'] as const;
         const machines = [createMachineFixture({ id: 'machine-shared' })];
         const { serverId } = await account.restore({ accountId: 'account-a', waivedActions, machines });
-        let modalId: string | null = null;
         let modalKind: ReturnType<typeof useVisibleModalKind> = null;
         function HostStatus() {
             modalKind = useVisibleModalKind();
             return React.createElement('View');
         }
-        const onClose = () => { if (modalId) Modal.hide(modalId); };
         const onConfirmed = vi.fn(async () => {});
         const profile = AIBackendProfileSchema.parse({ id: 'deepseek', name: 'Original Account profile',
             environmentVariables: [{ name: 'OPENAI_BASE_URL', value: 'https://api.deepseek.test/v1', isSecret: false }] });
@@ -103,8 +104,8 @@ describe('Provider legacy review captured Account', () => {
         });
         const screen = await renderScreen(<ModalProvider><HostStatus /></ModalProvider>);
         await act(async () => {
-            const common = { machineId: 'machine-shared', serverId, onConfirmed, onClose };
-            modalId = kind === 'review'
+            const common = { machineId: 'machine-shared', serverId, onConfirmed };
+            kind === 'review'
                 ? Modal.show({ component: LegacyProfileMigrationReview, props: { ...common, profile, secretBindings: {} } })
                 : Modal.show({ component: LegacyProfileMigrationConflictReview, props: { ...common, profileName: profile.name, conflict } });
         });

@@ -33,7 +33,7 @@ vi.mock('react-native-safe-area-context', () => ({
 
 vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) =>
     (await import('@/dev/testkit/mocks/serverProfiles')).createPartialServerProfilesModuleMock(importOriginal, {
-        getActiveServerId: () => null,
+        overrides: { getActiveServerId: () => '' },
     }));
 
 vi.mock('@/hooks/machine/useMachineEnvPresence', () => ({

@@ -74,6 +74,25 @@ function literalText(valueRef: ValueRefV1): string {
   return valueRef.t === 'literal' ? valueRef.v : '';
 }
 
+/** One line saying what a row holds: the value and its kind, a saved secret's name, or what it is. */
+export function describeValueRef(
+  valueRef: ValueRefV1,
+  secretName: (secretId: string) => string | null,
+): string {
+  const type = rowType(valueRef);
+  if (type === 'savedSecret' && valueRef.t === 'savedSecret')
+    return (
+      secretName(valueRef.secretId) ?? t('capabilities.valueRows.needsValue')
+    );
+  if (type === 'literal' || type === 'machine') {
+    const text = literalText(valueRef);
+    return text.length === 0
+      ? t('capabilities.valueRows.needsValue')
+      : `${text} · ${typeTitle(type)}`;
+  }
+  return typeTitle(type);
+}
+
 /** What a literal typed into a "From the machine" field means: `${NAME}`, with or without the braces. */
 function machineValue(text: string): string | null {
   const trimmed = text.trim();
@@ -153,10 +172,12 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
                 },
           onSubmit: ({ key: nextKey, valueRef: nextValueRef }) => {
             const result = editor.submitEntry(key, nextKey, nextValueRef);
-            if (!result.ok && result.error === 'duplicate_key')
+            if (!result.ok)
               Modal.alert(
                 t('common.error'),
-                t('capabilities.valueRows.duplicateName'),
+                result.error === 'duplicate_key'
+                  ? t('capabilities.valueRows.duplicateName')
+                  : t('errors.operationFailed'),
               );
             return result.ok;
           },
@@ -184,16 +205,8 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
     setWidth((current) => (current === next ? current : next));
   }, []);
 
-  const describe = (valueRef: ValueRefV1): string => {
-    const type = rowType(valueRef);
-    if (type === 'savedSecret' && valueRef.t === 'savedSecret')
-      return (
-        secretName(valueRef.secretId) ?? t('capabilities.valueRows.needsValue')
-      );
-    if (type === 'literal' || type === 'machine')
-      return `${literalText(valueRef)} · ${typeTitle(type)}`;
-    return typeTitle(type);
-  };
+  const describe = (valueRef: ValueRefV1): string =>
+    describeValueRef(valueRef, secretName);
 
   return (
     <View style={styles.list} onLayout={onLayout}>
@@ -342,6 +355,12 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
     return props.valueRef;
   };
 
+  const presentSubmission = (result: SubmitResult) => {
+    setError(result.ok ? null : result.error === 'invalid_key'
+      ? t(props.kind === 'env' ? 'capabilities.valueRows.invalidEnvName' : 'capabilities.valueRows.invalidHeaderName')
+      : result.error === 'duplicate_key' ? t('capabilities.valueRows.duplicateName') : t('errors.operationFailed'));
+  };
+
   const commit = (
     nextType: RowType = type,
     text: string = value,
@@ -372,15 +391,7 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
     )
       return;
     const result = props.onSubmit(nextName, valueRef);
-    if (result.ok) setError(null);
-    else if (result.error === 'invalid_key')
-      setError(
-        props.kind === 'env'
-          ? t('capabilities.valueRows.invalidEnvName')
-          : t('capabilities.valueRows.invalidHeaderName'),
-      );
-    else if (result.error === 'duplicate_key')
-      setError(t('capabilities.valueRows.duplicateName'));
+    presentSubmission(result);
   };
 
   // A new row waits for its value: leaving its name for its value must not file it away half typed.
@@ -400,17 +411,12 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
         includeNoneRow: false,
         onSelectId: (id: string | null) => {
           if (!id) return;
-          setType(thenType);
           const result = props.onSubmit(name, {
             t: 'savedSecret',
             secretId: id,
           });
-          if (!result.ok && result.error === 'invalid_key')
-            setError(
-              props.kind === 'env'
-                ? t('capabilities.valueRows.invalidEnvName')
-                : t('capabilities.valueRows.invalidHeaderName'),
-            );
+          if (result.ok) setType(thenType);
+          presentSubmission(result);
         },
       },
       chrome: {
@@ -493,32 +499,42 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
 
   const fieldColors = resolveFieldBoxColors(theme);
   const special = type === 'template' || type === 'sessionAttested';
-  const missingSecret = type === 'savedSecret' && !props.secretName;
 
   return (
     <View style={styles.rowWrap}>
       <View style={styles.row} testID={props.testID}>
-        <FieldTextInput
-          testID={`${props.testID}.name`}
-          value={name}
-          onChangeText={(text) => {
-            setName(props.kind === 'env' ? text.toUpperCase() : text);
-            setError(null);
-          }}
-          onBlur={onNameBlur}
-          accessibilityLabel={t('capabilities.valueRows.name')}
-          placeholder={
-            props.kind === 'env'
-              ? t('settings.mcpServersEnvKeyPlaceholder')
-              : t('settings.mcpServersHeaderKeyPlaceholder')
-          }
-          autoCapitalize={props.kind === 'env' ? 'characters' : 'none'}
-          autoFocus={props.autoFocus}
-          invalid={Boolean(error)}
-          editable={props.declaredName !== true}
-          monospace
-          style={styles.name}
-        />
+        {props.declaredName === true ? (
+          <View style={styles.nameLabel}>
+            <Text
+              variant="body"
+              testID={`${props.testID}.name`}
+              style={[styles.declaredName, { color: theme.colors.text.primary }]}
+            >
+              {name.replace(/([_-])/g, '$1\u200b')}
+            </Text>
+          </View>
+        ) : (
+          <FieldTextInput
+            testID={`${props.testID}.name`}
+            value={name}
+            onChangeText={(text) => {
+              setName(props.kind === 'env' ? text.toUpperCase() : text);
+              setError(null);
+            }}
+            onBlur={onNameBlur}
+            accessibilityLabel={t('capabilities.valueRows.name')}
+            placeholder={
+              props.kind === 'env'
+                ? t('settings.mcpServersEnvKeyPlaceholder')
+                : t('settings.mcpServersHeaderKeyPlaceholder')
+            }
+            autoCapitalize={props.kind === 'env' ? 'characters' : 'none'}
+            autoFocus={props.autoFocus}
+            invalid={Boolean(error)}
+            monospace
+            style={styles.name}
+          />
+        )}
         <View style={styles.value}>
           {type === 'savedSecret' ? (
             <HappierPressable
@@ -533,7 +549,7 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
                                 open: false,
                                 detailColor: theme.colors.text.primary,
                                 chevronColor: theme.colors.text.secondary,
-                                field: resolveFieldBoxColors(theme, props.attention || missingSecret ? 'invalid' : 'idle'),
+                                field: resolveFieldBoxColors(theme, props.attention ? 'invalid' : 'idle'),
                                 placeholder: t('capabilities.valueRows.chooseSecret'),
                                 placeholderColor: theme.colors.input.placeholder,
                                 leading: <Icon name="lock" size={14} color={theme.colors.text.secondary} />,
@@ -671,6 +687,20 @@ const styles = StyleSheet.create((theme) => ({
   typeFixed: {
     flexShrink: 0,
     paddingHorizontal: theme.space.s8,
+  },
+  // A name the config fixes reads as a label, whole: it is never an input to truncate or edit. A long one breaks
+  // after an underscore or hyphen (a zero-width space marks each), and anywhere only when it has to.
+  nameLabel: {
+    flexGrow: 2,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: 0,
+    minHeight: FIELD_BOX_METRICS.minHeightPx,
+    justifyContent: 'center',
+  },
+  declaredName: {
+    ...Typography.mono(),
+    ...({ overflowWrap: 'anywhere' } as const),
   },
   specialValue: {
     ...Typography.mono(),

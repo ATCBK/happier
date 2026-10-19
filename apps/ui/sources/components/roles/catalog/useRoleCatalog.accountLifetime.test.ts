@@ -1,6 +1,9 @@
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -76,7 +79,11 @@ describe('role catalog Account lifetime', () => {
                     }
                     return Response.json({ content: { t: 'plain', v: settings }, version: settingsVersion });
                 }
-                if (path === '/v1/artifacts') { lists += 1; return Response.json([artifact]); }
+                if (path === '/v1/artifacts') {
+                    lists += 1;
+                    if (holdRead && !held) { held = true; return staleRead.promise; }
+                    return Response.json([artifact]);
+                }
                 if (path === `/v1/artifacts/${roleId}`) {
                     if (init?.method === 'POST') {
                         const write = JSON.parse(String(init.body)) as ArtifactUpdateRequest;
@@ -86,7 +93,6 @@ describe('role catalog Account lifetime', () => {
                         artifact = { ...artifact, ...write, headerVersion: artifact.headerVersion + 1, bodyVersion: (artifact.bodyVersion ?? 0) + 1 };
                         return Response.json({ success: true, headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion });
                     }
-                    if (holdRead && !held) { held = true; return staleRead.promise; }
                     return Response.json(artifact);
                 }
                 return new Response(null, { status: 404 });
@@ -112,7 +118,7 @@ describe('role catalog Account lifetime', () => {
             invalidateRoleCatalog();
         });
         if (retire) await act(async () => { publishAppliedActiveServerRuntimeAvailability(false); });
-        await act(async () => { staleRead.resolve(Response.json(staleArtifact)); });
+        await act(async () => { staleRead.resolve(Response.json([staleArtifact])); });
         if (retire) {
             expect(catalog.getCurrent().entries).toEqual([]);
             expect(lists).toBe(initialLists + 1);

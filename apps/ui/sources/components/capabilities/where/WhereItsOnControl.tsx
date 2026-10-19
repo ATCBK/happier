@@ -193,6 +193,8 @@ function ConsequenceLine(
     machines: WhereItsOnControlProps['places']['machines'];
     names: WhereItsOnNames;
     agentTakes: NonNullable<WhereItsOnControlProps['agentTakes']>;
+    /** Whether any rule turns the item on. With none, it is known to be available nowhere, whatever machines report. */
+    anyRuleOn: boolean;
     testID: string;
   }>,
 ) {
@@ -206,7 +208,7 @@ function ConsequenceLine(
     props.agentTakes,
     props.kind,
   );
-  if (consequence === null || consequence.availabilityUnknown) {
+  if (consequence === null || (consequence.availabilityUnknown && props.anyRuleOn)) {
     return (
       <Text
         variant="body"
@@ -754,6 +756,7 @@ export const WhereItsOnControl = React.memo(function WhereItsOnControl(
           machines={props.places.machines}
           names={names}
           agentTakes={props.agentTakes ?? takesEverything}
+          anyRuleOn={rules.some((rule) => rule.enabled)}
           testID={`${props.testID}:consequence`}
         />
       </SectionContentRow>

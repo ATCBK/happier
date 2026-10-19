@@ -12,9 +12,14 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
+/** The list form's visible rows before the rest fold (lab `ad`: more than 8 folds). */
+const LIST_FOLD_AFTER = 8;
+
 export type CapabilityMachineTruthRow = Readonly<{
     machineId: string;
     machineName: string;
+    /** The name is still loading: the title is a placeholder, so it reads quiet rather than as a name. */
+    namePending?: boolean;
     deviceIcon: IconName;
     /** "macOS", "Linux": a quiet qualifier after the name. */
     os?: string;
@@ -25,6 +30,10 @@ export type CapabilityMachineTruthRow = Readonly<{
     status?: CapabilityStatus | null;
     /** An offline machine reads dimmed; its last-known facts stay. */
     offline?: boolean;
+    /** That machine's own operations (Install, Update, Remove), in the row's control column. */
+    actions?: React.ReactNode;
+    /** Given, the row opens in place into this (the machine's own setup rows). */
+    detail?: React.ReactNode;
 }>;
 
 /**
@@ -44,10 +53,23 @@ export function CapabilityMachineTruth(props: Readonly<{
     defaultExpanded?: boolean;
     /** What the section says when it is on no machine (default: "No machines yet"). */
     emptyLabel?: string;
+    /**
+     * `summary` (default): one closed line that opens into the rows. `list`: every machine at once,
+     * for a capability whose machines are the page's first question (an Agent: where it's installed).
+     */
+    presentation?: 'summary' | 'list';
+    /** `list`: the machine whose row is open (controlled by the page, which may act on that machine). */
+    expandedMachineId?: string | null;
+    onExpandedMachineChange?: (machineId: string | null) => void;
+    /** `list`: rows shown before the rest fold behind "N more machines" (default 8). */
+    visibleCount?: number;
     testID: string;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const [expanded, setExpanded] = React.useState(props.defaultExpanded === true);
+    // The list form shows its first rows; a long tail (machines that can't run it, offline) folds behind one row.
+    const [showAll, setShowAll] = React.useState(false);
+    const visibleCount = Math.max(1, props.visibleCount ?? LIST_FOLD_AFTER);
     const action = props.sectionAction;
     return (
         <ItemGroup
@@ -69,6 +91,28 @@ export function CapabilityMachineTruth(props: Readonly<{
         >
             {props.rows.length === 0 ? (
                 <Item testID={`${props.testID}:none`} title={props.emptyLabel ?? t('capabilities.detail.noMachines')} showChevron={false} />
+            ) : props.presentation === 'list' ? (
+                <>
+                    {(showAll ? props.rows : props.rows.slice(0, visibleCount)).map((row) => (
+                        <CapabilityMachineTruthRowView
+                            key={row.machineId}
+                            row={row}
+                            testID={props.testID}
+                            expanded={props.expandedMachineId === row.machineId}
+                            onExpandedChange={props.onExpandedMachineChange}
+                        />
+                    ))}
+                    {!showAll && props.rows.length > visibleCount ? (
+                        <Item
+                            testID={`${props.testID}:more`}
+                            title={t('capabilities.detail.moreMachines', { count: props.rows.length - visibleCount })}
+                            titleStyle={styles.more}
+                            leftElement={<ExpandableItemCaret expanded={false} />}
+                            onPress={() => setShowAll(true)}
+                            showChevron={false}
+                        />
+                    ) : null}
+                </>
             ) : (
                 <ExpandableItem
                     testID={`${props.testID}:disclosure`}
@@ -92,28 +136,58 @@ export function CapabilityMachineTruth(props: Readonly<{
                     )}
                 >
                     {expanded ? props.rows.map((row) => (
-                        <Item
-                            key={row.machineId}
-                            testID={`${props.testID}:machine:${row.machineId}`}
-                            title={row.machineName}
-                            titleQualifier={row.os ?? null}
-                            titleStyle={row.offline ? styles.offline : undefined}
-                            subtitle={row.who}
-                            subtitleLines={1}
-                            icon={<Icon name={row.deviceIcon} size={20} color={row.offline ? theme.colors.text.tertiary : theme.colors.text.secondary} />}
-                            rightElement={row.status || row.note ? (
-                                <View style={styles.end}>
-                                    {row.status ? <CapabilityStatusChip status={row.status} showFix testID={`${props.testID}:machine:${row.machineId}:status`} /> : null}
-                                    {row.note ? <Text variant="meta" style={styles.note} testID={`${props.testID}:machine:${row.machineId}:note`}>{row.note}</Text> : null}
-                                </View>
-                            ) : undefined}
-                            accessoryLayout="adaptive"
-                            showChevron={false}
-                        />
+                        <CapabilityMachineTruthRowView key={row.machineId} row={row} testID={props.testID} />
                     )) : null}
                 </ExpandableItem>
             )}
         </ItemGroup>
+    );
+}
+
+/** One machine: name and OS, what it looks like there, its status, its operations; open, its own setup. */
+function CapabilityMachineTruthRowView(props: Readonly<{
+    row: CapabilityMachineTruthRow;
+    testID: string;
+    expanded?: boolean;
+    onExpandedChange?: (machineId: string | null) => void;
+}>): React.ReactElement {
+    const { theme } = useUnistyles();
+    const { row } = props;
+    const rowTestID = `${props.testID}:machine:${row.machineId}`;
+    const end = row.status || row.note || row.actions ? (
+        <View style={styles.end}>
+            {row.status ? <CapabilityStatusChip status={row.status} showFix={!row.actions} testID={`${rowTestID}:status`} /> : null}
+            {row.note ? <Text variant="meta" style={styles.note} testID={`${rowTestID}:note`}>{row.note}</Text> : null}
+            {row.actions ? <View style={styles.actions}>{row.actions}</View> : null}
+        </View>
+    ) : undefined;
+    const header = (headerProps?: Readonly<Record<string, unknown>>) => (
+        <Item
+            {...headerProps}
+            testID={rowTestID}
+            title={row.machineName}
+            titleQualifier={row.os ?? null}
+            titleStyle={row.namePending ? styles.pending : row.offline ? styles.offline : undefined}
+            subtitle={row.who}
+            subtitleLines={1}
+            icon={<Icon name={row.deviceIcon} size={20} color={row.offline ? theme.colors.text.tertiary : theme.colors.text.secondary} />}
+            rightElement={end}
+            rightElementOutsidePressable={Boolean(row.actions)}
+            accessoryLayout="adaptive"
+            showChevron={false}
+        />
+    );
+    if (!row.detail || !props.onExpandedChange) return header();
+    const onExpandedChange = props.onExpandedChange;
+    return (
+        <ExpandableItem
+            testID={`${rowTestID}:disclosure`}
+            expanded={props.expanded === true}
+            onExpandedChange={(open) => onExpandedChange(open ? row.machineId : null)}
+            header={({ headerProps }) => header(headerProps as Readonly<Record<string, unknown>>)}
+        >
+            {row.detail}
+        </ExpandableItem>
     );
 }
 
@@ -124,4 +198,7 @@ const styles = StyleSheet.create((theme) => ({
     end: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, flexShrink: 1, flexWrap: 'wrap', justifyContent: 'flex-end' },
     note: { color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'] },
     offline: { color: theme.colors.text.secondary },
+    pending: { color: theme.colors.text.tertiary },
+    actions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+    more: { color: theme.colors.text.secondary },
 }));

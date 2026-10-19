@@ -172,6 +172,13 @@ describe('WhereItsOnControl', () => {
     expect(empty.text()).toContain(t('capabilities.where.availableNowhere'));
   });
 
+  it.each(['skill', 'mcp_server'] as const)('says an item turned off everywhere is available nowhere even while %s inventory is unknown', async kind => {
+    const incomplete = [{ machineId: 'mbp', agents: [], agentInventoryComplete: false }];
+    const off = await renderControl({ rules: [everywhere(false)], kind, projection: incomplete });
+    expect(off.text()).toContain(t('capabilities.where.availableNowhere'));
+    expect(off.text()).not.toContain('—');
+  });
+
   it('adds an agent exception as one replace that holds wherever a project turns it on (D33)', async () => {
     const exceptRules = [
       everywhere(true),

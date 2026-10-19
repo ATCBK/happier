@@ -1,13 +1,16 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { SharedSavedSecretCreateInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
+import { StoredApprovalRequestSchema } from '@happier-dev/protocol';
 
-import { createDeferred, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const confirmDisclosure = vi.hoisted(() => vi.fn(async () => true));
-const createResource = vi.hoisted(() => vi.fn());
 
 installSettingsViewCommonModuleMocks({
     storage: 'real',
@@ -17,16 +20,16 @@ installSettingsViewCommonModuleMocks({
     },
 });
 
-vi.mock('@/sync/ops/settings/savedSecretResourceOperations', () => ({
-    createSavedSecretResource: createResource,
-}));
-const { serveActionHomes } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+// The host runner supplies the native UUID adapter at its real OS boundary.
+vi.mock('expo-crypto', async importOriginal => ({ ...await importOriginal<typeof import('expo-crypto')>(),
+    randomUUID: (await import('node:crypto')).randomUUID }));
+const { serveSavedSecretEditorHomes, savedSecretCreatePath } = await import('@/dev/testkit/harness/savedSecretEditorHttpHarness');
 const { teamSummaryFixture, teamGroupFixture } = await import('@/dev/testkit/fixtures/teamFixtures');
-let home: Awaited<ReturnType<typeof serveActionHomes>> | null = null;
+let home: Awaited<ReturnType<typeof serveSavedSecretEditorHomes>> | null = null;
 let scopeA = { serverId: '', accountId: 'owner-a' };
 let scopeB = { serverId: '', accountId: 'owner-b' };
 beforeEach(async () => {
-    home = await serveActionHomes({
+    home = await serveSavedSecretEditorHomes({
         homes: [
             { key: 'home-b', serverUrl: 'https://saved-secret-create-b.test', accountId: 'owner-b' },
             { key: 'home-a', serverUrl: 'https://saved-secret-create-a.test', accountId: 'owner-a' },
@@ -48,20 +51,23 @@ beforeEach(async () => {
     scopeB = { serverId: home.homes['home-b']!.id, accountId: 'owner-b' };
 });
 
-afterEach(() => {
-    standardCleanup();
-    home?.dispose();
+afterEach(async () => {
+    await standardCleanup();
+    await home?.dispose();
     home = null;
     confirmDisclosure.mockReset();
     confirmDisclosure.mockResolvedValue(true);
-    createResource.mockReset();
 });
+
+const createWrites = () => home!.mutations.filter(request => request.path === savedSecretCreatePath);
+const createdInput = () => SharedSavedSecretCreateInputV1Schema.parse(createWrites()[0]!.body);
+const createdRef = () => `happier:shared-secret:v1:${createdInput().resourceId}`;
+async function startAdding(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    await act(async () => { invokeTestInstanceHandler(screen.findByTestId('saved-secret-access-search'), 'onFocus'); });
+}
 
 describe('SavedSecretCreateEditor', () => {
     it('creates an owner-only resource from one name, kind, and value entry', async () => {
-        createResource.mockResolvedValueOnce({
-            ok: true, resourceRef: 'happier:shared-secret:v1:resource-a', revision: 1,
-        });
         const onCreated = vi.fn(async () => {});
         const { SavedSecretCreateEditor } = await import('./SavedSecretCreateEditor');
         const screen = await renderScreen(
@@ -80,18 +86,17 @@ describe('SavedSecretCreateEditor', () => {
         await screen.pressByTestIdAsync('saved-secret-create-submit');
 
         expect(confirmDisclosure).not.toHaveBeenCalled();
-        expect(createResource).toHaveBeenCalledWith(expect.objectContaining({
-            scope: scopeA,
-            name: 'Deploy token', kind: 'token', value: '  token-value\n',
+        await vi.waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
+        expect(createWrites()).toHaveLength(1);
+        expect(createWrites()[0]).toMatchObject({ home: 'home-a', accountId: 'owner-a' });
+        expect(createdInput()).toMatchObject({
+            displayName: 'Deploy token', kind: 'token', storedContent: { t: 'plain', v: { value: '  token-value\n' } },
             accountGrants: [], teamGrants: [], groupGrants: [],
-        }));
-        expect(onCreated).toHaveBeenCalledWith('happier:shared-secret:v1:resource-a', 'shared');
+        });
+        expect(onCreated).toHaveBeenCalledWith(createdRef(), 'shared');
     });
 
     it('confirms disclosure and submits initial Account, Team, and Group grants', async () => {
-        createResource.mockResolvedValueOnce({
-            ok: true, resourceRef: 'happier:shared-secret:v1:resource-a', revision: 1,
-        });
         const { SavedSecretCreateEditor } = await import('./SavedSecretCreateEditor');
         const screen = await renderScreen(
             <SavedSecretCreateEditor
@@ -105,6 +110,7 @@ describe('SavedSecretCreateEditor', () => {
 
         screen.changeTextByTestId('saved-secret-create-name', 'Mixed secret');
         screen.changeTextByTestId('saved-secret-create-value', 'secret-value');
+        await startAdding(screen);
         await vi.waitFor(() => expect(screen.findByTestId('saved-secret-access-candidate-account:account-b')).toBeTruthy());
         await screen.pressByTestIdAsync('saved-secret-access-candidate-account:account-b');
         await vi.waitFor(() => expect(screen.findByTestId('saved-secret-access-candidate-team:team-a')).toBeTruthy());
@@ -116,15 +122,25 @@ describe('SavedSecretCreateEditor', () => {
         await screen.pressByTestIdAsync('saved-secret-create-submit');
 
         expect(confirmDisclosure).toHaveBeenCalledOnce();
-        expect(createResource).toHaveBeenCalledWith(expect.objectContaining({
+        await vi.waitFor(() => expect(createWrites()).toHaveLength(1));
+        expect(createdInput()).toMatchObject({
             accountGrants: ['account-b'], teamGrants: ['team-a'], groupGrants: ['group-a'],
-        }));
+        });
     });
 
     it('keeps the draft mounted while approval is pending and presents the exact artifact', async () => {
         const requestApproval = vi.fn();
-        const { TeamActionApprovalPendingError } = await import('@/sync/ops/teams/teamActionClient');
-        createResource.mockRejectedValueOnce(new TeamActionApprovalPendingError('approval-a'));
+        home!.replaceSettings('home-a', { actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+            'secrets.shared.create': { approvalRequiredSurfaces: ['ui'] },
+        } }) }, 2);
+        // Cold restore intentionally ignores an already initialized Sync runtime.
+        // Reconnect this fixture's Account before expecting the new server policy.
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        await disconnectActiveServerConnection();
+        await home!.restoreActiveConnection();
+        const { storage } = await import('@/sync/domains/state/storage');
+        await vi.waitFor(() => expect(storage.getState().settings.actionsSettingsV1)
+            .toEqual(home!.settings('home-a')!.actionsSettingsV1));
         const { SavedSecretCreateEditor } = await import('./SavedSecretCreateEditor');
         const screen = await renderScreen(
             <SavedSecretCreateEditor
@@ -141,13 +157,21 @@ describe('SavedSecretCreateEditor', () => {
         // handler is the one the last commit produced.
         await flushHookEffects();
         await screen.pressByTestIdAsync('saved-secret-create-submit');
-        expect(requestApproval).toHaveBeenCalledWith('approval-a');
+        await vi.waitFor(() => expect(requestApproval).toHaveBeenCalledOnce());
+        const artifact = home!.artifacts.get('home-a')!.list()[0]!;
+        expect(artifact).toBeTruthy();
+        expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({ artifactId: artifact.id }));
+        const requestBody = home!.artifacts.get('home-a')!.readPlainBody(artifact.id);
+        expect(requestBody).not.toBeNull();
+        expect(StoredApprovalRequestSchema.parse(JSON.parse(requestBody!))).toMatchObject({ actionId: 'secrets.shared.create',
+            actionArgs: { displayName: 'Kept name', storedContent: { t: 'plain', v: { value: 'kept-value' } } } });
+        expect(createWrites()).toHaveLength(0);
 
         await screen.update(
             <SavedSecretCreateEditor
                 scope={scopeA}
                 approvalPending
-                approvalId="approval-a"
+                approvalId={artifact.id}
                 requestApproval={requestApproval}
                 onOpenApproval={vi.fn()}
                 onCancel={vi.fn()}
@@ -160,10 +184,8 @@ describe('SavedSecretCreateEditor', () => {
     });
 
     it('clears the draft across a Home switch and ignores the old Home result', async () => {
-        const deferred = createDeferred<{
-            ok: true; resourceRef: string; revision: number;
-        }>();
-        createResource.mockReturnValueOnce(deferred.promise);
+        const deferred = createDeferred<Response>();
+        home!.respondToMutations(() => deferred.promise);
         const onCreated = vi.fn(async () => {});
         const { SavedSecretCreateEditor } = await import('./SavedSecretCreateEditor');
         const common = {
@@ -180,6 +202,7 @@ describe('SavedSecretCreateEditor', () => {
         // Commit the typed draft before pressing, so the press reads it.
         await flushHookEffects();
         screen.pressByTestId('saved-secret-create-submit');
+        await vi.waitFor(() => expect(createWrites()).toHaveLength(1));
 
         await screen.update(
             <SavedSecretCreateEditor scope={scopeB} {...common} />,
@@ -189,17 +212,16 @@ describe('SavedSecretCreateEditor', () => {
         expect(screen.findByTestId('saved-secret-create-name')?.props.value).toBe('');
         expect(screen.findByTestId('saved-secret-create-value')?.props.value).toBe('');
         await screen.pressByTestIdAsync('saved-secret-create-submit');
-        expect(createResource).toHaveBeenCalledTimes(1);
+        expect(createWrites()).toHaveLength(1);
 
-        deferred.resolve({ ok: true, resourceRef: 'happier:shared-secret:v1:old-home', revision: 1 });
+        const response = Response.json({ resourceId: createdInput().resourceId, revision: 1 });
+        deferred.resolve(response);
+        await vi.waitFor(() => expect(response.bodyUsed).toBe(true));
         await flushHookEffects();
         expect(onCreated).not.toHaveBeenCalled();
     });
 
     it('does not carry one Home\u2019s recipients into a Create on another Home', async () => {
-        createResource.mockResolvedValueOnce({
-            ok: true, resourceRef: 'happier:shared-secret:v1:resource-b', revision: 1,
-        });
         const { SavedSecretCreateEditor } = await import('./SavedSecretCreateEditor');
         const common = {
             approvalPending: false,
@@ -212,6 +234,7 @@ describe('SavedSecretCreateEditor', () => {
         );
         screen.changeTextByTestId('saved-secret-create-name', 'Cross-Home secret');
         screen.changeTextByTestId('saved-secret-create-value', 'cross-home-value');
+        await startAdding(screen);
         await vi.waitFor(() => expect(screen.findByTestId('saved-secret-access-candidate-account:account-b')).toBeTruthy());
         await screen.pressByTestIdAsync('saved-secret-access-candidate-account:account-b');
         await vi.waitFor(() => expect(screen.findByTestId('saved-secret-access-candidate-team:team-a')).toBeTruthy());
@@ -227,12 +250,13 @@ describe('SavedSecretCreateEditor', () => {
 
         // `account-b`, `team-a` and `group-a` are Home A identities; submitting
         // them to Home B would ask it to share with principals it never named.
-        expect(createResource).toHaveBeenCalledWith(expect.objectContaining({
-            scope: scopeB,
-            name: 'Home B secret',
-            value: 'home-b-value',
+        await vi.waitFor(() => expect(createWrites()).toHaveLength(1));
+        expect(createWrites()[0]).toMatchObject({ home: 'home-b', accountId: 'owner-b' });
+        expect(createdInput()).toMatchObject({
+            displayName: 'Home B secret',
+            storedContent: { t: 'plain', v: { value: 'home-b-value' } },
             accountGrants: [], teamGrants: [], groupGrants: [],
-        }));
+        });
         // An owner-only create needs no disclosure confirmation, which also
         // proves the recipient sets really were empty at submit time.
         expect(confirmDisclosure).not.toHaveBeenCalled();
@@ -265,12 +289,11 @@ describe('SavedSecretCreateEditor', () => {
             { name: 'Local key', value: 'local-value' },
             { onApprovalPending: requestApproval },
         );
-        expect(createResource).not.toHaveBeenCalled();
+        expect(createWrites()).toHaveLength(0);
         expect(onCreated).toHaveBeenCalledWith('personal-new', 'personal');
     });
 
     it('creates a shared resource instead when Shared is chosen in the same editor', async () => {
-        createResource.mockResolvedValueOnce({ ok: true, resourceRef: 'happier:shared-secret:v1:resource-s', revision: 1 });
         const onCreatePersonal = vi.fn(async () => 'personal-new');
         const onCreated = vi.fn(async () => {});
         const { SavedSecretCreateEditor } = await import('./SavedSecretCreateEditor');
@@ -292,8 +315,9 @@ describe('SavedSecretCreateEditor', () => {
         await screen.pressByTestIdAsync('saved-secret-create-submit');
 
         expect(onCreatePersonal).not.toHaveBeenCalled();
-        expect(createResource).toHaveBeenCalledWith(expect.objectContaining({ name: 'Team key', kind: 'password', value: 'team-value' }));
-        expect(onCreated).toHaveBeenCalledWith('happier:shared-secret:v1:resource-s', 'shared');
+        await vi.waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
+        expect(createdInput()).toMatchObject({ displayName: 'Team key', kind: 'password', storedContent: { t: 'plain', v: { value: 'team-value' } } });
+        expect(onCreated).toHaveBeenCalledWith(createdRef(), 'shared');
     });
 
     it('offers only personal storage where this Home does not allow shared secrets', async () => {
@@ -315,7 +339,7 @@ describe('SavedSecretCreateEditor', () => {
     });
 
     it('keeps entered material available for retry after a typed failure', async () => {
-        createResource.mockResolvedValueOnce({ ok: false, reason: 'unavailable' });
+        home!.respondToMutations(() => Response.json({ error: 'temporarily_unavailable' }, { status: 503 }));
         const { SavedSecretCreateEditor } = await import('./SavedSecretCreateEditor');
         const screen = await renderScreen(
             <SavedSecretCreateEditor
@@ -328,8 +352,11 @@ describe('SavedSecretCreateEditor', () => {
         );
         screen.changeTextByTestId('saved-secret-create-name', 'Retry me');
         screen.changeTextByTestId('saved-secret-create-value', 'still-here');
+        await flushHookEffects();
         await screen.pressByTestIdAsync('saved-secret-create-submit');
 
+        await vi.waitFor(() => expect(screen.findByTestId('saved-secret-create-failure')).toBeTruthy());
+        expect(createWrites()).toHaveLength(1);
         expect(screen.findByTestId('saved-secret-create-name')?.props.value).toBe('Retry me');
         expect(screen.findByTestId('saved-secret-create-value')?.props.value).toBe('still-here');
         expect(screen.findByTestId('saved-secret-create-submit')?.props.disabled).toBe(false);

@@ -45,6 +45,7 @@ export const LegacyProfileMigrationReview = React.memo(function LegacyProfileMig
         buildLegacyProfileMigrationDraft({ profile: props.profile, secretBindings: props.secretBindings }));
     const [sourceFingerprint, setSourceFingerprint] = React.useState<string | null>(null);
     const [pending, setPending] = React.useState<'preview' | 'confirm' | null>(null);
+    const pendingPreview = React.useRef<AbortController | null>(null);
     const [operationError, setOperationError] = React.useState<Readonly<{
         error: ProviderErrorV1;
         retry?: () => Promise<void>;
@@ -63,6 +64,14 @@ export const LegacyProfileMigrationReview = React.memo(function LegacyProfileMig
         connectionId,
         now: connectionCreatedAt,
     }), [connectionCreatedAt, connectionId, draft]);
+    React.useEffect(() => {
+        setSourceFingerprint(null);
+        setPending(current => current === 'preview' ? null : current);
+        return () => {
+            pendingPreview.current?.abort();
+            pendingPreview.current = null;
+        };
+    }, [buildMapping, props.machineId, props.profile.id, props.serverId]);
     const finishConfirmedMigration = React.useCallback(async (settingsVersion: number): Promise<void> => {
         if (!initiatingLifetime?.isCurrent()) return;
         try {
@@ -84,21 +93,27 @@ export const LegacyProfileMigrationReview = React.memo(function LegacyProfileMig
     }, [initiatingLifetime, props.machineId, props.onClose, props.onConfirmed, props.profile.id]);
 
     const preview = React.useCallback(async (): Promise<void> => {
+        pendingPreview.current?.abort();
+        const controller = new AbortController();
+        pendingPreview.current = controller;
         setPending('preview');
         setOperationError(null);
         try {
             const reviewedMapping = buildMapping();
             const result = await previewLegacyProfileMigration({
                 serverId: props.serverId,
+                signal: controller.signal,
                 request: {
                     machineId: props.machineId,
                     sourceProfileId: props.profile.id,
                     reviewedMapping,
                 },
             });
+            if (controller.signal.aborted) return;
             if (result.status === 'success') setSourceFingerprint(result.sourceFingerprint);
             else setOperationError({ error: result.error, retry: preview });
         } catch (caught) {
+            if (controller.signal.aborted) return;
             setOperationError({
                 error: providerErrorFromRpcFailure(caught, {
                     machineId: props.machineId,
@@ -107,7 +122,10 @@ export const LegacyProfileMigrationReview = React.memo(function LegacyProfileMig
                 retry: preview,
             });
         } finally {
-            setPending(null);
+            if (pendingPreview.current === controller) {
+                pendingPreview.current = null;
+                setPending(null);
+            }
         }
     }, [buildMapping, previewLegacyProfileMigration, props.machineId, props.profile.id, props.serverId]);
 

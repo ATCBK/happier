@@ -29,6 +29,7 @@ import {
 } from '@/modal/components/card/commandSurfaceCard';
 import type { CustomModalInjectedProps } from '@/modal/types';
 import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
 
 export type CapabilityAddInputContext = Readonly<{
   /** Hand a parsed item to the catalog details column (From a link, Paste a config). */
@@ -181,7 +182,9 @@ function capabilityAddChrome(frame: Readonly<{ title: string; subtitle?: string;
   return {
     kind: 'card' as const,
     title: frame.title,
-    ...(frame.subtitle === undefined ? {} : { subtitle: frame.subtitle }),
+    // Explicit nulls: the chrome owner merges patches, so leaving Registries must clear its back link and subtitle.
+    leading: null,
+    subtitle: frame.subtitle ?? null,
     testID: frame.testID,
     closeButtonTestID: `${frame.testID}:close`,
     scrollHost: 'body' as const,
@@ -467,21 +470,25 @@ function CatalogToolsBand(props: Readonly<{ open: boolean; children: React.React
 
 /**
  * The pinned footer of the Add dialog: a quiet note (or the failure) at the start, the actions at the end. Where the
- * details are a phone page (`stacked`) the note reads on its own line and the actions share the full width.
+ * details are a phone page (`stacked`) the note reads on its own line and the actions share the full width. A mode that
+ * is not a Collection's details (Link, Upload, Paste) is a phone page exactly when the dialog is presented as one, so
+ * `stacked` defaults to the device class that decides that presentation.
  */
 export function CapabilityAddFooter(
-  props: Readonly<{ start: React.ReactNode; children: React.ReactNode; stacked?: boolean }>,
+  props: Readonly<{ start: React.ReactNode; children: React.ReactNode; stacked?: boolean; testID?: string }>,
 ): React.ReactElement {
-  if (props.stacked) {
+  const onPhone = useDeviceType() === 'phone';
+  const stacked = props.stacked ?? onPhone;
+  if (stacked) {
     return (
-      <View style={[styles.footer, styles.footerStacked]}>
+      <View testID={props.testID} style={[styles.footer, styles.footerStacked]}>
         {props.start === null || props.start === undefined ? null : props.start}
         <View style={styles.footerActionsStacked}>{props.children}</View>
       </View>
     );
   }
   return (
-    <View style={styles.footer}>
+    <View testID={props.testID} style={styles.footer}>
       <View style={styles.footerStart}>{props.start}</View>
       {props.children}
     </View>
