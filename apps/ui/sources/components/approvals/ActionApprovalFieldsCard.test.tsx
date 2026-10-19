@@ -231,7 +231,7 @@ afterEach(async () => {
     for (const id of profiles.splice(0)) await removeServerProfile(id);
 });
 
-it('renders the daemon-evaluated plugin install disclosure in the approval Inbox card', async () => {
+it('presents a plugin install approval through the install review facts, keeping raw values in Technical details', async () => {
     const actionArgs = { path: '/plugins/acme.example', kind: 'path' as const };
     const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
         createdBy: { surface: 'cli' }, actionId: 'plugins.install', actionArgs, summary: 'Install plugin',
@@ -254,9 +254,20 @@ it('renders the daemon-evaluated plugin install disclosure in the approval Inbox
     for (const anatomy of ['card', 'page'] as const) {
         const screen = await renderScreen(<ActionApprovalFieldsCard presentation={presentation} anatomy={anatomy} />);
         const text = screen.getTextContent();
-        for (const value of ['Daemon-evaluated install and trust disclosure', 'acme.example', 'network', 'https://example.test']) {
+        // The same words as the Settings install review: its sections, its labels for declared enums.
+        for (const value of [t('settingsPlugins.installReviewSections.requiredAccess'),
+            t('settingsPlugins.installReviewSections.authorizationClass.cooperativeDisclosure'),
+            t('settingsPlugins.installReviewSections.uiArtifactStatus.none'),
+            t('settingsPlugins.installReviewSections.trustedCodeTitle'), 'network', 'https://example.test']) {
             expect(text).toContain(value);
         }
+        // Raw enum values and key-derived labels never lead; they wait behind Technical details.
+        for (const raw of ['cooperativeDisclosure', 'notProvided', 'notApplicable', 'Ui artifacts', 'Runtime api version']) {
+            expect(text).not.toContain(raw);
+        }
+        const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+        await act(async () => { details?.props.onExpandedChange(true); });
+        expect(screen.getTextContent()).toContain('cooperativeDisclosure');
     }
 });
 

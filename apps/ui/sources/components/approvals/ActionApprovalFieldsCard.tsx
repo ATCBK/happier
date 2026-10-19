@@ -13,6 +13,7 @@ import { Typography } from '@/constants/Typography';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { getTranslationValue, t, tLoose } from '@/text';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
+import { presentPluginInstallApprovalRows } from './pluginInstallApprovalFacts';
 
 type ApprovalFieldRow = ApprovalActionFieldsPresentation['rows'][number];
 type ApprovalValueRow = Extract<ApprovalFieldRow, { kind: 'value' }>;
@@ -37,7 +38,8 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
     collapsed?: boolean;
 }>) {
     const [detailsOpen, setDetailsOpen] = React.useState(props.collapsed !== true);
-    const allRows = props.presentation.rows;
+    // A kind with its own human presentation reads through it; its raw structure stays in Technical details.
+    const allRows = React.useMemo(() => presentPluginInstallApprovalRows(props.presentation.rows), [props.presentation.rows]);
     // People read names, choices and values; opaque ids stay present, one disclosure away.
     const rows = React.useMemo(() => allRows.filter((row) => !(row.kind === 'value' && row.technical)), [allRows]);
     const technical = React.useMemo(
