@@ -12956,7 +12956,11 @@ describe('Composer physical surface mount', () => {
  * mocked, and it is asserted on.
  */
 describe('installed Session widget through the mounted plugin controller', () => {
-    it('shares widget occurrences through the public provider and fences retired mounts', async () => {
+    it.each([
+        { kind: 'home' },
+        { kind: 'project', projectId: 'project_1' },
+        { kind: 'sessionBoard', sessionId: 'session_1' },
+    ] as const)('shares widget occurrences through the public provider in $kind, retains hidden mounts and fences retired mounts', async owner => {
         const { widgetProjectionEntry } = await import('@/dev/testkit/fixtures/pluginWidgetProjectionFixtures');
         const { readWidgetDescriptor } = await import('@/components/widgets/widgetCatalog');
         const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
@@ -12969,7 +12973,7 @@ describe('installed Session widget through the mounted plugin controller', () =>
             sourceRef: { pluginId, machineId: 'machine_1',
                 sourceCustody: { kind: 'development' as const, registeredRootId: '/plugins/shared-widget' } },
         };
-        const scope = { serverId: 'server_1', accountId: 'account-a', owner: { kind: 'home' as const } };
+        const scope = { serverId: 'server_1', accountId: 'account-a', owner };
         const previous = storage.getState();
         onTestFinished(() => { storage.setState(previous, true); });
         await pluginSurfaceAccountLifetime.setScope(scope, { serverIdentityId: 'srv_server_1' });

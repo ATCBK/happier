@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import * as React from 'react';
+import { Platform } from 'react-native';
 
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { RetainedPanelSurface } from '@/components/ui/panels/RetainedPanelSurface';
+import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import { useUiSurfaceRendererMount } from './useUiSurfaceRendererMount';
 
@@ -20,6 +25,38 @@ function createLifetime() {
 }
 
 describe('physical surface renderer mount', () => {
+    it.each(['web', 'ios', 'android'] as const)('keeps a retained %s renderer current across hide/reveal and retires it only on unmount', async platform => {
+        const originalPlatform = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: platform });
+        const lifetime = createLifetime();
+        let current: ReturnType<typeof useUiSurfaceRendererMount> | undefined;
+        function Renderer() {
+            current = useUiSurfaceRendererMount({
+                lifetime, interactionEnabled: true, focusEligible: usePluginSurfaceFocusEligibility(), mountKey: 'external-plugin',
+            });
+            return null;
+        }
+        const child = React.createElement(Renderer);
+        const panel = (active: boolean) => React.createElement(RetainedPanelSurface, { isActive: active, children: child });
+        try {
+            const screen = await renderScreen(panel(true));
+            const first = current!;
+            await screen.update(panel(false));
+            expect(first.signal.aborted).toBe(false);
+            expect(first.isCurrent()).toBe(true);
+            expect(first.isFocusEligible()).toBe(false);
+            await screen.update(panel(true));
+            expect(current!.signal).toBe(first.signal);
+            expect(current!.identity).toBe(first.identity);
+            expect(first.isFocusEligible()).toBe(true);
+            await screen.unmount();
+            expect(first.signal.aborted).toBe(true);
+            expect(first.isCurrent()).toBe(false);
+        } finally {
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
+        }
+    });
+
     it('preserves mount identity across presentation changes while checking current focus eligibility', async () => {
         const lifetime = createLifetime();
         const hook = await renderHook(useUiSurfaceRendererMount, {

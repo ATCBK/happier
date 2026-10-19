@@ -1780,13 +1780,22 @@ describe('PluginHostedWebPane', () => {
         };
         await send(1, 'ready', { ready: true });
         await send(2, 'hostApi', { wireVersion: 1, kind: 'negotiate', identity, apiRange: '^1.0.0' });
+        expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({
+            kind: 'result', payload: expect.objectContaining({ kind: 'negotiated', methods: expect.arrayContaining(['watchContext']) }),
+        }), 'https://preview.happier.test');
         await send(3, 'hostApi', {
             wireVersion: 1, kind: 'subscribe', identity, requestId: 'watch',
             subscriptionId: 'retained-context', method: 'watchContext',
         });
+        await screen.update(pane(true, 'subscribed'));
         const events = () => postMessage.mock.calls.flatMap(([message]) => (
             message.payload?.kind === 'subscription' ? [message.payload] : []
         ));
+        expect(events()).toContainEqual(expect.objectContaining({
+            subscriptionId: 'retained-context', event: expect.objectContaining({
+                surface: expect.objectContaining({ translations: { title: 'subscribed' } }),
+            }),
+        }));
         await screen.update(pane(false, 'hidden'));
         await screen.update(pane(false, 'settled while hidden'));
         expect(events()).toContainEqual(expect.objectContaining({
