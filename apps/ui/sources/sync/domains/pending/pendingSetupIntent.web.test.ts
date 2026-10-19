@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+
+installDisconnectedServerSocketBoundary();
+const accountConnections: Array<Awaited<ReturnType<typeof restoreServerAccountForTest>>> = [];
+await loadSyncSingletonForTests();
 
 type StorageLike = {
     readonly length: number;
@@ -27,7 +32,6 @@ function createLocalStorage(): StorageLike {
 }
 
 async function importFreshWeb() {
-    vi.resetModules();
     return await import('./pendingSetupIntent.web');
 }
 
@@ -50,18 +54,14 @@ async function applyActiveServer(serverUrl: string) {
 }
 
 async function activateServerAccount(serverUrl: string, accountId: string) {
-    const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
-    const { storage } = await import('@/sync/domains/state/storage');
-
-    const server = await applyActiveServer(serverUrl);
-    const scope = createServerAccountScope(server.id, accountId);
-    expect(scope).not.toBeNull();
-    if (!scope) throw new Error('Expected Account scope');
-    storage.getState().activateProfileScope(scope);
-    await storage.getState().activateSettingsScope(scope);
+    const connection = await restoreServerAccountForTest({ serverUrl, accountId });
+    accountConnections.push(connection);
+    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    expect(getActiveServerAccountScope()).toEqual({ serverId: connection.serverId, accountId });
 }
 
 async function activateServerWithoutAccount(serverUrl: string) {
+    for (const connection of accountConnections.splice(0).reverse()) await connection.dispose();
     const { storage } = await import('@/sync/domains/state/storage');
 
     await applyActiveServer(serverUrl);
@@ -77,6 +77,7 @@ describe('pendingSetupIntent.web', () => {
     afterEach(async () => {
         const { clearPendingSetupIntent } = await importFreshWeb();
         clearPendingSetupIntent();
+        for (const connection of accountConnections.splice(0).reverse()) await connection.dispose();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
@@ -113,11 +114,18 @@ describe('pendingSetupIntent.web', () => {
 
         nowSpy.mockReturnValue(writtenAtMs + (24 * 60 * 60 * 1000) + 1);
         expect(getPendingSetupIntent()).toBeNull();
+        // The SDK backing, not an expired in-memory snapshot, must be empty.
+        const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { serverAccountScopedStorageKey } = await import('@/sync/domains/scope/serverAccountScope');
+        const { readStorageScopeFromEnv, scopedStorageId } = await import('@/utils/system/storageScope');
+        const activeScope = getActiveServerAccountScope();
+        if (!activeScope) throw new Error('Expected the restored Account scope');
+        expect(globalThis.localStorage.getItem(serverAccountScopedStorageKey(
+            scopedStorageId('pending-setup-intent-record:v2', readStorageScopeFromEnv()), activeScope,
+        ))).toBeNull();
 
         nowSpy.mockReturnValue(writtenAtMs);
-        const reloaded = await importFreshWeb();
-        await activateServerAccount('https://relay.example.test', 'account-a');
-        expect(reloaded.getPendingSetupIntent()).toBeNull();
+        expect(getPendingSetupIntent()).toBeNull();
     });
 
     it('returns a stable pending setup intent reference while the serialized web record is unchanged', async () => {
@@ -190,10 +198,14 @@ describe('pendingSetupIntent.web', () => {
         });
     });
 
-    it.each(['pending-setup-intent-record', 'mmkv.pending-setup-intent\\record'])(
-        'keeps the snapshot and original expiry when adopting legacy key %s on web',
-        async (legacyKey) => {
-            const writtenAtMs = 1_700_000_000_000;
+    it.each([
+        { legacyKey: 'pending-setup-intent-record', writtenAtMs: 1_700_000_000_000 },
+        { legacyKey: 'mmkv.pending-setup-intent\\record', writtenAtMs: 1_700_000_000_001 },
+    ])(
+        'keeps the snapshot and original expiry when adopting legacy key $legacyKey on web',
+        async ({ legacyKey, writtenAtMs }) => {
+            // These are separate persisted records: the retained owner correctly
+            // remembers the expired bytes from the preceding case.
             const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(writtenAtMs + 60_000);
             const record = JSON.stringify({
                 branch: 'thisComputer',

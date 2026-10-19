@@ -591,11 +591,15 @@ describe('pendingQueueV2 optimistic thinking', () => {
             outboxScope: testOutboxScope,
             isOutboxScopeCurrent: () => true,
         });
-        expect((await loadPendingOutboxForSession(sessionId, testOutboxScope))).toEqual([]);
-        await deletePendingMessageV2({ sessionId, pendingId: localId, request });
+        // The snapshot proves a reservation; the dispatch claim is still held by the pending ACK.
+        expect((await loadPendingOutboxForSession(sessionId, testOutboxScope))).toEqual([
+            expect.objectContaining({ localId, operation: 'enqueue' }),
+        ]);
+        const cancellation = deletePendingMessageV2({ sessionId, pendingId: localId, request });
         releasePost();
-        await enqueue;
+        await Promise.all([enqueue, cancellation]);
 
+        expect((await loadPendingOutboxForSession(sessionId, testOutboxScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,

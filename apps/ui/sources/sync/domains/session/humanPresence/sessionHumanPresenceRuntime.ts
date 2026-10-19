@@ -1,4 +1,6 @@
-import { sessionAddressKey, type SessionAddress } from '../sessionAddress';
+import type { SessionAddress } from '../sessionAddress';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { DiscussionAddressV1Schema } from '@happier-dev/protocol/discussions/content';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import {
     SessionHumanPresenceVisibleReplaceResultV1Schema,
@@ -8,7 +10,7 @@ import {
 import { getVisibleSessionSurfaces, subscribeSessionSurfaceVisibility } from '../sessionSurfaceVisibility';
 import { readHostActivelyViewed, subscribeToHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 import { readComputerUiFocusState, subscribeToRuntimeActiveChange } from '@/utils/runtime/isRuntimeActive';
-import { sessionHumanPresenceStore, type SessionHumanPresenceTarget } from './sessionHumanPresenceStore';
+import { humanPresenceLocationKey, sessionHumanPresenceStore, type DiscussionHumanPresenceTarget, type SessionHumanPresenceTarget } from './sessionHumanPresenceStore';
 
 export type SessionHumanPresenceSocketTransport = Readonly<{
     isConnected(): boolean;
@@ -18,36 +20,51 @@ export type SessionHumanPresenceSocketTransport = Readonly<{
     subscribeSnapshot(listener: (payload: unknown) => void): () => void;
 }>;
 
-type DiscussionTarget = SessionAddress & Readonly<{ discussionId: string }>;
 type Attachment = {
+    accountId: string;
     dispose(preserveObservation?: boolean): void;
     publish(): void;
     edit(target: SessionHumanPresenceTarget, nonEmpty: boolean): void;
     stop(target?: SessionHumanPresenceTarget): void;
 };
 const homes = new Map<string, Attachment>();
-const discussionLocations = new Map<string, { target: DiscussionTarget; count: number }>();
+const discussionLocations = new Map<string, { target: DiscussionHumanPresenceTarget; accountId: string; count: number }>();
 let detachVisibility: (() => void) | null = null;
 
-const targetKey = (target: SessionHumanPresenceTarget) => `${sessionAddressKey(target)}\u0000${target.discussionId ?? ''}`;
+const targetKey = (target: SessionHumanPresenceTarget) => JSON.stringify([target.serverId, humanPresenceLocationKey(target)]);
+const targetIdentity = (target: SessionHumanPresenceTarget) => target.discussionId === undefined
+    ? { sessionId: target.sessionId } : { discussionId: target.discussionId };
+
+function currentDiscussionAttachment(target: DiscussionHumanPresenceTarget, lifetime: ServerAccountScopeLifetime): Attachment | undefined {
+    const serverId = resolveServerProfileScopeIdForIdentifier(target.serverId);
+    if (!lifetime.isCurrent() || resolveServerProfileScopeIdForIdentifier(lifetime.scope.serverId) !== serverId) return;
+    const home = homes.get(serverId);
+    return home?.accountId === lifetime.scope.accountId ? home : undefined;
+}
 
 /** Registers one visible discussion through the existing per-Home replace-set owner. */
-export function registerSessionDiscussionHumanPresence(target: DiscussionTarget): () => void {
-    const normalized = { ...target, serverId: resolveServerProfileScopeIdForIdentifier(target.serverId) };
-    const key = targetKey(normalized);
-    const current = discussionLocations.get(key);
-    discussionLocations.set(key, { target: normalized, count: (current?.count ?? 0) + 1 });
+export function registerDiscussionHumanPresence(target: DiscussionHumanPresenceTarget, lifetime: ServerAccountScopeLifetime): () => void {
+    const parsed = DiscussionAddressV1Schema.safeParse(target);
+    if (!parsed.success || !lifetime.isCurrent()) return () => {};
+    const normalized = { ...parsed.data, serverId: resolveServerProfileScopeIdForIdentifier(parsed.data.serverId) };
+    if (resolveServerProfileScopeIdForIdentifier(lifetime.scope.serverId) !== normalized.serverId) return () => {};
+    const key = JSON.stringify([lifetime.scope.accountId, targetKey(normalized)]);
+    const entry = discussionLocations.get(key) ?? { target: normalized, accountId: lifetime.scope.accountId, count: 0 };
+    entry.count++;
+    discussionLocations.set(key, entry);
     homes.get(normalized.serverId)?.publish();
     let disposed = false;
-    return () => {
+    let retirement: Readonly<{ dispose(): void }> | undefined;
+    const dispose = () => {
         if (disposed) return;
         disposed = true;
-        const entry = discussionLocations.get(key);
-        if (!entry) return;
-        if (entry.count > 1) discussionLocations.set(key, { ...entry, count: entry.count - 1 });
-        else discussionLocations.delete(key);
+        retirement?.dispose();
+        if (discussionLocations.get(key) !== entry) return;
+        if (--entry.count === 0) discussionLocations.delete(key);
         homes.get(normalized.serverId)?.publish();
     };
+    retirement = lifetime.onRetire(dispose);
+    return dispose;
 }
 
 export function reportSessionTypingEdit(address: SessionAddress, nonEmpty: boolean): void {
@@ -58,13 +75,11 @@ export function stopSessionTyping(address: SessionAddress): void {
     const serverId = resolveServerProfileScopeIdForIdentifier(address.serverId);
     homes.get(serverId)?.stop({ ...address, serverId });
 }
-export function reportSessionDiscussionTypingEdit(target: DiscussionTarget, nonEmpty: boolean): void {
-    const serverId = resolveServerProfileScopeIdForIdentifier(target.serverId);
-    homes.get(serverId)?.edit({ ...target, serverId }, nonEmpty);
+export function reportDiscussionTypingEdit(target: DiscussionHumanPresenceTarget, nonEmpty: boolean, lifetime: ServerAccountScopeLifetime): void {
+    currentDiscussionAttachment(target, lifetime)?.edit({ ...target, serverId: resolveServerProfileScopeIdForIdentifier(target.serverId) }, nonEmpty);
 }
-export function stopSessionDiscussionTyping(target: DiscussionTarget): void {
-    const serverId = resolveServerProfileScopeIdForIdentifier(target.serverId);
-    homes.get(serverId)?.stop({ ...target, serverId });
+export function stopDiscussionTyping(target: DiscussionHumanPresenceTarget, lifetime: ServerAccountScopeLifetime): void {
+    currentDiscussionAttachment(target, lifetime)?.stop({ ...target, serverId: resolveServerProfileScopeIdForIdentifier(target.serverId) });
 }
 
 export function attachSessionHumanPresenceSocket(input: Readonly<{
@@ -95,13 +110,11 @@ export function attachSessionHumanPresenceSocket(input: Readonly<{
     let unacknowledgedDeclarationMayBeApplied = false;
     let admitted = new Set<string>();
     let admittedLocations = new Set<string>();
-    let discussionSupport: 'unknown' | 'supported' | 'unsupported' = 'unknown';
     let typing: {target: SessionHumanPresenceTarget; renewedAt: number; timer: ReturnType<typeof setTimeout>} | null = null;
-    const currentLocations = (): DiscussionTarget[] => readHostActivelyViewed()
-        ? [...discussionLocations.values()].map((entry) => entry.target)
-            .filter((target) => target.serverId === serverId)
-            .sort((left, right) => left.sessionId.localeCompare(right.sessionId)
-                || left.discussionId.localeCompare(right.discussionId))
+    const currentLocations = (): DiscussionHumanPresenceTarget[] => readHostActivelyViewed()
+        ? [...discussionLocations.values()].filter((entry) => entry.accountId === accountId && entry.target.serverId === serverId)
+            .map((entry) => entry.target)
+            .sort((left, right) => left.discussionId.localeCompare(right.discussionId))
         : [];
     const currentIds = () => readHostActivelyViewed()
         ? [...new Set(getVisibleSessionSurfaces()
@@ -113,22 +126,20 @@ export function attachSessionHumanPresenceSocket(input: Readonly<{
         clearTimeout(typing.timer);
         if (transport.isConnected() && support === 'supported') transport.send(TYPING_EVENT, {
             v: 1,
-            sessionId: typing.target.sessionId,
-            ...(typing.target.discussionId ? { discussionId: typing.target.discussionId } : {}),
+            ...targetIdentity(typing.target),
             typing: false,
         });
         typing = null;
     };
     const publish = () => {
         const ids = currentIds();
-        const locations = currentLocations().map(({ sessionId, discussionId }) => ({ sessionId, discussionId }));
-        const desiredKeys = new Set(locations.map((location) => `${location.sessionId}\u0000${location.discussionId}`));
-        if (typing && (typing.target.discussionId
-            ? !desiredKeys.has(`${typing.target.sessionId}\u0000${typing.target.discussionId}`)
-            : !ids.includes(typing.target.sessionId))) stop();
+        const locations = currentLocations().map(({ discussionId }) => ({ discussionId }));
+        const desiredKeys = new Set(locations.map((location) => location.discussionId));
+        if (typing && (typeof typing.target.sessionId === 'string'
+            ? !ids.includes(typing.target.sessionId)
+            : !desiredKeys.has(typing.target.discussionId))) stop();
         if (disposed || !connected || pending) return;
-        const sentLocations = discussionSupport === 'unsupported' ? [] : locations;
-        const nextSignature = JSON.stringify([ids, sentLocations]);
+        const nextSignature = JSON.stringify([ids, locations]);
         if (signature === nextSignature) return;
         if (support === 'unavailable') {
             // A timed-out/malformed acknowledgement does not reveal whether the Home
@@ -145,11 +156,11 @@ export function attachSessionHumanPresenceSocket(input: Readonly<{
         pending = true;
         unacknowledgedDeclarationMayBeApplied = true;
         const issuedGeneration = generation;
-        handle.beginDeclaration(ids, sentLocations);
+        handle.beginDeclaration(ids, locations);
         const payload = {
             v: 1 as const,
             sessionIds: ids,
-            ...(sentLocations.length > 0 ? { locations: sentLocations } : {}),
+            ...(locations.length > 0 ? { locations } : {}),
         };
         void transport.sendWithAck(VISIBLE_EVENT, payload).then((raw) => {
             if (disposed || issuedGeneration !== generation) return;
@@ -167,11 +178,6 @@ export function attachSessionHumanPresenceSocket(input: Readonly<{
                 stop();
                 admitted.clear();
                 admittedLocations.clear();
-                if (parsed.data.errorCode === 'INVALID_REQUEST' && sentLocations.length > 0) {
-                    discussionSupport = 'unsupported';
-                    signature = null;
-                    return;
-                }
                 if (parsed.data.errorCode === 'UNSUPPORTED_VERSION') {
                     support = 'unavailable';
                     handle.setStatus('unsupported');
@@ -187,19 +193,16 @@ export function attachSessionHumanPresenceSocket(input: Readonly<{
             }
             support = 'supported';
             admitted = new Set(parsed.data.admittedSessionIds.filter((sessionId) => ids.includes(sessionId)));
-            discussionSupport = sentLocations.length > 0 && parsed.data.admittedLocations === undefined
-                ? 'unsupported'
-                : 'supported';
             admittedLocations = new Set((parsed.data.admittedLocations ?? [])
-                .map((location) => `${location.sessionId}\u0000${location.discussionId}`)
-                .filter((key) => desiredKeys.has(key)));
+                .map((location) => location.discussionId)
+                .filter((key): key is string => typeof key === 'string' && desiredKeys.has(key)));
             handle.confirmDeclaration(
                 [...admitted],
-                locations.filter((location) => admittedLocations.has(`${location.sessionId}\u0000${location.discussionId}`)),
+                locations.filter((location) => admittedLocations.has(location.discussionId)),
             );
-            if (typing && (typing.target.discussionId
-                ? !admittedLocations.has(`${typing.target.sessionId}\u0000${typing.target.discussionId}`)
-                : !admitted.has(typing.target.sessionId))) stop();
+            if (typing && (typeof typing.target.sessionId === 'string'
+                ? !admitted.has(typing.target.sessionId)
+                : !admittedLocations.has(typing.target.discussionId))) stop();
         }).catch(() => {
             if (disposed || issuedGeneration !== generation) return;
             stop();
@@ -212,18 +215,18 @@ export function attachSessionHumanPresenceSocket(input: Readonly<{
         });
     };
     const attachment: Attachment = {
+        accountId,
         dispose: (preserveObservation) => dispose(preserveObservation),
         publish,
         stop,
-        edit(sessionId, nonEmpty) {
-            const target = sessionId;
+        edit(target, nonEmpty) {
             if (!nonEmpty) { stop(target); return; }
-            const targetAdmitted = target.discussionId
-                ? admittedLocations.has(`${target.sessionId}\u0000${target.discussionId}`)
-                : admitted.has(target.sessionId);
-            const targetVisible = target.discussionId
-                ? currentLocations().some((location) => targetKey(location) === targetKey(target))
-                : currentIds().includes(target.sessionId);
+            const targetAdmitted = typeof target.sessionId === 'string'
+                ? admitted.has(target.sessionId)
+                : admittedLocations.has(target.discussionId);
+            const targetVisible = typeof target.sessionId === 'string'
+                ? currentIds().includes(target.sessionId)
+                : currentLocations().some((location) => targetKey(location) === targetKey(target));
             if (disposed || !connected || support !== 'supported' || !targetAdmitted || !targetVisible) return;
             if (!typing || targetKey(typing.target) !== targetKey(target)) stop();
             const now = Date.now();
@@ -232,8 +235,7 @@ export function attachSessionHumanPresenceSocket(input: Readonly<{
             if (typing) clearTimeout(typing.timer);
             if (renew) transport.send(TYPING_EVENT, {
                 v: 1,
-                sessionId: target.sessionId,
-                ...(target.discussionId ? { discussionId: target.discussionId } : {}),
+                ...targetIdentity(target),
                 typing: true,
             });
             typing = { target, renewedAt, timer: setTimeout(() => stop(target), 4_000) };
@@ -257,7 +259,6 @@ export function attachSessionHumanPresenceSocket(input: Readonly<{
         signature = null;
         admitted.clear();
         admittedLocations.clear();
-        discussionSupport = 'unknown';
         unacknowledgedDeclarationMayBeApplied = false;
         if (connected) {
             publishFocus();

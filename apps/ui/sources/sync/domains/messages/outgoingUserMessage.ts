@@ -1,7 +1,7 @@
 import { isBundledAgentId } from '@/agents/catalog/catalog';
 import { getAgentModelConfig } from '@happier-dev/agents';
 import { buildSendMessageMeta } from '@/sync/domains/messages/buildSendMessageMeta';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createTranscriptRawRecordV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { SessionMessageMetaSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageMeta';
 import type { MessageMeta } from "@happier-dev/session-core/messages";

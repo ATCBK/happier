@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { deriveSessionReadState, resolveSessionReadStateAction } from './sessionReadState';
+import type { Message } from '@happier-dev/session-core/messages';
+import { applyMessageChangeToTranscriptRenderableAggregate, buildTranscriptRenderableAggregate } from '@/sync/domains/session/listing/transcriptRenderableAggregate';
 
 const storageState = vi.hoisted(() => ({
     sessions: {} as Record<string, unknown>,
@@ -18,6 +20,57 @@ beforeEach(async () => {
 });
 
 describe('sessionReadState', () => {
+    it('reads the current aggregate without revisiting historical message attention', () => {
+        let historicalReads = 0;
+        const messages: Message[] = Array.from({ length: 400 }, (_, index) => ({
+            id: `m${index + 1}`,
+            kind: 'agent-text',
+            localId: null,
+            createdAt: index + 1,
+            seq: index + 1,
+            text: 'history',
+            get transcriptObservationProvenance() {
+                historicalReads += 1;
+                return undefined;
+            },
+        }));
+        const aggregate = buildTranscriptRenderableAggregate({ messages, completedRequests: null });
+        const transcript = {
+            isLoaded: true,
+            messageIdsOldestFirst: messages.map((message) => message.id),
+            messagesById: Object.fromEntries(messages.map((message) => [message.id, message])),
+            renderableAggregate: aggregate as typeof aggregate | undefined,
+        };
+        storageState.sessionMessages.s_aggregate = transcript;
+        historicalReads = 0;
+        expect(deriveSessionReadState({
+            id: 's_aggregate', seq: 400, lastViewedSessionSeq: 400,
+            latestTurnStatus: 'in_progress', metadata: null,
+        })).toBe('read');
+        expect(historicalReads).toBe(0);
+
+        const previous = messages[messages.length - 1];
+        const updated: Message = { ...previous, seq: 401 };
+        expect(applyMessageChangeToTranscriptRenderableAggregate({ aggregate, previous, next: updated })).toBe(true);
+        transcript.messagesById[updated.id] = updated;
+        expect(deriveSessionReadState({
+            id: 's_aggregate', seq: 401, lastViewedSessionSeq: 400,
+            latestTurnStatus: 'in_progress', metadata: null,
+        })).toBe('unread');
+
+        const recovered: Message = {
+            ...updated,
+            transcriptObservationProvenance: { kind: 'non_dependent', source: 'history' },
+        };
+        expect(applyMessageChangeToTranscriptRenderableAggregate({ aggregate, previous: updated, next: recovered })).toBe(false);
+        transcript.renderableAggregate = undefined;
+        transcript.messagesById[recovered.id] = recovered;
+        expect(deriveSessionReadState({
+            id: 's_aggregate', seq: 401, lastViewedSessionSeq: 399,
+            latestTurnStatus: 'in_progress', metadata: null,
+        })).toBe('read');
+    });
+
     it('keeps an untracked viewer quiet despite old cursor and cached unread projections', () => {
         const session = {
             seq: 8,

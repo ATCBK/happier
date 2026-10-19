@@ -1,9 +1,10 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { resolveMergedSessionRuntimeActivityProjectionFields } from '@/sync/engine/sessions/sessionRuntimeActivityProjection';
 import { hasTerminalPrimaryTurnStatus } from './attention/runtimePresentation';
+import { areServerProfileIdentifiersEquivalent } from '../server/serverProfiles';
 
 type SessionLifecycleProjection = Pick<Session,
-    | 'seq' | 'updatedAt' | 'meaningfulActivityAt' | 'lastTurnCompletedAt'
+    | 'serverId' | 'seq' | 'updatedAt' | 'meaningfulActivityAt' | 'lastTurnCompletedAt'
     | 'active' | 'activeAt' | 'thinking' | 'thinkingAt'
     | 'latestTurnId' | 'latestTurnStatus' | 'latestTurnStatusObservedAt'
     | 'pendingVersion' | 'pendingCount' | 'pendingBlockedCount' | 'pendingActivationAuthorization'
@@ -113,6 +114,18 @@ export function reconcileSessionLifecycleProjection<T extends SessionLifecyclePr
         applyPatch({ pendingVersion: previous.pendingVersion, pendingCount: previous.pendingCount,
             pendingBlockedCount: previous.pendingBlockedCount,
             pendingActivationAuthorization: previous.pendingActivationAuthorization });
+    }
+    const previousAuthorization = previous.pendingActivationAuthorization;
+    const incomingAuthorization = next.pendingActivationAuthorization;
+    // Activation settlement does not advance pendingVersion. A Session read
+    // captured before failure must not revive that same request after its
+    // socket publication; an explicit rearm has a newer requestedAt.
+    if (previousAuthorization?.status === 'failed' && incomingAuthorization?.status === 'waiting'
+        && (!previous.serverId || !incoming.serverId
+            || areServerProfileIdentifiersEquivalent(previous.serverId, incoming.serverId))
+        && incomingAuthorization.requestedAt === previousAuthorization.requestedAt
+        && incomingAuthorization.requestId === previousAuthorization.requestId) {
+        applyPatch({ pendingActivationAuthorization: previousAuthorization });
     }
     const runtimeActivity = resolveMergedSessionRuntimeActivityProjectionFields(previous, incoming);
     if (runtimeActivity) applyPatch(runtimeActivity);

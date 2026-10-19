@@ -13,7 +13,7 @@ export type SessionListHydrationPriorityResult<T> = Readonly<{
 type HydrationPriorityRow = Readonly<{
     id: string;
     active?: boolean;
-    reportsTo?: Readonly<{ sessionId: string }> | null;
+    manager?: Readonly<{ sessionId: string }> | null;
 }>;
 
 function normalizeSessionIds(sessionIds?: Iterable<string> | null): string[] {

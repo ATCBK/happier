@@ -6,8 +6,8 @@ describe('orderRowsForSessionListHydration', () => {
     it('keeps offscreen agents and reports as projections until explicitly demanded', () => {
         const result = orderRowsForSessionListHydration({
             rows: [{ id: 'unrelated', active: false },
-                { id: 'child', active: true, reportsTo: { sessionId: 'lead' } },
-                { id: 'grandchild', active: false, reportsTo: { sessionId: 'child' } }],
+                { id: 'child', active: true, manager: { sessionId: 'lead' } },
+                { id: 'grandchild', active: false, manager: { sessionId: 'child' } }],
             eagerHydrationCount: 0, maxBackgroundHydrationRows: 0,
         });
         expect(result.rows).toEqual([]);

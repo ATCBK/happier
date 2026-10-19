@@ -5,7 +5,7 @@ import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol
 import { isSessionAccessOwner, type NormalizedSessionAccessProjection } from './normalizeSessionAccessProjection';
 import { ComposerOptionsInputV1Schema, projectComposerOptionsInputV1, type ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
 
-import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { isDataKeyAuthCredentials, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { MetadataSchema, type Metadata } from '@happier-dev/session-core/state';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { isSessionContentReadable, type SessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
@@ -139,7 +139,7 @@ export function readSessionLayout1OwnerMetadata(params: Readonly<{
         return { kind: 'recipient' };
     }
     if (params.ownerMetadataEnvelope === null || params.ownerMetadataEnvelope === undefined) {
-        return { kind: 'recipient' };
+        return { kind: 'unavailable', reason: 'invalid_envelope' };
     }
     if (!params.accountMode) {
         return {
@@ -179,8 +179,8 @@ export function readSessionLayout1OwnerMetadata(params: Readonly<{
     const ciphertext = validated.envelope.t === 'encrypted' ? validated.envelope.c : null;
     const token = credentials.token;
     const secret = 'secret' in credentials ? credentials.secret : undefined;
-    const machineKey = 'encryption' in credentials ? credentials.encryption.machineKey : undefined;
-    const publicKey = 'encryption' in credentials ? credentials.encryption.publicKey : undefined;
+    const machineKey = isDataKeyAuthCredentials(credentials) ? credentials.encryption.machineKey : undefined;
+    const publicKey = isDataKeyAuthCredentials(credentials) ? credentials.encryption.publicKey : undefined;
     return {
         kind: 'owner',
         ownerMetadataEnvelope: validated.envelope,
@@ -189,8 +189,8 @@ export function readSessionLayout1OwnerMetadata(params: Readonly<{
             if (next.credentials !== credentials || next.accountMode !== accountMode) return false;
             if (credentials.token !== token
                 || ('secret' in credentials ? credentials.secret : undefined) !== secret
-                || ('encryption' in credentials ? credentials.encryption.machineKey : undefined) !== machineKey
-                || ('encryption' in credentials ? credentials.encryption.publicKey : undefined) !== publicKey) return false;
+                || (isDataKeyAuthCredentials(credentials) ? credentials.encryption.machineKey : undefined) !== machineKey
+                || (isDataKeyAuthCredentials(credentials) ? credentials.encryption.publicKey : undefined) !== publicKey) return false;
             const envelope = next.ownerMetadataEnvelope;
             // Identity comparison only: unknown extensions still take the canonical strict reader.
             return envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope)

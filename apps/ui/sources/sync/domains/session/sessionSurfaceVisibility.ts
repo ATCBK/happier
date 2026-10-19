@@ -29,8 +29,11 @@ type MutableSessionSurfaceVisibilityState = {
     focusedSessionId: string | null;
     focusedSessionAddress: SessionAddress | null;
     routeAnchorSessionId: string | null;
+    routeAnchorSessionAddress: SessionAddress | null;
     snapshot: SessionSurfaceVisibilitySnapshot;
     visibleSurfaces: readonly SessionAddress[];
+    visibleListRows: Map<string, { address: SessionAddress; count: number }>;
+    visibleListSurfaces: readonly SessionAddress[];
 };
 
 const sessionSurfaceVisibilityStateKey = '__HAPPIER_SESSION_SURFACE_VISIBILITY_STATE__';
@@ -48,7 +51,10 @@ function createSessionSurfaceVisibilityState(): MutableSessionSurfaceVisibilityS
         focusedSessionId: null,
         focusedSessionAddress: null,
         routeAnchorSessionId: null,
+        routeAnchorSessionAddress: null,
         visibleSurfaces: [],
+        visibleListRows: new Map(),
+        visibleListSurfaces: [],
         snapshot: {
             focusedSessionId: null,
             routeAnchorSessionId: null,
@@ -64,6 +70,8 @@ function getSessionSurfaceVisibilityState(): MutableSessionSurfaceVisibilityStat
     state.resetListeners ??= new Set<() => void>();
     state.resetVersion ??= 0;
     state.focusedSessionAddress ??= null;
+    state.visibleListRows ??= new Map();
+    state.visibleListSurfaces ??= [];
     return state;
 }
 
@@ -191,6 +199,60 @@ function refreshSnapshot(): void {
 /** Only exact, actually rendered Home-qualified surfaces; no focus/subscription inference. */
 export function getVisibleSessionSurfaces(): readonly SessionAddress[] {
     return sessionSurfaceVisibilityState.visibleSurfaces ?? [];
+}
+
+/** Visible list rows demand metadata hydration, never transcript consumption or human presence. */
+export function getVisibleSessionListSurfaces(): readonly SessionAddress[] {
+    return sessionSurfaceVisibilityState.visibleListSurfaces;
+}
+
+function refreshVisibleSessionListSurfaces(): void {
+    const next = Array.from(sessionSurfaceVisibilityState.visibleListRows.values(), value => value.address)
+        .sort((a, b) => a.serverId.localeCompare(b.serverId) || a.sessionId.localeCompare(b.sessionId));
+    const previous = sessionSurfaceVisibilityState.visibleListSurfaces;
+    if (next.length === previous.length && next.every((address, index) => (
+        address.serverId === previous[index].serverId && address.sessionId === previous[index].sessionId
+    ))) return;
+    sessionSurfaceVisibilityState.visibleListSurfaces = next;
+    emitChange();
+}
+
+/** Each mounted pane retains its own viewport; releasing one pane cannot hide another's rows. */
+export function retainVisibleSessionListSurfaces(addresses: readonly SessionAddress[]): () => void {
+    const keys = new Set<string>();
+    for (const address of addresses) {
+        const identity = resolveVisibleSessionIdentity(address.sessionId, address.serverId);
+        if (!identity.serverId || !identity.sessionId || !identity.sessionKey || keys.has(identity.sessionKey)) continue;
+        keys.add(identity.sessionKey);
+        const current = sessionSurfaceVisibilityState.visibleListRows.get(identity.sessionKey);
+        sessionSurfaceVisibilityState.visibleListRows.set(identity.sessionKey, {
+            address: current?.address ?? { serverId: identity.serverId, sessionId: identity.sessionId },
+            count: (current?.count ?? 0) + 1,
+        });
+    }
+    refreshVisibleSessionListSurfaces();
+    const resetVersion = sessionSurfaceVisibilityState.resetVersion;
+    let released = false;
+    return () => {
+        if (released) return;
+        released = true;
+        if (resetVersion !== sessionSurfaceVisibilityState.resetVersion) return;
+        for (const key of keys) {
+            const current = sessionSurfaceVisibilityState.visibleListRows.get(key);
+            if (!current || current.count <= 1) sessionSurfaceVisibilityState.visibleListRows.delete(key);
+            else sessionSurfaceVisibilityState.visibleListRows.set(key, { ...current, count: current.count - 1 });
+        }
+        refreshVisibleSessionListSurfaces();
+    };
+}
+
+export function isSessionListRowVisible(sessionId: string, serverId?: string | null): boolean {
+    const normalizedSessionId = normalizeNullableSessionId(sessionId);
+    if (!normalizedSessionId) return false;
+    const normalizedServerId = normalizeNullableServerId(serverId);
+    return getVisibleSessionListSurfaces().some(address => address.sessionId === normalizedSessionId && (
+        !normalizedServerId || areServerProfileIdentifiersEquivalent(address.serverId, normalizedServerId)
+    ));
 }
 
 export function getSessionSurfaceVisibilitySnapshot(): SessionSurfaceVisibilitySnapshot {
@@ -333,8 +395,12 @@ export function getFocusedSessionId(): string | null {
     return sessionSurfaceVisibilityState.focusedSessionId;
 }
 
-export function setRouteAnchorSessionId(sessionId: string | null): void {
-    sessionSurfaceVisibilityState.routeAnchorSessionId = normalizeNullableSessionId(sessionId);
+export function setRouteAnchorSessionId(sessionId: string | null, serverId?: string | null): void {
+    const identity = resolveVisibleSessionIdentity(sessionId, serverId);
+    sessionSurfaceVisibilityState.routeAnchorSessionId = identity.sessionId;
+    sessionSurfaceVisibilityState.routeAnchorSessionAddress = serverId !== null && identity.serverId && identity.sessionId
+        ? { serverId: identity.serverId, sessionId: identity.sessionId }
+        : null;
     refreshSnapshot();
     emitChange();
 }
@@ -344,6 +410,7 @@ export function clearRouteAnchorSessionId(sessionId: string): void {
     if (!normalizedSessionId) return;
     if (sessionSurfaceVisibilityState.routeAnchorSessionId === normalizedSessionId) {
         sessionSurfaceVisibilityState.routeAnchorSessionId = null;
+        sessionSurfaceVisibilityState.routeAnchorSessionAddress = null;
         refreshSnapshot();
         emitChange();
     }
@@ -351,6 +418,10 @@ export function clearRouteAnchorSessionId(sessionId: string): void {
 
 export function getRouteAnchorSessionId(): string | null {
     return sessionSurfaceVisibilityState.routeAnchorSessionId;
+}
+
+export function getRouteAnchorSessionAddress(): SessionAddress | null {
+    return sessionSurfaceVisibilityState.routeAnchorSessionAddress ?? null;
 }
 
 export function isSessionSurfaceVisible(sessionId: string, serverId?: string | null): boolean {
@@ -379,6 +450,7 @@ function clearSessionSurfaceVisibility(options: Readonly<{ notifyMountedSurfaces
     sessionSurfaceVisibilityState.focusedSessionId = null;
     sessionSurfaceVisibilityState.focusedSessionAddress = null;
     sessionSurfaceVisibilityState.routeAnchorSessionId = null;
+    sessionSurfaceVisibilityState.routeAnchorSessionAddress = null;
     refreshSnapshot();
     emitChange();
     if (options.notifyMountedSurfaces) {
@@ -388,6 +460,8 @@ function clearSessionSurfaceVisibility(options: Readonly<{ notifyMountedSurfaces
 }
 
 export function clearSessionSurfaceVisibilityForServerScopeReset(): void {
+    sessionSurfaceVisibilityState.visibleListRows.clear();
+    refreshVisibleSessionListSurfaces();
     clearSessionSurfaceVisibility({ notifyMountedSurfaces: true });
 }
 

@@ -11,7 +11,10 @@ import {
 } from '@happier-dev/protocol';
 
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
+import { AgentStateSchema } from '@happier-dev/session-core/state';
 import { createEmbedEncryption } from '@/embed/encryption/createEmbedEncryption';
+import { Encryption } from '@/sync/encryption/encryption';
+import { SessionEncryption } from '@/sync/encryption/sessionEncryption';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storage';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -99,6 +102,202 @@ function createDeferred<T>(): {
 }
 
 describe('fetchAndApplySessionById', () => {
+  it.each(['plain', 'e2ee'] as const)('hydrates a %s batch-supplied detail and turn response without issuing single reads', async mode => {
+    const request = vi.fn(async () => Response.json({ error: 'Session not found' }, { status: 404 }));
+    const secret = new Uint8Array(32).fill(4);
+    const encrypted = mode === 'e2ee' ? await Encryption.create(secret) : null;
+    encrypted?.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+    const key = sessionDataKey();
+    if (encrypted) await encrypted.initializeSessions(new Map([['batch-session', key]]));
+    const metadata = encrypted ? await encrypted.getSessionEncryption('batch-session')!.encryptRaw({ name: 'Batch' })
+      : JSON.stringify({ name: 'Batch' });
+    const dataEncryptionKey = encrypted ? encodeBase64(await encrypted.encryptEncryptionKey(key), 'base64') : null;
+    const params = {
+      sessionId: 'batch-session', credentials: encrypted ? { token: 't', secret: encodeBase64(secret, 'base64url') } : { token: 't' },
+      accountCurrentness: encrypted ? E2EE_ACCOUNT_CURRENTNESS : PLAIN_ACCOUNT_CURRENTNESS,
+      encryption: encrypted ?? PLAINTEXT_ACCOUNT_SESSION_ENCRYPTION, sessionDataKeys: new Map<string, Uint8Array>(),
+      request, applySessions: vi.fn(), log: { log() {} },
+      prefetched: {
+        detail: { status: 200, body: { session: {
+          id: 'batch-session', createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900,
+          encryptionMode: mode, dataEncryptionKey, metadataLayoutVersion: 0,
+          metadataVersion: 1, metadata, agentStateVersion: 1, agentState: null, share: null,
+        } } },
+        turns: { status: 200, body: { v: 1, sessionId: 'batch-session', updatedAt: 900, turns: [
+          { turnId: 'batch-turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 400, updatedAt: 900 },
+        ] } },
+      },
+    };
+    const result = await fetchAndApplySessionById(params);
+    expect(result).toMatchObject({ ok: true, session: { id: 'batch-session', metadata: { name: 'Batch' },
+      sessionTurns: { turns: [{ turnId: 'batch-turn', terminalAt: 400 }] } } });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('reads an encrypted list projection without opening a Session key or publishing a Session', async () => {
+    const secret = new Uint8Array(32).fill(4);
+    const encryption = await Encryption.create(secret);
+    encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+    const envelope = encodeBase64(await encryption.encryptEncryptionKey(sessionDataKey()), 'base64');
+    const decryptKey = vi.spyOn(encryption, 'decryptEncryptionKey');
+    const initialize = vi.spyOn(encryption, 'initializeSessions');
+    const applySessions = vi.fn();
+    const sessionDataKeys = new Map<string, Uint8Array>();
+    const sessionDataKeyEnvelopes = new Map<string, string>();
+    try {
+      const result = await fetchAndApplySessionById({
+        sessionId: 'projection-only', serverId: 'home-a', contentDemand: 'list-projection',
+        credentials: { token: 't', secret: encodeBase64(secret, 'base64url') },
+        encryption, sessionDataKeys, sessionDataKeyEnvelopes,
+        request: async () => Response.json({ session: {
+          id: 'projection-only', createdAt: 1, updatedAt: 2, seq: 2, active: true, activeAt: 2,
+          encryptionMode: 'e2ee', dataEncryptionKey: envelope, metadataLayoutVersion: 0,
+          metadataVersion: 1, metadata: 'metadata-not-demanded',
+          agentStateVersion: 1, agentState: 'agent-state-not-demanded', share: null,
+          pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 0,
+        } }), applySessions, log: { log: () => {} },
+      });
+      expect(result).toMatchObject({ ok: true, session: null,
+        sessionListRenderable: { id: 'projection-only', seq: 2, hasPendingPermissionRequests: true } });
+      expect(decryptKey).not.toHaveBeenCalled();
+      expect(initialize).not.toHaveBeenCalled();
+      expect(sessionDataKeys.size).toBe(0);
+      expect(sessionDataKeyEnvelopes.size).toBe(0);
+      expect(applySessions).not.toHaveBeenCalled();
+    } finally { decryptKey.mockRestore(); initialize.mockRestore(); }
+  });
+  describe('encryption-context reads', () => {
+    it('initializes the current Session key without opening metadata or publishing a Session', async () => {
+      const secret = new Uint8Array(32).fill(4);
+      const author = await Encryption.create(secret);
+      const encryption = await Encryption.create(secret);
+      encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+      const key = sessionDataKey();
+      await author.initializeSessions(new Map([['draft-session', key]]));
+      const payload = { draft: 'recovered without opening the Session' };
+      const ciphertext = await author.getSessionEncryption('draft-session')!.encryptRaw(payload);
+      const envelope = encodeBase64(await author.encryptEncryptionKey(key), 'base64');
+      const metadata = vi.spyOn(SessionEncryption.prototype, 'decryptMetadata');
+      const metadataPayload = vi.spyOn(SessionEncryption.prototype, 'decryptMetadataPayload');
+      const agentState = vi.spyOn(SessionEncryption.prototype, 'decryptAgentState');
+      const applySessions = vi.fn();
+      const sessionDataKeys = new Map<string, Uint8Array>();
+      const sessionDataKeyEnvelopes = new Map<string, string>();
+      const params: Parameters<typeof fetchAndApplySessionById>[0] & { contentDemand: 'encryption-context' } = {
+        sessionId: 'draft-session', serverId: 'home-a', contentDemand: 'encryption-context',
+        credentials: { token: 't', secret: encodeBase64(secret, 'base64url') },
+        encryption, sessionDataKeys, sessionDataKeyEnvelopes,
+        request: async () => Response.json({ session: {
+          id: 'draft-session', createdAt: 1, updatedAt: 1, seq: 0, active: false, activeAt: 0,
+          encryptionMode: 'e2ee', dataEncryptionKey: envelope, metadataLayoutVersion: 0,
+          metadataVersion: 1, metadata: 'metadata-not-demanded',
+          agentStateVersion: 1, agentState: 'agent-state-not-demanded', share: null,
+        } }),
+        applySessions, log: { log: () => {} },
+      };
+      try {
+        const result = await fetchAndApplySessionById(params);
+        expect(result).toMatchObject({ ok: true, encryptionMode: 'e2ee', session: null });
+        expect(sessionDataKeys.get('draft-session')).toEqual(key);
+        expect(sessionDataKeyEnvelopes.get('draft-session')).toBe(envelope);
+        await expect(encryption.getSessionEncryption('draft-session')!.decryptRaw(ciphertext)).resolves.toEqual(payload);
+        expect(metadata).not.toHaveBeenCalled();
+        expect(metadataPayload).not.toHaveBeenCalled();
+        expect(agentState).not.toHaveBeenCalled();
+        expect(applySessions).not.toHaveBeenCalled();
+      } finally {
+        metadata.mockRestore(); metadataPayload.mockRestore(); agentState.mockRestore();
+      }
+    });
+
+    it('returns a keyless plain context without parsing Session content', async () => {
+      const applySessions = vi.fn();
+      const params: Parameters<typeof fetchAndApplySessionById>[0] & { contentDemand: 'encryption-context' } = {
+        sessionId: 'plain-draft', contentDemand: 'encryption-context', credentials: { token: 't' },
+        accountCurrentness: PLAIN_ACCOUNT_CURRENTNESS,
+        encryption: PLAINTEXT_ACCOUNT_SESSION_ENCRYPTION, sessionDataKeys: new Map(),
+        request: async () => Response.json({ session: {
+          id: 'plain-draft', createdAt: 1, updatedAt: 1, seq: 0, active: false, activeAt: 0,
+          encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
+          metadataVersion: 1, metadata: 'not-json', agentStateVersion: 1, agentState: 'not-json', share: null,
+        } }),
+        applySessions, log: { log: () => {} },
+      };
+      await expect(fetchAndApplySessionById(params)).resolves.toMatchObject({ ok: true, encryptionMode: 'plain', session: null });
+      expect(applySessions).not.toHaveBeenCalled();
+    });
+
+    it.each(['missing', 'invalid'] as const)('refuses a %s Session key without publishing a locked shell', async kind => {
+      const encryption = await Encryption.create(new Uint8Array(32).fill(4));
+      encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+      const applySessions = vi.fn();
+      const params: Parameters<typeof fetchAndApplySessionById>[0] & { contentDemand: 'encryption-context' } = {
+        sessionId: 'locked-draft', contentDemand: 'encryption-context', credentials: { token: 't' },
+        encryption, sessionDataKeys: new Map(),
+        accountCurrentness: { ...E2EE_ACCOUNT_CURRENTNESS, recipientEnvelopeReadiness: { status: 'available' } },
+        request: async () => Response.json({ session: {
+          id: 'locked-draft', createdAt: 1, updatedAt: 1, seq: 0, active: false, activeAt: 0,
+          encryptionMode: 'e2ee', dataEncryptionKey: kind === 'missing' ? null : 'invalid-envelope',
+          metadataLayoutVersion: 0, metadataVersion: 1, metadata: 'metadata-not-demanded',
+          agentStateVersion: 0, agentState: null, share: { accessLevel: 'view', canApprovePermissions: false },
+        } }),
+        applySessions, log: { log: () => {} },
+      };
+      await expect(fetchAndApplySessionById(params)).resolves.toMatchObject({
+        ok: false, session: null, errorCode: kind === 'missing' ? 'session_key_unavailable' : 'session_key_invalid',
+      });
+      expect(encryption.getSessionEncryption('locked-draft')).toBeNull();
+      expect(applySessions).not.toHaveBeenCalled();
+    });
+
+    it.each(['authority', 'key-rotation'] as const)('keeps an encryption-context read fenced when %s retires during key opening', async retirement => {
+      const secret = new Uint8Array(32).fill(4);
+      const encryption = await Encryption.create(secret);
+      const envelope = encodeBase64(await encryption.encryptEncryptionKey(sessionDataKey()), 'base64');
+      const started = createDeferred<void>();
+      const release = createDeferred<void>();
+      encryption.configureNativeCryptoWorker({
+        worker: {
+          async probe() { return { available: true, failureReason: 0, nativeVersion: 1 }; },
+          async decryptDataKeyEnvelopeV1(request) {
+            started.resolve();
+            await release.promise;
+            return { status: 'ok', source: 'native', items: request.items.map(() => encodeBase64(sessionDataKey(), 'base64')) };
+          },
+          async decryptSecretboxJson() { throw new Error('Session content was not demanded'); },
+          async decryptAesGcmJson() { throw new Error('Session content was not demanded'); },
+        },
+        routing: { mode: 'require', minPayloadBytes: 0 },
+        scope: { accountId: 'draft-account', serverId: 'home-a', generation: 0 },
+      });
+      await encryption.initializeSessions(new Map([['draft-session', new Uint8Array(32).fill(9)]]), { serverId: 'home-a' });
+      let current = true;
+      const applySessions = vi.fn();
+      const sessionDataKeys = new Map<string, Uint8Array>();
+      const params: Parameters<typeof fetchAndApplySessionById>[0] & { contentDemand: 'encryption-context' } = {
+        sessionId: 'draft-session', serverId: 'home-a', contentDemand: 'encryption-context',
+        credentials: { token: 't', secret: encodeBase64(secret, 'base64url') }, encryption,
+        sessionDataKeys, isCurrent: () => current,
+        request: async () => Response.json({ session: {
+          id: 'draft-session', createdAt: 1, updatedAt: 1, seq: 0, active: false, activeAt: 0,
+          encryptionMode: 'e2ee', dataEncryptionKey: envelope, metadataLayoutVersion: 0,
+          metadataVersion: 1, metadata: 'metadata-not-demanded', agentStateVersion: 0, agentState: null, share: null,
+        } }),
+        applySessions, log: { log: () => {} },
+      };
+      const read = fetchAndApplySessionById(params);
+      try {
+        await started.promise;
+        if (retirement === 'authority') current = false;
+        else await encryption.initializeSessions(new Map([['draft-session', new Uint8Array(32).fill(8)]]), { serverId: 'home-a' });
+        release.resolve();
+        await expect(read).resolves.toMatchObject({ ok: false, session: null, errorCode: 'stale_response' });
+        expect(sessionDataKeys.has('draft-session')).toBe(false);
+        expect(applySessions).not.toHaveBeenCalled();
+      } finally { release.resolve(); await read; }
+    });
+  });
+
   it.each([undefined, 0])('leaves an unbounded Session read to its transport when timeoutMs is %s', async (timeoutMs) => {
     vi.useFakeTimers();
     try {
@@ -535,12 +734,12 @@ describe('fetchAndApplySessionById', () => {
     });
     const ownerMetadataEnvelope =
       createPlainSessionOwnerMetadataEnvelopeV1(ownerMetadata);
-    const fullAgentState = {
+    const fullAgentState = AgentStateSchema.parse({
       controlledByUser: false,
       requests: {
-        privateRequest: { tool: 'dangerous-private-detail' },
+        privateRequest: { tool: 'dangerous-private-detail', arguments: {} },
       },
-    };
+    });
     const applySessions = vi.fn();
     const request = vi.fn(async (path: string) => {
       if (path === '/v1/sessions/s_owner/turns') {
@@ -616,6 +815,62 @@ describe('fetchAndApplySessionById', () => {
       },
     });
     expect(JSON.stringify(hydrated.metadata)).not.toContain('/private/worktree');
+  });
+
+  it('settles a negotiated layout-v1 owner row without its required owner envelope as an unavailable shell', async () => {
+    const applySessions = vi.fn();
+
+    const result = await fetchAndApplySessionById({
+      sessionId: 's_owner_missing_envelope',
+      credentials: OWNER_TEST_CREDENTIALS,
+      encryption: {
+        decryptEncryptionKey: async () => sessionDataKey(),
+        initializeSessions: async () => {},
+        getSessionEncryption: () => ({
+          decryptMetadata: async () => null,
+          decryptMetadataPayload: async () => null,
+          decryptAgentState: async () => null,
+        }),
+      },
+      sessionDataKeys: new Map<string, Uint8Array>(),
+      request: vi.fn(async (path: string) => {
+        expect(path).toBe('/v2/sessions/s_owner_missing_envelope?accessProjectionVersion=1');
+        return Response.json({ session: {
+          id: 's_owner_missing_envelope', createdAt: 1, updatedAt: 2, seq: 3,
+          active: false, activeAt: 2, encryptionMode: 'e2ee', dataEncryptionKey: 'dek',
+          metadataLayoutVersion: 1, metadataVersion: 4, metadata: 'encrypted-shared-metadata',
+          ownerMetadata: null, agentStateVersion: 5,
+          agentState: 'encrypted-agent-state', share: null,
+          responsibleAccountId: null, responsibleAccount: null,
+          effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+            capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }) },
+        } });
+      }),
+      applySessions,
+      log: { log: () => {} },
+      accessProjectionVersion: 1,
+      includeTurnsProjection: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      session: {
+        id: 's_owner_missing_envelope',
+        metadata: null,
+        ownerMetadataView: null,
+        agentState: null,
+        encryptedContentAvailability: 'encrypted_content_unavailable',
+      },
+    });
+    expect(applySessions).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: 's_owner_missing_envelope',
+        metadata: null,
+        ownerMetadataView: null,
+        agentState: null,
+        encryptedContentAvailability: 'encrypted_content_unavailable',
+      }),
+    ]);
   });
 
   it.each(['view', 'edit', 'admin'] as const)(

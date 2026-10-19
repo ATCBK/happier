@@ -8,6 +8,7 @@ import {
 import { Encryption } from '@/sync/encryption/encryption';
 import { RawRecordSchema, type RawRecord } from "@happier-dev/session-core/raw";
 import { HappierStructuredInputV1Schema, RawIngressStructuredInputV1Schema, readAdmittedHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/runtime/input/structuredInputV1';
+import { resolvePendingActivationBanner } from '@/components/sessions/pending/resolvePendingActivationBanner';
 
 import {
     fetchAndApplyPendingMessagesV2 as fetchAndApplyPendingMessagesV2Impl,
@@ -32,6 +33,90 @@ const fetchAndApplyPendingMessagesV2 = (
 describe('pendingQueueV2 decrypt mapping', () => {
     beforeEach(async () => {
         await resetPendingQueueState();
+    });
+
+    it('carries only a valid held exchange root through the real pending refresh and clears it when released', async () => {
+        const sessionId = 'held-check-in';
+        const encryption = await createPendingQueueEncryption({ sessionId });
+        const content = { t: 'encrypted', c: await encryptRawRecordForPending({ encryption, sessionId,
+            rawRecord: { role: 'user', content: { type: 'text', text: 'held continuation' } } }) };
+        const root = { sessionId: 'original-session', localId: 'original-input' };
+        const row = { localId: 'held-input', messageRole: 'user', requestedAction: { v: 1, kind: 'enqueue' },
+            content, status: 'queued', position: 0, createdAt: 1, updatedAt: 1 };
+        const refresh = (autonomousExchangeRoot: unknown, held = true) => fetchAndApplyPendingMessagesV2({ sessionId, encryption,
+            request: async () => Response.json({ pending: [{ ...row, autonomousExchangeRoot,
+                ...(held ? { deliveryState: 'blocked', deliveryBlockedReason: 'autonomous_check_in' } : {}) }] }) });
+        await refresh(root);
+        expect(storage.getState().sessionPending[sessionId]?.messages[0]).toMatchObject({
+            pendingDeliveryBlockedReason: 'autonomous_check_in', pendingAutonomousExchangeRoot: root,
+        });
+        await refresh({ ...root, localId: '' });
+        expect(storage.getState().sessionPending[sessionId]?.messages[0]).not.toHaveProperty('pendingAutonomousExchangeRoot');
+        await refresh(root, false);
+        expect(storage.getState().sessionPending[sessionId]?.messages[0]).not.toHaveProperty('pendingAutonomousExchangeRoot');
+    });
+
+    it('keeps an unopened encrypted row loading until its Session reader arrives, then distinguishes a genuine decrypt failure', async () => {
+        const sessionId = 'reader-loading';
+        const encryption = await createPendingQueueEncryption({ sessionId });
+        const content = { t: 'encrypted', c: await encryptRawRecordForPending({ encryption, sessionId,
+            rawRecord: { role: 'user', content: { type: 'text', text: 'original queued input' } } }) };
+        const request = async () => Response.json({ pending: [{ localId: 'original', messageRole: 'user',
+            content, status: 'queued', position: 0, createdAt: 1, updatedAt: 1 }] });
+        await fetchAndApplyPendingMessagesV2({ sessionId, encryption: null, request });
+        expect(storage.getState().sessionPending[sessionId]?.messages).toMatchObject([
+            { localId: 'original', pendingDecryption: { kind: 'loading' }, pendingDeliveryStatus: 'server_queued' },
+        ]);
+        expect(storage.getState().sessionPending[sessionId]?.messages[0]).not.toHaveProperty('pendingDecryptFailure');
+        await fetchAndApplyPendingMessagesV2({ sessionId, encryption, request });
+        expect(storage.getState().sessionPending[sessionId]?.messages[0]).toMatchObject({ text: 'original queued input' });
+        expect(storage.getState().sessionPending[sessionId]?.messages[0]).not.toHaveProperty('pendingDecryption');
+        await fetchAndApplyPendingMessagesV2({ sessionId, encryption: null, request });
+        expect(storage.getState().sessionPending[sessionId]?.messages[0]).toMatchObject({ text: 'original queued input' });
+        await fetchAndApplyPendingMessagesV2({ sessionId, encryption,
+            request: async () => Response.json({ pending: [{ localId: 'bad', content: { t: 'encrypted', c: 'invalid' },
+                status: 'queued', position: 0, createdAt: 1, updatedAt: 1 }] }) });
+        expect(storage.getState().sessionPending[sessionId]?.messages[0]).toMatchObject({ pendingDecryptFailure: { kind: 'decrypt_failed' } });
+    });
+
+    it.each(['managed_power_required', 'resume_not_requested'] as const)('carries the canonical %s hold through queue refresh into its recovery presentation', async reason => {
+        const sessionId = 'stopped-managed';
+        const encryption = await createPendingQueueEncryption({ sessionId });
+        const content = { t: 'encrypted', c: await encryptRawRecordForPending({ encryption, sessionId,
+            rawRecord: { role: 'user', content: { type: 'text', text: 'accepted input' } } }) };
+        const row = { localId: 'held-input', messageRole: 'user', requestedAction: { v: 1, kind: 'enqueue' },
+            content, status: 'queued', deliveryStatus: { status: 'queued' }, position: 0, createdAt: 1, updatedAt: 1 };
+        let holdReason: string | undefined = reason;
+        const refresh = () => fetchAndApplyPendingMessagesV2({ sessionId, encryption,
+            request: async () => Response.json({ pending: [{ ...row, ...(holdReason ? { activationHoldReason: holdReason } : {}) }] }) });
+        await refresh();
+        const pendingMessages = storage.getState().sessionPending[sessionId]?.messages ?? [];
+        expect(pendingMessages).toMatchObject([{ localId: 'held-input', pendingDeliveryStatus: 'server_queued',
+            pendingActivationHoldReason: reason }]);
+        expect(resolvePendingActivationBanner({ authorization: null, activeAt: 0, active: false,
+            machineReachable: false, canWrite: true, pendingMessages })).toMatchObject({
+            kind: 'queued_offline', holdReason: reason,
+            primaryAction: reason === 'managed_power_required' ? null : 'process_when_online',
+        });
+        expect(resolvePendingActivationBanner({ authorization: null, activeAt: 0, active: false,
+            machineReachable: true, canWrite: true, pendingMessages })).toMatchObject({ kind: 'queued', primaryAction: 'resume' });
+        const unknown = { kind: 'unknown' as const, inputCustody: 'queued' as const,
+            canWithdraw: true, canRetryAgentStart: false, canRequestWake: false, canResumeRuntime: false };
+        expect(resolvePendingActivationBanner({ authorization: null, activeAt: 0, active: false,
+            machineReachable: false, canWrite: true, pendingMessages, managedWakeProjection: unknown }))
+            .toMatchObject({ holdReason: reason });
+        expect(resolvePendingActivationBanner({ authorization: null, activeAt: 0, active: false,
+            machineReachable: false, canWrite: true, pendingMessages, managedWakeProjection: { ...unknown, kind: 'starting' } }))
+            .toMatchObject({ managedWakeProjection: { kind: 'starting' } });
+        expect(resolvePendingActivationBanner({ authorization: null, activeAt: 0, active: false,
+            machineReachable: false, canWrite: true,
+            pendingMessages: pendingMessages.map(message => ({ ...message, pendingDeliveryStatus: 'server_delivering' as const })) })).toBeNull();
+        holdReason = undefined;
+        await refresh();
+        expect(storage.getState().sessionPending[sessionId]?.messages[0]).not.toHaveProperty('pendingActivationHoldReason');
+        holdReason = 'newer_unknown_diagnostic';
+        await refresh();
+        expect(storage.getState().sessionPending[sessionId]?.messages[0]).not.toHaveProperty('pendingActivationHoldReason');
     });
 
     it('retains decrypted rows that cannot be coerced to a RawRecord user-text message as explicit failures', async () => {
@@ -502,7 +587,7 @@ describe('pendingQueueV2 decrypt mapping', () => {
         expect(pendingState?.discarded).toEqual([]);
     });
 
-    it('retains encrypted pending rows as decrypt failures when session encryption is unavailable', async () => {
+    it('retains encrypted pending rows as loading when session encryption is unavailable', async () => {
         const sessionId = 's_missing_session_encryption';
         const encryption = await Encryption.create(new Uint8Array(32).fill(7));
 
@@ -529,7 +614,8 @@ describe('pendingQueueV2 decrypt mapping', () => {
 
         const pendingState = storage.getState().sessionPending[sessionId];
         expect(pendingState?.messages.map((message) => message.localId)).toEqual(['queued-missing-key']);
-        expect(pendingState?.messages[0]).toMatchObject({ pendingDecryptFailure: { kind: 'decrypt_failed' } });
+        expect(pendingState?.messages[0]).toMatchObject({ pendingDecryption: { kind: 'loading' } });
+        expect(pendingState?.messages[0]).not.toHaveProperty('pendingDecryptFailure');
     });
 
     it('treats a same-ID server row with malformed content as persisted and retires enqueue custody into an explicit failure', async () => {

@@ -55,6 +55,7 @@ function resolveReadableActivityForReadState(session: SessionReadStateInput) {
     return summarizeSessionListReadableActivityFromMessageRecords(
         sessionMessages.messageIdsOldestFirst,
         sessionMessages.messagesById,
+        sessionMessages.renderableAggregate,
     );
 }
 

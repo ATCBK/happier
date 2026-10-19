@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
+
+installDisconnectedServerSocketBoundary();
+const accountConnections: Array<Awaited<ReturnType<typeof restoreServerAccountForTest>>> = [];
+await loadSyncSingletonForTests();
+const scopedRecordKeyPrefix = `${scopedStorageId('pending-terminal-connect-record:v2', readStorageScopeFromEnv())}:`;
+const isScopedRecordKey = (key: string) => key.startsWith(scopedRecordKeyPrefix);
 
 type StorageLike = {
     readonly length: number;
@@ -31,30 +39,23 @@ function createLocalStorage(options: Readonly<{
     };
 }
 
-async function importFreshWeb() {
-    vi.resetModules();
+let ownerReload = 0;
+async function importFreshWeb(options: Readonly<{ restart?: boolean }> = {}) {
+    if (options.restart) {
+        // Reload this persistence owner while keeping the real Account/Sync
+        // graph alive, as another tab or a reopened owner would.
+        return await vi.importActual<typeof import('./pendingTerminalConnect.web')>(
+            `./pendingTerminalConnect.web?owner-reload=${++ownerReload}`,
+        );
+    }
     return await import('./pendingTerminalConnect.web');
 }
 
 async function activateServerAccount(serverUrl: string, accountId: string) {
-    await loadSyncSingletonForTests();
-    const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
-    const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
-    const { storage } = await import('@/sync/domains/state/storage');
-    const { switchConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
-
-    const server = await upsertAndActivateServer({
-        serverUrl,
-        source: 'manual',
-        scope: 'device',
-        replaceEquivalentStoredUrl: true,
-    });
-    const scope = createServerAccountScope(server.id, accountId);
-    expect(scope).not.toBeNull();
-    if (!scope) throw new Error('Expected Account scope');
-    await switchConnectionToActiveServer();
-    storage.getState().activateProfileScope(scope);
-    await storage.getState().activateSettingsScope(scope);
+    const connection = await restoreServerAccountForTest({ serverUrl, accountId });
+    accountConnections.push(connection);
+    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    expect(getActiveServerAccountScope()).toEqual({ serverId: connection.serverId, accountId });
 }
 
 describe('pendingTerminalConnect.web', () => {
@@ -64,8 +65,9 @@ describe('pendingTerminalConnect.web', () => {
     });
 
     afterEach(async () => {
-        const { clearPendingTerminalConnect } = await importFreshWeb();
+        const { clearPendingTerminalConnect } = await import('./pendingTerminalConnect.web');
         clearPendingTerminalConnect();
+        for (const connection of accountConnections.splice(0).reverse()) await connection.dispose();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
@@ -151,7 +153,7 @@ describe('pendingTerminalConnect.web', () => {
     });
 
     it('keeps a failed promotion claimed to its first account across a module reload', async () => {
-        vi.stubGlobal('localStorage', createLocalStorage({ failSet: (key) => key.includes(':v2:') }));
+        vi.stubGlobal('localStorage', createLocalStorage({ failSet: isScopedRecordKey }));
         const first = await importFreshWeb();
         first.setPendingTerminalConnect({
             publicKeyB64Url: 'claimed-key',
@@ -163,12 +165,12 @@ describe('pendingTerminalConnect.web', () => {
 
         await activateServerAccount('https://claimed.example.test', 'account-b');
         first.retargetPendingTerminalConnectToServerUrl('https://claimed.example.test');
-        const reloaded = await importFreshWeb();
+        const reloaded = await importFreshWeb({ restart: true });
         expect(reloaded.getPendingTerminalConnect()).toBeNull();
     });
 
     it('invalidates an unclaimed persisted capture when persisting its account claim fails', async () => {
-        vi.stubGlobal('localStorage', createLocalStorage({ failSet: (key) => key.includes(':v2:') }));
+        vi.stubGlobal('localStorage', createLocalStorage({ failSet: isScopedRecordKey }));
         vi.stubGlobal('sessionStorage', createLocalStorage({
             failSet: (_key, value) => value.includes('claimedScope'),
         }));
@@ -181,7 +183,7 @@ describe('pendingTerminalConnect.web', () => {
         await activateServerAccount('https://claim-write-failed.example.test', 'account-a');
         expect(first.getPendingTerminalConnect()).toMatchObject({ publicKeyB64Url: 'claim-write-failed-key' });
 
-        const reloaded = await importFreshWeb();
+        const reloaded = await importFreshWeb({ restart: true });
         await activateServerAccount('https://claim-write-failed.example.test', 'account-b');
         expect(reloaded.getPendingTerminalConnect()).toBeNull();
     });
@@ -209,7 +211,7 @@ describe('pendingTerminalConnect.web', () => {
         const firstTabSessionStorage = createLocalStorage();
         let failScopedWrites = true;
         const sharedLocalStorage = createLocalStorage({
-            failSet: (key) => failScopedWrites && key.includes(':v2:'),
+            failSet: (key) => failScopedWrites && isScopedRecordKey(key),
         });
         vi.stubGlobal('sessionStorage', firstTabSessionStorage);
         vi.stubGlobal('localStorage', sharedLocalStorage);
@@ -225,7 +227,7 @@ describe('pendingTerminalConnect.web', () => {
         vi.spyOn(Date, 'now').mockReturnValue(now + 1_000);
         failScopedWrites = false;
         vi.stubGlobal('sessionStorage', createLocalStorage());
-        const secondTab = await importFreshWeb();
+        const secondTab = await importFreshWeb({ restart: true });
         await activateServerAccount('https://freshness.example.test', 'account-a');
         secondTab.setPendingTerminalConnect({
             publicKeyB64Url: 'newer-scoped-key',
@@ -269,7 +271,7 @@ describe('pendingTerminalConnect.web', () => {
         });
         first.clearPendingTerminalConnect();
 
-        const reloaded = await importFreshWeb();
+        const reloaded = await importFreshWeb({ restart: true });
         expect(reloaded.getPendingTerminalConnect()).toBeNull();
     });
 
@@ -283,12 +285,12 @@ describe('pendingTerminalConnect.web', () => {
         });
         first.clearPendingTerminalConnect();
 
-        const reloaded = await importFreshWeb();
+        const reloaded = await importFreshWeb({ restart: true });
         expect(reloaded.getPendingTerminalConnect()).toBeNull();
     });
 
     it('tombstones an account-scoped approval when deletion fails', async () => {
-        vi.stubGlobal('localStorage', createLocalStorage({ failRemove: (key) => key.includes(':v2:') }));
+        vi.stubGlobal('localStorage', createLocalStorage({ failRemove: isScopedRecordKey }));
         const first = await importFreshWeb();
         await activateServerAccount('https://scoped-clear.example.test', 'account-a');
         first.setPendingTerminalConnect({
@@ -298,7 +300,7 @@ describe('pendingTerminalConnect.web', () => {
         });
         first.clearPendingTerminalConnect();
 
-        const reloaded = await importFreshWeb();
+        const reloaded = await importFreshWeb({ restart: true });
         expect(reloaded.getPendingTerminalConnect()).toBeNull();
     });
 

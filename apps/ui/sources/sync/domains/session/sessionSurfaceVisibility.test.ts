@@ -24,10 +24,13 @@ import {
     getFocusedSessionAddress,
     getSessionSurfaceVisibilitySnapshot,
     getVisibleSessionSurfaces,
+    getVisibleSessionListSurfaces,
+    isSessionListRowVisible,
     isSessionSurfaceVisible,
     markSessionSurfaceHidden,
     markSessionSurfaceVisible,
     resetSessionSurfaceVisibilityForTests,
+    retainVisibleSessionListSurfaces,
     setFocusedSessionId,
     setRouteAnchorSessionId,
 } from './sessionSurfaceVisibility';
@@ -35,6 +38,46 @@ import {
 describe('sessionSurfaceVisibility', () => {
     beforeEach(() => {
         resetSessionSurfaceVisibilityForTests();
+    });
+
+    it('retains exact list-row demand across panes without consuming transcripts', () => {
+        const releaseA = retainVisibleSessionListSurfaces([
+            { serverId: 'home-a', sessionId: 'same' },
+            { serverId: 'home-a', sessionId: 'same' },
+        ]);
+        const releaseB = retainVisibleSessionListSurfaces([
+            { serverId: 'home-a', sessionId: 'same' },
+            { serverId: 'home-b', sessionId: 'same' },
+        ]);
+        expect(getVisibleSessionListSurfaces()).toEqual([
+            { serverId: 'home-a', sessionId: 'same' },
+            { serverId: 'home-b', sessionId: 'same' },
+        ]);
+        expect(isSessionListRowVisible('same', 'home-a')).toBe(true);
+        expect(isSessionListRowVisible('same', 'home-c')).toBe(false);
+        expect(isSessionListRowVisible('same')).toBe(true);
+        expect(isSessionSurfaceVisible('same', 'home-a')).toBe(false);
+        expect(getVisibleSessionSurfaces()).toEqual([]);
+
+        const both = getVisibleSessionListSurfaces();
+        releaseA();
+        releaseA();
+        expect(getVisibleSessionListSurfaces()).toBe(both);
+        releaseB();
+        expect(getVisibleSessionListSurfaces()).toEqual([]);
+        expect(isSessionListRowVisible('same', 'home-a')).toBe(false);
+    });
+
+    it('resets retained list demand without allowing an old pane release to remove new demand', () => {
+        const releaseOld = retainVisibleSessionListSurfaces([{ serverId: 'server-profile', sessionId: 'same' }]);
+        expect(isSessionListRowVisible('same', 'server-alias')).toBe(true);
+        resetSessionSurfaceVisibilityForTests();
+        expect(getVisibleSessionListSurfaces()).toEqual([]);
+        const releaseNew = retainVisibleSessionListSurfaces([{ serverId: 'server-actual', sessionId: 'same' }]);
+        releaseOld();
+        expect(isSessionListRowVisible('same', 'server-actual')).toBe(true);
+        releaseNew();
+        expect(getVisibleSessionListSurfaces()).toEqual([]);
     });
 
     it('projects qualified, reference-counted surfaces without merging Homes', () => {

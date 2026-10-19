@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { SessionInputMachineTargetV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { pendingDeliveryStatusV1ToPersistedFields } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
 import { createLightSqliteHarness, type LightSqliteHarness } from '../../../../../server/sources/testkit/lightSqliteHarness';
 import { createAuthenticatedTestApp } from '../../../../../server/sources/app/api/testkit/sqliteFastify';
@@ -15,7 +16,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { getPendingMessageVisualState } from '@/components/sessions/pending/pendingMessageVisualState';
-import { enqueuePendingMessageV2, fetchAndApplyPendingMessagesV2 } from './pendingQueueV2';
+import { enqueuePendingMessageV2, fetchAndApplyPendingMessagesV2, markPendingDeliveryHandledV2 } from './pendingQueueV2';
 import { loadPendingOutboxForSession } from '@/sync/domains/state/pendingOutboxPersistence';
 
 let database: LightSqliteHarness;
@@ -79,7 +80,25 @@ it('projects real pending receipts and retains external enqueue custody until ac
         expect(stale.status).toBe(409);
         expect(await stale.json()).toEqual({ error: 'action-conflict' });
 
+        // A transcript carrier can outlive its main runner's Machine tuple.
+        // Browser-owned Voice reserves custody here before it starts its own
+        // provider/run; this is not an input for the retired main runner.
+        const retiredTarget = SessionInputMachineTargetV1Schema.parse({
+            homeId: 'srv_retired_home', accountId: owner.id, sessionId: session.id,
+            machineId: 'machine-1', installationId: 'retired-installation',
+        });
+        await db.session.update({ where: { id: session.id }, data: { runtimeMachineTarget: retiredTarget } });
+        storage.getState().applySessions([createSessionFixture({ id: session.id, serverId: home.id,
+            encryptionMode: 'plain', active: false })]);
+        const ordinary = await request(`/v2/sessions/${session.id}/pending`, { method: 'POST',
+            body: JSON.stringify({ localId: randomUUID(), messageRole: 'user',
+                content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'main input' }, meta: {} } },
+                requestedAction: { v: 1, kind: 'send_now' } }) });
+        expect(ordinary.status).toBe(404);
+        expect(await ordinary.json()).toMatchObject({ code: 'session_input_target_unavailable' });
+
         const handoffLocalId = randomUUID();
+        let handoffBody: unknown;
         let outboxAtSnapshot: Awaited<ReturnType<typeof loadPendingOutboxForSession>> = [];
         const handoff = await enqueuePendingMessageV2({
             sessionId: session.id, localId: handoffLocalId, text: 'external input', encryption: null,
@@ -87,6 +106,7 @@ it('projects real pending receipts and retains external enqueue custody until ac
             deliveryMode: 'external_handoff', requestedAction: { v: 1, kind: 'send_now' },
             metaOverrides: { claudeRemoteMaxThinkingTokens: 4096 },
             request: async (path, init) => {
+                handoffBody = JSON.parse(String(init?.body));
                 // The actual registered POST commits to SQLite before its ACK
                 // reaches the client. A real GET then exposes that reservation.
                 const acknowledgement = await request(path, init);
@@ -97,6 +117,7 @@ it('projects real pending receipts and retains external enqueue custody until ac
         });
         expect(outboxAtSnapshot).toEqual([expect.objectContaining({ localId: handoffLocalId, operation: 'enqueue' })]);
         expect(handoff).toMatchObject({ accepted: true, externalHandoffClaimed: true });
+        expect(handoffBody).not.toHaveProperty('targetMachineId');
         expect(handoff.settled).toBeUndefined();
         expect(await loadPendingOutboxForSession(session.id, account.accountLifetime.scope)).toEqual([]);
         expect(storage.getState().sessionPending[session.id]?.messages).toContainEqual(
@@ -106,9 +127,34 @@ it('projects real pending receipts and retains external enqueue custody until ac
             where: { sessionId_localId: { sessionId: session.id, localId: handoffLocalId } },
         });
         expect(reserved.deliveryState).toBe('external_handoff');
+        expect(reserved.inputAdmissionReceipt).not.toHaveProperty('admittedTarget');
         expect(reserved.content).toMatchObject({
             t: 'plain', v: { meta: { claudeRemoteMaxThinkingTokens: 4096 } },
         });
+        await markPendingDeliveryHandledV2({ sessionId: session.id, pendingId: handoffLocalId,
+            encryption: null, request, outboxScope: account.accountLifetime.scope });
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id, localId: handoffLocalId } })).toBe(0);
+        expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId: handoffLocalId } })).toBe(1);
+
+        // Existing clients may still send their old inferred Machine field.
+        // It cannot turn caller-owned custody back into main-runner input.
+        const legacyLocalId = randomUUID();
+        const legacyBody = { localId: legacyLocalId, messageRole: 'user', targetMachineId: retiredTarget.machineId,
+            deliveryMode: 'external_handoff', requestedAction: { v: 1, kind: 'send_now' },
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'legacy handoff' }, meta: {} } } };
+        const legacy = await request(`/v2/sessions/${session.id}/pending`, { method: 'POST', body: JSON.stringify(legacyBody) });
+        expect(legacy.status).toBe(200);
+        expect(await legacy.json()).toMatchObject({ pending: { localId: legacyLocalId, deliveryStatus: { status: 'external_handoff' } } });
+        const stranger = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const forbidden = await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/pending`,
+            headers: { 'x-test-user-id': stranger.id, 'x-happier-account-stored-content-protocol': '4' },
+            payload: { ...legacyBody, localId: randomUUID() } });
+        expect(forbidden.statusCode).toBe(404);
+        await db.session.update({ where: { id: session.id }, data: { archivedAt: new Date() } });
+        const archived = await request(`/v2/sessions/${session.id}/pending`, { method: 'POST',
+            body: JSON.stringify({ ...legacyBody, localId: randomUUID() }) });
+        expect(archived.status).toBe(400);
+        expect(await archived.json()).toMatchObject({ code: 'session_input_archived' });
     } finally {
         account.dispose();
         await homes.dispose();

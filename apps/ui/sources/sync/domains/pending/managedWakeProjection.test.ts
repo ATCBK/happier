@@ -4,6 +4,7 @@ import { deriveManagedWakeProjection, type ManagedWakeProjectionInput } from './
 const controller = { machineId: 'controller-a', installationId: 'installation-a' };
 const resource: NonNullable<ManagedWakeProjectionInput['managed']> = {
     id: 'managed-a', homeId: 'home-a', creationState: 'active', enrolledMachineId: 'guest-a', allocation: 'bound', controller,
+    wakeOnAcceptedMessage: true,
     observation: { observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained', daemon: 'disconnected' },
 };
 const input: ManagedWakeProjectionInput = {
@@ -14,6 +15,18 @@ const input: ManagedWakeProjectionInput = {
 };
 
 describe('managed wake observed projection', () => {
+    it('distinguishes unread inputs from completed reads with unknown facts and settled failure', () => {
+        const failed = { status: 'failed' as const, requestId: 'request-a', requestedAt: 10, failureCode: 'runtime_start_failed' as const };
+        expect(deriveManagedWakeProjection({ ...input, activation: failed, managedReadState: 'loading', machineInventoryState: 'read' }))
+            .toMatchObject({ kind: 'loading', canRequestWake: false, canRetryAgentStart: false, canResumeRuntime: false });
+        expect(deriveManagedWakeProjection({ ...input, activation: failed, managedReadState: 'read', machineInventoryState: 'loading' }))
+            .toMatchObject({ kind: 'loading', canRequestWake: false, canRetryAgentStart: false });
+        expect(deriveManagedWakeProjection({ ...input, managed: { ...resource, observation: undefined }, managedReadState: 'read', machineInventoryState: 'read' })?.kind)
+            .toBe('unknown');
+        expect(deriveManagedWakeProjection({ ...input, activation: failed, managedReadState: 'read', machineInventoryState: 'read' }))
+            .toMatchObject({ kind: 'agentStartFailed', failureCode: 'runtime_start_failed', canRequestWake: true });
+    });
+
     it('waits on stopped retained compute and advances only on real submission, power and runtime observations', () => {
         expect(deriveManagedWakeProjection(input)?.kind).toBe('waiting');
         expect(deriveManagedWakeProjection({ ...input, managed: {
@@ -44,9 +57,36 @@ describe('managed wake observed projection', () => {
             kind: 'agentStartFailed', inputCustody: 'queued', canRetryAgentStart: true,
         });
         expect(deriveManagedWakeProjection({ ...input, managed, activation: failed, runtimeResuming: true })?.kind).toBe('resuming');
+        const wakeDisabled = { ...managed, wakeOnAcceptedMessage: false };
+        expect(deriveManagedWakeProjection({ ...input, managed: wakeDisabled, activation: failed })).toMatchObject({
+            canRetryAgentStart: true, canRequestWake: false,
+        });
         expect(deriveManagedWakeProjection({
             ...input, managed, activation: failed, pending: { source: 'server_pending', pendingDeliveryStatus: 'server_delivering' },
         })).toMatchObject({ kind: 'deliveryUnknown', inputCustody: 'unknown', canRetryAgentStart: false });
+    });
+
+    it('offers an explicit wake retry only for the retained queued input on confirmed stopped compute', () => {
+        const failed = { status: 'failed' as const, requestId: 'request-a', requestedAt: 10, failureCode: 'runtime_start_failed' as const };
+        expect(deriveManagedWakeProjection({ ...input, activation: failed })).toMatchObject({
+            kind: 'agentStartFailed', canRequestWake: true, canRetryAgentStart: false,
+        });
+        // Wake admission can inspect this exact resource before deciding the
+        // native effect. Unknown storage is not confirmed storage loss.
+        expect(deriveManagedWakeProjection({ ...input, activation: failed, managed: { ...resource,
+            observation: { ...resource.observation!, storage: 'unknown' },
+        } })).toMatchObject({ canRequestWake: true, canRetryAgentStart: false });
+        const wakeDisabled = { ...resource, wakeOnAcceptedMessage: false };
+        expect(deriveManagedWakeProjection({ ...input, activation: failed, managed: wakeDisabled }))
+            .toMatchObject({ canRequestWake: false, canRetryAgentStart: false });
+        expect(deriveManagedWakeProjection({ ...input, activation: failed, managed: { ...resource, observation: undefined } }))
+            .toMatchObject({ canRequestWake: false });
+        expect(deriveManagedWakeProjection({ ...input, activation: failed, managed: { ...resource,
+            submittedNativeEffect: { intentRevision: 2, requestId: 'start-a', intent: 'start', controller },
+        } })).toMatchObject({ kind: 'starting', canRequestWake: false });
+        expect(deriveManagedWakeProjection({ ...input, activation: failed,
+            pending: { source: 'server_pending', pendingDeliveryStatus: 'server_delivering' },
+        })).toMatchObject({ kind: 'deliveryUnknown', canRequestWake: false });
     });
 
     it('preserves native absence, storage loss and missing observations as distinct facts', () => {
@@ -56,6 +96,9 @@ describe('managed wake observed projection', () => {
     });
 
     it('does not fabricate queued wake from passive reads or a local outbound projection', () => {
+        // Before the pending list is read, an absent row is "not read yet", never "delivery unconfirmed".
+        expect(deriveManagedWakeProjection({ ...input, pending: null, pendingLoaded: false })?.kind).toBe('loading');
+        expect(deriveManagedWakeProjection({ ...input, pending: null, pendingLoaded: true })?.kind).toBe('deliveryUnknown');
         expect(deriveManagedWakeProjection({ ...input, pending: null, activation: null })).toBeNull();
         expect(deriveManagedWakeProjection({ ...input, pending: { source: 'local_outbound', pendingDeliveryStatus: 'server_queued' } })).toMatchObject({
             inputCustody: 'unknown', canWithdraw: false,

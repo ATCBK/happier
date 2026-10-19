@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { AgentStateSchema } from '@happier-dev/session-core/state';
 import { createSessionDataKeyFixture } from '@/dev/testkit';
 import { encodeBase64 } from '@/encryption/base64';
 import {
@@ -404,12 +405,12 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
                 machineId: 'plain-owner-machine',
             },
         });
-        const agentState = {
+        const agentState = AgentStateSchema.parse({
             controlledByUser: false,
             requests: {
-                privateRequest: { tool: 'owner-only' },
+                privateRequest: { tool: 'owner-only', arguments: {} },
             },
-        };
+        });
         const row = buildSessionRow({
             id: 's_token_only_layout1_owner',
             encryptionMode: 'plain',
@@ -616,6 +617,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             cachedSessionListEntries,
             getExistingSession: () => existingSession,
             awaitSessionListHydration: true,
+            requiredHydrationSessionIds: [row.id],
             log: { log: () => {} },
         });
 
@@ -975,7 +977,37 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
         ]);
     });
 
-    it('drains the independent attention continuation and deduplicates rows from ordinary pagination', async () => {
+    it('keeps attention continuation at the list frontier until another page is demanded', async () => {
+        const requestSpy = vi.fn(async () => jsonResponse({
+            sessions: [buildSessionRow({ id: 's_first_attention', encryptionMode: 'plain' })],
+            nextCursor: 'ordinary_cursor',
+            hasNext: true,
+            attentionNextCursor: 'attention_cursor_1',
+            attentionHasNext: true,
+        }));
+        const { encryption } = createEncryptionHarness();
+
+        const result = await fetchAndApplySessions({
+            credentials: { token: 't', secret: 's' } as AuthCredentials,
+            encryption,
+            sessionDataKeys: new Map<string, Uint8Array>(),
+            request: requestSpy,
+            includeSessionListAttentionRows: true,
+            applySessions: vi.fn(),
+            log: { log: () => {} },
+        });
+
+        expect(requestSpy.mock.calls).toHaveLength(1);
+        expect(result).toMatchObject({
+            nextCursor: 'ordinary_cursor',
+            hasNext: true,
+            attentionNextCursor: 'attention_cursor_1',
+            attentionHasNext: true,
+        });
+        expect(result.sessionIds).toEqual(['s_first_attention']);
+    });
+
+    it('drains an explicitly requested attention continuation and deduplicates rows from ordinary pagination', async () => {
         const newerAttention = buildSessionRow({
             id: 's_newer_attention',
             encryptionMode: 'plain',
@@ -1039,6 +1071,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             sessionDataKeys: new Map<string, Uint8Array>(),
             request: requestSpy,
             includeSessionListAttentionRows: true,
+            sessionListAttentionMaxPages: 1,
             applySessions,
             log: { log: () => {} },
         });
@@ -1099,6 +1132,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             sessionDataKeys: new Map<string, Uint8Array>(),
             request: requestSpy,
             includeSessionListAttentionRows: true,
+            sessionListAttentionMaxPages: 2,
             applySessions: vi.fn(),
             log: { log: () => {} },
         });
@@ -1187,6 +1221,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             sessionDataKeys: new Map<string, Uint8Array>(),
             request: requestSpy,
             includeSessionListAttentionRows: true,
+            sessionListAttentionMaxPages: 1,
             applySessions,
             log: { log: () => {} },
         } satisfies FetchAndApplySessionsParams;
@@ -2277,7 +2312,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
         ]);
     });
 
-    it('hydrates a cold plain permission row into the canonical session store', async () => {
+    it('hydrates an explicitly demanded cold plain permission row into the canonical session store', async () => {
         const requestSpy = vi.fn(async () =>
             jsonResponse({
                 sessions: [
@@ -2323,6 +2358,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
                 currentRenderables = Object.fromEntries(renderables.map((renderable) => [renderable.id, renderable]));
             },
             getCurrentSessionListRenderable: (sessionId) => currentRenderables[sessionId] ?? null,
+            priorityHydrationSessionIds: ['s_cold_permission'],
             sessionListBackgroundHydrationYield: async () => {},
             sessionListBackgroundHydrationApplyFlushDelayMs: 0,
             log: { log: () => {} },
@@ -2512,6 +2548,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             request: requestSpy,
             applySessions,
             onSnapshotFetched,
+            priorityHydrationSessionIds: ['s_cached'],
             log: { log: () => {} },
             cachedSessionListEntries: {
                 s_cached: {
@@ -2597,7 +2634,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
         ], { replace: true });
     });
 
-    it('hydrates matching warm cache rows when the canonical sessions map is empty', async () => {
+    it('hydrates explicitly demanded matching warm cache rows when the canonical sessions map is empty', async () => {
         const requestSpy = vi.fn(async () =>
             jsonResponse({
                 sessions: [
@@ -2626,6 +2663,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             request: requestSpy,
             applySessions,
             applySessionListRenderables,
+            priorityHydrationSessionIds: ['s_cached'],
             getExistingSession: () => null,
             cachedSessionListEntries: {
                 s_cached: {
@@ -2738,6 +2776,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             getCurrentSessionListRenderable: (sessionId) => (
                 sessionId === 's_current_renderable' ? currentRenderable : null
             ),
+            priorityHydrationSessionIds: ['s_current_renderable'],
             cachedSessionListEntries: {},
             sessionListBackgroundHydrationYield,
             awaitSessionListHydration: true,
@@ -2787,6 +2826,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             request: requestSpy,
             applySessions: vi.fn(),
             applySessionListRenderables,
+            priorityHydrationSessionIds: ['s_stale_cache'],
             getExistingSession: () => null,
             cachedSessionListEntries: {
                 s_stale_cache: {
@@ -3243,6 +3283,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             log: { log: () => {} },
             prioritizeSessionIds: ['s_priority'],
             sessionListEagerHydrationCount: 1,
+            sessionListBackgroundHydrationMaxRows: 1,
             sessionListHydrationConcurrencyLimit: 1,
             cachedSessionListEntries: {
                 s_oldest: {
@@ -3322,7 +3363,9 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             log: { log: () => {} },
             prioritizeSessionIds: ['s_current'],
             requiredHydrationSessionIds: ['s_required'],
+            activeSessionIds: ['s_active'],
             sessionListEagerHydrationCount: 1,
+            sessionListBackgroundHydrationMaxRows: 1,
             sessionListBackgroundHydrationConcurrencyLimit: 1,
             cachedSessionListEntries: {
                 s_eager: staleCacheEntry('s_eager', '/eager'),
@@ -3386,7 +3429,9 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             prioritizeSessionIds: ['s_route'],
             activeSessionIds: ['s_active_surface'],
             requiredHydrationSessionIds: ['s_required'],
+            priorityHydrationSessionIds: ['s_priority'],
             sessionListEagerHydrationCount: 1,
+            sessionListBackgroundHydrationMaxRows: 1,
             sessionListBackgroundHydrationConcurrencyLimit: 1,
             sessionListBackgroundHydrationYield: async () => {},
             sessionListBackgroundHydrationGate,
@@ -3429,7 +3474,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
         ]);
     });
 
-    it('renders placeholder rows immediately on empty cache and hydrates in the background', async () => {
+    it('renders demanded placeholder rows immediately on empty cache before hydrating their metadata', async () => {
         const requestSpy = vi.fn(async () =>
             jsonResponse({
                 sessions: [
@@ -3464,6 +3509,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             request: requestSpy,
             applySessions,
             applySessionListRenderables,
+            priorityHydrationSessionIds: ['s_cold'],
             cachedSessionListEntries: {},
             log: { log: () => {} },
         });
@@ -3541,6 +3587,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             applySessionListRenderables,
             getCurrentSessionListRenderable: (sessionId) => currentRenderables[sessionId] ?? null,
             cachedSessionListEntries: {},
+            sessionListBackgroundHydrationMaxRows: 2,
             sessionListBackgroundHydrationConcurrencyLimit: 1,
             sessionListBackgroundHydrationApplyBatchSize: 2,
             sessionListBackgroundHydrationApplyFlushDelayMs: 1_000,
@@ -3696,6 +3743,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             applySessions,
             applySessionListRenderables,
             cachedSessionListEntries: {},
+            sessionListBackgroundHydrationMaxRows: 4,
             sessionListBackgroundHydrationConcurrencyLimit: 1,
             sessionListBackgroundHydrationApplyBatchSize: 4,
             sessionListBackgroundHydrationApplyFlushDelayMs: 1,
@@ -3780,6 +3828,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             applySessionListRenderables,
             getCurrentSessionListRenderable: (sessionId: string) => currentRenderables[sessionId] ?? null,
             cachedSessionListEntries: {},
+            sessionListBackgroundHydrationMaxRows: 2,
             sessionListBackgroundHydrationConcurrencyLimit: 1,
             sessionListBackgroundHydrationApplyBatchSize: 2,
             sessionListBackgroundHydrationApplyFlushDelayMs: 1_000,
@@ -3843,6 +3892,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             applySessionListRenderables,
             getCurrentSessionListRenderable: (sessionId: string) => currentRenderables[sessionId] ?? null,
             cachedSessionListEntries: {},
+            sessionListBackgroundHydrationMaxRows: 2,
             sessionListBackgroundHydrationConcurrencyLimit: 1,
             sessionListBackgroundHydrationApplyBatchSize: 2,
             sessionListBackgroundHydrationApplyFlushDelayMs: 1_000,
@@ -3931,6 +3981,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             applySessionListRenderablePatches,
             getCurrentSessionListRenderable: (sessionId: string) => currentRenderables[sessionId] ?? null,
             cachedSessionListEntries: {},
+            sessionListBackgroundHydrationMaxRows: 1,
             sessionListBackgroundHydrationConcurrencyLimit: 1,
             sessionListBackgroundHydrationApplyBatchSize: 2,
             sessionListBackgroundHydrationApplyFlushDelayMs: 1_000,
@@ -4099,6 +4150,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             applySessions,
             applySessionListRenderables,
             cachedSessionListEntries: {},
+            sessionListBackgroundHydrationMaxRows: 1,
             sessionListBackgroundHydrationConcurrencyLimit: 1,
             sessionListBackgroundHydrationApplyBatchSize: 2,
             sessionListBackgroundHydrationApplyFlushDelayMs: 1_000,
@@ -4251,6 +4303,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             applySessions,
             applySessionListRenderables,
             cachedSessionListEntries: {},
+            sessionListBackgroundHydrationMaxRows: 2,
             sessionListBackgroundHydrationConcurrencyLimit: 1,
             sessionListBackgroundHydrationApplyFlushDelayMs: 1,
             sessionListBackgroundHydrationYield,
@@ -4294,6 +4347,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             request: requestSpy,
             applySessions,
             applySessionListRenderables,
+            priorityHydrationSessionIds: ['s_direct'],
             cachedSessionListEntries: {
                 s_direct: {
                     sessionId: 's_direct',
@@ -4566,6 +4620,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             applySessions,
             applySessionListRenderables,
             cachedSessionListEntries: {},
+            sessionListBackgroundHydrationMaxRows: 2,
             shouldContinue: () => active,
             sessionListBackgroundHydrationConcurrencyLimit: 1,
             sessionListBackgroundHydrationYield,
@@ -4612,6 +4667,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             applySessions,
             applySessionListRenderables,
             cachedSessionListEntries: {},
+            sessionListBackgroundHydrationMaxRows: 1,
             shouldContinue: () => false,
             log: { log: () => {} },
         });
@@ -4886,6 +4942,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
                 applySessionListRenderables,
                 applySessionListRenderablePatches,
                 getCurrentSessionListRenderable: (sessionId) => currentRenderables[sessionId],
+                priorityHydrationSessionIds: ['s_unopenable_key'],
                 cachedSessionListEntries: {},
                 sessionListBackgroundHydrationYield: async () => {},
                 log: { log: () => {} },
@@ -4956,6 +5013,7 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
                 applySessionListRenderables,
                 applySessionListRenderablePatches,
                 getCurrentSessionListRenderable: (sessionId) => currentRenderables[sessionId],
+                priorityHydrationSessionIds: ['s_empty_cached_identity'],
                 cachedSessionListEntries: {
                     s_empty_cached_identity: {
                         sessionId: 's_empty_cached_identity',

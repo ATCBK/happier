@@ -90,8 +90,8 @@ function latestTurnStatusFromLifecycleEvent(event: TaskLifecycleEvent | null) {
     return undefined;
 }
 
-function isTerminalLatestTurnStatus(status: Session['latestTurnStatus']): boolean {
-    return status === 'completed' || status === 'cancelled' || status === 'failed';
+function isEndedLatestTurnStatus(status: Session['latestTurnStatus']): boolean {
+    return status === 'completed' || status === 'cancelled' || status === 'failed' || status === 'waiting';
 }
 
 function shouldApplyLifecycleLatestTurnStatus(params: Readonly<{
@@ -101,9 +101,9 @@ function shouldApplyLifecycleLatestTurnStatus(params: Readonly<{
 }>): boolean {
     if (!params.lifecycleEvent || !params.latestTurnStatus) return false;
     if (params.latestTurnStatus !== 'in_progress') return true;
-    if (!isTerminalLatestTurnStatus(params.session.latestTurnStatus)) return true;
+    if (!isEndedLatestTurnStatus(params.session.latestTurnStatus)) return true;
 
-    // A task_started row seen during replay/catch-up can predate the terminal projection
+    // A task_started row seen during replay/catch-up can predate the ended-turn projection
     // already held locally. Only let it reopen the turn when it is ordered after that projection.
     return Number.isFinite(params.lifecycleEvent.createdAt)
         && params.lifecycleEvent.createdAt > params.session.updatedAt;

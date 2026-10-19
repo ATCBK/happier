@@ -4,6 +4,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 beforeAll(loadSyncSingletonForTests);
 
 import { storage } from '@/sync/domains/state/storage';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { loadPendingOutboxForSession, savePendingOutboxMessage } from '@/sync/domains/state/pendingOutboxPersistence';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import {
@@ -760,7 +761,7 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
         storage.setState(
             {
                 ...storage.getState(),
-                settings: {
+                settings: settingsParse({
                     ...storage.getState().settings,
                     experiments: true,
                     featureToggles: {
@@ -772,7 +773,7 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
                     executionRunsGuidanceEntries: [
                         { id: 'g1', title: 'Rule 1', description: 'Always use execution runs for code reviews.', enabled: true },
                     ],
-                },
+                }),
                 sessions: {
                     ...storage.getState().sessions,
                     [sessionId]: {
@@ -823,7 +824,7 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
         storage.setState(
             {
                 ...storage.getState(),
-                settings: {
+                settings: settingsParse({
                     ...storage.getState().settings,
                     experiments: false,
                     featureToggles: {
@@ -835,7 +836,7 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
                     executionRunsGuidanceEntries: [
                         { id: 'g1', title: 'Rule 1', description: 'Always use execution runs for code reviews.', enabled: true },
                     ],
-                },
+                }),
                 sessions: {
                     ...storage.getState().sessions,
                     [sessionId]: {
@@ -940,7 +941,7 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
         expect(pending[0]?.displayText).toBe('Original display');
     });
 
-    it('clears pendingDecryptFailure when the user edits a decrypt-failure row', async () => {
+    it.each(['decrypt_failed', 'loading'] as const)('clears unopened-content state when the user explicitly edits a %s row', async kind => {
         const sessionId = 's_update_pending_decrypt_failure';
         const encryption = await createPendingQueueEncryption({ sessionId, seedByte: 12 });
 
@@ -967,7 +968,8 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
             updatedAt: 1,
             text: '',
             displayText: 'Failed to decrypt',
-            pendingDecryptFailure: { kind: 'decrypt_failed' },
+            ...(kind === 'loading' ? { pendingDecryption: { kind: 'loading' as const } }
+                : { pendingDecryptFailure: { kind: 'decrypt_failed' as const } }),
             rawRecord: null,
         });
 
@@ -983,6 +985,8 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
         expect(pending).toHaveLength(1);
         expect(pending[0]?.text).toBe('new text');
         expect(pending[0]?.pendingDecryptFailure).toBeUndefined();
+        expect(pending[0]?.pendingDecryption).toBeUndefined();
+        expect(pending[0]?.displayText).toBeUndefined();
     });
 
     it('rotates one canonical Pending projection only after the server confirms its replacement localId', async () => {
@@ -1546,6 +1550,14 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
                 },
             },
         };
+        const stagedMediaReleaseIntents = [
+            { handle: stagedMediaHandle, executionTarget: stagedMediaHandle.executionTarget,
+                owner: stagedMediaHandle.owner,
+                claimant: { composer: { kind: 'session' as const, sessionId }, attachmentInstanceId: attachment.instanceId } },
+            { handle: { ...stagedMediaHandle, id: 'raw-snapshot-42' }, executionTarget: stagedMediaHandle.executionTarget,
+                owner: stagedMediaHandle.owner,
+                claimant: { composer: { kind: 'pendingMessage' as const, sessionId, localId: 'p1' }, attachmentInstanceId: attachment.instanceId } },
+        ];
         storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
         storage.getState().upsertPendingMessage(sessionId, {
             id: 'p1',
@@ -1578,7 +1590,8 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
             text: 'edited text',
             structuredInput: { v: 1, composerAttachments: [attachment] },
             preparedComposerAdmission: {
-                stagedMediaHandles: [stagedMediaHandle],
+                stagedMediaHandles: stagedMediaReleaseIntents.map(({ handle }) => handle),
+                stagedMediaReleaseIntents,
                 sessionMediaMetadata,
             },
             encryption: null,
@@ -1599,7 +1612,8 @@ describe('pendingQueueV2 updatePendingMessageV2', () => {
                 }],
                 composerAttachments: [attachment],
             },
-            stagedMediaHandles: [stagedMediaHandle],
+            stagedMediaHandles: stagedMediaReleaseIntents.map(({ handle }) => handle),
+            stagedMediaReleaseIntents,
             sessionMediaMetadata,
         });
         // The finalizer's canonical metadata must travel with the accepted fact and

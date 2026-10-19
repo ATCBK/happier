@@ -1,5 +1,10 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { attachSessionHumanPresenceSocket, registerSessionDiscussionHumanPresence, reportSessionDiscussionTypingEdit, reportSessionTypingEdit, stopSessionDiscussionTyping, stopSessionTyping, type SessionHumanPresenceSocketTransport } from './sessionHumanPresenceRuntime';
+import { attachSessionHumanPresenceSocket, registerDiscussionHumanPresence, reportDiscussionTypingEdit, reportSessionTypingEdit, stopDiscussionTyping, stopSessionTyping, type SessionHumanPresenceSocketTransport } from './sessionHumanPresenceRuntime';
+import { SessionHumanPresenceVisibleReplaceV1Schema, SessionHumanPresenceTypingSetV1Schema } from '@happier-dev/protocol/sessions';
+import { act } from 'react-test-renderer';
+import { renderHook } from '@/dev/testkit';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import type { HomeCredentialMutationEvent } from '@/auth/storage/tokenStorage';
 import { upsertServerProfile, setServerProfileIdentityForUrl, removeServerProfile } from '@/sync/domains/server/serverProfiles';
 import { AppState } from 'react-native';
 import { sessionHumanPresenceStore } from './sessionHumanPresenceStore';
@@ -10,6 +15,23 @@ type TestTransport = SessionHumanPresenceSocketTransport & {
     snapshot(payload: unknown): void;
     change(connected: boolean): void;
 };
+const credentials = vi.hoisted(() => ({
+    accounts: new Map<string, string>(),
+    listeners: new Set<(event: HomeCredentialMutationEvent) => void>(),
+}));
+// Secure credential lookup/mutation is the boundary; binding currentness and retirement stay real.
+vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
+    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
+    return createTokenStorageModuleMock({ importOriginal, tokenStorage: {
+        getCredentialsForServerUrl: async (url) => {
+            const accountId = credentials.accounts.get(new URL(url).origin);
+            return accountId ? { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64')}.signature`, secret: 'test-secret' } : null;
+        },
+    }, subscribeHomeCredentialMutations: (listener) => {
+        credentials.listeners.add(listener);
+        return () => { credentials.listeners.delete(listener); };
+    } });
+});
 function transport() {
     let status: (() => void) | undefined;
     let snapshot: ((payload: unknown) => void) | undefined;
@@ -37,6 +59,21 @@ function transport() {
     return { socket, sent };
 }
 const cleanup: Array<() => void | Promise<void>> = [];
+async function scopeHomes(names: readonly string[]) {
+    const profiles = await Promise.all(names.map(async name => {
+        const profile = await upsertServerProfile({ serverUrl: `https://${name}.discussion-presence.test`, source: 'manual' });
+        credentials.accounts.set(new URL(profile.serverUrl).origin, 'self');
+        cleanup.push(async () => { credentials.accounts.delete(new URL(profile.serverUrl).origin); await removeServerProfile(profile.id); });
+        return { name, profile };
+    }));
+    const hook = await renderHook(() => useServerCredentialAccountScopeBindings(profiles.map(({ profile }) => profile.id)));
+    cleanup.push(() => hook.unmount());
+    await vi.waitFor(() => expect(profiles.every(({ profile }) => hook.getCurrent().get(profile.id)?.isCurrent())).toBe(true));
+    return new Map(profiles.map(({ name, profile }) => [name, {
+        serverId: profile.id, serverUrl: profile.serverUrl,
+        getLifetime: () => hook.getCurrent().get(profile.id)!,
+    }]));
+}
 const hostListeners = new Set<() => void>();
 const hostChanged = () => { for (const listener of hostListeners) listener(); };
 beforeAll(() => {
@@ -76,41 +113,122 @@ describe('human presence runtime', () => {
         stopSessionTyping({serverId:'a',sessionId:'s'});
     });
     it('declares, publishes typing, and clears one exact discussion without leaking to Session presence', async () => {
-        const target = { serverId: 'a', sessionId: 's', discussionId: 'd' };
-        cleanup.push(registerSessionDiscussionHumanPresence(target));
+        const home = (await scopeHomes(['a'])).get('a')!;
+        const target = { serverId: home.serverId, discussionId: 'd' };
+        const lifetime = home.getLifetime();
+        cleanup.push(registerDiscussionHumanPresence(target, lifetime));
         const {socket,sent} = transport();
-        cleanup.push(attachSessionHumanPresenceSocket({serverId:'a',accountId:'self',transport:socket}));
+        cleanup.push(attachSessionHumanPresenceSocket({serverId:home.serverId,accountId:'self',transport:socket}));
         await settle();
         expect(sent[0]?.[1]).toEqual({
             v: 1,
             sessionIds: [],
-            locations: [{ sessionId: 's', discussionId: 'd' }],
+            locations: [{ discussionId: 'd' }],
         });
-        reportSessionDiscussionTypingEdit(target, true);
-        expect(sent.at(-1)?.[1]).toEqual({v:1,sessionId:'s',discussionId:'d',typing:true});
-        socket.snapshot({v:1,sessionId:'s',discussionId:'d',observedAt:2,viewers:[]});
+        expect(SessionHumanPresenceVisibleReplaceV1Schema.safeParse(sent[0]?.[1]).success).toBe(true);
+        reportDiscussionTypingEdit(target, true, lifetime);
+        expect(sent.at(-1)?.[1]).toEqual({v:1,discussionId:'d',typing:true});
+        expect(SessionHumanPresenceTypingSetV1Schema.safeParse(sent.at(-1)?.[1]).success).toBe(true);
+        socket.snapshot({v:1,discussionId:'d',observedAt:2,viewers:[]});
         expect(sessionHumanPresenceStore.read(target).status).toBe('live');
-        expect(sessionHumanPresenceStore.read({serverId:'a',sessionId:'s'}).status).toBe('unavailable');
-        stopSessionDiscussionTyping(target);
-        expect(sent.at(-1)?.[1]).toEqual({v:1,sessionId:'s',discussionId:'d',typing:false});
+        expect(sessionHumanPresenceStore.read({serverId:home.serverId,sessionId:'s'}).status).toBe('unavailable');
+        stopDiscussionTyping(target, lifetime);
+        expect(sent.at(-1)?.[1]).toEqual({v:1,discussionId:'d',typing:false});
     });
     it('keeps identical Session and discussion ids qualified by Home', async () => {
-        cleanup.push(registerSessionDiscussionHumanPresence({serverId:'a',sessionId:'same',discussionId:'same-d'}));
-        cleanup.push(registerSessionDiscussionHumanPresence({serverId:'b',sessionId:'same',discussionId:'same-d'}));
+        const scopes = await scopeHomes(['a', 'b']);
+        const homeA = scopes.get('a')!; const homeB = scopes.get('b')!;
+        const targetA = { serverId: homeA.serverId, discussionId: 'same-d' };
+        const targetB = { serverId: homeB.serverId, discussionId: 'same-d' };
+        cleanup.push(registerDiscussionHumanPresence(targetA, homeA.getLifetime()));
+        cleanup.push(registerDiscussionHumanPresence(targetB, homeB.getLifetime()));
+        markSessionSurfaceVisible('same-d', homeA.serverId); markSessionSurfaceVisible('same-d', homeB.serverId);
+        cleanup.push(() => { markSessionSurfaceHidden('same-d', homeA.serverId); markSessionSurfaceHidden('same-d', homeB.serverId); });
         const a = transport(); const b = transport();
-        cleanup.push(attachSessionHumanPresenceSocket({serverId:'a',accountId:'self',transport:a.socket}));
-        cleanup.push(attachSessionHumanPresenceSocket({serverId:'b',accountId:'self',transport:b.socket}));
+        cleanup.push(attachSessionHumanPresenceSocket({serverId:homeA.serverId,accountId:'self',transport:a.socket}));
+        cleanup.push(attachSessionHumanPresenceSocket({serverId:homeB.serverId,accountId:'self',transport:b.socket}));
         await settle();
         const declaration = {
             v: 1,
-            sessionIds: [],
-            locations: [{sessionId:'same',discussionId:'same-d'}],
+            sessionIds: ['same-d'],
+            locations: [{discussionId:'same-d'}],
         };
         expect(a.sent[0]?.[1]).toEqual(declaration);
         expect(b.sent[0]?.[1]).toEqual(declaration);
-        reportSessionDiscussionTypingEdit({serverId:'a',sessionId:'same',discussionId:'same-d'}, true);
-        expect(a.sent.at(-1)?.[1]).toEqual({v:1,sessionId:'same',discussionId:'same-d',typing:true});
+        reportDiscussionTypingEdit(targetA, true, homeA.getLifetime());
+        expect(a.sent.at(-1)?.[1]).toEqual({v:1,discussionId:'same-d',typing:true});
         expect(b.sent).toHaveLength(1);
+    });
+    it('retires a Discussion declaration with its Account binding and rejects stale typing on its replacement', async () => {
+        const home = (await scopeHomes(['account-change'])).get('account-change')!;
+        const target = { serverId: home.serverId, discussionId: 'd' };
+        const previousLifetime = home.getLifetime();
+        cleanup.push(registerDiscussionHumanPresence(target, previousLifetime));
+        const previous = transport();
+        cleanup.push(attachSessionHumanPresenceSocket({ serverId: home.serverId, accountId: 'self', transport: previous.socket }));
+        await settle();
+        reportDiscussionTypingEdit(target, true, previousLifetime);
+        credentials.accounts.set(new URL(home.serverUrl).origin, 'replacement');
+        await act(async () => {
+            for (const listener of credentials.listeners) listener({ kind: 'credentials_set', serverId: home.serverId, serverUrl: home.serverUrl });
+        });
+        await settle();
+        expect(previousLifetime.isCurrent()).toBe(false);
+        expect(previous.sent.slice(-2)).toEqual([
+            ['session-human-presence:typing-set', { v: 1, discussionId: 'd', typing: false }],
+            ['session-human-presence:visible-replace', { v: 1, sessionIds: [] }],
+        ]);
+        await vi.waitFor(() => expect(home.getLifetime().accountId).toBe('replacement'));
+        const next = transport();
+        cleanup.push(attachSessionHumanPresenceSocket({ serverId: home.serverId, accountId: 'replacement', transport: next.socket }));
+        await settle();
+        expect(next.sent).toEqual([['session-human-presence:visible-replace', { v: 1, sessionIds: [] }]]);
+        reportDiscussionTypingEdit(target, true, previousLifetime);
+        expect(next.sent).toHaveLength(1);
+        const nextLifetime = home.getLifetime();
+        cleanup.push(registerDiscussionHumanPresence(target, nextLifetime));
+        await settle();
+        reportDiscussionTypingEdit(target, true, nextLifetime);
+        expect(next.sent.at(-1)?.[1]).toEqual({ v: 1, discussionId: 'd', typing: true });
+        const events = next.sent.length;
+        stopDiscussionTyping(target, previousLifetime);
+        expect(next.sent).toHaveLength(events);
+        stopDiscussionTyping(target, nextLifetime);
+        expect(next.sent.at(-1)?.[1]).toEqual({ v: 1, discussionId: 'd', typing: false });
+    });
+
+    it('does not reinterpret a refused declaration and restores Session-only presence on actual visibility change', async () => {
+        const home = (await scopeHomes(['refused-declaration'])).get('refused-declaration')!;
+        const target = { serverId: home.serverId, discussionId: 'd' };
+        const lifetime = home.getLifetime();
+        markSessionSurfaceVisible('s', home.serverId);
+        cleanup.push(() => markSessionSurfaceHidden('s', home.serverId));
+        const unregister = registerDiscussionHumanPresence(target, lifetime);
+        cleanup.push(unregister);
+        const { socket, sent } = transport();
+        let requests = 0;
+        const sendWithAck: SessionHumanPresenceSocketTransport['sendWithAck'] = async (event, payload) => {
+            sent.push([event, payload]);
+            if (++requests === 1) return { v: 1, ok: false, errorCode: 'INVALID_REQUEST' };
+            if (requests === 2) return { v: 1, ok: true, admittedSessionIds: ['s'] };
+            // Keep a regression's unintended third request pending so it fails the assertion without spinning.
+            return await new Promise(() => {});
+        };
+        cleanup.push(attachSessionHumanPresenceSocket({ serverId: home.serverId, accountId: 'self', transport: { ...socket, sendWithAck } }));
+        await settle();
+        expect(sent).toEqual([
+            ['session-human-presence:visible-replace', { v: 1, sessionIds: ['s'], locations: [{ discussionId: 'd' }] }],
+        ]);
+        unregister();
+        await settle();
+        expect(sent).toEqual([
+            ['session-human-presence:visible-replace', { v: 1, sessionIds: ['s'], locations: [{ discussionId: 'd' }] }],
+            ['session-human-presence:visible-replace', { v: 1, sessionIds: ['s'] }],
+        ]);
+        reportDiscussionTypingEdit(target, true, lifetime);
+        reportSessionTypingEdit({ serverId: home.serverId, sessionId: 's' }, true);
+        expect(sent.at(-1)?.[1]).toEqual({ v: 1, sessionId: 's', typing: true });
+        expect(sessionHumanPresenceStore.read(target).status).toBe('unavailable');
     });
     it('stops on host background and only restores viewing on foreground', async () => {
         markSessionSurfaceVisible('s', 'a'); cleanup.push(() => markSessionSurfaceHidden('s', 'a'));

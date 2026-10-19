@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { buildDismissedThisComputerSetupIntent, fromRecord } from './pendingSetupIntent.shared';
+import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
 
-async function importFresh() {
-    vi.resetModules();
+installDisconnectedServerSocketBoundary();
+const accountConnections: Array<Awaited<ReturnType<typeof restoreServerAccountForTest>>> = [];
+await loadSyncSingletonForTests();
+
+async function importFresh(options: Readonly<{ restart?: boolean }> = {}) {
+    // Ordinary cases retain the app-owned Sync and its storage handles. Only
+    // the persistence-reload assertion needs a new module graph.
+    if (options.restart) vi.resetModules();
     return await import('./pendingSetupIntent');
 }
 
@@ -26,18 +34,14 @@ async function applyActiveServer(serverUrl: string) {
 }
 
 async function activateServerAccount(serverUrl: string, accountId: string) {
-    const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
-    const { storage } = await import('@/sync/domains/state/storage');
-
-    const server = await applyActiveServer(serverUrl);
-    const scope = createServerAccountScope(server.id, accountId);
-    expect(scope).not.toBeNull();
-    if (!scope) throw new Error('Expected Account scope');
-    storage.getState().activateProfileScope(scope);
-    await storage.getState().activateSettingsScope(scope);
+    const connection = await restoreServerAccountForTest({ serverUrl, accountId });
+    accountConnections.push(connection);
+    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    expect(getActiveServerAccountScope()).toEqual({ serverId: connection.serverId, accountId });
 }
 
 async function activateServerWithoutAccount(serverUrl: string) {
+    for (const connection of accountConnections.splice(0).reverse()) await connection.dispose();
     const { storage } = await import('@/sync/domains/state/storage');
 
     await applyActiveServer(serverUrl);
@@ -62,6 +66,11 @@ describe('pendingSetupIntent', () => {
     afterEach(async () => {
         const { clearPendingSetupIntent } = await importFresh();
         clearPendingSetupIntent();
+        for (const connection of accountConnections.splice(0).reverse()) await connection.dispose();
+        // Native backing outlives a module reload and stores every Account's
+        // records. Clear this test's SDK store, including previously focused scopes.
+        const { MMKV } = await import('react-native-mmkv');
+        new MMKV({ id: scopedStorageId('pending-setup-intent', readStorageScopeFromEnv()) }).clearAll();
         vi.restoreAllMocks();
     });
 
@@ -105,7 +114,7 @@ describe('pendingSetupIntent', () => {
         expect(getPendingSetupIntent()).toBeNull();
 
         nowSpy.mockReturnValue(writtenAtMs);
-        const reloaded = await importFresh();
+        const reloaded = await importFresh({ restart: true });
         await activateServerAccount('https://relay.example.test', 'account-a');
         expect(reloaded.getPendingSetupIntent()).toBeNull();
     });

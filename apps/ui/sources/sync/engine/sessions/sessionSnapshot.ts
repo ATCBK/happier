@@ -146,9 +146,9 @@ type SessionListRenderablePatch = Readonly<{
     patch: Readonly<Partial<Omit<SessionListRenderableSession, 'id'>>>;
 }>;
 
-// Bound one cold-sync pump so a malformed or moving server cursor cannot make a
-// single fetch open-ended. The owning runtime retains and resumes the returned
-// attention cursor; this is a work bound, never a corpus-completeness limit.
+// Explicit multi-page callers retain this existing continuation work bound.
+// Ordinary acquisitions default to no extra attention pages; their list owner
+// retains the unfinished cursor until page demand resumes it.
 const DEFAULT_SESSION_LIST_ATTENTION_CONTINUATION_MAX_PAGES = 100;
 
 function readSessionListRowAgentStateVersion(row: SessionListRow): number {
@@ -396,7 +396,7 @@ function buildPlainHydratedSessionFromRow(
         : hydratedSession;
 }
 
-function buildRenderableFromRowAndCache(
+export function buildRenderableFromRowAndCache(
     row: SessionListRow,
     credentials: AuthCredentials,
     accountCurrentness: AccountEncryptionCurrentnessResponse | undefined,
@@ -457,12 +457,9 @@ function buildRenderableFromRowAndCache(
             ? { ...renderable, metadataUnavailable: true }
             : renderable;
     }
-    // E2EE: no key opens here, so the row goes through the one projector as a Session whose
-    // projection is undecided. The projection this device already holds for the row's revision is
-    // the previous row the projector keeps: the matching warm-cache row, else the hydrated Session's,
-    // else a same-layout warm-cache row from an older revision (its own, truthful revision is kept,
-    // so warm hydration re-reads it). With none, the row carries no projection and the store's
-    // apply keeps the applied row's (`preserveSessionListRenderableStaleFields`), as before.
+    // The Session key and shared content stay unopened, while the Account-owned envelope
+    // can independently prove visibility. Keep same-layout readable details from the matching
+    // cache/Session projection or the applied row, retaining their truthful metadata revision.
     const cachedProjectionUsable = cachedRenderable?.metadata != null
         && readSessionMetadataLayoutVersion(cachedEntry?.metadataLayoutVersion) === rowMetadataLayoutVersion;
     const existingSessionProjectionMatches = existingSessionRenderable?.metadata != null
@@ -482,6 +479,7 @@ function buildRenderableFromRowAndCache(
             metadata: null,
             agentState: null,
             encryptedContentAvailability: knownContentAvailability,
+            ownerMetadataView: projectSessionLayout1LockedOwnerVisibility(ownerMetadataRead),
             ownerMetadataProjection: ownerMetadataRead?.kind === 'owner' && ownerMetadataRead.canReuse ? ownerMetadataRead : null,
         }) as Session,
         // The Home-qualified applied row may retain the store's safe title even with no metadata.
@@ -489,7 +487,8 @@ function buildRenderableFromRowAndCache(
         lockedDisplayTitle: currentRenderable?.lockedDisplayTitle,
         metadataUndecided: true,
     };
-    return buildSessionListRenderableFromSession(undecidedSession, projectionSource ?? undefined);
+    return buildSessionListRenderableFromSession(undecidedSession, projectionSource
+        ?? (ownerMetadataRead?.kind === 'owner' ? existingRenderable : undefined));
 }
 
 function buildRenderableFromCachedEntry(cachedEntry: SessionListCacheEntryV1): SessionListRenderableSession {
@@ -1437,12 +1436,12 @@ export async function fetchAndApplySessions(params: {
     const sessionListPageSize = Math.max(1, Math.min(200, Math.trunc(params.sessionListPageSize ?? 50)));
     const sessionListMaxPages = Math.max(1, Math.trunc(params.sessionListMaxPages ?? 1));
     const sessionListAttentionMaxPages = Math.max(
-        1,
+        0,
         Math.min(
             DEFAULT_SESSION_LIST_ATTENTION_CONTINUATION_MAX_PAGES,
             Math.trunc(
                 params.sessionListAttentionMaxPages
-                ?? DEFAULT_SESSION_LIST_ATTENTION_CONTINUATION_MAX_PAGES,
+                ?? 0,
             ),
         ),
     );
@@ -1656,9 +1655,11 @@ export async function fetchAndApplySessions(params: {
                 token: credentials.token,
                 source: params.source,
                 sessionListPath: isQuerySource ? undefined : DEFAULT_SESSION_LIST_PATH,
+                cursor: null,
                 attentionCursor: attentionNextCursor,
                 limit: sessionListPageSize,
                 allowLegacyV1Fallback: false,
+                getPreviousOwnerMetadataEnvelope,
             });
             appendRows(attentionPage.sessions);
             metadataUpgradeRequiredCount += attentionPage.metadataUpgradeRequiredCount;
@@ -1711,16 +1712,6 @@ export async function fetchAndApplySessions(params: {
             .map((sessionId) => String(sessionId ?? '').trim())
             .filter(Boolean),
     );
-    for (const row of sessions) {
-        const existingSession = params.getExistingSession?.(row.id);
-        if (
-            existingSession
-            && readSessionMetadataLayoutVersion(row.metadataLayoutVersion)
-                > readSessionMetadataLayoutVersion(existingSession.metadataLayoutVersion)
-        ) {
-            requiredHydrationSessionIds.add(row.id);
-        }
-    }
     const requiredSnapshotRows = countRowsWithIds(sessions, requiredHydrationSessionIds);
     const backgroundSnapshotRows = countBackgroundRows(sessions.length, requiredSnapshotRows);
 
@@ -1818,9 +1809,6 @@ export async function fetchAndApplySessions(params: {
         ? new Map(sessionDataKeyEnvelopes)
         : undefined;
     const priorityHydrationSessionIds = new Set(normalizeSessionListHydrationSessionIds(params.priorityHydrationSessionIds));
-    for (const row of sessions) {
-        if (isSessionListRowAttentionHydrationPriority(row)) priorityHydrationSessionIds.add(row.id);
-    }
     // Choose demand from the full page before removing already hydrated rows.
     // Otherwise each refresh promotes another eager slice of historical Sessions.
     const hydrationPriority = orderRowsForSessionListHydration({
@@ -1834,10 +1822,9 @@ export async function fetchAndApplySessions(params: {
     });
     const demandedSessionIds = new Set(hydrationPriority.rows.map(row => row.id));
     const dataKeyHydrationPlan = createSessionDataKeyHydrationPlan({
-        // Already retained readers still reconcile changed envelope/mode facts.
-        // An unopened offscreen row needs no DEK until its real consumer demands it.
-        sessions: sessions.filter(session => !shouldApplyRenderables || demandedSessionIds.has(session.id)
-            || sessionDataKeys.has(session.id)).map((session) => ({
+        // Retaining a previously opened key is not current consumer demand.
+        // Reconcile changed envelopes when the row is demanded again.
+        sessions: sessions.filter(session => !shouldApplyRenderables || demandedSessionIds.has(session.id)).map((session) => ({
             id: session.id,
             encryptionMode: session.encryptionMode,
             dataEncryptionKey: session.dataEncryptionKey,

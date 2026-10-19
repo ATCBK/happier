@@ -3,6 +3,7 @@ import { getPendingQueueWakeResumeOptions } from './pendingQueueWake';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { attachAgentPluginSettings } from '@/agents/registry/agentUiSettingLookup';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { getStorage } from '@/sync/domains/state/storage';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -727,12 +728,12 @@ describe('getPendingQueueWakeResumeOptions', () => {
             sessionId: 's1',
             session,
             resumeCapabilityOptions: {
-                // Configured ACP resume requires the Account's own declaration
-                // that this exact backend supports `session/load`.
-                accountSettings: {
-                    acpCatalogSettingsV1: {
-                        v: 2,
-                        backends: [{
+                // Resume admission reads the migrated Account catalog row.
+                acpCatalogSnapshot: {
+                    status: 'ready', revision: 1,
+                    record: AcpCatalogRecordV1Schema.parse({
+                        v: 1,
+                        definitions: [{
                             id: 'custom-kiro',
                             name: 'custom-kiro',
                             title: 'Custom Kiro',
@@ -742,7 +743,7 @@ describe('getPendingQueueWakeResumeOptions', () => {
                             createdAt: 1,
                             updatedAt: 2,
                         }],
-                    },
+                    }),
                 },
             },
         })).toEqual({

@@ -23,6 +23,18 @@ const credentials = {
 };
 
 describe('readSessionLayout1OwnerMetadata', () => {
+    it.each([null, undefined])('fails closed when an owner projection omits its required owner envelope (%s)', (ownerMetadataEnvelope) => {
+        expect(readSessionLayout1OwnerMetadata({
+            access: normalizeSessionAccessProjection({ share: null }, { allowLegacy: true }),
+            accountMode: 'e2ee',
+            ownerMetadataEnvelope,
+            credentials,
+        })).toEqual({
+            kind: 'unavailable',
+            reason: 'invalid_envelope',
+        });
+    });
+
     it('opens plain owner options only from authoritative plain Account mode, not Session mode or key absence', () => {
         const plainOwner = createPlainSessionOwnerMetadataEnvelopeV1(SessionOwnerMetadataV1Schema.parse({
             v: 1, workspace: { path: '/private' }, runtime: { modelOverrideV1: { v: 1, modelId: 'chosen', updatedAt: 10 } },

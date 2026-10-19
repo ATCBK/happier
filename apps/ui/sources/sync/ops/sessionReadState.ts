@@ -23,6 +23,7 @@ import { nowServerMs } from '@/sync/runtime/time';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 
 export type SessionManualReadState = 'read' | 'unread';
 
@@ -218,7 +219,9 @@ export async function sessionSetManualReadStateWithServerScope(
                     });
                 }
             }
-            return { success: false, message: outcome.error };
+            return { success: false, message: outcome.error === 'credential_scope_denied'
+                ? resolveActionExecutionFailureMessage({ ok: false, errorCode: outcome.error, error: outcome.error }, outcome.error) ?? outcome.error
+                : outcome.error };
         }
         const parsed = outcome.value;
         sync.invalidateSessionListSnapshot(targetServerId);
