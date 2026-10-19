@@ -537,6 +537,8 @@ const style = StyleSheet.create((theme) => ({
         fontSize: 14,
         lineHeight: 20,
         backgroundColor: theme.colors.surface.selected,
+        // A long path or identifier has no break opportunity; without this it runs past the bubble or column it sits in.
+        ...(Platform.OS === 'web' ? ({ overflowWrap: 'anywhere' } as const) : {}),
     },
     thinkingInlineCode: {
         ...Typography.mono(),

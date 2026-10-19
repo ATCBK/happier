@@ -1,0 +1,97 @@
+import { describe, expect, it } from 'vitest';
+
+import { mapRenderedSelectionToMarkdownSource } from './markdownSelectionSource';
+
+const markdown = [
+  '# Runbook',
+  '',
+  'A replay shows one row. A replay shows **one** row.',
+  '',
+  '- **Retrying…** Pending retries show “Retrying…”.',
+  '1. Check the dashboard.',
+].join('\n');
+
+/** What a browser puts in the body's text: no block separators, list marks drawn as glyphs. */
+const rendered =
+  'RunbookA replay shows one row. A replay shows one row.•Retrying… Pending retries show “Retrying…”.1.Check the dashboard.';
+
+function select(text: string, occurrence = 0) {
+  let start = -1;
+  for (let index = 0; index <= occurrence; index++)
+    start = rendered.indexOf(text, start + 1);
+  return { start, end: start + text.length };
+}
+
+describe('mapRenderedSelectionToMarkdownSource', () => {
+  it('maps a selection by its position, so a repeated phrase resolves to the one selected', () => {
+    const second = mapRenderedSelectionToMarkdownSource({
+      markdown,
+      rendered,
+      ...select('A replay shows one row.', 1),
+    });
+    expect(second).toEqual({
+      start: markdown.lastIndexOf('A replay shows'),
+      end: markdown.lastIndexOf('row.') + 4,
+    });
+    expect(markdown.slice(second!.start, second!.end)).toBe(
+      'A replay shows **one** row.',
+    );
+    const first = mapRenderedSelectionToMarkdownSource({
+      markdown,
+      rendered,
+      ...select('A replay shows one row.', 0),
+    });
+    expect(markdown.slice(first!.start, first!.end)).toBe(
+      'A replay shows one row.',
+    );
+  });
+
+  it('skips glyphs the renderer draws but the source does not have', () => {
+    const range = mapRenderedSelectionToMarkdownSource({
+      markdown,
+      rendered,
+      ...select('Check the dashboard'),
+    });
+    expect(markdown.slice(range!.start, range!.end)).toBe(
+      'Check the dashboard',
+    );
+  });
+
+  it('keeps inline markup a selection crosses inside the source range', () => {
+    const range = mapRenderedSelectionToMarkdownSource({
+      markdown,
+      rendered,
+      ...select('Retrying… Pending'),
+    });
+    expect(markdown.slice(range!.start, range!.end)).toBe(
+      'Retrying…** Pending',
+    );
+  });
+
+  it('refuses a selection it cannot place exactly', () => {
+    expect(
+      mapRenderedSelectionToMarkdownSource({
+        markdown,
+        rendered: 'Something else entirely',
+        start: 0,
+        end: 9,
+      }),
+    ).toBeNull();
+    expect(
+      mapRenderedSelectionToMarkdownSource({
+        markdown,
+        rendered,
+        start: 4,
+        end: 4,
+      }),
+    ).toBeNull();
+    expect(
+      mapRenderedSelectionToMarkdownSource({
+        markdown,
+        rendered,
+        start: 8,
+        end: 9,
+      }),
+    ).toBeNull();
+  });
+});

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import renderer, { act } from 'react-test-renderer';
+import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -187,21 +187,19 @@ describe('CodeMirrorWebViewSurface (native)', () => {
         postMessageSpy.mockClear();
         lastWebViewProps = null;
 
-        let tree: renderer.ReactTestRenderer;
-
-        tree = (await renderScreen(React.createElement(CodeMirrorWebViewSurface, {
+        const screen = await renderScreen(React.createElement(CodeMirrorWebViewSurface, {
                     resetKey: '1',
                     value: 'hello',
                     language: 'markdown',
                     onChange: vi.fn(),
                     readOnly: false,
-                }))).tree;
+                }));
 
         emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
         postMessageSpy.mockClear();
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 React.createElement(CodeMirrorWebViewSurface, {
                     resetKey: '1',
                     value: 'hello',
@@ -223,15 +221,13 @@ describe('CodeMirrorWebViewSurface (native)', () => {
         lastWebViewProps = null;
 
         const onChange = vi.fn();
-        let tree: renderer.ReactTestRenderer;
-
-        tree = (await renderScreen(React.createElement(CodeMirrorWebViewSurface, {
+        const screen = await renderScreen(React.createElement(CodeMirrorWebViewSurface, {
                     resetKey: '1',
                     value: 'hello',
                     language: 'markdown',
                     onChange,
                     readOnly: false,
-                }))).tree;
+                }));
 
         emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
         postMessageSpy.mockClear();
@@ -240,7 +236,7 @@ describe('CodeMirrorWebViewSurface (native)', () => {
         expect(onChange).toHaveBeenCalledWith('hello world');
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 React.createElement(CodeMirrorWebViewSurface, {
                     resetKey: '1',
                     value: 'hello',
@@ -262,15 +258,13 @@ describe('CodeMirrorWebViewSurface (native)', () => {
         lastWebViewProps = null;
 
         const onChange = vi.fn();
-        let tree: renderer.ReactTestRenderer;
-
-        tree = (await renderScreen(React.createElement(CodeMirrorWebViewSurface, {
+        const screen = await renderScreen(React.createElement(CodeMirrorWebViewSurface, {
                     resetKey: '1',
                     value: 'test',
                     language: 'markdown',
                     onChange,
                     readOnly: false,
-                }))).tree;
+                }));
 
         emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
         postMessageSpy.mockClear();
@@ -279,7 +273,7 @@ describe('CodeMirrorWebViewSurface (native)', () => {
         expect(onChange).toHaveBeenCalledWith('test 123');
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 React.createElement(CodeMirrorWebViewSurface, {
                     resetKey: '1',
                     value: 'test 123',
@@ -297,14 +291,12 @@ describe('CodeMirrorWebViewSurface (native)', () => {
         postMessageSpy.mockClear();
         lastWebViewProps = null;
 
-        let tree: renderer.ReactTestRenderer;
-
-        tree = (await renderScreen(React.createElement(CodeMirrorWebViewSurface, {
+        const screen = await renderScreen(React.createElement(CodeMirrorWebViewSurface, {
                     resetKey: '1',
                     value: 'const message = \"hello\";',
                     language: 'typescript',
                     onChange: vi.fn(),
-                }))).tree;
+                }));
 
         const firstHtml = lastWebViewProps?.source?.html;
         expect(firstHtml).toContain('#ff79c6');
@@ -319,7 +311,7 @@ describe('CodeMirrorWebViewSurface (native)', () => {
         };
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 React.createElement(CodeMirrorWebViewSurface, {
                     resetKey: '1',
                     value: 'const message = \"hello\";',

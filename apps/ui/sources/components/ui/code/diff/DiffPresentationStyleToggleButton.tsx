@@ -43,7 +43,7 @@ export const DiffPresentationStyleToggleButton = React.memo<DiffPresentationStyl
                 accessibilityLabel={accessibilityLabel}
                 tabs={(['unified', 'split'] as const).map((id) => ({
                     id,
-                    label: t(`settingsSourceControl.filesDisplay.diffPresentation.options.${id}.title`),
+                    label: t(id === 'unified' ? 'settingsSourceControl.page.files.unified' : 'settingsSourceControl.page.files.split'),
                     disabled: props.disabled === true || (id === 'split' && splitTooNarrow),
                     unavailableReason: id === 'split' && splitTooNarrow ? t('detailsSurface.chrome.splitNeedsWiderPane') : undefined,
                 }))}

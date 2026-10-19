@@ -1,6 +1,7 @@
 import type { CodeLinesViewProps } from '@/components/ui/code/view/CodeLinesView';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import type { ReactNode } from 'react';
+import type { FindController } from '@happier-dev/plugin-ui/presentation';
 
 export type DiffViewerMode = 'unified' | 'text';
 
@@ -26,6 +27,8 @@ export type DiffViewerBaseProps = Readonly<{
     highlightLineId?: string;
     highlightLineIds?: CodeLinesViewProps['highlightLineIds'];
     findActive?: boolean;
+    /** Bind this mounted renderer's temporary Find refold operation to its surface controller. */
+    registerFindRefold?: (refold: NonNullable<FindController['refold']>) => (() => void) | undefined;
     findRangesByLineId?: CodeLinesViewProps['findRangesByLineId'];
     selectedLineIds?: ReadonlySet<string>;
     testID?: CodeLinesViewProps['testID'];

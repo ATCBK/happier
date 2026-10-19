@@ -1,4 +1,5 @@
 import type { MarkdownBlock } from '../parseMarkdown';
+import type { MarkdownContainerBlock } from '../streaming/readMarkdownContainerBlock';
 import type { MarkdownSourceRange } from '../parseMarkdown';
 
 type MarkdownRenderSegmentBase = Readonly<{
@@ -23,4 +24,9 @@ export type SpecialMarkdownRenderSegment = MarkdownRenderSegmentBase & Readonly<
     blocks: readonly MarkdownBlock[];
 }>;
 
-export type MarkdownRenderSegment = EnrichedMarkdownRenderSegment | SpecialMarkdownRenderSegment;
+export type ContainerMarkdownRenderSegment = MarkdownRenderSegmentBase & Readonly<{
+    type: 'container-block';
+    container: MarkdownContainerBlock;
+}>;
+
+export type MarkdownRenderSegment = EnrichedMarkdownRenderSegment | SpecialMarkdownRenderSegment | ContainerMarkdownRenderSegment;

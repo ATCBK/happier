@@ -15,7 +15,7 @@ import { isActionOperationTerminal } from '@/sync/domains/actionOperations/actio
 import { useActionOperation } from '@/sync/domains/actionOperations/useActionOperations';
 import { useServerScopedMachine } from '@/sync/store/hooks';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 
 import { ToolTimelineRowHeader } from './ToolTimelineRowHeader';
 
@@ -64,7 +64,7 @@ export const ProjectCommandToolTimelineRowHeader = React.memo(
     );
     const machineName = attachment
       ? machine
-        ? getMachineDisplayName(machine)
+        ? getMachineSentenceName(machine)
         : attachment.machineId
       : null;
     const name = attachment?.script?.name ?? snapshot?.title ?? null;

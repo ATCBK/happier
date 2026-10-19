@@ -1,4 +1,8 @@
-export type MarkdownRenderingProfile = 'default' | 'transcript' | 'thinking' | 'widget';
+/**
+ * `document`: Markdown placed in interface chrome (a plugin's detail step or body), read at the interface
+ * reading size with headings that never outrank the step that holds them.
+ */
+export type MarkdownRenderingProfile = 'default' | 'transcript' | 'thinking' | 'widget' | 'document';
 
 export function normalizeMarkdownRenderingProfile(params: Readonly<{
     profile?: MarkdownRenderingProfile;

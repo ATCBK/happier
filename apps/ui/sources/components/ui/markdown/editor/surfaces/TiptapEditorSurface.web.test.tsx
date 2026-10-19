@@ -201,6 +201,29 @@ describe('TiptapEditorSurface (web)', () => {
         expect(ref.current.getValue()).toBe('# Seed');
     });
 
+    it('does not read the serializer\'s trailing blank line after a list as a user edit of an unedited document', async () => {
+        const seed = '# Guide\n\n- one\n- two\n';
+        const editor = createFakeEditor(seed);
+        editorState.current = editor;
+        const onChange = vi.fn();
+
+        await renderScreen(
+            React.createElement(TiptapEditorSurface, { resetKey: '1', value: seed, onChange, changeDebounceMs: 0 }),
+        );
+
+        await act(async () => {
+            editor.__emitUpdate(`${seed}\n`);
+            await flushHookEffects();
+        });
+        expect(onChange).toHaveBeenCalledTimes(0);
+
+        await act(async () => {
+            editor.__emitUpdate('# Guide\n\n- one\n- two\n- three\n\n');
+            await flushHookEffects();
+        });
+        expect(onChange).toHaveBeenCalledTimes(1);
+    });
+
     it('emits onChange(markdown) on a real user edit', async () => {
         const editor = createFakeEditor('hello');
         editorState.current = editor;
@@ -276,7 +299,7 @@ describe('TiptapEditorSurface (web)', () => {
         });
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 React.createElement(TiptapEditorSurface, {
                     resetKey: '1',
                     value: 'external seed',
@@ -432,19 +455,17 @@ describe('TiptapEditorSurface (web)', () => {
         editor.view.dom.parentElement.scrollLeft = 6;
         editorState.current = editor;
         const onChange = vi.fn();
-        let tree: any;
-
-        tree = (await renderScreen(
+        const screen = await renderScreen(
             React.createElement(TiptapEditorSurface, {
                 resetKey: '1',
                 value: 'seed content',
                 onChange,
                 changeDebounceMs: 0,
             }),
-        )).tree;
+        );
 
         await act(async () => {
-            tree.update(
+            await screen.update(
                 React.createElement(TiptapEditorSurface, {
                     resetKey: '1',
                     value: 'external content update',
@@ -465,19 +486,17 @@ describe('TiptapEditorSurface (web)', () => {
         const editor = createFakeEditor('seed');
         editorState.current = editor;
         const onChange = vi.fn();
-        let tree: any;
-
-        tree = (await renderScreen(
+        const screen = await renderScreen(
             React.createElement(TiptapEditorSurface, {
                 resetKey: '1',
                 value: 'seed',
                 onChange,
                 changeDebounceMs: 0,
             }),
-        )).tree;
+        );
 
         await act(async () => {
-            tree.update(
+            await screen.update(
                 React.createElement(TiptapEditorSurface, {
                     resetKey: '1',
                     value: 'external update',

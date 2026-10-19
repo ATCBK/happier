@@ -33,6 +33,7 @@ describe('ToolInlineBody (SubAgentRun error fallback)', () => {
                 tool={{
                     id: 't-subagent',
                     name: 'SubAgentRun',
+                    description: null,
                     state: 'error',
                     input: {},
                     result: { status: 'timeout', error: { code: 'execution_run_timeout', message: 'Timed out' } },
@@ -61,6 +62,7 @@ describe('ToolInlineBody (SubAgentRun error fallback)', () => {
                 tool={{
                     id: 't-task',
                     name: 'Task',
+                    description: null,
                     state: 'error',
                     input: {},
                     result: { message: 'Task failed' },

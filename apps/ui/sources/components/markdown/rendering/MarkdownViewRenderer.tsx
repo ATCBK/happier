@@ -9,6 +9,7 @@ import type { StreamingTextRevealPreset } from '../streaming/streamingTextReveal
 import type { MarkdownRenderingProfile } from './MarkdownRenderingProfile';
 import type { MarkdownInlineReferences } from '../markdownInlineReferences';
 import { MarkdownSegmentView } from './MarkdownSegmentView';
+import { MarkdownCodeBlockWrapKeyProvider } from '../MarkdownCodeBlockWrapState';
 import {
     readMarkdownRenderSegmentsCache,
     writeMarkdownRenderSegmentsCache,
@@ -31,6 +32,8 @@ type MarkdownViewRendererProps = Readonly<{
     streamingAnimated: boolean;
     streamingRevealPreset?: StreamingTextRevealPreset;
     staticRenderPlaceholderEnabled?: boolean;
+    /** Stable message identity, independent of streaming revisions, for per-block presentation state. */
+    codeBlockStateKey?: string;
     renderCacheKey?: string;
     sourceRangeLayoutObserver?: MarkdownSourceRangeLayoutObserver;
     onPressSourceRange?: (action: MarkdownSourceRangeAction) => void;
@@ -139,27 +142,31 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
                 style={styles.content}
             >
                 {segments.map((segment, index) => (
-                    <MarkdownSegmentView
+                    <MarkdownCodeBlockWrapKeyProvider
                         key={segmentKeys[index]}
-                        segment={segment}
-                        selectable={props.selectable}
-                        onOptionPress={props.onOptionPress}
-                        onOptionLongPress={props.onOptionLongPress}
-                        onLinkPress={props.onLinkPress}
-                        textStyle={props.textStyle}
-                        profile={props.profile}
-                        streamingReveal={streamingReveal}
-                        streamingRevealPreset={props.streamingRevealPreset}
-                        sourceRangeInteractionsActive={sourceRangeInteractionsActive}
-                        sourceRangeLayoutObserver={props.sourceRangeLayoutObserver}
-                        onPressSourceRange={props.onPressSourceRange}
-                        renderAfterSourceRange={props.renderAfterSourceRange}
-                        highlightSourceRange={props.highlightSourceRange}
-                        findSourceRanges={props.findSourceRanges}
-                        findActive={props.findActive}
-                        agentTexMath={props.agentTexMath}
-                        inlineReferences={props.inlineReferences}
-                    />
+                        value={props.codeBlockStateKey ? JSON.stringify([props.codeBlockStateKey, segment.sourceStart]) : null}
+                    >
+                        <MarkdownSegmentView
+                            segment={segment}
+                            selectable={props.selectable}
+                            onOptionPress={props.onOptionPress}
+                            onOptionLongPress={props.onOptionLongPress}
+                            onLinkPress={props.onLinkPress}
+                            textStyle={props.textStyle}
+                            profile={props.profile}
+                            streamingReveal={streamingReveal}
+                            streamingRevealPreset={props.streamingRevealPreset}
+                            sourceRangeInteractionsActive={sourceRangeInteractionsActive}
+                            sourceRangeLayoutObserver={props.sourceRangeLayoutObserver}
+                            onPressSourceRange={props.onPressSourceRange}
+                            renderAfterSourceRange={props.renderAfterSourceRange}
+                            highlightSourceRange={props.highlightSourceRange}
+                            findSourceRanges={props.findSourceRanges}
+                            findActive={props.findActive}
+                            agentTexMath={props.agentTexMath}
+                            inlineReferences={props.inlineReferences}
+                        />
+                    </MarkdownCodeBlockWrapKeyProvider>
                 ))}
             </View>
             {staticRenderPlaceholder.visible ? <StaticMarkdownRenderPlaceholder /> : null}

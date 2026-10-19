@@ -1,6 +1,6 @@
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { ToolCall } from "@happier-dev/session-core/messages";
-import * as z from 'zod';
+import * as z from 'zod/mini';
 import { ICON_EDIT } from '../icons';
 import type { KnownToolDefinition } from '../_types';
 import { resolveDiffToolHeaderPresentation } from '../resolveDiffToolHeaderPresentation';
@@ -14,12 +14,12 @@ export const providerDiffTools = {
         minimal: false,  // Show full diff view
         hideDefaultError: true,
         noStatus: true,  // Always successful, stateless like Task
-        input: z.object({
-            unified_diff: z.string().describe('Unified diff content')
-        }).partial().passthrough(),
-        result: z.object({
-            status: z.literal('completed').describe('Always completed')
-        }).partial().passthrough(),
+        input: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({
+            unified_diff: z.string().check(z.describe('Unified diff content'))
+        }))),
+        result: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({
+            status: z.literal('completed').check(z.describe('Always completed'))
+        }))),
         extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
             return resolveDiffToolHeaderPresentation({ tool: opts.tool }).subtitle;
         },
@@ -38,14 +38,14 @@ export const providerDiffTools = {
         minimal: false,  // Show full diff view
         hideDefaultError: true,
         noStatus: true,  // Always successful, stateless like Task
-        input: z.object({
-            unified_diff: z.string().optional().describe('Unified diff content'),
-            filePath: z.string().optional().describe('File path'),
-            description: z.string().optional().describe('Edit description')
-        }).partial().passthrough(),
-        result: z.object({
-            status: z.literal('completed').describe('Always completed')
-        }).partial().passthrough(),
+        input: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({
+            unified_diff: z.optional(z.string()).check(z.describe('Unified diff content')),
+            filePath: z.optional(z.string()).check(z.describe('File path')),
+            description: z.optional(z.string()).check(z.describe('Edit description'))
+        }))),
+        result: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({
+            status: z.literal('completed').check(z.describe('Always completed'))
+        }))),
         extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
             return resolveDiffToolHeaderPresentation({
                 tool: opts.tool,

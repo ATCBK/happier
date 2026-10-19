@@ -2,6 +2,34 @@ import { describe, expect, it } from 'vitest';
 import { projectMarkdownFindSpans, projectMarkdownFindText } from './markdownFindProjection';
 
 describe('projectMarkdownFindText', () => {
+    it('preserves code Find offsets in a mixed custom-options and code segment', () => {
+        const markdown = '<options>\n<option>choose</option>\n</options>\n```ts\nneedle\n```';
+        const projected = projectMarkdownFindText(markdown);
+        expect(projected.text).toBe('chooseneedle');
+        expect(projected.sourceOffsets.slice(-6)).toEqual(Array.from({ length: 6 }, (_, index) => markdown.indexOf('needle') + index));
+    });
+
+    it.each([
+        '> **needle**\n> second needle\n>\n>   ```ts\n>   needle\n>     needle\n>   ```',
+        '- Review\n\n      needle\n        needle',
+        '    needle\n      needle',
+    ])('maps every nested and indented occurrence back to its original source: %s', markdown => {
+        const projected = projectMarkdownFindText(markdown);
+        const displayed = [...projected.text.matchAll(/needle/g)].map(match => projected.sourceOffsets[match.index]);
+        expect(displayed).toEqual([...markdown.matchAll(/needle/g)].map(match => match.index));
+        expect(projected.sourceOffsets).toHaveLength(projected.text.length);
+        expect(projected.sourceEnds).toHaveLength(projected.text.length);
+        expect(projected.text).not.toContain('```');
+    });
+
+    it('projects nested prose and code with source offsets after container and fence indentation is removed', () => {
+        const markdown = '- **Review needle**\n\n    ```ts\n    const needle = 1;\n    ```';
+        const projected = projectMarkdownFindText(markdown);
+        expect(projected.text).toBe('Review needle\nconst needle = 1;');
+        const needles = [...projected.text.matchAll(/needle/g)].map(match => projected.sourceOffsets[match.index]);
+        expect(needles).toEqual([...markdown.matchAll(/needle/g)].map(match => match.index));
+    });
+
     it('projects canonical Markdown text and maps repeated labels across hidden destinations and markup', () => {
         const markdown = '# **same** [same](https://hidden/same) 😀';
         const result = projectMarkdownFindText(markdown);

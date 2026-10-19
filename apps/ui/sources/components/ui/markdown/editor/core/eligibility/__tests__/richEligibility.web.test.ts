@@ -34,16 +34,12 @@ it('keeps cheap gates synchronous and resolves lossless HTML through the deferre
         React.createElement(Probe, { value: '# Clean' })));
     expect(latest).toEqual({ eligible: true });
     expect(tiptap.loaded).toBe(false);
-    await act(async () => {
-        screen.tree.update(React.createElement(React.Suspense, { fallback: null },
-            React.createElement(Probe, { value: 'See note.[^1]\n\n[^1]: preserved' })));
-    });
+    await screen.update(React.createElement(React.Suspense, { fallback: null },
+        React.createElement(Probe, { value: 'See note.[^1]\n\n[^1]: preserved' })));
     expect(latest).toEqual({ eligible: false, reason: 'footnotes' });
     expect(tiptap.loaded).toBe(false);
-    await act(async () => {
-        screen.tree.update(React.createElement(React.Suspense, { fallback: null },
-            React.createElement(Probe, { value: 'Before <span>kept</span> after' })));
-    });
+    await screen.update(React.createElement(React.Suspense, { fallback: null },
+        React.createElement(Probe, { value: 'Before <span>kept</span> after' })));
     expect(latest).toEqual({ eligible: false, reason: 'html-or-jsx', pending: true });
     tiptap.release();
     await act(async () => {

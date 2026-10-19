@@ -1,12 +1,13 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ReviewCommentActionIdV1, ReviewCommentV1 } from '@happier-dev/protocol';
 import { ReviewCommentTransitionRequestV1Schema } from '@happier-dev/protocol';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { flushHookEffects, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { commitPreferredLanguage, getPreferredLanguage } from '@/text/preferredLanguage';
 import type {
     PluginPermissionGrant,
     PluginPermissionPendingGrantRequest,
@@ -27,14 +28,15 @@ vi.mock('@/components/ui/text/Text', async () => {
     const { createUiTextModuleMock } = await import('@/dev/testkit/mocks/uiText');
     return createUiTextModuleMock();
 });
-
 // The popover's portal and window measurement are the boundary; the real More menu and its rows render inline.
 vi.mock('@/components/ui/popover/Popover', async (importOriginal) =>
     (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    const { getPreferredLanguage } = await import('@/text/preferredLanguage');
     return createTextModuleMock({ translate: (key: string, params?: Record<string, unknown>) => {
+        if (getPreferredLanguage() === 'fr') return `fr:${key}`;
         if (key === 'files.reviewComments.durable.count') return String(params?.count ?? '');
         if (key === 'files.reviewComments.durable.directWriteGrant.body') return String(params?.pluginId ?? '');
         if (key === 'files.reviewComments.durable.bulkFailure') return `${String(params?.commentId ?? '')}:${String(params?.errorCode ?? '')}`;
@@ -104,10 +106,26 @@ function deferred<T>() {
 const settleMenu = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
 
 describe('ReviewCommentsSessionSurface', () => {
+    let initialLanguage: ReturnType<typeof getPreferredLanguage>;
     beforeEach(() => {
+        initialLanguage = getPreferredLanguage();
+        commitPreferredLanguage('en');
         modalMock.prompt.mockReset();
         submitMessageSpy.mockReset();
         resetReviewRunCommentsForTests();
+    });
+    afterEach(async () => { await act(async () => { commitPreferredLanguage(initialLanguage); }); });
+
+    it('updates mounted comment, filter and toolbar labels when the committed locale changes', async () => {
+        const execute = vi.fn(async () => ({ items: [comment()], cursor: null }));
+        const screen = await renderScreen(<ReviewCommentsSessionSurface projectId="project-1" execute={execute} testID="comments" />);
+        await flushHookEffects();
+        const keys = ['reply', 'resolve', 'bulkResolve', 'states.open', 'headerTitle'];
+        for (const key of keys) expect(screen.getTextContent()).toContain(`files.reviewComments.durable.${key}`);
+        await act(async () => { commitPreferredLanguage('fr'); });
+        for (const key of keys) expect(screen.getTextContent()).toContain(`fr:files.reviewComments.durable.${key}`);
+        expect(screen.findHostByTestId('review-comment-comment-1')).not.toBeNull();
+        expect(execute).toHaveBeenCalledTimes(1);
     });
 
     it.each(['edit', 'reply'] as const)('submits %s text through the real Action policy without a second confirmation', async (operation) => {

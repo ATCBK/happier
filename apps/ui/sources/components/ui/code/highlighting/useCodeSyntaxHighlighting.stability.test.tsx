@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
@@ -53,9 +52,7 @@ describe('useCodeSyntaxHighlighting', () => {
         const firstConfig = latestConfig;
         expect(firstConfig).not.toBeNull();
 
-        await act(async () => {
-            screen.tree.update(<Harness filePath="src/a.ts" />);
-        });
+        await screen.update(<Harness filePath="src/a.ts" />);
 
         expect(latestConfig).toBe(firstConfig);
     });

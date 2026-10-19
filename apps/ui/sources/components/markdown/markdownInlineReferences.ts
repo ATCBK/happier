@@ -1,16 +1,10 @@
 /**
  * Inline references: a Markdown link whose destination is `<scheme>:<target>` names something the
  * caller owns (a review finding cited in a walkthrough stop). The caller resolves the target to the
- * label and colours drawn where the author placed it, and receives its press; an unresolved or
+ * label, severity and colours drawn where the author placed it, and receives its press; an unresolved or
  * unowned reference renders as its plain text. A reference is never an openable URL.
  */
-export type MarkdownInlineReference = Readonly<{ label: string; foreground: string; background: string }>;
-
-export type MarkdownInlineReferences = Readonly<{
-    scheme: string;
-    resolve: (target: string) => MarkdownInlineReference | null;
-    onPress?: (target: string) => void;
-}>;
+export type { MarkdownInlineReference, MarkdownInlineReferences } from '@happier-dev/plugin-ui/components';
 
 /** The internal destination a resolved reference renders with; the link handling owner never opens it. */
 export const MARKDOWN_INLINE_REFERENCE_HREF_PREFIX = 'happier-ref:';

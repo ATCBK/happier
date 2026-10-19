@@ -7,7 +7,7 @@ import { getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog
 import { formatAgentLikeIdForDisplay } from '@/agents/catalog/formatAgentLikeIdForDisplay';
 import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { describeEffectiveModelMode } from '@/sync/domains/models/describeEffectiveModelMode';
-import { findModelOptionForEffectiveModelId, getModelOptionsForSession } from '@/sync/domains/models/modelOptions';
+import { resolveSessionModelLabel } from '@/sync/domains/models/modelOptions';
 import type { ToolCall } from "@happier-dev/session-core/messages";
 import { readSessionModelsState } from '@/sync/domains/sessionControl/readSessionControlMetadata';
 import type { Metadata } from '@happier-dev/session-core/state';
@@ -86,11 +86,7 @@ function resolveModelLabel(params: {
     if (!params.modelId || params.modelId === 'default') return null;
     if (!params.agentId) return params.modelId;
 
-    const option = findModelOptionForEffectiveModelId(
-        getModelOptionsForSession(params.agentId, params.metadata),
-        params.modelId,
-    );
-    return option?.label.trim() || params.modelId;
+    return resolveSessionModelLabel(params.agentId, params.metadata, params.modelId) ?? params.modelId;
 }
 
 function resolveNativeSessionModelId(agentId: string | null, metadata: Metadata | null): string | null {

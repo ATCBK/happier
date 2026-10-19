@@ -1,3 +1,4 @@
+import { readMarkdownSpecialCodeSources, type MarkdownContainerBlock } from '../streaming/readMarkdownContainerBlock';
 import type { MarkdownSpan } from '@/components/markdown/parseMarkdown';
 import { parseMarkdownTableSources } from '@/components/markdown/parseMarkdownBlock';
 import { parseMarkdownSyntax } from '@/components/markdown/streaming/splitMarkdownIntoBlockSources';
@@ -24,6 +25,15 @@ export function projectPlainFindText(text: string, sourceStart = 0): FindDisplay
         text,
         sourceOffsets: Array.from({ length: text.length }, (_, index) => sourceStart + index),
         sourceEnds: Array.from({ length: text.length }, (_, index) => sourceStart + index + 1),
+    };
+}
+
+/** Rebase an existing display projection through grammar-owned decontainerization. */
+export function projectFindTextThroughSourceOffsets(leaf: FindDisplayText, sourceOffsets: readonly number[], localStart = 0): FindDisplayText {
+    return {
+        ...leaf,
+        sourceOffsets: leaf.sourceOffsets.map(offset => sourceOffsets[localStart + offset]!),
+        sourceEnds: leaf.sourceEnds.map(end => sourceOffsets[localStart + end - 1]! + 1),
     };
 }
 
@@ -169,6 +179,26 @@ function projectMarkdownFindDisplay(markdown: string): MarkdownFindDisplay {
             visit(parseMarkdownSyntax(renderMarkdown).topNode, renderMarkdown, segment.sourceStart - definitionPrefixLength);
             continue;
         }
+        if (segment.type === 'container-block') {
+            const visitContainer = (block: MarkdownContainerBlock): void => {
+                if (block.type === 'code') {
+                    if (block.block.type !== 'code-block') return;
+                    separator(block.sourceStart);
+                    spans.push({ text: block.block.content, sourceOffsets: block.sourceOffsets,
+                        sourceEnds: block.sourceOffsets.map(offset => offset + 1), styles: ['code'], url: null });
+                } else if (block.type === 'prose') {
+                    separator(block.sourceStart);
+                    for (const span of projectMarkdownFindSpans(block.markdown)) {
+                        spans.push({ ...span, ...projectFindTextThroughSourceOffsets(span, block.sourceOffsets) });
+                    }
+                } else if (block.type === 'quote') block.children.forEach(visitContainer);
+                else block.items.forEach(item => item.children.forEach(visitContainer));
+            };
+            visitContainer(segment.container);
+            continue;
+        }
+        const codeSources = segment.blocks.some(block => block.type === 'code-block')
+            ? readMarkdownSpecialCodeSources(segment.markdown, parseMarkdownSyntax(segment.markdown).topNode.firstChild) : null;
         const tableSources = segment.blocks.some((block) => block.type === 'table')
             ? parseMarkdownTableSources(segment.markdown)
             : undefined;
@@ -181,18 +211,10 @@ function projectMarkdownFindDisplay(markdown: string): MarkdownFindDisplay {
         };
         for (const [blockIndex, block] of segment.blocks.entries()) {
             if (block.type === 'code-block') {
-                sourceCursor = segment.markdown.indexOf('\n') + 1;
-                const lines = block.content.split('\n');
-                for (let index = 0; index < lines.length; index++) {
-                    const line = lines[index]!;
-                    const end = segment.markdown.indexOf('\n', sourceCursor);
-                    const sourceEnd = end >= 0 ? end : segment.markdown.length;
-                    // The parser removes only the opening fence's indentation.
-                    const removed = sourceEnd - sourceCursor - line.length;
-                    append(line, segment.sourceStart + sourceCursor + removed, ['code']);
-                    if (index < lines.length - 1) append('\n', segment.sourceStart + sourceEnd, ['code']);
-                    sourceCursor = sourceEnd + 1;
-                }
+                const projection = codeSources!.get(blockIndex)!;
+                spans.push({ text: block.content, styles: ['code'], url: null,
+                    sourceOffsets: projection.sourceOffsets.map(offset => segment.sourceStart + offset),
+                    sourceEnds: projection.sourceEnds.map(end => segment.sourceStart + end) });
             } else if (block.type === 'mermaid') {
                 // Diagrams are non-text media, including their error-source fallback.
                 continue;

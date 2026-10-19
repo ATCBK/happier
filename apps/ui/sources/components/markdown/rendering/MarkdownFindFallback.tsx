@@ -2,7 +2,7 @@ import * as React from 'react';
 import { MarkdownBlockView } from '../MarkdownBlockView';
 import type { MarkdownBlock, MarkdownSpan } from '../parseMarkdown';
 import { parseMarkdownSyntax } from '../streaming/splitMarkdownIntoBlockSources';
-import { projectMarkdownFindSpans } from '@/components/markdown/rendering/markdownFindProjection';
+import { projectFindTextThroughSourceOffsets, projectMarkdownFindSpans } from '@/components/markdown/rendering/markdownFindProjection';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import { markdownProfileToLegacyVariant } from './MarkdownRenderingProfile';
 import { MarkdownFindDecorationContext, projectLeafRanges } from './MarkdownFindDecorationContext';
@@ -14,6 +14,7 @@ type Props = Pick<React.ComponentProps<typeof MarkdownView>, 'onOptionPress' | '
     markdown: string;
     sourceStart: number;
     ranges: readonly FindTextRange[];
+    sourceOffsets?: readonly number[];
     profile: NonNullable<React.ComponentProps<typeof MarkdownView>['profile']>;
     selectable: boolean;
     first: boolean;
@@ -30,7 +31,8 @@ export function MarkdownFindFallback(props: Props) {
             const leaves = projectMarkdownFindSpans(props.markdown.slice(start, end));
             return leaves.map((leaf) => {
                 const span: MarkdownSpan = { text: leaf.text, styles: leaf.styles, url: leaf.url };
-                decorations.set(span, projectLeafRanges(leaf, props.sourceStart + start, props.ranges));
+                const projection = props.sourceOffsets ? projectFindTextThroughSourceOffsets(leaf, props.sourceOffsets, start) : leaf;
+                decorations.set(span, projectLeafRanges(projection, props.sourceOffsets ? 0 : props.sourceStart + start, props.ranges));
                 return span;
             });
         };
@@ -69,7 +71,7 @@ export function MarkdownFindFallback(props: Props) {
         const tree = parseMarkdownSyntax(props.markdown);
         for (let node = tree.topNode.firstChild; node; node = node.nextSibling) visit(node);
         return { blocks, decorations };
-    }, [props.markdown, props.ranges, props.sourceStart]);
+    }, [props.markdown, props.ranges, props.sourceStart, props.sourceOffsets]);
     return <MarkdownFindDecorationContext.Provider value={prepared.decorations}>
         {prepared.blocks.map((block, index) => <MarkdownBlockView key={index} block={block}
             first={props.first && index === 0} last={props.last && index === prepared.blocks.length - 1}

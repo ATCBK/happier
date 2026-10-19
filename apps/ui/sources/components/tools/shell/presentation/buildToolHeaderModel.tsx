@@ -20,6 +20,8 @@ export type ToolHeaderModel = Readonly<{
     title: string;
     subtitle: string | null;
     statusText: string | null;
+    answeredBy: ReturnType<typeof resolveToolHeaderTextPresentation>['answeredBy'];
+    answeredByLabel: string | null;
     icon: React.ReactNode;
     hasSpecificView: boolean;
     isUnknownTool: boolean;
@@ -43,9 +45,11 @@ export function buildToolHeaderModel(input: {
      * live-metadata answer.
      */
     historicalAgentId?: string | null;
+    answeringSession?: Readonly<{ sessionId: string; name: string | null }>;
 }): ToolHeaderModel {
     const toolForRendering = normalizeToolCallForRendering(input.tool);
-    const headerText = resolveToolHeaderTextPresentation({ tool: toolForRendering, metadata: input.metadata });
+    const headerText = resolveToolHeaderTextPresentation({ tool: toolForRendering, metadata: input.metadata,
+        answeringSession: input.answeringSession });
     const normalizedToolName = headerText.normalizedToolName;
     const knownTool = knownTools[normalizedToolName as keyof typeof knownTools] as any;
 
@@ -81,6 +85,8 @@ export function buildToolHeaderModel(input: {
         title: headerText.title,
         subtitle: headerText.subtitle,
         statusText: headerText.statusText,
+        answeredBy: headerText.answeredBy,
+        answeredByLabel: headerText.answeredByLabel,
         icon,
         hasSpecificView,
         isUnknownTool,

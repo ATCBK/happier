@@ -92,10 +92,10 @@ describe('HappierUnifiedDiffViewer (folding)', () => {
         expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === passage)).toBe(true);
 
         const shifted = patch.replace('@@ -1,25 +1,25 @@', '@@ -1,25 +1,28 @@\n+insertedA\n+insertedB') + '+new ending\n';
-        await act(async () => { screen.tree.update(<HappierUnifiedDiffViewer mode="unified" unifiedDiff={shifted} filePath="src/demo.ts" />); });
+        await screen.update(<HappierUnifiedDiffViewer mode="unified" unifiedDiff={shifted} filePath="src/demo.ts" />);
         expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === passage)).toBe(true);
         expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === 'line20')).toBe(false);
-        await act(async () => { screen.tree.update(<HappierUnifiedDiffViewer mode="unified" unifiedDiff={shifted} filePath="src/other.ts" />); });
+        await screen.update(<HappierUnifiedDiffViewer mode="unified" unifiedDiff={shifted} filePath="src/other.ts" />);
         expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === passage)).toBe(false);
     });
 

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import renderer, { act } from 'react-test-renderer';
+import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -294,13 +294,12 @@ describe('TiptapWebViewSurface (native)', () => {
 
         const ref = React.createRef<any>();
         const onChange = vi.fn();
-        let tree: renderer.ReactTestRenderer;
-        tree = (await renderScreen(React.createElement(TiptapWebViewSurface, {
+        const screen = await renderScreen(React.createElement(TiptapWebViewSurface, {
             ref,
             resetKey: '1',
             value: 'hello',
             onChange,
-        }))).tree;
+        }));
 
         emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
 
@@ -314,7 +313,7 @@ describe('TiptapWebViewSurface (native)', () => {
         emitEnvelope({ v: 1, type: 'selectionState', payload: staleSelectionState });
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 React.createElement(TiptapWebViewSurface, {
                     ref,
                     resetKey: '2',
@@ -353,13 +352,12 @@ describe('TiptapWebViewSurface (native)', () => {
 
         const ref = React.createRef<any>();
         const onChange = vi.fn();
-        let tree: renderer.ReactTestRenderer;
-        tree = (await renderScreen(React.createElement(TiptapWebViewSurface, {
+        const screen = await renderScreen(React.createElement(TiptapWebViewSurface, {
             ref,
             resetKey: '1',
             value: 'hello',
             onChange,
-        }))).tree;
+        }));
 
         emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
 
@@ -378,7 +376,7 @@ describe('TiptapWebViewSurface (native)', () => {
         emitEnvelope({ v: 1, type: 'selectionState', payload: staleSelectionState });
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 React.createElement(TiptapWebViewSurface, {
                     ref,
                     resetKey: '2',
@@ -419,12 +417,11 @@ describe('TiptapWebViewSurface (native)', () => {
         postMessageSpy.mockClear();
         lastWebViewProps = null;
 
-        let tree: renderer.ReactTestRenderer;
-        tree = (await renderScreen(React.createElement(TiptapWebViewSurface, {
+        const screen = await renderScreen(React.createElement(TiptapWebViewSurface, {
             resetKey: '1',
             value: 'hello',
             onChange: vi.fn(),
-        }))).tree;
+        }));
 
         const firstHtml = lastWebViewProps?.source?.html;
         expect(firstHtml).toContain('#abcdef');
@@ -437,7 +434,7 @@ describe('TiptapWebViewSurface (native)', () => {
         };
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 React.createElement(TiptapWebViewSurface, {
                     resetKey: '1',
                     value: 'hello',
@@ -455,19 +452,18 @@ describe('TiptapWebViewSurface (native)', () => {
         lastWebViewProps = null;
 
         const ref = React.createRef<any>();
-        let tree: renderer.ReactTestRenderer;
-        tree = (await renderScreen(React.createElement(TiptapWebViewSurface, {
+        const screen = await renderScreen(React.createElement(TiptapWebViewSurface, {
             ref,
             resetKey: '1',
             value: 'seed markdown',
             onChange: vi.fn(),
-        }))).tree;
+        }));
 
         emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
         const callCountBeforeReset = postMessageSpy.mock.calls.length;
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 React.createElement(TiptapWebViewSurface, {
                     ref,
                     resetKey: '2',

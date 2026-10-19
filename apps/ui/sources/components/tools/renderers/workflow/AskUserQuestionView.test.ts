@@ -22,6 +22,8 @@ import { createMachineFixture, createRootLayoutFeaturesResponse } from '@/dev/te
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { PluginProjectionV2Schema, DaemonContributionRegistryProjectionDescribeResponseSchema, DaemonPluginSettingsGetRequestSchema, DaemonPluginSettingsSetRequestSchema, DaemonPluginSettingsGetResponseSchema, DaemonPluginSettingsSetResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { PluginAccountSettingsMutationRequestV1Schema, PluginAccountSettingsReadResponseV1Schema, PluginAccountSettingsMutationResponseV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema,
+    PluginAvailabilityIntentsListActionOutputV1Schema, PluginAvailabilityMaterializationsReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
@@ -898,6 +900,37 @@ describe('AskUserQuestionView', () => {
 
     it('persists an external Agent choice through its own qualified settings declaration', async () => {
         publishReviewAskUserQuestionDescriptor(['always_include']);
+        // Account Settings admission reads the selected release declaration;
+        // a daemon's current Agent descriptor alone cannot authorize that write.
+        const intentRead = PluginAvailabilityIntentReadActionOutputV1Schema.parse({
+            availabilityCursor: 1, hostingCapability: { enabled: false },
+            intent: { pluginId: 'acme.review', desiredVersion: '1.0.0', enabled: true,
+                offlineUiHosting: 'disabled', writableCollections: [], revision: '1' },
+            release: { ref: { pluginId: 'acme.review', version: '1.0.0' }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                normalizedManifest: { schemaVersion: 2, id: 'acme.review', version: '1.0.0', displayName: 'Review',
+                    engines: { happier: '^1.0.0' }, runtime: { apiVersion: 1 }, contributes: { settings: [{
+                        id: 'settings', title: 'Remembered choices', scope: 'account',
+                        target: { kind: 'agent', agent: { pluginId: 'acme.review', localId: 'review' } },
+                        fields: [{ id: 'reviewScopePreference', title: 'Review scope',
+                            schema: { type: 'string', enum: ['ask_every_time', 'always_include'] } }],
+                    }] } }, collectionContracts: [], uiSlots: [],
+                packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] } },
+            packageAssets: [], uiArtifacts: [],
+        });
+        homes.answer(account.serverId, `POST ${PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']}`, {
+            body: PluginAvailabilityMaterializationsReadActionOutputV1Schema.parse({ availabilityCursor: 1, snapshots: [] }),
+        });
+        homes.answer(account.serverId, `POST ${PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']}`, {
+            body: PluginAvailabilityIntentsListActionOutputV1Schema.parse({ availabilityCursor: 1, pluginIds: ['acme.review'],
+                intentReads: [{ pluginId: 'acme.review', response: intentRead }], failedPluginIds: [], nextCursor: null }),
+        });
+        const [{ createActivePluginAccountAvailabilityProjectionHydrator }, { applyPluginAccountAvailabilityProjectionRefresh }] = await Promise.all([
+            import('@/sync/api/plugins/availability/pluginAvailabilityProjection'),
+            import('@/sync/domains/plugins/availability/projection'),
+        ]);
+        const availability = await createActivePluginAccountAvailabilityProjectionHydrator().refresh();
+        if (!availability) throw new Error('Question Account Availability scope retired');
+        applyPluginAccountAvailabilityProjectionRefresh(availability);
         askUserQuestionSessionState.current = {
             serverId: account.serverId,
             metadataLayoutVersion: 1,

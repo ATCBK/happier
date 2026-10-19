@@ -4,6 +4,8 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
 import { CodeBlockView } from '@/components/ui/code/blocks/CodeBlockView';
+import { WrapLinesToggleButton } from '@/components/ui/code/WrapLinesToggleButton';
+import { useMarkdownCodeBlockWrap } from './MarkdownCodeBlockWrapState';
 import { DiffFilesListView } from '@/components/ui/code/diff/DiffFilesListView';
 import { useDiffFilesExpansionState } from '@/components/ui/code/diff/useDiffFilesExpansionState';
 import { buildDiffBlocks, buildDiffFileEntries, type DiffFileEntry } from '@/components/ui/code/model/diff/diffViewModel';
@@ -40,11 +42,12 @@ export const MarkdownCodeBlock = React.memo((props: Readonly<{
 
     const [mode, setMode] = React.useState<'diff' | 'code'>(canRenderDiff ? 'diff' : 'code');
 
+    const [wrapLines, setWrapLines] = useMarkdownCodeBlockWrap();
     const wrapLinesInDiffs = useSetting('wrapLinesInDiffs');
+    const showWrapControls = useSetting('showChatCodeBlockWrapControls');
     const showLineNumbersInToolViews = useSetting('showLineNumbersInToolViews');
     const fileListVirtualizationMinFilesSetting = useSetting('filesDiffFileListVirtualizationMinFiles');
 
-    const wrapLines = wrapLinesInDiffs !== false;
     const showLineNumbers = showLineNumbersInToolViews === true;
     const showPrefix = showLineNumbers;
 
@@ -74,32 +77,20 @@ export const MarkdownCodeBlock = React.memo((props: Readonly<{
         defaultExpanded: files.length <= 1,
     });
 
-    if (!canRenderDiff || props.findRanges?.length) {
-        return (
-            <CodeBlockView
-                code={props.content}
-                language={props.language}
-                selectable={props.selectable}
-                wrap={false}
-                showCopyButton={true}
-                scrollTestID="markdown-code-block-scroll"
-                findRanges={props.findRanges}
-            />
-        );
-    }
+    const codeView = (
+        <CodeBlockView
+            code={props.content}
+            language={props.language}
+            selectable={props.selectable}
+            wrap={wrapLines}
+            headerRight={showWrapControls !== false ? <WrapLinesToggleButton wrapLines={wrapLines} onChange={setWrapLines} /> : null}
+            showCopyButton={true}
+            scrollTestID="markdown-code-block-scroll"
+            findRanges={props.findRanges}
+        />
+    );
 
-    if (files.length === 0) {
-        return (
-            <CodeBlockView
-                code={props.content}
-                language={props.language}
-                selectable={props.selectable}
-                wrap={false}
-                showCopyButton={true}
-                scrollTestID="markdown-code-block-scroll"
-            />
-        );
-    }
+    if (!canRenderDiff || props.findRanges?.length || files.length === 0) return codeView;
 
     return (
         <View>
@@ -132,22 +123,13 @@ export const MarkdownCodeBlock = React.memo((props: Readonly<{
                     expandedKeys={expandedKeys}
                     onToggleExpanded={toggleExpanded}
                     canRenderInlineDiffs={true}
-                    wrapLines={wrapLines}
+                    wrapLines={wrapLinesInDiffs !== false}
                     showLineNumbers={showLineNumbers}
                     showPrefix={showPrefix}
                     virtualizeFileList={virtualizeFileList}
                     virtualizedListLayout="intrinsic"
                 />
-            ) : (
-                <CodeBlockView
-                    code={props.content}
-                    language={props.language}
-                    selectable={props.selectable}
-                    wrap={false}
-                    showCopyButton={true}
-                    scrollTestID="markdown-code-block-scroll"
-                />
-            )}
+            ) : codeView}
         </View>
     );
 });

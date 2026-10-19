@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 
 import { buildMonacoEditorThemeData, resolveCodeEditorTheme } from './editorTheme';
 
@@ -15,7 +16,7 @@ const colors = {
 
 describe('buildMonacoEditorThemeData', () => {
     it('hands Monaco hex colors only, because it paints any other expression solid red', () => {
-        const theme = buildMonacoEditorThemeData(resolveCodeEditorTheme({ dark: false, colors }));
+        const theme = buildMonacoEditorThemeData(resolveCodeEditorTheme(createThemeFixture({ dark: false, colors })));
 
         expect(theme.colors['editor.lineHighlightBorder']).toBe('#00000014');
         expect(theme.colors['editorLineNumber.foreground']).toBe('#3c3c4399');

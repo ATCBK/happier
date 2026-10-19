@@ -1,5 +1,6 @@
 import type { ToolCall } from "@happier-dev/session-core/messages";
 import type { Metadata } from '@happier-dev/session-core/state';
+import { SessionQuestionHandlerV1Schema, type SessionQuestionHandlerV1 } from '@happier-dev/protocol/sessions/permissions/v1';
 
 import { knownTools } from '@/components/tools/catalog';
 import { inferToolNameForRendering } from '@/components/tools/normalization/policy/toolNameInference';
@@ -14,6 +15,9 @@ export type ToolHeaderTextPresentation = Readonly<{
     title: string;
     subtitle: string | null;
     statusText: string | null;
+    /** Separate answer actor; never a replacement for the worker/request cause. */
+    answeredBy: SessionQuestionHandlerV1 | null;
+    answeredByLabel: string | null;
 }>;
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -61,8 +65,18 @@ function compactSubAgentRunSubtitle(subtitle: string | null, normalizedToolName:
 export function resolveToolHeaderTextPresentation(params: {
     tool: ToolCall;
     metadata: Metadata | null;
+    /** Already-authorized display projection, qualified to the exact answering Session. */
+    answeringSession?: Readonly<{ sessionId: string; name: string | null }>;
 }): ToolHeaderTextPresentation {
     const { tool, metadata } = params;
+    const actor = tool.permission?.status === 'approved'
+        ? SessionQuestionHandlerV1Schema.safeParse(tool.permission.answeredBy) : null;
+    const answeredBy = actor?.success ? actor.data : null;
+    const answeringSessionName = answeredBy?.kind === 'session' && params.answeringSession?.sessionId === answeredBy.sessionId
+        ? params.answeringSession.name?.trim() : null;
+    const answeredByLabel = answeredBy?.kind === 'session'
+        ? t('workflows.run.answeredBy', { name: answeringSessionName || t('message.provenanceSession') })
+        : answeredBy?.kind === 'person' ? t('workflows.run.answeredByPerson') : null;
 
     if (tool.name.startsWith('mcp__')) {
         return {
@@ -71,6 +85,8 @@ export function resolveToolHeaderTextPresentation(params: {
             title: formatMCPTitle(tool.name, tool.permission?.mcpTool, tool.input),
             subtitle: formatMCPSubtitle(tool.input),
             statusText: null,
+            answeredBy,
+            answeredByLabel,
         };
     }
 
@@ -141,10 +157,11 @@ export function resolveToolHeaderTextPresentation(params: {
 
     if (!knownTool) {
         const rawTitle = typeof title === 'string' ? title.trim() : '';
-        // When OpenCode (and other providers) emit simple lowercase tool names like "skill" or "question",
-        // prefer a minimally humanized title instead of showing raw lowercase.
-        if (rawTitle && /^[a-z][a-z0-9]*$/.test(rawTitle)) {
-            title = rawTitle[0]!.toUpperCase() + rawTitle.slice(1);
+        // When providers emit simple lowercase or snake_case tool names like "skill" or
+        // "codex_command_execution", prefer a minimally humanized title instead of the raw identifier.
+        if (rawTitle && /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/.test(rawTitle)) {
+            const words = rawTitle.replace(/_/g, ' ');
+            title = words[0]!.toUpperCase() + words.slice(1);
         }
     }
 
@@ -154,5 +171,7 @@ export function resolveToolHeaderTextPresentation(params: {
         title,
         subtitle,
         statusText,
+        answeredBy,
+        answeredByLabel,
     };
 }

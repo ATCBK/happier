@@ -62,7 +62,8 @@ describe('review comments panel components', () => {
                 selectedStates={['open']}
             />,
         );
-        expect(panel.getTextContent()).toContain('Filters');
+        expect(panel.findHostByTestId('review-comment-filter-state-open')?.props['aria-pressed']).toBe(true);
+        expect(panel.findHostByTestId('review-comment-filter-state-proposed')?.props['aria-pressed']).toBe(false);
         expect(panel.getTextContent()).toContain('Open issue.');
         expect(panel.getTextContent()).not.toContain('Proposals only');
 

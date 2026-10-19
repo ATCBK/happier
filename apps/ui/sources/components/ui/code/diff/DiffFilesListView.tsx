@@ -429,7 +429,7 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
                             <View style={styles.fileRowMain}>
                                 <Icon name={expanded ? 'caret-down' : 'caret-right'} size={12} color={styles.filePath.color} />
                                 <FileIcon fileName={file.filePath ?? ''} size={16} appearance="line" />
-                                <InlineRepoPathLabel fullPath={diffFileDisplayPath(file)} preferNameOverPath pathTextStyle={styles.path} nameTextStyle={styles.filePath} findRanges={findState?.pathRanges} />
+                                <InlineRepoPathLabel fullPath={diffFileDisplayPath(file)} preferNameOverPath align="start" pathTextStyle={styles.path} nameTextStyle={styles.filePath} findRanges={findState?.pathRanges} />
                                 {file.kind ? (
                                     <View
                                         style={[
@@ -624,6 +624,8 @@ const styles = StyleSheet.create((theme) => ({
     },
     openFileButton: {
         marginLeft: 10,
+        // The row's own horizontal inset, so the button sits inside its card instead of on the pane edge.
+        marginRight: 12,
         width: 28,
         height: 28,
         borderRadius: 8,

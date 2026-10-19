@@ -47,6 +47,16 @@ describe('DiffPresentationStyleToggleButton', () => {
         await screen.pressByTestIdAsync('diff-presentation:split');
         expect(setFilesDiffPresentationStyle).toHaveBeenCalledWith('split');
     });
+    it('names the segments by the choice alone, not by the setting title that serves as the tooltip', async () => {
+        styleSettingValue = 'unified';
+        const { DiffPresentationStyleToggleButton } = await import('./DiffPresentationStyleToggleButton');
+        const { DiffPresentationWidthProvider } = await import('./diffPresentationStyle');
+        const screen = await renderScreen(<DiffPresentationWidthProvider widthPx={1100}><DiffPresentationStyleToggleButton presentation="segmented" /></DiffPresentationWidthProvider>);
+        const labels = screen.findAll((node) => typeof node.type === 'string' && node.children.length === 1 && typeof node.children[0] === 'string').map((node) => node.children[0]);
+        expect(labels).toContain('settingsSourceControl.page.files.unified');
+        expect(labels).toContain('settingsSourceControl.page.files.split');
+        expect(labels.some((label) => String(label).includes('diffPresentation.options'))).toBe(false);
+    });
     it('toggles unified -> split', async () => {
         setFilesDiffPresentationStyle.mockClear();
         styleSettingValue = 'unified';

@@ -20,7 +20,7 @@ import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Modal } from '@/modal';
-import { t } from '@/text';
+import { t, usePreferredLanguage } from '@/text';
 import { sync } from '@/sync/sync';
 import { randomUUID } from '@/platform/randomUUID';
 import type {
@@ -130,9 +130,10 @@ export function ReviewCommentsSessionSurface(props: ReviewCommentsSessionSurface
 
 function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceProps) {
     const { theme } = useUnistyles();
-    const labels = React.useMemo(() => buildReviewCommentLabels(), []);
-    const headerLabels = React.useMemo(() => buildReviewCommentsHeaderLabels(), []);
-    const directWriteGrantLabels = React.useMemo(() => buildReviewCommentDirectWriteGrantLabels(), []);
+    const language = usePreferredLanguage();
+    const labels = React.useMemo(() => buildReviewCommentLabels(), [language]);
+    const headerLabels = React.useMemo(() => buildReviewCommentsHeaderLabels(), [language]);
+    const directWriteGrantLabels = React.useMemo(() => buildReviewCommentDirectWriteGrantLabels(), [language]);
     const actions = React.useMemo(() => createReviewCommentsActions({ execute: props.execute }), [props.execute]);
     const [commentsState, setCommentsState] = React.useState(createEmptyReviewCommentsState);
     const [ownPanelOpen, setPanelOpen] = React.useState(props.defaultPanelOpen !== false);

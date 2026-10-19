@@ -115,6 +115,9 @@ async function findPierreHoverUtilityButtonProps(utility: any): Promise<any> {
     return props;
 }
 
+// Load the real runtime graph after installing its boundaries, before behavior deadlines begin.
+await import('./PierreDiffViewer.web');
+
 describe('PierreDiffViewer (web)', () => {
     it('uses the surface evidence fallback if the external renderer fails', async () => {
         fileDiffSpy.mockImplementation(() => { throw new Error('renderer failed'); });
@@ -142,6 +145,22 @@ describe('PierreDiffViewer (web)', () => {
             const patch = fileDiffSpy.mock.calls.at(-1)?.[0].fileDiff;
             expect(patch?.additionLines).toEqual(['after\n', ' \n']);
             expect(error.mock.calls.filter((call) => String(call[0]).includes('invalid rawLine'))).toEqual([]);
+        } finally {
+            error.mockRestore();
+        }
+    });
+    it('renders a hunk-only snippet without logging a parser diagnostic', async () => {
+        fileDiffSpy.mockClear();
+        // Renderer creation reports its SDK deprecation; observe the actual diff update separately.
+        const screen = await renderScreen(<React.Fragment />);
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+            await screen.update(<PierreDiffViewer mode="unified" unifiedDiff={'@@ -1 +1 @@\n-before\n+after\n'} />);
+            // A hunk without a file prelude keeps its source visible through the owner's fallback.
+            const snippet = screen.findByProps({ 'data-testid': 'pierre-diff-fallback' });
+            expect(snippet.children.join('')).toContain('-before\n+after');
+            expect(error).not.toHaveBeenCalled();
         } finally {
             error.mockRestore();
         }
@@ -548,12 +567,12 @@ describe('PierreDiffViewer (web)', () => {
         const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
         const patch = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-foo\n+bar\n';
         const view = (unifiedDiff: string) => <PierreDiffViewer mode="unified" filePath="a.ts" unifiedDiff={unifiedDiff} virtualized />;
-        const { tree } = await renderScreen(view(patch));
+        const screen = await renderScreen(view(patch));
         await renderer.act(async () => {
-            tree.findByType('Virtualizer').props.onScroll(600);
+            screen.findByType('Virtualizer').props.onScroll(600);
         });
-        await renderer.act(async () => { tree.update(view(patch.replace('+bar', '+updated'))); });
-        expect(tree.findByType('Virtualizer').props.scrollTop).toBe(600);
+        await screen.update(view(patch.replace('+bar', '+updated')));
+        expect(screen.findByType('Virtualizer').props.scrollTop).toBe(600);
     });
 
     it('does not reapply a consumed jump target on a patch refresh', async () => {
@@ -566,10 +585,10 @@ describe('PierreDiffViewer (web)', () => {
         root.append(target);
         const patch = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-foo\n+bar\n';
         const view = (unifiedDiff: string) => <PierreDiffViewer mode="unified" filePath="a.ts" unifiedDiff={unifiedDiff} scrollToLineId="a:5" />;
-        const { tree } = await renderScreen(view(patch), { createNodeMock: () => root });
+        const screen = await renderScreen(view(patch), { createNodeMock: () => root });
         expect(root.scrollTop).toBe(100);
         root.scrollTop = 600;
-        await renderer.act(async () => { tree.update(view(patch.replace('+bar', '+updated'))); });
+        await screen.update(view(patch.replace('+bar', '+updated')));
         expect(root.scrollTop).toBe(600);
     });
 
@@ -610,9 +629,7 @@ describe('PierreDiffViewer (web)', () => {
         expect(virtualizerSpy).toHaveBeenCalledTimes(0);
         expect(screen.findByProps({ 'data-testid': 'pierre-diff-viewer' }).props.style?.position).toBeUndefined();
         const firstRenderedKey = screen.tree.findByType('FileDiff').props.fileDiff.cacheKey;
-        await renderer.act(async () => {
-            screen.tree.update(view(patch.replace('+bar', '+updated')));
-        });
+        await screen.update(view(patch.replace('+bar', '+updated')));
         expect(screen.tree.findByType('FileDiff').props.fileDiff.cacheKey).not.toBe(firstRenderedKey);
     });
 
@@ -1233,9 +1250,9 @@ describe('PierreDiffViewer (web)', () => {
             '',
         ].join('\n');
 
-        let tree!: renderer.ReactTestRenderer;
+        let screen!: Awaited<ReturnType<typeof renderScreen>>;
         await renderer.act(async () => {
-            tree = (await renderScreen(<PierreDiffViewer
+            screen = await renderScreen(<PierreDiffViewer
                     mode="unified"
                     filePath="src/a.ts"
                     unifiedDiff={patch}
@@ -1243,14 +1260,14 @@ describe('PierreDiffViewer (web)', () => {
                     showLineNumbers={true}
                     showPrefix={true}
                     selectedLineIds={new Set(['a:5'])}
-                />)).tree;
+                />);
         });
 
         const firstOptions = fileDiffSpy.mock.calls[fileDiffSpy.mock.calls.length - 1]?.[0]?.options;
         expect(String(firstOptions?.unsafeCSS ?? '')).toContain("[data-line-type='change-addition'][data-line='1']");
 
         await renderer.act(async () => {
-            tree.update(
+            await screen.update(
                 <PierreDiffViewer
                     mode="unified"
                     filePath="src/a.ts"
@@ -1380,9 +1397,7 @@ describe('PierreDiffViewer (web)', () => {
         const fallbackText = String((fallback.children ?? []).join(''));
         expect(fallbackText).toContain('--- a/a.ts');
         expect(fallbackText).toContain('+++ b/a.ts');
-        await renderer.act(async () => {
-            screen.tree.update(<PierreDiffViewer mode="unified" filePath="src/a.ts" unifiedDiff={patch.replace('+bar', '+recovered')} />);
-        });
+        await screen.update(<PierreDiffViewer mode="unified" filePath="src/a.ts" unifiedDiff={patch.replace('+bar', '+recovered')} />);
         expect(screen.findAllByProps({ 'data-testid': 'pierre-diff-fallback' })).toHaveLength(0);
         expect(fileDiffSpy.mock.calls.at(-1)?.[0].fileDiff).toBeTruthy();    });
 

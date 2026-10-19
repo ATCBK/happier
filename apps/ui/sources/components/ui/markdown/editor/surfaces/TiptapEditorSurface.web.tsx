@@ -241,7 +241,10 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
                 if (ignoreChangeRef.current) {
                     // Still showing the seed; only a divergent transaction counts as
                     // a real user edit (R-A7).
-                    if (next === seedRef.current) {
+                    // The serializer reads a document that ends in a list or block back with a blank
+                    // line after it; that is the seed echoed, not an edit, so a built-in or imported
+                    // document is never dirty before anyone touches it.
+                    if (next === seedRef.current || next.trimEnd() === seedRef.current.trimEnd()) {
                         return;
                     }
                     ignoreChangeRef.current = false;

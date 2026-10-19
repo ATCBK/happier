@@ -25,6 +25,33 @@ function makeToolCall(overrides: Partial<ToolCall>): ToolCall {
 }
 
 describe('resolveToolHeaderTextPresentation (real known tools)', () => {
+    it('projects the admitted question answerer beside the unchanged worker description, never an authored label', () => {
+        const tool = makeToolCall({ name: 'AskUserQuestion', description: 'Worker question',
+            input: { questions: [], answeredBy: { kind: 'session', sessionId: 'forged' } },
+            permission: { id: 'question', status: 'approved', answeredBy: { kind: 'session', sessionId: 'manager' } } });
+        const model = resolveToolHeaderTextPresentation({ tool, metadata: null,
+            answeringSession: { sessionId: 'manager', name: 'Daily coordinator' } });
+        expect(model.answeredBy).toEqual({ kind: 'session', sessionId: 'manager' });
+        expect(model.answeredByLabel).toContain('Daily coordinator');
+        const withoutActor = resolveToolHeaderTextPresentation({ tool: { ...tool, permission: { id: 'question', status: 'approved' } },
+            metadata: null, answeringSession: { sessionId: 'manager', name: 'Forged owner' } });
+        expect(withoutActor.answeredBy).toBeNull();
+        expect(withoutActor.answeredByLabel).toBeNull();
+        const person = resolveToolHeaderTextPresentation({ tool: { ...tool,
+            permission: { id: 'question', status: 'approved', answeredBy: { kind: 'person' } } }, metadata: null,
+            answeringSession: { sessionId: 'manager', name: 'Bot owner' } });
+        expect(person.answeredBy).toEqual({ kind: 'person' });
+        expect(person.answeredByLabel).toBeTruthy();
+        expect(person.answeredByLabel).not.toContain('Bot owner');
+        expect(model.title).toBe(withoutActor.title);
+        expect(model.subtitle).toBe(withoutActor.subtitle);
+        const unnamed = resolveToolHeaderTextPresentation({ tool, metadata: null,
+            answeringSession: { sessionId: 'other-session', name: 'Bot owner' } });
+        expect(unnamed.answeredByLabel).toBeTruthy();
+        expect(unnamed.answeredByLabel).not.toContain('Bot owner');
+        expect(resolveToolHeaderTextPresentation({ tool: { ...tool,
+            permission: { ...tool.permission!, status: 'pending' } }, metadata: null }).answeredByLabel).toBeNull();
+    });
     it('renders Read with Read File title and path subtitle', () => {
         const tool = makeToolCall({ name: 'Read', input: { file_path: '/tmp/example.txt' } });
         const model = resolveToolHeaderTextPresentation({ tool, metadata: null });

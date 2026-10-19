@@ -549,20 +549,6 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
             </TranscriptCollapsible>
 
             {/*
-              * The Board item this call created, if it created one. It sits at row
-              * level beside the permission footer and approval cards rather than
-              * inside the collapsible, because it is the call's OUTCOME, not its
-              * diagnostic body: an MCP-named tool collapses to `title` by default,
-              * which would otherwise hide the widget the agent just made.
-              */}
-            <SessionBoardActionResultReference
-                tool={toolForRendering}
-                sessionId={sessionId}
-                serverId={props.serverId}
-                contentDemand={contentDemand}
-                visualContext={visualContext}
-            />
-            {/*
               * The managed workflow Run this call admitted, if it admitted one:
               * the same row-level OUTCOME placement, linking the exact Run.
               */}
@@ -612,7 +598,25 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
                     disabledReason={interaction.permissionDisabledReason}
                 />
             ))}
+            {statusKind === 'permission_pending' ? (
+                // Waiting for the person: the one attention edge every tool card shares (lab P6), drawn over
+                // the card so it never shifts layout when the wait starts or ends.
+                <View testID="tool-view-waiting-edge" pointerEvents="none" style={styles.waitingEdge} />
+            ) : null}
         </TranscriptJumpAttention>
+        {/*
+          * The Board item this call created, if it created one, is the call's OUTCOME: the agent's visual
+          * reply. It stands in the reply column below the card rather than inside its inset well, so it
+          * reads as the reply and the call above it stays a quiet line (an MCP-named tool collapses to its
+          * title by default). Inside the card it read as tool output.
+          */}
+        <SessionBoardActionResultReference
+            tool={toolForRendering}
+            sessionId={sessionId}
+            serverId={props.serverId}
+            contentDemand={contentDemand}
+            visualContext={visualContext}
+        />
         </TranscriptRowSeqProvider>
     );
 });
@@ -629,6 +633,12 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: theme.parts.toolCard.radius,
         marginVertical: theme.space.s4,
         overflow: 'hidden'
+    },
+    waitingEdge: {
+        ...StyleSheet.absoluteFillObject,
+        borderRadius: theme.parts.toolCard.radius,
+        borderWidth: 1,
+        borderColor: theme.colors.state.attention.foreground,
     },
     containerEmbedded: {
         // Inside a tool-calls group card the unit card already paints a continuous

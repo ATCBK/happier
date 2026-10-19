@@ -30,11 +30,11 @@ describe('code line navigation', () => {
         });
         await settleScroll();
         scrollY = 320;
-        await act(async () => screen.tree.update(render(1)));
+        await screen.update(render(1));
         await settleScroll();
         expect(scrollY).toBe(240);
         scrollY = 320;
-        await act(async () => screen.tree.update(render(1)));
+        await screen.update(render(1));
         await settleScroll();
         expect(scrollY).toBe(320);
     });
@@ -55,7 +55,7 @@ describe('code line navigation', () => {
         expect(externalScrollView.offsetRef.current).toBe(240);
         scrollY = 320;
         externalScrollView.offsetRef.current = scrollY;
-        await act(async () => screen.tree.update(<CodeLinesViewCore lines={[...lines]} virtualized={false} scrollToLineId="a:2" externalScrollView={externalScrollView} />));
+        await screen.update(<CodeLinesViewCore lines={[...lines]} virtualized={false} scrollToLineId="a:2" externalScrollView={externalScrollView} />);
         await settleScroll();
         expect(scrollY).toBe(320);
     });
@@ -68,7 +68,7 @@ describe('code line navigation', () => {
         await settleScroll();
         expect(onScrollToLine).toHaveBeenCalledWith(240);
         onScrollToLine.mockClear();
-        await act(async () => screen.tree.update(<CodeLinesViewCore lines={[...lines]} virtualized={false} scrollToLineId="a:2" onScrollToLine={onScrollToLine} />));
+        await screen.update(<CodeLinesViewCore lines={[...lines]} virtualized={false} scrollToLineId="a:2" onScrollToLine={onScrollToLine} />);
         await settleScroll();
         expect(onScrollToLine).not.toHaveBeenCalled();
     });

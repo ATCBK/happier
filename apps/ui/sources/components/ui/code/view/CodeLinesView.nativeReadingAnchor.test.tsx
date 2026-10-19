@@ -24,6 +24,8 @@ installCodeViewCommonModuleMocks({
     },
 });
 
+await import('./CodeLinesViewCore');
+
 describe('native code reading continuity', () => {
     it('lets only the native viewer covering the viewport top restore a shared scroll owner', async () => {
         const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
@@ -62,7 +64,7 @@ describe('native code reading continuity', () => {
             for (const node of screen.tree.root.findAll((node) => String(node.type) === 'View')) node.props.onLayout?.();
         });
         inserted = true;
-        await act(async () => screen.tree.update(render()));
+        await screen.update(render());
         expect(scrollY).toBe(80);
     });
 
@@ -89,7 +91,7 @@ describe('native code reading continuity', () => {
             screen.findByType('FlatList').props.onViewableItemsChanged({ viewableItems: [{ index: 2 }] });
         });
         inserted = true;
-        await act(async () => screen.tree.update(<CodeLinesViewCore lines={buildCodeLinesFromFile({ text: 'wrapped insertion\na\nb\nreading\nd' })} />));
+        await screen.update(<CodeLinesViewCore lines={buildCodeLinesFromFile({ text: 'wrapped insertion\na\nb\nreading\nd' })} />);
         expect(scrollY).toBe(115);
     });
 
@@ -113,10 +115,10 @@ describe('native code reading continuity', () => {
         await act(async () => {
             for (const row of screen.tree.root.findAll((node) => String(node.type) === 'View' && typeof node.props.nativeID === 'string')) row.props.onLayout?.();
         });
-        await act(async () => screen.tree.update(<CodeLinesViewCore virtualized={false} externalScrollView={externalScrollView} lines={buildCodeLinesFromFile({ text: `inserted\na\nb\n${tail}` })} />));
+        await screen.update(<CodeLinesViewCore virtualized={false} externalScrollView={externalScrollView} lines={buildCodeLinesFromFile({ text: `inserted\na\nb\n${tail}` })} />);
         expect(scrollY).toBe(initial + 25);
         // A second refresh can commit before the native onScroll echo arrives.
-        await act(async () => screen.tree.update(<CodeLinesViewCore virtualized={false} externalScrollView={externalScrollView} lines={buildCodeLinesFromFile({ text: `second\ninserted\na\nb\n${tail}` })} />));
+        await screen.update(<CodeLinesViewCore virtualized={false} externalScrollView={externalScrollView} lines={buildCodeLinesFromFile({ text: `second\ninserted\na\nb\n${tail}` })} />);
         expect(scrollY).toBe(initial + 50);
     });
 
@@ -139,7 +141,7 @@ describe('native code reading continuity', () => {
         await act(async () => {
             screen.findByType('FlatList').props.onViewableItemsChanged({ viewableItems: [{ index: 2 }] });
         });
-        await act(async () => screen.tree.update(<CodeLinesViewCore lines={buildCodeLinesFromFile({ text: 'inserted\na\nb\nreading\nd' })} />));
+        await screen.update(<CodeLinesViewCore lines={buildCodeLinesFromFile({ text: 'inserted\na\nb\nreading\nd' })} />);
         await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)); });
         expect(visible.index).toBe(3);
         expect(visible.viewOffset).toBe(0);

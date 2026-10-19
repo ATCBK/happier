@@ -58,6 +58,12 @@ function removeCodeFenceContentIndent(line: string, indent: number): string {
     return line.slice(removableSpaces);
 }
 
+export type MarkdownCodeSource = Readonly<{
+    text: string;
+    sourceOffsets: readonly number[];
+    sourceEnds: readonly number[];
+}>;
+
 export type MarkdownTableCellSource = Readonly<{
     text: string;
     sourceOffsets: readonly number[];
@@ -189,13 +195,27 @@ export function parseMarkdownTableSources(markdown: string): ReadonlyMap<number,
     return parseMarkdownBlockContent(markdown).tableSources;
 }
 
+/** Only a complete, dedicated option line is an interactive choice. */
+export function readMarkdownOption(line: string): string | null {
+    return line.trim().match(/^<option>(.*?)<\/option>$/)?.[1] ?? null;
+}
+
 export function parseMarkdownBlock(markdown: string) {
     return parseMarkdownBlockContent(markdown).blocks;
 }
 
-function parseMarkdownBlockContent(markdown: string) {
+export function parseMarkdownCodeSources(markdown: string): ReadonlyMap<number, MarkdownCodeSource> {
+    return parseMarkdownBlockContent(markdown, { includeCodeSources: true }).codeSources;
+}
+
+export function parseMarkdownBlockContent(markdown: string, options: Readonly<{ includeCodeSources?: boolean }> = {}): Readonly<{
+    blocks: MarkdownBlock[];
+    tableSources: ReadonlyMap<number, MarkdownTableSource>;
+    codeSources: ReadonlyMap<number, MarkdownCodeSource>;
+}> {
     const blocks: MarkdownBlock[] = [];
     const tableSources = new Map<number, MarkdownTableSource>();
+    const codeSources = new Map<number, MarkdownCodeSource>();
     const lines = markdown.split('\n');
     let sourceOffset = 0;
     const lineOffsets = lines.map((line) => {
@@ -223,16 +243,24 @@ function parseMarkdownBlockContent(markdown: string) {
         const openingCodeFence = parseOpeningCodeFence(line);
         if (openingCodeFence) {
             const content: string[] = [];
+            const sourceOffsets: number[] | null = options.includeCodeSources ? [] : null;
             while (index < lines.length) {
                 const nextLine = lines[index];
                 if (isClosingCodeFence(nextLine, openingCodeFence)) {
                     index++;
                     break;
                 }
-                content.push(removeCodeFenceContentIndent(nextLine, openingCodeFence.indent));
+                const contentLine = removeCodeFenceContentIndent(nextLine, openingCodeFence.indent);
+                if (sourceOffsets) {
+                    if (content.length > 0) sourceOffsets.push(lineOffsets[index] - 1);
+                    const start = lineOffsets[index] + nextLine.length - contentLine.length;
+                    for (let offset = 0; offset < contentLine.length; offset++) sourceOffsets.push(start + offset);
+                }
+                content.push(contentLine);
                 index++;
             }
             const contentString = content.join('\n');
+            if (sourceOffsets) codeSources.set(blocks.length, { text: contentString, sourceOffsets, sourceEnds: sourceOffsets.map(offset => offset + 1) });
 
             // Detect mermaid diagram language and route to appropriate block type
             if (openingCodeFence.language === 'mermaid') {
@@ -250,18 +278,22 @@ function parseMarkdownBlockContent(markdown: string) {
         }
 
         // Options block
-        if (trimmed.startsWith('<options>')) {
-            let items: string[] = [];
+        const hasOptionsWrapper = trimmed.startsWith('<options>');
+        const firstOption = readMarkdownOption(line);
+        if (hasOptionsWrapper || firstOption !== null) {
+            const items: string[] = firstOption === null ? [] : [firstOption];
             while (index < lines.length) {
                 const nextLine = lines[index];
                 if (nextLine.trim() === '</options>') {
                     index++;
                     break;
                 }
-                // Extract content from <option> tags
-                const optionMatch = nextLine.match(/<option>(.*?)<\/option>/);
-                if (optionMatch) {
-                    items.push(optionMatch[1]);
+                const option = readMarkdownOption(nextLine);
+                if (option !== null) {
+                    items.push(option);
+                } else if (!hasOptionsWrapper) {
+                    // Continuations have no enclosing block to delimit unrelated prose.
+                    break;
                 }
                 index++;
             }
@@ -331,5 +363,5 @@ function parseMarkdownBlockContent(markdown: string) {
             blocks.push({ type: 'text', content: parseMarkdownSpans(trimmed, false) });
         }
     }
-    return { blocks, tableSources };
+    return { blocks, tableSources, codeSources };
 }

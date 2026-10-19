@@ -11,6 +11,7 @@ import type { MarkdownRenderingProfile } from './MarkdownRenderingProfile';
 import type { MarkdownInlineReferences } from '../markdownInlineReferences';
 import type { MarkdownRenderSegment } from './markdownRenderSegmentTypes';
 import { SpecialMarkdownBlockView } from './SpecialMarkdownBlockView';
+import { MarkdownContainerView } from './MarkdownContainerView';
 import { MarkdownFindFallback } from './MarkdownFindFallback';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 
@@ -69,7 +70,22 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
                 inlineReferences={props.inlineReferences}
             />
         )
-        : (
+        : props.segment.type === 'container-block' ? (
+            <MarkdownContainerView
+                block={props.segment.container}
+                sourceStart={props.segment.sourceStart}
+                selectable={props.selectable}
+                profile={props.profile}
+                onLinkPress={props.onLinkPress}
+                textStyle={props.textStyle}
+                streamingReveal={props.streamingReveal}
+                streamingRevealPreset={props.streamingRevealPreset}
+                agentTexMath={props.agentTexMath}
+                findActive={props.findActive}
+                findSourceRanges={props.findSourceRanges}
+                inlineReferences={props.inlineReferences}
+            />
+        ) : (
             <SpecialMarkdownBlockView
                 blocks={props.segment.blocks}
                 findSourceRanges={props.findSourceRanges}

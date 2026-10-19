@@ -3,13 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { createOnShouldStartLoadWithRequest } from 'react-native-webview/src/WebViewShared';
 import { renderScreen } from '@/dev/testkit';
-import { installMarkdownCommonModuleMocks } from './markdownTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const clipboardMocks = vi.hoisted(() => ({
-  setStringAsync: vi.fn(async () => {}),
+  setStringAsync: vi.fn(async () => true),
 }));
 const modalMocks = vi.hoisted(() => ({
   alert: vi.fn(),
@@ -20,26 +19,17 @@ const linkingMocks = vi.hoisted(() => ({
 }));
 vi.mock('expo-clipboard', () => clipboardMocks);
 
-installMarkdownCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: modalMocks,
-        }).module;
-    },
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Platform: {
-                OS: 'ios',
-            },
-            Linking: linkingMocks,
-        });
-    },
-    storage: async () =>
-        await vi.importActual<typeof import('@/sync/domains/state/storage')>(
-            '@/sync/domains/state/storage',
-        ),
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ spies: modalMocks }).module;
+});
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ Platform: { OS: 'ios' }, Linking: linkingMocks });
+});
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock().module;
 });
 
 let lastWebViewHtml: string | null = null;

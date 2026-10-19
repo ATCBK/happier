@@ -1,51 +1,38 @@
 import * as React from 'react';
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { storage } from '@/sync/domains/state/storageStore';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('@/sync/domains/state/storage', async () => {
-  const { createStorageModuleStub } =
-    await import('@/dev/testkit/mocks/storage');
-  return createStorageModuleStub({
-    useSetting: (key: string) =>
-      key === 'filesDiffRendererMode' ? 'pierre' : undefined,
-  });
-});
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 
-// The Pierre renderer is a lazily fetched chunk (network boundary): it never arrives in this suite,
-// so the viewer stays in its loading state for the whole test.
-vi.mock('./pierre/PierreDiffViewer.web', () => new Promise(() => {}));
-
-vi.mock('./happier/HappierUnifiedDiffViewer', () => ({
-  HappierUnifiedDiffViewer: (props: any) =>
-    React.createElement('HappierUnifiedDiffViewer', {
-      ...props,
-      testID: 'happier-unified-diff-viewer',
-    }),
-}));
+// Hold the external renderer SDK's chunk import, not Happier's renderer or
+// Suspense owner. The real inline code renderer remains mounted underneath it.
+vi.mock('@pierre/diffs', () => new Promise(() => {}));
+const { HappierUnifiedDiffViewer } = await import('./happier/HappierUnifiedDiffViewer');
+const unifiedViewerType = Reflect.get(HappierUnifiedDiffViewer, 'type') ?? HappierUnifiedDiffViewer;
+const initialState = storage.getState();
 
 const DIFF =
   'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n';
 
 describe('DiffViewer (web) while the Pierre renderer loads', () => {
-  const previousWindow = (globalThis as any).window;
-  const previousDocument = (globalThis as any).document;
-  const previousWorker = (globalThis as any).Worker;
+  let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
 
-  beforeEach(() => {
-    (globalThis as any).Worker = function Worker() {} as any;
-    (globalThis as any).window = {};
-    (globalThis as any).document = {
-      baseURI: 'http://localhost/',
-      createElement: () => ({ attachShadow: () => ({}) }),
-    };
+  beforeEach(async () => {
+    browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
+    vi.stubGlobal('Worker', class Worker {});
+    storage.setState({ settings: { ...storage.getState().settings, filesDiffRendererMode: 'pierre' } });
   });
 
-  afterAll(() => {
-    (globalThis as any).window = previousWindow;
-    (globalThis as any).document = previousDocument;
-    (globalThis as any).Worker = previousWorker;
+  afterEach(() => {
+    standardCleanup();
+    storage.setState(initialState, true);
+    browser?.restore();
   });
 
   it('shows the code itself, not an empty or loading body, for an inline unified diff', async () => {
@@ -61,7 +48,7 @@ describe('DiffViewer (web) while the Pierre renderer loads', () => {
       />,
     );
 
-    const code = screen.findByTestId('happier-unified-diff-viewer');
+    const code = screen.findByType(unifiedViewerType);
     expect(code?.props.unifiedDiff).toBe(DIFF);
     expect(code?.props.showLineNumbers).toBe(true);
     expect(screen.findByTestId('pierre-diff-loading')).toBeNull();
@@ -79,6 +66,6 @@ describe('DiffViewer (web) while the Pierre renderer loads', () => {
       />,
     );
 
-    expect(screen.findByTestId('happier-unified-diff-viewer')).toBeNull();
+    expect(screen.findAllByType(unifiedViewerType)).toHaveLength(0);
   });
 });
