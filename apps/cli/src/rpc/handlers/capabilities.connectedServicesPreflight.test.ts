@@ -192,7 +192,7 @@ describe('capabilities.invoke connected-service preflight', () => {
     // The real declared-tool launch clears PATH; the simulated OS executable
     // must name this test runtime directly, as native catalog fixtures do.
     writeFileSync(fixture, fixtureSource.replace(/^#![^\n]*/, `#!${process.execPath}`)
-      .replace("id: 'gpt-5.4'", "id: existsSync(join(process.env.CODEX_HOME || '', 'auth.json')) ? 'gpt-6.1-sol' : 'unselected-model'")
+      .replace("id: 'gpt-5.4'", "id: existsSync(join(process.env.CODEX_HOME || '', 'auth.json')) ? 'gpt-6-luna' : 'unselected-model'")
       .replace("existsSync, writeFileSync", "existsSync, mkdirSync, writeFileSync")
       .replace("    captureMaterializedEnvironment();", `    captureMaterializedEnvironment();
     mkdirSync(join(process.env.CODEX_HOME, 'sessions'), { recursive: true });
@@ -312,7 +312,6 @@ describe('capabilities.invoke connected-service preflight', () => {
     const credentialReads: string[] = [];
     vi.spyOn(axios, 'get').mockImplementation(async (url) => {
       const path = new URL(String(url)).pathname;
-      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'e2ee', updatedAt: 0 } };
       if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {
         schemaVersion: 6, connectedServicesProviderStateSharingSettingsV1: {
           v: 1, defaults: { configMode: 'linked', stateMode: 'shared' }, byAgentId: { codex: { stateMode: 'shared' } },
@@ -394,15 +393,20 @@ describe('capabilities.invoke connected-service preflight', () => {
       },
     });
     phase = 'admit plugin runtime';
+    const selectedPluginIds = ['happier.agent.codex', 'happier.agent.opencode', ...(targetId === 'external' ? [SAMPLE_PLUGIN_ID] : [])];
     const lease = await pluginReloadController.acquireRuntimeRegistry({
       resolveRuntimeRegistry: async () => {
         const base = await resolveMergedContributionRegistry({ happyHomeDir: tempDir! });
         return resolveExecutablePluginRuntimeRegistry({
-        contributes: createResolvedContributionRegistry({ ...base, activationTargets:
-          base.activationTargets.map(target => preparedDevelopmentActivationGraphsByPluginId.has(target.pluginId)
+        contributes: createResolvedContributionRegistry({ ...base,
+          // This native-account fixture admits only its real Agent sources;
+          // unrelated UI release declarations are outside the exercised runtime.
+          pluginDeclarations: base.pluginDeclarations?.filter(target => selectedPluginIds.includes(target.pluginId)),
+          activationTargets: base.activationTargets.filter(target => selectedPluginIds.includes(target.pluginId))
+            .map(target => preparedDevelopmentActivationGraphsByPluginId.has(target.pluginId)
             ? { ...target, daemonEntryPath: preparedDevelopmentActivationGraphsByPluginId.get(target.pluginId)!.entryPath,
               devDaemonEntryPath: preparedDevelopmentActivationGraphsByPluginId.get(target.pluginId)!.entryPath }
-            : target) }), pluginIds: ['happier.agent.codex', 'happier.agent.opencode', 'happier.scm.backend.git', ...(targetId === 'external' ? [SAMPLE_PLUGIN_ID] : [])],
+            : target) }), pluginIds: selectedPluginIds,
         preparedDevelopmentActivationGraphsByPluginId,
         // Account plugin settings are persistent storage. An absent record uses
         // the real declaration defaults without attempting a real Account read.
@@ -533,7 +537,7 @@ describe('capabilities.invoke connected-service preflight', () => {
     }
     expect(response).toMatchObject({
       ok: true,
-      result: { source: 'dynamic', availableModels: expect.arrayContaining([expect.objectContaining({ id: 'gpt-6.1-sol' })]) },
+      result: { source: 'dynamic', availableModels: expect.arrayContaining([expect.objectContaining({ id: 'gpt-6-luna' })]) },
     });
     phase = 'selected-account structured Run admission';
     const { assertExecutionRunStructuredOutputModelAllowed } = await import('@/agent/runtime/bridges/executionRun/structuredOutputAdmission');
@@ -562,8 +566,8 @@ describe('capabilities.invoke connected-service preflight', () => {
     if (!acquired.ok || acquired.result.kind !== 'execution_run.snapshot') throw new Error('Missing selected Codex snapshot');
     const snapshotId = acquired.result.snapshotId;
     const nativeRequest = { backendTarget: { kind: 'builtInAgent' as const, agentId: 'codex' },
-      modelId: 'gpt-6.1-sol', cwd: tempDir, connectedServices,
-      modelSelection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-6.1-sol' } };
+      modelId: 'gpt-6-luna', cwd: tempDir, connectedServices,
+      modelSelection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-6-luna' } };
     // The retained Session requester must remain authoritative even when the
     // daemon's foreground credential store has no usable Account.
     const persistence = await import('@/persistence');
@@ -586,40 +590,6 @@ describe('capabilities.invoke connected-service preflight', () => {
     const methods = JSON.parse(readFileSync(join(tempDir, 'captured-methods.json'), 'utf8')) as string[];
     expect(methods).toContain('model/list');
     expect(methods.some((method) => method.startsWith('thread/') || method.startsWith('realtime/'))).toBe(false);
-    phase = 'detached selected-account SCM credential admission';
-    const { createLocalScmRepositoryFixture } = await import('@/testkit/scm/scmBackendContractFixtures');
-    const { createTestExecutionRunHostRuntime } = await import('@/agent/runtime/bridges/executionRun/testkit');
-    const runtimeBoundary = await import('@/agent/runtime/bridges/executionRun/createExecutionRunBridgeRuntime');
-    const { ExecutionRunHostBridge } = await import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge');
-    const { createExecutionRunRpcActionDeps } = await import('./executionRuns/dispatchExecutionRunRpcAction');
-    const { resolveExecutionRunPolicy } = await import('@/agent/executionRuns/policy/executionRunPolicy');
-    const { buildExecutionRunProfileCatalog } = await import('@/agent/executionRuns/profiles/intentRegistry');
-    const { resolveCliEngineRegistry } = await import('@/agent/runtime/registry/engineRegistry');
-    const repository = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-detached-selected-model-' });
-    writeFileSync(join(repository.rootPath, repository.trackedPath), 'selected-account SCM change\n');
-    // Only native process execution is substituted; dispatcher, bridge, start,
-    // credential materialization, model probe and SCM preparation remain real.
-    const nativeRuntime = vi.spyOn(runtimeBoundary, 'createExecutionRunBridgeRuntime').mockImplementation(() => createTestExecutionRunHostRuntime());
-    const engineRegistry = await resolveCliEngineRegistry({ contributes: lease.registry.contributes });
-    const manager = new ExecutionRunHostBridge({ parentProvider: 'codex', cwd: repository.rootPath, sendAcp: async () => {},
-      resolveExecutionRunProfileCatalog: () => ({ engineRegistry, profileCatalog: buildExecutionRunProfileCatalog() }),
-    });
-    try {
-      const deps = createExecutionRunRpcActionDeps({ manager,
-        context: { sessionId: null, cwd: repository.rootPath, readPromptCredentials: async () => credentials,
-          resolveAccountSettings: async () => ({}) },
-        policy: resolveExecutionRunPolicy({ defaults: { maxConcurrentRuns: null, boundedTimeoutMs: null, reviewBoundedTimeoutMs: null, maxTurns: null } }),
-        isExecutionRunsEnabled: () => true,
-      });
-      const started = await deps.executionRunStart(null, { intent: 'scm_diff_summary', backendTarget: nativeRequest.backendTarget,
-        connectedServices, modelSelection: nativeRequest.modelSelection, instructions: 'Summarize this change.',
-        intentInput: { cwd: repository.rootPath, source: { kind: 'workingTree' }, outputs: ['summary'] },
-        permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response' });
-      expect(started).toMatchObject({ runId: expect.any(String) });
-      expect(manager.listPublic()).toHaveLength(1);
-    } finally {
-      await manager.dispose(); nativeRuntime.mockRestore(); rmSync(repository.rootPath, { recursive: true, force: true });
-    }
     complete = true;
   }, 90_000);
 

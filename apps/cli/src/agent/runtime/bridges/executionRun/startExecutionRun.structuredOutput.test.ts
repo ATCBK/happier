@@ -71,6 +71,32 @@ describe('structured analysis Run admission', () => {
       expect(runtimeCreated).toBe(false);
     } finally { await voiceAgentManager.dispose(); }
   });
+  it.each(['review', 'scm_diff_summary'] as const)('preserves a failed native catalog read when admitting %s', async intent => {
+    const runs = new Map<string, ExecutionRunState>();
+    let runtimeCreated = false;
+    const voiceAgentManager = new VoiceAgentManager({ createRuntime: () => { throw new Error('Unused Voice boundary'); } });
+    const reviewer = resolveRoleSelectionV1({ roleId: 'reviewer' });
+    if (!reviewer.ok) throw new Error('Missing canonical Reviewer role');
+    try {
+      await expect(startExecutionRun({
+        params: { sessionId: 'parent-session', intent, backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+          ...(intent === 'review' ? { resolvedRole: reviewer.selection } : {}),
+          modelId: 'gpt-6-luna',
+          // The runner-to-daemon catalog transport failed before a model was read.
+          readNativeOfferedModel: async () => { throw Object.assign(new Error('Snapshot read unavailable'),
+            { code: 'execution_run_contribution_snapshot_unavailable' }); },
+          instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable',
+          runClass: 'long_lived', ioMode: 'request_response' },
+        parentProvider: 'codex', sendAcp: async () => {}, streamedTranscriptSession: null,
+        createRuntime: () => { runtimeCreated = true; return createTestExecutionRunHostRuntime(); }, getNowMs: () => 1,
+        budgetRegistry: null, runs, controllers: new Map(), enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {},
+        finishRun: async () => {}, executeBoundedRun: async () => {}, send: async () => ({ ok: true }), voiceAgentManager,
+      })).rejects.toMatchObject({ code: 'execution_run_contribution_snapshot_unavailable',
+        details: { executionRunStart: { runCreation: 'noRunCreated' } } });
+      expect(runs.size).toBe(0);
+      expect(runtimeCreated).toBe(false);
+    } finally { await voiceAgentManager.dispose(); }
+  });
   it('joins an already accepted request while new Run admission is drained', async () => {
     const drain = createDaemonAdmissionDrain();
     const modelId = getAgentStaticModels('claude', { catalogOnly: true })[0]?.id;
