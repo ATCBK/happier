@@ -156,6 +156,28 @@ describe("schemaSync", () => {
         expect(mysql).toMatch(/SessionFollowEdge_deliveredTurn_pair_check/u);
     });
 
+    it("keeps the public share exactly-one-subject invariant provider-complete", () => {
+        for (const providerDir of ["prisma", "prisma/sqlite"]) {
+            const migration = readFileSync(join(
+                serverRoot,
+                providerDir,
+                "migrations/20261002200000_stored_content_public_shares/migration.sql",
+            ), "utf8");
+            expect(migration).toMatch(/PublicSessionShare_subject_check/u);
+        }
+
+        const mysql = readFileSync(join(
+            serverRoot,
+            "prisma/mysql/migrations/20261002200000_stored_content_public_shares/migration.sql",
+        ), "utf8");
+        // sessionId and artifactId both participate in cascading foreign keys,
+        // so MySQL rejects the CHECK (error 3823); triggers carry the invariant.
+        expect(mysql).not.toMatch(/PublicSessionShare_subject_check/u);
+        expect(mysql).toMatch(/CREATE TRIGGER `PublicSessionShare_subject_insert`/u);
+        expect(mysql).toMatch(/CREATE TRIGGER `PublicSessionShare_subject_update`/u);
+        expect(mysql.match(/SIGNAL SQLSTATE '45000'/gu)).toHaveLength(2);
+    });
+
     it("keeps the Automation catalog identity within MySQL's exact key boundary", () => {
         const postgres = readFileSync(join(serverRoot, "prisma/schema.prisma"), "utf8");
         const mysql = generateMySqlSchemaFromPostgres(postgres);
