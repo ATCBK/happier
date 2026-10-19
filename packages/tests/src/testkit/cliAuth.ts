@@ -151,6 +151,17 @@ export async function seedCliAuthForServer(params: {
   });
 }
 
+export async function seedCliTokenOnlyAuthForServer(params: {
+  cliHome: string;
+  serverUrl: string;
+  token: string;
+}): Promise<{ serverId: string; machineId: string }> {
+  return seedCliCredentialsForServer({
+    ...params,
+    credentials: { token: params.token },
+  });
+}
+
 export async function seedCliDataKeyAuthForServer(params: {
   cliHome: string;
   serverUrl: string;

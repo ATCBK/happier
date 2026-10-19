@@ -110,7 +110,7 @@ describe('core e2e: direct Claude sessions browse/link/tail', () => {
     try {
       await waitFor(() => ui.isConnected(), { timeoutMs: 20_000, context: 'socket connected for direct sessions e2e' });
 
-      const machineRpc = createDataKeyRpcClient(ui, auth.accountMachineKey);
+      const machineRpc = createMachineRpcClient(ui, { mode: 'plain' });
 
       let candidatesResult: any = null;
       await waitFor(
