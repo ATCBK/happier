@@ -152,6 +152,11 @@ export const SessionCompanionPresentationBridge = React.memo(
             };
         }, [address, boardAvailable, boardContinuity, openBoard, revealBoardItem, snapshot]);
 
+        const showInlineTranscriptItem = mountedBoard?.showInlineTranscriptItem;
+        const showItemInChat = React.useCallback((itemId: string): SessionPresentationMutationOutcome => (
+            { status: showInlineTranscriptItem?.(itemId) ?? 'unavailable' }
+        ), [showInlineTranscriptItem]);
+
         const applier = React.useCallback((
             intent: CurrentSessionPresentationIntentV1,
             onCompanionMutation?: SessionCompanionMutationObserver,
@@ -161,10 +166,11 @@ export const SessionCompanionPresentationBridge = React.memo(
             viewer,
             canAddCompanionItem: (item) => canAddSessionCompanionItem(item, mountedBoard?.pluginRuntime ?? null, board.canReadItem),
             returnToChat,
+            showItemInChat,
             openFullSurface: props.openFullSurface,
             publishNotice: publishPresentationNotice,
             noticeKeyPrefix: buildSessionPresentationNoticeKeyPrefix(address, sessionId),
-        }, intent, onCompanionMutation), [address, board, controller, mountedBoard?.pluginRuntime, props.openFullSurface, viewer, returnToChat, sessionId]);
+        }, intent, onCompanionMutation), [address, board, controller, mountedBoard?.pluginRuntime, props.openFullSurface, viewer, returnToChat, showItemInChat, sessionId]);
 
         const applierRef = props.applierRef;
         React.useEffect(() => {

@@ -4,7 +4,9 @@ import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneSco
 import { usePaneFocusMode } from '@/components/appShell/panes/focusMode/usePaneFocusMode';
 import { useSessionCompanionPlacement } from '@/components/sessions/companion/layout/useSessionCompanionPlacement';
 import { useSessionCompanionPreference } from '@/components/sessions/companion/state/useSessionCompanionPreference';
-import { useSessionScreenIsFocused } from '@/components/sessions/shell/useSessionScreenIsFocused';
+import { useDestinationVisibility } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import {
@@ -42,7 +44,12 @@ export function useSessionBoardHostVisibility(input: Readonly<{
 }>): SessionBoardHostVisibility {
     const pane = useAppPaneScope(input.paneScopeId);
     const paneFocusMode = usePaneFocusMode(input.paneScopeId);
-    const foreground = useSessionScreenIsFocused() && input.presented !== false;
+    const destinationVisible = useDestinationVisibility();
+    const layoutPresented = useLayoutPresentationActive();
+    const hostViewed = useHostActivelyViewed();
+    // Keyboard focus belongs to one workspace group, while several Session panes
+    // can be visible. Only actual presentation/host visibility withdraws a runner.
+    const foreground = hostViewed && layoutPresented && destinationVisible && input.presented !== false;
     const companionPlacement = useSessionCompanionPlacement({
         sessionId: input.address?.sessionId ?? null,
         serverId: input.address?.serverId ?? null,

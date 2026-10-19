@@ -585,7 +585,10 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         })
         : [];
 
+    // A reply that runs elsewhere keeps no slot for the body it does not draw: the declared height
+    // belongs to the live copy, and holding it here left a large empty box around one line.
     const resolvedHeight = state.kind === 'ready' && props.expanded !== true
+        && !(reply && presentation.kind === 'preview')
         ? props.heightBounds === undefined
             ? resolveSessionBoardReplyHeight({
                 height: state.item.height,
@@ -611,15 +614,9 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
             : t('sessionBoard.board.unavailable.reason');
 
     const previewAction = presentation.kind === 'preview' ? presentation.actionKind : null;
-    const openReference = previewAction === 'openHere' ? (
-        <View style={styles.actions}>
-            <RoundButton size="small" display="inverted" testID={`${testID}-open-here`}
-                title={props.openActionLabel ?? actionLabel('openHere')} onPress={() => runAction('openHere')} />
-        </View>
-    ) : null;
     const configuredReference = presentation.kind === 'preview' && widgetInstance !== null;
     // This copy is not the one that runs. Saying so keeps the frame truthful; an empty body read as a
-    // visual that failed to render. A configured widget that can be opened here offers that instead.
+    // visual that failed to render. Where the person can bring it here, the same line offers that.
     const runningElsewhere = (
         <SurfaceStateCard
             testID={`${testID}-elsewhere`}
@@ -628,6 +625,15 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
             title={t('sessionBoard.item.runningElsewhere.title')}
             detail={t('sessionBoard.item.runningElsewhere.reason')}
             accessibilitySemantics="status"
+            {...(previewAction === 'openHere'
+                ? {
+                    action: {
+                        label: props.openActionLabel ?? actionLabel('openHere'),
+                        onPress: () => runAction('openHere'),
+                        testID: `${testID}-open-here`,
+                    },
+                }
+                : {})}
         />
     );
 
@@ -705,7 +711,7 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         // host composition, not persisted outer card chrome.
                         presentation={embeddedPresentation}
                         appRuntime={appRuntime}
-                        {...(configuredReference ? { reference: openReference ?? runningElsewhere } : {})}
+                        {...(configuredReference ? { reference: runningElsewhere } : {})}
                         onIntrinsicHeightChange={onReportIntrinsicHeight}
                         {...(props.onManagePlugin ? { onManagePlugin: props.onManagePlugin } : {})}
                         {...(inputs.onRepairInputs ? { onRepairInputs: inputs.onRepairInputs } : {})}
@@ -893,7 +899,6 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                                     <SurfaceStateSizeProvider size={props.expanded ? 'pane' : 'line'}>{body}</SurfaceStateSizeProvider>
                                 ) : body}
                             </View>
-                            {configuredReference ? null : openReference}
                         </>
                     ),
                 }}

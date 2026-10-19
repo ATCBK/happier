@@ -88,6 +88,14 @@ export type MountedSessionBoardController = Readonly<{
      * on screen longest, so a body never jumps between replies while the person reads.
      */
     resolveInlineTranscriptOccurrence: (itemId: string) => string | null;
+    /**
+     * "Show here": the person (or an Agent, through `chat.return` with a widgetId) asked this item to
+     * run in its transcript reply. With an occurrence, that exact reply takes the body; without one
+     * the reply that has been on screen longest does. Every Board host then previews it.
+     */
+    showInlineTranscriptItem: (itemId: string, occurrence?: string) => 'applied' | 'unchanged' | 'unavailable';
+    /** Opening the item on a Board host takes the request back: the latest explicit choice wins. */
+    releaseInlineTranscriptItem: (itemId: string) => void;
     /** Registers the real workspace tab hosts consumed by Board removal dialogs. */
     onViewFocusTargetChange: (viewId: string, target: FocusReturnTarget) => void;
     /** Registers the workspace's surviving Board-view action control fallback. */
@@ -99,6 +107,7 @@ export type MountedSessionBoardController = Readonly<{
 const NO_PRIMARY_MOUNT: SessionBoardPrimaryMountResolver = () => null;
 const NO_INSTALLED_WIDGET_CANDIDATES: readonly WidgetCandidate[] = Object.freeze([]);
 const NO_INLINE_TRANSCRIPT_DEMAND: ReadonlyMap<string, readonly string[]> = new Map();
+const NO_INLINE_TRANSCRIPT_PREFERENCE: ReadonlySet<string> = new Set();
 
 const SessionBoardControllerContext = React.createContext<MountedSessionBoardController | null>(null);
 
@@ -448,6 +457,7 @@ export function SessionBoardControllerOwner(props: React.PropsWithChildren<Reado
     // Transcript replies that draw an executable item while the transcript list demands them,
     // in the order they arrived on screen. One owner for the whole Session shell, not one per row.
     const [inlineTranscriptDemand, setInlineTranscriptDemand] = React.useState(NO_INLINE_TRANSCRIPT_DEMAND);
+    const [inlineTranscriptPreferred, setInlineTranscriptPreferred] = React.useState(NO_INLINE_TRANSCRIPT_PREFERENCE);
     const reportInlineTranscriptDemand = React.useCallback((itemId: string, occurrence: string) => {
         setInlineTranscriptDemand((current) => {
             const occurrences = current.get(itemId) ?? [];
@@ -461,6 +471,30 @@ export function SessionBoardControllerOwner(props: React.PropsWithChildren<Reado
             const remaining = occurrences.filter((candidate) => candidate !== occurrence);
             if (remaining.length > 0) next.set(itemId, remaining);
             else next.delete(itemId);
+            return next;
+        });
+    }, []);
+    // A request lives while a reply that draws the item is on screen; it never waits for a later one.
+    React.useEffect(() => {
+        setInlineTranscriptPreferred((current) => {
+            const kept = [...current].filter((itemId) => inlineTranscriptDemand.has(itemId));
+            return kept.length === current.size ? current : new Set(kept);
+        });
+    }, [inlineTranscriptDemand]);
+    const showInlineTranscriptItem = React.useCallback<MountedSessionBoardController['showInlineTranscriptItem']>((itemId, occurrence) => {
+        const occurrences = inlineTranscriptDemand.get(itemId);
+        if (!occurrences) return 'unavailable';
+        const target = occurrence !== undefined && occurrences.includes(occurrence) ? occurrence : occurrences[0];
+        if (inlineTranscriptPreferred.has(itemId) && occurrences[0] === target) return 'unchanged';
+        setInlineTranscriptPreferred((current) => new Set(current).add(itemId));
+        setInlineTranscriptDemand((current) => new Map(current).set(itemId, [target!, ...occurrences.filter((candidate) => candidate !== target)]));
+        return 'applied';
+    }, [inlineTranscriptDemand, inlineTranscriptPreferred]);
+    const releaseInlineTranscriptItem = React.useCallback((itemId: string) => {
+        setInlineTranscriptPreferred((current) => {
+            if (!current.has(itemId)) return current;
+            const next = new Set(current);
+            next.delete(itemId);
             return next;
         });
     }, []);
@@ -479,9 +513,10 @@ export function SessionBoardControllerOwner(props: React.PropsWithChildren<Reado
                     && bodyEligibility[host]?.itemIds.has(itemId)
                 )),
                 inlineTranscriptDemanded: inlineTranscriptDemand.has(itemId),
+                inlineTranscriptPreferred: inlineTranscriptPreferred.has(itemId),
             },
         ),
-        [bodyEligibility, controller.activeViewId, inlineTranscriptDemand, selectedViewItemIds, shellResolvePrimaryHost],
+        [bodyEligibility, controller.activeViewId, inlineTranscriptDemand, inlineTranscriptPreferred, selectedViewItemIds, shellResolvePrimaryHost],
     );
     const value = React.useMemo<MountedSessionBoardController>(() => ({
         address: props.address,
@@ -500,10 +535,12 @@ export function SessionBoardControllerOwner(props: React.PropsWithChildren<Reado
         onBodyEligibilityChange,
         reportInlineTranscriptDemand,
         resolveInlineTranscriptOccurrence,
+        showInlineTranscriptItem,
+        releaseInlineTranscriptItem,
         onViewFocusTargetChange: props.onViewFocusTargetChange ?? (() => {}),
         onViewActionsFocusTargetChange: props.onViewActionsFocusTargetChange ?? (() => {}),
         viewActionsFocusTargetRef: props.viewActionsFocusTargetRef,
-    }), [props.acquireContent, props.actions, props.address, props.approvalPending, props.binding, props.callerHostedHtmlRuntime, installedWidgetCandidates, props.onViewActionsFocusTargetChange, props.onViewFocusTargetChange, props.pluginRuntime, props.requestApprovalContinuation, props.viewActionsFocusTargetRef, controller, resolvePrimaryHost, onBodyEligibilityChange, reportInlineTranscriptDemand, resolveInlineTranscriptOccurrence]);
+    }), [props.acquireContent, props.actions, props.address, props.approvalPending, props.binding, props.callerHostedHtmlRuntime, installedWidgetCandidates, props.onViewActionsFocusTargetChange, props.onViewFocusTargetChange, props.pluginRuntime, props.requestApprovalContinuation, props.viewActionsFocusTargetRef, controller, resolvePrimaryHost, onBodyEligibilityChange, reportInlineTranscriptDemand, resolveInlineTranscriptOccurrence, showInlineTranscriptItem, releaseInlineTranscriptItem]);
     return (
         <SessionBoardControllerContext.Provider value={value}>
             {props.children}
