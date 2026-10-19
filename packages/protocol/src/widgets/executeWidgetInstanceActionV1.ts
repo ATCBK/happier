@@ -210,7 +210,7 @@ export async function executeWidgetInstanceActionV1(
     const failed = ActionExecuteFailureSchema.safeParse(source);
     if (failed.success) return failed.data;
     if (!Array.isArray(source)) return failure('invalid_action_output');
-    // Only what this surface can host: a checkout widget needs a surface that supplies the checkout.
+    // Share declared-target admission with Gallery; bindings still require exact target authority.
     const entries = source.filter(entry => isWidgetTargetHostableV1({ inputs: { fields: entry.fields } }, surface.owner.kind))
       .map(entry => ({ ...entry, presentation: resolveWidgetSizeChoicesV1(surface.owner.kind, entry.sizeDeclaration) }));
     return { ok: true, result: { surface, entries, presentation: resolveWidgetSizeChoicesV1(surface.owner.kind) } };
@@ -295,7 +295,7 @@ export async function executeWidgetInstanceActionV1(
       const add = WidgetInstanceActionInputSchemasV1[actionId].parse(args);
       if (add.area && surface.owner.kind !== 'project') return failure('widget_placement_unsupported');
       if (add.groupId && !supportsWidgetGroupsV1(surface.owner.kind)) return failure('widget_placement_unsupported');
-      // A checkout widget needs a surface that supplies the checkout (the target owner decides).
+      // Reject invalid declarations before binding and size admission.
       const native = readBuiltinWidgetDescriptorV1(add.instance.definition);
       if (native && !isWidgetTargetHostableV1(native, surface.owner.kind)) return failure('unsupported_widget_surface');
       if (state.instances.some(entry => entry.instance.id === add.instance.id)) return failure('widget_instance_already_exists');
