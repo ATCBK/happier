@@ -27,7 +27,7 @@ async function fixture() {
     handlers.set(method, data => handler(data as TRequest));
   } };
   const registration = registerMachinePromptAssetTransferRpcHandlers({ rpcHandlerManager: registrar,
-    adapterRegistry: new Map(), foundSkills: { home, agents } });
+    foundSkills: { home, agents } });
   const invoke = async (_machineId: string, method: string, input: unknown) => await handlers.get(method)!(input);
   return { home, path: scan.items[0]!.path, agents, registration, invoke };
 }

@@ -2,35 +2,34 @@ import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeF
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { z as zMini } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { PromptBundleEntryV1Schema, validatePromptBundleBodyV1AgainstSchemaId, validateStoredPromptBundleBodyV1AgainstSchemaId, type PromptBundleEntryV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
 import { createAbsolutePathSymlink } from '@happier-dev/plugin-sdk/fs';
 
-const segment = z.string().min(1).refine(value => value !== '.' && value !== '..' && !/[\\/\0]/u.test(value));
-const digestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
-export const SkillOwnerKeySchema = z.string().refine(value => {
+const segment = z.string().check(z.minLength(1), z.refine(value => value !== '.' && value !== '..' && !/[\\/\0]/u.test(value)));
+const digestSchema = z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/u));
+export const SkillOwnerKeySchema = z.string().check(z.refine(value => {
     const parts = value.split('/');
     return (parts.length === 1 || parts.length === 3 && parts[1] === 'runs') && parts.every(part => segment.safeParse(part).success);
-});
-export const EnsureSkillSessionDirInputSchema = z.object({
+}));
+export const EnsureSkillSessionDirInputSchema = z.strictObject({
     ownerKey: SkillOwnerKeySchema,
-    items: z.array(z.object({ skillId: z.string().min(1), name: segment, digest: digestSchema,
-        files: z.array(zMini.catchall(PromptBundleEntryV1Schema, zMini.never())) }).strict()),
-    nativeDisables: z.array(z.object({ name: z.string().min(1), path: z.string().min(1) }).strict()),
-}).strict().refine(input => new Set(input.items.map(item => item.name)).size === input.items.length,
-    { message: 'Delivered skill names must be unique' });
+    items: z.array(z.strictObject({ skillId: z.string().check(z.minLength(1)), name: segment, digest: digestSchema,
+        files: z.array((<T extends z.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(PromptBundleEntryV1Schema)) })),
+    nativeDisables: z.array(z.strictObject({ name: z.string().check(z.minLength(1)), path: z.string().check(z.minLength(1)) })),
+}).check(z.refine(input => new Set(input.items.map(item => item.name)).size === input.items.length, { message: 'Delivered skill names must be unique' }));
 export type SkillSessionDirItem = Readonly<{ skillId: string; name: string; digest: string; files: PromptBundleEntryV1[] }>;
 export type SkillSessionItem = Readonly<{ skillId: string; name: string; digest: string }>;
 export type EnsureSkillSessionDirInput = Readonly<{ ownerKey: string; items: readonly SkillSessionDirItem[];
     nativeDisables: readonly Readonly<{ name: string; path: string }>[] }>;
-export const EnsureSkillSessionDirResultSchema = z.object({ pluginRoot: z.string().min(1), skillsRoot: z.string().min(1),
-    failed: z.array(z.object({ skillId: z.string().min(1), reason: z.literal('materialize_failed'), detail: z.string().optional() }).strict()) }).strict();
+export const EnsureSkillSessionDirResultSchema = z.strictObject({ pluginRoot: z.string().check(z.minLength(1)), skillsRoot: z.string().check(z.minLength(1)),
+    failed: z.array(z.strictObject({ skillId: z.string().check(z.minLength(1)), reason: z.literal('materialize_failed'), detail: z.optional(z.string()) })) });
 export type EnsureSkillSessionDirResult = z.infer<typeof EnsureSkillSessionDirResultSchema>;
 export type SkillCachePaths = Readonly<{ reliable: boolean; paths: ReadonlySet<string> }>;
-const sessionManifestSchema = createStoredReadSchema(z.object({ items: z.array(z.object({ skillId: z.string().min(1), name: segment, digest: digestSchema }).strict()) }).strict());
+const sessionManifestSchema = createStoredReadSchema(z.strictObject({ items: z.array(z.strictObject({ skillId: z.string().check(z.minLength(1)), name: segment, digest: digestSchema })) }));
 type CollectionInput = Readonly<{ libraryDigests?: readonly string[] | null }>;
 
 function errorCode(error: unknown): string {

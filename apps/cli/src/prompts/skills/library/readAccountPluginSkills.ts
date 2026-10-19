@@ -22,12 +22,15 @@ export type AccountPluginSkillRead = Readonly<{
   serverHttpBaseUrl?: string;
   signal?: AbortSignal;
   skillIds?: readonly string[];
+  /** Discovery may omit unavailable sources; selected reads and GC require complete coverage. */
+  availableOnly?: boolean;
   isCurrent?: () => boolean | Promise<boolean>;
 }>;
 
 /** The captured Account source boundary, independent of Session machine placement. */
 export async function readAccountPluginSkills(input: AccountPluginSkillRead): Promise<readonly ReadOnlySkillV1[]> {
   if (input.skillIds && !input.skillIds.some(isPluginSkillIdV1)) return [];
+  const availableOnly = input.availableOnly === true && input.skillIds === undefined;
   const assertCurrent = async () => {
     input.signal?.throwIfAborted();
     if (input.isCurrent && !await input.isCurrent()) throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
@@ -85,7 +88,10 @@ export async function readAccountPluginSkills(input: AccountPluginSkillRead): Pr
       const family = sourceResponse?.projection.familiesById.skills;
       const entries = family?.family === 'skills' ? Object.values(family.entriesById).map(value => PluginProjectedSkillEntryV1Schema.parse(value)) : [];
       for (const { materialization, skillIds } of sources) {
-        if (skillIds === null && !sourceResponse?.pluginSkills) return unavailable();
+        if (skillIds === null && !sourceResponse?.pluginSkills) {
+          if (availableOnly) continue;
+          return unavailable();
+        }
         const sourceIds = skillIds ?? entries.filter(entry => entry.pluginId === materialization.pluginId)
           .map(entry => pluginSkillIdV1({ pluginId: entry.pluginId, localId: entry.definition.id }));
         for (const skillId of sourceIds) {
@@ -118,7 +124,10 @@ export async function readAccountPluginSkills(input: AccountPluginSkillRead): Pr
     const knownPluginId = pluginId?.kind === 'plugin' ? pluginId.pluginId : getPluginMachineExecutionOriginRef(rows[0]!.origin!).pluginId;
     const result = resolvePluginContentSuppliesV1({ supplies: rows.map(value => ({ ...value, value })),
       selectedOrigin: input.settings?.machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId[knownPluginId] ?? null });
-    if (result.kind !== 'ready') return unavailable();
+    if (result.kind !== 'ready') {
+      if (availableOnly) continue;
+      return unavailable();
+    }
     const skill = [...result.supplies].sort((a, b) => a.machineId.localeCompare(b.machineId)).find(row => row.skill)?.skill;
     if (!skill || skill.skillId !== skillId) return unavailable();
     selected.push(skill);

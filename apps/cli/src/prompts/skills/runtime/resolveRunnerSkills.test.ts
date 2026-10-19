@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
 import { setImmediate } from 'node:timers/promises';
 import retained from '../../../../../../packages/protocol/fixtures/0.2-retained-skill-path.json';
 import retainedFrontmatter from '../../../../../../packages/protocol/fixtures/0.2-retained-skill-frontmatter.json';
 import { PromptBundleBodyV1Schema, readSkillBundleContentV1, validatePromptBundleBodyV1AgainstSchemaId } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
+import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import { createDaemonControlApp } from '@/daemon/controlServer';
 import { ensureSkillSessionDirHttp } from '@/daemon/controlClient';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
@@ -12,8 +15,10 @@ import { join } from 'node:path';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { createSkillStore } from '../store/skillStore';
 import { resolveRunnerSkills, type ResolveRunnerSkillsInput } from './resolveRunnerSkills';
+import { prepareSessionSkillPlan } from './prepareSessionSkillPlan';
+import { publishRunnerSkillNotice } from './publishRunnerSkillNotice';
 import type { SkillArtifactStore } from '../library/readSkillLibraryContent';
-import type { AccountArtifact } from '@/api/artifacts/accountArtifactStore';
+import type { AccountArtifact, AccountArtifactHeader } from '@/api/artifacts/accountArtifactStore';
 import {
   AgentRuntimeDaemonSessionOpenRequestV1Schema,
   AgentRuntimeDaemonSessionOpenAttestationRequestV1Schema,
@@ -22,6 +27,9 @@ import {
 
 const dirs: string[] = [];
 const stores: ReturnType<typeof createSkillStore>[] = [];
+let restoreProjectHttp: () => void;
+beforeEach(() => { restoreProjectHttp = installEmptyProjectAccountRowsHttpBoundary(); });
+afterEach(() => { restoreProjectHttp(); });
 afterEach(async () => {
   for (const store of stores.splice(0)) {
     await store.releaseSkillSessionDirs('session');
@@ -29,8 +37,9 @@ afterEach(async () => {
   }
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
-const bundle = (artifactId: string, name: string): AccountArtifact => ({
+const bundle = (artifactId: string, name: string): AccountArtifact & AccountArtifactHeader => ({
   artifactId, ownerAccountId: 'account', access: 'owner', revision: { headerVersion: 1, bodyVersion: 1 }, seq: 1, createdAt: 1, updatedAt: 1,
+  headerVersion: 1, bodyVersion: 1,
   header: { v: 1, kind: 'prompt_bundle.v2', title: 'Display title', bundleSchemaId: 'skills.skill_md_v1' },
   body: JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [
     { path: 'SKILL.md', contentKind: 'utf8', contentBase64: Buffer.from(`---\nname: ${name}\ndescription: Useful\n---\nFull body`).toString('base64') },
@@ -51,6 +60,7 @@ async function fixture() {
   stores.push(store);
   const input: ResolveRunnerSkillsInput = {
     ownerKey: 'session', agentId: 'test', machineId: 'machine', directory, home,
+    pluginSkills: [],
     credentials: { token: 'token', encryption: null }, sessionMetadata: {}, agentHasActionChannel: true,
     contributes: { catalogEntriesById: { test: { skills: { delivery: 'session_dir', nativeDisable: 'supported', liveReload: 'supported' } } } },
     accountSnapshot: { source: 'network', settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
@@ -61,6 +71,36 @@ async function fixture() {
   return { home, directory, input, artifacts, store, readIds };
 }
 describe('runner skill resolution', () => {
+  it('delivers readable skills beside unavailable plugin content that is not selected', async () => {
+    const f = await fixture();
+    const selected = resolveSessionCapabilitiesV1({ context: { machineId: 'machine', machinePlatform: 'posix', directory: f.directory,
+      projectKey: null, agentId: 'test' }, mcp: null, skills: { items: [{ skillId: 'library', name: 'sample' }],
+      rules: [{ id: 'on', skillId: 'library', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }] },
+      selection: {}, agentAcceptsUserMcp: false }).skills;
+    const result = await prepareSessionSkillPlan({ inventory: [bundle('library', 'sample')], artifacts: f.artifacts, selected,
+      pluginSkills: [{ skillId: 'plugin:external.skills/broken', files: [],
+        provenance: { kind: 'plugin', pluginId: 'external.skills', occurrenceId: 'unavailable' } }],
+      agentSkills: { delivery: 'session_dir', nativeDisable: 'supported', liveReload: 'supported' }, agentHasActionChannel: true,
+      directory: f.directory, home: f.home, assertCurrent: async () => {} });
+    expect(result.plan.items).toContainEqual(expect.objectContaining({ skillId: 'library', state: 'delivered' }));
+    const runner = await resolveRunnerSkills({ ...f.input, pluginSkills: [{ skillId: 'plugin:external.skills/broken', files: [],
+      provenance: { kind: 'plugin', pluginId: 'external.skills', occurrenceId: 'unavailable' } }] },
+    { artifacts: f.artifacts, ensureSessionDir: request => f.store.ensureSkillSessionDir(request) });
+    expect(runner.delivery?.items).toContainEqual(expect.objectContaining({ skillId: 'library' }));
+  });
+  it('delivers plugin library content through the ordinary skill plan and cache', async () => {
+    const f = await fixture();
+    const skillId = 'plugin:com.acme.skills/check';
+    const pluginSkills = [{ skillId, provenance: { kind: 'plugin' as const, pluginId: 'com.acme.skills', occurrenceId: 'occurrence' },
+      files: [{ path: 'SKILL.md', contentKind: 'utf8' as const,
+        contentBase64: Buffer.from('---\nname: check\ndescription: Check the project\n---\nPlugin instructions').toString('base64') }] }];
+    const input = { ...f.input, pluginSkills, sessionMetadata: { skillSelectionV1: {
+      v: 1, forceIncludeSkillIds: [skillId], forceExcludeSkillIds: [], excludeNativeSkillNames: [] } } };
+    const result = await resolveRunnerSkills(input, { artifacts: f.artifacts,
+      ensureSessionDir: request => f.store.ensureSkillSessionDir(request) });
+    expect(result.delivery?.items).toContainEqual(expect.objectContaining({ skillId, name: 'check' }));
+    expect(await readFile(join(result.delivery!.skillsRoot, 'check', 'SKILL.md'), 'utf8')).toContain('Plugin instructions');
+  });
   it('reads independent selected skills concurrently before authenticated folder delivery, preserving conflicts and failures', async () => {
     const f = await fixture();
     const older = { ...bundle('older', 'shared'), updatedAt: 1 };
@@ -82,15 +122,15 @@ describe('runner skill resolution', () => {
     };
     const input = { ...f.input, accountSnapshot: { ...f.input.accountSnapshot!, promptLibraryCatalog: { status: 'ready' as const,
       rows: [{ revision: 1, record: { key: 'skill-rules' as const, value: { v: 1 as const,
-        rules: ['older', 'newer', 'broken'].map(skillId => ({ id: `on-${skillId}`, skillId,
-          target: { t: 'allMachines' as const }, enabled: true, createdAt: 1, updatedAt: 1 })),
+        rules: ['older', 'newer', 'broken', 'off'].map(skillId => ({ id: `on-${skillId}`, skillId,
+          target: { t: 'allMachines' as const }, enabled: skillId !== 'off', createdAt: 1, updatedAt: 1 })),
       } } }], tombstones: [], diagnostics: [] } } };
     const app = createDaemonControlApp({ getChildren: () => [], machineId: 'machine',
       stopSession: async () => ({ status: 'not_found' }), spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
       requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'parallel-test', skillStore: f.store });
     const url = await app.listen({ port: 0, host: '127.0.0.1' });
     const work = resolveRunnerSkills(input, { artifacts, ensureSessionDir: content => ensureSkillSessionDirHttp(content,
-      { target: { httpPort: Number(new URL(url).port), controlToken: 'parallel-test' } }) });
+      { target: { pid: process.pid, httpPort: Number(new URL(url).port), controlToken: 'parallel-test' } }) });
     try {
       await setImmediate();
       expect(started).toEqual(['older', 'newer', 'broken']);
@@ -107,6 +147,16 @@ describe('runner skill resolution', () => {
         ]);
       expect(result.delivery?.items).toEqual([expect.objectContaining({ skillId: 'newer', name: 'shared' })]);
       expect(await readFile(join(result.delivery!.skillsRoot, 'shared', 'SKILL.md'), 'utf8')).toContain('name: shared');
+      expect(result.unavailable).toBeUndefined();
+      const notices: unknown[] = [];
+      // Committed Session event persistence is the external boundary; the
+      // real notice owner must identify only the unreadable sibling.
+      await publishRunnerSkillNotice({ enqueueSessionEventCommitted: async event => {
+        notices.push(event); return { persisted: true as const, delivered: false as const };
+      } }, result);
+      expect(notices.map(readSessionCapabilityNoticeV1)).toEqual([{ v: 1, items: [
+        { kind: 'skill', name: 'broken', itemId: 'broken', code: 'skills_unavailable', detail: 'content_unreadable' },
+      ] }]);
     } finally {
       // Also release a serialized implementation after the deciding assertion fails.
       releasing = true;
@@ -138,7 +188,7 @@ describe('runner skill resolution', () => {
       stopSession: async () => ({ status: 'not_found' }), spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
       requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'retained-test', skillStore: store });
     const url = await app.listen({ port: 0, host: '127.0.0.1' });
-    const target = { httpPort: Number(new URL(url).port), controlToken: 'retained-test' };
+    const target = { pid: process.pid, httpPort: Number(new URL(url).port), controlToken: 'retained-test' };
     try {
       const result = await resolveRunnerSkills(input, { artifacts,
         ensureSessionDir: content => ensureSkillSessionDirHttp(content, { target }) });
@@ -197,12 +247,19 @@ describe('runner skill resolution', () => {
     expect(adjacent.delivery?.items).toEqual([]);
     expect(skills.rules[0]!.target.workspaceRoot).toBe(linked);
   });
-  it('consumes P2 selection and daemon materialization while reading only selected bodies', async () => {
+  it.each(['rule', 'session'] as const)('delivers selected skill references without opening the unrelated Account inventory (%s demand)', async demand => {
     const { input, artifacts, store, readIds } = await fixture();
-    const result = await resolveRunnerSkills(input, { artifacts, ensureSessionDir: value => store.ensureSkillSessionDir(value) });
+    const selectedInput = { ...input, sessionMetadata: { skillSelectionV1: {
+      v: 1, forceIncludeSkillIds: demand === 'session' ? ['library', 'excluded'] : ['excluded'],
+      forceExcludeSkillIds: ['excluded'], excludeNativeSkillNames: [],
+    } }, ...(demand === 'session' ? { accountSnapshot: { ...input.accountSnapshot!, promptLibraryCatalog: { status: 'ready' as const,
+      rows: [{ revision: 1, record: { key: 'skill-rules' as const, value: { v: 1 as const, rules: [] } } }],
+      tombstones: [], diagnostics: [] } } } : {}) };
+    const result = await resolveRunnerSkills(selectedInput, { artifacts: { ...artifacts,
+      list: async () => { throw new Error('Unrelated Account inventory unavailable'); } },
+      ensureSessionDir: value => store.ensureSkillSessionDir(value) });
     expect(result.delivery?.items).toEqual([expect.objectContaining({ skillId: 'library', name: 'sample' })]);
     expect(readIds).toEqual(['library']);
-    expect(result.plan.items.find(item => item.skillId === 'off')?.state).toBe('off');
     expect(result.indexItems).toEqual([]);
     expect(await readFile(join(result.delivery!.skillsRoot, 'sample', 'references', 'note.md'), 'utf8')).toBe('Supporting file');
     const request = { kind: 'create' as const, sessionId: input.ownerKey, cwd: input.directory, skills: result.delivery };
@@ -260,13 +317,13 @@ describe('runner skill resolution', () => {
     expect(result.plan.items[0]).toMatchObject({ state: 'unavailable', reason: 'native_scan_failed' });
     expect(result.plan.diagnostics).toHaveLength(1);
   });
-  it('does not open Account content without Account credentials, and does not turn partial inventory into empty', async () => {
+  it('requires Account credentials but delivers known demand independently of partial inventory', async () => {
     const { input, artifacts } = await fixture();
     const scoped = await resolveRunnerSkills({ ...input, credentials: null }, { artifacts: { ...artifacts, list: async () => { throw new Error('must_not_read'); } } });
     expect(scoped.delivery).toBeUndefined();
-    const failed = await resolveRunnerSkills(input, { artifacts: { ...artifacts, list: async () => ({ items: [], coverage: 'partial' }) } });
-    expect(failed.unavailable).toBe(true);
-    expect(failed.unavailableReason).toBe('skill_library_unavailable');
+    const resolved = await resolveRunnerSkills(input, { artifacts: { ...artifacts, list: async () => ({ items: [], coverage: 'partial' }) },
+      ensureSessionDir: async () => ({ pluginRoot: '/session', skillsRoot: '/session/skills', failed: [] }) });
+    expect(resolved.delivery?.items).toEqual([expect.objectContaining({ skillId: 'library', name: 'sample' })]);
   });
   it('serves an index without materializing a folder and without embedding skill bodies', async () => {
     const { input, artifacts } = await fixture();

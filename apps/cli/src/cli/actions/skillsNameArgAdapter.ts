@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { sameStoredCredentials } from '@/persistence';
-import { configuration } from '@/configuration';
-import { normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 as outputs, SkillFoundListResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { SkillReadResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
 import { REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/registries';
@@ -54,7 +53,7 @@ export async function tryHandleSkillsCliCommand(params: Readonly<{ argv: readonl
   const create = params.actionExecutionDeps?.createExecutorFn ?? (async input => (await import('@/session/actions/createCliActionExecutorFromCredentials')).createCliActionExecutorFromCredentials(input));
   const deps: Partial<ActionCliExecutionDeps> = { ...params.actionExecutionDeps, createExecutorFn: async input => {
     if (captured && (!sameStoredCredentials(captured.credentials, input.credentials) || captured.serverId !== input.serverId
-      || normalizeServerHttpBaseUrl(captured.serverApiUrl ?? configuration.apiServerUrl) !== normalizeServerHttpBaseUrl(input.serverApiUrl ?? configuration.apiServerUrl)
+      || normalizeServerHttpBaseUrl(captured.serverApiUrl ?? resolveServerHttpBaseUrl()) !== normalizeServerHttpBaseUrl(input.serverApiUrl ?? resolveServerHttpBaseUrl())
       || captured.serverIdentityId !== input.serverIdentityId)) throw Object.assign(new Error('Skill Account or Home retired'), { code: 'client_refused' });
     captured ??= input; return create(input);
   } };

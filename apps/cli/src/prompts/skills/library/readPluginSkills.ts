@@ -19,7 +19,7 @@ export async function readPluginSkills(
   for (const declaration of registry.skills ?? []) {
     if (skillIds && !skillIds.includes(pluginSkillIdV1(declaration.identity))) continue;
     signal?.throwIfAborted();
-    const occurrenceId = registry.occurrenceIdsByPluginId[declaration.pluginId];
+    const occurrenceId = registry.occurrenceIdsByPluginId?.[declaration.pluginId];
     if (!occurrenceId) throw Object.assign(new Error('Plugin skill occurrence unavailable'), { code: 'skill_content_unavailable' });
     try {
       const root = await realpath(declaration.pluginRootPath);

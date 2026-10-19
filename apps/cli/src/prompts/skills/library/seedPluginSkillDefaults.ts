@@ -12,7 +12,8 @@ export async function seedPluginSkillDefaults(input: Readonly<{
   input.port.assertCurrent();
   const read = readPromptLibraryCatalogRecordV1({ ...projection, key: 'skill-rules' });
   if (read.status !== 'ready' || read.record.key !== 'skill-rules') throw new Error('skill_rules_unavailable');
-  const items = input.skills.filter(skill => !read.record.value.rules.some(rule => rule.skillId === skill.skillId))
+  const existingRules = read.record.value.rules;
+  const items = input.skills.filter(skill => !existingRules.some(rule => rule.skillId === skill.skillId))
     .map(skill => ({ skillId: skill.skillId }));
   if (items.length === 0) return;
   const defaults = resolveCreateReachV1({ kind: 'skill', caller: { surface: 'rpc' }, ctx: input.port.ruleWriteContext() });

@@ -13,10 +13,8 @@ export type RecordSkillUseInput = Readonly<{ skillIds: readonly string[]; accoun
 /** Daemon-owned, best-effort facts; network work never enters the filesystem store queue. */
 export function createSkillUsageRecorder(input: Readonly<{ credentials: StoredCredentials; signal?: AbortSignal }>) {
     const scopeKey = resolveAccountSettingsScopeKey(input.credentials);
-    const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
     const accountId = readAccountIdFromToken(input.credentials.token);
     const serverHttpBaseUrl = resolveServerHttpBaseUrl();
-    const store = createCliPromptLibraryStore(input);
     // Only overlapping observations share a reservation. The stored row owns
     // the daily interval; a failed attempt is never a stored usage fact.
     const inFlight = new Set<string>();
@@ -26,6 +24,11 @@ export function createSkillUsageRecorder(input: Readonly<{ credentials: StoredCr
             const reserved: string[] = [];
             try {
                 if (normalizeServerHttpBaseUrl(request.account.serverHttpBaseUrl) !== serverHttpBaseUrl) return;
+                // The daemon constructs this recorder before warming Account settings.
+                // Capture the admitted lifetime for each observation, not at startup;
+                // the row store still fences retirement throughout that observation.
+                const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+                const store = createCliPromptLibraryStore(input);
                 const read = await prepareActivePromptLibraryRecord({ ...input, scopeKey, lifetimeToken, key: 'skill-usage' });
                 if (read.status !== 'ready' || read.record.key !== 'skill-usage') return;
                 const nowMs = Date.now();

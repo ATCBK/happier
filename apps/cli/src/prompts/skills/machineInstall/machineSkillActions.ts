@@ -3,10 +3,11 @@ import type { PromptLibraryArtifactStore } from '@happier-dev/protocol/prompts/l
 import type { PromptLibraryStackActionPortV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { isPromptExternalLinkForMachine, type PromptExternalLinkEntryV1, type PromptExternalLinksV1 } from '@happier-dev/protocol/prompts/library/promptExternalLinksV1';
-import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
-import { readSkillBundleContentV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
-import { FIRST_PARTY_SKILLS_V1 } from '@happier-dev/protocol/prompts/library/skills/firstPartySkillsV1';
-import { readCompleteSkillLibraryInventoryV1 } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import { readSkillBundleContentV1, readReadOnlySkillContentV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
+import { FIRST_PARTY_SKILLS_V1, type ReadOnlySkillV1 } from '@happier-dev/protocol/prompts/library/skills/firstPartySkillsV1';
+import { isPluginSkillIdV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import type { SkillActionPortV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
+import { readAvailablePluginSkillItemsV1, readCompleteSkillLibraryInventoryV1 } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
 import { SkillFoundListResultV1Schema, type SkillFoundListResultV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { scanNativeSkillRoots } from '@/prompts/skills/native/scanNativeSkillRoots';
 import { installMachineSkill, uninstallMachineSkill, refreshMachineSkillInstalls, isMachineSkillReceiptCurrent,
@@ -24,6 +25,7 @@ export type MachineSkillActionsInput = Readonly<{
   target: MachineAdministrationTargetV1; libraryServerIdentityId: string;
   homeDirectory: string; happierHomeDirectory: string; agents: readonly MachineSkillInstallAgent[];
   readInstalledAgents?: () => Promise<readonly string[]>; nowMs?: () => number;
+  readPluginSkills: NonNullable<SkillActionPortV1['readPluginSkills']>;
 }>;
 function errorCode(error: unknown): string {
   return error && typeof error === 'object' && typeof Reflect.get(error, 'code') === 'string'
@@ -62,13 +64,14 @@ export function createMachineSkillActions(input: MachineSkillActionsInput) {
     return { value: read.record.value, revision: read.revision,
       ...(read.authority === 'inactive' ? { sourceSettingsVersion: projection.sourceSettingsVersion } : {}) };
   }
-  async function readContent(skillId: string, signal?: AbortSignal): Promise<MachineSkillInstallContent> {
+  async function readContent(skillId: string, signal?: AbortSignal, pluginSkills?: readonly ReadOnlySkillV1[]): Promise<MachineSkillInstallContent> {
     current(signal);
-    const stub = FIRST_PARTY_SKILLS_V1.find(skill => skill.skillId === skillId);
-    if (stub) {
-      const bundleBody = { v: 1 as const, entries: [...stub.files], createdAtMs: 0, updatedAtMs: 0 };
-      return { skillId, name: stub.name, bundleBody, digest: computePromptBundleDigestV1(bundleBody) };
+    const bundled = readReadOnlySkillContentV1(skillId, pluginSkills ?? await input.readPluginSkills(signal, [skillId]));
+    current(signal);
+    if (bundled) {
+      return { skillId, name: bundled.frontmatter.name, bundleBody: bundled.body, digest: bundled.digest };
     }
+    if (isPluginSkillIdV1(skillId)) return fail('not_found');
     const artifact = await input.store.read(skillId, signal ? { signal } : undefined);
     current(signal);
     if (!artifact || artifact.id !== skillId) return fail('not_found');
@@ -118,9 +121,11 @@ export function createMachineSkillActions(input: MachineSkillActionsInput) {
     } }, { includeBody: false, signal }).catch(error => {
       current(signal); return fail('library_unavailable', errorCode(error));
     });
+    const pluginSkills = await readAvailablePluginSkillItemsV1(() => input.readPluginSkills(signal), signal);
+    current(signal);
     const opened = await Promise.all([
       ...inventory.map(async artifact => {
-        try { return await readContent(artifact.artifactId, signal); }
+        try { return await readContent(artifact.artifactId, signal, pluginSkills); }
         catch (error) {
           current(signal);
           // Found annotates native items from readable library content only.
@@ -129,7 +134,7 @@ export function createMachineSkillActions(input: MachineSkillActionsInput) {
           throw error;
         }
       }),
-      ...FIRST_PARTY_SKILLS_V1.map(stub => readContent(stub.skillId, signal)),
+      ...[...FIRST_PARTY_SKILLS_V1, ...pluginSkills].map(stub => readContent(stub.skillId, signal, pluginSkills)),
     ]).catch(error => { current(signal); return fail('library_unavailable', errorCode(error)); });
     return opened.filter((content): content is MachineSkillInstallContent => content !== null);
   }

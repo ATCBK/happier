@@ -63,6 +63,8 @@ describe('skill library name inventory', () => {
           ...(url.searchParams.get('includeBody') === 'true' && !(unreadable && index === 1)
             ? { body: encodePlainArtifactStoredContent({ body: JSON.stringify(body) }) } : {}),
         }))));
+      } else if (url.pathname === '/v1/plugins/availability/materializations/read') {
+        response.end(JSON.stringify({ availabilityCursor: 0, inventoryComplete: true, snapshots: [], releases: [] }));
       } else if (url.pathname.startsWith('/v1/artifacts/')) {
         response.statusCode = 503; response.end(JSON.stringify({ error: 'individual_read_unavailable' }));
       } else response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));

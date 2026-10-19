@@ -18,7 +18,7 @@ export type FoundNativeSkillRoot = Readonly<{
   path: string; scope: 'user' | 'project' | 'plugin'; agents: readonly string[]; status: 'ok' | 'failed';
 }>;
 export type FoundNativeSkillItem = Readonly<{
-  name: string; description: string | null; path: string; digest: string;
+  name: string; description: string | null; path: string; digest: string; userInvocable: boolean;
   agents: readonly string[]; scope: FoundNativeSkillRoot['scope']; pluginOwned: Readonly<{ pluginName: string }> | null;
 }>;
 export type FoundNativeSkillScan = Readonly<{ roots: readonly FoundNativeSkillRoot[]; items: readonly FoundNativeSkillItem[] }>;
@@ -155,7 +155,7 @@ export async function scanNativeSkillRoots(input: MaskingScanInput | FoundNative
         // Native Agents may accept names outside the library's authoring pattern.
         const name = frontmatter.name ?? child;
         names.push({ name, path, root: root.path });
-        if (contentRoot) items.push({ name, description: frontmatter.description ?? null, path: skillDirectory,
+        if (contentRoot) items.push({ name, description: frontmatter.description ?? null, path: skillDirectory, userInvocable: frontmatter.userInvocable,
           digest: computePromptBundleDigestV1(buildPromptBundleBodyFromDirectory({ rootDirectory: contentRoot, preferredFirstPath: 'SKILL.md' })),
           agents: [...root.agents], scope: root.scope, pluginOwned: root.pluginName === null ? null : { pluginName: root.pluginName } });
       } catch (error) {

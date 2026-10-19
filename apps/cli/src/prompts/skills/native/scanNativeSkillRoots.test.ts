@@ -46,6 +46,21 @@ it.each(['~/repo/nested', '~\\repo\\nested'])('expands the public Found director
   expect(found.items.map(item => item.path)).toEqual([skillDirectory]);
 });
 
+it('retains invocation eligibility in Found without hiding skills from management discovery', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'happier-native-invocation-')); homes.push(home);
+  for (const [name, flag] of [['hidden', 'user-invocable: false'], ['explicit', 'user-invocable: true'], ['default', '']] as const) {
+    const directory = await createSkill(join(home, '.codex', 'skills'), name);
+    await writeFile(join(directory, 'SKILL.md'), `---\nname: ${name}\ndescription: Native\n${flag}\n---\nNative body`);
+  }
+  const found = await scanNativeSkillRoots({ purpose: 'found', home,
+    agents: [{ agentId: 'codex', nativeRoots: { user: [['.codex', 'skills']] } }] });
+  expect(found.items).toEqual([
+    expect.objectContaining({ name: 'default', userInvocable: true }),
+    expect.objectContaining({ name: 'explicit', userInvocable: true }),
+    expect.objectContaining({ name: 'hidden', userInvocable: false }),
+  ]);
+});
+
 it('aggregates shared Agent roots and hashes complete skill files and executable modes through the existing bundle owner', async () => {
   const home = await mkdtemp(join(tmpdir(), 'happier-native-found-')); homes.push(home);
   const skillDirectory = await createSkill(join(home, '.shared'), 'shared');
@@ -71,10 +86,10 @@ it('aggregates shared Agent roots and hashes complete skill files and executable
     { path: join(directory, '.project'), scope: 'project', agents: ['first'], status: 'ok' },
     { path: join(repository, '.project'), scope: 'project', agents: ['first'], status: 'ok' },
   ]);
-  expect(before.items).toEqual([{ name: 'shared', description: 'Native', path: skillDirectory,
+  expect(before.items).toEqual([{ name: 'shared', description: 'Native', path: skillDirectory, userInvocable: true,
     digest: computePromptBundleDigestV1(buildPromptBundleBodyFromDirectory({ rootDirectory: skillDirectory })),
     agents: ['first', 'second'], scope: 'user', pluginOwned: null },
-    { name: 'project', description: 'Native', path: projectSkill,
+    { name: 'project', description: 'Native', path: projectSkill, userInvocable: true,
       digest: computePromptBundleDigestV1(buildPromptBundleBodyFromDirectory({ rootDirectory: projectSkill })),
       agents: ['first'], scope: 'project', pluginOwned: null },
   ]);
