@@ -130,8 +130,8 @@ async function renderOpenedModal() {
     return { config, onClose, screen, submit };
 }
 
-async function chooseTarget(screen: Awaited<ReturnType<typeof renderScreen>>, path = '/target') {
-    const target = storage.getState().machines['machine-b'];
+async function chooseTarget(screen: Awaited<ReturnType<typeof renderScreen>>, path = '/target', machineId = 'machine-b') {
+    const target = storage.getState().machines[machineId];
     await act(async () => { invokeTestInstanceHandler(screen.findByType(MachineSelector), 'onSelect', target); });
     await act(async () => { invokeTestInstanceHandler(screen.findByType(PathSelectionList), 'onCommit', path); });
 }
@@ -268,6 +268,38 @@ describe('Project Add machine modal', () => {
         expect(callsFor(RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_REPLACEMENT_PREFLIGHT)).toEqual([]);
         await act(async () => { recordMachineRequestSucceeded({ serverId: workspace.serverId, accountId: workspace.accountId, machineId: 'machine-b' }); });
         expect(modal.submit().props.disabled).toBe(false);
+    });
+
+    describe('same-Machine destination', () => {
+        const blocked = 'workspaceSync.start.blocked.destinationFolder';
+        const chooseOwnMachine = async (path: string) => {
+            owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+            const modal = await renderOpenedModal();
+            await chooseTarget(modal.screen, path, 'machine-a');
+            return modal;
+        };
+
+        it('lists the source Machine, labelled as this machine', async () => {
+            owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+            const modal = await renderOpenedModal();
+            const items: Array<{ id: string; subtitle?: string }> = modal.screen.findByType(MachineSelector).findByType(DropdownMenu).props.items;
+            expect(items.find(item => item.id === 'machine-a')?.subtitle).toContain('workspaceSync.addMachine.thisMachine');
+            expect(items.find(item => item.id === 'machine-b')?.subtitle ?? '').not.toContain('workspaceSync.addMachine.thisMachine');
+        });
+
+        it.each(['/source', '/source/', '/source//nested', '\\source\\nested'])('blocks %s as equal to the source root or inside it', async (path) => {
+            const modal = await chooseOwnMachine(path);
+            expect(modal.submit().props).toMatchObject({ disabled: true, accessibilityHint: blocked });
+        });
+
+        it('creates the link on the same Machine for a distinct sibling folder', async () => {
+            requireApproval = true;
+            const modal = await chooseOwnMachine('/source-copy');
+            await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+            await act(async () => { modal.submit().props.onPress(); });
+            await vi.waitFor(() => expect(confirmModal).toHaveBeenCalledOnce());
+            expect(storedApproval().actionArgs).toMatchObject({ sourceWorkspaceRefId: source().id, targetMachineId: 'machine-a', targetPath: '/source-copy' });
+        });
     });
 
     it('retires an in-flight destination admission when its Account credential changes', async () => {

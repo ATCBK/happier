@@ -9,6 +9,7 @@ import { normalizeRawMessage, RawRecordSchema, type AgentEvent } from "@happier-
 
 import { TranscriptEventRow } from './TranscriptEventRow';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { WorkerUpdateCard } from '@/components/sessions/work/WorkerUpdateCard';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
@@ -154,6 +155,24 @@ describe('TranscriptEventRow', () => {
         </AppSessionTranscriptSourceProvider>);
         expect(follower.findByTestId('transcript-event-host-wake')).toBeNull();
         expect(follower.findByTestId('worker-update:worker')).not.toBeNull();
+    });
+    it('binds each card to its own admitted Follow reason and accepted delivery evidence', async () => {
+        const update = { v: 1, workerKind: 'session', workerId: 'worker', ownerState: 'settled',
+            wake: 'finished', headline: 'Finished', canInspect: false } as const;
+        const render = async (followMatches: { kind: 'relation'; relation: 'manager' | 'follower' }[] | undefined,
+            delivery: { status: 'woke' | null; reason: null }) => renderScreen(
+            <AppSessionTranscriptSourceProvider sessionId="lead" serverId="home-b">
+                <TranscriptEventRow event={{ type: 'worker-update', update, ...(followMatches ? { followMatches } : {}) }}
+                    followDeliveryProjection={delivery} />
+            </AppSessionTranscriptSourceProvider>);
+        const manager = await render([{ kind: 'relation', relation: 'manager' }], { status: 'woke', reason: null });
+        const unknown = await render([{ kind: 'relation', relation: 'follower' }], { status: null, reason: null });
+        expect(manager.findAll(node => node.type === WorkerUpdateCard)[0]?.props).toMatchObject({
+            followMatches: [{ kind: 'relation', relation: 'manager' }], delivery: { status: 'woke', reason: null },
+        });
+        expect(unknown.findAll(node => node.type === WorkerUpdateCard)[0]?.props).toMatchObject({
+            followMatches: [{ kind: 'relation', relation: 'follower' }], delivery: { status: null, reason: null },
+        });
     });
     it('renders a host worker update as a card with its effective engine and result', async () => {
         const screen = await renderScreen(<AppSessionTranscriptSourceProvider sessionId="lead" serverId="home-b"><TranscriptEventRow event={{

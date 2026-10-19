@@ -2,6 +2,12 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
 import { installSessionOpsNetworkBoundary } from './sessionOpsNetworkBoundary';
+import { loadSyncSingletonForTests } from './syncSingletonLoader';
+
+// Keep cold app initialization out of the individual transport assertions.
+const initialNetwork = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+await initialNetwork.dispose();
 
 let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>> | null = null;
 afterEach(async () => {
