@@ -602,6 +602,10 @@ export type SkillsActionResultById = {
                 occurrenceId: string;
             };
             outsideReferences?: string[] | undefined;
+            siblingSkills?: {
+                path: string;
+                references: string[];
+            }[] | undefined;
         }[];
     };
     readonly "skills.export": {

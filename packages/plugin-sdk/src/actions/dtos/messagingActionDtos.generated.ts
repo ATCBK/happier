@@ -288,6 +288,13 @@ export type MessagingActionResultById = {
                 throughSeq: number;
                 participantSessionId: string;
             } | undefined;
+            workflow?: {
+                purpose: 'invocation';
+                runId: string;
+                invocationRecordId: string;
+                workDepth?: number | undefined;
+                stepOrdinal?: string | undefined;
+            } | undefined;
             actionRequestAttributionV1?: {
                 requestRef: string;
                 requester: {

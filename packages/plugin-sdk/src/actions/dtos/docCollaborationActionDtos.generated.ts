@@ -333,6 +333,11 @@ export type DocCollaborationActionResultById = {
                     requestLocalId: string;
                     outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
                     acceptedTurnId?: string | undefined;
+                    workflow?: {
+                        runId: string;
+                        invocationRecordId: string;
+                        invocationAttempt: string;
+                    } | undefined;
                 } | undefined;
             } | null;
             mentionedAccountIds: string[];
@@ -566,6 +571,11 @@ export type DocCollaborationActionResultById = {
                     requestLocalId: string;
                     outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
                     acceptedTurnId?: string | undefined;
+                    workflow?: {
+                        runId: string;
+                        invocationRecordId: string;
+                        invocationAttempt: string;
+                    } | undefined;
                 } | undefined;
             } | null;
             mentionedAccountIds: string[];

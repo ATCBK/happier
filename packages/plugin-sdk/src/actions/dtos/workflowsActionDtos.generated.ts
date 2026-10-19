@@ -108,8 +108,18 @@ export type WorkflowsActionInputById = {
             secondOpinion?: 'off' | 'encouraged' | undefined;
             canDelegateToOtherRoles?: boolean | undefined;
         }[] | undefined;
+        origin?: {
+            kind: 'discussion';
+            discussion: {
+                serverId: string;
+                discussionId: string;
+            };
+            addressingMessageId: string;
+        } | undefined;
         onComplete?: {
             kind: 'originating_session';
+        } | {
+            kind: 'originating_discussion';
         } | undefined;
     };
     readonly "workflow.run.list": {
@@ -126,6 +136,7 @@ export type WorkflowsActionInputById = {
         states?: ('queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review')[] | undefined;
         attention?: 'required' | undefined;
         originSessionId?: string | undefined;
+        originDiscussionId?: string | undefined;
         targetSessionId?: string | undefined;
         underSessionId?: string | undefined;
         automationId?: string | undefined;
@@ -3561,6 +3572,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -3770,6 +3789,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -3843,6 +3870,10 @@ export type WorkflowsActionResultById = {
             kind: 'unavailable';
             reason: 'missing_reference' | 'invalid_reference_scope' | 'invalid_input' | 'target_unavailable' | 'run_not_found' | 'not_authenticated' | 'subtree_denied' | 'role_target_unavailable' | 'role_runs_as_mismatch' | 'policy_denied_field' | 'permission_exceeds_ceiling' | 'work_depth_exceeded' | 'definition_exceeds_authority' | 'run_access_denied' | 'currentness_conflict' | 'workflow_input_too_large' | 'workflow_outcome_unresolved' | 'workflow_http_error' | 'workflow_interaction_capacity_exceeded' | 'workflow_conversation_unavailable' | 'continuation_unavailable' | 'workflow_workspace_restore_unavailable' | 'workflow_workspace_restore_failed' | 'workflow_wait_self_dependency' | 'ineligible_state' | 'custody_pending' | 'content_unavailable' | 'source_unavailable' | 'legacy_conversion_unsupported' | 'history_not_readable' | 'encryption_setup_required' | 'waiting_for_keys' | 'storage_unavailable' | 'native_goal_owner' | 'session_already_started';
         }>;
+        supportsAnotherRoundByRunId?: Record<string, boolean> | undefined;
+        callerAccessByRunId?: Record<string, {
+            canEdit: boolean;
+        }> | undefined;
         invocationProvenance?: {
             index: {
                 id: string;
@@ -4023,6 +4054,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -7945,6 +7984,14 @@ export type WorkflowsActionResultById = {
             origin: {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             metadata?: {
                 title: string;
@@ -8451,6 +8498,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -8661,6 +8716,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -8871,6 +8934,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -9081,6 +9152,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -9290,6 +9369,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -9500,6 +9587,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -9709,6 +9804,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -9918,6 +10021,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -11506,6 +11617,15 @@ export type WorkflowsActionResultById = {
                 };
             } | undefined;
         };
+        discussionResultDelivery?: {
+            discussion: {
+                serverId: string;
+                discussionId: string;
+            };
+            messageId: string;
+            throughSeq: number;
+            kind: 'originating_discussion';
+        } | undefined;
     };
     readonly "workflow.run.invocations.retry": {
         run: {
@@ -11651,6 +11771,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -12486,6 +12614,15 @@ export type WorkflowsActionResultById = {
                 };
             } | undefined;
         };
+        discussionResultDelivery?: {
+            discussion: {
+                serverId: string;
+                discussionId: string;
+            };
+            messageId: string;
+            throughSeq: number;
+            kind: 'originating_discussion';
+        } | undefined;
     };
     readonly "workflow.run.invocations.complete_review": {
         run: {
@@ -12631,6 +12768,14 @@ export type WorkflowsActionResultById = {
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
