@@ -197,6 +197,10 @@ describe('ApiSessionClient pending queue materialization', () => {
     });
 
     it('replays exact queued Run targets from the initial attach Session when the Run manager subscribes', async () => {
+        bindApiSessionSocketPairMock(mockIo, {
+            sessionSocket: createApiSessionSocketStub({ connected: true }),
+            userSocket: createApiSessionSocketStub(),
+        });
         const client = createClient(createMockSession({
             pendingCount: 1,
             pendingVersion: 8,
@@ -1568,17 +1572,19 @@ describe('ApiSessionClient pending queue materialization', () => {
     });
 
 
-    it('does not redrive materialization over HTTP after a connected socket ACK is lost', async () => {
+    it('keeps materialization pending beyond the control cutoff and does not redrive over HTTP after actual ACK loss', async () => {
         const previousTimeout = process.env.HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS;
         process.env.HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS = '5';
 
         try {
+            let loseAck!: (error: Error) => void;
+            const materializationAck = new Promise<never>((_resolve, reject) => { loseAck = reject; });
             const sessionSocket = createApiSessionSocketStub({
                 connected: true,
                 // Lose only this operation's ACK. Registration/activity/close
                 // still obey the canonical socket boundary contract.
                 emitWithAck: async (event, payload) => event === 'pending-materialize-next'
-                    ? new Promise<never>(() => {})
+                    ? materializationAck
                     : resolveApiSessionSocketDefaultAck(event, payload),
             });
             const userSocket = createApiSessionSocketStub();
@@ -1590,18 +1596,19 @@ describe('ApiSessionClient pending queue materialization', () => {
             const client = createClient(createMockSession({ pendingCount: 1, pendingVersion: 3 }));
             await waitForPendingInputContract(client);
             vi.useFakeTimers();
-            const materializePromise = client.materializeNextPendingMessageSafely().then((value) => ({
-                status: 'resolved' as const,
-                value,
-            }));
+            let settled = false;
+            const materializePromise = client.materializeNextPendingMessageSafely().then((value) => {
+                settled = true;
+                return { status: 'resolved' as const, value };
+            });
 
+            await vi.waitFor(() => expect(sessionSocket.emitWithAck.mock.calls.some(
+                ([event]) => event === 'pending-materialize-next',
+            )).toBe(true));
             await vi.advanceTimersByTimeAsync(100);
-            const outcome = await Promise.race([
-                materializePromise,
-                Promise.resolve({ status: 'pending' as const }),
-            ]);
-
-            expect(outcome).toEqual({ status: 'resolved', value: { type: 'retryable_transport' } });
+            expect(settled).toBe(false);
+            loseAck(new SocketAckError({ code: 'socket_ack_timeout', event: 'pending-materialize-next' }));
+            await expect(materializePromise).resolves.toEqual({ status: 'resolved', value: { type: 'retryable_transport' } });
             expect(postSpy).not.toHaveBeenCalled();
         } finally {
             vi.useRealTimers();
@@ -1805,7 +1812,8 @@ describe('ApiSessionClient pending queue materialization', () => {
         await flushApiSessionClientMessageCommitQueue(client as any);
 
         const call = sessionSocket.emitWithAck.mock.calls.find(
-            (args: unknown[]) => args[0] === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1,
+            (args: unknown[]) => args[0] === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1
+                && typeof args[1] === 'object' && args[1] !== null && 'localId' in args[1] && args[1].localId === 'msg-1',
         );
         expect(call?.[1]).toMatchObject({
             v: 1,
