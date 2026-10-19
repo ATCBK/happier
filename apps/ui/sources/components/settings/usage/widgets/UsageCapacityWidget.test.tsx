@@ -13,6 +13,7 @@ import { WidgetPresentationProvider } from '@happier-dev/plugin-ui';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { QualifiedConnectedAccountGroupV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { ConnectedServicePoolSelectionGetResponseV1Schema } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getAppliedActiveServerSnapshot, publishAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
@@ -71,6 +72,28 @@ it('renders every overlapping pool membership without duplicating standalone Acc
   expect(screen.findAllHostsByTestId('capacity.cell.work')).toHaveLength(2);
   expect(screen.findAllHostsByTestId('capacity.cell.personal')).toHaveLength(2);
   expect(screen.findAllHostsByTestId('capacity.cell.standalone')).toHaveLength(1);
+  const renderSlice = (next: typeof slice) => <InjectedAuthProvider credentials={null}>
+    <UsageCapacityWidget id="usage_capacity" model={{ ...model, slice: next }} slice={next} query={query} serverId="home" testID="capacity" />
+  </InjectedAuthProvider>;
+  await screen.update(renderSlice({ ...slice, pools: slice.pools!.map(pool => ({ ...pool,
+    selection: { status: 'error', machineId: 'machine', errorCode: 'MACHINE_RPC_TIMEOUT' },
+  })) }));
+  expect(screen.findHostByTestId('capacity.usedFirst.cause')).not.toBeNull();
+  expect(screen.getTextContent()).toContain(t('usage.board.plans.usedFirstReadFailed'));
+  const recovered = { ...slice, pools: slice.pools!.map(pool => {
+    const candidates = pool.memberAccountIds.map(profileId => ({ profileId, priority: 1, createdAtMs: 1, enabled: true, leastLimitedScore: null }));
+    return { ...pool, selection: { status: 'available' as const, machineId: 'machine', asOfMs: 200,
+      value: ConnectedServicePoolSelectionGetResponseV1Schema.parse({ group: pool.group, observedAtMs: 200,
+        selection: { selected: candidates[0], reason: 'selected', excluded: [], decisionTrace: {
+          activeProfileId: candidates[0]!.profileId, reason: 'selected', strategy: 'priority', selectionBasis: 'active_stickiness',
+          sticky: true, orderedEligibleCandidates: candidates, candidates: [],
+        } } }),
+    } };
+  }) };
+  await screen.update(renderSlice(recovered));
+  expect(screen.findHostByTestId('capacity.usedFirst.cause')).toBeNull();
+  expect(screen.getTextContent()).not.toContain(t('usage.board.plans.usedFirstReadFailed'));
+  expect(screen.findAllHostsByTestId('capacity.cell.work')).toHaveLength(2);
 });
 
 it('outlines only a pool of two or more members; a pool of one reads as its account does', async () => {
@@ -188,10 +211,54 @@ it.each([['loaded_data', true], ['not_loaded', false]] as const)('says only an a
   const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
     <UsageCapacityWidget id="usage_capacity" model={model} slice={slice} query={query} serverId="home" testID="capacity" />
   </InjectedAuthProvider>);
-  expect(screen.findHostByTestId('capacity.cell.mail')).not.toBeNull();
-  // An observed empty result says so; a not-yet-read placeholder keeps the quiet reading state.
-  if (observed) expect(screen.getTextContent()).toContain(t('usage.board.plans.cellNoAllowance'));
-  else expect(screen.getTextContent()).not.toContain(t('usage.board.plans.cellNoAllowance'));
+  // An observed empty result keeps its segment and says so; a never-read placeholder is no segment at all,
+  // only the one collapsed "not read yet" line (R1), never an epoch date or a silent dash.
+  if (observed) {
+    expect(screen.findHostByTestId('capacity.cell.mail')).not.toBeNull();
+    expect(screen.getTextContent()).toContain(t('usage.board.plans.cellNoAllowance'));
+    expect(screen.findHostByTestId('capacity.unread')).toBeNull();
+  } else {
+    expect(screen.findHostByTestId('capacity.cell.mail')).toBeNull();
+    expect(screen.getTextContent()).not.toContain(t('usage.board.plans.cellNoAllowance'));
+    expect(screen.findByTestId('capacity.unread')).not.toBeNull();
+    expect(screen.getTextContent()).toContain(t('usage.board.plans.capacityNotRead', { count: 1 }));
+  }
+});
+
+it.each([['medium', true], ['tall', true], ['full', false]] as const)('draws one pooled bar with labels under its segments beside other widgets (%s), and the per-account grid at full width', async (size, pooled) => {
+  const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };
+  const query = normalizeUsageQuery({});
+  const quota = [['work', 'loaded_data', 40], ['personal', 'loaded_data', 75], ['spare', 'not_loaded', null]].map(([accountId, state, usedPct]) => {
+    const recordKey = { providerId: 'anthropic', accountSubjectId: accountId as string, subjectKind: 'account', quotaScope: 'account' } as const;
+    const observed = state === 'loaded_data';
+    return ConnectedServiceQuotaGetResultV1Schema.parse({
+      source: { ref: { service, accountId }, bindingKind: 'account' },
+      current: { v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+        providerId: 'anthropic', accountSubject: { kind: 'providerSubject', id: accountId },
+        observedAtMs: observed ? Date.now() : 0, fetchedAtMs: observed ? Date.now() : 0, staleAfterMs: 60_000,
+        source: 'providerHttp', confidence: 'confirmed', state, planLabel: null,
+        meters: usedPct === null ? [] : [{ meterId: 'weekly', label: 'Weekly', usedPct, utilizationPct: usedPct, used: null, limit: null,
+          unit: 'count', status: 'ok', resetsAt: Date.now() + 86_400_000, resetAtMs: Date.now() + 86_400_000, windowDurationMs: 7 * 86_400_000 }] },
+      pace: [], targets: [], waitingWork: { status: 'unavailable', reason: 'unsupported' },
+    });
+  });
+  const slice = resolveUsagePageAggregation({ queries: [query], quota: { status: 'available', value: quota } }).results[0]!;
+  const model = { requestedQuery: null, shownQuery: null, slice, pending: false, error: null,
+    freshness: 'fresh', updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} } satisfies UsageWidgetBodyModel;
+  const { UsageCapacityWidget } = await import('./UsageCapacityWidget');
+  const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
+    <WidgetPresentationProvider value={{ size, footprint: { columns: 2, columnSpan: 1, rowSpan: 1, width: 'half', height: 'regular' },
+      geometry: { width: 520, height: 320 } }}>
+      <UsageCapacityWidget id="usage_capacity" model={model} slice={slice} query={query} serverId="home" testID="capacity" />
+    </WidgetPresentationProvider>
+  </InjectedAuthProvider>);
+  // Read accounts are segments; the never-read one is one quiet line, and the headline counts only reads.
+  expect(screen.findHostByTestId('capacity.cell.work')).not.toBeNull();
+  expect(screen.findHostByTestId('capacity.cell.personal')).not.toBeNull();
+  expect(screen.findHostByTestId('capacity.cell.spare')).toBeNull();
+  expect(screen.getTextContent()).toContain(t('usage.board.plans.capacityNotRead', { count: 1 }));
+  expect(screen.getTextContent()).toContain(t('usage.board.plans.capacityAccounts', { count: 2 }));
+  expect(screen.findHostByTestId('capacity.pooled') !== null).toBe(pooled);
 });
 
 it.each(['pending', 'not_loaded'] as const)('shows an observed headline with first-read progress (%s) and replaces it when a tighter account answers', async status => {

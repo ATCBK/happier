@@ -98,6 +98,18 @@ function quotaRead(
 }
 
 describe('Plans projection of admitted allowance reads', () => {
+  it('separates observed accounts from unread placeholders and excludes ineligible services', () => {
+    const observed = quotaRead({ accountId: 'observed', meters: [] });
+    const unread = { bindingKind: 'account' as const, ref: { service, accountId: 'unread' } };
+    const email = { bindingKind: 'account' as const, ref: { service: { pluginId: 'acme.email', localId: 'email' }, accountId: 'mail' } };
+    const projection = projectUsagePlans([observed], NOW, undefined,
+      [unread, email].map(source => ({ source: `quota:${JSON.stringify(source)}`, status: 'pending' as const })),
+      candidate => candidate.pluginId === service.pluginId && candidate.localId === service.localId);
+    expect(projection.accounts.map(account => account.accountId)).toEqual(['unread', 'observed']);
+    expect(projection.readAccounts.map(account => account.accountId)).toEqual(['observed']);
+    expect(projection.unreadAccounts.map(account => account.accountId)).toEqual(['unread']);
+    expect(projection.readAccountCount).toBe(1);
+  });
   it('compares every retained observation while refresh and history reads are outstanding', () => {
     const reads = [
       quotaRead({ accountId: 'roomy', meters: [{ meterId: 'week', label: 'Weekly', usedPct: 40 }] }),

@@ -1,8 +1,7 @@
 import { wasConnectedServiceQuotaObserved } from '@happier-dev/protocol/connect/quotaObservationTime';
 import type { ConnectedServiceQuotaGetResultV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
-import { getProviderAccountUsageQuotaHistoryV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { getProviderAccountUsageQuotaPageFactsV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import {
-  deriveProviderAccountUsageEarlierWindowCurves,
   type ProviderAccountUsageEarlierWindowCurvesV1,
   type ProviderAccountUsagePaceV1,
 } from '@happier-dev/protocol/connect/deriveProviderAccountUsagePace';
@@ -101,6 +100,9 @@ export type UsagePlanEvent = Readonly<{
 
 export type UsagePlansProjection = Readonly<{
   accounts: readonly UsagePlanAccount[];
+  readAccounts: readonly UsagePlanAccount[];
+  unreadAccounts: readonly UsagePlanAccount[];
+  readAccountCount: number;
   pools: readonly UsagePlanPool[];
   /** The least room left among the accounts' headline windows. A fact, not a rank or a weighting. */
   tightest: Readonly<{
@@ -194,6 +196,7 @@ export function projectUsagePlans(
   nowMs: number,
   memberships?: readonly UsageQueryPoolSnapshot[],
   sourceStates?: readonly UsageQuerySourceState[],
+  isUsageCapable?: (service: UsagePlanAccount['service']) => boolean,
 ): UsagePlansProjection {
   const accounts: UsagePlanAccount[] = [];
   const pools = new Map<
@@ -221,6 +224,7 @@ export function projectUsagePlans(
   const sources = new Map([...states].map(([key, entry]) => [key, entry.source]));
   for (const [key, read] of reads) if (!sources.has(key)) sources.set(key, read.source);
   for (const [key, source] of sources) {
+    if (isUsageCapable && !isUsageCapable(source.ref.service)) continue;
     const read = reads.get(key) ?? null;
     const ref = source.ref;
     const groupId =
@@ -299,7 +303,10 @@ export function projectUsagePlans(
     accountKeys: pool.memberAccountIds.map(accountId => `${serviceKey(pool.group.service)}:${accountId}`)
       .filter(key => accounts.some(account => account.key === key)),
   }));
-  return { accounts, pools: qualifiedPools ?? [...pools.values()], tightest, events };
+  const readAccounts = accounts.filter(account => account.observedAtMs !== null);
+  const unreadAccounts = accounts.filter(account => account.observedAtMs === null);
+  return { accounts, readAccounts, unreadAccounts, readAccountCount: readAccounts.length,
+    pools: qualifiedPools ?? [...pools.values()], tightest, events };
 }
 
 /** Every window the B pace owner derived a pace for, in the Account's own order. */
@@ -404,7 +411,7 @@ export type UsageResetStartBinding =
 
 /**
  * The pending owner's reset binding for one window: the read's own source and record, witnessed by the
- * latest accepted history entry of that record. Without such an entry there is nothing to bind to.
+ * latest accepted witness projected by B. Without such an entry there is nothing to bind to.
  */
 export function resolveUsageResetStartBinding(account: UsagePlanAccount, meterId: string, nowMs = Date.now()): UsageResetStartBinding {
   const read = account.read;
@@ -413,14 +420,11 @@ export function resolveUsageResetStartBinding(account: UsagePlanAccount, meterId
   const window = account.windows.find((candidate) => candidate.meterId === meterId);
   if (!window || window.resetAtMs === null) return { status: 'unavailable', reason: 'no_reset' };
   let witness: Readonly<{ id: string; observedAtMs: number }> | null = null;
-  const history = getProviderAccountUsageQuotaHistoryV1(read);
-  for (const entry of history?.entries ?? []) {
-    if (entry.snapshot.recordId !== current.recordId) continue;
-    if (!witness || entry.observedAtMs > witness.observedAtMs) witness = { id: entry.id, observedAtMs: entry.observedAtMs };
-  }
+  const accepted = getProviderAccountUsageQuotaPageFactsV1(read)?.resetWitness;
+  if (accepted) witness = { id: accepted.id, observedAtMs: accepted.observedAtMs };
   if (!witness) return { status: 'unavailable', reason: 'no_witness' };
   const reset = { source: account.source, recordId: current.recordId, meterId, witness };
-  const snapshot = history?.entries.find(entry => entry.id === witness.id && entry.observedAtMs === witness.observedAtMs)?.snapshot ?? null;
+  const snapshot = accepted?.snapshot ?? null;
   const admission = evaluatePendingResetStartAdmissionV1({ reset, witness: snapshot, current, nowMs, authorityCurrent: true });
   if (admission.status !== 'available') return { status: 'unavailable', reason: admission.reason === 'witness_unavailable'
     ? 'no_witness' : admission.reason === 'unknown_window' || admission.reason === 'window_changed' ? 'no_reset' : 'no_reading' };
@@ -453,12 +457,12 @@ export function adviseUsageBankedReset(account: UsagePlanAccount): UsageBankedRe
 }
 
 /**
- * Earlier ended windows of one meter as curves, from the read's own accepted history. The pace owner
- * decides which earlier windows are comparable; this only hands it the read's snapshots.
+ * Earlier ended windows of one meter as curves. B's pace owner has already
+ * decided comparability and preserved every point before Resource publication.
  */
 export function projectUsageEarlierCurves(account: UsagePlanAccount, meterId: string): ProviderAccountUsageEarlierWindowCurvesV1 {
   const current = account.read?.current;
   if (!current) return { status: 'unavailable', reason: 'unknown_window' };
-  const history = account.read ? getProviderAccountUsageQuotaHistoryV1(account.read)?.entries.map((entry) => entry.snapshot) : undefined;
-  return deriveProviderAccountUsageEarlierWindowCurves({ current, meterId, ...(history ? { history } : {}) });
+  return (account.read && getProviderAccountUsageQuotaPageFactsV1(account.read)?.earlierCurves.find(row => row.meterId === meterId)?.value)
+    || { status: 'unavailable', reason: 'not_loaded' };
 }

@@ -144,7 +144,6 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
     <View style={styles.body} testID={`${props.testID}.breakdowns`}>
       {blocks.map((block) => {
         const lead = leadingUsageRows(block.rows, expanded.includes(block.dimension));
-        const long = block.rows.length > lead.rows.length || expanded.includes(block.dimension);
         return (
         <View key={block.dimension} style={styles.block}>
             <Text style={styles.heading} accessibilityRole="header">
@@ -213,16 +212,12 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
                 }
               : {})}
           />
-          {long ? <UsageShowAllRows label={`${t(`usage.widgets.${props.id}`)}: ${t(DIMENSION_TITLE[block.dimension])}`}
-            total={block.rows.length} complete={block.truncated === 0} expanded={lead.hidden === 0}
+          <UsageShowAllRows label={`${t(`usage.widgets.${props.id}`)}: ${t(DIMENSION_TITLE[block.dimension])}`}
+            total={block.rows.length} hidden={lead.hidden} complete={block.truncated === 0} expanded={expanded.includes(block.dimension)}
+            unlisted={block.truncated > 0 ? t('usage.board.page.moreRows', { count: block.truncated }) : null}
             testID={`${props.testID}.${block.dimension}.more`}
             onToggle={() => setExpanded(current => current.includes(block.dimension)
-              ? current.filter(entry => entry !== block.dimension) : [...current, block.dimension])} /> : null}
-          {block.truncated > 0 ? (
-            <Text style={styles.more}>
-              {t('usage.board.page.moreRows', { count: block.truncated })}
-            </Text>
-          ) : null}
+              ? current.filter(entry => entry !== block.dimension) : [...current, block.dimension])} />
         </View>
         );
       })}
@@ -242,9 +237,5 @@ const styles = StyleSheet.create((theme) => ({
   heading: {
     ...Typography.variant('body', 'semiBold'),
     color: theme.colors.text.secondary,
-  },
-  more: {
-    ...Typography.variant('meta'),
-    color: theme.colors.text.tertiary,
   },
 }));

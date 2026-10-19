@@ -12,7 +12,7 @@ import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachabi
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useProjectedConnectedServicesRegistry, useProjectedPluginLocalizedTextResolver } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { resolveConnectedServiceRegistryEntryDisplayName, resolveQualifiedConnectedServiceRegistryDisplayName, resolveQualifiedConnectedServiceRegistryEntry } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
-import type { ConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { isConnectedServiceUsageCapable, type ConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { QualifiedConnectedAccountGroupV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
@@ -65,12 +65,13 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
   // A fresh `now` per render would rebuild the projection on every parent render; minute precision
   // is what the reset/stale wording shows.
   const minute = Math.floor(nowMs / 60_000);
-  const baseProjection = React.useMemo(
-    () => projectUsagePlans(quota, minute * 60_000, slice.pools, slice.sources),
-    [quota, minute, slice.pools, slice.sources],
-  );
   const summaries = useConnectedServiceQuotaSummaries({ fetchPolicy: 'cache_only' });
   const registry = useProjectedConnectedServicesRegistry();
+  const baseProjection = React.useMemo(
+    () => projectUsagePlans(quota, minute * 60_000, slice.pools, slice.sources,
+      service => isConnectedServiceUsageCapable(service, registry)),
+    [quota, minute, slice.pools, slice.sources, registry],
+  );
   const localizePluginText = useProjectedPluginLocalizedTextResolver();
   const scope = useActiveServerAccountScope();
   const groups = storage(state => areServerAccountScopesEqual(state.profileScope, scope)

@@ -172,23 +172,40 @@ export function usageSourceTimelineSeries(input: Readonly<{
     bucketLabel: (startMs: number) => string;
 }>): readonly UsageSourceSeries[] {
     const timeline = input.timeline ?? [];
-    const parts = new Map<string, { key: string; label: string; values: Map<number, number | null>;
+    const parts = new Map<string, { key: string; label: string; values: Map<number, number | null>; allOutside: boolean;
         details: Record<string, { label: string; execution: 'happier' | 'outside' | 'unknown'; value: number | null }[]> }>();
-    for (const bucket of timeline) for (const leader of bucket.leaders) for (const part of leader.sources ?? []) {
-        const execution = part.execution === 'happier' ? t('usage.board.page.executionHappier')
-            : part.execution === 'outside' ? t('usage.board.page.executionOutside') : t('usage.board.page.executionUnknown');
+    for (const bucket of timeline) for (const leader of bucket.leaders) {
+        if (input.metric === 'tokens' && !leader.sources?.length) continue;
         const key = input.dimensionKey(leader.key);
         const entry = parts.get(key) ?? { key, label: input.label(key, leader.key === key ? leader.label : undefined),
-            values: new Map<number, number | null>(), details: {} };
-        const value = input.metric === 'tokens' ? part.tokens.total : input.costSelection !== undefined
-            ? resolveUsageCostForSelection(part.cost, input.costSelection) : resolveUsageCostBasis(part.cost, input.costMode)?.amountUsd ?? null;
-        const previous = entry.values.get(bucket.bucketStartMs);
-        entry.values.set(bucket.bucketStartMs, value === null || previous === null ? null : (previous ?? 0) + value);
-        const details = entry.details[String(bucket.bucketStartMs)] ?? [];
-        const basisLabel = input.metric === 'cost' && input.costSelection !== undefined
-            ? usagePageCostRow(part.cost, input.costSelection)?.label : undefined;
-        details.push({ label: [execution, usageSourceTitle(part.source), basisLabel].filter(Boolean).join(' · '), execution: part.execution, value });
-        entry.details[String(bucket.bucketStartMs)] = details;
+            values: new Map<number, number | null>(), allOutside: true, details: {} };
+        if (!leader.sources?.length) entry.allOutside = false;
+        // A whole-call report can price the Agent/day without attributing money
+        // to its individual capture sources. The query owner selects the leader's
+        // money; source partitions are details, never another summation policy.
+        if (input.metric === 'cost') {
+            const value = leader.cost ? input.costSelection !== undefined
+                ? resolveUsageCostForSelection(leader.cost, input.costSelection)
+                : resolveUsageCostBasis(leader.cost, input.costMode)?.amountUsd ?? null : null;
+            const previous = entry.values.get(bucket.bucketStartMs);
+            entry.values.set(bucket.bucketStartMs, value === null || previous === null ? null : (previous ?? 0) + value);
+        }
+        for (const part of leader.sources ?? []) {
+            if (part.execution !== 'outside') entry.allOutside = false;
+            const execution = part.execution === 'happier' ? t('usage.board.page.executionHappier')
+                : part.execution === 'outside' ? t('usage.board.page.executionOutside') : t('usage.board.page.executionUnknown');
+            const value = input.metric === 'tokens' ? part.tokens.total : input.costSelection !== undefined
+                ? resolveUsageCostForSelection(part.cost, input.costSelection) : resolveUsageCostBasis(part.cost, input.costMode)?.amountUsd ?? null;
+            if (input.metric === 'tokens') {
+                const previous = entry.values.get(bucket.bucketStartMs);
+                entry.values.set(bucket.bucketStartMs, value === null || previous === null ? null : (previous ?? 0) + value);
+            }
+            const details = entry.details[String(bucket.bucketStartMs)] ?? [];
+            const basisLabel = input.metric === 'cost' && input.costSelection !== undefined
+                ? usagePageCostRow(part.cost, input.costSelection)?.label : undefined;
+            details.push({ label: [execution, usageSourceTitle(part.source), basisLabel].filter(Boolean).join(' · '), execution: part.execution, value });
+            entry.details[String(bucket.bucketStartMs)] = details;
+        }
         parts.set(key, entry);
     }
     const recorded = timeline.map(bucket => bucket.bucketStartMs);
@@ -198,7 +215,7 @@ export function usageSourceTimelineSeries(input: Readonly<{
     for (const entry of parts.values()) if (!dimensionIndexes.has(entry.key)) dimensionIndexes.set(entry.key, dimensionIndexes.size);
     return [...parts].map(([id, entry]) => ({ id, dimensionKey: entry.key, label: entry.label, sourceDetails: entry.details,
         color: input.color(dimensionIndexes.get(entry.key)!, entry.key),
-        ...(Object.values(entry.details).flat().every(part => part.execution === 'outside') ? { fillPattern: 'hatch' as const } : {}),
+        ...(entry.allOutside ? { fillPattern: 'hatch' as const } : {}),
         points: starts.map(startMs => {
             const bucket = buckets.get(startMs);
             // A truncated dimension or an older unpartitioned bucket cannot establish a source zero.
@@ -263,9 +280,11 @@ export function useUsageSeriesLens(input: Readonly<{
     /** What the numbers mean, said once under them (cost basis). */
     footer?: string;
     choice?: (seriesId: string) => UsageSeriesChoice | null;
+    /** A point's title when its caller says it only on demand (unlabelled time points); the bucket's label otherwise. */
+    pointTitle?: (bucket: HappierSeriesBucket) => string;
     testID?: string;
 }>): Pick<StackedSeriesChartProps, 'renderPlotOverlay' | 'onSelect'> {
-    const { series, format, accentColor, footer, choice, testID } = input;
+    const { series, format, accentColor, footer, choice, pointTitle, testID } = input;
     // The chart's own keyboard selection: the lens shows where the viewer is reading.
     const [focusedId, setFocusedId] = useState<string | null>(null);
     const onSelect = useCallback((bucketId: string) => setFocusedId(bucketId), []);
@@ -285,7 +304,7 @@ export function useUsageSeriesLens(input: Readonly<{
                 return [parent, ...details.map(part => ({ label: part.label,
                     value: part.value === null ? t('common.unavailable') : format(part.value) }))];
             });
-            return { title: bucket.label, rows, ...(footer ? { footer } : {}),
+            return { title: pointTitle ? pointTitle(bucket) : bucket.label, rows, ...(footer ? { footer } : {}),
                 // Comparison overlays are independent observations, never additive parts.
                 ...(known && bucket.values.length > 1 && !series.some(entry => entry.overlay)
                     ? { total: format(bucket.values.reduce((sum, entry) => sum + (entry.value ?? 0), 0)) } : {}) };
@@ -294,6 +313,6 @@ export function useUsageSeriesLens(input: Readonly<{
         return <ScrubLens style={RNStyleSheet.absoluteFill} accentColor={accentColor} resolveContent={resolveContent}
             layout={{ centers: plot.centers }}
             focusIndex={focusIndex < 0 ? null : focusIndex} {...(testID ? { testID } : {})} />;
-    }, [series, format, accentColor, footer, choice, focusedId, testID]);
+    }, [series, format, accentColor, footer, choice, pointTitle, focusedId, testID]);
     return { renderPlotOverlay, onSelect };
 }

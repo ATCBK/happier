@@ -103,14 +103,14 @@ describe('mounted Usage page scope commands', () => {
         </InjectedAuthProvider>);
         await inventoryStarted.promise;
         await flushHookEffects({ cycles: 10 });
-        // The cold list and layout are one admitted page: data cannot paint
-        // beneath a temporary preset-only navigation strip.
-        expect.soft(screen.findAllByType(WidgetSurface)).toHaveLength(0);
+        // The selected document is authoritative independently of the slow inventory.
+        expect.soft(screen.findAllByType(WidgetSurface).map(node => node.props.instance.id)).toEqual(['work-only']);
         expect.soft(Boolean(screen.findHostByTestId('usage-area.unavailable'))).toBe(false);
-        expect.soft(Boolean(screen.findHostByTestId('usage-area.loading'))).toBe(true);
+        expect.soft(Boolean(screen.findHostByTestId('usage-area.loading'))).toBe(false);
+        expect.soft(screen.findAllByType(WidgetAreaLayoutBar)).toHaveLength(0);
         inventoryRead.resolve();
-        await vi.waitFor(() => expect(screen.findAllByType(WidgetSurface).map(node => node.props.instance.id)).toEqual(['work-only']));
-        expect(screen.findByType(WidgetAreaLayoutBar).props.selectedId).toBe('work');
+        await vi.waitFor(() => expect(screen.findByType(WidgetAreaLayoutBar).props.selectedId).toBe('work'));
+        expect(screen.findAllByType(WidgetSurface).map(node => node.props.instance.id)).toEqual(['work-only']);
         await act(async () => {
             screen.findHostByTestId('usage-views')!.props.onLayout({ nativeEvent: { layout: { width: 300, height: 40 } } });
             screen.findByTestId('usage-views.tabs:viewport')!.props.onLayout({ nativeEvent: { layout: { width: 200, height: 40 } } });

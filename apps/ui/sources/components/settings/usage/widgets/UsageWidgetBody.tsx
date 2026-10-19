@@ -12,7 +12,8 @@ import { UsageBodyReading, type UsageBodyProps } from './usageBodyKit';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import { useUsageWidgetModel } from './usageWidgetBatch';
 import { useUsageQueryActions } from './useUsageQueryActions';
-import { UsageDailyWidget } from './UsageDailyWidget';
+import { UsageDailyWidget, resolveUsageDailyChartShape } from './UsageDailyWidget';
+import { useDeviceType } from '@/utils/platform/responsive';
 import { UsagePeriodSummaryWidget } from './UsagePeriodSummaryWidget';
 import { UsageCostFactsWidget } from './UsageCostFactsWidget';
 import { UsageFlowWidget } from './UsageFlowWidget';
@@ -109,9 +110,11 @@ function UsageQueryWidgetBody(
   // A first read holds the room of the shape that lands (Period summary's figures, the Coach's strip), so the
   // widgets below it do not move when the facts arrive; every other body holds three list rows.
   const presentation = useWidgetPresentation();
+  const phone = useDeviceType() === 'phone';
   const readingShape = props.id === 'usage_period_summary' ? { kind: 'summary' as const }
     : props.id === 'usage_capacity' ? { kind: 'capacity' as const }
-    : props.id === 'usage_coach' && isUsageCoachStrip(presentation) ? { kind: 'strip' as const } : undefined;
+    : props.id === 'usage_coach' && isUsageCoachStrip(presentation) ? { kind: 'strip' as const }
+    : props.id === 'usage_daily' ? resolveUsageDailyChartShape(presentation, phone) : undefined;
   if (!query)
     return (
       <SurfaceStateCard

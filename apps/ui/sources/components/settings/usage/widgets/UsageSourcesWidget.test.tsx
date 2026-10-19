@@ -1,17 +1,18 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { USAGE_SOURCE_CONSENT_DISCLOSURE } from '@happier-dev/protocol/usage/usageSources';
 import { createUsageSourceActionPort } from '@happier-dev/protocol/actions/executor/usageSourceActions';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import {
-  USAGE_SOURCE_CONSENT_DISCLOSURE,
   type UsageSourceV1,
 } from '@happier-dev/protocol/usage/usageSources';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { t } from '@/text';
 import { UsageSourcesMachines, projectUsageSourcesMachines } from './UsageSourcesWidget';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 it('retains source inventory but withdraws execution from machines with locked content', () => {
@@ -164,15 +165,27 @@ describe('Usage Sources body', () => {
     await screen.update(<UsageSourcesMachines {...props} machines={[]} />);
     boundary.failDiscovery();
     await screen.update(<UsageSourcesMachines {...props} machines={[machine]} />);
-    await vi.waitFor(() => expect(screen.findByTestId('sources.machine.mac.error')).toBeTruthy());
+    // A machine that can't be read says so once, grouped with its Retry, never also "Looking for files".
+    await vi.waitFor(() => expect(screen.findByTestId('sources.unreadableMachines')).toBeTruthy());
+    expect(screen.getTextContent()).not.toContain(t('usage.board.sources.machineLooking'));
     expect(screen.findByTestId('sources.emptyMachines')).toBeFalsy();
-    expect(screen.findByTestId('sources.machine.mac')).toBeTruthy();
+    expect(screen.findAllHostsByTestId('sources.machine.mac')).toHaveLength(0);
     boundary.failDiscovery(false);
     boundary.setDiscovery([]);
-    await screen.pressByTestIdAsync('sources.machine.mac.error-action');
+    await screen.pressByTestIdAsync('sources.unreadableMachines-action');
     await vi.waitFor(() => expect(screen.findByTestId('sources.emptyMachines')).toBeTruthy());
     expect(screen.findByTestId('sources.emptyMachines')?.props.accessibilityLabel).toContain('1');
-    expect(screen.findByTestId('sources.machine.mac.error')).toBeFalsy();
+    expect(screen.findByTestId('sources.unreadableMachines')).toBeFalsy();
+  });
+  it('leads with what is counted: Happier sessions live, then each counted source with the time it was read', async () => {
+    const counted = { ...found, consent: 'enabled', status: 'ready', coverage: 'complete', asOfMs: Date.UTC(2026, 9, 16, 12, 0) } as UsageSourceV1;
+    const boundary = machineBoundary(counted);
+    const screen = await mount(boundary.executor);
+    expect(screen.findByTestId('sources.happier')).toBeTruthy();
+    expect(screen.getTextContent()).toContain(t('usage.board.sources.happierLive'));
+    await vi.waitFor(() => expect(screen.findByTestId('sources.machine.mac.source.claude-default')).toBeTruthy());
+    // The counted source says when it was read, not a bare "up to date".
+    expect(screen.getTextContent()).toContain('countedAsOf');
   });
   it('does not count or discover a replaced machine identity as another current computer', () => {
     const machine = { id: 'old', metadata: null, active: true, activeAt: 1000, replacedByMachineId: 'current' };
@@ -261,6 +274,17 @@ describe('Usage Sources body', () => {
     expect(boundary.calls).toContain('usage.sources.history.delete');
   });
 
+  it('shows the server disclosure only where a source can be enabled, not under a source that cannot be read', async () => {
+    const boundary = machineBoundary({ ...found, consent: 'disabled', status: 'unsupported' });
+    const screen = await mount(boundary.executor);
+    const card = 'sources.machine.mac.source.claude-default';
+    await vi.waitFor(() => expect(screen.findByTestId(card)).toBeTruthy());
+    expect(screen.getTextContent()).not.toContain(USAGE_SOURCE_CONSENT_DISCLOSURE);
+    const readable = await mount(machineBoundary().executor);
+    await vi.waitFor(() => expect(readable.findByTestId(`${card}.add`)).toBeTruthy());
+    expect(readable.getTextContent()).toContain(USAGE_SOURCE_CONSENT_DISCLOSURE);
+  });
+
   it('edits and removes a discovered root before fresh disclosure consent, including after Stop', async () => {
     const boundary = machineBoundary({ ...found, root: { kind: 'override', path: '/configured' } });
     const screen = await mount(boundary.executor);
@@ -279,7 +303,7 @@ describe('Usage Sources body', () => {
     await screen.pressByTestIdAsync(`${card}.folder`);
     expect(screen.findByTestId(`${card}.add`)).toBeTruthy();
   });
-  it('shows a found card from metadata only and consents only after the exact disclosure is accepted', async () => {
+  it('leaves waived source consent to the canonical Action policy without a caller confirmation', async () => {
     const boundary = machineBoundary();
     const screen = await mount(boundary.executor);
     const card = 'sources.machine.mac.source.claude-default';
@@ -288,15 +312,6 @@ describe('Usage Sources body', () => {
     );
     expect(boundary.calls).toEqual(['usage.sources.discover']);
 
-    confirm.mockResolvedValueOnce(false);
-    await screen.pressByTestIdAsync(`${card}.add`);
-    expect(confirm).toHaveBeenCalledWith(
-      'usage.board.sources.consentTitle',
-      USAGE_SOURCE_CONSENT_DISCLOSURE,
-    );
-    expect(boundary.calls).toEqual(['usage.sources.discover']);
-
-    confirm.mockResolvedValueOnce(true);
     await screen.pressByTestIdAsync(`${card}.add`);
     await vi.waitFor(() =>
       expect(screen.findByTestId(`${card}.stop`)).toBeTruthy(),
@@ -306,6 +321,7 @@ describe('Usage Sources body', () => {
       'usage.sources.consent.set',
     ]);
     expect(screen.findByTestId(`${card}.add`)).toBeFalsy();
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it('hides a found card on Not now without consenting or deleting anything', async () => {

@@ -35,10 +35,14 @@ vi.mock('expo-router', async () => {
 let home: Awaited<ReturnType<typeof serveActionHomes>> | undefined;
 let reader: CurrentUiContextReader | null = null;
 let unregister: (() => void) | undefined;
+const NO_COST_BASES = [] as const;
+let showExtraFilter = false;
 function Publication() {
     const authority = captureActiveServerAccountScopeLifetime();
     const page = useUsageWidgetPageContext({ authority });
-    usePublishUsageWidgetPageContext({ authority, page, costBasisOptions: [] });
+    usePublishUsageWidgetPageContext({ authority, page, costBasisOptions: NO_COST_BASES,
+        filterCommands: [{ field: 'agents', id: 'codex', title: 'Agent: Codex', invoke: () => page.setScope({ agents: ['codex'] }) },
+            ...(showExtraFilter ? [{ field: 'agents', id: 'claude', title: 'Agent: Claude', invoke: () => page.setScope({ agents: ['claude'] }) }] : [])] });
     reader = useOptionalCurrentUiContextReader();
     React.useEffect(() => {
         if (!reader) return;
@@ -74,6 +78,7 @@ async function mount(children: React.ReactNode) {
     return { screen, retire: () => screen.update(tree(null)) };
 }
 afterEach(async () => {
+    showExtraFilter = false;
     standardCleanup(); unregister?.(); unregister = undefined; reader = null;
     retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined;
 });
@@ -89,6 +94,24 @@ async function invoke(id: string) {
             context: { surface: 'agent' } })).toMatchObject({ ok: true });
     });
 }
+
+it('keeps command addresses across equivalent filter callback updates and retires them when the scope changes', async () => {
+    const { retire } = await mount(null);
+    const before = reader!.readCurrentUiContext()!;
+    await retire();
+    const after = reader!.readCurrentUiContext()!;
+    expect(after.commands).toEqual(before.commands);
+    showExtraFilter = true;
+    await retire();
+    const withExtra = reader!.readCurrentUiContext()!;
+    expect(withExtra.commands.filter(command => command.title !== 'Agent: Claude')).toEqual(before.commands);
+    const filter = after.commands.find(command => command.title === 'Agent: Codex')!;
+    await invoke(filter.id);
+    const detail = reader!.readCurrentUiContext()!.detail;
+    if (typeof detail !== 'string') throw new Error('Expected the Usage page detail document');
+    expect(JSON.parse(detail).scope.agents).toEqual(['codex']);
+    expect(reader!.resolveCurrentUiCommand(filter.id)).toBeNull();
+});
 
 it('composes real list and chart disclosures, isolates identical widget copies and retires their commands', async () => {
     const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 86_400_000 }, metric: 'tokens', breakdown: ['model'] });
@@ -109,7 +132,7 @@ it('composes real list and chart disclosures, isolates identical widget copies a
     const before = lists();
     await invoke(listCommands[0]!.id);
     expect(lists()).toEqual([9, before[1]]);
-    await screen.pressByTestIdAsync('list-first.model.more');
+    await screen.pressByTestIdAsync('list-first.model.more.toggle');
     expect(lists()).toEqual(before);
     const chartCommands = reader!.readCurrentUiContext()!.commands.filter(command => command.title.includes(t('usage.widgets.usage_daily')));
     expect(chartCommands).toHaveLength(2);

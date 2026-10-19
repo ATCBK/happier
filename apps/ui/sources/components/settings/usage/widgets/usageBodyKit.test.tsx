@@ -17,7 +17,7 @@ import { UsageRhythmWidget } from './UsageRhythmWidget';
 import { usageQaAccountingFixture } from '@/dev/testkit/fixtures/usageQaAccountingFixture';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { usageSourceAgentId } from '@/sync/domains/usage/usageLabels';
-import { describeUsagePagePendingSources, readUsagePageAsOfMs, readUsageCoverageGaps, isUsageReadOutstanding, UsageCoverageLine, usageCoverageDescription, usageCoverageLineMode, usageCoverageSummary, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useSettledBodyHeightFloor, useUsageMeterListFirstReadReserve } from './usageBodyKit';
+import { describeUsagePageFailedSources, describeUsagePagePendingSources, readUsagePageAsOfMs, readUsageCoverageGaps, isUsageReadOutstanding, UsageCoverageLine, usageCoverageDescription, usageCoverageLineMode, usageCoverageSummary, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useSettledBodyHeightFloor, useUsageMeterListFirstReadReserve } from './usageBodyKit';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -54,21 +54,25 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(screen.getTextContent()).not.toContain(t('usage.board.page.noUsageTitle'));
         expect(screen.findByTestId('daily.loading')).toBeTruthy();
     });
-    it('holds a phone-width Daily body at its settled height while the first read is outstanding, and nothing at a wide card', async () => {
+    it('holds the settled Daily chart room at every width while the first read is outstanding', async () => {
         const query = normalizeUsageQuery({ period: { relative: '7days' }, granularity: 'day' });
         const slice = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'pending' }] }).results[0]!;
         const model: UsageWidgetBodyModel = { requestedQuery: null, shownQuery: null, slice, pending: true, error: null,
             freshness: 'fresh', updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} };
-        const heldRoom = async (width: number) => {
+        const heldRoom = async (width: number, height = 260) => {
             const screen = await renderScreen(<WidgetPresentationProvider value={{ size: 'medium',
-                footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width, height: 260 } }}>
+                footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width, height } }}>
                 <UsageDailyWidget query={query} slice={slice} model={model} serverId="home" id="usage_daily" testID="daily" />
             </WidgetPresentationProvider>);
-            const style = ([] as unknown[]).concat(screen.findHostByTestId('daily.reading')?.props.style ?? []).flat(2);
+            const style = ([] as unknown[]).concat(screen.findHostByTestId('daily.loading')?.props.style ?? []).flat(2);
             return style.reduce<number>((held, entry) => (entry && typeof entry === 'object' && 'minHeight' in entry ? Number(entry.minHeight) : held), 0);
         };
-        expect(await heldRoom(326)).toBeGreaterThan(0);
-        expect(await heldRoom(640)).toBe(0);
+        // The plot, its axis and legend: a narrow frame wraps its legend and note, so it keeps more chrome room.
+        expect(await heldRoom(326)).toBe(Math.max(88, 260 - 136) + 136);
+        expect(await heldRoom(640)).toBe(260 - 84 + 84);
+        // A Board's Medium card (232 px of body): the plot gives way to the peak figure, so the held chart never outgrows it
+        // and the coverage note stays inside the card.
+        expect(await heldRoom(326, 232)).toBe(232);
     });
     it('keeps Rhythm reading until activity answers and retains known activity during refresh', async () => {
         const query = normalizeUsageQuery({ period: { relative: '7days' }, includeActivity: true, activityResolution: 'both' });
@@ -157,7 +161,10 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(usageCoverageLineMode([gap('partial'), gap('stale'), gap('unsupported')], true)).toBe('hidden');
         // A source still being read is one cause: the page header says it once, the bodies hold their room.
         expect(usageCoverageLineMode([gap('pending'), gap('not_loaded')], true)).toBe('hidden');
-        expect(usageCoverageLineMode([gap('partial'), gap('error')], true)).toBe('failed');
+        // A failed page read is one cause too: the header says it once and the bodies inherit it quietly.
+        expect(usageCoverageLineMode([gap('partial'), gap('error')], true)).toBe('hidden');
+        // A widget's own read (a comparison, a pool selection) is not in the header, so its body says it.
+        expect(usageCoverageLineMode([{ source: 'comparison', status: 'error' }], true)).toBe('failed');
         // Off the page (Home, Project, Session hosts) nothing else says it, so the detail stays.
         expect(usageCoverageLineMode([gap('partial')], false)).toBe('detail');
         expect(usageCoverageLineMode([], false)).toBe('hidden');
@@ -208,6 +215,27 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(describeUsagePagePendingSources([slice([{ source: 'accounting', status: 'partial' }])])).toBeNull();
         // A widget's own read (a pool selection) is said by that widget, not listed in the page header.
         expect(describeUsagePagePendingSources([slice([{ source: 'selection:openai-codex-pool', status: 'pending' }])])).toBeNull();
+    });
+    it('names a failed page read once for the header, never a widget-own read', () => {
+        const slice = (sources: readonly { source: string; status: string }[]) =>
+            ({ sources }) as unknown as Parameters<typeof describeUsagePageFailedSources>[0][number];
+        expect(describeUsagePageFailedSources([slice([{ source: 'work', status: 'error' }]), slice([{ source: 'work', status: 'error' }])]))
+            .toBe(t('usage.board.page.coverageFailed', { sources: usageSourceTitle('work') }));
+        expect(describeUsagePageFailedSources([slice([{ source: 'comparison', status: 'error' }])])).toBeNull();
+        expect(describeUsagePageFailedSources([slice([{ source: 'work', status: 'pending' }])])).toBeNull();
+    });
+    it('keeps admitted sources quiet during background refresh while naming an unanswered sibling', () => {
+        const sources: UsageQueryResultSlice['sources'] = [
+            { source: 'accounting', status: 'pending', asOfMs: 100 },
+            { source: 'work', status: 'pending', asOfMs: 100 },
+            { source: 'how_you_work', status: 'pending', asOfMs: 100 },
+            { source: 'quota', status: 'available', asOfMs: 100 },
+            { source: 'quota:answered', status: 'pending', asOfMs: 100 },
+        ];
+        expect(describeUsagePagePendingSources([{ sources }])).toBeNull();
+        expect(readUsagePageAsOfMs([{ sources }])).toBe(100);
+        expect(describeUsagePagePendingSources([{ sources: [...sources, { source: 'quota:unanswered', status: 'pending' }] }]))
+            .toBe(t('usage.board.page.coveragePending', { sources: usageSourceTitle('quota') }));
     });
     it('discloses a held account read after sibling allowances have arrived', () => {
         // The aggregate Resource publishes each qualified account independently of its siblings.
@@ -309,10 +337,11 @@ describe('shared Usage identity and dependent coverage', () => {
         const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 86_400_000 }, metric: 'tokens' });
         const tokens = { input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 10 };
         const cost = { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' };
+        const totalCost = { ...cost, reportedUsd: 3 };
         const slice = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'available', value: {
-            v: 1, totals: { eventCount: 3, tokens: { ...tokens, total: 30, input: 30 }, cost },
+            v: 1, totals: { eventCount: 3, tokens: { ...tokens, total: 30, input: 30 }, cost: totalCost },
             engineTimeline: [{ bucketStartMs: 0, bucketEndMs: 86_400_000, leaders: [{ key: 'codex:local', eventCount: 3,
-                tokens: { ...tokens, total: 30, input: 30 }, cost, sources: [
+                tokens: { ...tokens, total: 30, input: 30 }, cost: totalCost, sources: [
                     { source: 'runtime', path: 'runtime', execution: 'happier', eventCount: 1, tokens, cost },
                     { source: 'native', path: 'native', execution: 'outside', eventCount: 1, tokens, cost },
                     { source: 'older', path: 'unknown', execution: 'unknown', eventCount: 1, tokens, cost },

@@ -38,6 +38,18 @@ export type UsageSourcesController = Readonly<{
 const failure = (errorCode: string): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
 const isRead = (id: UsageSourceActionId) => id === 'usage.sources.discover' || id === 'usage.sources.get';
 
+/** One admission for the mounted client-local Not now intent, including mounted delivery. */
+export function resolveUsageSourceDismiss(input: UsageSourceActionInputById['usage.sources.dismiss'], options: Readonly<{
+    machineId: string;
+    lifetime: ServerAccountScopeLifetime | null;
+    snapshot: UsageSourcesSnapshot | undefined;
+}>): Readonly<{ status: 'dismissed' | 'unavailable' }> {
+    return { status: options.lifetime?.isCurrent() && options.snapshot && !options.snapshot.retired
+        && input.serverId === options.lifetime.scope.serverId && input.machineId === options.machineId
+        && options.snapshot.sources.some(source => source.sourceId === input.sourceId && source.consent === 'disabled')
+        ? 'dismissed' : 'unavailable' };
+}
+
 /** Mounted UI state only. The Action owner admits effects; the Machine owns capture/status. */
 
 export function createUsageSourcesController(options: Readonly<{
@@ -77,9 +89,8 @@ export function createUsageSourcesController(options: Readonly<{
         // Not now is an admitted client-local fact, scoped to this mounted card lifetime.
         usageSourceDismiss: async (input, context) => {
             context.signal?.throwIfAborted();
-            return { status: current() && input.serverId === target.serverId && input.machineId === target.machineId
-                && snapshot.sources.some(source => source.sourceId === input.sourceId && source.consent === 'disabled')
-                ? 'dismissed' : 'unavailable' };
+            current();
+            return resolveUsageSourceDismiss(input, { machineId: options.machineId, lifetime: options.lifetime, snapshot });
         },
     });
     const reconcile = (sources: readonly UsageSourceV1[]) => {

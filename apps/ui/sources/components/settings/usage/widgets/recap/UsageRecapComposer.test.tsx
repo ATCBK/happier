@@ -104,6 +104,25 @@ describe('recap composer through authorized query and composition', () => {
     pending.forEach(deferred => deferred.resolve(Response.json(accounting)));
   });
 
+  it('keeps the last preview and style tiles while a format switch composes, never blanking them', async () => {
+    let hold: ReturnType<typeof createDeferred<Response>> | null = null;
+    const { screen } = await mount(request => {
+      if (request.path !== '/v2/usage/query') return undefined;
+      if (!hold) return Response.json(accounting);
+      return hold.promise;
+    });
+    await vi.waitFor(() => expect(screen.findByTestId('usage-recap-composer.card')).not.toBeNull());
+    hold = createDeferred<Response>();
+    await act(async () => {
+      screen.findAllByType(SegmentedTabBar).find(node => node.props.testIDPrefix === 'usage-recap-format')!.props.onSelectTab('story');
+    });
+    // Still composing the story: the square card and every style tile stay on screen.
+    expect(screen.findByTestId('usage-recap-composer.card')).not.toBeNull();
+    expect(screen.findAllByType(SelectionTiles)[0]!.props.options.every((option: { preview?: unknown }) => option.preview !== undefined)).toBe(true);
+    expect(screen.findByTestId('usage-recap-composer.save')!.props.accessibilityState.disabled).toBe(true);
+    await act(async () => { hold!.resolve(Response.json(accounting)); });
+    await vi.waitFor(() => expect(screen.findByTestId('usage-recap-composer.save')!.props.accessibilityState.disabled).toBe(false));
+  });
   it('exposes a rejected preparation as a recoverable terminal failure', async () => {
     // Invalid clock evidence rejects query preparation before the Action resolves; keep its internal path real.
     const clock = vi.spyOn(Date, 'now');

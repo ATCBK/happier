@@ -99,12 +99,13 @@ export function useUsageWidgetBodyModel(resource: UsageWidgetResource, instanceI
     // settles. Those sources keep their own pending state; they do not re-read
     // the already shown accounting. Before the first progress snapshot, retain
     // the entry's activity so an actual refresh is still visible immediately.
-    const accountingPending = !slice || slice.sources.some(source => source.source === 'accounting' && source.status === 'pending')
+    // A quota-only body has no A response that can end its refresh indicator.
+    const shownReadPending = query?.includeAccounting === false || !slice || slice.sources.some(source => source.source === 'accounting' && source.status === 'pending')
         || slice.comparison?.source.status === 'pending';
     return { requestedQuery: current ? identity : null,
         shownQuery: slice ? identity : retained?.identity ?? null, slice: shownSlice,
         pending: current && (snapshot.pending !== 'idle' || slice?.pending === true),
         error: current ? error : null, freshness: shownSlice && sourceError ? 'stale' : snapshot.freshness,
         updatingPreviousPeriod: !slice && retained !== null,
-        refreshing: current && shownSlice !== null && snapshot.pending !== 'idle' && accountingPending, refresh };
+        refreshing: current && shownSlice !== null && snapshot.pending !== 'idle' && shownReadPending, refresh };
 }

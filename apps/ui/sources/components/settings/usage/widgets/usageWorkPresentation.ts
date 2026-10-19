@@ -71,6 +71,8 @@ export type UsageWorkBranchRow = UsageWorkIdentities & MoneyDisplay & Readonly<{
 
 export type UsageWorkProjectRow = MoneyDisplay & Readonly<{
   projectKey: string | null;
+  /** Distinct unnamed folders represented by the single null-key display row. */
+  unnamedProjectCount: number;
   amount: number | null;
   allocated: number | null;
   unallocated: number | null;
@@ -220,7 +222,9 @@ function groupBranches(allocations: UsageWorkProjection['branchAllocations'], ba
 export function summarizeUsageWork(
   work: UsageWorkProjection,
   basis: UsageWorkAmount,
+  namedProjectKeys?: ReadonlySet<string>,
 ): UsageWorkSummary {
+  const displayProjectKey = (key: string | null) => key === null || namedProjectKeys && !namedProjectKeys.has(key) ? null : key;
   const unallocatedAmounts: Record<UsageWorkUnallocatedReason, AmountAccumulator> = {
     missing_turn: newAmount(),
     missing_evidence: newAmount(),
@@ -252,6 +256,7 @@ export function summarizeUsageWork(
       providers: Map<string, UsageWorkProvider>;
       outcomes: Set<string>;
       parts: Map<string, AmountAccumulator>;
+      projectKeys: Set<string | null>;
     }
   >();
   const sessionRows = new Map<
@@ -272,7 +277,8 @@ export function summarizeUsageWork(
     accumulate(total, row, basis);
     addPart(agentAmounts, contribution.agentId, row, basis);
     if (amount === null) missingMoneyCount += 1;
-    const project = projectRows.get(contribution.projectKey) ?? {
+    const projectKey = displayProjectKey(contribution.projectKey);
+    const project = projectRows.get(projectKey) ?? {
       amount: newAmount(),
       allocated: newAmount(),
       unallocated: newAmount(),
@@ -281,14 +287,16 @@ export function summarizeUsageWork(
       providers: new Map(),
       outcomes: new Set(),
       parts: new Map(),
+      projectKeys: new Set<string | null>(),
     };
+    project.projectKeys.add(contribution.projectKey);
     accumulate(project.amount, row, basis);
     addPart(project.parts, contribution.sessionId, row, basis);
     if (contribution.sessionId) project.sessions.add(contribution.sessionId);
     if (contribution.agentId) project.agents.add(contribution.agentId);
     const provider = contribution.providerId ? { providerId: contribution.providerId, machineId: contribution.machineId } : null;
     if (provider) project.providers.set(JSON.stringify(provider), provider);
-    projectRows.set(contribution.projectKey, project);
+    projectRows.set(projectKey, project);
     if (contribution.sessionId) {
       const session = sessionRows.get(contribution.sessionId) ?? {
         amount: newAmount(),
@@ -344,6 +352,7 @@ export function summarizeUsageWork(
   const projects = [...projectRows.entries()]
     .map(([projectKey, row]): UsageWorkProjectRow => ({
       projectKey,
+      unnamedProjectCount: projectKey === null ? row.projectKeys.size : 0,
       amount: row.amount.amount,
       moneyBasis: row.amount.moneyBasis,
       allocated: row.allocated.amount,
@@ -357,7 +366,7 @@ export function summarizeUsageWork(
         .flatMap((key) => outcomeByKey.get(key) ?? [])
         .sort(byAmount),
       sessions: sessionParts(row.parts),
-      branches: groupBranches(work.branchAllocations.filter((allocation) => allocation.contribution.projectKey === projectKey), basis, work.allocations),
+      branches: groupBranches(work.branchAllocations.filter((allocation) => displayProjectKey(allocation.contribution.projectKey) === projectKey), basis, work.allocations),
     }))
     .sort(byAmount);
   const sessions = [...sessionRows.entries()]

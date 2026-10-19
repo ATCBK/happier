@@ -172,12 +172,12 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
   const rangeColor = theme.colors.text.tertiary;
   const ghostColor = theme.colors.border.default;
   const earlier = React.useMemo(
-    () => (focus ? projectUsageEarlierCurves(focus.account, focus.window.meterId) : null),
-    [focus],
+    () => (focus && !list ? projectUsageEarlierCurves(focus.account, focus.window.meterId) : null),
+    [focus, list],
   );
   const series = React.useMemo(
     () =>
-      focus
+      focus && !list
         ? buildBurnUp(
             focus,
             nowMs,
@@ -191,7 +191,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
             earlier?.status === 'available' && !tile ? { curves: earlier.curves, color: ghostColor } : undefined,
           )
         : [],
-    [focus, nowMs, accent, rangeColor, earlier, tile, ghostColor],
+    [focus, nowMs, accent, rangeColor, earlier, tile, ghostColor, list],
   );
   // Ghost points join the plot after the current ones, so the axis names the plot's real first and last moment.
   const axisTicks = React.useMemo(() => {
@@ -323,15 +323,9 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
               : t('usage.board.plans.paceSharedReasonSome', { count: repeatedCount, reason: quietReason })}
           </Text>
         ) : null}
-        {lead.rows.length < rows.length || expanded ? (
-          <UsageShowAllRows label={t(`usage.widgets.${props.id}`)} testID={`${props.testID}.showAll`} total={rows.length} expanded={expanded}
-            onToggle={() => setExpanded((value) => !value)} />
-        ) : null}
-        {unreported.length ? (
-          <Text style={[styles.quiet, text.detail]} testID={`${props.testID}.unreported`}>
-            {t('usage.board.plans.unreportedWindows', { count: unreported.length })}
-          </Text>
-        ) : null}
+        <UsageShowAllRows label={t(`usage.widgets.${props.id}`)} testID={`${props.testID}.showAll`} total={rows.length}
+          hidden={lead.hidden} expanded={expanded} onToggle={() => setExpanded((value) => !value)}
+          unlisted={unreported.length ? t('usage.board.plans.unreportedWindows', { count: unreported.length }) : null} />
         {/* A window still without a pace may gain one and run out while reads arrive: the alert's line is held
             until they settle, then let go, so a list that never gets an alert keeps no blank line. */}
         {depletingNote ?? (!settled && rows.some(row => !row.window.pace)

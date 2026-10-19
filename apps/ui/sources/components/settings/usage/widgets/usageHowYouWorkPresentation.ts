@@ -87,7 +87,8 @@ export type UsageTodayMachineGroup = Readonly<{
 
 /**
  * Today's slice of each witnessed lane, in minutes from the day's start, grouped by machine. Each busy
- * span is its own row (a run's gaps are not busy); waits are hatched rows of their own.
+ * span and wait is its own interval (a run's gaps are not busy; waits are hatched), and one run's
+ * intervals share a track so the machine's lane packs them onto one line.
  */
 export function groupUsageTodayLanes(
   lanes: Lanes,
@@ -134,6 +135,8 @@ export function groupUsageTodayLanes(
         group.intervals.push({
           id: `${lane.workId}:busy:${index}`,
           label: title,
+          lane: group.label,
+          track: lane.workId,
           ...clipped,
           order: clipped.start,
           color: labels.agentColor(lane.agentId ?? ''),
@@ -146,6 +149,8 @@ export function groupUsageTodayLanes(
         group.intervals.push({
           id: `${lane.workId}:wait:${span.evidenceId}`,
           ...clipped,
+          lane: group.label,
+          track: lane.workId,
           order: clipped.start,
           label: `${title} · ${t(
             span.kind === 'child_wait'

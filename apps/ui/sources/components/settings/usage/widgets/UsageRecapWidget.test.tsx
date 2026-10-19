@@ -62,7 +62,11 @@ describe('Recap table/text controls through the admitted export Action', () => {
     expect(Boolean(screen.findByTestId('recap.autopsy'))).toBe(true);
     // No Work facts in this read: the autopsy says so instead of drawing an empty table.
     expect(Boolean(screen.findByTestId('recap.autopsy.workUnavailable'))).toBe(true);
-    expect(home!.requests).toHaveLength(0);
+    // Home bootstrap is independent of the passive autopsy; no Usage owner may
+    // fetch accounting, private Session evidence or B history for this body.
+    expect(home!.requests.filter(request => request.path === '/v2/usage/query'
+      || request.path.startsWith('/v2/sessions/s1') || request.path.startsWith('/v1/sessions/s1/')
+      || request.path.includes('/provider-account-usage'))).toEqual([]);
   });
   it('copies the Action text bytes for the exact shown query with explicit summary fields', async () => {
     const clipboard = vi.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);

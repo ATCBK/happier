@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { renderHook, renderScreen } from '@/dev/testkit';
+import { useUsageWork } from './useUsageWork';
 import { router } from 'expo-router';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 import { HappierDataRows, IntervalTimeline } from '@happier-dev/plugin-ui/presentation';
@@ -26,6 +27,7 @@ import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { UsageProjectLedgerWidget } from './UsageProjectLedgerWidget';
 import { UsageSessionValueWidget } from './UsageSessionValueWidget';
 import { UsageHumanLoopWidget } from './UsageHumanLoopWidget';
+import { UsageParallelWidget } from './UsageParallelWidget';
 import { UsageOutcomesWidget } from './UsageOutcomesWidget';
 import { UsageCoachWidget } from './UsageCoachWidget';
 import { storage } from '@/sync/domains/state/storage';
@@ -137,6 +139,8 @@ const slice: UsageQueryResultSlice = {
       cost: { reportedUsd: 9, estimatedUsd: 12, currency: 'USD' },
     },
     contributions,
+    breakdowns: { project: [{ key: 'p1', label: 'Workspace', eventCount: 3,
+      tokens: { ...tokens, total: 42 }, cost: { reportedUsd: 9, estimatedUsd: 12, currency: 'USD' } }] },
   },
   sources: [
     { source: 'accounting', status: 'available' },
@@ -158,6 +162,20 @@ const model: UsageWidgetBodyModel = {
 const props = { model, slice, query, serverId: 'home' };
 
 describe('Work and Coach widget bodies', () => {
+  it('never falls back to raw opaque Project or Session ids', async () => {
+    const opaque = 'a'.repeat(64);
+    const rows = [contribution('opaque', 'private-session-identifier', null)].map(row => ({ ...row, projectKey: opaque }));
+    const unnamed = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions: rows, evidence: [] }));
+    for (const accounting of [undefined, { ...slice.accounting!, breakdowns: { project: [{
+      ...slice.accounting!.breakdowns!.project![0]!, key: opaque, label: `  ${'b'.repeat(64)}  `,
+    }] } }]) {
+      const hook = await renderHook(() => useUsageWork({ ...slice, work: unnamed, accounting }, query, 'home'));
+      expect(hook.getCurrent().projectLabel(opaque)).toBe(t('usage.board.work.unknownProject'));
+      expect(hook.getCurrent().sessionLabel('private-session-identifier')).toBe(t('session.untitled'));
+      expect(hook.getCurrent().summary?.projects).toMatchObject([{ projectKey: null, unnamedProjectCount: 1 }]);
+      await hook.unmount();
+    }
+  });
   it('keeps an unanswered first Coach evaluation pending instead of claiming there are no findings', async () => {
     const pendingSlice = resolveUsagePageAggregation({ queries: [query],
       accounting: [{ query, status: 'available', value: slice.accounting!, asOfMs: 1000 }],
@@ -216,16 +234,34 @@ describe('Work and Coach widget bodies', () => {
     // a checkout that would retain a private path (the observed live Work producer).
     const rowKey = { kind: 'project-organization' as const, serverId: 'producer-cli-profile', projectKey: 'p1' };
     const content = cipher.seal({ key: rowKey, value: { label: 'Human project' } });
+    // Exercise the exact QA label, distinct from its accounting key, through
+    // protected storage; the old accounting-only filter never saw this ingress.
+    const opaque = '84ae4f69031158170a5d5dd1f71dce833e983675d3632a33ead3592cba283061';
+    const opaqueKey = { ...rowKey, projectKey: 'opaque-project' };
+    const opaqueContent = cipher.seal({ key: opaqueKey, value: { label: opaque } });
+    const otherOpaqueKey = { ...rowKey, projectKey: 'other-opaque-project' };
+    const otherOpaqueContent = cipher.seal({ key: otherOpaqueKey, value: { label: 'b'.repeat(64) } });
+    const namedWork = allocateUsageOutcomes({ contributions: [...contributions,
+      { ...contribution('opaque', 'opaque-session', null), projectKey: opaqueKey.projectKey },
+      { ...contribution('other-opaque', 'other-opaque-session', null), projectKey: otherOpaqueKey.projectKey }], evidence: [] });
     const owner = createProjectAccountRowsSync({ scope, cipher, isCurrent: () => true,
-      transport: { list: async () => ({ status: 'listed', coverage: 'complete', rows: [{ key: rowKey, revision: 1, content }] }),
+      transport: { list: async () => ({ status: 'listed', coverage: 'complete', rows: [{ key: rowKey, revision: 1, content },
+        { key: opaqueKey, revision: 1, content: opaqueContent }, { key: otherOpaqueKey, revision: 1, content: otherOpaqueContent }] }),
         mutate: async () => { throw new Error('Label read must not mutate Project rows'); } },
       apply: snapshot => storage.getState().applyProjectAccountRowsForScope(scope, snapshot) });
     try {
       storage.setState({ profileScope: scope });
       storage.getState().activateProjectAccountRowsScope(scope);
       await owner.refresh();
-      const screen = await renderScreen(<UsageProjectLedgerWidget {...props} id="usage_project_ledger" testID="label-ledger" />);
+      const workSlice = { ...slice, work: namedWork };
+      const screen = await renderScreen(<UsageProjectLedgerWidget {...props} slice={workSlice} id="usage_project_ledger" testID="label-ledger" />);
       expect(screen.getTextContent()).toContain('Human project');
+      expect(screen.getTextContent()).not.toContain(opaque);
+      const hook = await renderHook(() => useUsageWork(workSlice, query, 'home'));
+      expect(hook.getCurrent().summary?.projects).toMatchObject([
+        { projectKey: 'p1' }, { projectKey: null, unnamedProjectCount: 2, amount: 6 },
+      ]);
+      await hook.unmount();
       await act(async () => storage.getState().setProjectAccountRowsStatusForScope(scope, 'locked'));
       expect(screen.getTextContent()).not.toContain('Human project');
       await act(async () => storage.getState().setProjectAccountRowsStatusForScope(scope, 'ready'));
@@ -301,6 +337,23 @@ describe('Work and Coach widget bodies', () => {
     expect(text).not.toContain(t('usage.board.work.notLinked'));
     expect(text).not.toContain(t('usage.board.work.linkedToPrs'));
   });
+  it('bounds the project ledger behind Show all and says the PR qualifier once for the band, not on every row', async () => {
+    const many = Array.from({ length: 12 }, (_, index) => ({ ...contribution(`m${index}`, `ms${index}`, null), projectKey: `project-${index}` }));
+    const unlinked = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions: many, evidence: [] }));
+    const accounting = { ...slice.accounting!, breakdowns: { project: many.map(row => ({ key: row.projectKey,
+      label: `Project ${row.projectKey}`, eventCount: 1, tokens: row.tokens, cost: row.cost })) } };
+    const screen = await renderScreen(<UsageProjectLedgerWidget {...props} slice={{ ...slice, work: unlinked, accounting }} id="usage_project_ledger" testID="ledger" />);
+    // A long list leads with its largest rows; the rest are one press away, never a wall.
+    expect(screen.findByTestId('ledger.project.project-11')).toBeNull();
+    expect(screen.findByTestId('ledger.projects.more')).toBeTruthy();
+    const text = screen.getTextContent();
+    // Nothing is linked anywhere, so no row repeats "0 linked PRs" or its unlinked amount.
+    expect(text).not.toContain(t('usage.board.work.ledgerRowLine', { sessions: 1, prs: 0 }));
+    expect(text).not.toContain(t('usage.board.work.notLinkedPart', { amount: '' }).trim());
+    expect(text).toContain(t('usage.board.work.noneLinked'));
+    await screen.pressByTestIdAsync('ledger.projects.more.toggle');
+    expect(screen.findByTestId('ledger.project.project-11')).toBeTruthy();
+  });
   it('shows a standalone exact branch and a separate bound Provider mark without inventing one from the Agent', async () => {
     const bound = { ...contribution('branch', 's1', 't1'), providerId: 'provider.openrouter', providerConnectionId: 'connection' };
     const branch = { ref: 'refs/heads/standalone', headSha: 'c'.repeat(40) };
@@ -317,6 +370,15 @@ describe('Work and Coach widget bodies', () => {
     // information: no "Provider: Not recorded" line (quiet truth).
     expect(screen.getTextContent()).not.toContain('Not recorded');
   });
+  it('holds How you work bodies in their reading state while that read is pending, never "aren\'t readable here"', async () => {
+    const pending = { ...slice, howYouWork: undefined, sources: [...slice.sources.filter(source => source.source !== 'how_you_work'),
+      { source: 'how_you_work', status: 'pending' as const }] };
+    for (const [Widget, id] of [[UsageHumanLoopWidget, 'usage_human_loop'], [UsageParallelWidget, 'usage_parallel']] as const) {
+      const screen = await renderScreen(<Widget {...props} slice={pending} id={id} testID="hyw" />);
+      expect(screen.findByTestId('hyw.loading')).toBeTruthy();
+      expect(screen.findByTestId('hyw.empty')).toBeFalsy();
+    }
+  });
   it('leads "What they waited for" with the longest waits and keeps the long tail behind Show all', async () => {
     const base = resolveUsageHowYouWork({ period: { startMs: 0, endMs: 1000 }, timeZoneOffsetMinutes: 0, detail: { status: 'available', facts: [] } });
     const byTool = Array.from({ length: 12 }, (_, index) => ({ toolId: `tool${index}`, requestCount: 1, pairedDecisionCount: 1, decisionLatencyMs: (12 - index) * 60_000 }));
@@ -325,7 +387,7 @@ describe('Work and Coach widget bodies', () => {
     const screen = await renderScreen(<UsageHumanLoopWidget {...props} slice={{ ...slice, howYouWork }} id="usage_human_loop" testID="loop" />);
     expect(screen.getTextContent()).toContain('tool0');
     expect(screen.getTextContent()).not.toContain('tool11');
-    await screen.pressByTestIdAsync('loop.tools.more');
+    await screen.pressByTestIdAsync('loop.tools.more.toggle');
     expect(screen.getTextContent()).toContain('tool11');
   });
   it('opens a selected Session autopsy with exact contribution, checkpoint and witnessed wait phases', async () => {
@@ -430,7 +492,9 @@ describe('Work and Coach widget bodies', () => {
       work: UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions: rows, evidence: [evidence('eur-session', 'eur-turn', 1),
         evidence('usd-session', 'usd-turn', 2)] })),
       accounting: { ...slice.accounting!, totals: { ...slice.accounting!.totals,
-        cost: { reportedUsd: 3, estimatedUsd: 4, currency: 'MIXED' } } } };
+        cost: { reportedUsd: 3, estimatedUsd: 4, currency: 'MIXED' } },
+        breakdowns: { project: rows.map(row => ({ key: row.projectKey, label: row.projectKey === 'eur-project' ? 'Europe' : 'America',
+          eventCount: 1, tokens: row.tokens, cost: row.cost })) } } };
     for (const [Widget, id] of [[UsageProjectLedgerWidget, 'usage_project_ledger'], [UsageSessionValueWidget, 'usage_session_value'], [UsageOutcomesWidget, 'usage_outcomes']] as const) {
       const screen = await renderScreen(<Widget {...props} query={mixedQuery} slice={mixedSlice} id={id} testID="work" />);
       const text = screen.getTextContent();
@@ -613,6 +677,23 @@ describe('Work and Coach widget bodies', () => {
     expect(screen.findByTestId('coach.summary')).toBeFalsy();
     expect(screen.findByTestId('coach.checks')).toBeFalsy();
     expect(screen.findByTestId('coach.configure')).toBeFalsy();
+  });
+
+  it('says a finding in its measured facts; observation counts and coverage wait behind Why (R7)', async () => {
+    const screen = await renderScreen(
+      <UsageCoachWidget {...props} id="usage_coach" testID="coach" />,
+    );
+    const finding = coach.findings[0]!;
+    const meta = screen.findByTestId('coach.finding.compaction_storms.meta')!;
+    const metaText = String(meta.props.children);
+    expect(metaText).toContain(`${finding.measurements[0]!.value} ${t(`usage.board.coach.metric_${finding.measurements[0]!.metric}`)}`);
+    // Mechanism words (observation counts, evidence coverage) are method facts, not the finding's line.
+    const evidenceLine = t('usage.board.coach.evidenceLine', { count: finding.evidence.length,
+      coverage: t(`usage.board.coach.coverage_${finding.coverage}`) });
+    expect(metaText).not.toContain(evidenceLine);
+    expect(screen.getTextContent()).not.toContain(evidenceLine);
+    await screen.pressByTestIdAsync('coach.finding.compaction_storms.why-header');
+    expect(screen.getTextContent()).toContain(evidenceLine);
   });
 
   it('coach shows the evidence-backed finding, hides a dismissed one and keeps insufficient checks visible', async () => {

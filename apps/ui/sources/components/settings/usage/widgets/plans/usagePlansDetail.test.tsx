@@ -234,6 +234,11 @@ it('shows the canonical capacity weather and insufficient model/reset basis insi
   const screen = await renderScreen(wrap(<UsagePlanFitWidget {...bodyProps([read, other])} id="usage_plan_fit" testID="fit" />));
   // A plan is one row; its basis lines open under Details.
   expect(screen.findByTestId('fit.plan.work.weather.weekly')).toBeFalsy();
+  // An unknown plan value is never a lone dash at the row's far edge; when no row has a price, that is said
+  // once for the list (R9), never repeated on every row.
+  expect(screen.getTextContent()).not.toContain('—');
+  expect(screen.getTextContent()).not.toContain(t('usage.board.plans.planNoPriceShort'));
+  expect(String(screen.findByTestId('fit.once')!.props.children)).toBe(t('usage.board.plans.planNoPriceAll'));
   await screen.pressByTestIdAsync('fit.plan.work.details-header');
   expect(screen.findByTestId('fit.plan.work.weather.weekly')).toBeTruthy();
   // What no account has a basis for yet is one line for the whole widget, never one per account.
@@ -247,6 +252,18 @@ it('shows the canonical capacity weather and insufficient model/reset basis insi
   expect(screen.findByTestId('fit.plan.work.pricePerReset.weekly.insufficient')).toBeFalsy();
   expect(screen.findAllByType((await import('@/components/settings/connectedServices/ConnectedServiceMark')).ConnectedServiceMark)
     .find(node => node.props.legacyServiceId === 'claude-subscription')).toBeTruthy();
+});
+
+it('shows the entered monthly amount without inventing a provider billing period', async () => {
+  const now = Date.now();
+  const read = quotaRead('work', now, [], {}, { subscription: { status: 'unavailable', renewal: 'unknown',
+    observedAtMs: now, staleAfterMs: 60000, enteredMonthlyPrice: { amount: 1.23, currency: 'USD', enteredAtMs: now } } });
+  const { UsagePlanFitWidget } = await import('../UsagePlanFitWidget');
+  const screen = await renderScreen(wrap(<UsagePlanFitWidget {...bodyProps([read])} id="usage_plan_fit" testID="fit" />));
+  expect(screen.getTextContent()).toContain('$1.23');
+  expect(screen.getTextContent()).not.toContain(t('usage.board.plans.planNoPriceShort'));
+  expect(read.current?.subscription).not.toHaveProperty('currentPeriodStartAtMs');
+  await screen.unmount();
 });
 
 it('names available model-meter headroom through the catalog and readable unknown fallback', async () => {
@@ -354,6 +371,27 @@ it('does not declare all projections missing when a settled paced window is behi
   expect(text).not.toContain(t('usage.board.plans.paceSharedReason', { reason: '' }));
 });
 
+it('does not materialize curve points for the meter-list presentation', async () => {
+  const now = Date.now();
+  const read = quotaRead('work', now, [{ meterId: 'weekly', label: 'Weekly', usedPct: 80,
+    resetAtMs: now + DAY, windowDurationMs: 7 * DAY }]);
+  const props = bodyProps([read]);
+  let curveReads = 0;
+  const pace = props.slice.quota![0]!.pace[0]!.value;
+  if (pace.status !== 'available') throw new Error('Expected available pace');
+  for (const point of pace.observedCurve ?? []) {
+    const value = point.usedFraction;
+    Object.defineProperty(point, 'usedFraction', { get: () => { curveReads += 1; return value; } });
+  }
+  const { UsageProjectionsWidget } = await import('../UsageProjectionsWidget');
+  const screen = await renderScreen(wrap(<WidgetPresentationProvider value={{ size: 'medium',
+    footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width: 520, height: 260 } }}>
+    <UsageProjectionsWidget {...props} id="usage_projections" testID="proj" />
+  </WidgetPresentationProvider>));
+  expect(screen.findByTestId('proj.window.work.weekly')).toBeTruthy();
+  expect(curveReads).toBe(0);
+});
+
 it('lists every reported window with its projection beside other widgets, without the burn-up or disclosures', async () => {
   const now = Date.now();
   const read = quotaRead('work', now, [{ meterId: 'weekly', label: 'Weekly', usedPct: 30,
@@ -378,8 +416,8 @@ it('lists every reported window with its projection beside other widgets, withou
   // Neither window has a pace for the same reason: it is said once under the list, not on each row.
   // Each window has its own projection, so no shared reason is said.
   expect(screen.findByTestId('proj.sharedReason')).toBeFalsy();
-  // The unreported window is one quiet count; its row lives on the Plans view.
-  expect(screen.findByTestId('proj.unreported')).toBeTruthy();
+  // The unreported window is one quiet count in the list's one footer; its row lives on the Plans view.
+  expect(screen.findByTestId('proj.showAll.unlisted')).toBeTruthy();
   expect(screen.findByTestId('proj.window.work.unknown')).toBeFalsy();
   // No window has a pace for the same reason: it is said once under the list, not on each row.
   const unpaced = ConnectedServiceQuotaGetResultV1Schema.parse({ ...partial, pace: [] });

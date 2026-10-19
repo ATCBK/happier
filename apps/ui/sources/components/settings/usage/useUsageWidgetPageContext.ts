@@ -5,7 +5,7 @@ import { useOptionalCurrentUiContextReader, usePublishCurrentUiContext } from '@
 import type { CurrentUiContextMountedEnrichment, CurrentUiContextMountedCommand } from '@/components/appShell/currentUiContext/currentUiContextModel';
 import { executeMountedCurrentUiContextCommand } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
-import { useCurrentUiContextComposedCommands } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
+import { useCurrentUiContextComposedCommands, useCurrentUiContextLocalCommandDefinitions } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
 import { USAGE_PERIODS, getUsagePeriodDefinition, type UsagePeriod } from '@/sync/api/account/usagePeriods';
 import { t } from '@/text';
 import { applyUsageWidgetPageScope, describeUsageWidgetSlotValue, readUsageWidgetPageContext, readUsageWidgetPageScope, readUsageWidgetQueryOverrides, resolveUsageWidgetPageInitialQuery,
@@ -118,6 +118,10 @@ export type UsageWidgetPagePublicationInput = Readonly<{
     filterCommands?: readonly Readonly<{ field: string; id: string; title: string; invoke(): boolean | Promise<boolean> }>[];
 }>;
 
+function pageCommandKey(kind: string, ...ids: string[]): string {
+    return JSON.stringify([kind, ...ids]);
+}
+
 /** Called after the area binding, so its inventory/selection stays at the platform owner. */
 export function usePublishUsageWidgetPageContext(input: UsageWidgetPagePublicationInput): Readonly<{
     selectLayout(layoutId: string, signal?: AbortSignal): Promise<boolean>;
@@ -128,7 +132,7 @@ export function usePublishUsageWidgetPageContext(input: UsageWidgetPagePublicati
     const { page } = input;
     const descendantCommands = useCurrentUiContextComposedCommands();
     const reader = useOptionalCurrentUiContextReader();
-    const { execute } = useMountedActionExecution(input.authority?.scope);
+    const { execute } = useMountedActionExecution(input.authority?.scope, { openOnRequest: true });
     const latest = React.useRef(input);
     latest.current = input;
     const mounted = React.useRef(true);
@@ -137,34 +141,32 @@ export function usePublishUsageWidgetPageContext(input: UsageWidgetPagePublicati
         && latest.current.authority === input.authority && input.authority?.isCurrent() === true,
         [input.authority]);
     const applyLayout = React.useCallback(async (layoutId: string, signal?: AbortSignal): Promise<boolean> => {
-        if (!canChange() || signal?.aborted || !input.selectLayout || !input.layouts?.some(layout => layout.id === layoutId)) return false;
-        const selected = await input.selectLayout(layoutId);
+        const current = latest.current;
+        if (!canChange() || signal?.aborted || !current.selectLayout || !current.layouts?.some(layout => layout.id === layoutId)) return false;
+        const selected = await current.selectLayout(layoutId);
         // Selection can itself retire its published descriptor. Its known
         // success survives that republish, but never a Home/Account retirement.
         if (!selected || !canChange()) return false;
         return true;
-    }, [canChange, input.authority, input.layouts, input.selectLayout]);
+    }, [canChange]);
 
+    const definitions = useCurrentUiContextLocalCommandDefinitions([
+        ...USAGE_PERIODS.map(period => ({ key: pageCommandKey('period', period),
+            title: t(getUsagePeriodDefinition(period).translationKey), invoke: () => page.setPeriod(period) })),
+        ...input.costBasisOptions.map(costBasis => ({ key: pageCommandKey('cost', costBasis),
+            title: describeUsageWidgetSlotValue('costBasis', costBasis, page.period), invoke: () => page.setScope({ costBasis }) })),
+        ...(input.filterCommands ?? []).map(({ field, id, title, invoke }) => ({ key: pageCommandKey('filter', field, id), title, invoke })),
+        ...(input.layouts ?? []).map(layout => ({ key: pageCommandKey('layout', layout.id), title: layout.name, invoke: () => applyLayout(layout.id) })),
+    ], canChange, JSON.stringify({ period: page.period, scope: page.scope, layoutId: input.layoutId ?? null }));
     const publication = React.useMemo(() => {
         if (!canChange()) return null;
-        const command = (title: string, change: () => boolean | Promise<boolean>) => ({ title, command: { kind: 'hostLocal' as const,
-            invoke: async ({ signal }: Readonly<{ signal: AbortSignal }>) => signal.aborted || !canChange() || !await change()
-                ? { ok: false as const, code: 'stale_surface' as const } : { ok: true as const } } });
-        const periods = USAGE_PERIODS.map(period => ({ id: period, ...command(t(getUsagePeriodDefinition(period).translationKey), () => page.setPeriod(period)) }));
-        const costs = input.costBasisOptions.map(costBasis => ({ id: costBasis, ...command(
-            describeUsageWidgetSlotValue('costBasis', costBasis, page.period), () => page.setScope({ costBasis })) }));
-        const filters = (input.filterCommands ?? []).map(choice => ({ field: choice.field, id: choice.id, ...command(choice.title, choice.invoke) }));
-        const layouts = (input.layouts ?? []).map(layout => ({ id: layout.id, title: layout.name, command: { kind: 'hostLocal' as const,
-            invoke: async ({ signal }: Readonly<{ signal: AbortSignal }>) => await applyLayout(layout.id, signal)
-                ? { ok: true as const } : { ok: false as const, code: 'stale_surface' as const } } }));
         const enrichment: CurrentUiContextMountedEnrichment = {
             entity: { kind: 'usage_summary', label: t('usage.summary.title'), summary: t(getUsagePeriodDefinition(page.period).translationKey) },
             detail: JSON.stringify({ scope: page.scope, layoutId: input.layoutId ?? null }),
-            commands: [...periods, ...costs, ...filters, ...layouts, ...descendantCommands],
+            commands: [...definitions, ...descendantCommands],
         };
-        return { enrichment, periods, costs, filters, layouts };
-    }, [canChange, input.active, page.isCurrent, page.period, page.scope, page.setPeriod, page.setScope, input.layoutId, input.costBasisOptions,
-        input.filterCommands, input.layouts, applyLayout, descendantCommands]);
+        return { enrichment, definitions };
+    }, [canChange, input.active, page.isCurrent, page.period, page.scope, input.layoutId, definitions, descendantCommands]);
     usePublishCurrentUiContext(publication?.enrichment ?? null);
     const currentPublication = React.useRef(publication);
     React.useLayoutEffect(() => { currentPublication.current = publication; }, [publication]);
@@ -176,9 +178,9 @@ export function usePublishUsageWidgetPageContext(input: UsageWidgetPagePublicati
     // from the committed publication, never the retired descriptor captured at close.
     // Opaque external command ids still retire normally in the current-context owner.
     const selectLayout = React.useCallback((id: string, signal?: AbortSignal) => signal?.aborted ? Promise.resolve(false)
-        : invoke(currentPublication.current?.layouts.find(row => row.id === id)?.command), [invoke]);
-    const selectPeriod = React.useCallback((id: UsagePeriod) => invoke(currentPublication.current?.periods.find(row => row.id === id)?.command), [invoke]);
-    const selectCostBasis = React.useCallback((id: UsageWidgetPageScope['costBasis']) => invoke(currentPublication.current?.costs.find(row => row.id === id)?.command), [invoke]);
-    const selectFilter = React.useCallback((field: string, id: string) => invoke(currentPublication.current?.filters.find(row => row.field === field && row.id === id)?.command), [invoke]);
+        : invoke(currentPublication.current?.definitions.find(row => row.key === pageCommandKey('layout', id))?.command), [invoke]);
+    const selectPeriod = React.useCallback((id: UsagePeriod) => invoke(currentPublication.current?.definitions.find(row => row.key === pageCommandKey('period', id))?.command), [invoke]);
+    const selectCostBasis = React.useCallback((id: UsageWidgetPageScope['costBasis']) => invoke(currentPublication.current?.definitions.find(row => row.key === pageCommandKey('cost', id))?.command), [invoke]);
+    const selectFilter = React.useCallback((field: string, id: string) => invoke(currentPublication.current?.definitions.find(row => row.key === pageCommandKey('filter', field, id))?.command), [invoke]);
     return { selectLayout, selectPeriod, selectCostBasis, selectFilter };
 }

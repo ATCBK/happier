@@ -13,6 +13,7 @@ import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
+import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Typography } from '@/constants/Typography';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -29,6 +30,7 @@ import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs
 import { t } from '@/text';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import { UsageAgentMark, usageAgentTitle } from './usageBodyKit';
+import { formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
 import type {
   UsageSourcesController,
   UsageSourcesSnapshot,
@@ -119,23 +121,29 @@ export function UsageSourcesMachines(
     .map(machine => [machine.id, machine])).values()];
   const online = machines.filter(machine => machine.online);
   const offlineCount = machines.length - online.length;
-  // Only a derived loaded-empty bit leaves each controller. Inventory, source state and demand
-  // stay at the mounted leaf; this count cannot label a previous Account or selection as current.
+  // Only a derived per-machine state leaves each controller (counted content, nothing found, still
+  // looking, or unreadable). Inventory, source state and demand stay at the mounted leaf; the grouped
+  // lines cannot label a previous Account or selection as current.
   const projectionKey = JSON.stringify([props.input.agents, props.input.sources, online.map(machine => machine.id)]);
-  const [emptyProjection, setEmptyProjection] = React.useState<Readonly<{
-    lifetime: ServerAccountScopeLifetime; key: string; ids: ReadonlySet<string>;
+  const [stateProjection, setStateProjection] = React.useState<Readonly<{
+    lifetime: ServerAccountScopeLifetime; key: string; states: ReadonlyMap<string, UsageSourcesMachineState>;
   }> | null>(null);
-  const reportEmpty = React.useCallback((machineId: string, empty: boolean) => {
-    setEmptyProjection(previous => {
+  const retries = React.useRef(new Map<string, () => void>());
+  const reportState = React.useCallback((machineId: string, state: UsageSourcesMachineState, retry?: () => void) => {
+    if (retry) retries.current.set(machineId, retry); else retries.current.delete(machineId);
+    setStateProjection(previous => {
       const current = previous?.lifetime === props.lifetime && previous.key === projectionKey ? previous : null;
-      if (current && current.ids.has(machineId) === empty) return previous;
-      const ids = new Set(current?.ids);
-      if (empty) ids.add(machineId); else ids.delete(machineId);
-      return { lifetime: props.lifetime, key: projectionKey, ids };
+      if (current && current.states.get(machineId) === state) return previous;
+      const states = new Map(current?.states);
+      states.set(machineId, state);
+      return { lifetime: props.lifetime, key: projectionKey, states };
     });
   }, [props.lifetime, projectionKey]);
-  const emptyCount = emptyProjection?.lifetime === props.lifetime && emptyProjection.key === projectionKey
-    ? online.filter(machine => emptyProjection.ids.has(machine.id)).length : 0;
+  const states = stateProjection?.lifetime === props.lifetime && stateProjection.key === projectionKey ? stateProjection.states : null;
+  const countIn = (state: UsageSourcesMachineState) => online.filter(machine => (states?.get(machine.id) ?? 'looking') === state).length;
+  const emptyCount = countIn('none');
+  const lookingCount = countIn('looking');
+  const unreadable = online.filter(machine => states?.get(machine.id) === 'unreadable');
   if (machines.length === 0)
     return (
       <SurfaceStateCard
@@ -150,30 +158,69 @@ export function UsageSourcesMachines(
     <Text style={styles.machineName}>{t('projects.identity.machineCount', { count: machines.length })}</Text>
     {offlineCount > 0 ? <Text style={styles.note}>{t('machines.widgets.body.fleet.offlineGroup', { count: offlineCount })}</Text> : null}
   </View>;
+  const groupLine = (testID: string, count: number, status: string) => (
+    <Text testID={`${props.testID}.${testID}`} style={styles.note}
+      accessibilityLabel={`${t('projects.identity.machineCount', { count })} · ${status}`}>
+      {t('projects.identity.machineCount', { count })} · {status}
+    </Text>
+  );
+  // What is counted leads (lab d2src "Happier usage first"): Happier sessions are always live, then
+  // every machine's sources. Machines with nothing to show are grouped once below, one status each.
   return (
     <View testID={props.testID} style={styles.machines}>
-      {online.map((machine, index) => (
+      <HappierSessionsSource serverId={props.serverId} testID={`${props.testID}.happier`} />
+      {online.map((machine) => (
         <MachineSources
           key={machine.id}
           machine={machine}
           lifetime={props.lifetime}
           serverId={props.serverId}
           executor={props.executor}
-          first={index === 0}
           agentIds={props.input.agents}
           accountingSources={props.input.sources}
-          onEmpty={reportEmpty}
+          onState={reportState}
           testID={`${props.testID}.machine.${machine.id}`}
         />
       ))}
-      {emptyCount > 0 ? <Text testID={`${props.testID}.emptyMachines`} style={styles.note}
-        accessibilityLabel={`${t('projects.identity.machineCount', { count: emptyCount })} · ${t('usage.board.sources.machineNone')}`}>
-        {t('projects.identity.machineCount', { count: emptyCount })} · {t('usage.board.sources.machineNone')}
-      </Text> : null}
-      {offlineCount > 0 ? <Text testID={`${props.testID}.offline`} style={styles.note}
-        accessibilityLabel={t('machines.widgets.body.fleet.offlineGroup', { count: offlineCount })}>
-        {t('machines.widgets.body.fleet.offlineGroup', { count: offlineCount })}
-      </Text> : null}
+      {lookingCount + unreadable.length + emptyCount + offlineCount > 0 ? <View style={styles.groups}>
+        {lookingCount > 0 ? groupLine('lookingMachines', lookingCount, t('usage.board.sources.machineLooking')) : null}
+        {unreadable.length > 0 ? (
+          <SurfaceFreshnessLine
+            testID={`${props.testID}.unreadableMachines`}
+            tone="warning"
+            reason={`${t('projects.identity.machineCount', { count: unreadable.length })} · ${t('usage.board.sources.machinesUnreadable')}`}
+            action={{ label: t('common.retry'), onPress: () => { for (const machine of unreadable) retries.current.get(machine.id)?.(); } }}
+          />
+        ) : null}
+        {emptyCount > 0 ? groupLine('emptyMachines', emptyCount, t('usage.board.sources.machineNone')) : null}
+        {offlineCount > 0 ? <Text testID={`${props.testID}.offline`} style={styles.note}
+          accessibilityLabel={t('machines.widgets.body.fleet.offlineGroup', { count: offlineCount })}>
+          {t('machines.widgets.body.fleet.offlineGroup', { count: offlineCount })}
+        </Text> : null}
+      </View> : null}
+    </View>
+  );
+}
+
+/** How a mounted machine reads in the grouped lines: its sources, or the one status it shares with others. */
+type UsageSourcesMachineState = 'content' | 'none' | 'looking' | 'unreadable';
+
+/** Happier's own sessions are counted as they run on every machine: the first counted source, always live. */
+function HappierSessionsSource(props: Readonly<{ serverId: string; testID: string }>) {
+  const { theme } = useUnistyles();
+  return (
+    <View testID={props.testID} style={[styles.source, styles.happier]}>
+      <View style={styles.sourceMark}>
+        <Icon name="chats-circle" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
+      </View>
+      <View style={styles.sourceBody}>
+        <Text style={styles.sourceTitle} numberOfLines={1}>{t('usage.board.sources.happierTitle')}</Text>
+        <Text style={styles.sourceSubtitle} numberOfLines={1}>{t('usage.board.sources.happierSubtitle')}</Text>
+        <View style={styles.stateLine}>
+          <StatusDot color={theme.colors.state.success.foreground} />
+          <Text style={styles.stateText} numberOfLines={1}>{t('usage.board.sources.happierLive')}</Text>
+        </View>
+      </View>
     </View>
   );
 }
@@ -184,11 +231,10 @@ function MachineSources(
     lifetime: ServerAccountScopeLifetime;
     executor?: UsageSourcesHookOptions['executor'];
     serverId: string;
-    first: boolean;
     testID: string;
     agentIds: readonly string[];
     accountingSources: readonly string[];
-    onEmpty(machineId: string, empty: boolean): void;
+    onState(machineId: string, state: UsageSourcesMachineState, retry?: () => void): void;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -219,22 +265,20 @@ function MachineSources(
   const discovering = snapshot.pending.some(
     (operation) => operation.actionId === 'usage.sources.discover',
   );
-  const empty = snapshot.loaded && scoped.length === 0 && !snapshot.error && !snapshot.approval;
-  React.useEffect(() => { props.onEmpty(props.machine.id, empty); }, [props.onEmpty, props.machine.id, empty]);
-  const status = !props.machine.online
-    ? t('usage.board.sources.machineOffline')
-    : !snapshot.loaded
-      ? t('usage.board.sources.machineLooking')
-      : scoped.length === 0
-        ? t('usage.board.sources.machineNone')
-        : counted > 0
-          ? t('usage.board.sources.machineCounted', { count: counted })
-          : null;
-  if (empty) return null;
+  // One status per machine: an unreadable machine is never also "looking", and a machine with
+  // nothing to show joins its group's single line instead of drawing a header of its own.
+  const state: UsageSourcesMachineState = snapshot.approval || (snapshot.loaded && scoped.length > 0) ? 'content'
+    : snapshot.error && !snapshot.loaded ? 'unreadable'
+      : snapshot.loaded ? 'none' : 'looking';
+  const retry = React.useCallback(() => { void controller?.discover(); }, [controller]);
+  React.useEffect(() => { props.onState(props.machine.id, state, state === 'unreadable' ? retry : undefined); },
+    [props.onState, props.machine.id, state, retry]);
+  const status = counted > 0 ? t('usage.board.sources.machineCounted', { count: counted }) : null;
+  if (state !== 'content') return null;
   return (
     <View
       testID={props.testID}
-      style={[styles.machine, props.first ? null : styles.machineDivided]}
+      style={[styles.machine, styles.machineDivided]}
     >
       <View style={styles.machineHeader}>
         <Icon
@@ -257,17 +301,6 @@ function MachineSources(
           />
         ) : null}
       </View>
-      {snapshot.error && !snapshot.loaded && props.machine.online ? (
-        <SurfaceFreshnessLine
-          testID={`${props.testID}.error`}
-          tone="warning"
-          reason={t('usage.board.sources.unavailable')}
-          action={{
-            label: t('common.retry'),
-            onPress: () => controller?.discover(),
-          }}
-        />
-      ) : null}
       {snapshot.approval ? (
         <Text style={styles.note}>
           {t('usage.board.sources.approvalPending')}
@@ -324,26 +357,8 @@ function SourceRow(
       : null;
   const words = { agent, machine: props.machineName };
 
-  const add = React.useCallback(async () => {
-    // Consent is explicit and says exactly what the server keeps (approved UD-1 disclosure).
-    const confirmed = await Modal.confirm(
-      t('usage.board.sources.consentTitle', words),
-      controller.disclosure,
-      { confirmText: t('usage.board.sources.add') },
-    );
-    if (confirmed) await controller.setConsent(source.sourceId, true);
-  }, [controller, source.sourceId, agent, props.machineName]);
-  const deleteHistory = React.useCallback(async () => {
-    const confirmed = await Modal.confirm(
-      t('usage.board.sources.deleteTitle', words),
-      t('usage.board.sources.deleteMessage'),
-      {
-        confirmText: t('usage.board.sources.deleteHistory'),
-        destructive: true,
-      },
-    );
-    if (confirmed) await controller.deleteHistory(source.sourceId);
-  }, [controller, source.sourceId, agent, props.machineName]);
+  const add = React.useCallback(() => controller.setConsent(source.sourceId, true), [controller, source.sourceId]);
+  const deleteHistory = React.useCallback(() => controller.deleteHistory(source.sourceId), [controller, source.sourceId]);
   const changeFolder = React.useCallback(async () => {
     const next = await Modal.prompt(
       t('usage.board.sources.folderPromptTitle'),
@@ -377,7 +392,9 @@ function SourceRow(
           : source.status === 'ready'
             ? source.coverage === 'partial'
               ? t('usage.board.sources.countedPartial')
-              : t('usage.board.sources.counted')
+              : source.asOfMs !== null
+                ? t('usage.board.sources.countedAsOf', { time: formatUsageObservedAt(source.asOfMs) })
+                : t('usage.board.sources.counted')
             : null;
   const failed = source.status === 'error' || source.status === 'unavailable';
   return (
@@ -444,6 +461,11 @@ function SourceRow(
             })}
           </Text>
         ) : null}
+        {/* The disclosure belongs to the consent it governs: only where this card offers Add or Resume. */}
+        {source.consent === 'disabled' && (found || source.status !== 'unsupported')
+          ? <Text style={styles.note}>{controller.disclosure}</Text> : null}
+        {source.consent === 'enabled' || source.status === 'stopped' || source.pendingCount > 0 || source.asOfMs !== null
+          ? <Text style={styles.note}>{t('usage.board.sources.deleteMessage')}</Text> : null}
         <View style={styles.actions}>
           {found ? (
             <>
@@ -538,6 +560,15 @@ function SourceRow(
 const styles = StyleSheet.create((theme) => ({
   machines: {
     gap: theme.space.s4,
+  },
+  happier: {
+    paddingVertical: theme.space.s12,
+  },
+  groups: {
+    gap: theme.space.s4,
+    paddingTop: theme.space.s8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.default,
   },
   machine: {
     gap: theme.space.s12,

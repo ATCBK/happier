@@ -14,7 +14,7 @@ import { UsageCostFactsWidget } from './UsageCostFactsWidget';
 import { UsageDailyWidget } from './UsageDailyWidget';
 import { UsageFlowWidget } from './UsageFlowWidget';
 import { UsageBreakdownsWidget } from './UsageBreakdownsWidget';
-import { leadingUsageRows, UsageShowAllRows } from './usageBodyKit';
+import { leadingUsageRows, UsageShowAllRows, usagePartialHistoryLabel } from './usageBodyKit';
 import { usageQaAccountingFixture } from '@/dev/testkit/fixtures/usageQaAccountingFixture';
 import { UsageEfficiencyWidget } from './UsageEfficiencyWidget';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
@@ -47,6 +47,66 @@ function mountedCosts(unpriced = false) {
 }
 
 describe('one selected money basis across Usage bodies', () => {
+  it.each([7, 30].flatMap(days => (['auto', 'reported', 'estimated', 'api_equivalent'] as const)
+    .map(costBasis => ({ days, costBasis, olderUnpriced: false }))).concat([
+      { days: 30, costBasis: 'auto', olderUnpriced: true },
+    ]))('shares selected $costBasis money across every body at $days days (older unpriced: $olderUnpriced)', async ({ days, costBasis, olderUnpriced }) => {
+    const props = mountedCosts();
+    const query = normalizeUsageQuery({ ...props.query, period: { startMs: 0, endMs: days * day }, costBasis });
+    const base = props.slice.accounting!.contributions![0]!;
+    const contributions: UsageAnalyticsContribution[] = [
+      { ...base, id: 'covered', source: 'runtime', observedAtMs: day + 1,
+        cost: { reportedUsd: 0, estimatedUsd: 2, currency: 'USD', costSource: 'pricing_estimate', reportedTotalId: 'final' } },
+      { ...base, id: 'final', source: 'final', observedAtMs: day + 2,
+        tokens: { ...tokens, input: 0, total: 0 },
+        cost: { reportedUsd: 7, estimatedUsd: 0, currency: 'USD', costSource: 'provider_reported', reportedTotalContributionIds: ['covered'] } },
+      { ...base, id: 'estimated', sessionId: 'other', source: 'native', observedAtMs: day + 3,
+        cost: { reportedUsd: 0, estimatedUsd: 4, currency: 'USD', costSource: 'pricing_estimate' } },
+    ];
+    if (olderUnpriced) contributions.push({ ...base, id: 'older-unpriced', observedAtMs: 1, modelId: null,
+      source: 'claude-assistant-usage',
+      cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } });
+    const known = { eventCount: 3, tokens: { ...tokens, input: 20, total: 20 },
+      cost: { reportedUsd: 7, estimatedUsd: 6, currency: 'USD', costSource: 'none' as const } };
+    const older = { eventCount: 1, tokens, cost: contributions.at(-1)!.cost };
+    const total = { ...known, eventCount: contributions.length,
+      tokens: { ...tokens, input: olderUnpriced ? 30 : 20, total: olderUnpriced ? 30 : 20 } };
+    const accounting = repriceUsageAnalyticsResponse({ v: 1, totals: total, contributions,
+      series: [{ ...known, bucketStartMs: day, bucketEndMs: 2 * day },
+        ...(olderUnpriced ? [{ ...older, bucketStartMs: 0, bucketEndMs: day }] : [])],
+      breakdowns: { agent: [{ key: 'claude', ...total }] },
+      engineTimeline: [{ bucketStartMs: day, bucketEndMs: 2 * day, leaders: [{ key: 'claude', ...known }] },
+        ...(olderUnpriced ? [{ bucketStartMs: 0, bucketEndMs: day, leaders: [{ key: 'claude', ...older }] }] : [])],
+    }, undefined, {}, costBasis);
+    const slice = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'available', value: accounting }] }).results[0]!;
+    const screen = await renderScreen(<>
+      <UsageDailyWidget {...props} query={query} slice={slice} id="usage_daily" testID="whole-daily" />
+      <UsageBreakdownsWidget {...props} query={query} slice={slice} id="usage_breakdowns" testID="whole-breakdown" />
+      <UsageCostFactsWidget {...props} query={query} slice={slice} id="usage_cost_facts" testID="whole-facts" />
+      <UsagePeriodSummaryWidget {...props} query={query} slice={slice} id="usage_period_summary" testID="whole-summary" />
+      <UsageEfficiencyWidget {...props} query={query} slice={slice} id="usage_efficiency" testID="whole-efficiency" />
+    </>);
+    const metrics = screen.findAllByType(HappierDataMetric);
+    const selected = olderUnpriced ? null : costBasis === 'auto' ? 11 : costBasis === 'estimated' ? 6 : null;
+    expect(projectUsagePageCost(slice.accounting!, costBasis).amountUsd).toBe(selected);
+    expect(metrics.find(metric => metric.props.testID === 'whole-summary.hero')?.props.value).toBe(selected ?? '—');
+    expect(metrics.find(metric => metric.props.testID === 'whole-efficiency.perMtok')?.props.value).toBe(selected === null ? '—' : selected / 20 * 1e6);
+    expect(metrics.find(metric => metric.props.testID === 'whole-facts.fact.reported')?.props.value).toBe(7);
+    expect(metrics.find(metric => metric.props.testID === 'whole-facts.fact.estimated')?.props.value).toBe(6);
+    expect(screen.findByType(RankedRows).props.rows[0].value).toBe(selected);
+    const chart = screen.findByType(StackedSeriesChart);
+    const points: { y: number | null }[] = chart.props.series.flatMap((entry: { points: { y: number | null }[] }) => entry.points);
+    expect(points.reduce((sum, point) => sum + (point.y ?? 0), 0)).toBe(olderUnpriced ? 11 : selected ?? 0);
+    if (selected === null && !olderUnpriced) expect(points.every(point => point.y === null)).toBe(true);
+    if (olderUnpriced) {
+      expect(points.some(point => point.y === null)).toBe(true);
+      expect(slice.costFactTotals?.find(fact => fact.kind === 'unpriced')?.tokens.total).toBe(30);
+      // An unavailable whole-period amount says why, never the candidate basis's "estimated where not reported".
+      const unpriced = 'Some usage has no reported cost or price';
+      expect(metrics.find(metric => metric.props.testID === 'whole-summary.hero')?.props.caption).toBe(unpriced);
+      expect(metrics.find(metric => metric.props.testID === 'whole-efficiency.perMtok')?.props.caption).toBe(unpriced);
+    }
+  });
   it.each([0, 100, 20_000])('compares Period totals honestly against a prior base of %s', async previousTokens => {
     const props = mountedCosts();
     const query = normalizeUsageQuery({ ...props.query, period: { startMs: day, endMs: 2 * day }, metric: 'tokens' });
@@ -167,10 +227,12 @@ describe('one selected money basis across Usage bodies', () => {
       freshness: 'fresh', updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} };
     const screen = await renderScreen(<UsageBreakdownsWidget query={query} slice={slice} model={model} serverId="home" id="usage_breakdowns" testID="qa-machines" />);
     expect(screen.findByType(RankedRows).props.rows).toHaveLength(6);
-    expect(screen.findByType(UsageShowAllRows).props).toMatchObject({ total: 20, complete: false });
+    // One footer says both remainders: the folded returned rows and the rows the query never returned.
+    expect(screen.findByType(UsageShowAllRows).props).toMatchObject({ total: 20, hidden: 14, complete: false,
+      unlisted: t('usage.board.page.moreRows', { count: 3 }) });
     expect(screen.getTextContent()).toContain(`${t('usage.showAvailable')} · 20`);
     expect(screen.getTextContent()).toContain(t('usage.board.page.moreRows', { count: 3 }));
-    await screen.pressByTestIdAsync('qa-machines.machine.more');
+    await screen.pressByTestIdAsync('qa-machines.machine.more.toggle');
     expect(screen.findByType(RankedRows).props.rows).toHaveLength(20);
     expect(slice.accounting!.coverage!.ranked.find(row => row.dimension === 'machine')).toMatchObject({ totalEntries: 23, returnedEntries: 20, complete: false });
   });
@@ -222,6 +284,18 @@ describe('one selected money basis across Usage bodies', () => {
     expect(screen.findByType(RankedRows).props.rows.map((row: { value: number }) => row.value)).toEqual([3]);
   });
 
+  it('says "partial history" once for the facts band when every fact shares it, never under each fact (R9)', async () => {
+    const props = mountedCosts();
+    const facts = (props.slice.costFactTotals ?? []).map(fact => ({ ...fact, complete: false }));
+    expect(facts.length).toBeGreaterThan(1);
+    const screen = await renderScreen(<UsageCostFactsWidget {...props} slice={{ ...props.slice, costFactTotals: facts }} id="usage_cost_facts" testID="facts" />);
+    const captions = screen.findAllByType(HappierDataMetric).filter(metric => String(metric.props.testID).startsWith('facts.fact.'))
+      .map(metric => String(metric.props.caption));
+    expect(captions.length).toBeGreaterThan(1);
+    expect(captions.some(caption => caption.includes(t('usage.board.page.factIncomplete')))).toBe(false);
+    expect(String(screen.findByTestId('facts.partial')!.props.children)).toContain(usagePartialHistoryLabel());
+  });
+
   it('keeps missing selected money unavailable instead of drawing a zero total or row', async () => {
     const props = mountedCosts(true);
     const screen = await renderScreen(<>
@@ -232,7 +306,7 @@ describe('one selected money basis across Usage bodies', () => {
     </>);
     // Unknown money is a quiet dash with its reason as the caption, never a headline word.
     expect(screen.findAllByType(HappierDataMetric).find(metric => metric.props.testID === 'summary.hero')?.props.value).toBe('—');
-    expect(screen.getTextContent()).toContain(t('common.unavailable'));
+    expect(screen.getTextContent()).toContain(t('usage.board.page.costUnpricedCaption'));
     expect(screen.findByType(RankedRows).props.rows[0].value).toBeNull();
     expect(screen.findAllByType(StackedSeriesChart).flatMap(chart => chart.props.series)
       .every((entry: { points: { y: number | null }[] }) => entry.points.every(point => point.y === null))).toBe(true);

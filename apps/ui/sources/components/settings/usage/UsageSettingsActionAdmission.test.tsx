@@ -5,6 +5,8 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { UsageWidgetBodyModel } from './useUsageWidgetResource';
+import { ConnectedPresentationRecordV1Schema, ConnectedPresentationRowMutationV1Schema } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
+import type { UsagePlanAccount } from './widgets/plans/usagePlansModel';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -16,6 +18,8 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOrigin
 });
 
 const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+const { renderHook } = await import('@/dev/testkit/hooks/renderHook');
+const { useMountedActionExecution } = await import('@/components/approvals/useMountedActionExecution');
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
 const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
 const { storage } = await import('@/sync/domains/state/storage');
@@ -28,6 +32,7 @@ const { CONNECTED_SERVICES_USAGE_GAUGE_SETTINGS } = await import('../connectedSe
 const { UsageNightShiftWidget } = await import('./widgets/UsageNightShiftWidget');
 const { UsageCoachWidget } = await import('./widgets/UsageCoachWidget');
 const { UsageModelPricesEditor } = await import('./widgets/UsageModelPrices');
+const { UsageSubscriptionPriceEditor } = await import('./widgets/plans/UsagePlanActions');
 const { FieldTextInput } = await import('@/components/ui/forms/FieldTextInput');
 const { SessionModelRoutingHint } = await import('@/components/sessions/modelPicker/SessionModelRoutingHint');
 const { createResolvedAgentCatalogEntryFixture } = await import('@/dev/testkit/fixtures/agentCatalogFixtures');
@@ -38,8 +43,8 @@ const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = aw
 const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
 const { normalizeUsageQuery, getUsageQueryKey } = await import('@happier-dev/protocol/inputs/usageQuery');
-const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol');
-const { z } = await import('zod');
+const { ApprovalRequestV2Schema, AccountProfileSchema } = await import('@happier-dev/protocol');
+const { z } = await import('zod/mini');
 
 const settingsInput = z.object({ content: z.object({ t: z.literal('plain'), v: z.record(z.string(), z.unknown()) }), expectedVersion: z.number() });
 let serverId: string;
@@ -55,8 +60,6 @@ beforeEach(async () => {
     raw = {};
     version = 1;
     storage.setState({ settings: settingsParse(raw), settingsScope: { serverId, accountId: 'usage-account' }, profileScope: { serverId, accountId: 'usage-account' }, settingsVersion: version });
-    await harness.requireUiApproval(serverId, 'settings.set');
-    raw = { ...storage.getState().settings };
     harness.answer(serverId, 'GET /v2/account/settings', { select: () => ({ body: { content: { t: 'plain', v: raw }, version } }) });
     // Persisted settings and its CAS are the genuine HTTP boundary. All declaration, Action and
     // approval logic above it stays real, including the store projection after acknowledgement.
@@ -77,6 +80,11 @@ beforeEach(async () => {
     await settingsQueue.awaitQueue();
     storage.setState({ settings: settingsParse(raw), settingsScope: { serverId, accountId: 'usage-account' }, profileScope: { serverId, accountId: 'usage-account' }, settingsVersion: version });
     expect(getActiveServerAccountScope()).toEqual({ serverId, accountId: 'usage-account' });
+    // Seed policy only after restoration: before this point the harness correctly
+    // seeds the saved Home, not the not-yet-applied Account's live settings.
+    await harness.requireUiApproval(serverId, 'settings.set');
+    raw = { ...storage.getState().settings };
+    harness.answer(serverId, 'GET /v2/account/settings', { select: () => ({ body: { content: { t: 'plain', v: raw }, version } }) });
 });
 afterEach(async () => { standardCleanup(); await disconnectActiveServerConnection(); });
 
@@ -108,16 +116,178 @@ function priceSlice() {
 }
 
 describe('Usage settings UI Action admission', () => {
-    it('sets and resets a model price through the Account setting only after approval', async () => {
+    it('round-trips mounted Save and Clear through quota read-back when the provider reports no subscription', async () => {
+        const { ProviderAccountUsageSnapshotV1Schema, buildProviderAccountUsageRecordId } = await import('@happier-dev/protocol');
+        const { ConnectedServiceQuotaGetResultV1Schema } = await import('@happier-dev/protocol/connect/providerAccountUsageHistory');
+        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const { createUiConnectedServiceAction } = await import('@/sync/ops/actions/connectedServiceActionDeps');
+        const ref = { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId: 'personal' };
+        const source = { ref, bindingKind: 'account' as const };
+        const recordKey = { providerId: 'claude', accountSubjectId: ref.accountId, subjectKind: 'account' as const, quotaScope: 'account' as const };
+        const now = Date.now();
+        const snapshot = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+            providerId: 'claude', accountSubject: { kind: 'providerSubject', id: ref.accountId }, observedAtMs: now, fetchedAtMs: now,
+            staleAfterMs: 60000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data', meters: [] });
+        const profile = AccountProfileSchema.parse({ id: 'usage-account', connectedAccountsV4: [{ ref,
+            status: 'connected', authenticationModeId: 'oauth', configurationReady: true, configurationRevision: null,
+            revisionSemantics: 'legacy_unfenced', credentialRevision: null }] });
+        storage.setState({ profile });
+        harness.answer(serverId, '/v1/account/profile', { body: profile });
+        let record = ConnectedPresentationRecordV1Schema.parse({ v: 1, entries: [] });
+        let revision = 1;
+        harness.answer(serverId, 'GET /v1/account/entity-rows/connected-metadata/presentation', {
+            select: () => ({ body: { status: 'present', revision, content: { t: 'plain', v: record } } }),
+        });
+        harness.answer(serverId, 'GET /v1/account/entity-rows/connected-metadata/acknowledgements', {
+            body: { status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, entries: [] } } },
+        });
+        harness.answer(serverId, 'POST /v1/account/entity-rows/connected-metadata/presentation', { select: input => {
+            const body = ConnectedPresentationRowMutationV1Schema.parse(input);
+            expect(body.expectedRevision).toBe(revision);
+            if (body.content?.t !== 'plain') throw new Error('Expected keyless personal metadata');
+            record = body.content.v;
+            return { body: { status: 'updated', revision: ++revision, cursor: revision } };
+        } });
+        harness.answer(serverId, '/v4/connect/qualified/provider-account-usage/sources/resolve', { body: {
+            source, recordId: snapshot.recordId, providerAccountId: ref.accountId, fetchedAt: now, staleAfterMs: 60000,
+        } });
+        harness.answer(serverId, '/v4/connect/qualified/provider-account-usage/record', { body: {
+            content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: now, staleAfterMs: 60000, status: 'ok' }, sources: [source],
+        } });
+        harness.answer(serverId, 'POST /v2/pending/reset-starts/read', { body: { entries: [] } });
+        const captured = await captureLazyActionAccountContext(serverId);
+        const action = createUiConnectedServiceAction(captured);
+        const initial: UsagePlanAccount = { key: 'subscription', source, service: ref.service, accountId: ref.accountId,
+            groupId: null, planLabel: null, accountLabel: null, state: { source: 'quota', status: 'available' }, read: null,
+            windows: [], headline: null, stale: false, observedAtMs: now, subscription: null,
+            prices: { paid: null, list: null, entered: null }, recoveryCredits: undefined };
+        let readBack: Promise<void> | undefined;
+        function MountedEditor() {
+            const [account, setAccount] = React.useState(initial);
+            return <UsageSubscriptionPriceEditor account={account} serverId={serverId} testID="roundtrip" onSettled={() => {
+                readBack = action({ actionId: 'connectedServices.quota.get', input: { source }, context: { surface: 'ui', authority: 'present_user' } })
+                    .then(read => setAccount({ ...initial, subscription: ConnectedServiceQuotaGetResultV1Schema.parse(read).current?.subscription ?? null }));
+            }} />;
+        }
+        const screen = await renderScreen(<MountedEditor />);
+        try {
+            await screen.pressByTestIdAsync('roundtrip-header');
+            const field = (name: string) => screen.findAllByType(FieldTextInput).find(input => input.props.testID === `roundtrip.${name}`)!;
+            await act(async () => { field('amount').props.onChangeText('1.23'); field('currency').props.onChangeText('USD'); });
+            await screen.pressByTestIdAsync('roundtrip.save');
+            await waitForHomeGovernance(() => expect(record.entries[0]?.subscriptionMonthlyPrice).toMatchObject({ amount: 1.23, currency: 'USD' }));
+            expect(readBack).toBeDefined();
+            await act(async () => { await readBack; });
+            expect(screen.findByTestId('roundtrip.clear')).toBeTruthy();
+            expect(field('amount').props.value).toBe('1.23');
+            await screen.pressByTestIdAsync('roundtrip.clear');
+            await waitForHomeGovernance(() => expect(record.entries).toEqual([]));
+            await act(async () => { await readBack; });
+            expect(screen.findByTestId('roundtrip.clear')).toBeNull();
+            expect(field('amount').props.value).toBe('');
+            expect(revision).toBe(3);
+        } finally { captured.dispose(); await screen.unmount(); }
+    });
+    it.each([
+        ['save', false], ['clear', false], ['save', true], ['clear', true],
+    ] as const)('subscription price %s persists through the mounted front door (explicit Ask: %s)', async (operation, requireApproval) => {
+        const actionId = 'connectedServices.subscription.price.set';
+        const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'personal' };
+        let record = ConnectedPresentationRecordV1Schema.parse({ v: 1, entries: [{ v: 1, label: '', subject: { kind: 'account', account: ref },
+            subscriptionMonthlyPrice: { amount: 11, currency: 'EUR', enteredAtMs: 1 } }] });
+        let revision = 1;
+        const original = record;
+        const profile = AccountProfileSchema.parse({ id: 'usage-account', connectedAccountsV4: [{ ref,
+            status: 'connected', authenticationModeId: 'oauth', configurationReady: true, configurationRevision: null,
+            revisionSemantics: 'legacy_unfenced', credentialRevision: null }] });
+        storage.setState({ profile });
+        harness.answer(serverId, '/v1/account/profile', { body: profile });
+        harness.answer(serverId, 'GET /v1/account/entity-rows/connected-metadata/presentation', {
+            select: () => ({ body: { status: 'present', revision, content: { t: 'plain', v: record } } }),
+        });
+        harness.answer(serverId, 'GET /v1/account/entity-rows/connected-metadata/acknowledgements', {
+            body: { status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, entries: [] } } },
+        });
+        harness.answer(serverId, 'POST /v1/account/entity-rows/connected-metadata/presentation', { select: input => {
+            const body = ConnectedPresentationRowMutationV1Schema.parse(input);
+            expect(body.expectedRevision).toBe(revision);
+            if (body.content?.t !== 'plain') throw new Error('Expected keyless personal metadata');
+            record = body.content.v;
+            return { body: { status: 'updated', revision: ++revision, cursor: revision } };
+        } });
+        if (requireApproval) await harness.requireUiApproval(serverId, actionId);
+        const account: UsagePlanAccount = { key: 'subscription', source: { ref, bindingKind: 'account' },
+            service: ref.service, accountId: ref.accountId, groupId: null, planLabel: null, accountLabel: null,
+            state: { source: 'quota', status: 'available' }, read: null, windows: [], headline: null, stale: false,
+            observedAtMs: null, subscription: { status: 'subscribed', renewal: 'unknown', observedAtMs: 1, staleAfterMs: 1000,
+                enteredMonthlyPrice: { amount: 11, currency: 'EUR', enteredAtMs: 1 } },
+            prices: { paid: null, list: null, entered: null }, recoveryCredits: undefined };
+        const settled = vi.fn();
+        const screen = await renderScreen(<UsageSubscriptionPriceEditor account={account} serverId={serverId} testID="subscription" onSettled={settled} />);
+        await screen.pressByTestIdAsync('subscription-header');
+        const change = (name: string, value: string) => screen.findAllByType(FieldTextInput)
+            .find(input => input.props.testID === `subscription.${name}`)!.props.onChangeText(value);
+        await act(async () => { change('amount', '17'); change('currency', 'USD'); });
+        expect(screen.findByTestId(`subscription.${operation}`)?.props.disabled).toBe(false);
+        const approvals = () => harness.artifacts(serverId).list().filter(artifact => {
+            const request = ApprovalRequestV2Schema.safeParse(JSON.parse(harness.artifacts(serverId).readPlainBody(artifact.id) ?? 'null'));
+            return request.success && request.data.actionId === actionId;
+        });
+        await screen.pressByTestIdAsync(`subscription.${operation}`);
+        if (requireApproval) {
+            await waitForHomeGovernance(() => expect(approvals()).toHaveLength(1));
+            expect(record).toEqual(original);
+            const rejectedId = approvals()[0]!.id;
+            await decideApprovalAsInbox(serverId, rejectedId, 'reject');
+            await waitForHomeGovernance(() => expect(screen.findByTestId(`subscription.${operation}`)?.props.disabled).toBe(false));
+            expect(record).toEqual(original);
+            expect(settled).not.toHaveBeenCalled();
+            await screen.pressByTestIdAsync(`subscription.${operation}`);
+            await waitForHomeGovernance(() => expect(approvals()).toHaveLength(2));
+            await decideApprovalAsInbox(serverId, approvals().find(artifact => artifact.id !== rejectedId)!.id, 'approve');
+        } else expect(approvals()).toHaveLength(0);
+        await waitForHomeGovernance(() => expect(record.entries).toMatchObject(operation === 'clear' ? [] : [{
+            subject: { kind: 'account', account: ref }, subscriptionMonthlyPrice: { amount: 17, currency: 'USD' },
+        }]));
+        expect(revision).toBe(2);
+        await waitForHomeGovernance(() => expect(settled).toHaveBeenCalledTimes(1));
+        await screen.unmount();
+    });
+
+    it('retains mounted local delivery beneath canonical admission and refuses it after Account retirement', async () => {
+        const dismissed = new Set<string>();
+        const executorOptions = { usageSourceDismiss: async (input: { sourceId: string }) => {
+            dismissed.add(input.sourceId);
+            return { status: 'dismissed' as const };
+        } };
+        const hook = await renderHook(() => useMountedActionExecution({ serverId, accountId: 'usage-account' },
+            { openOnRequest: true, executorOptions }));
+        const input = { serverId, machineId: 'machine', sourceId: 'source' };
+        expect(await hook.getCurrent().execute('usage.sources.dismiss', input))
+            .toMatchObject({ ok: true, result: { status: 'dismissed' } });
+        expect([...dismissed]).toEqual(['source']);
+        await act(async () => { await harness.switchAccount(serverId, 'other-account'); });
+        expect(await hook.getCurrent().execute('usage.sources.dismiss', { ...input, sourceId: 'retired' }))
+            .toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
+        expect([...dismissed]).toEqual(['source']);
+        await hook.unmount();
+    });
+    it.each([false, true])('sets and resets a model price through its Account owner (explicit Ask: %s)', async requireApproval => {
+        if (!requireApproval) {
+            raw.actionsSettingsV1 = { v: 1, actions: {} };
+            storage.getState().applySettings(settingsParse(raw), ++version);
+        }
         const { slice } = priceSlice();
         const screen = await renderScreen(<UsageModelPricesEditor slice={slice} serverId={serverId} testID="prices" />);
         await screen.pressByTestIdAsync('prices.model.qa-private-model.set');
         const field = (name: string) => screen.findAllByType(FieldTextInput).find(input => input.props.testID === `prices.model.qa-private-model.${name}`)!;
         await act(async () => { field('input').props.onChangeText('3'); field('output').props.onChangeText('15'); });
         await screen.pressByTestIdAsync('prices.model.qa-private-model.save');
-        expect(storage.getState().settings.usageModelPriceOverridesV1).toEqual({});
-        await waitForHomeGovernance(() => expect(approvalFor('usage.modelPrices')).toBeTruthy());
-        await decideApprovalAsInbox(serverId, approvalFor('usage.modelPrices')!.id, 'approve');
+        if (requireApproval) {
+            expect(storage.getState().settings.usageModelPriceOverridesV1).toEqual({});
+            await waitForHomeGovernance(() => expect(approvalFor('usage.modelPrices')).toBeTruthy());
+            await decideApprovalAsInbox(serverId, approvalFor('usage.modelPrices')!.id, 'approve');
+        } else expect(approvalFor('usage.modelPrices')).toBeUndefined();
         await waitForHomeGovernance(() => expect(storage.getState().settings.usageModelPriceOverridesV1).toEqual({
             'qa-private-model': { kind: 'rates', inputUsdPerMillion: 3, outputUsdPerMillion: 15 } }));
         const previous = new Set(harness.artifacts(serverId).list().map(row => row.id));
@@ -126,8 +296,10 @@ describe('Usage settings UI Action admission', () => {
         await waitForHomeGovernance(() => expect(screen.findByTestId('prices.model.qa-private-model.reset')).toBeTruthy());
         await screen.pressByTestIdAsync('prices.model.qa-private-model.reset');
         const next = () => harness.artifacts(serverId).list().find(row => !previous.has(row.id));
-        await waitForHomeGovernance(() => expect(next()).toBeTruthy());
-        await decideApprovalAsInbox(serverId, next()!.id, 'approve');
+        if (requireApproval) {
+            await waitForHomeGovernance(() => expect(next()).toBeTruthy());
+            await decideApprovalAsInbox(serverId, next()!.id, 'approve');
+        } else expect(next()).toBeUndefined();
         await waitForHomeGovernance(() => expect(storage.getState().settings.usageModelPriceOverridesV1).toEqual({}));
         await screen.unmount();
     });
@@ -200,7 +372,7 @@ describe('Usage settings UI Action admission', () => {
         await screen.unmount();
     });
 
-    it('turns the routing hint off and on through the admitted settings owner when no approval is requested', async () => {
+    it('applies routing hint, notification and pacing edits directly by default through the settings owner', async () => {
         raw.actionsSettingsV1 = { v: 1, actions: {} };
         storage.getState().applySettings(settingsParse(raw), ++version);
         const screen = await renderScreen(<ProviderUsageGaugeSettingsGroup settings={CONNECTED_SERVICES_USAGE_GAUGE_SETTINGS.settings} />);
@@ -211,7 +383,16 @@ describe('Usage settings UI Action admission', () => {
         await screen.pressByTestIdAsync('settings-session-providerUsageGauge-routingHints');
         await waitForHomeGovernance(() => expect(raw.usageRoutingHintsEnabled).toBe(true));
         expect(storage.getState().settings.usageRoutingHintsEnabled).toBe(true);
+        expect(approvalFor('session.providerLimits.routingHints')).toBeUndefined();
         await screen.unmount();
+        const alerts = await renderScreen(<UsageCapacityAlertsSettingsGroup />);
+        await alerts.pressByTestIdAsync('settings-usage-alerts-pace');
+        await waitForHomeGovernance(() => expect(raw.usageQuotaNotificationsV1).toMatchObject({ pace: true }));
+        await alerts.pressByTestIdAsync('settings-usage-pace-target:75');
+        await waitForHomeGovernance(() => expect(raw.usagePacingTargetsV1).toEqual([expect.objectContaining({ utilizationFraction: 0.75 })]));
+        expect(approvalFor('session.providerLimits.alertPace')).toBeUndefined();
+        expect(approvalFor('session.providerLimits.personalPaceTarget')).toBeUndefined();
+        await alerts.unmount();
     });
 
     it('keeps the picker hint visible while its hide Action awaits approval', async () => {

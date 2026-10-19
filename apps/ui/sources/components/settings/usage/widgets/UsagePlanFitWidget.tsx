@@ -24,6 +24,7 @@ import {
   planPaceReasonText,
   UsagePlanIdentity,
   UsagePlanAccountStates,
+  isUsagePlanAccountSettledUnread,
   UsagePlanSectionHead,
   UsagePlansNothingRead,
   usePlanText,
@@ -58,10 +59,16 @@ export function UsagePlanFitWidget(props: UsageBodyProps) {
       </View>
     );
   }
+  const insightsOf = (account: UsagePlanAccount) => props.slice.planInsights?.accounts.find(entry => entry.source.ref.accountId === account.accountId
+    && entry.source.ref.service.pluginId === account.service.pluginId && entry.source.ref.service.localId === account.service.localId);
+  // Never-read accounts are one quiet line, not rows (R1); a missing price shared by every row is said once (R9).
+  const drawn = projection.accounts.filter((account) => !isUsagePlanAccountSettledUnread(account));
+  const unreadCount = projection.accounts.length - drawn.length;
+  const noPriceOnce = drawn.length > 1 && drawn.every((account) => readPlanKeyFact(account, insightsOf(account), nowMs) === null);
   return (
     <View style={styles.body} testID={`${props.testID}.planFit`}>
       <View style={styles.rows} accessibilityRole="list">
-        {projection.accounts.map((account) => (
+        {drawn.map((account) => (
           <PlanRow
             key={account.key}
             account={account}
@@ -71,12 +78,18 @@ export function UsagePlanFitWidget(props: UsageBodyProps) {
             compact={tile}
             serverId={props.serverId}
             onSettled={props.model.refresh}
-            insights={props.slice.planInsights?.accounts.find(entry => entry.source.ref.accountId === account.accountId
-              && entry.source.ref.service.pluginId === account.service.pluginId && entry.source.ref.service.localId === account.service.localId)}
+            insights={insightsOf(account)}
+            noPriceSaidOnce={noPriceOnce}
             testID={`${props.testID}.plan.${account.accountId}`}
           />
         ))}
       </View>
+      {noPriceOnce || unreadCount > 0 ? (
+        <Text testID={`${props.testID}.once`} style={[styles.quiet, text.detail]}>
+          {[noPriceOnce ? t('usage.board.plans.planNoPriceAll') : null,
+            unreadCount > 0 ? t('usage.board.plans.capacityNotRead', { count: unreadCount }) : null].filter(Boolean).join(' · ')}
+        </Text>
+      ) : null}
       {props.slice.planInsights?.recordedWeek.status === 'available'
         ? <RecordedWeek value={props.slice.planInsights.recordedWeek} compact={tile} testID={`${props.testID}.recordedWeek`} /> : null}
       {/* What has no basis yet is not a list of feature names: one quiet promise, said once. */}
@@ -92,6 +105,14 @@ export function UsagePlanFitWidget(props: UsageBodyProps) {
   );
 }
 
+/** The row's one figure: value as a multiple of the price, else the known price; null when neither is known. */
+function readPlanKeyFact(account: UsagePlanAccount, insights: UsagePlanInsights['accounts'][number] | undefined, nowMs: number): string | null {
+  const value = insights?.value;
+  if (value?.status === 'available' && value.priceMultiple.status === 'available') return 'multiple';
+  const price = projectProviderAccountSubscriptionMonetaryFacts({ subscription: account.subscription, nowMs, tier: account.planLabel });
+  return account.subscription?.enteredMonthlyPrice || price.paid || price.list ? 'price' : null;
+}
+
 function PlanRow(
   props: Readonly<{
     account: UsagePlanAccount;
@@ -103,6 +124,8 @@ function PlanRow(
     serverId: string;
     onSettled(): void;
     insights?: UsagePlanInsights['accounts'][number];
+    /** Every row lacks a price and the list says so once; the row stays quiet about it. */
+    noPriceSaidOnce?: boolean;
   }>,
 ) {
   const { account, nowMs } = props;
@@ -142,8 +165,11 @@ function PlanRow(
       : `${headline.label} · ${planPaceReasonText(headline.paceUnavailable ?? 'not_derived')}`
     : null;
   const price = projectProviderAccountSubscriptionMonetaryFacts({ subscription: account.subscription, nowMs, tier: account.planLabel });
-  const priceText = price.entered
-    ? t('usage.board.plans.planEntered', { amount: formatUsageCost(price.entered.amount, price.entered.currency) })
+  // The person's monthly amount is displayable without provider period evidence;
+  // period-qualified value/fit still comes from the monetary-facts owner above.
+  const entered = account.subscription?.enteredMonthlyPrice;
+  const priceText = entered
+    ? t('usage.board.plans.planEntered', { amount: formatUsageCost(entered.amount, entered.currency) })
     : price.paid
     ? t('usage.board.plans.planPaid', {
         amount: formatUsageCost(price.paid.amount, price.paid.currency),
@@ -190,13 +216,18 @@ function PlanRow(
   // the rest (pace, value basis, weather, headroom, billing, your price) waits behind Details.
   const value = props.insights?.value;
   const multiple = value?.status === 'available' && value.priceMultiple.status === 'available' ? value.priceMultiple.multiple : null;
-  const known = Boolean(price.entered || price.paid || price.list);
+  const known = Boolean(entered || price.paid || price.list);
   const keyFact = multiple !== null
     ? `${multiple.toLocaleString(getPreferredLanguage(), { maximumFractionDigits: 1 })}×`
-    : known ? priceText : '—';
-  const verdict = fit.observed === 0 ? null : t('usage.board.plans.fitUsedUp', { count: fit.usedUp, total: fit.observed });
+    : known ? priceText : null;
+  // The verdict is the outcome ("never ran out in 242"); the counted windows stay in Details.
+  const verdict = fit.observed === 0 ? null : fit.usedUp === 0
+    ? t('usage.board.plans.fitNeverRanOut', { total: fit.observed })
+    : t('usage.board.plans.fitRanOut', { count: fit.usedUp, total: fit.observed });
   const renewalKnown = subscription?.status === 'subscribed' && end !== undefined && subscription.renewal !== 'unknown';
+  // An unknown value is a quiet reason right under the plan's name, never a lone dash at the far edge.
   const secondary = [
+    keyFact === null && !props.noPriceSaidOnce ? t('usage.board.plans.planNoPriceShort') : null,
     renewalKnown ? periodText : null,
     fitWindow, verdict ?? (fit.observed === 0 ? t('usage.board.plans.fitNoneEnded') : null),
   ].filter(Boolean).join(' · ');
@@ -210,15 +241,18 @@ function PlanRow(
         <View style={styles.rowIdentity}>
           <UsagePlanIdentity name={props.name} compact />
         </View>
-        <Text style={[styles.price, text.title, multiple === null && !known ? styles.quiet : null]} numberOfLines={1}>
-          {keyFact}
-        </Text>
+        {keyFact !== null ? (
+          <Text style={[styles.price, text.title]} numberOfLines={1}>
+            {keyFact}
+          </Text>
+        ) : null}
       </View>
       <Text
         testID={fit.observed === 0 ? `${props.testID}.fit.insufficient` : `${props.testID}.fit`}
         accessibilityLabel={`${t('usage.board.plans.fitTitle')}: ${fitText}`}
         style={[styles.secondary, text.detail, ending ? styles.warning : null]}
-        numberOfLines={1}
+        // Two lines on a phone, so the verdict is never cut after the price reason.
+        numberOfLines={2}
       >
         {secondary}
       </Text>

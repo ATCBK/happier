@@ -83,6 +83,9 @@ describe('How you work presentation', () => {
     ]);
     expect(rows.filter((row) => row.pattern === 'hatched')).toHaveLength(2);
     expect(rows[0]!.label).toBe('s1');
+    // One run (its busy spans and waits) is one packed track inside its machine's lane.
+    expect(new Set(rows.map((row) => row.track))).toEqual(new Set([JSON.stringify(['s1', 't1'])]));
+    expect(rows.every((row) => row.lane === 'devbox')).toBe(true);
     // Approvals count as waiting on you; a sub-agent wait is the agent's own.
     expect(sumUsageWaitingOnYouMs(groups)).toBe(30 * MIN);
     expect(

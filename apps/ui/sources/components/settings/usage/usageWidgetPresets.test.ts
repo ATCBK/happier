@@ -50,14 +50,23 @@ describe('Usage host fragment presets', () => {
             { size: 'tall', instance: { definition: { id: 'usage_daily' } } },
             { size: 'medium', instance: { definition: { id: 'usage_period_summary' } } },
             { size: 'medium', instance: { definition: { id: 'usage_capacity' } } }]);
-        // The group packs Overview without a half-empty column: the Projections list beside Efficiency over Rhythm.
-        const children = first.kind === 'group' ? first.children : [];
-        const nameOf = (id: string) => children.find(child => child.instance.id === id)?.instance.definition;
-        const bands = packWidgetGroupBands(resolveWidgetGroupCells('corePage', children.map(child => ({ id: child.instance.id, size: child.size }))), 2);
-        const last = bands[bands.length - 1]!;
-        expect(last.kind).toBe('columns');
-        expect(last.kind === 'columns' ? last.columns.map(column => column.map(cell => nameOf(cell.id)?.kind === 'builtin' ? nameOf(cell.id)!.id : '')) : [])
-            .toEqual([['usage_projections'], ['usage_efficiency', 'usage_rhythm']]);
+        // Overview: the Projections list beside Efficiency over Rhythm, so neither column ends in a half-empty cell.
+        // Costs: the daily cost bars beside Breakdowns over Efficiency, so the chart gets a real plot height (lab d2views-COST 2-up).
+        const bandsOf = (presetId: string) => {
+            const group = presets.find(preset => preset.id === presetId)!.items[0]!;
+            const kids = group.kind === 'group' ? group.children : [];
+            const nameOf = (id: string) => {
+                const definition = kids.find(child => child.instance.id === id)?.instance.definition;
+                return definition?.kind === 'builtin' ? definition.id : '';
+            };
+            return packWidgetGroupBands(resolveWidgetGroupCells('corePage', kids.map(child => ({ id: child.instance.id, size: child.size }))), 2)
+                .map(band => band.kind === 'row' ? [[nameOf(band.cell.id)]] : band.kind === 'columns' ? band.columns.map(column => column.map(cell => nameOf(cell.id))) : []);
+        };
+        expect(bandsOf('overview').slice(-1)).toEqual([[['usage_projections'], ['usage_efficiency', 'usage_rhythm']]]);
+        expect(bandsOf('costs')).toEqual([[['usage_cost_facts']], [['usage_daily'], ['usage_breakdowns', 'usage_efficiency']],
+            [['usage_plan_fit']], [['usage_outcomes']]]);
+        // Plans: Capacity, then Projections and Plan fit stack beside the longer Resets list instead of leaving a column empty.
+        expect(bandsOf('plans')).toEqual([[['usage_capacity']], [['usage_projections', 'usage_plan_fit'], ['usage_resets']]]);
     });
 
     it('uses declared Usage inputs for every definition; Home owns values and Project follows only projects', () => {

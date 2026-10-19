@@ -94,6 +94,9 @@ const EMPTY_SNAPSHOT: UsageCoachSnapshot = {
   retired: true,
 };
 
+/** The finding's own line names its leading measurements; every measurement stays listed under Why. */
+const COACH_LINE_MEASUREMENTS = 3;
+
 function formatMeasurement(
   measurement: UsageCoachFinding['measurements'][number],
 ): string {
@@ -106,7 +109,10 @@ function formatMeasurement(
           ? formatTokenCount(measurement.value)
           : measurement.unit === 'milliseconds'
             ? formatUsageDuration(measurement.value)
-            : new Intl.NumberFormat().format(measurement.value);
+            : measurement.metric === 'cache_hit_ratio'
+              // A ratio reads as the share it is ("0% of input from cache"), never a bare "0".
+              ? `${Math.round(measurement.value * 100)}%`
+              : new Intl.NumberFormat().format(measurement.value);
   return `${value} ${t(`usage.board.coach.metric_${measurement.metric}`)}`;
 }
 
@@ -198,6 +204,7 @@ function useUsageCoachController(
     scopeKey: JSON.stringify([viewer?.serverId ?? null, viewer?.accountId ?? null]),
     serverId: viewer?.serverId ?? '',
     onExecuted: () => settled.current(),
+    openOnRequest: true,
   });
   const requestApproval = React.useRef(approvals.requestApproval);
   requestApproval.current = approvals.requestApproval;
@@ -338,8 +345,11 @@ export function UsageCoachWidget(props: UsageBodyProps) {
             layout="inline"
             size="line"
             title={t('usage.board.coach.emptyTitle')}
-            // "Every check ran" is only true when none is waiting for evidence.
-            reason={insufficient.length ? t('usage.board.coach.insufficientCount', { count: insufficient.length }) : t('usage.board.coach.emptyReason')}
+            // "Every check ran" is only true when none is waiting for evidence. The Coach view's facts band already
+            // counts the checks that need more evidence, so only the Overview strip (no band) says it here.
+            reason={insufficient.length
+              ? glance ? t('usage.board.coach.insufficientCount', { count: insufficient.length }) : undefined
+              : t('usage.board.coach.emptyReason')}
           />
         ) : null}
         {/* No findings, no container: an empty one still takes the body's row gap, which grew the reading state past its settled height. */}
@@ -528,16 +538,20 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
     candidateCost: formatUsageCost(comparison.candidateCost, comparison.currency),
     provider: `${comparison.modelId}: ${formatModelResponseSource(comparison.modelResponseSource)}; ${comparison.candidateModelId}: ${formatModelResponseSource(comparison.candidateResponseSource)}`,
   }), t('usage.board.coach.modelN1Cache')].join(' ') : null;
+  // The finding's line is what was measured (lab d2coach-A: kind, headline, one line, value, action). How it
+  // was established (observation count, coverage, an older reading's time) is method, said under Why.
   const evidence = [
-    ...finding.measurements.map(formatMeasurement),
+    ...finding.measurements.slice(0, COACH_LINE_MEASUREMENTS).map(formatMeasurement),
+    ...(finding.currentness === 'stale' && finding.asOfMs !== null
+      ? [t('surfaceState.asOf', { time: formatAsOfTime(finding.asOfMs) })]
+      : []),
+  ].join(' · ');
+  const method = [
     t('usage.board.coach.evidenceLine', {
       count: finding.evidence.length,
       coverage: t(`usage.board.coach.coverage_${finding.coverage}`),
     }),
-    ...(finding.currentness === 'stale'
-      ? [t('usage.board.coach.staleEvidence')]
-      : []),
-    ...(finding.asOfMs !== null
+    ...(finding.currentness !== 'stale' && finding.asOfMs !== null
       ? [t('surfaceState.asOf', { time: formatAsOfTime(finding.asOfMs) })]
       : []),
   ].join(' · ');
@@ -626,11 +640,12 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
           {title}
         </Text>
         {qualifiedModel ? <Text style={[styles.evidence, text('subtitle')]}>{qualifiedModel}</Text> : null}
-        <Text style={[styles.evidence, text('subtitle')]}>{evidence}</Text>
+        {evidence ? <Text style={[styles.evidence, text('subtitle')]} testID={`${props.testID}.meta`}>{evidence}</Text> : null}
         <UsagePlanDisclosure title={t('usage.board.coach.why')} testID={`${props.testID}.why`}>
         <View testID={`${props.testID}.evidence`} style={styles.why}>
           <Text style={[styles.whyHeading, text('subtitle')]}>{t('usage.board.coach.methodTitle')}</Text>
           <Text style={[styles.evidence, text('subtitle')]}>{t(`usage.board.coach.basis_${finding.basis.kind}`)}</Text>
+          <Text style={[styles.quiet, text('subtitle')]}>{method}</Text>
           {finding.basis.limitations.map((limitation, index) => <Text key={index} style={[styles.quiet, text('subtitle')]}>{limitation}</Text>)}
           {finding.basis.advice.map((advice, index) => <Text key={index} style={[styles.evidence, text('subtitle')]}>{advice}</Text>)}
           {estimate?.assumptions.map((assumption, index) => <Text key={index} style={[styles.quiet, text('subtitle')]}>{assumption}</Text>)}

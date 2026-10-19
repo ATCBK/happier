@@ -14,6 +14,8 @@ import { useUsageDrill } from '../usageDrill';
 import {
   UsageBodyInsufficient,
   UsageCoverageLine,
+  UsageShowAllRows,
+  leadingUsageRows,
   usagePeriodPhrase,
   useUsagePluginTheme,
   type UsageBodyProps,
@@ -61,6 +63,7 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
   );
   const drill = useUsageDrill(props.query);
   const disclosures = useUsageWorkDisclosures();
+  const [showAllProjects, setShowAllProjects] = React.useState(false);
   useWidgetFrameBodyCaption(
     t('usage.board.work.ledgerCaption', {
       period: usagePeriodPhrase(props.query),
@@ -110,6 +113,10 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
       summary.unallocatedByReason[reason] === null || (summary.unallocatedByReason[reason] ?? 0) > 0,
   );
   const noneLinked = summary.allocated === 0 && summary.total !== null && summary.total > 0;
+  // The PR qualifier is said once for the band: rows carry PR facts only when some project has one.
+  const anyLinked = summary.projects.some((row) => row.outcomes.length > 0);
+  const lead = leadingUsageRows(summary.projects, showAllProjects);
+  const projects = lead.rows;
   const sessionRows = (parts: UsageWorkProjectRow['sessions'], testID: string) => (
     <UsageWorkSessionRows
       parts={parts}
@@ -250,17 +257,17 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
         density={density}
         valueFormatter={format}
         showProportionShares={false}
-        rowIds={summary.projects.map((row) => row.projectKey ?? '\u0000none')}
-        proportionColors={summary.projects.map((_row, index) =>
+        rowIds={projects.map((row) => row.projectKey ?? '\u0000none')}
+        proportionColors={projects.map((_row, index) =>
           usageMeterFill(appTheme, index === 0),
         )}
-        rowLeads={summary.projects.map((row) => (
+        rowLeads={projects.map((row) => (
           <UsageWorkRowLead
             expanded={disclosures.isOpen(`project:${row.projectKey ?? ''}`)}
             icon="folder"
           />
         ))}
-        rowTrails={summary.projects.map((row) => (
+        rowTrails={projects.map((row) => (
           <UsageWorkMarks
             agentIds={row.agentIds}
             providers={row.providers}
@@ -272,23 +279,22 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
           { label: t('usage.board.work.allProjects') },
           { label: metricLabel, proportion: true },
           { label: t('usage.board.work.funnelSessions') },
-          { label: t('usage.board.work.notLinked') },
+          ...(anyLinked ? [{ label: t('usage.board.work.notLinked') }] : []),
         ]}
-        rows={summary.projects.map((row) => [
+        rows={projects.map((row) => [
           projectLabel(row.projectKey),
           cell(row.amount, row.moneyBasis),
-          t('usage.board.work.ledgerRowLine', {
-            sessions: row.sessionIds.length,
-            prs: row.outcomes.length,
-          }),
-          row.unallocated === null || row.unallocated > 0
-            ? t('usage.board.work.notLinkedPart', {
-                amount: format(row.unallocated, row.unallocatedBasis),
-              })
-            : '',
+          anyLinked
+            ? t('usage.board.work.ledgerRowLine', { sessions: row.sessionIds.length, prs: row.outcomes.length })
+            : sessionsLine(row.sessionIds.length),
+          ...(anyLinked
+            ? [row.unallocated === null || row.unallocated > 0
+              ? t('usage.board.work.notLinkedPart', { amount: format(row.unallocated, row.unallocatedBasis) })
+              : '']
+            : []),
         ])}
         renderRow={(_cells, visual, index) => {
-          const row = summary.projects[index]!;
+          const row = projects[index]!;
           const id = `project:${row.projectKey ?? ''}`;
           const testID = `${props.testID}.project.${row.projectKey ?? 'none'}`;
           return (
@@ -303,6 +309,14 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
             </UsageWorkDisclosure>
           );
         }}
+      />
+      <UsageShowAllRows
+        label={t('usage.board.work.ledgerLabel')}
+        total={summary.projects.length}
+        hidden={lead.hidden}
+        expanded={showAllProjects}
+        onToggle={() => setShowAllProjects((value) => !value)}
+        testID={`${props.testID}.projects.more`}
       />
       {summary.branches.length > 0 ? (
         <View style={styles.section}>
