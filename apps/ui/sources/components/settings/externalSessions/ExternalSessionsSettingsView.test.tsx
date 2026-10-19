@@ -1,48 +1,58 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 
-import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
+import { renderSettingsView as renderSettingsScreen } from '@/dev/testkit/harness/settingsViewHarness';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { createDeferred, createModalModuleMock, flushHookEffects } from '@/dev/testkit';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createDeferred, createModalModuleMock, flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createAccountSettingsHttpBoundary } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { readExternalSessionFollowPolicy } from '@/sync/domains/session/external/externalSessionFollowMetadata';
 import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
-import type { Metadata } from '@happier-dev/session-core/state';
 
 const modalMock = createModalModuleMock();
-const accountCurrentnessState = vi.hoisted(() => ({ current: true }));
 const virtualizedBoundary = vi.hoisted(() => ({
     props: null as Record<string, any> | null,
     mountLimit: Number.POSITIVE_INFINITY,
 }));
-const administrationTargetState = vi.hoisted(() => ({
-    current: {
-        target: {
-            serverIdentityId: 'identity-1',
-            machineId: 'machine-1',
-        },
-        serverId: 'server-1',
-        machine: {
-            id: 'machine-1',
-            daemonStateVersion: 1,
-        },
-    },
-}));
+const administrationTargetState = { machineId: 'machine-1', peerHome: false };
 const daemonProjectionRequest = vi.hoisted(() => vi.fn());
 
 vi.mock('@/modal', () => modalMock.module);
 
-const effectBoundary = vi.hoisted(() => ({
+let settingsHttp: ReturnType<typeof createAccountSettingsHttpBoundary> | null = null;
+let settingsVersion = 1;
+let rawAccountSettings: Record<string, unknown> = {};
+let settingsWriteGate: Promise<void> | null = null;
+let rejectSettingsWrite = false;
+const settingsPosts = vi.fn();
+let projectionGate: ReturnType<typeof createDeferred<void>> | null = null;
+let peerServerId: string | null = null;
+// These are external HTTP/Socket server facts, not replacements for the store,
+// Sync, currentness, target selection, projection adapters or operation owners.
+const effectBoundary = {
     followPolicySet: vi.fn(),
     machineRpc: vi.fn(),
-    applySessionMetadataLocally: vi.fn(),
-    setExternalSessionsSettings: vi.fn(),
-    mutateAccountSettings: vi.fn(),
     machines: [] as Machine[],
     sessions: [] as Session[],
-    accountSettings: {} as Record<string, unknown>,
+    get accountSettings() { return rawAccountSettings; },
+    set accountSettings(value: Record<string, unknown>) {
+        rawAccountSettings = value;
+        if (settingsHttp) settingsHttp.replaceAccountSettings('account-1', {
+            content: { t: 'plain', v: value }, version: ++settingsVersion,
+        });
+    },
     daemonProjection: {
         phase: 'ready' as 'ready' | 'loading' | 'error',
         inputs: null as Record<string, unknown> | null,
@@ -58,15 +68,14 @@ const effectBoundary = vi.hoisted(() => ({
             workspacePath?: string | null;
         }>;
     } | null,
-    setContextSelections: vi.fn(),
-}));
+};
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
 });
 
-vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 // The native recycler owns viewport mounting; keep Happier's list and row projection real.
 vi.mock('@legendapp/list/react-native', async (importOriginal) => {
@@ -86,82 +95,42 @@ vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
-
-
-
-
-
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createPartialStorageModuleMock(importOriginal, {
-        useAllSessions: () => effectBoundary.sessions,
-        useAllMachines: () => effectBoundary.machines,
-        useLocalSetting: () => null,
-        useSetting: (name: string) => {
-            if (name === 'externalSessionsSettingsV1') return effectBoundary.settings;
-            if (name === 'backendEnabledByTargetKey') return {};
-            if (name === 'acpCatalogSettingsV1') return { v: 2, backends: [] };
-            return null;
-        },
-        useSettingMutable: (name: string) => {
-            if (name === 'contextSelectionsV1') {
-                return [effectBoundary.contextSelections, effectBoundary.setContextSelections];
-            }
-            if (name === 'externalSessionsSettingsV1') {
-                return [effectBoundary.settings, effectBoundary.setExternalSessionsSettings];
-            }
-            return [null, vi.fn()];
-        },
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+const account = createProviderSettingsAccountHarness();
+installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+    socket.connect = vi.fn<typeof socket.connect>(() => {
+        socket.connected = true;
+        for (const listener of socket.listeners('connect')) listener();
+        return socket;
+    });
+    socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event: string, value: unknown) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+        if (!value || typeof value !== 'object' || !('method' in value) || typeof value.method !== 'string'
+            || !('params' in value)) throw new Error('Malformed External Sessions Socket request');
+        const separator = value.method.indexOf(':');
+        const machineId = value.method.slice(0, separator);
+        const method = value.method.slice(separator + 1);
+        const { listServerProfiles, resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
+        const profile = listServerProfiles().find(candidate => candidate.serverUrl === serverUrl);
+        if (!profile) throw new Error('External Sessions Socket requires its real Home');
+        const serverId = resolveServerProfileScopeId(profile);
+        if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+            daemonProjectionRequest({ machineId, serverId });
+            await projectionGate?.promise;
+            if (effectBoundary.daemonProjection.phase === 'error') throw new Error('fixture_projection_unavailable');
+            return { ok: true, result: { protocolVersion: 1,
+                projection: PluginProjectionV2Schema.parse(effectBoundary.daemonProjection.inputs?.pluginProjectionV2) } };
+        }
+        if (method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_BACKGROUND_FOLLOW_SET) {
+            return { ok: true, result: await effectBoundary.followPolicySet(value.params, { serverId }) };
+        }
+        if (method === 'daemon.plugins.sessionHooks.status.get') {
+            return { ok: true, result: await effectBoundary.machineRpc({ machineId, serverId, method, payload: value.params }) };
+        }
+        throw new Error(`Unexpected External Sessions Socket request: ${method}`);
     });
 });
-
-vi.mock('@/sync/ops/machineExternalSessions', () => ({
-    machineExternalSessionFollowPolicySet: effectBoundary.followPolicySet,
-}));
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        applySessionMetadataLocally: effectBoundary.applySessionMetadataLocally,
-        mutateAccountSettingsOnce: effectBoundary.mutateAccountSettings,
-    },
-}));
-
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useAccountSettingsScope: () => ({ serverId: 'server-1', accountId: 'account-1' }),
-}));
-
-vi.mock('@/sync/domains/scope/activeServerAccountScope', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/scope/activeServerAccountScope')>(),
-    captureActiveServerAccountScopeCurrentness: () => ({
-        isCurrent: () => accountCurrentnessState.current,
-        onRetire: () => ({ dispose() {} }),
-    }),
-}));
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: effectBoundary.machineRpc,
-}));
-
-vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: (params: Record<string, unknown>) => {
-        daemonProjectionRequest(params);
-        return effectBoundary.daemonProjection;
-    },
-}));
-
-vi.mock('@/sync/domains/machines/administration/useTargetSelection', () => ({
-    useMachineAdministrationTargetSelection: () => ({
-        selectedTarget: administrationTargetState.current.target,
-        canExecute: true,
-        resolveExecutionTarget: () => administrationTargetState.current,
-    }),
-}));
-
-vi.mock('@/components/settings/machines/MachineAdministrationTargetSelector', () => ({
-    MachineAdministrationTargetSelector: (props: Record<string, unknown>) => (
-        React.createElement('MachineAdministrationTargetSelector', props)
-    ),
-}));
 
 function createExternalSession(params: Readonly<{
     id: string;
@@ -171,7 +140,7 @@ function createExternalSession(params: Readonly<{
     machineId?: string;
     title?: string;
 }>): Session {
-    return {
+    return createSessionFixture({
         id: params.id,
         serverId: 'server-1',
         seq: 1,
@@ -216,14 +185,16 @@ function createExternalSession(params: Readonly<{
                 } : {}),
             },
         },
-    };
+    });
 }
 
 function createFollowCapabilityProjection(params?: Readonly<{ sourceKind?: string }>) {
-    return {
+    return PluginProjectionV2Schema.parse({
+        v: 2,
         generation: 1,
         installedPackagesById: {
-            'test.follow': { id: 'test.follow', enabled: true },
+            'test.follow': { id: 'test.follow', displayName: 'Follow fixture', version: '1.0.0', enabled: true,
+                source: { kind: 'npm', locator: 'test.follow' } },
         },
         agentsById: {
             claude: {
@@ -231,22 +202,108 @@ function createFollowCapabilityProjection(params?: Readonly<{ sourceKind?: strin
                 externalSessions: {
                     agent: { pluginId: 'test.follow', localId: 'claude' },
                     generation: 1,
-                    operations: {},
+                    operations: { listCandidates: true, resolveLinkIdentity: true, pageTranscript: true, readAfterTranscript: true },
                     sources: [{
                         sourceKind: params?.sourceKind ?? 'claudeConfig',
                         schema: {
                             fields: [
-                                { name: 'kind', kind: 'literal', value: 'claudeConfig' },
+                                { name: 'kind', kind: 'literal', value: params?.sourceKind ?? 'claudeConfig' },
                                 { name: 'configDir', kind: 'string', min: 1 },
                             ],
                         },
-                        key: { segments: [{ kind: 'literal', value: 'claudeConfig' }] },
+                        key: { segments: [{ kind: 'literal', value: params?.sourceKind ?? 'claudeConfig' }] },
                         instances: [{ kind: 'default', constants: { configDir: '/tmp/claude' } }],
                     }],
                 },
             },
         },
-    };
+    });
+}
+
+async function publishSessionFixtures(sessions: readonly Session[]) {
+    const [{ sync }, { storage }] = await Promise.all([import('@/sync/sync'), import('@/sync/domains/state/storage')]);
+    for (const session of sessions) session.serverId = account.serverId;
+    const sessionHttp = createSessionMetadataHttpBoundary(() => Object.fromEntries(sessions.map(session => [session.id, session])));
+    for (const path of ['/v2/sessions', '/v2/sessions/active', '/v2/session-organization',
+        ...sessions.map(session => `/v2/sessions/${encodeURIComponent(session.id)}`)]) {
+        account.home.answer(account.serverId, `GET ${path}`, { select: async (_input, request) => {
+            const response = sessionHttp.handle(request.url, request.init);
+            if (!response) throw new Error('Expected External Sessions Session listing route');
+            return { status: response.status, body: await response.json() };
+        } });
+    }
+    await sync.refreshSessions({ awaitSessionListHydration: true });
+    // List snapshots intentionally stay lazy. These scenarios begin with
+    // loaded linked Sessions, acquired through the same exact owner read as a
+    // session route, rather than an invented full-store reader.
+    for (const session of sessions) await sync.ensureSessionVisibleForMessageRoute(session.id, {
+        serverId: account.serverId, forceRefresh: true, hydrateMessages: false,
+    });
+    await waitForHomeGovernance(() => {
+        expect(Object.keys(storage.getState().sessions).sort()).toEqual(sessions.map(session => session.id).sort());
+    });
+}
+
+async function renderSettingsView(element: React.ReactElement) {
+    const [preferences, projection] = await Promise.all([
+        import('@/sync/domains/machines/administration/selectionPreferences'),
+        import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs'),
+    ]);
+    const settings = { ...effectBoundary.accountSettings, externalSessionsSettingsV1: effectBoundary.settings,
+        ...(effectBoundary.contextSelections ? { contextSelectionsV1: effectBoundary.contextSelections } : {}) };
+    await account.restore({ accountId: 'account-1', serverIdentityId: 'srv_external_settings',
+        machines: effectBoundary.machines, settings });
+    settingsVersion = 1;
+    rawAccountSettings = settings;
+    settingsHttp = createAccountSettingsHttpBoundary({ serverUrl: 'https://provider-settings-account.test',
+        initialAccounts: [{ accountId: 'account-1', snapshot: { content: { t: 'plain', v: settings }, version: settingsVersion } }] });
+    account.home.answer(account.serverId, '/v2/account/settings', { select: async (_input, request) => {
+        const respondAfter = request.init?.method === 'POST' ? settingsWriteGate : null;
+        if (request.init?.method === 'POST') {
+            settingsPosts(_input);
+            if (rejectSettingsWrite) {
+                rejectSettingsWrite = false;
+                return { status: 503, body: { error: 'account_settings_unavailable' },
+                    ...(respondAfter ? { respondAfter } : {}) };
+            }
+        }
+        const response = settingsHttp?.handle(request.url, request.init);
+        if (!response) throw new Error('Expected External Sessions Account settings route');
+        const snapshotResponse = settingsHttp!.handle(request.url, { ...request.init, method: 'GET' });
+        const snapshot = AccountSettingsV2GetResponseSchema.parse(await snapshotResponse!.json());
+        if (snapshot.content?.t === 'plain') rawAccountSettings = snapshot.content.v;
+        settingsVersion = snapshot.version;
+        return { status: response.status, body: await response.json(), ...(respondAfter ? { respondAfter } : {}) };
+    } });
+    await publishSessionFixtures(effectBoundary.sessions);
+    let selectedServerId = account.serverId;
+    if (administrationTargetState.peerHome) {
+        peerServerId = await account.addHome({ name: 'Other Home', serverUrl: 'https://external-settings-other.test',
+            serverIdentityId: 'srv_external_other', accountId: 'account-1', active: false });
+        await account.publishMachines(peerServerId, effectBoundary.machines.filter(machine => machine.id === administrationTargetState.machineId));
+        await account.home.selectHomes([account.serverId, peerServerId]);
+        selectedServerId = peerServerId;
+    }
+    await account.selectMachine(selectedServerId, administrationTargetState.machineId, preferences.MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.externalSessions);
+    if (effectBoundary.daemonProjection.phase === 'ready') {
+        await Promise.all([...new Set([...effectBoundary.machines.map(machine => machine.id),
+            ...effectBoundary.sessions.map(session => readExternalSessionLink(session.metadata)?.machineId).filter((id): id is string => Boolean(id))])]
+            .map(async machineId => {
+                const result = await projection.loadDaemonMergedProjectionCacheEntry({ machineId, serverId: account.serverId });
+                expect(result, 'The fixture daemon must publish a schema-admitted current projection').toMatchObject({ kind: 'ready' });
+            }));
+    } else if (effectBoundary.daemonProjection.phase === 'loading') {
+        projectionGate = createDeferred<void>();
+    }
+    const screen = await renderSettingsScreen(element);
+    await flushHookEffects();
+    return screen;
+}
+
+async function currentMetadata(sessionId: string) {
+    const { storage } = await import('@/sync/domains/state/storage');
+    const session = storage.getState().sessions[sessionId];
+    return session ? readSessionOwnerMetadataView(session) : null;
 }
 
 function flattenStyle(style: unknown): Record<string, unknown> {
@@ -278,61 +335,42 @@ await import('./ExternalSessionsSettingsView');
 
 describe('ExternalSessionsSettingsView passive shell', () => {
     beforeEach(async () => {
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        storage.setState({ settingsVersion: 1, settingsScope: { serverId: 'server-1', accountId: 'account-1' } });
-        effectBoundary.machines = [];
+        settingsHttp = null;
+        settingsWriteGate = null;
+        rejectSettingsWrite = false;
+        settingsPosts.mockReset();
+        effectBoundary.machines = [createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() })];
+        effectBoundary.sessions = [];
+        effectBoundary.settings = { v: 1, keepPassivelyFollowingAfterRestart: false };
         effectBoundary.machineRpc.mockReset();
         effectBoundary.followPolicySet.mockReset();
-        accountCurrentnessState.current = true;
         modalMock.spies.alert.mockClear();
         modalMock.spies.alertAsync.mockClear();
-        const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
-        registerStorageStateReader(() => ({
-            sessions: Object.fromEntries(
-                effectBoundary.sessions.map((session) => [session.id, session]),
-            ),
-        } as never));
+        const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+        clearDaemonMergedProjectionCacheForTests();
         effectBoundary.daemonProjection = {
             phase: 'ready',
             inputs: {
                 pluginProjectionV2: createFollowCapabilityProjection(),
             },
         };
-        administrationTargetState.current = {
-            target: {
-                serverIdentityId: 'identity-1',
-                machineId: 'machine-1',
-            },
-            serverId: 'server-1',
-            machine: {
-                id: 'machine-1',
-                daemonStateVersion: 1,
-            },
-        };
+        administrationTargetState.machineId = 'machine-1';
+        administrationTargetState.peerHome = false;
+        peerServerId = null;
         daemonProjectionRequest.mockReset();
         effectBoundary.contextSelections = null;
-        effectBoundary.setContextSelections.mockReset();
-        effectBoundary.setContextSelections.mockImplementation((next) => {
-            effectBoundary.contextSelections = next;
-        });
         effectBoundary.accountSettings = {
             externalSessionsSettingsV1: effectBoundary.settings,
         };
-        effectBoundary.mutateAccountSettings.mockReset();
-        effectBoundary.mutateAccountSettings.mockImplementation(async (
-            input: Readonly<{
-                mutate: (raw: Readonly<Record<string, unknown>>) => Readonly<{
-                    settings: Record<string, unknown>;
-                    value: unknown;
-                }>;
-            }>,
-        ) => {
-            const result = input.mutate(effectBoundary.accountSettings);
-            effectBoundary.accountSettings = result.settings;
-            return { status: 'applied', settingsVersion: 2, value: result.value };
-        });
         virtualizedBoundary.props = null;
         virtualizedBoundary.mountLimit = Number.POSITIVE_INFINITY;
+    });
+    afterEach(async () => {
+        standardCleanup();
+        projectionGate?.resolve();
+        projectionGate = null;
+        settingsHttp = null;
+        await account.reset();
     });
 
     it('keeps 1k integration and follow inventories as lazy descriptors behind the virtualized window', async () => {
@@ -477,13 +515,13 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         );
         await flushHookEffects();
 
-        expect(screen.findRow(
+        await waitForHomeGovernance(() => expect(screen.findRow(
             'settings-external-sessions-integration-machine-1\u0000com.example.removed-agent\u0000removed\u0000installation:installation-removed',
-        )).toBeTruthy();
-        expect(effectBoundary.machineRpc).toHaveBeenCalledOnce();
+        )).toBeTruthy());
+        await waitForHomeGovernance(() => expect(effectBoundary.machineRpc).toHaveBeenCalledOnce());
         expect(effectBoundary.machineRpc).toHaveBeenCalledWith({
             machineId: 'machine-1',
-            serverId: 'server-1',
+            serverId: account.serverId,
             method: 'daemon.plugins.sessionHooks.status.get',
             payload: {
                 machineId: 'machine-1',
@@ -557,10 +595,10 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             await Promise.resolve();
         });
 
-        expect(effectBoundary.machineRpc).toHaveBeenCalledTimes(2);
+        await waitForHomeGovernance(() => expect(effectBoundary.machineRpc).toHaveBeenCalledTimes(2));
         expect(effectBoundary.machineRpc).toHaveBeenLastCalledWith({
             machineId: 'machine-1',
-            serverId: 'server-1',
+            serverId: account.serverId,
             method: 'daemon.plugins.sessionHooks.status.get',
             payload: {
                 machineId: 'machine-1',
@@ -572,9 +610,9 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         expect(virtualizedBoundary.props?.data.find(
             (item: { kind?: string }) => item.kind === 'integration_chunk',
         )?.key).toBe(initialIntegrationChunkKey);
-        expect(screen.findRow(
+        await waitForHomeGovernance(() => expect(screen.findRow(
             'settings-external-sessions-integration-machine-1\u0000com.example.external-agent\u0000assistant\u0000installation:installation-2',
-        )).toBeTruthy();
+        )).toBeTruthy());
         await screen.unmount();
     });
 
@@ -601,17 +639,8 @@ describe('ExternalSessionsSettingsView passive shell', () => {
                 },
             },
         };
-        administrationTargetState.current = {
-            target: {
-                serverIdentityId: 'identity-2',
-                machineId: 'machine-2',
-            },
-            serverId: 'server-2',
-            machine: {
-                id: 'machine-2',
-                daemonStateVersion: 2,
-            },
-        };
+        administrationTargetState.machineId = 'machine-2';
+        administrationTargetState.peerHome = true;
         effectBoundary.machineRpc.mockResolvedValue({
             ok: true,
             rows: [],
@@ -627,14 +656,13 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         );
         await flushHookEffects();
 
-        expect(daemonProjectionRequest).toHaveBeenCalledWith({
+        await waitForHomeGovernance(() => expect(daemonProjectionRequest).toHaveBeenCalledWith({
             machineId: 'machine-2',
-            serverId: 'server-2',
-            enabled: true,
-        });
+            serverId: peerServerId,
+        }));
         expect(effectBoundary.machineRpc).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-2',
-            serverId: 'server-2',
+            serverId: peerServerId,
             payload: expect.objectContaining({
                 machineId: 'machine-2',
             }),
@@ -656,31 +684,29 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         effectBoundary.daemonProjection = {
             phase: 'ready',
             inputs: {
-                mergedProviderProjectionById: {
-                    'acme-agent': {
-                        agentId: 'acme-agent',
-                        title: 'Acme Projected Agent',
-                        iconAgentId: 'codex',
-                        channel: 'plugin',
-                        isBuiltIn: false,
-                    },
-                },
-                mergedBackendProjectionById: {},
-                pluginProjectionV2: {
+                pluginProjectionV2: PluginProjectionV2Schema.parse({
+                    v: 2,
                     generation: 4,
                     agentsById: {
                         'acme-agent': {
                             id: 'acme-agent',
+                            title: 'Acme Projected Agent',
+                            iconAgentId: 'codex',
+                            channel: 'plugin',
+                            isBuiltIn: false,
                             externalSessions: {
                                 agent: {
                                     pluginId: 'com.example.acme',
                                     localId: 'reviewer',
                                 },
                                 generation: 4,
+                                operations: { listCandidates: true, resolveLinkIdentity: true, pageTranscript: true, readAfterTranscript: true },
+                                sources: [{ sourceKind: 'claudeConfig', schema: { fields: [{ name: 'kind', kind: 'literal', value: 'claudeConfig' }] },
+                                    key: { segments: [{ kind: 'literal', value: 'claudeConfig' }] }, instances: [{ kind: 'default', constants: {} }] }],
                             },
                         },
                     },
-                },
+                }),
             },
         };
         effectBoundary.machineRpc.mockResolvedValue({
@@ -705,9 +731,9 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         );
         await flushHookEffects();
 
-        expect(screen.findRow(
+        await waitForHomeGovernance(() => expect(screen.findRow(
             'settings-external-sessions-integration-machine-1\u0000com.example.acme\u0000reviewer\u0000installation:installation-acme',
-        )?.props.title).toBe('Acme Projected Agent · externalSessions.settingsIntegrationTitle');
+        )?.props.title).toBe('Acme Projected Agent · externalSessions.settingsIntegrationTitle'));
 
         await screen.unmount();
     });
@@ -773,7 +799,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             await rows[0]?.props.onPress?.();
         });
 
-        expect(effectBoundary.mutateAccountSettings).toHaveBeenCalledTimes(1);
+        expect(settingsPosts).toHaveBeenCalledTimes(1);
         expect(effectBoundary.accountSettings).toEqual({
             externalSessionsSettingsV1: {
                 v: 1,
@@ -803,9 +829,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         };
         effectBoundary.followPolicySet.mockReset();
         effectBoundary.machineRpc.mockReset();
-        effectBoundary.applySessionMetadataLocally.mockReset();
-        effectBoundary.setExternalSessionsSettings.mockReset();
-        effectBoundary.mutateAccountSettings.mockClear();
+        settingsPosts.mockClear();
 
         const { ExternalSessionsSettingsView } = await import('./ExternalSessionsSettingsView');
         const screen = await renderSettingsView(<ExternalSessionsSettingsView />);
@@ -821,9 +845,8 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         expect(screen.findRowByTitle('externalSessions.settingsPassiveTitle')).toBeTruthy();
         expect(effectBoundary.followPolicySet).not.toHaveBeenCalled();
         expect(effectBoundary.machineRpc).not.toHaveBeenCalled();
-        expect(effectBoundary.applySessionMetadataLocally).not.toHaveBeenCalled();
-        expect(effectBoundary.setExternalSessionsSettings).not.toHaveBeenCalled();
-        expect(effectBoundary.mutateAccountSettings).not.toHaveBeenCalled();
+        expect(readExternalSessionFollowPolicy(await currentMetadata('passive'))).toBe('background_follow');
+        expect(settingsPosts).not.toHaveBeenCalled();
 
         await screen.unmount();
     });
@@ -834,7 +857,6 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             v: 1,
             keepPassivelyFollowingAfterRestart: false,
         };
-        effectBoundary.setExternalSessionsSettings.mockReset();
         effectBoundary.accountSettings = {
             externalSessionsSettingsV1: effectBoundary.settings,
             futureRoot: { revision: 3 },
@@ -884,8 +906,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
 
         await screen.pressByTestIdAsync('settings-external-sessions-restore-item');
 
-        expect(effectBoundary.mutateAccountSettings).toHaveBeenCalledTimes(1);
-        expect(effectBoundary.setExternalSessionsSettings).not.toHaveBeenCalled();
+        expect(settingsPosts).toHaveBeenCalledTimes(1);
         expect(effectBoundary.accountSettings).toEqual({
             externalSessionsSettingsV1: {
                 v: 1,
@@ -906,10 +927,8 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             keepPassivelyFollowingAfterRestart: false,
         };
         const firstMutation = createDeferred<void>();
-        effectBoundary.mutateAccountSettings
-            .mockReset()
-            .mockImplementationOnce(() => firstMutation.promise)
-            .mockResolvedValue(undefined);
+        settingsWriteGate = firstMutation.promise;
+        rejectSettingsWrite = true;
         modalMock.spies.alertAsync.mockClear();
 
         const { ExternalSessionsSettingsView } = await import('./ExternalSessionsSettingsView');
@@ -928,7 +947,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             await Promise.resolve();
         });
 
-        expect(effectBoundary.mutateAccountSettings).toHaveBeenCalledTimes(1);
+        await waitForHomeGovernance(() => expect(settingsPosts).toHaveBeenCalledTimes(1));
         expect(screen.findRow('settings-external-sessions-restore-item')?.props.loading).toBe(true);
         expect(screen.findRow('settings-external-sessions-restore-item')?.props.disabled).toBe(true);
         const pendingToggle = screen.findRow('settings-external-sessions-restore-item')
@@ -936,14 +955,15 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         expect(pendingToggle?.props.disabled).toBe(true);
 
         await act(async () => {
-            firstMutation.reject(new Error('account_settings_unavailable'));
+            settingsWriteGate = null;
+            firstMutation.resolve();
             await Promise.resolve();
         });
 
-        expect(modalMock.spies.alertAsync).toHaveBeenCalledWith(
+        await waitForHomeGovernance(() => expect(modalMock.spies.alertAsync).toHaveBeenCalledWith(
             'common.error',
             'externalSessions.settingsRestoreUpdateFailed',
-        );
+        ));
         expect(screen.findRow('settings-external-sessions-restore-item')?.props.loading).toBe(false);
         expect(screen.findRow('settings-external-sessions-restore-item')?.props.disabled).toBe(false);
         const recoveredToggle = screen.findRow('settings-external-sessions-restore-item')
@@ -954,7 +974,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             screen.findRow('settings-external-sessions-restore-item')?.props.onPress?.();
             await Promise.resolve();
         });
-        expect(effectBoundary.mutateAccountSettings).toHaveBeenCalledTimes(2);
+        await waitForHomeGovernance(() => expect(settingsPosts).toHaveBeenCalledTimes(2));
 
         await screen.unmount();
     });
@@ -1145,11 +1165,13 @@ describe('ExternalSessionsSettingsView passive shell', () => {
 
         await screen.pressByTestIdAsync('settings-external-sessions-follow-item-unsupported');
 
+        await waitForHomeGovernance(() => expect(screen.findRow('settings-external-sessions-follow-item-unsupported')?.props.subtitle)
+            .toBe('externalSessions.followStatusUnsupported'));
         const unsupportedRow = screen.findRow('settings-external-sessions-follow-item-unsupported');
         expect(effectBoundary.followPolicySet).toHaveBeenCalledTimes(1);
         expect(unsupportedRow?.props.subtitle).toBe('externalSessions.followStatusUnsupported');
         expect(unsupportedRow?.props.disabled).toBe(true);
-        expect(effectBoundary.applySessionMetadataLocally).not.toHaveBeenCalled();
+        expect(readExternalSessionFollowPolicy(await currentMetadata('unsupported'))).toBe('attached_only');
 
         await screen.unmount();
     });
@@ -1212,6 +1234,8 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         const { ExternalSessionsSettingsView } = await import('./ExternalSessionsSettingsView');
         const screen = await renderSettingsView(<ExternalSessionsSettingsView />);
 
+        await waitForHomeGovernance(() => expect(screen.findRow('settings-external-sessions-follow-item-errored-projection')?.props.subtitle)
+            .toBe('externalSessions.followStatusUnknown'));
         const row = screen.findRow(
             'settings-external-sessions-follow-item-errored-projection',
         );
@@ -1239,7 +1263,6 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             title: 'Selected follow',
         })];
         effectBoundary.followPolicySet.mockReset();
-        effectBoundary.applySessionMetadataLocally.mockReset();
         let resolveFollowPolicySet: ((value: {
             ok: true;
             enabled: true;
@@ -1261,13 +1284,20 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         });
         // Account A retires while the machine RPC is in flight; its late
         // settlement must not alert or publish into the successor Account.
-        accountCurrentnessState.current = false;
+        await waitForHomeGovernance(() => expect(effectBoundary.followPolicySet).toHaveBeenCalledOnce());
+        await account.restore({ accountId: 'account-next', serverIdentityId: 'srv_external_settings', machines: effectBoundary.machines });
+        // A successor with the same Session id makes a missing retirement
+        // fence observable: the old result must not patch this new owner.
+        await publishSessionFixtures([createExternalSession({ id: 'selected', policy: 'attached_only',
+            status: 'disabled', title: 'Successor Account session' })]);
+        const successorMetadata = await currentMetadata('selected');
         await act(async () => {
             resolveFollowPolicySet?.({ ok: true, enabled: true, leaseActive: true, updatedAtMs: 42 });
             await press;
         });
 
-        expect(effectBoundary.applySessionMetadataLocally).not.toHaveBeenCalled();
+        expect(await currentMetadata('selected')).toEqual(successorMetadata);
+        expect(readExternalSessionFollowPolicy(await currentMetadata('selected'))).toBe('attached_only');
         expect(modalMock.spies.alert).not.toHaveBeenCalled();
         expect(modalMock.spies.alertAsync).not.toHaveBeenCalled();
 
@@ -1290,7 +1320,6 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             }),
         ];
         effectBoundary.followPolicySet.mockReset();
-        effectBoundary.applySessionMetadataLocally.mockReset();
         effectBoundary.followPolicySet.mockResolvedValue({
             ok: true,
             enabled: true,
@@ -1303,6 +1332,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
 
         await screen.pressByTestIdAsync('settings-external-sessions-follow-item-selected');
 
+        await waitForHomeGovernance(async () => expect(readExternalSessionFollowPolicy(await currentMetadata('selected'))).toBe('background_follow'));
         expect(effectBoundary.followPolicySet).toHaveBeenCalledTimes(1);
         expect(effectBoundary.followPolicySet).toHaveBeenCalledWith({
             machineId: 'machine-1',
@@ -1315,25 +1345,15 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             },
             enabled: true,
         }, {
-            serverId: 'server-1',
+            serverId: account.serverId,
         });
-        expect(effectBoundary.applySessionMetadataLocally).toHaveBeenCalledWith(
-            'selected',
-            expect.any(Function),
-        );
-
-        const updater = effectBoundary.applySessionMetadataLocally.mock.calls[0]?.[1] as
-            | ((metadata: Metadata) => Metadata)
-            | undefined;
-        const selectedMetadata = effectBoundary.sessions[0]?.metadata;
-        expect(selectedMetadata).toBeTruthy();
-        const updated = selectedMetadata ? updater?.(selectedMetadata) : undefined;
+        const updated = await currentMetadata('selected');
         expect(readExternalSessionLink(updated)?.followPolicyV1).toEqual({
             v: 1,
             policy: 'background_follow',
             updatedAtMs: 42,
         });
-        expect(readExternalSessionFollowPolicy(effectBoundary.sessions[1]?.metadata))
+        expect(readExternalSessionFollowPolicy(await currentMetadata('untouched')))
             .toBe('attached_only');
 
         await screen.unmount();
@@ -1347,7 +1367,6 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             }),
         ];
         effectBoundary.followPolicySet.mockReset();
-        effectBoundary.applySessionMetadataLocally.mockReset();
         effectBoundary.followPolicySet.mockResolvedValue({
             ok: true,
             enabled: false,
@@ -1358,19 +1377,15 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         screen = await renderSettingsView(<ExternalSessionsSettingsView />);
         await screen.pressByTestIdAsync('settings-external-sessions-follow-item-selected');
 
+        await waitForHomeGovernance(async () => expect(readExternalSessionFollowPolicy(await currentMetadata('selected'))).toBe('attached_only'));
         expect(effectBoundary.followPolicySet).toHaveBeenCalledWith(
             expect.objectContaining({
                 sessionId: 'selected',
                 enabled: false,
             }),
-            { serverId: 'server-1' },
+            { serverId: account.serverId },
         );
-        const disableUpdater = effectBoundary.applySessionMetadataLocally.mock.calls[0]?.[1] as
-            | ((metadata: Metadata) => Metadata)
-            | undefined;
-        const enabledMetadata = effectBoundary.sessions[0]?.metadata;
-        expect(enabledMetadata).toBeTruthy();
-        const disabled = enabledMetadata ? disableUpdater?.(enabledMetadata) : undefined;
+        const disabled = await currentMetadata('selected');
         expect(readExternalSessionLink(disabled)?.followPolicyV1).toEqual({
             v: 1,
             policy: 'attached_only',
@@ -1390,7 +1405,6 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             }),
         ];
         effectBoundary.followPolicySet.mockReset();
-        effectBoundary.applySessionMetadataLocally.mockReset();
         let resolveFollowPolicySet: ((value: {
             ok: true;
             enabled: true;
@@ -1420,7 +1434,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             await Promise.resolve();
         });
 
-        expect(effectBoundary.followPolicySet).toHaveBeenCalledTimes(1);
+        await waitForHomeGovernance(() => expect(effectBoundary.followPolicySet).toHaveBeenCalledTimes(1));
 
         await act(async () => {
             resolveFollowPolicySet?.({
@@ -1432,7 +1446,8 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             await Promise.all([firstPress, secondPress]);
         });
 
-        expect(effectBoundary.applySessionMetadataLocally).toHaveBeenCalledTimes(1);
+        await waitForHomeGovernance(async () => expect(readExternalSessionLink(await currentMetadata('selected'))?.followPolicyV1)
+            .toEqual({ v: 1, policy: 'background_follow', updatedAtMs: 42 }));
         await screen.unmount();
     });
 });

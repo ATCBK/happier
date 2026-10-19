@@ -1,34 +1,27 @@
 import * as React from 'react';
-import { useGlobalSearchParams, usePathname } from '@/components/appShell/workspace/destinationRoute';
-import Fuse, { type IFuseOptions } from 'fuse.js';
+import Fuse, { type FuseResult, type IFuseOptions } from 'fuse.js';
 import type { FeatureId } from '@happier-dev/protocol';
 
-import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useTeamsSettingsAdmission } from '@/hooks/teams/useTeamsSettingsAdmission';
-import { useTeamsDestinationShown } from '@/hooks/teams/useTeamsDestinationShown';
-import { useHomeAdministrationSettingsAdmission } from '@/hooks/home/useHomeAdministrationSettingsAdmission';
-import { storage, useLocalSetting, useSetting } from '@/sync/domains/state/storage';
-import { getPreferredLanguage, t } from '@/text';
-import { useAppShellPluginUiProjection, useProjectedPluginLocalizedTextResolver } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { storage } from '@/sync/domains/state/storage';
+import { t } from '@/text';
+import { useProjectedPluginLocalizedTextResolver } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { voiceSettingsDeclarationRegistry } from '@/voice/settings/voiceContributedSettingsDeclarations';
 import { projectConversationLanguagePreference } from '@/voice/settings/language/conversationLanguage';
 
-import { SETTINGS_PAGE_CATALOG, flattenSettingsPageCatalog } from '../pageCatalog';
-import { SETTINGS_ROUTES, settingsRoutePathname } from '../routes';
+import { flattenSettingsPageCatalog } from '../pageCatalog';
+import { settingsRoutePathname } from '../routes';
 import { SETTINGS_PAGE_DECLARATIONS, getSettingsPageDeclarations } from '../settingsPageDeclarations';
 import {
     buildSettingHref,
     collectDeclaredFeatureIds,
-    resolveSettingsHost,
     settingRendersOnHost,
     type SettingRef,
     type SettingsHost,
     type SettingsRouteContext,
     type SettingsPageDeclaration,
 } from '../settingDeclarations';
-import type { ResolvedSettingsPageNode, SettingsPageId, SettingsPageNode, SettingsPageSearchResult } from '../types';
-import { mergeAdmittedPluginSettingsPages } from './pluginSettingsPageCatalog';
-import { resolveSettingsPageGateUnavailableReason } from '../settingsPageGateAvailability';
+import type { ResolvedSettingsPageNode, SettingsPageId, SettingsPageSearchResult } from '../types';
+import { SETTINGS_PAGE_FEATURE_IDS, useResolvedSettingsPageTree, useSettingsPageFeatureSnapshot } from './useResolvedSettingsPageIdentity';
 
 export type ResolvedSettingsPageCatalog = Readonly<{
     tree: readonly ResolvedSettingsPageNode[];
@@ -45,54 +38,6 @@ type SettingsPageSearchDoc = Readonly<{
     pathTokens: readonly string[];
     setting?: SettingsPageSearchResult['setting'];
 }>;
-
-type CatalogVisibilityContext = Readonly<{
-    useProfiles: boolean;
-    devModeEnabled: boolean;
-    tauriDesktop: boolean;
-    features: Readonly<Record<string, boolean>>;
-    teamsAdmitted: boolean;
-    homeAdministrationAdmitted: boolean;
-}>;
-
-function resolveGateVisibility(node: SettingsPageNode, ctx: CatalogVisibilityContext): boolean {
-    // These two destinations consume their exact Home-set admission owners.
-    // Neither the focused Home nor a catalog-local role check can decide them.
-    if (node.id === 'teams' && !ctx.teamsAdmitted) return false;
-    if (node.id === 'homeAdministration' && !ctx.homeAdministrationAdmitted) return false;
-    return resolveSettingsPageGateUnavailableReason(node.gate, ctx) === undefined;
-}
-
-function resolveTree(nodes: readonly SettingsPageNode[], ctx: CatalogVisibilityContext): ResolvedSettingsPageNode[] {
-    const out: ResolvedSettingsPageNode[] = [];
-    for (const node of nodes) {
-        if (!resolveGateVisibility(node, ctx)) continue;
-        const children = node.children ? resolveTree(node.children, ctx) : undefined;
-        out.push({
-            id: node.id,
-            titleKey: node.titleKey,
-            title: node.title ?? (node.titleKey ? String(t(node.titleKey)) : node.id),
-            subtitleKey: node.subtitleKey,
-            ...(node.subtitle
-                ? { subtitle: node.subtitle }
-                : node.subtitleKey
-                    ? { subtitle: String(t(node.subtitleKey)) }
-                    : {}),
-            route: node.route,
-            keywords: node.keywordsKey ? splitSearchWords(String(t(node.keywordsKey))) : (node.keywords ?? []),
-            icon: node.icon,
-            pluginSettingsPage: node.pluginSettingsPage,
-            ...(node.searchOnly ? { searchOnly: true } : {}),
-            ...(children && children.length > 0 ? { children } : {}),
-        });
-    }
-    return out;
-}
-
-/** A page's translated search words are one comma-separated list. */
-function splitSearchWords(list: string): string[] {
-    return list.split(',').map((word) => word.trim()).filter((word) => word.length > 0);
-}
 
 function buildSettingDocs(params: Readonly<{
     pageId: SettingsPageId;
@@ -186,47 +131,12 @@ function buildSearchDocs(
     return out;
 }
 
-function pathnameIsAtOrBelowRoute(pathname: string, route: string): boolean {
-    return pathname === route || pathname.startsWith(`${route}/`);
-}
-
-function isQualifiedPluginSettingsPagePathname(pathname: string): boolean {
-    const prefix = `${SETTINGS_ROUTES.plugins}/`;
-    if (!pathname.startsWith(prefix)) return false;
-    return pathname.slice(prefix.length).split('/').filter(Boolean).length >= 2;
-}
-
-function resolveActivePageIdFromPathname(
-    pathname: string,
-    flat: readonly SettingsPageNode[]
-): SettingsPageId | null {
-    const exact = flat.find((node) => node.route && settingsRoutePathname(node.route) === pathname);
-    if (exact) return exact.id;
-
-    // The generic plugin Settings route is a qualified leaf identity. If its
-    // admission has retired, retain no active catalog page instead of making
-    // the unavailable route look like an admitted page or the Marketplace.
-    if (isQualifiedPluginSettingsPagePathname(pathname)) return null;
-
-    // Fallback: choose the longest Settings route on a segment boundary. The
-    // Settings overview is an exact-only index page, not an owner for every
-    // unmatched /settings child route.
-    let best: SettingsPageNode | null = null;
-    for (const node of flat) {
-        if (!node.route || node.route === SETTINGS_ROUTES.general) continue;
-        const route = settingsRoutePathname(node.route);
-        if (!pathnameIsAtOrBelowRoute(pathname, route)) continue;
-        if (!best || (best.route && route.length > settingsRoutePathname(best.route).length)) {
-            best = node;
-        }
-    }
-    return best?.id ?? null;
-}
-
 const PAGE_SEARCH_OPTIONS: IFuseOptions<SettingsPageSearchDoc> = {
     includeScore: false,
+    includeMatches: true,
     ignoreLocation: true,
-    threshold: 0.35,
+    // Title typo recovery allows a one-in-five edit error, not harbor -> behavior/abort.
+    threshold: 0.2,
     keys: [
         { name: 'title', weight: 0.6 },
         { name: 'keywords', weight: 0.3 },
@@ -246,35 +156,13 @@ const SETTING_SEARCH_OPTIONS: IFuseOptions<SettingsPageSearchDoc> = {
     ],
 };
 
-/**
- * Every feature a catalog page or a declared section is gated on. Derived from the catalog and the
- * declarations, so a new gate is evaluated the moment it is declared.
- */
-const SETTINGS_GATE_FEATURE_IDS: readonly FeatureId[] = [...new Set<FeatureId>([
-    ...flattenSettingsPageCatalog(SETTINGS_PAGE_CATALOG).flatMap((node) => (node.gate?.featureId ? [node.gate.featureId] : [])),
-    ...collectDeclaredFeatureIds(SETTINGS_PAGE_DECLARATIONS),
-])];
-
-function useSettingsFeatureSnapshot(): Readonly<Record<string, boolean>> {
-    // The id list is a module constant, so these hooks run in the same order on every render.
-    const enabled = SETTINGS_GATE_FEATURE_IDS.map((featureId) => useFeatureEnabled(featureId));
-    const signature = enabled.map((value) => (value ? '1' : '0')).join('');
-    return React.useMemo(
-        () => Object.fromEntries(SETTINGS_GATE_FEATURE_IDS.map((featureId, index) => [featureId, signature[index] === '1'])),
-        [signature],
-    );
-}
+const SETTINGS_SEARCH_FEATURE_IDS: readonly FeatureId[] = collectDeclaredFeatureIds(SETTINGS_PAGE_DECLARATIONS)
+    .filter(featureId => !SETTINGS_PAGE_FEATURE_IDS.includes(featureId));
 
 export function useResolvedSettingsPageCatalog(): ResolvedSettingsPageCatalog {
-    const pathname = usePathname();
-    // The catalog lives in the Settings layout; global params describe the selected leaf,
-    // unlike layout-local params. Scoped declarations validate them against its pathname.
-    const routeParams = useGlobalSearchParams();
-    const routeContext = React.useMemo<SettingsRouteContext>(
-        () => ({ pathname: pathname ?? '/', params: routeParams }),
-        [pathname, routeParams],
-    );
-    const appShellPluginUiProjection = useAppShellPluginUiProjection();
+    const { tree, activePageId, featureSnapshot: pageFeatures, host, routeContext, teamRouteAdmitted, homeRouteAdmitted } = useResolvedSettingsPageTree(true);
+    const searchFeatures = useSettingsPageFeatureSnapshot(SETTINGS_SEARCH_FEATURE_IDS);
+    const featureSnapshot = React.useMemo(() => ({ ...pageFeatures, ...searchFeatures }), [pageFeatures, searchFeatures]);
     const localizePluginText = useProjectedPluginLocalizedTextResolver();
     const voiceDeclarationRevision = React.useSyncExternalStore(
         voiceSettingsDeclarationRegistry.subscribe ?? (() => () => {}),
@@ -284,56 +172,6 @@ export function useResolvedSettingsPageCatalog(): ResolvedSettingsPageCatalog {
     const voiceProviderId = storage((state) => state.settings.voice.providerId);
     const voiceLanguageKind = storage((state) => projectConversationLanguagePreference(state.settings.voice, voiceSettingsDeclarationRegistry).kind);
     const declarations = React.useMemo(() => getSettingsPageDeclarations(localizePluginText, storage.getState().settings), [localizePluginText, voiceDeclarationRevision, voiceProviderId, voiceLanguageKind]);
-    const useProfiles = Boolean(useSetting('useProfiles'));
-    const devModeEnabled = Boolean(useLocalSetting('devModeEnabled'));
-    const { os: hostOs, desktop: tauriDesktop } = resolveSettingsHost();
-    const host = React.useMemo<SettingsHost>(() => ({ os: hostOs, desktop: tauriDesktop }), [hostOs, tauriDesktop]);
-    const teamsAdmission = useTeamsSettingsAdmission();
-    const homeAdministrationAdmission = useHomeAdministrationSettingsAdmission();
-    // The feature admits Teams; each Home then says whether this viewer is shown it.
-    const teamsShown = useTeamsDestinationShown(teamsAdmission.capableServerIds);
-    const teamsAdmitted = teamsAdmission.admitted && teamsShown;
-    const homeAdministrationAdmitted = homeAdministrationAdmission.admitted;
-    const routeServerId = routeParams.serverId;
-    const teamRouteAdmitted = typeof routeServerId === 'string' && teamsAdmission.capableServerIds.includes(routeServerId);
-    const homeRouteAdmitted = typeof routeServerId === 'string' && homeAdministrationAdmission.admittedServerIds.includes(routeServerId);
-
-    const featureSnapshot = useSettingsFeatureSnapshot();
-    const locale = getPreferredLanguage();
-
-    const catalog = React.useMemo(() => mergeAdmittedPluginSettingsPages({
-        baseCatalog: SETTINGS_PAGE_CATALOG,
-        projection: appShellPluginUiProjection.pluginUiProjection,
-        locale,
-    }), [appShellPluginUiProjection.pluginUiProjection, locale]);
-
-    const tree = React.useMemo(() => {
-        return resolveTree(catalog, {
-            useProfiles,
-            devModeEnabled,
-            tauriDesktop,
-            features: featureSnapshot,
-            teamsAdmitted,
-            homeAdministrationAdmitted,
-        });
-    }, [
-        catalog,
-        devModeEnabled,
-        featureSnapshot,
-        teamsAdmitted,
-        homeAdministrationAdmitted,
-        locale,
-        tauriDesktop,
-        useProfiles,
-    ]);
-
-    // Navigation/search visibility does not retire a still-mounted route's identity.
-    // Plugin leaves remain lifecycle-owned by the merged projection above.
-    const flat = React.useMemo(() => flattenSettingsPageCatalog(catalog), [catalog]);
-
-    const activePageId = React.useMemo(() => {
-        return resolveActivePageIdFromPathname(pathname ?? '/', flat);
-    }, [flat, pathname]);
 
     const searchDocs = React.useMemo(() => buildSearchDocs(tree, featureSnapshot, host, routeContext, {
         teams: teamRouteAdmitted,
@@ -351,22 +189,29 @@ export function useResolvedSettingsPageCatalog(): ResolvedSettingsPageCatalog {
         const q = String(query ?? '').trim().toLowerCase();
         if (!q) return [];
 
+        // Literal evidence takes priority. Typo recovery may use only the displayed title,
+        // never fuzzy descriptions, keywords or locations ("harbor" -> "behavior").
+        const project = ({ item: doc, matches }: FuseResult<SettingsPageSearchDoc>, allowTitleTypo = false): SettingsPageSearchResult[] => {
+            const contains = (value: string) => value.toLowerCase().includes(q);
+            const visibleMatch = [doc.title, ...(doc.setting?.path ?? [])].some(contains);
+            const keyword = doc.keywords.find(contains);
+            const descriptionMatch = doc.subtitle.toLowerCase().indexOf(q);
+            // Prefer the explicit search word. Description-only matches begin at the hit,
+            // so a row clamp cannot hide the evidence behind a long lead or location.
+            const matchText = visibleMatch ? undefined : keyword ?? (descriptionMatch < 0 ? undefined
+                : `${descriptionMatch > 0 ? '…' : ''}${doc.subtitle.slice(descriptionMatch)}`);
+            if (!visibleMatch && !matchText && !(allowTitleTypo && matches?.some(match => match.key === 'title'))) return [];
+            return [{ id: doc.id, route: doc.route,
+                ...(doc.setting ? { setting: doc.setting } : {}),
+                ...(matchText ? { matchText } : {}) }];
+        };
         // Pages stay first without hiding matching rows behind a shared result cap.
-        const pageMatches = fuses.pages.search(q);
-        const settingMatches = fuses.settings.search(q);
-        // Prefer the words the person typed over edit-distance matches ("model" versus "mode").
-        // Keep typo recovery when no label, alias, description or location contains the query.
-        const containsQuery = (doc: SettingsPageSearchDoc) => [doc.title, ...doc.keywords, doc.subtitle, ...doc.pathTokens]
-            .some(value => value.toLowerCase().includes(q));
-        const literalPages = pageMatches.filter(result => containsQuery(result.item));
-        const literalSettings = settingMatches.filter(result => containsQuery(result.item));
-        const hasLiteralMatch = literalPages.length > 0 || literalSettings.length > 0;
-        const pages = hasLiteralMatch ? literalPages : pageMatches;
-        const settings = hasLiteralMatch ? literalSettings : settingMatches;
-        return [
-            ...pages.map((result) => ({ id: result.item.id, route: result.item.route })),
-            ...settings.map((result) => ({ id: result.item.id, route: result.item.route, setting: result.item.setting! })),
+        const matches = [
+            ...fuses.pages.search(q),
+            ...fuses.settings.search(q),
         ];
+        const literalResults = matches.flatMap(result => project(result));
+        return literalResults.length > 0 ? literalResults : matches.flatMap(result => project(result, true));
     }, [fuses]);
 
     return {

@@ -1105,6 +1105,7 @@ describe('externalSessionsIntegrationController', () => {
             intent: 'passive_inventory',
             cursor: 'page-2',
             limit: 50,
+            signal: expect.any(AbortSignal),
         });
         expect(hook.getCurrent().loadingMoreInventory).toBe(true);
 
@@ -1498,6 +1499,8 @@ describe('externalSessionsIntegrationController', () => {
                 localId: 'removed',
             },
             installationId: 'installation-removed',
+            serverId: undefined,
+            signal: expect.any(AbortSignal),
         }, expect.any(Function));
         expect(hook.getCurrent().integrations).toEqual([
             expect.objectContaining({
@@ -2453,6 +2456,7 @@ describe('externalSessionsIntegrationController', () => {
             serverId: 'server-1',
             agent,
             installationId: 'installation-a',
+            signal: expect.any(AbortSignal),
         }, expect.any(Function));
         const refreshed = hook.getCurrent().integrations!;
         expect(status).toHaveBeenCalledTimes(1);
@@ -2478,6 +2482,7 @@ describe('externalSessionsIntegrationController', () => {
             intent: 'installation_recheck',
             agent,
             installationId: 'installation-b',
+            signal: expect.any(AbortSignal),
         });
         expect(hook.getCurrent().integrations).toHaveLength(2);
 
@@ -2681,6 +2686,7 @@ describe('externalSessionsIntegrationController', () => {
             intent: 'passive_inventory',
             agent,
             limit: 50,
+            signal: expect.any(AbortSignal),
         });
         await flushHookEffects({ cycles: 2, turns: 2 });
         expect(status).toHaveBeenCalledTimes(1);
@@ -2703,6 +2709,7 @@ describe('externalSessionsIntegrationController', () => {
             intent: 'installation_recheck',
             agent,
             installationId: 'installation-current',
+            signal: expect.any(AbortSignal),
         });
 
         await hook.rerender({

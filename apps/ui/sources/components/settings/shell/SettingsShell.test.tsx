@@ -171,9 +171,7 @@ describe('SettingsShell', () => {
         for (const [width, sidebarEnabled] of [[390, true], [1600, true], [1600, false], [1600, true]] as const) {
             windowDimsState.width = width;
             localSettingsState.values.set('settingsNavSidebarEnabled', sidebarEnabled);
-            await act(async () => {
-                screen.tree.update(content());
-            });
+            await screen.update(content());
             expect(screen.findByTestId('draft')?.props.value).toBe('Unsaved settings edit');
             expect(screen.findByTestId('draft')).toBe(draft);
         }

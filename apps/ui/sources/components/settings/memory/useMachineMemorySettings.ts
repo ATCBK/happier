@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import {
   DEFAULT_MEMORY_SETTINGS,
@@ -56,7 +57,8 @@ function resolveExecutionTargetKey(
 export function useMachineMemorySettings(
   options: Readonly<{ enabled: boolean }>,
 ) {
-  const { enabled } = options;
+  const presented = useLayoutPresentationActive();
+  const enabled = options.enabled && presented;
   const administrationTargetSelection = useMachineAdministrationTargetSelection(
     MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory,
   );
@@ -93,17 +95,33 @@ export function useMachineMemorySettings(
   const [memoryStatusRequestState, setMemoryStatusRequestState] =
     React.useState<ArchivedMemoryStatusRequestState>('unresolved');
   const [loading, setLoading] = React.useState(false);
+  const scopeController = React.useRef<AbortController | null>(null);
+  const readController = React.useRef<AbortController | null>(null);
+  React.useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    scopeController.current = controller;
+    return () => {
+      controller.abort();
+      readController.current?.abort();
+      readController.current = null;
+      if (scopeController.current === controller) scopeController.current = null;
+    };
+  }, [enabled, executionTargetKey]);
 
   const refreshStatus = React.useCallback(
     async (target: FreshMachineAdministrationExecutionTargetV1) => {
+      const signal = scopeController.current?.signal;
+      if (!signal || signal.aborted) return;
       setMemoryStatusRequestState('loading');
       const statusResult = await fetchDaemonMemoryStatus({
         machineId: target.machine.id,
         serverId: target.serverId,
+        signal,
       })
         .then((status) => ({ status, requestState: 'resolved' as const }))
         .catch(() => ({ status: null, requestState: 'unreachable' as const }));
-      if (!isExecutionTargetCurrent(target)) return;
+      if (signal.aborted || !isExecutionTargetCurrent(target)) return;
       setMemoryStatus(statusResult.status);
       setMemoryStatusRequestState(statusResult.requestState);
     },
@@ -112,8 +130,12 @@ export function useMachineMemorySettings(
 
   const fetchSettings = React.useCallback(async () => {
     if (!enabled) return;
+    if (!scopeController.current || scopeController.current.signal.aborted) return;
     const target = administrationTargetSelection.resolveExecutionTarget();
     if (!target) return;
+    readController.current?.abort();
+    const controller = new AbortController();
+    readController.current = controller;
     setLoading(true);
     settleRead(null);
     setMemoryStatus(null);
@@ -123,12 +145,14 @@ export function useMachineMemorySettings(
         fetchDaemonMemorySettings({
           machineId: target.machine.id,
           serverId: target.serverId,
+          signal: controller.signal,
         })
           .then((result) => ({ result, unreachable: false as const }))
           .catch(() => ({ result: null, unreachable: true as const })),
         fetchDaemonMemoryStatus({
           machineId: target.machine.id,
           serverId: target.serverId,
+          signal: controller.signal,
         })
           .then((status) => ({ status, requestState: 'resolved' as const }))
           .catch(() => ({
@@ -136,7 +160,7 @@ export function useMachineMemorySettings(
             requestState: 'unreachable' as const,
           })),
       ]);
-      if (!isExecutionTargetCurrent(target)) return;
+      if (controller.signal.aborted || !isExecutionTargetCurrent(target)) return;
       const targetKey = resolveExecutionTargetKey(target)!;
       if (settingsResult.result) {
         setSettings(settingsResult.result.settings);
@@ -150,7 +174,10 @@ export function useMachineMemorySettings(
       setMemoryStatus(statusResult.status);
       setMemoryStatusRequestState(statusResult.requestState);
     } finally {
-      if (isExecutionTargetCurrent(target)) setLoading(false);
+      if (readController.current === controller) {
+        readController.current = null;
+        if (isExecutionTargetCurrent(target)) setLoading(false);
+      }
     }
   }, [
     administrationTargetSelection.resolveExecutionTarget,
@@ -160,7 +187,7 @@ export function useMachineMemorySettings(
   ]);
 
   React.useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) { setLoading(false); return; }
     if (!hasExecutionTarget) {
       setSettings(DEFAULT_MEMORY_SETTINGS);
       settleRead(null);
@@ -195,12 +222,15 @@ export function useMachineMemorySettings(
     async (next: MemorySettingsV1) => {
       const target = resolveWritableTarget();
       if (!target) return;
+      const signal = scopeController.current?.signal;
+      if (!signal || signal.aborted) return;
       const result = await writeDaemonMemorySettings({
         machineId: target.machine.id,
         serverId: target.serverId,
         settings: next,
+        signal,
       });
-      if (!isExecutionTargetCurrent(target)) return;
+      if (signal.aborted || !isExecutionTargetCurrent(target)) return;
       setSettings(result.settings);
       if (!result.supported) {
         settleRead({

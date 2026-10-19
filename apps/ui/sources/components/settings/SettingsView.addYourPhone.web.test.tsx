@@ -181,7 +181,6 @@ vi.mock('@/components/settings/machines/hooks/useActiveSelectionMachineGroups', 
 }));
 
 const { SettingsView } = await import('./SettingsView');
-const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { settingsDefaults } = await import('@/sync/domains/settings/settings');

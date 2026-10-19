@@ -5,14 +5,14 @@ import type { ResolvedSettingsPageNode, SettingsPageSearchResult } from '@/compo
 /**
  * The one row projection of a settings-search result, shared by every surface that lists settings
  * results (the settings rail, the phone Settings page and Search / ⌘K), so a page or a setting reads
- * the same everywhere: its title, then where it lives ("Appearance › Terminal").
+ * the same everywhere: its title, matching words when needed, and where it lives ("Appearance › Terminal").
  */
 export type SettingsSearchRow = Readonly<{
     kind: 'page' | 'setting';
     /** The page id, or the setting's anchor. */
     id: string;
     title: string;
-    /** The pages above it, joined with " › "; absent for a top-level page. */
+    /** Matching words when needed, followed by the page/section path joined with " › ". */
     subtitle?: string;
     route: string;
 }>;
@@ -53,21 +53,23 @@ export function buildSettingsSearchRows(
     const settingRows: SettingsSearchRow[] = [];
     for (const result of results) {
         if (result.setting) {
+            const subtitle = [result.matchText, result.setting.path.join(PATH_SEPARATOR)].filter(Boolean).join(' · ');
             settingRows.push({
                 kind: 'setting',
                 id: result.setting.anchor,
                 title: result.setting.title,
-                ...(result.setting.path.length > 0 ? { subtitle: result.setting.path.join(PATH_SEPARATOR) } : {}),
+                ...(subtitle ? { subtitle } : {}),
                 route: result.route,
             });
             continue;
         }
         const page = pages.get(result.id);
+        const subtitle = [result.matchText, page?.path.join(PATH_SEPARATOR)].filter(Boolean).join(' · ');
         pageRows.push({
             kind: 'page',
             id: result.id,
             title: page?.title ?? String(result.id),
-            ...(page && page.path.length > 0 ? { subtitle: page.path.join(PATH_SEPARATOR) } : {}),
+            ...(subtitle ? { subtitle } : {}),
             route: result.route,
         });
     }

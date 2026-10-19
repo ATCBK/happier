@@ -59,6 +59,7 @@ export const SETTINGS_PAGE_IDS = {
     search: 'search',
 
     session: 'session',
+    coordination: 'coordination',
     externalSessions: 'externalSessions',
     actions: 'actions',
     embeds: 'embeds',
@@ -147,6 +148,8 @@ export type ResolvedSettingsPageNode = Readonly<{
 export type SettingsPageSearchResult = Readonly<{
     id: SettingsPageId;
     route: string;
+    /** The matching description or explicit keyword, when the title/location does not explain the hit. */
+    matchText?: string;
     /** Present when the result is an individual setting on page `id` rather than the page itself. */
     setting?: Readonly<{
         anchor: string;

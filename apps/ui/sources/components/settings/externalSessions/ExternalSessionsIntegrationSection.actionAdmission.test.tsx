@@ -10,7 +10,8 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { Modal } from '@/modal';
 
-const rpc = vi.hoisted(() => ({ installed: false, writes: 0 }));
+const rpc = vi.hoisted(() => ({ installed: false, writes: 0, blockNextStatus: false,
+    statusSignals: [] as (AbortSignal | undefined)[] }));
 const agent = { pluginId: 'example.agent', localId: 'assistant' };
 const preview = { previewId: `hook-install-preview:v1:${'a'.repeat(64)}`, targets: [{ targetId: 'settings',
     absolutePath: '/tmp/agent-settings.json', changes: [{ kind: 'append_json_array_entry', collectionId: 'hooks',
@@ -27,11 +28,16 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOrigina
 // The Machine RPC transport is the process boundary; catalog admission, policy,
 // controller lifecycle and the native hook response schemas remain real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: async ({ method, machineId }: { method: string; machineId: string }) => {
+    machineRpcWithServerScope: async ({ method, machineId, signal }: { method: string; machineId: string; signal?: AbortSignal }) => {
         const status = () => rpc.installed
             ? { state: 'installed_enabled', installationId: 'installation-one' }
             : { state: 'not_installed', installPreview: preview };
         if (method === RPC_METHODS.DAEMON_PLUGIN_SESSION_HOOKS_STATUS_GET) {
+            rpc.statusSignals.push(signal);
+            if (rpc.blockNextStatus) {
+                rpc.blockNextStatus = false;
+                await new Promise<void>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+            }
             return { ok: true, rows: [{ agent, status: status() }], nextCursor: null, diagnostics: [] };
         }
         if (method === RPC_METHODS.DAEMON_PLUGIN_SESSION_HOOKS_INSTALL) {
@@ -54,9 +60,31 @@ installDisconnectedServerSocketBoundary();
 const { ExternalSessionsIntegrationSection } = await import('./ExternalSessionsIntegrationSection');
 const { useExternalSessionsIntegrationController } = await import('./externalSessionsIntegrationController');
 
-afterEach(() => { standardCleanup(); vi.restoreAllMocks(); rpc.installed = false; rpc.writes = 0; });
+afterEach(() => { standardCleanup(); vi.restoreAllMocks(); rpc.installed = false; rpc.writes = 0;
+    rpc.blockNextStatus = false; rpc.statusSignals.length = 0; });
 
 describe('external hook Actions from the rendered integration controls', () => {
+    it('retires an unanswered inventory on Machine change and can load the original Machine again', async () => {
+        const account = await createSecretSettingsTestHarness();
+        rpc.blockNextStatus = true;
+        function Screen({ machineId }: { machineId: string }) {
+            const controller = useExternalSessionsIntegrationController({ machineId, serverId: account.scope.serverId,
+                projectionGeneration: 1, agent: { agent, agentTitle: 'Assistant' } });
+            return <ExternalSessionsIntegrationSection integrations={controller.integrations} machineId={machineId}
+                agent={null} operations={controller.operations} inventoryState={controller.inventoryState} />;
+        }
+        try {
+            const screen = await renderScreen(<Screen machineId="machine-one" />);
+            await vi.waitFor(() => expect(rpc.statusSignals.length).toBeGreaterThan(0));
+            await screen.update(<Screen machineId="machine-two" />);
+            expect(rpc.statusSignals[0]?.aborted).toBe(true);
+            await screen.update(<Screen machineId="machine-one" />);
+            await vi.waitFor(() => expect(screen.findAll(node => typeof node.props.testID === 'string'
+                && node.props.testID.endsWith('-review_install')).length).toBeGreaterThan(0));
+            await screen.unmount();
+            expect(rpc.statusSignals.every(signal => signal?.aborted === true)).toBe(true);
+        } finally { standardCleanup(); await account.dispose(); }
+    });
     it('retires an install intent when its selected Machine changes during confirmation', async () => {
         const account = await createSecretSettingsTestHarness();
         const decision = createDeferred<boolean>();

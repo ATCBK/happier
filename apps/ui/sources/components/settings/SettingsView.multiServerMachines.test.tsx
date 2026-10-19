@@ -136,8 +136,8 @@ beforeEach(async () => {
     const serverA = await home.addHome({ name: 'Server A', serverUrl: 'https://settings-a.example', serverIdentityId: 'srv-a', accountId: 'owner' });
     await home.addHome({ name: 'Server B', serverUrl: 'https://settings-b.example', serverIdentityId: 'srv-b', accountId: 'owner', active: false });
     const machines = [
-        createMachineFixture({ id: 'mach-a1', metadata: { displayName: 'Machine A1', host: 'a.local' } }),
-        createMachineFixture({ id: 'mach-b1', metadata: { displayName: 'Machine B1', host: 'b.local' } }),
+        createMachineFixture({ id: 'mach-a1', metadata: { ...createMachineFixture().metadata!, displayName: 'Machine A1', host: 'a.local' } }),
+        createMachineFixture({ id: 'mach-b1', metadata: { ...createMachineFixture().metadata!, displayName: 'Machine B1', host: 'b.local' } }),
     ];
     storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
         machineListByServerId: { 'srv-a': [machines[0]!], 'srv-b': [machines[1]!] },

@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { AttentionDeviceOverridesV1Schema } from '@/sync/domains/settings/attentionDeviceOverridesV1';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
@@ -30,7 +31,7 @@ export const notificationDeviceSoundsStorageBinding: SettingStorageBinding = {
 export function updateNotificationDeviceQuietHours(local: LocalSettings, quietHoursOverride: LocalSettings['attentionDeviceOverridesV1']['quietHoursOverride']): Partial<LocalSettings> {
     return { attentionDeviceOverridesV1: { ...local.attentionDeviceOverridesV1, quietHoursOverride } };
 }
-const quietHoursSchema = AttentionDeviceOverridesV1Schema.removeCatch().shape.quietHoursOverride.removeDefault();
+const quietHoursSchema = AttentionDeviceOverridesV1Schema._zod.def.innerType.shape.quietHoursOverride._zod.def.innerType;
 export const notificationDeviceQuietHoursStorageBinding: SettingStorageBinding = {
     scope: 'local', kind: 'localOwner', access: 'read_write', read: local => local.attentionDeviceOverridesV1.quietHoursOverride,
     parse: value => { const parsed = quietHoursSchema.safeParse(value); if (!parsed.success) return { success: false };

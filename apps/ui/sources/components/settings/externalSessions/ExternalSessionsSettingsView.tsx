@@ -19,6 +19,7 @@ import {
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
 import { setExternalSessionFollowPolicy } from '@/components/sessions/external/follow/setExternalSessionFollowPolicy';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import {
     useMachineAdministrationTargetSelection,
@@ -26,7 +27,7 @@ import {
 import { isMachineAdministrationExecutionTargetCurrent } from '@/sync/domains/machines/administration/operationCurrentness';
 import { useActiveServerAccountScope, useAllMachines, useAllSessions, useSetting } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { readSessionDisplayTitleField } from '@/sync/state/selectors';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { sync } from '@/sync/sync';
 import { useSettingsVersion } from '@/sync/store/hooks';
 import { requireOneShotAccountSettingsMutationApplied } from '@/sync/engine/settings/syncSettings';
@@ -99,9 +100,7 @@ function buildFollowRows(
         const status = machineOnline === false
             ? 'machine_offline'
             : readExternalSessionFollowStatusV1(link.followStatusV1)?.status ?? 'unknown';
-        const title = readSessionDisplayTitleField(session).value
-            ?? metadata?.name
-            ?? link.remoteSessionId;
+        const title = getSessionName(session);
         rows.push({
             session,
             title,
@@ -296,6 +295,16 @@ export const ExternalSessionsSettingsView = React.memo(function ExternalSessions
     });
     const hasActiveFollowPolicy = rows.some((row) => row.enabled);
     const pendingSessionIdsRef = React.useRef(new Set<string>());
+    const presentationActive = useLayoutPresentationActive();
+    const followControllerRef = React.useRef<AbortController | null>(null);
+    React.useEffect(() => {
+        const controller = new AbortController();
+        followControllerRef.current = controller;
+        if (!presentationActive) controller.abort();
+        pendingSessionIdsRef.current.clear();
+        setPendingSessionIds(new Set());
+        return () => controller.abort();
+    }, [presentationActive, expectedSettingsScope]);
     const [pendingSessionIds, setPendingSessionIds] = React.useState<ReadonlySet<string>>(
         () => new Set(),
     );
@@ -340,6 +349,8 @@ export const ExternalSessionsSettingsView = React.memo(function ExternalSessions
     }, [expectedSettingsScope, settingsVersion]);
 
     const setSessionFollowEnabled = React.useCallback(async (row: FollowRow, enabled: boolean) => {
+        const signal = followControllerRef.current?.signal;
+        if (!signal || signal.aborted) return;
         const link = readExternalSessionLink(readSessionOwnerMetadataView(row.session));
         if (
             !link
@@ -365,6 +376,7 @@ export const ExternalSessionsSettingsView = React.memo(function ExternalSessions
                 serverId: row.session.serverId ?? null,
                 link,
                 policy: enabled ? 'background_follow' : 'attached_only',
+                signal,
             });
             if (outcome.kind === 'stale') return;
             if (outcome.kind !== 'applied') {
@@ -389,6 +401,7 @@ export const ExternalSessionsSettingsView = React.memo(function ExternalSessions
                 return next;
             });
         } finally {
+            if (signal.aborted) return;
             pendingSessionIdsRef.current.delete(row.session.id);
             setPendingSessionIds((current) => {
                 if (!current.has(row.session.id)) return current;

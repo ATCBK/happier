@@ -19,7 +19,7 @@ const CANVAS_WIDTH = 320;
 const PREVIEW_SCALE = 0.34;
 const SAMPLE_IDS = ['happier-sample-a', 'happier-sample-b', 'happier-sample-c', 'happier-sample-d'] as const;
 
-function PreviewStage(props: Readonly<{ children: React.ReactNode }>) {
+export function PreviewStage(props: Readonly<{ children: React.ReactNode }>) {
     return <View
         style={{ flex: 1, overflow: 'hidden' }}
         pointerEvents="none"
@@ -34,7 +34,7 @@ function PreviewStage(props: Readonly<{ children: React.ReactNode }>) {
     </View>;
 }
 
-function PreviewRows(props: Readonly<{ density: SessionListRowDensity; ids: readonly string[]; project?: string }>) {
+export function PreviewRows(props: Readonly<{ density: SessionListRowDensity; ids: readonly string[]; project?: string; titles?: readonly string[] }>) {
     const showIdentity = props.density !== 'minimal';
     return <>{props.ids.map((id, index) => <SessionListRowPresentation
         key={id}
@@ -42,7 +42,7 @@ function PreviewRows(props: Readonly<{ density: SessionListRowDensity; ids: read
         first={index === 0}
         last={index === props.ids.length - 1}
         identity={showIdentity ? <AvatarGradient id={id} size={SESSION_LIST_ROW_IDENTITY_METRICS[props.density].slotSize} /> : null}
-        title={<SessionListRowTitle density={props.density}>{t('settingsSessionPages.preview.userMessage')}</SessionListRowTitle>}
+        title={<SessionListRowTitle density={props.density}>{props.titles?.[index] ?? t('settingsSessionPages.preview.userMessage')}</SessionListRowTitle>}
     >
         {props.density === 'default'
             ? <SessionListRowSubtitle density={props.density}>{props.project ?? '~/happier'}</SessionListRowSubtitle>

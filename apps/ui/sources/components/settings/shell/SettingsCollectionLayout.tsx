@@ -18,6 +18,7 @@ import { NavigationBackChromeProvider } from '@/components/ui/layout/NavigationB
 import { NavigationTitleChromeProvider } from '@/components/ui/layout/navigationTitleChrome';
 import { getPreferredLanguage, t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { CollectionDraftTitleScope } from '@/components/ui/lists/collection/CollectionDraftTitle';
 
 export type SettingsCollectionLayoutProps = Readonly<{
     /** The rail's width at normal text scale: a role from the one metrics owner, never a page-local number. */
@@ -63,7 +64,7 @@ export const SettingsCollectionLayout = React.memo(function SettingsCollectionLa
     const scale = Math.max(1, fontScale);
     const hasRail = props.rail !== null && props.rail !== undefined;
 
-    return <>
+    return <CollectionDraftTitleScope key={props.navigator}>
         {/* One phone header stays above both panes and follows the active child route. */}
         <Stack.Screen options={routes.find((route) => route.name === currentRoute)?.options} />
         <View style={{ flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base }}>
@@ -96,7 +97,7 @@ export const SettingsCollectionLayout = React.memo(function SettingsCollectionLa
                 </View>}
             />
         </View>
-    </>;
+    </CollectionDraftTitleScope>;
 });
 
 /**

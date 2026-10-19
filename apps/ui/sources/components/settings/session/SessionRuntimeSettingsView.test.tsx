@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { storage } from '@/sync/domains/state/storageStore';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { standardCleanup } from '@/dev/testkit';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { installSessionSettingsCommonModuleMocks } from './sessionSettingsViewTestHelpers';
 import { SESSION_RUNTIME_SETTINGS } from './sessionRuntimeSettings';
@@ -23,6 +24,10 @@ installSessionSettingsCommonModuleMocks({
         return importOriginal();
     },
 });
+vi.doUnmock('@/sync/domains/state/storage');
+const account = createProviderSettingsAccountHarness();
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
@@ -30,15 +35,15 @@ vi.mock('@expo/vector-icons', () => ({
 
 describe('SessionRuntimeSettingsView', () => {
     beforeEach(async () => {
-        await loadSyncSingletonForTests();
-        storage.setState({ settings: { ...settingsDefaults, sessionUseTmux: false, sessionTerminalHost: 'herdr' },
-            settingsScope: { serverId: 'server-a', accountId: 'account-a' }, settingsVersion: 1 });
+        await account.restore({ settings: { sessionUseTmux: false, sessionTerminalHost: 'herdr' } });
     });
 
     afterEach(async () => {
         vi.useRealTimers();
         paramsState.value = {};
         await act(async () => { setReducedMotionPreferenceOverride(null); });
+        standardCleanup();
+        await account.reset();
         vi.restoreAllMocks();
     });
 
@@ -102,8 +107,13 @@ describe('SessionRuntimeSettingsView', () => {
     });
 
     it('shows the existing account tmux settings only for tmux, retaining the saved values', async () => {
-        storage.setState({ settings: { ...settingsDefaults, sessionUseTmux: true, sessionTerminalHost: 'tmux',
-            sessionTmuxSessionName: 'work', sessionTmuxIsolated: true, sessionTmuxTmpDir: '/tmp/work-tmux' } });
+        const { sync } = await import('@/sync/sync');
+        sync.applySettings({ sessionUseTmux: true, sessionTerminalHost: 'tmux',
+            sessionTmuxSessionName: 'work', sessionTmuxIsolated: true, sessionTmuxTmpDir: '/tmp/work-tmux' },
+        { expectedSettingsScope: storage.getState().settingsScope! });
+        await vi.waitFor(() => expect(storage.getState().settings).toMatchObject({
+            sessionTerminalHost: 'tmux', sessionTmuxSessionName: 'work', sessionTmuxIsolated: true,
+        }));
         const { SessionRuntimeSettingsView } = await import('./SessionRuntimeSettingsView');
         const screen = await renderSettingsView(React.createElement(SessionRuntimeSettingsView));
         expect(screen.findByTestId('settings-session-tmux-name')?.props.value).toBe('work');
@@ -113,10 +123,11 @@ describe('SessionRuntimeSettingsView', () => {
             screen.findByTestId('settings-session-tmux-name')!.props.onChangeText('renamed');
             screen.findByTestId('settings-session-tmux-tmpdir')!.props.onChangeText('/tmp/renamed');
         });
-        expect(storage.getState().settings.sessionTmuxSessionName).toBe('renamed');
-        expect(storage.getState().settings.sessionTmuxTmpDir).toBe('/tmp/renamed');
+        await vi.waitFor(() => expect(storage.getState().settings).toMatchObject({
+            sessionTmuxSessionName: 'renamed', sessionTmuxTmpDir: '/tmp/renamed',
+        }));
         await act(async () => { screen.findByTestId('settings-session-tmux-isolated')!.props.onValueChange(false); });
-        expect(storage.getState().settings.sessionTmuxIsolated).toBe(false);
+        await vi.waitFor(() => expect(storage.getState().settings.sessionTmuxIsolated).toBe(false));
         expect(screen.findByTestId('settings-session-tmux-tmpdir')).toBeNull();
         await act(async () => {
             storage.setState({ settings: { ...storage.getState().settings, sessionTerminalHost: 'herdr', sessionUseTmux: false } });

@@ -41,6 +41,7 @@ import { ACTIONS_CREATE_SESSION_SETTINGS, ACTIONS_PROMPT_DOCUMENT_SETTINGS } fro
 import { EXTERNAL_SESSIONS_SETTINGS } from '@/components/settings/externalSessions/externalSessionsSettings';
 import { TRANSCRIPT_SETTINGS } from '@/components/settings/session/transcriptSettings';
 import { PERMISSIONS_SETTINGS } from '@/components/settings/session/permissionsSettings';
+import { COORDINATION_SETTINGS } from '@/components/settings/coordination/coordinationSettings';
 import { HANDOFF_SETTINGS } from '@/components/settings/session/handoffSettings';
 import { TOOL_RENDERING_SETTINGS } from '@/components/settings/session/toolRenderingSettings';
 import { SOURCE_CONTROL_SETTINGS } from '@/components/settings/sourceControl/sourceControlSettings';
@@ -130,6 +131,7 @@ export const SETTINGS_PAGE_DECLARATIONS: readonly SettingsPageDeclaration[] = [
     APPEARANCE_MACHINE_SUMMARY_SETTINGS,
     THEMES_SETTINGS,
     SESSION_SETTINGS,
+    COORDINATION_SETTINGS,
     SESSION_RUNTIME_SETTINGS,
     SESSION_PROVIDER_LIMITS_SETTINGS,
     NEW_SESSION_WIZARD_SETTINGS,

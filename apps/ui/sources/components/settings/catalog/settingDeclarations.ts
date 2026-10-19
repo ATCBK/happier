@@ -8,9 +8,10 @@ import type { SettingsPageId } from './types';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import type { Settings, WritableSettingsKey } from '@/sync/domains/settings/settings';
 import type { SettingsWriteDelta } from '@/sync/domains/settings/settings';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { ACCOUNT_SETTING_DEFINITIONS } from '@happier-dev/protocol/account/settings/accountSettings';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { SettingsDeclarationTargetKindV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
@@ -36,6 +37,7 @@ export type SettingOwnerMutation = (settings: Settings) => SettingsWriteDelta | 
 export type SettingsOwnerActionExecute = SettingsOwnerActionExecuteV1;
 export type SettingOperationContext = Readonly<{
     signal?: AbortSignal;
+    accountScope?: ServerAccountScope;
     input?: SettingsDeclarationOperationInputV1;
     isCurrent(): boolean;
     isFeatureEnabled?: (featureId: FeatureId) => Promise<boolean>;
@@ -109,7 +111,7 @@ export type SettingStorageBinding = Readonly<{
          * theme and status bar) or keep sibling fields of a nested record.
          */
         commit: (local: LocalSettings, value: SettingValue, writeLocal: (delta: Partial<LocalSettings>) => void,
-            context?: Readonly<{ signal?: AbortSignal; isCurrent(): boolean }>) =>
+            context?: Readonly<{ signal?: AbortSignal; isCurrent(): boolean; readLocalSettings?: () => LocalSettings }>) =>
             void | typeof SETTING_VALUE_UNAVAILABLE | Promise<void | typeof SETTING_VALUE_UNAVAILABLE>;
     }>
 );
@@ -437,7 +439,7 @@ export function collectDeclaredFeatureIds(declarations: readonly SettingsPageDec
 export const SETTING_ANCHOR_QUERY_PARAM = 'setting';
 
 /** The link that opens a settings page and reveals one declared setting on it. */
-export function buildSettingHref(route: string, ref: Pick<SettingRef, 'anchor'>): string;
+export function buildSettingHref<Route extends string>(route: Route, ref: Pick<SettingRef, 'anchor'>): `${Route}${'?' | '&'}setting=${string}`;
 export function buildSettingHref(route: SettingsSubpageRoute, ref: Pick<SettingRef, 'anchor'>, context?: SettingsRouteContext): string | null;
 export function buildSettingHref(route: SettingsSubpageRoute, ref: Pick<SettingRef, 'anchor'>, context?: SettingsRouteContext): string | null {
     const destination = typeof route === 'string' ? route : context ? route(context) : null;

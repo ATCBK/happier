@@ -1,14 +1,12 @@
 import * as React from 'react';
-import { storage as storageStore } from '@/sync/domains/state/storage';
-import { settingsParse } from '@/sync/domains/settings/settings';
-import { localSettingsParse } from '@/sync/domains/settings/localSettings';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { standardCleanup } from '@/dev/testkit';
 
-const initialSettingsCatalogStorage = storageStore.getState();
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { act } from 'react-test-renderer';
 
 import { renderScreen } from '@/dev/testkit';
@@ -20,9 +18,6 @@ import {
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const featureGateState = vi.hoisted(() => ({
-    enabled: (_featureId: string) => true,
-}));
 const pathnameState = vi.hoisted(() => ({ value: '/settings' }));
 const routerPushSpy = vi.hoisted(() => vi.fn());
 const routerNavigateSpy = vi.hoisted(() => vi.fn());
@@ -47,12 +42,6 @@ vi.mock('expo-router', async () => {
         router: { navigate: routerNavigateSpy, push: routerPushSpy },
     }).module;
 });
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (featureId: string) => featureGateState.enabled(featureId),
-}));
-
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => importOriginal());
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -83,14 +72,16 @@ vi.mock('expo-clipboard', () => ({
     setStringAsync: async () => {},
 }));
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'StyledText',
-    TextInput: 'TextInput',
-}));
+const account = createProviderSettingsAccountHarness();
+const { storage: storageStore } = await import('@/sync/domains/state/storage');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { localSettingsParse } = await import('@/sync/domains/settings/localSettings');
+const initialSettingsCatalogStorage = storageStore.getState();
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | null = null;
 
 beforeEach(async () => {
-    await loadSyncSingletonForTests();
-    installDisconnectedServerSocketBoundary();
+    browser = await installBrowserRuntimeForTests({ url: 'https://settings-sidebar.test/settings' });
+    await account.restore({ settings: { useProfiles: false } });
     storageStore.setState({
         settings: settingsParse({ useProfiles: false }),
         localSettings: localSettingsParse({ devModeEnabled: false, uiFontScale: 1 }),
@@ -99,7 +90,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
     await standardCleanup();
+    await account.reset();
     storageStore.setState(initialSettingsCatalogStorage, true);
+    browser?.restore();
+    browser = null;
 });
 
 describe('SettingsSidebar', () => {
@@ -107,7 +101,6 @@ describe('SettingsSidebar', () => {
         pathnameState.value = '/settings';
         routerPushSpy.mockReset();
         routerNavigateSpy.mockReset();
-        featureGateState.enabled = () => true;
         clearActiveUnsavedChangesGuard();
     });
 
@@ -438,7 +431,7 @@ function resolveRowTitleWeight(
 ): string | number | undefined {
     const row: any = screen.findByTestId(testID);
     expect(row).toBeTruthy();
-    const title = row.findAllByType('StyledText')[0];
+    const title = row.findAllByType('Text')[0];
     expect(title).toBeTruthy();
     const style = flattenStyle(title.props?.style);
     return style.fontWeight ?? style.fontFamily;

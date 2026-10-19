@@ -22,6 +22,10 @@ const RENDERING_ENVIRONMENT_READS = new Set([
     'useSetting:filesDiffTokenizationMaxBytes',
 ]);
 installMessageViewCommonModuleMocks();
+// Language changes are the behavior under test; keep the canonical locale and
+// Settings owners real instead of the message-view helper's key-only text port.
+vi.doUnmock('@/text');
+vi.doUnmock('@/sync/domains/state/storage');
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',

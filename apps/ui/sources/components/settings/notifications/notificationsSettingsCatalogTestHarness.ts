@@ -20,6 +20,7 @@ import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/serv
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 
 type CatalogFixture = Readonly<{ status: 'present'; record: NotificationChannelCatalogRecordV1 }>
     | Readonly<{ status: 'deleted' | 'absent' }>;
@@ -116,6 +117,7 @@ export async function restoreNotificationsSettingsCatalog(params: Readonly<{
             if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: 3 });
             if ([PROFILE_TRANSFER_ROUTE_V1, REMOTE_HOST_ROWS_ROUTE_V1, MCP_SERVER_CATALOG_ROWS_ROUTE_V1,
                 ACP_CATALOG_ROWS_ROUTE_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
+                `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`,
                 `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/configurations`, `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`].includes(path))
                 return Response.json({ status: 'absent' });
             if (path === '/v1/account/saved-secrets/resources/materials') return Response.json({ resources: secretPromotions.map(input => ({

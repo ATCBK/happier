@@ -1,13 +1,16 @@
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { DEFAULT_ATTENTION_DELIVERY_POLICY_V1 } from '@happier-dev/protocol';
 
-import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { waitForNetworkResponseForTests } from '@/dev/testkit/mocks/runtimeFetch';
 import { getStorage } from '@/sync/domains/state/storage';
 import { DEFAULT_ATTENTION_DEVICE_OVERRIDES_V1 } from '@/sync/domains/settings/attentionDeviceOverridesV1';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
@@ -16,7 +19,10 @@ import { useRemoteAlertRegistrationStatus } from './useRemoteAlertRegistrationSt
 const nativeCapabilitiesState = vi.hoisted(() => ({
     current: { v: 1, platform: 'ios', events: ['ready'] } as const as unknown,
 }));
-const readExpoPushTokenSpy = vi.hoisted(() => vi.fn(async () => ({ ok: true as const, token: 'ExponentPushToken[test]' })));
+const readExpoPushTokenSpy = vi.hoisted(() => vi.fn(async () => ({ data: 'ExponentPushToken[test]' })));
+
+vi.mock('react-native', async () =>
+    (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' }));
 
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
@@ -44,8 +50,10 @@ vi.mock('../../../../modules/happier-activity-notifications', () => ({
     readActivityNotificationCapabilities: () => nativeCapabilitiesState.current,
 }));
 
-vi.mock('@/activity/notifications/permission/pushNotificationAccess', () => ({
-    readExpoPushToken: () => readExpoPushTokenSpy(),
+// Only the native SDK mints a token; module loading, support and token parsing stay real.
+vi.mock('expo-notifications', () => ({
+    getPermissionsAsync: vi.fn(async () => ({ status: 'granted', granted: true, canAskAgain: true })),
+    getExpoPushTokenAsync: readExpoPushTokenSpy,
 }));
 
 afterEach(async () => {
@@ -65,9 +73,6 @@ describe('remote alert registration status', () => {
         getStorage().getState().activateProfileScope(scope);
         getStorage().setState({ settingsScope: scope, settingsVersion: 7 });
         // Secure credential storage and HTTP are external boundaries. Scope, request and parsing stay real.
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
-            token: `e30.${Buffer.from(JSON.stringify({ sub: scope.accountId })).toString('base64url')}.signature`,
-        });
         let marked = true;
         const hosts: string[] = [];
         setRuntimeFetch(async (url, init) => {
@@ -128,9 +133,6 @@ describe('remote alert registration status', () => {
         const scope = { serverId: home.id, accountId: 'account-refresh' };
         getStorage().getState().activateProfileScope(scope);
         getStorage().setState({ settingsScope: scope, settingsVersion: 8 });
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
-            token: `e30.${Buffer.from(JSON.stringify({ sub: scope.accountId })).toString('base64url')}.signature`,
-        });
         setRuntimeFetch(async (url, init) => {
             const target = new URL(url instanceof Request ? url.url : String(url));
             if (target.pathname === '/v1/auth/ping') return new Response('{}', { status: 200 });
@@ -178,24 +180,22 @@ describe('remote alert registration status', () => {
         const scope = { serverId: home.id, accountId: 'account-prepared' };
         getStorage().getState().activateProfileScope(scope);
         getStorage().setState({ settingsScope: scope, settingsVersion: 9 });
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
-            token: `e30.${Buffer.from(JSON.stringify({ sub: scope.accountId })).toString('base64url')}.signature`,
-        });
-        let resolveProjection: ((response: Response) => void) | null = null;
-        const projectionRequested = new Promise<void>((resolve) => {
-            setRuntimeFetch(async (url, init) => {
-                const target = new URL(url instanceof Request ? url.url : String(url));
-                if (target.pathname === '/v1/auth/ping' || target.pathname === '/health') {
-                    return Response.json({});
-                }
-                if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-                if (target.pathname === '/v2/account/settings') return accountSettingsResponse(init, 9);
-                if (target.pathname !== '/v1/push-tokens' || target.searchParams.get('projectionVersion') !== '2') {
-                    return new Response(null, { status: 404 });
-                }
-                resolve();
-                return await new Promise<Response>((resolveResponse) => { resolveProjection = resolveResponse; });
-            });
+        let projectionRequested = false;
+        let releaseProjection!: () => void;
+        const projectionReleased = new Promise<void>(resolve => { releaseProjection = resolve; });
+        setRuntimeFetch(async (url, init) => {
+            const target = new URL(url instanceof Request ? url.url : String(url));
+            if (target.pathname === '/v1/auth/ping' || target.pathname === '/health') {
+                return Response.json({});
+            }
+            if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (target.pathname === '/v2/account/settings') return accountSettingsResponse(init, 9);
+            if (target.pathname !== '/v1/push-tokens' || target.searchParams.get('projectionVersion') !== '2') {
+                return new Response(null, { status: 404 });
+            }
+            projectionRequested = true;
+            await waitForNetworkResponseForTests(projectionReleased, init?.signal);
+            return Response.json({ v: 2, accountRemoteAlerts: { settingsVersion: 9, status: 'current' }, tokens: [] });
         });
         nativeCapabilitiesState.current = null;
         const hook = await renderHook(() => useRemoteAlertRegistrationStatus({
@@ -206,16 +206,12 @@ describe('remote alert registration status', () => {
             deviceEnabled: true,
             deviceOverrides: DEFAULT_ATTENTION_DEVICE_OVERRIDES_V1,
         }));
-        await projectionRequested;
+        await waitForHomeGovernance(() => expect(projectionRequested).toBe(true));
         expect(hook.getCurrent().registration.nativeAvailable).toBe(false);
 
         nativeCapabilitiesState.current = { v: 1, platform: 'ios', events: ['ready'] };
         await act(async () => {
-            resolveProjection?.(Response.json({
-                v: 2,
-                accountRemoteAlerts: { settingsVersion: 9, status: 'current' },
-                tokens: [],
-            }));
+            releaseProjection();
             await new Promise((resolve) => setTimeout(resolve, 0));
         });
 

@@ -65,6 +65,14 @@ afterEach(async () => {
 });
 
 type Membership = 'builtin' | 'empty' | 'deleted' | 'absent';
+// These journeys exercise the Account's explicit Ask-first policy and durable Inbox decision.
+const catalogApprovalSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+    'notifications.expoPush.update': { approvalRequiredSurfaces: ['ui'] },
+    'notifications.webhooks.add': { approvalRequiredSurfaces: ['ui'] },
+    'notifications.webhooks.update': { approvalRequiredSurfaces: ['ui'] },
+    'notifications.webhooks.remove': { approvalRequiredSurfaces: ['ui'] },
+    'notifications.webhooks.signingSecret.clear': { approvalRequiredSurfaces: ['ui'] },
+} });
 async function openCatalogScreen(membership: Membership, independentlyEnabledPreferences = false, actionsSettingsV1?: ActionsSettingsV1) {
     const accountId = `notification-controls-${membership}`;
     const legacyNotifications = {
@@ -90,7 +98,8 @@ async function openCatalogScreen(membership: Membership, independentlyEnabledPre
     });
     const raw: Record<string, unknown> = { notificationsSettingsV1: legacyNotifications, attentionDeliveryPolicyV1: policy,
         sessionRemoteAlertsEnabled: true, futurePreference: { retained: 'opaque sibling' },
-        ...(actionsSettingsV1 ? { actionsSettingsV1 } : {}),
+        actionsSettingsV1: { ...catalogApprovalSettings, ...actionsSettingsV1,
+            actions: { ...catalogApprovalSettings.actions, ...actionsSettingsV1?.actions } },
         ...(membership === 'absent' ? { notificationChannelsV1: [] } : {}),
     };
     const fixture = await restoreNotificationsSettingsCatalog({
@@ -353,7 +362,7 @@ describe('NotificationsSettingsView catalog control authority', () => {
             enabled: true, url: 'https://hooks.example.test/signed', topics: {},
             readyIncludeMessageText: false, requestIncludeMessageText: false,
             signingSecretRef: formatSharedSavedSecretRefV1('24683d18-f5a1-4e0a-bb2c-5f0fd97b6155') });
-        const raw = { futurePreference: { retained: true } };
+        const raw = { futurePreference: { retained: true }, actionsSettingsV1: catalogApprovalSettings };
         const fixture = await restoreNotificationsSettingsCatalog({ accountId: 'notification-clear-existing',
             serverUrl: 'https://notification-clear-existing.example.test', rawSettings: raw,
             catalog: { status: 'present', record: { v: 1, channels: [webhook] } } });

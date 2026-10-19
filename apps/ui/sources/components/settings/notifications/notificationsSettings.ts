@@ -6,16 +6,6 @@ import { accountNotificationStorageBinding, notificationBadgeStorageBinding, not
 export const NOTIFICATIONS_SETTINGS = defineSettingsPage({
     pageId: 'notifications',
     sections: {
-        autoFollow: {
-            titleKey: 'session.follow.preferences.title',
-            featureId: 'sessions.following',
-            settings: {
-                autoFollowAssigned: {},
-                autoFollowDirect: {},
-                autoFollowTeam: {},
-                autoFollowGroup: {},
-            },
-        },
         // Activity surfaces render on iOS; the desktop app shows the shared part only.
         activitySurfaces: {
             titleKey: 'settingsNotifications.activitySurfaces.title',

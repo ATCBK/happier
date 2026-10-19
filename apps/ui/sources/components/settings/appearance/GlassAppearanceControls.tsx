@@ -25,6 +25,7 @@ import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
+import { Slider } from '@/components/ui/forms/Slider';
 import { SettingAnchor, SettingRow, SettingSection } from '@/components/settings/shell/SettingRow';
 import { openDesktopReduceTransparencySettings } from '@/utils/platform/desktopGlassMaterial';
 import { Modal } from '@/modal';
@@ -92,10 +93,19 @@ export function GlassAppearanceControls(props: Readonly<{ presentation: 'tiles' 
         id,
         label: t(id === 'light' ? 'settingsAppearance.glass.intensityLight' : id === 'regular' ? 'settingsAppearance.glass.intensityRegular' : 'settingsAppearance.glass.intensityStrong'),
     }));
-    const tintOptions = (['subtle', 'medium', 'strong'] as const).map(id => ({
-        id,
-        label: t(id === 'subtle' ? 'settingsAppearance.glassControls.tintSubtle' : id === 'medium' ? 'settingsAppearance.glassControls.tintMedium' : 'settingsAppearance.glassControls.tintStrong'),
-    }));
+    const tintDisabled = appearance.preset === 'solid' || appearance.preset === 'custom';
+    const tintPercent = `${appearance.tint}%`;
+    const tintSlider = <Slider
+        testID="appearance-tint"
+        accessibilityLabel={t(APPEARANCE_SETTINGS.settings.glassTint.titleKey)}
+        min={0}
+        max={100}
+        step={1}
+        value={appearance.tint}
+        formatValueText={value => `${value}%`}
+        onValueChange={appearance.setTint}
+        disabled={tintDisabled}
+    />;
     if (props.presentation === 'panel') {
         return <>
             <LookPanelBlock title={t('settingsAppearance.glassControls.title')}>
@@ -118,15 +128,8 @@ export function GlassAppearanceControls(props: Readonly<{ presentation: 'tiles' 
                     disabled={appearance.preset === 'solid'}
                 />
             </LookPanelBlock> : null}
-            <LookPanelBlock title={t(APPEARANCE_SETTINGS.settings.glassTint.titleKey)}>
-                <LookSegments
-                    label={t(APPEARANCE_SETTINGS.settings.glassTint.titleKey)}
-                    testIDPrefix="appearance-tint"
-                    options={tintOptions}
-                    value={appearance.tint}
-                    onChange={appearance.setTint}
-                    disabled={appearance.preset === 'solid' || appearance.preset === 'custom'}
-                />
+            <LookPanelBlock title={t(APPEARANCE_SETTINGS.settings.glassTint.titleKey)} value={tintPercent} testID="appearance-tint-block">
+                {tintSlider}
             </LookPanelBlock>
         </>;
     }
@@ -155,13 +158,13 @@ export function GlassAppearanceControls(props: Readonly<{ presentation: 'tiles' 
         disabled={appearance.preset === 'solid'}
     />;
     // Tint scales the named presets' Elements and menu coats; authored (custom) coats apply as set.
-    const tint = <SegmentedChoiceItem
+    const tint = <Item
+        testID="appearance-tint-row"
         title={t(APPEARANCE_SETTINGS.settings.glassTint.titleKey)}
-        testIDPrefix="appearance-tint"
-        options={tintOptions}
-        value={appearance.tint}
-        onChange={appearance.setTint}
-        disabled={appearance.preset === 'solid' || appearance.preset === 'custom'}
+        detail={tintPercent}
+        disabled={tintDisabled}
+        showChevron={false}
+        bottomElement={<View style={styles.tintSlider}>{tintSlider}</View>}
     />;
     return <>
         {material}
@@ -287,6 +290,8 @@ const styles = StyleSheet.create(theme => ({
     homePreviewComposer: { width: '46%', height: '15%', borderRadius: theme.borderRadius.md },
     homePreviewCards: { position: 'absolute', left: '8%', right: '8%', bottom: 0, height: '22%', flexDirection: 'row', gap: '3%' },
     homePreviewCard: { flex: 1, borderTopLeftRadius: theme.borderRadius.md, borderTopRightRadius: theme.borderRadius.md },
+    // The slider spans the row under its label and value, as the Look page's Strength does.
+    tintSlider: { alignSelf: 'stretch' },
     effectiveStateRow: { paddingHorizontal: 0 },
     effectiveState: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.secondary },
     downloadAction: { flexDirection: 'row', alignSelf: 'flex-start' },

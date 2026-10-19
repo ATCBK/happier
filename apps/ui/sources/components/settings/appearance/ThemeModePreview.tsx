@@ -4,7 +4,7 @@ import Color from 'color';
 
 import { darkTheme, lightTheme } from '@/theme';
 import { glassElementsCoatColor, glassSurfaceBackgroundColor, glassSurfaceTintColor } from '@/components/ui/glass/glassSurfacePaint';
-import { resolveGlassBackdropTone, type GlassSurfaceMaterials, type GlassMaterialSettings, type GlassMaterialEnvironment } from '@/components/ui/glass/glassMaterial';
+import { resolveGlassBackdropMap, type GlassSurfaceMaterials, type GlassMaterialSettings, type GlassMaterialEnvironment } from '@/components/ui/glass/glassMaterial';
 import { resolveGlassPresentationVariables } from '@/components/ui/glass/glassDocumentPresentation';
 import { createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 
@@ -47,11 +47,13 @@ export function ThemePalettePreview(props: Readonly<{
     // Material-bearing objects take their real roles and ladder fills, as GlassSurface paints them live.
     const cardFill = glassElementsCoatColor(c.edge?.cardFill ?? c.surface.base, c.surface.base);
     const floatingFill = c.edge?.floatingFill ?? c.surface.base;
-    const backdropTone = materials ? resolveGlassBackdropTone(
-        props.materialSettings ?? { glassSurfaceMaterials: materials }, 'floating', props.palette.dark === true,
+    // The one backdrop treatment the live surface resolves: its tone and the effective coat opacity.
+    const backdropMap = (group: 'card' | 'floating', solid: string) => materials ? resolveGlassBackdropMap(
+        props.materialSettings ?? { glassSurfaceMaterials: materials }, group, props.palette.dark === true,
         props.materialEnvironment ?? { desktopWindow: true, nativeWindowMaterialLive: true },
-        { page: c.surface.base, solid: floatingFill },
-    ) : undefined;
+        { page: c.surface.base, solid },
+    ) : null;
+    const backdropTone = materials ? backdropMap('floating', floatingFill)?.tone ?? '' : undefined;
     const variables = materials ? resolveGlassPresentationVariables(
         props.materialSettings ?? { glassSurfaceMaterials: materials },
         props.materialEnvironment ?? { desktopWindow: true, nativeWindowMaterialLive: true },
@@ -62,7 +64,10 @@ export function ThemePalettePreview(props: Readonly<{
         const tintColor = glassSurfaceTintColor({ color, ink: c.text?.primary ?? color, dark: props.palette.dark === true,
             settings: props.materialSettings ?? { glassSurfaceMaterials: materials }, group,
             environment: props.materialEnvironment ?? { desktopWindow: true, nativeWindowMaterialLive: true }, page: c.surface.base });
-        if (Platform.OS === 'web') return glassSurfaceBackgroundColor(tintColor, group, nested);
+        if (Platform.OS === 'web') {
+            const coatOpacity = group === 'card' || group === 'floating' ? backdropMap(group, color)?.opacity : undefined;
+            return glassSurfaceBackgroundColor(tintColor, group, nested, false, coatOpacity);
+        }
         // The static native miniature paints the same effective coat; CSS variables are web-only.
         const opacity = Number.parseFloat(variables[`--happier-glass-${group}-${nested ? 'nested-opacity' : 'opacity'}`]!) / 100;
         return Color(tintColor).alpha(opacity).rgb().string();
