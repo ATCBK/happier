@@ -55,6 +55,28 @@ beforeEach(async () => {
 afterEach(standardCleanup);
 
 describe('SharedWithTeamsSourceAdministration', () => {
+    it('reads readiness once across equal parent renders and re-reads a changed source', async () => {
+        const serverId = await harness.addHome({ name: 'Home', serverUrl: 'https://home.example', accountId: 'owner' });
+        await harness.selectHomes([serverId]);
+        const row = teamCredentialSourceResourceFixture();
+        harness.answer(serverId, LIST_PATH, { body: { resources: [row] } });
+        const { SharedWithTeamsSourceAdministration } = await import('./SharedWithTeamsSourceAdministration');
+        const render = (connectionId = CONNECTION_ID) => <SharedWithTeamsSourceAdministration
+            scope={{ serverId, accountId: 'owner' }}
+            source={{ v: 1, kind: 'provider_connection', connectionId }}
+        />;
+        const screen = await renderScreen(render());
+        await vi.waitFor(() => expect(harness.requestsFor(LIST_PATH)).toHaveLength(1));
+        // A minute of unrelated parent updates must not become readiness polling.
+        for (let second = 0; second < 60; second++) await screen.update(render());
+        expect(harness.requestsFor(LIST_PATH)).toHaveLength(1);
+        await screen.update(render(ProviderConnectionIdSchema.parse('connection-2')));
+        await vi.waitFor(() => expect(harness.requestsFor(LIST_PATH)).toHaveLength(2));
+        expect(harness.requestsFor(LIST_PATH)[1]?.input).toMatchObject({
+            source: { kind: 'provider_connection', connectionId: 'connection-2' },
+        });
+    });
+
     it.each([
         { operation: 'narrow', refreshFails: false },
         { operation: 'delete', refreshFails: false },

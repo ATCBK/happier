@@ -292,6 +292,62 @@ afterEach(() => {
 });
 
 describe('TeamCredentialEditScreen broker placement', () => {
+    it.each(['succeeded', 'unreachable', 'not_visible'] as const)('waits for the exact administration read when a recipient catalog row arrives first (%s)', async (outcome) => {
+        const serverId = await harness.addHome({
+            name: 'Home A', serverUrl: 'https://recipient-editor.test', accountId: 'account-maya',
+            teamsEnabled: true, credentialResourcesEnabled: true,
+        });
+        await harness.selectHomes([serverId]);
+        harness.answer(serverId, TEAM_GET_PATH, { body: teamSummaryFixture() });
+        const resource = teamCredentialResourceFixture({
+            source: null,
+            brokerPlacement: null,
+            brokerPresentation: { selectedTarget: null, eligibleTargets: [], selectedPool: null, eligiblePools: [] },
+            readiness: { kind: 'broker_unavailable' },
+            recoveryAction: 'source_owner_action',
+        });
+        const exactRead = createDeferred<{ status?: number; body: typeof resource | { error: string } }>();
+        harness.answer(serverId, CREDENTIAL_GET_PATH, { select: () => exactRead.promise });
+        harness.answer(serverId, ENTITLED_LIST_PATH, { body: { resources: [{
+            id: resource.id, teamId: resource.teamId, displayName: resource.displayName,
+            resourceRevision: resource.revision, sourcePresentation: resource.sourcePresentation,
+            readiness: resource.readiness, recoveryAction: resource.recoveryAction,
+            mayBroker: true, mayReceiveDirect: false, directMaterialState: 'never_delivered',
+            sessionUsePolicy: resource.sessionUsePolicy, providerModels: [], connectedServiceSelections: [],
+        }] } });
+        harness.answer(serverId, LIMITS_LIST_PATH, { body: { limits: [], nextCursor: null } });
+        const { getTeamCredentialResourceCatalogSnapshot } = await import('@/sync/store/teams/teamsSnapshots');
+        const { TeamCredentialEditScreen } = await import('./TeamCredentialEditScreen');
+        const screen = await renderScreen(
+            <TeamCredentialEditScreen serverId={serverId} teamId="team-1" resourceId={resource.id} />,
+        );
+        await vi.waitFor(() => expect(getTeamCredentialResourceCatalogSnapshot(
+            { serverId, accountId: 'account-maya' }, { serverId, teamId: 'team-1' },
+        )?.status).toBe('ready'));
+
+        expect(screen.findByTestId('team-credential-edit-unavailable')).toBeNull();
+        expect(screen.findByTestId('team-credential-edit-loading')).not.toBeNull();
+
+        if (outcome === 'not_visible') {
+            await act(async () => exactRead.resolve({ status: 404, body: { error: 'not_found_or_not_visible' } }));
+            await vi.waitFor(() => expect(screen.findByTestId('team-credential-edit-unavailable')).not.toBeNull());
+            expect(screen.findByTestId('team-credential-edit-name')).toBeNull();
+            return;
+        }
+        if (outcome === 'unreachable') {
+            await act(async () => exactRead.resolve({ status: 503, body: { error: 'unavailable' } }));
+            await vi.waitFor(() => expect(screen.findByTestId('team-credential-edit-resource-retry')).not.toBeNull());
+            expect(screen.findByTestId('team-credential-edit-unavailable')).toBeNull();
+            harness.answer(serverId, CREDENTIAL_GET_PATH, { body: resource });
+            await screen.pressByTestIdAsync('team-credential-edit-resource-retry');
+        } else {
+            await act(async () => exactRead.resolve({ body: resource }));
+        }
+        await vi.waitFor(() => expect(screen.findByTestId('team-credential-edit-name')?.props.value).toBe(resource.displayName));
+        expect(screen.findByTestId('team-credential-edit-unavailable')).toBeNull();
+        expect(screen.root.findAllByType('MachineAdministrationTargetSelector')).toHaveLength(0);
+    });
+
     it('retries an initial source read without replacing the resource draft', async () => {
         const { screen, serverId, resource } = await renderEditor({ sourceReadFails: true });
         act(() => screen.changeTextByTestId('team-credential-edit-name', 'Keep this draft'));

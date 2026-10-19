@@ -85,6 +85,12 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
     props: Readonly<{ scope: ServerAccountScope; source: TeamCredentialSourceLocatorV1 }>,
 ) {
     const router = useRouter();
+    const scope = React.useMemo(() => ({
+        serverId: props.scope.serverId,
+        accountId: props.scope.accountId,
+    }), [props.scope.serverId, props.scope.accountId]);
+    const sourceKey = teamCredentialSourceLocatorKeyV1(props.source);
+    const source = React.useMemo(() => props.source, [sourceKey]);
     const [rows, setRows] = React.useState<readonly TeamCredentialSourceResourceAdministrationV1[] | null>(null);
     const [error, setError] = React.useState<string | null>(null);
     const [pendingId, setPendingId] = React.useState<string | null>(null);
@@ -102,7 +108,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
         const requestGeneration = ++generation.current;
         rowsCurrentRef.current = false;
         setRowsCurrent(false);
-        const outcome = await listTeamCredentialSourceResources(props);
+        const outcome = await listTeamCredentialSourceResources({ scope, source });
         if (generation.current !== requestGeneration) return;
         if (outcome.kind === 'succeeded') {
             setRows(outcome.value.resources);
@@ -113,13 +119,13 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
         } else {
             setError(credentialFailureMessage(outcome.failure));
         }
-    }, [props.scope, props.source]);
+    }, [scope, source]);
     const loadMore = React.useCallback(async () => {
         if (!nextCursor || !rowsCurrentRef.current) return;
         const requestGeneration = generation.current;
         setLoadingMore(true);
         try {
-            const outcome = await listTeamCredentialSourceResources({ ...props, cursor: nextCursor });
+            const outcome = await listTeamCredentialSourceResources({ scope, source, cursor: nextCursor });
             if (generation.current !== requestGeneration) return;
             if (outcome.kind === 'succeeded') {
                 setRows((current) => [...(current ?? []), ...outcome.value.resources.filter(
@@ -128,7 +134,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                 setNextCursor(readSourceResourceNextCursor(outcome.value));
             } else setError(credentialFailureMessage(outcome.failure));
         } finally { setLoadingMore(false); }
-    }, [nextCursor, props.scope, props.source]);
+    }, [nextCursor, scope, source]);
     const approval = useActionApprovalContinuation({
         scopeKey: `${props.scope.serverId}:${props.scope.accountId}:credential-source:${teamCredentialSourceLocatorKeyV1(props.source)}`,
         serverId: props.scope.serverId,
