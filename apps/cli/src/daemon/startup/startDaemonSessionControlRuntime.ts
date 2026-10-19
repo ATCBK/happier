@@ -13289,8 +13289,8 @@ export async function startDaemonSessionControlRuntime(
         });
       },
       purposeBindingOwner: Object.freeze({
-        activatePurposeBindings: async (input, { parentSessionId }) => {
-          const context = await resolveSessionAccountContext(parentSessionId);
+        activatePurposeBindings: async (input, { parentSessionId, signal }) => {
+          const context = await resolveSessionAccountContext(parentSessionId, undefined, signal);
           try {
             const activate = context
               ? context.activatePurposeBindings

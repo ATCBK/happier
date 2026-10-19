@@ -125,7 +125,7 @@ export async function readActiveConnectedAccountCatalog(input: Parameters<typeof
   const snapshot = input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
   const expectedScope = input.operationContext?.readSnapshot()?.scopeKey ?? resolveAccountSettingsScopeKey(input.credentials);
   if (!snapshot || snapshot.scopeKey !== expectedScope
-    || input.operationContext && !await input.operationContext.isCurrent()
+    || input.operationContext && !await input.operationContext.isCurrent(input.signal)
     || !input.operationContext && lifetime !== getActiveAccountSettingsSnapshotLifetimeToken()) {
     return { status: 'unavailable' as const, reason: 'scope-retired' as const };
   }

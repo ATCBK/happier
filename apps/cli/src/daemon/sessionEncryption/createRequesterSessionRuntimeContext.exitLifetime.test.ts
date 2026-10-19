@@ -19,6 +19,10 @@ it.each(['before_exit', 'during_exit', 'before_cleanup_registration', 'collision
   'retires current requester custody across %s',
   async replacement => {
     const directory = await mkdtemp(join(tmpdir(), 'requester-exit-lifetime-'));
+    // The substituted Home authenticates this token; requester owners still
+    // consume its real Account subject, including the Follow cache boundary.
+    const requesterToken = `e30.${Buffer.from(JSON.stringify({ sub: 'bob', tokenEpoch: 1,
+      provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.fixture`;
     const channel = await createRequesterCurrentnessSocketHarness();
     let releaseExitCleanup: (() => void) | undefined;
     let announceExitCleanup: (() => void) | undefined;
@@ -69,7 +73,7 @@ it.each(['before_exit', 'during_exit', 'before_cleanup_registration', 'collision
       const switchCoordinator = host.runtime.connectedServiceAuthGroupPreTurnSwitchCoordinator;
       const admitBootstrap = async () => {
         const admitted = await admitRequesterSessionBootstrap({
-          bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: 'bob' } },
+          bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: requesterToken } },
           existingSessionId: 'bob-session',
           boundary: { serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', happyHomeDir: directory },
           context: { signal: new AbortController().signal,
@@ -246,6 +250,7 @@ it.each(['before_exit', 'during_exit', 'before_cleanup_registration', 'collision
         try {
           await requester?.dispose();
           await retainedPredecessor?.dispose();
+          await initialBootstrap?.dispose();
         } finally {
           try {
             await host?.dispose();

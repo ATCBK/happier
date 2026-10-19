@@ -2011,27 +2011,28 @@ export function createActiveAccountSettingsConnectedAccountPurposeBindingStore(i
         throw unavailable('scope-retired');
       }
     };
-    const verifyCurrent = async () => {
+    const verifyCurrent = async (signal?: AbortSignal) => {
+      signal?.throwIfAborted();
       assertCurrent();
-      if (input.operationContext && !await input.operationContext.isCurrent()) throw unavailable('scope-retired');
+      if (input.operationContext && !await input.operationContext.isCurrent(signal)) throw unavailable('scope-retired');
       assertCurrent();
     };
     assertCurrent();
     return { assertCurrent, verifyCurrent };
   };
-  const credentialsForOperation = async (operation: ReturnType<typeof captureOperation>) => {
+  const credentialsForOperation = async (operation: ReturnType<typeof captureOperation>, signal?: AbortSignal) => {
     const credentials = input.operationContext?.credentials ?? input.credentials ?? await readStoredCredentials();
-    await operation.verifyCurrent();
+    await operation.verifyCurrent(signal);
     if (!credentials) throw unavailable('credentials-unavailable');
     return credentials;
   };
   const readCatalog = async (operation: ReturnType<typeof captureOperation>, signal?: AbortSignal) => {
     signal?.throwIfAborted();
-    await operation.verifyCurrent();
+    await operation.verifyCurrent(signal);
     let catalog = readConnectedAccountCatalogFromSnapshot(readSnapshot(), 'purposes');
     if (catalog.status === 'loading') catalog = await refreshActiveConnectedAccountCatalog({
-      credentials: await credentialsForOperation(operation), key: 'purposes', signal, operationContext: input.operationContext });
-    await operation.verifyCurrent();
+      credentials: await credentialsForOperation(operation, signal), key: 'purposes', signal, operationContext: input.operationContext });
+    await operation.verifyCurrent(signal);
     if (catalog.status !== 'ready') throw unavailable(catalog.status === 'unavailable' ? catalog.reason : 'loading');
     if (catalog.record.key !== 'purposes') throw unavailable('invalid-stored-content');
     signal?.throwIfAborted();
@@ -2047,10 +2048,10 @@ export function createActiveAccountSettingsConnectedAccountPurposeBindingStore(i
     async update(mutate, signal) {
       const operation = captureOperation();
       const current = await readCatalog(operation, signal);
-      await operation.verifyCurrent();
+      await operation.verifyCurrent(signal);
       operation.assertCurrent();
       const value = ConnectedPurposeCatalogV1Schema.parse(mutate(current.record.value));
-      const credentials = await credentialsForOperation(operation);
+      const credentials = await credentialsForOperation(operation, signal);
       operation.assertCurrent();
       const transport = createCliConnectedAccountCatalogStore({ credentials, signal, operationContext: input.operationContext });
       const result = await transport.writeRecord({ record: { key: 'purposes', value }, expectedRevision: current.revision }).catch(async (error: unknown) => {

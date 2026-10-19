@@ -111,7 +111,8 @@ export function createRequesterSessionRuntimeContextResolver(input: Readonly<{
     let stamp = tracked?.requesterWorkAttributionV1 ?? tracked?.spawnOptions?.requesterWorkAttributionV1
       ?? context?.bootstrap.attribution ?? attribution;
     if (stamp && attribution && !isDeepStrictEqual(stamp, attribution)) return null;
-    const recoverBootstrap = () => input.recoverBootstrap({ sessionId, ...(stamp ? { attribution: stamp } : {}), tracked: tracked !== undefined, signal });
+    const recoverBootstrap = () => input.recoverBootstrap({ sessionId, ...(stamp ? { attribution: stamp } : {}), tracked: tracked !== undefined,
+      ...(signal ? { signal } : {}) });
     const coldBootstrap = !context ? await recoverBootstrap() : null;
     stamp ??= coldBootstrap?.attribution;
     if (!stamp) return null;
@@ -225,7 +226,7 @@ export type AdmittedRequesterSessionBootstrap = Readonly<{
   subscribeAccountSettings(listener: () => void): () => void;
   subscribeSessionFollowRules(listener: () => void): () => void;
   subscribeSessionFollowSources(listener: (sourceSessionId: string | null) => void): () => void;
-  isCurrent(): Promise<boolean>;
+  isCurrent(signal?: AbortSignal): Promise<boolean>;
   /** Retires this bootstrap's observation when its ordinary runtime lifetime ends. */
   dispose(): Promise<void>;
   getBoundSessionId(): string | null;
@@ -336,7 +337,7 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
       const observed = await accountObservation.read(currentnessSignal());
       return live && !currentnessSignal().aborted && sameRequesterAccountEncryptionCurrentness(observed, currentness);
     };
-    const isCurrent = async () => {
+    const readCurrentness = async () => {
       if (!await isObservationCurrent()) return false;
       const checkpoint = requesterCurrentnessCheckpoint.getStore();
       const read = (observed: RequesterCurrentnessObservation) => observed.pending
@@ -358,8 +359,9 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
       const observed = currentObservation;
       return reused ? timeWebLatencyPhase('requester.currentness_reuse', () => read(observed), reused.trace) : read(observed);
     };
-    const readPreparationCurrentness = () => readRequesterHomeWithinActionLifetime(
-      () => waitForObservation(isCurrent(), input.signal ?? currentnessSignal()), input.signal);
+    const isCurrent = (signal?: AbortSignal) => readRequesterHomeWithinActionLifetime(
+      () => signal ? waitForObservation(readCurrentness(), signal) : readCurrentness(), signal);
+    const readPreparationCurrentness = () => isCurrent(input.signal);
     if (!await readPreparationCurrentness()) return null;
     const accountSettingsContext = await readRequesterHomeWithinActionLifetime(() => runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl,
       () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', publication: 'invocation',

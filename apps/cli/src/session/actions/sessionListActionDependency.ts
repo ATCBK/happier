@@ -23,6 +23,7 @@ import { evaluateFollowRulePreviewV1, type FollowRulePreviewCandidateV1 } from '
 import { projectSessionListFilterAfterHomeQueryV1, projectSessionListFilterHomeQueriesV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterQueryV1';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
+import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
 
 /** The one typed answer for a query arm an admitted one-Session corpus cannot serve. */
 function unsupportedSessionListQueryArmsResult(arms: readonly string[]) {
@@ -267,9 +268,12 @@ export function createSessionListActionDeps(params: Readonly<{
       ...(allowedSessionIds ? { allowedSessionIds } : {}),
     });
     try {
-      return params.serverHttpBaseUrl
-        ? await runWithServerHttpBaseUrl(params.serverHttpBaseUrl, run)
-        : await run();
+      // Scope observation is a preparation read, not the Action effect. Retain
+      // its admitted lifetime through transient Home failures before the scope
+      // guard classifies an unavailable observation as an unsupported corpus.
+      return await readRequesterHomeWithinActionLifetime(() => params.serverHttpBaseUrl
+        ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, run)
+        : run(), signal);
     } catch (error) {
       // The admitted one-Session corpus cannot answer every query arm; that is a
       // typed contract answer, not a transport failure.

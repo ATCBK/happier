@@ -1,17 +1,19 @@
 import axios from 'axios';
 import fastify from 'fastify';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { buildProviderAccountUsageRecordId, FeaturesResponseSchema, type ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol';
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { buildProviderAccountUsageRecordId, FeaturesResponseSchema, QualifiedConnectedAccountCredentialSnapshotV4Schema,
+  QualifiedConnectedAccountListResponseV4Schema, type ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createProviderAccountUsagePersistenceScheduler, flushProviderAccountUsagePersistenceForTrackedSessions } from '../connectedServices/accountUsage/persistence';
 import { fetchConnectedServiceProjectionForSession } from '../connectedServices/accountGroups/generation/connectedServiceProjectionSnapshot';
 import { registerExecutionRunConnectedServicesTarget } from '../connectedServices/runs/executionRunMaterialization';
 import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
-import { admitRequesterSessionBootstrap, assertRequesterSessionAccountContextCurrent, createRequesterSessionCredentialCustody, listRequesterSessionCredentialBindings } from './requesterSessionCredentials';
+import { admitRequesterSessionBootstrap, assertRequesterSessionAccountContextCurrent, createRequesterSessionCredentialCustody, createRequesterSessionRuntimeContextResolver, listRequesterSessionCredentialBindings } from './requesterSessionCredentials';
 import { createRequesterSessionRuntimeContext } from './createRequesterSessionRuntimeContext';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
@@ -49,6 +51,12 @@ import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
 import { buildSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/follow/changes';
 import type { ChangeEntry } from '@happier-dev/protocol/changes';
 import { DELIVERY_MUTE_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+import { retainExecutionRunState } from '../executionRunRegistry';
+import { readProcessIdentityByPid } from '../processIdentity';
+import { hashProcessCommand } from '../sessionRegistry';
+import { pluginReloadController as runPluginRuntimeController } from '@/plugins/runtime/reload/singleton';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { logger as fileLogger } from '@/utils/logger';
 
 // HTTP substitutes authentication; the real Account owners still inspect the subject.
 function accountToken(accountId: string) {
@@ -178,10 +186,16 @@ it('returns installed Account personal ready policy through startup and refuses 
 });
 
 let channel: Awaited<ReturnType<typeof createRequesterCurrentnessSocketHarness>>;
+let openedRunPluginRuntime = false;
 beforeEach(async () => { channel = await createRequesterCurrentnessSocketHarness(); });
 afterEach(async () => { await channel.close(); });
-it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'authorization-observations', 'warm-account', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
+afterAll(async () => { if (openedRunPluginRuntime) await runPluginRuntimeController.shutdown(); });
+it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'run-home-recovery', 'run-purpose-home-recovery', 'run-binding-home-recovery', 'authorization-observations', 'warm-account', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
   const actionPolicySurface = surface === 'action-policy' || surface === 'action-home-recovery' || surface === 'authorization-observations';
+  const runSurface = surface === 'run-home-recovery' || surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
+  const runPurposeSurface = surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
+  const runService = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+  const runCredentialRevision = 'csr_aaaaaaaaaaaaaaaaaaaaaa';
   const directory = await mkdtemp(join(tmpdir(), 'requester-profiles-'));
   let current = true;
   let revision = 2;
@@ -194,6 +208,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
   const authorizationMintReads: number[] = [];
   let authorizationProfileReads = 0;
   let failActionHomeRead = false;
+  let runHomeStatus: number | null = null;
   let holdAuthorizationProfile = false;
   const authorizationProfileGate: { release?: () => void } = {};
   const releaseAuthorizationProfile = () => authorizationProfileGate.release?.();
@@ -212,7 +227,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
   const requesterToken = accountToken('bob');
   const control: { routes?: Parameters<typeof controlServer.startDaemonControlServer>[0] } = {};
   // The loopback HTTP server is the boundary; retain the real startup Action factory.
-  const controlBoundary = actionPolicySurface || surface === 'follow-source' ? vi.spyOn(controlServer, 'startDaemonControlServer')
+  const controlBoundary = actionPolicySurface || runSurface || surface === 'follow-source' ? vi.spyOn(controlServer, 'startDaemonControlServer')
     .mockImplementation(async input => { control.routes = input; return { port: 43127, stop: async () => {} }; }) : null;
   const approvalIds: string[] = [];
   const artifactBoundary = actionPolicySurface ? vi.spyOn(axios, 'post').mockImplementation(async (url, data, config) => {
@@ -303,6 +318,11 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
     }
     if (path.endsWith('/profile')) {
       authorizationProfileReads++;
+      if (runHomeStatus !== null) {
+        const status = runHomeStatus;
+        runHomeStatus = null;
+        return { status, data: { error: 'home_unavailable' } };
+      }
       if (failActionHomeRead) {
         failActionHomeRead = false;
         throw new axios.AxiosError('Requester Home read timed out', 'ECONNABORTED');
@@ -332,6 +352,21 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
         diagnostics: [], referenceGuardRevision: revision, transferControl: { status: 'absent' } } };
     }
     if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (runPurposeSurface && path.startsWith('/v4/connect/')) {
+      expect(config?.headers?.Authorization).toBe(`Bearer ${requesterToken}`);
+      expect(new URL(url).origin).toBe('https://bob-home.test');
+      if (path === '/v4/connect/qualified/configuration') return { status: 404, data: null };
+      if (path === '/v4/connect/qualified/accounts') return { status: 200, data: QualifiedConnectedAccountListResponseV4Schema.parse({
+        service: runService, accounts: [{ ref: { service: runService, accountId: 'work' }, status: 'connected', authenticationModeId: 'oauth',
+          revisionSemantics: 'revisioned', credentialRevision: runCredentialRevision, configurationReady: true, configurationRevision: null, scopes: [] }],
+      }) };
+      if (path === '/v4/connect/qualified/credential') return { status: 200, data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+        ref: { service: runService, accountId: 'work' }, authenticationModeId: 'oauth', revisionSemantics: 'revisioned',
+        credentialRevision: runCredentialRevision, configurationRevision: null, metadata: { scopes: [] },
+        content: { t: 'plain', v: { v: 1, values: { accessToken: 'fixture-bob-subscription', refreshToken: 'fixture-bob-refresh',
+          idToken: 'fixture-bob-id', providerAccountId: 'fixture-bob-billing' } } },
+      }) };
+    }
     if (path === '/v4/connect/qualified/accounts') return { status: 200, data: {
       service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accounts: [] } };
     return { status: 200, data: { content: { t: 'plain', v: savedSettings }, version: settingsVersion } };
@@ -356,20 +391,21 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
     throw new Error(`Unexpected write: ${path}`);
   }) : null;
   let host: Awaited<ReturnType<typeof createRequesterSessionControlRuntimeFixture>> | null = null;
+  const pluginRuntimeController = runSurface ? runPluginRuntimeController : null;
   try {
     const registry = new ConnectedServiceRuntimeRegistry();
     const trackedSessions = new Map<number, TrackedSession>();
     host = await createRequesterSessionControlRuntimeFixture({ happyHomeDir: directory, activeServerDir: directory,
       serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', machineId: 'machine', custodianAccountId: 'alice',
       credentials: aliceCredentials, connectedServicesMaterializationBaseDir: join(directory, 'materialized'),
-      registry, trackedSessions, getRequester: () => runtime, resolveQualifiedConnectedAccountV4Support: () => 'indeterminate',
+      registry, trackedSessions, getRequester: () => runtime, resolveQualifiedConnectedAccountV4Support: () => runPurposeSurface ? 'advertised' : 'indeterminate',
       ...(actionPolicySurface || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' ? { startup: { resolveCurrentMachineExecutionOriginContext: async () => {
         authorizationStartReads = sessionReads;
         authorizationProfileReads = 0;
         return { machineId: 'machine', serverIdentityId: 'bob-home' };
       } } } : {}) });
     const admitted = await admitRequesterSessionBootstrap({ bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: requesterToken } },
-      ...(actionPolicySurface || surface === 'refresh-observations' || surface === 'request-auth-observations' || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' ? { existingSessionId: requesterSessionId } : {}),
+      ...(actionPolicySurface || runSurface || surface === 'refresh-observations' || surface === 'request-auth-observations' || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' ? { existingSessionId: requesterSessionId } : {}),
       boundary: { serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', happyHomeDir: directory },
       context: { signal: new AbortController().signal, machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'alice',
         machineId: 'machine', installationId: host.installation?.installationId ?? 'installation', role: 'use', encryptionMode: 'plain' },
@@ -380,13 +416,117 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
     expect(admitted.admitted.accountSettingsContext.scopeKey).toBe(resolveAccountSettingsScopeKey(admitted.admitted.credentials));
     runtime = await createRequesterSessionRuntimeContext({ bootstrap: admitted.admitted,
       activeServerDir: directory, connectedServicesMaterializationBaseDir: join(directory, 'materialized'),
-      resolveQualifiedConnectedAccountV4Support: () => 'indeterminate',
+      resolveQualifiedConnectedAccountV4Support: () => runPurposeSurface ? 'advertised' : 'indeterminate',
       coordinatorInput: { machineId: 'machine', machineIdProvider: () => 'machine', runtimeId: 'runtime', happyHomeDir: directory,
         logger: { debug: () => {}, info: () => {}, warn: () => {} }, processEnv: {
           HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: '0', HAPPIER_CONNECTED_SERVICES_QUOTAS_ENABLED: '0' },
         pidToTrackedSession: trackedSessions, connectedServiceRuntimeRegistry: registry,
         connectedServiceAuthGroupPreTurnSwitchCoordinator: host.runtime.connectedServiceAuthGroupPreTurnSwitchCoordinator } });
     if (!runtime) throw new Error('Missing real requester runtime');
+    if (runSurface) {
+      const homeGet = get.getMockImplementation()!;
+      get.mockRestore();
+      const http = fastify();
+      http.get('/*', async (request, reply) => {
+        const response = await homeGet(new URL(request.url, 'https://bob-home.test').href,
+          { headers: { Authorization: request.headers.authorization } });
+        if (!response || typeof response !== 'object' || !('status' in response) || typeof response.status !== 'number'
+          || !('data' in response)) throw new Error('Invalid Home response');
+        return reply.code(response.status).send(response.data);
+      });
+      await http.ready();
+      const restoreHttp = installAxiosFastifyAdapter({ app: http, origin: 'https://bob-home.test' });
+      let pluginRuntime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
+      try {
+      openedRunPluginRuntime = true;
+      pluginRuntime = await createAdmittedPluginRuntimeFixture({ happyHomeDir: directory, controller: pluginRuntimeController!,
+        runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
+      const runner = await readProcessIdentityByPid(process.pid);
+      if (!runner?.processStartTimeMs || !runner.command) throw new Error('Missing live test runner identity');
+      trackedSessions.set(process.pid, { pid: process.pid, happySessionId: requesterSessionId, startedBy: 'daemon',
+        requesterSessionRuntimeContext: runtime, requesterWorkAttributionV1: runtime.bootstrap.attribution,
+        runnerProcessIdentity: { pid: process.pid, processStartTimeMs: runner.processStartTimeMs,
+          processCommandHash: hashProcessCommand(runner.command) } });
+      const runId = randomUUID();
+      await retainExecutionRunState({ runId, callId: 'call', sidechainId: 'side', sessionId: requesterSessionId,
+        depth: 0, intent: 'agent', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, backendId: 'codex',
+        instructions: 'Read only', permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded',
+        ioMode: 'request_response', status: 'running', startedAtMs: 1 });
+      const materialize = control.routes?.materializeConnectedServicesForExecutionRun;
+      if (!materialize) throw new Error('Missing production Run materializer');
+      const signal = new AbortController().signal;
+      const resolveRequester = createRequesterSessionRuntimeContextResolver({ trackedSessions,
+        getCreateRuntime: () => null, recoverBootstrap: async () => null });
+      if (surface === 'run-home-recovery') {
+        runHomeStatus = 503;
+        await expect(resolveRequester(requesterSessionId, runtime.bootstrap.attribution))
+          .rejects.toMatchObject({ code: 'project_requester_home_unavailable', retryable: true });
+      }
+      runHomeStatus = 503;
+      await expect(resolveRequester(requesterSessionId, runtime.bootstrap.attribution, signal)).resolves.toBe(runtime);
+      runHomeStatus = surface === 'run-home-recovery' ? 503 : null;
+      let phaseFaultInjected = false;
+      const infoFile = fileLogger.infoFile.bind(fileLogger);
+      // File logging is an OS boundary. Inject Home failure when the real
+      // production phase starts; every owner beneath it remains composed.
+      const phases = vi.spyOn(fileLogger, 'infoFile').mockImplementation((...args) => {
+        infoFile(...args);
+        const phase = args[1];
+        if (runPurposeSurface && !phaseFaultInjected && phase && typeof phase === 'object'
+          && 'phase' in phase && phase.phase === (surface === 'run-purpose-home-recovery' ? 'purpose_activation' : 'binding_read')
+          && 'status' in phase && phase.status === 'started') {
+          phaseFaultInjected = true;
+          runHomeStatus = 503;
+        }
+      });
+      let response: Awaited<ReturnType<typeof materialize>>;
+      try {
+        response = await materialize({ activationId: randomUUID(), runId,
+          runnerPid: process.pid, agentId: 'codex', cwd: directory, connectedServices: { v: 2, bindingsByServiceId: runPurposeSurface
+            ? { 'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'work' } } : {} } }, signal);
+      } finally { phases.mockRestore(); }
+      // The empty preflight probe has no credential effect; declared-purpose
+      // probes exercise their complete isolated Run materialization and release.
+      if (runPurposeSurface) {
+        expect(phaseFaultInjected).toBe(true);
+        expect(response, !response.ok ? response.errorMessage : undefined).toMatchObject({ ok: true });
+        if (response.ok) await control.routes!.releaseConnectedServicesForExecutionRun!({ runId, runnerPid: process.pid, activationId: response.activationId });
+      } else expect(response).toMatchObject({ ok: false, errorMessage: 'Connected services selection resolved no materialized auth' });
+      expect(runHomeStatus).toBeNull();
+      expect(await runtime.isCurrent()).toBe(true);
+      expect(runtime.readAccountSettingsSnapshot()).toBeDefined();
+      const exactRuntime = runtime;
+      const registration = { runKey: 'requester-signaled-registration', runnerPid: process.pid, agentId: 'codex' as const,
+        materializationKey: 'requester-signaled-registration', connectedServicesBindingsRaw: {}, connectedServiceSelectionsEnv: {}, sessionId: requesterSessionId };
+      const register = (registrationSignal: AbortSignal) => registerExecutionRunConnectedServicesTarget({ registry, registration,
+        signal: registrationSignal,
+        withSessionAccountContext: async <T>(_sessionId: string | null, operation: (context: typeof exactRuntime | null) => Promise<T>) => await operation(exactRuntime),
+        assertSessionAccountCurrent: async (_sessionId, expected, _attribution, readerSignal) => await assertRequesterSessionAccountContextCurrent({
+          expected, signal: readerSignal, resolveCurrent: async () => exactRuntime,
+          readTrackedContext: () => trackedSessions.get(process.pid)?.requesterSessionRuntimeContext ?? null,
+        }),
+      });
+      runHomeStatus = 503;
+      await expect(register(signal)).resolves.toBeUndefined();
+      expect(registry.getRunTargetByRunKey(registration.runKey)?.requesterWorkAttributionV1).toEqual(runtime.bootstrap.attribution);
+      registry.unregisterRunKey(registration.runKey);
+      runHomeStatus = 403;
+      const beforeRefusal = authorizationProfileReads;
+      expect(await runtime.isCurrent(signal)).toBe(false);
+      expect(authorizationProfileReads - beforeRefusal).toBe(1);
+      const cancelled = new AbortController();
+      cancelled.abort();
+      const beforeCancellation = authorizationProfileReads;
+      expect(await runtime.isCurrent(cancelled.signal)).toBe(false);
+      await expect(register(cancelled.signal)).rejects.toThrow('requester_session_not_current');
+      expect(registry.getRunTargetByRunKey(registration.runKey)).toBeNull();
+      expect(authorizationProfileReads).toBe(beforeCancellation);
+      return;
+      } finally {
+        try { await pluginRuntime?.dispose(); }
+        finally { restoreHttp(); await http.close(); }
+      }
+    }
     if (surface === 'follow-source' || surface === 'follow-receiver') {
       const notify = control.routes?.onSessionActivityChanged;
       if (surface === 'follow-source' && !notify) throw new Error('Missing real source IPC receiver');
@@ -441,6 +581,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       const requests: string[] = [];
       type MachineClient = NonNullable<Awaited<ReturnType<BootstrapMachineSyncRuntimeParams['createConnectedApiMachine']>>>;
       let changedSession: Parameters<MachineClient['onSessionChanged']>[0] | undefined;
+      let activatePending: Parameters<MachineClient['onPendingSessionActivationHint']>[0] | undefined;
       let running = false;
       let homeIdentity = 'srv_bob_home';
       const launches: string[] = [];
@@ -462,6 +603,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
         registerLiveStreamRelayRoutes: vi.fn(), connect: vi.fn(),
         updateDaemonState: async () => 'published' as const, updateMachineMetadata: async () => 'published' as const,
         onSessionChanged: (listener: NonNullable<typeof changedSession>) => { changedSession = listener; return () => { changedSession = undefined; }; },
+        onPendingSessionActivationHint: (listener: NonNullable<typeof activatePending>) => { activatePending = listener; return () => { activatePending = undefined; }; },
         emitExternalSessionTranscriptUpdate: vi.fn(), sendMachineTransferEnvelope: vi.fn(), sendTransferRelayV2Envelope: vi.fn(),
         sendMachineLiveStreamRelayEnvelope: vi.fn(),
         getPeerMediationMachineRpcHandlerManager: () => ({ invokeLocal: async () => ({ ok: true }) }),
@@ -476,17 +618,17 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
         spawnSession: async options => {
           expect(options.requesterSessionBootstrap).toBe(requester.bootstrap);
           expect(options.requesterSessionRuntimeContext).toBe(requester);
-          expect(options.executionAuthorization).toBeUndefined();
+          expect(options.executionAuthorization).toMatchObject({ provenance: 'user_request', requestId: pendingRequestId });
           launches.push(options.existingSessionId!); running = true;
           return { type: 'success', sessionId: requesterSessionId };
         }, stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => running,
-        resolveCurrentMachineExecutionOriginContext: resolveAmbientOrigin,
+        requesterServerId: 'bob-home', resolveCurrentMachineExecutionOriginContext: resolveOrigin,
         readRequesterSessionCredentialBindings: () => listRequesterSessionCredentialBindings({ happyHomeDir: directory,
           serverId: 'bob-home', machineId: 'machine', installationId }),
         resolveRequesterSessionRuntimeContext: async (sessionId, attribution) => {
           expect(sessionId).toBe(requesterSessionId); expect(attribution).toEqual(requester.bootstrap.attribution); return requester;
         }, releaseRequesterSessionRuntimeContext: async context => { expect(context).toBe(requester); },
-        ...(surface === 'follow-pending' ? { dispatchSessionFollowOccurrence: host.runtime.dispatchSessionFollowOccurrence } : {}),
+        dispatchSessionFollowOccurrence: host.runtime.dispatchSessionFollowOccurrence,
         loadLocalSessionMetadataForHandoff: async () => null, beforeShutdown: async () => {}, requestShutdown: () => {},
         directPeerServerLifecycle: null, directTransferRegistryHost: createCliRegistryHostV1(),
         connectedServiceRefreshLoopHandle: null, connectedServiceQuotasLoopHandle: null, daemonServerWorkScheduler: {} as never,
@@ -496,14 +638,25 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       let sourceAgentStateVersion = 0;
       let sourceTranscriptSeq = 1;
       let sourceRequests: Record<string, { tool: string; arguments: object; createdAt: number; turnId: string }> = {};
+      let pendingRequestId: string | undefined;
+      const activationTarget = { homeId: 'srv_bob_home', accountId: 'bob', sessionId: requesterSessionId, machineId: 'machine', installationId };
       http.addHook('onRequest', async request => { requests.push(request.url); expect(request.headers.authorization).toBe(`Bearer ${requesterToken}`); });
       http.get('/*', async (request, reply) => {
+        if (request.url === `/v2/sessions/${requesterSessionId}/pending`) return { pending: pendingRequestId
+          ? [{ localId: pendingRequestId, messageRole: 'user', deliveryStatus: { status: 'queued' } }] : [] };
+        if (request.url === `/v2/sessions/${requesterSessionId}` && pendingRequestId) return { session: createSessionRecordFixture({
+          id: requesterSessionId, encryptionMode: 'plain', ownerAccountId: 'bob', origin: { kind: 'none' },
+          metadata: JSON.stringify({ machineId: 'machine', path: directory, flavor: 'codex', codexSessionId: 'bob-native',
+            runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {} } }), dataEncryptionKey: null, share: null,
+          pendingCount: 1, pendingVersion: 1, pendingActivationAuthorization: { status: 'waiting', requestId: pendingRequestId,
+            requestedAt: 1, admittedTarget: activationTarget },
+        }) };
         if (request.url === '/v2/sessions/bob-follow-source') return { session: createSessionRecordFixture({
           id: 'bob-follow-source', encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: '/repo' }),
-          dataEncryptionKey: null, share: null, ownerAccountId: 'bob', origin: { kind: 'none' }, seq: surface === 'follow-pending' ? sourceTranscriptSeq : 0,
+          dataEncryptionKey: null, share: null, ownerAccountId: 'bob', origin: { kind: 'none' }, seq: sourceTranscriptSeq,
           agentStateVersion: sourceAgentStateVersion, agentState: JSON.stringify({ requests: sourceRequests, completedRequests: {} }),
           latestTurnId: surface === 'follow-pending' ? null : 'failed-turn', latestTurnStatus: surface === 'follow-pending' ? null : 'failed' }) };
-        if (request.url.startsWith('/v1/sessions/bob-follow-source/messages')) return { messages: surface === 'follow-pending' ? [{
+        if (request.url.startsWith('/v1/sessions/bob-follow-source/messages')) return { messages: [{
           id: 'source-message', seq: 1, localId: 'source-failed-original', createdAt: 1, updatedAt: 1, sidechainId: null, messageRole: 'agent',
           content: { t: 'plain', v: buildAcpAgentMessageEnvelope({ provider: 'claude', body: { type: 'turn_failed', id: 'failed-turn' } }) },
         }, ...(sourceTranscriptSeq >= 2 ? [{ id: 'source-next-message', seq: 2, localId: 'encountered-rule-original', createdAt: 2,
@@ -512,7 +665,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
         ...(sourceTranscriptSeq === 3 ? [{ id: 'fresh-source-message', seq: 3, localId: 'fresh-rule-original', createdAt: 30,
           updatedAt: 30, sidechainId: null, messageRole: 'agent',
           content: { t: 'plain', v: buildAcpAgentMessageEnvelope({ provider: 'claude', body: { type: 'turn_failed', id: 'fresh-failed-turn' } }) } }] : [])]
-          .filter(row => row.seq > Number(new URL(request.url, 'https://bob-home.test').searchParams.get('afterSeq') ?? 0)) : [], hasMore: false,
+          .filter(row => row.seq > Number(new URL(request.url, 'https://bob-home.test').searchParams.get('afterSeq') ?? 0)), hasMore: false,
           nextBeforeSeq: null, nextAfterSeq: null };
         const response = await homeGet(new URL(request.url, 'https://bob-home.test').href,
           { headers: { Authorization: request.headers.authorization } });
@@ -524,7 +677,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
         sourceSessionId: 'bob-follow-source', destinationSessionId: requesterSessionId, relation,
         ...(relation === 'manager' ? { attachedAt: 1 } : {}), policy: { preset: 'important' },
         delivered: SESSION_FOLLOW_ZERO_FRONTIER_V1, observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1,
-          ...(surface === 'follow-pending' ? { transcriptSeq: 1 } : { turn: { id: 'failed-turn', status: 'failed' } }) },
+          transcriptSeq: 1 },
       }));
       http.post(`/v2/sessions/${requesterSessionId}/follows/inactive-observations`, async () => SessionFollowObserveInactiveResponseV1Schema.parse({
         ok: true, v: 1, sessionId: requesterSessionId, target: { homeId: 'srv_bob_home', accountId: 'bob', sessionId: requesterSessionId,
@@ -544,11 +697,12 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       http.post(`/v2/sessions/${requesterSessionId}/pending`, async request => {
         const body = request.body as { localId: string };
         const didWrite = !pendingIds.has(body.localId);
-        if (didWrite) { pendingIds.add(body.localId); acceptedOriginals.push(request.body); }
+        if (didWrite) { pendingIds.add(body.localId); acceptedOriginals.push(request.body); pendingRequestId = body.localId; }
         return { didWrite };
       });
       await http.ready();
       const restoreHttp = installAxiosFastifyAdapter({ app: http, origin: 'https://bob-home.test' });
+      let followPluginRuntime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
       try {
         if (!changedSession) throw new Error('Missing exact Session subscription');
         expect(readInstallationIdentityIfExistsSync()?.installationId).toBe(installationId);
@@ -558,6 +712,16 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
         const activeAlice = getActiveAccountSettingsSnapshot();
         const originBeforeWake = originReads.length;
         await changedSession({ sessionId: requesterSessionId, cursor: 1 });
+        if (surface === 'follow-wake') {
+          expect(acceptedOriginals).toHaveLength(1);
+          expect(launches).toEqual([]);
+          openedRunPluginRuntime = true;
+          followPluginRuntime = await createAdmittedPluginRuntimeFixture({ happyHomeDir: directory,
+            controller: runPluginRuntimeController, runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
+          if (!activatePending || !pendingRequestId) throw new Error('Missing committed Pending activation');
+          await activatePending({ sessionId: requesterSessionId, requestId: pendingRequestId, pendingVersion: 1,
+            requestedAt: 1, source: 'live', target: activationTarget });
+        }
         if (surface === 'follow-pending') {
           expect(acceptedOriginals).toHaveLength(1);
           expect(acceptedOriginals[0]).toMatchObject({ followRelations: [{ relation: 'manager', attachedAt: 1 }, { relation: 'follower' }],
@@ -628,6 +792,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
         expect(requests.slice(beforeRetired).filter(path => path !== '/v1/account/encryption/currentness')).toEqual([]);
         expect(launches).toEqual(expectedLaunches);
       } finally {
+        await followPluginRuntime?.dispose();
         await retireMachineSyncRuntimeAttempt(machine); restoreHttp(); await http.close(); fetchBoundary.mockRestore(); await custody.cleanup();
       }
       return;
@@ -654,17 +819,17 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       });
       try {
         // The actual requester, assertion and purpose owner run beneath HTTP.
-        // An indeterminate service refuses before credential reads. It still
-        // needs fresh entry admission, once rather than both assertion and a
-        // repeated same-context read. Later requests and the assertion-free
-        // adapter must each perform their own fresh admission.
+        // An indeterminate service has no admitted binding and returns null
+        // before credential reads. Entry and exit each need fresh admission;
+        // later requests and the assertion-free adapter repeat those fences.
         for (const callback of [callbacks, callbackWithoutAssertion]) {
           for (let operation = 0; operation < 2; operation++) {
             const before = sessionReads;
+            const beforeCatalog = connectedCatalogReads;
             await expect(callback.resolveCurrentBinding({ subject, binding,
-              signal: new AbortController().signal })).rejects.toMatchObject({ code: 'request_auth_binding_unavailable',
-                diagnostic: { causeCode: 'binding_resolution_failed' } });
-            expect(sessionReads - before).toBe(1);
+              signal: new AbortController().signal })).resolves.toBeNull();
+            expect(sessionReads - before).toBe(2);
+            expect(connectedCatalogReads).toBe(beforeCatalog);
           }
         }
         current = false;
@@ -938,6 +1103,8 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
     expect(await retiredRead).toBe(false);
     expect(getActiveAccountSettingsSnapshot()).toBe(alice);
   } finally {
+    // A failed assertion must not inject its unconsumed Home fault into cleanup.
+    runHomeStatus = null;
     releaseRows?.();
     settingsGate.release?.();
     try {
