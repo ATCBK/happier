@@ -4354,7 +4354,7 @@
   dependencies:
     "@opentelemetry/semantic-conventions" "^1.29.0"
 
-"@opentelemetry/core@2.5.1", "@opentelemetry/core@^2.0.0", "@opentelemetry/core@^2.5.0", "@opentelemetry/core@^2.5.1":
+"@opentelemetry/core@2.5.1":
   version "2.5.1"
   resolved "https://registry.npmjs.org/@opentelemetry/core/-/core-2.5.1.tgz"
   integrity sha512-Dwlc+3HAZqpgTYq0MUyZABjFkcrKTePwuiFVLjahGD8cx3enqihmpAmdgNFO1R4m/sIe5afjJrA25Prqy4NXlA==

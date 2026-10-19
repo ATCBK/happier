@@ -307,6 +307,7 @@ Build targets:
 Key notes:
 - The server defaults to port `3005` (set `PORT` explicitly in container environments).
 - The image includes FFmpeg and Python for media processing.
+- In development source, `server`, `server-worker`, and `server-stress` share the existing production dependency projection. Redis validation tools stay development-only; generated Prisma clients and native runtime dependencies remain in the images.
 - The server entrypoint (`apps/server/scripts/run-server.sh`) runs `prisma migrate deploy` on startup by default (set `RUN_MIGRATIONS=0` to disable). On Postgres, it retries on advisory-lock contention.
 - Health-managed Postgres deployments use one pre-deploy Job running the prebuilt image's `/opt/happier/server/happier-server-migrate`, then start API and worker replicas with `RUN_MIGRATIONS=0`. The Job is independent of API probe deadlines. Source-built images use their provider migration script. Development 0.3 irreversible-migration admission remains owned by `apps/server/sources/app/runtime/updaterMigrationAdmission.ts`; a Kubernetes Job must not fabricate its updater capability or bypass refusal.
 - Before a MySQL deployment first applies
@@ -472,6 +473,12 @@ In an isolated environment matching the target Redis version and ACL:
 against the selected Redis URL. It is an ordinary-fanout smoke check, not a probe
 of deployed API nodes or certification of Pub/Sub/restart recovery. Use isolated
 Redis: the script uses the same fixed Stream/channel names as the application.
+
+From a development checkout, run `yarn --cwd apps/server validate:redis-adapter`. Set
+`REDIS_URL` to use an existing isolated Redis instance, or let the development
+dependency acquire and start a temporary local instance. Root package configuration
+defers acquisition until validation runs, so ordinary dependency installation does
+not require Redis build tools.
 
 ### Prospective predecessor compatibility
 
