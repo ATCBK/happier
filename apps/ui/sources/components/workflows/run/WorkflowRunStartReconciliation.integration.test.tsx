@@ -6,7 +6,9 @@ import {
     createWorkflowAccountRunActionOwner,
     TargetedActionRpcRequestV1Schema,
     WorkflowRunStartRequestV1Schema,
+    WorkflowRunGetResultV1Schema,
     WorkflowRunRecipientCensusResponseV1Schema,
+    prepareWorkflowRunStartV1,
     type WorkflowRunStartResultV1,
 } from '@happier-dev/protocol';
 import { createDeferred, renderScreen } from '@/dev/testkit';
@@ -52,7 +54,7 @@ afterEach(async () => {
     vi.unstubAllGlobals();
 });
 
-async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMissingRead = false) {
+async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMissingRead = false, anotherRound = false) {
     vi.stubGlobal('React', React);
     installShippedNativeFrameScheduler();
     await loadSyncSingletonForTests();
@@ -115,9 +117,27 @@ async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMi
         prepareWorkspace: async () => ({ ok: true, workspaceTarget: { project: { machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } } }),
         resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true } }),
     });
-    const input = WorkflowRunStartRequestV1Schema.parse({ runId, source: { kind: 'inline', definition } });
     const context = { surface: 'ui' as const, authority: 'present_user' as const, callerPermissionMode: 'default',
         externalActionTarget: { kind: 'machine' as const, machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } } };
+    const priorId = '33333333-3333-4333-8333-333333333333';
+    let source: Parameters<typeof WorkflowRunStartRequestV1Schema.parse>[0] = { runId, source: { kind: 'inline', definition } };
+    if (anotherRound) {
+        const priorDefinition = { ...definition, blocks: [...definition.blocks], inputs: [
+            { name: 'participants', valueType: 'json' as const, required: true },
+            { name: 'previousRoundContext', valueType: 'json' as const, required: false },
+        ] };
+        await owner.execute({ actionId: 'workflow.run.start', input: { runId: priorId,
+            source: { kind: 'inline', definition: priorDefinition }, inputs: { participants: ['retained-participant'] } }, context });
+        const prior = entries.get(priorId)!;
+        entries.set(priorId, { ...prior, run: { ...prior.run, state: 'succeeded' } });
+        const opened = WorkflowRunGetResultV1Schema.parse(await owner.execute({ actionId: 'workflow.run.get', input: { runId: priorId }, context }));
+        if (!opened.acceptedContext) throw new Error('prior_context_unavailable');
+        const prepared = prepareWorkflowRunStartV1({ definition: priorDefinition, acceptedContext: opened.acceptedContext,
+            replay: { runId: priorId, intent: 'another_round' } });
+        source = { runId, source: prepared.source, inputs: prepared.inputs };
+        admissions = 0;
+    }
+    const input = WorkflowRunStartRequestV1Schema.parse(source);
     machineRpc.mockImplementation(async (request) => {
         const targeted = TargetedActionRpcRequestV1Schema.parse(request.payload);
         expect(targeted.input).toEqual(input);
@@ -148,6 +168,21 @@ async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMi
 }
 
 describe('Run start response-loss through the real composer, Machine transport and Account owner', () => {
+    it('rejoins Another round after commit-before-ACK with accepted participants and prior context', async () => {
+        const h = await harness('admitted', false, true);
+        await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await act(async () => { await h.pending(); });
+        await vi.waitFor(() => expect(h.opened).toHaveBeenCalledWith(expect.objectContaining({ admission: 'existing' })));
+        const opened = await h.owner.execute({ actionId: 'workflow.run.get', input: { runId }, context: h.context });
+        expect(opened).toMatchObject({ acceptedContext: { inputs: {
+            participants: ['retained-participant'],
+            previousRoundContext: { runId: '33333333-3333-4333-8333-333333333333', state: 'succeeded', outcomes: [] },
+        } } });
+        expect(h.counts().admissions).toBe(1);
+        expect(machineRpc).toHaveBeenCalledTimes(1);
+        expect(h.readModals()).toEqual([]);
+    });
+
     it('opens the admitted Run after the Machine transport times out, without a failure or second start', async () => {
         const h = await harness('admitted');
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');

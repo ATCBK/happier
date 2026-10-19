@@ -12,6 +12,7 @@ import {
     describeWorkflowInvocationAttempt,
     type WorkflowInvocationLifecycleContext,
 } from '@/components/workflows/presentation/workflowLifecyclePresentation';
+import { isTerminalWorkflowInvocationLifecycle } from '@/components/work/status/resolveWorkStatusTone';
 import { Text } from '@/components/ui/text/Text';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { buildWorkflowEditorDraftFromDefinition, validateWorkflowEditorDraft } from '@/sync/domains/workflows/workflowAuthoring';
@@ -154,6 +155,7 @@ export function WorkflowRunSteps(props: Readonly<{
             </HappierPressable>;
             return {
                 ...(block?.kind === 'workflow' ? { nestedDefinition: child ?? null } : {}),
+                settled: displayedOccurrence !== null && isTerminalWorkflowInvocationLifecycle(displayedOccurrence.lifecycle),
                 state: displayedOccurrence === null ? null : <>
                     {elapsed === null ? null : <Text style={styles.provenance}>{elapsed}</Text>}
                     <WorkflowLifecycleStatus lifecycle={displayedOccurrence.lifecycle} blockKind={block?.kind ?? null} context={props.invocationStatusContext} />

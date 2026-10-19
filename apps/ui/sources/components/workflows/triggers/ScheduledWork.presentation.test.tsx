@@ -6,9 +6,12 @@ import { join, resolve } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, type ReactTestRendererJSON } from 'react-test-renderer';
 import { installMessageViewCommonModuleMocks } from '@/components/sessions/transcript/messageViewTestHelpers';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const capture = vi.hoisted(() => ({ dark: process.env.HB2B_CAPTURE_THEME === 'dark', width: Number(process.env.HB2B_CAPTURE_WIDTH ?? 1440) }));
 const resource = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 // Daemon resource transport only: keep packaged-brand admission and rendering real.
 vi.mock('@/sync/ops/machineContributionRegistryProjection', async (original) => ({
     ...await original<typeof import('@/sync/ops/machineContributionRegistryProjection')>(),
@@ -89,7 +92,7 @@ vi.unmock('@/components/ui/avatar/Avatar');
 // Select the actual platform adapter; the native switch cannot draw in a serialized web fixture.
 vi.mock('@/components/ui/forms/Switch', async () => vi.importActual('@/components/ui/forms/Switch.web'));
 vi.mock('react-native-svg', () => {
-    const host = (name: string) => (props: Record<string, unknown>) => React.createElement(name, props);
+    const host = (name: string): React.ComponentType<Record<string, unknown>> => (props) => React.createElement(name, props);
     return Object.fromEntries(['Svg', 'Path', 'Circle', 'Rect', 'Defs', 'RadialGradient', 'LinearGradient', 'Stop',
         'G', 'Line', 'Polyline', 'Polygon', 'Ellipse', 'ClipPath', 'Mask', 'Use', 'Text', 'TSpan'].map(name =>
         [name, host(name === 'Svg' ? 'svg' : name[0]!.toLowerCase() + name.slice(1))]).concat([['default', host('svg')],
@@ -101,6 +104,8 @@ vi.mock('react-native-svg', () => {
 vi.mock('react-native-enriched-markdown', () => ({ EnrichedMarkdownText: (props: Record<string, unknown>) =>
     React.createElement('span', { style: props.style }, props.markdown as string) }));
 
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
 const webHosts = await vi.importActual<typeof import('react-native')>('react-native-web');
 afterEach(async () => { (await import('@/dev/testkit')).standardCleanup(); storage.setState(storage.getInitialState(), true); });
@@ -136,7 +141,6 @@ const { DaemonContributionRegistryProjectionAutomationEligibleEventV1Schema, Plu
 import type { PluginEventAutomationComposerModel } from '@/components/automations/editor/usePluginEventAutomationComposer';
 const { MessageViewWithSessionCommon } = await import('@/components/sessions/transcript/MessageView');
 const { WorkerUpdateCard } = await import('@/components/sessions/work/WorkerUpdateCard');
-const { AgentSessionStartBlocker } = await import('@/components/machines/agents/AgentSessionStartBlocker');
 const { WorkflowRunContent } = await import('@/components/workflows/run/WorkflowRunContent');
 const { resolveGlassPresentationVariables } = await import('@/components/ui/glass/glassDocumentPresentation');
 const { useGlassMaterialSettings } = await import('@/components/ui/glass/useGlassMaterialSettings');
@@ -300,16 +304,6 @@ it.each(variants)('captures D6 source surfaces beside their existing Work-row re
                     invocationsLoaded invocationHistoryComplete firstFailedInvocationId={null} firstFailedInvocationResolution="resolved"
                     selectedInvocationId={null} onSelectInvocation={noop} view={view} onChangeView={noop} hasSource
                     sourceAction={{ kind: 'edit', onPress: noop }} /></webHosts.View></AppPaneProvider></section>)}
-            <section><h2>New Session · selected-route readiness (signed out, installable)</h2>
-                {(['signedOut', 'notInstalled'] as const).map(state => <webHosts.View key={state} style={{ marginBottom: 16 }}>
-                    <AgentSessionStartBlocker machineName="ubuntu-03" onSetUp={noop}
-                        connectedServicesRecoveryAction={state === 'signedOut' ? { label: 'Use Claude (work account)', onPress: noop } : null}
-                        agent={{ agentId: 'claude', title: 'Claude', state: state === 'signedOut' ? 'needsSignIn' : 'notInstalled',
-                            installed: state === 'signedOut', version: state === 'signedOut' ? '2.1.292' : null, latestVersion: '2.1.292', update: null,
-                            signIn: { status: 'signedOut', via: null, nativeLogin: 'terminal', connectedServices: [] },
-                            platform: { supported: true }, install: { available: true, mode: 'automatic', sizeBytes: 52_000_000,
-                                guideUrl: null, requiresVendorConsent: false }, dependencies: [], job: null, stale: false } as never} />
-                </webHosts.View>)}</section>
             <section><h2>Board · same next occurrence</h2><BoardCardView card={{ key: 'capture-workflow',
                 ref: { kind: 'workflow', qualifiedId: { serverId: home.id, id: 'daily' } }, picked: true,
                 availability: 'ready', title: 'Daily digest', status: { bucket: 'idle', tone: 'neutral', word: 'Idle' },

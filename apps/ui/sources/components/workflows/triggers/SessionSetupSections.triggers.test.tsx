@@ -14,13 +14,15 @@ import {
   type WorkflowTriggerSetV1,
 } from '@happier-dev/protocol';
 
-import { createMachineFixture, createSessionFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { createSessionFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
 import { installWorkflowActionHttpBoundary } from '@/dev/testkit/fixtures/workflowActionHttpBoundary';
-import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { getStorage } from '@/sync/domains/state/storage';
+import { useSessionViewShellSession } from '@/components/sessions/shell/sessionViewStableSession';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { ItemList } from '@/components/ui/lists/ItemList';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { UniversalSearchRuntimeProvider } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 import { DEFAULT_MACHINE_ONLINE_GRACE_MS } from '@happier-dev/protocol/machines/machineReachabilityV1';
@@ -51,12 +53,14 @@ vi.mock('@/text', async () => {
   return createTextModuleMock();
 });
 
-const { SessionWorkViewWithTriggers: WorkView } =
-  await import('./SessionWorkViewWithTriggers');
+const { SessionSetupSections } =
+  await import('@/components/sessions/work/SessionSetupSections');
 
-function SessionWorkViewWithTriggers(props: React.ComponentProps<typeof WorkView>) {
-  return <InjectedAuthProvider credentials={null}><UniversalSearchRuntimeProvider value={searchRuntime}>
-    <AppPaneProvider><WorkView {...props} /></AppPaneProvider>
+/** The Session's Info page host of its setup sections, Triggers among them (coordination lab P1i). */
+function SessionInfoSetup(props: Readonly<{ sessionId: string }>) {
+  const session = useSessionViewShellSession(props.sessionId, home.serverId);
+  return <InjectedAuthProvider credentials={workflowHttp?.credentials ?? null}><UniversalSearchRuntimeProvider value={searchRuntime}>
+    <AppPaneProvider><ItemList>{session ? <SessionSetupSections session={session} serverId={home.serverId} /> : null}</ItemList></AppPaneProvider>
   </UniversalSearchRuntimeProvider></InjectedAuthProvider>;
 }
 const searchRuntime = { open: () => {}, buildCommands: () => [] };
@@ -169,9 +173,9 @@ async function settle() {
   await flushHookEffects();
 }
 
-let accountScope: Awaited<ReturnType<typeof activateStorageAccountScope>>;
 let home: Awaited<ReturnType<typeof serveSessionActionHome>>;
 let workflowHttp: Awaited<ReturnType<typeof installWorkflowActionHttpBoundary>>;
+let machineRow: ReturnType<typeof createPlainMachineRowFixture>;
 let previousState = getStorage().getState();
 let restorePresenceClock: (() => void) | undefined;
 function resetTriggerSets() {
@@ -185,13 +189,14 @@ beforeEach(async () => {
   previousState = getStorage().getState();
   home = await serveSessionActionHome({ homes: [{ key: 'session', serverUrl: 'https://server-a', accountId: 'account-a', currentAccount: true }],
     route: request => request.path === '/v1/artifacts' ? Response.json([]) : undefined });
-  accountScope = await activateStorageAccountScope({ serverId: home.serverId, accountId: 'account-a' });
   resetTriggerSets();
   rows = [];
   failAutomationReads = false;
   finishRunRead = undefined;
   automationHttp.mockClear();
-  workflowHttp = await installWorkflowActionHttpBoundary({ automationDefinitions: automationHttp,
+  machineRow = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'account-a' });
+  workflowHttp = await installWorkflowActionHttpBoundary({ accountId: () => 'account-a', automationDefinitions: automationHttp,
+    machineRows: () => [machineRow],
     fixtureResponse: async actionId => {
       if (actionId === 'workflow.definition.list') return { ok: true, result: { definitions: [], nextCursor: null } };
       if (actionId === 'workflow.run.list') {
@@ -201,13 +206,13 @@ beforeEach(async () => {
       throw new Error(`Unexpected fixture Action ${actionId}`);
     } });
   workflowHttp.prime();
-  seedSessionMachine(true);
+  await (await import('@/sync/runtime/orchestration/connectionManager')).restoreConnectionToActiveServer(workflowHttp.credentials);
+  await seedSessionMachine(true);
 });
 afterEach(async () => {
   await standardCleanup();
   resetTriggerSets();
-  workflowHttp?.dispose();
-  act(() => accountScope.dispose());
+  await workflowHttp?.dispose();
   await home.dispose();
   getStorage().setState(previousState, true);
   routeParams.current = {};
@@ -215,14 +220,17 @@ afterEach(async () => {
   restorePresenceClock = undefined;
 });
 
-function seedSessionMachine(machineActive: boolean) {
+async function seedSessionMachine(machineActive: boolean) {
   const previous = getStorage().getState().machines['machine-a'];
   const observedAt = Math.max(Date.now(), (previous?.activeAt ?? 0) + 1);
-  const machine = createMachineFixture({ id: 'machine-a', active: machineActive, activeAt: observedAt, updatedAt: observedAt });
+  machineRow = { ...createPlainMachineRowFixture({ id: 'machine-a', accountId: 'account-a' }),
+    active: machineActive, activeAt: observedAt, updatedAt: observedAt };
+  await act(async () => { await (await import('@/sync/sync')).sync.refreshMachines(); });
+  const machine = getStorage().getState().machines['machine-a'];
+  if (!machine?.metadata) throw new Error('The Home census must publish the Session Machine');
   const session = createSessionFixture({ id: 'session-1', serverId: home.serverId, active: true,
     metadata: { machineId: 'machine-a', path: '/repo', host: machine.metadata!.host } });
   act(() => {
-    getStorage().getState().applyMachines([machine]);
     getStorage().getState().applySessions([session]);
   });
   if (!machineActive) {
@@ -234,13 +242,13 @@ function seedSessionMachine(machineActive: boolean) {
   return machine;
 }
 
-describe('the Work tab Triggers section', () => {
+describe('the Session Info page Triggers section', () => {
   it('keeps ordinary rows usable and shows a separate PR-link retry state', async () => {
     // No Channels Data collection is installed for this Account, so the real
     // PR-link reader refuses independently of the readable Automation rows.
     answer([triggerSet([lifecycleTrigger('trig-1', true)])]);
     const screen = await renderScreen(
-      <SessionWorkViewWithTriggers sessionId="session-1" scopeId="scope-1" />,
+      <SessionInfoSetup sessionId="session-1" />,
     );
     await settle();
     expect(
@@ -261,7 +269,7 @@ describe('the Work tab Triggers section', () => {
       ]),
     ]);
     const screen = await renderScreen(
-      <SessionWorkViewWithTriggers sessionId="session-1" scopeId="scope-1" />,
+      <SessionInfoSetup sessionId="session-1" />,
     );
     await settle();
 
@@ -296,10 +304,10 @@ describe('the Work tab Triggers section', () => {
     expect(screen.findByTestId('session-work-trigger:set-1:trig-2-switch')?.props.value).toBe(true);
   });
 
-  it('stays in the Work tab with its empty state and a way to add the first trigger', async () => {
+  it('stays on the Info page with its empty state and a way to add the first trigger', async () => {
     answer([]);
     const screen = await renderScreen(
-      <SessionWorkViewWithTriggers sessionId="session-1" scopeId="scope-1" />,
+      <SessionInfoSetup sessionId="session-1" />,
     );
     await settle();
 
@@ -317,7 +325,7 @@ describe('the Work tab Triggers section', () => {
     answer([]);
     finishRunRead = () => new Promise<void>((resolve) => { runList.finish = resolve; });
     const screen = await renderScreen(
-      <SessionWorkViewWithTriggers sessionId="session-1" scopeId="scope-1" />,
+      <SessionInfoSetup sessionId="session-1" />,
     );
     await settle();
     // Still reading: a section that may not exist holds no skeleton that later collapses.
@@ -339,7 +347,7 @@ describe('the Work tab Triggers section', () => {
       sessionLifecycleEvents: 'parentTurnCompleted',
     };
     const screen = await renderScreen(
-      <SessionWorkViewWithTriggers sessionId="session-1" scopeId="scope-1" />,
+      <SessionInfoSetup sessionId="session-1" />,
     );
     await settle();
 
@@ -377,32 +385,30 @@ describe('the Work tab Triggers section', () => {
       failAutomationReads = true;
     }
 
-    it('leaves the unreachable Machine to the Work view\'s own offline line instead of saying the read failed again', async () => {
-      seedSessionMachine(false);
+    it('leaves the unreachable Machine to the page\'s own offline status instead of saying the read failed again', async () => {
+      await seedSessionMachine(false);
       failReads();
-      const screen = await renderScreen(<SessionWorkViewWithTriggers sessionId="session-1" scopeId="scope-1" />);
+      const screen = await renderScreen(<SessionInfoSetup sessionId="session-1" />);
       await settle();
       expect(screen.findByTestId('session-work-triggers-failed')).toBeNull();
     });
 
     it('still says a failed read when the Machine is reachable', async () => {
-      seedSessionMachine(true);
+      await seedSessionMachine(true);
       failReads();
-      const screen = await renderScreen(<SessionWorkViewWithTriggers sessionId="session-1" scopeId="scope-1" />);
+      const screen = await renderScreen(<SessionInfoSetup sessionId="session-1" />);
       await settle();
       expect(screen.findByTestId('session-work-triggers-failed')).not.toBeNull();
     });
 
     it('reads again by itself when the offline Machine returns', async () => {
-      const offline = seedSessionMachine(false);
+      await seedSessionMachine(false);
       failReads();
-      const screen = await renderScreen(<SessionWorkViewWithTriggers sessionId="session-1" scopeId="scope-1" />);
+      const screen = await renderScreen(<SessionInfoSetup sessionId="session-1" />);
       await settle();
       expect(screen.findByTestId('session-work-trigger:set-1:trig-1-switch')).toBeNull();
       answer([triggerSet([lifecycleTrigger('trig-1', true)])]);
-      const observedAt = Math.max(Date.now(), offline.activeAt + 1);
-      const online = { ...offline, active: true, activeAt: observedAt, updatedAt: observedAt };
-      await act(async () => getStorage().getState().applyMachines([online]));
+      await seedSessionMachine(true);
       await settle();
       expect(screen.findByTestId('session-work-trigger:set-1:trig-1-switch')).not.toBeNull();
     });

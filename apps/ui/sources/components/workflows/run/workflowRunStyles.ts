@@ -3,6 +3,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Typography } from '@/constants/Typography';
+import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 /**
@@ -149,6 +150,10 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
     provenance: {
         ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
+    },
+    /** A line that continues the outcome sentence starts under its words, not under its state mark (lab run-R1). */
+    outcomeDetail: {
+        paddingLeft: ICON_SIZE.md + theme.space.s8,
     },
     actions: {
         flexDirection: 'row',

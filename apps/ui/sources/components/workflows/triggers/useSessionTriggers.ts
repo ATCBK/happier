@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { SessionTriggerAddRequestV1, SessionTriggerUpdateRequestV1, SessionTriggerPullRequestLinksV1, WorkflowTriggerSetV1 } from '@happier-dev/protocol';
 
-import { getStorage, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
+import { getStorage, useActiveServerAccountScopeLifetime, useSessionMachineId } from '@/sync/domains/state/storage';
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
 import { watchActivePluginCollectionChanges } from '@/sync/api/plugins/data/pluginCollectionChangeWatch';
 import { createWorkflowTriggerChangeSelector, createWorkflowTriggerSetSelector } from '@/sync/store/domains/automations';
@@ -13,6 +13,7 @@ import {
     type WorkflowTriggerWriteResult,
 } from '@/sync/domains/workflows/workflowTriggerActions';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 export type SessionTriggersRead = Readonly<{
     status: 'loading' | 'ready' | 'failed';
@@ -39,6 +40,13 @@ export type SessionTriggersRead = Readonly<{
  */
 export function useSessionTriggers(sessionId: string): SessionTriggersRead {
     const accountLifetime = useActiveServerAccountScopeLifetime();
+    // The Work shell can mount from a list row before its owner metadata arrives.
+    // Retry the same Account read when either owner routing fact hydrates.
+    const sessionMachineId = useSessionMachineId(sessionId);
+    const sessionDirectory = getStorage()((state) => {
+        const session = state.sessions[sessionId];
+        return session ? readSessionOwnerMetadataView(session)?.path?.trim() ?? null : null;
+    });
     const scope = accountLifetime?.scope ?? null;
     const linkScopeKey = scope ? serverAccountScopedResourceKey(scope, sessionId) : null;
     const selector = React.useMemo(() => createWorkflowTriggerSetSelector(`session:${sessionId}`), [sessionId]);
@@ -90,7 +98,7 @@ export function useSessionTriggers(sessionId: string): SessionTriggersRead {
                 if (!controller.signal.aborted && accountLifetime.isCurrent()) setState({ scopeKey: linkScopeKey, status: 'failed' });
             });
         return () => { controller.abort(); retirement.dispose(); };
-    }, [accountLifetime, attempt, changeSignal, linkScopeKey, options, sessionId]);
+    }, [accountLifetime, attempt, changeSignal, linkScopeKey, options, sessionDirectory, sessionId, sessionMachineId]);
 
     const applyWrite = React.useCallback((result: WorkflowTriggerWriteResult) => {
         setAttempt((value) => value + 1);

@@ -69,6 +69,8 @@ export type SessionTriggersSectionViewProps = Readonly<{
     addOpen?: boolean;
     /** A retired Automation link reveals this set's first row, as in the Account column. */
     deepLinkAutomationId?: string;
+    /** What writes into this Session, as one more group of the same section (lab P1-I). */
+    children?: React.ReactNode;
 }>;
 
 /**
@@ -160,6 +162,7 @@ export const SessionTriggersSectionView = React.memo(function SessionTriggersSec
                     ))}
                 </HappierPageSheetGroup>
             ))}
+            {props.children}
         </WorkSection>
     );
 });
@@ -234,13 +237,13 @@ type OpenPopover = Readonly<{ anchor: React.RefObject<View | null>; row: Session
  * popover each one immediate call with its own result. Last outcomes and expanded history read
  * the shared Account Run store; a firing timestamp alone never supplies a Run's lifecycle.
  */
-export const SessionTriggersSection = React.memo(function SessionTriggersSection(props: Readonly<{ sessionId: string; serverId?: string | null }>) {
+export const SessionTriggersSection = React.memo(function SessionTriggersSection(props: Readonly<{ sessionId: string; serverId?: string | null; children?: React.ReactNode }>) {
     const scope = useActiveServerAccountScope(props.serverId);
     if (scope === null) return null;
-    return <SessionTriggersContent key={`${serverAccountScopeKeySuffix(scope)}:${props.sessionId}`} sessionId={props.sessionId} serverId={props.serverId} />;
+    return <SessionTriggersContent key={`${serverAccountScopeKeySuffix(scope)}:${props.sessionId}`} sessionId={props.sessionId} serverId={props.serverId}>{props.children}</SessionTriggersContent>;
 });
 
-function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: string | null }>) {
+function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: string | null; children?: React.ReactNode }>) {
     const { theme } = useUnistyles();
     const read = useSessionTriggers(props.sessionId);
     const readRef = React.useRef(read);
@@ -314,8 +317,9 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: 
         setHistoryRowKey(current => current === row.key ? undefined : row.key);
     }, []);
     const historyRow = groups.flatMap(group => group.rows).find(candidate => candidate.key === historyRowKey);
-    const history = React.useMemo(() => historyRow ? <WorkflowTriggerRunHistory automationId={historyRow.automationId} /> : undefined,
-        [historyRow?.automationId]);
+    const history = React.useMemo(() => historyRow
+        ? <WorkflowTriggerRunHistory automationId={historyRow.automationId} triggerName={historyRow.title} /> : undefined,
+        [historyRow?.automationId, historyRow?.title]);
 
     const [pendingKeys, setPendingKeys] = React.useState<ReadonlySet<string>>(() => new Set());
     const pendingKeysRef = React.useRef(pendingKeys);
@@ -418,7 +422,9 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: 
                 addAnchorRef={addAnchorRef}
                 addOpen={examplesAnchor !== null || (popover !== null && row === null)}
                 {...(typeof params.trigger === 'string' ? { deepLinkAutomationId: params.trigger } : {})}
-            />
+            >
+                {props.children}
+            </SessionTriggersSectionView>
             {examplesAnchor !== null && exampleSession !== undefined ? (
                 <WorkflowExamplesPopover
                     testID="session-work-trigger-examples"

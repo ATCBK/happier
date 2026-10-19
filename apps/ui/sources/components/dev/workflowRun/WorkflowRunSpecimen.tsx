@@ -1,0 +1,194 @@
+import * as React from 'react';
+import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
+import {
+  WorkflowProgressEnvelopeV1Schema,
+  type WorkflowProgressEnvelopeV1,
+} from '@happier-dev/protocol';
+
+import {
+  createWorkflowDefinitionFixture,
+  createWorkflowInvocationIndexFixture,
+  createWorkflowRunSummaryFixture,
+} from '@/dev/testkit/fixtures/workflowRunFixtures';
+import {
+  WorkflowRunContent,
+  type WorkflowRunDetailView,
+} from '@/components/workflows/run/WorkflowRunContent';
+
+/**
+ * Dev-only specimen of Run detail (workflows lab run-R1), rendered through the real Run owners with
+ * schema-parsed Run, invocation and progress records. It reaches states a QA stack cannot produce on
+ * demand: a step that failed with a typed code, and a succeeded Run whose step retains an older reason.
+ * `?scene=failed|succeeded`. No RPC is issued.
+ */
+export type WorkflowRunSpecimenScene = 'failed' | 'succeeded';
+
+const definition = createWorkflowDefinitionFixture({
+  blocks: [
+    {
+      kind: 'step',
+      id: 'gather',
+      name: 'Gather changes',
+      document: {
+        text: 'Collect closed issues and commits since 0.2',
+        references: [],
+        attachments: [],
+      },
+      input: [],
+      result: { kind: 'text' },
+    },
+    {
+      kind: 'step',
+      id: 'tests',
+      name: 'Run test suite',
+      document: {
+        text: 'Run the full test suite and report whether it passed',
+        references: [],
+        attachments: [],
+      },
+      input: [],
+      result: { kind: 'text' },
+    },
+    {
+      kind: 'step',
+      id: 'publish',
+      name: 'Publish summary',
+      document: {
+        text: 'Publish the release summary',
+        references: [],
+        attachments: [],
+      },
+      input: [],
+      result: { kind: 'text' },
+    },
+  ],
+});
+
+function progress(
+  blockId: string,
+  invocationId: string,
+  extra: Readonly<Record<string, unknown>> = {},
+): WorkflowProgressEnvelopeV1 {
+  return WorkflowProgressEnvelopeV1Schema.parse({
+    kind: 'happier.workflow-progress.v1',
+    invocationPath: { blockId, scope: [] },
+    blockKind: 'step',
+    attempt: '0',
+    logicalInvocationRecordId: invocationId,
+    ...extra,
+  });
+}
+
+function sceneData(scene: WorkflowRunSpecimenScene) {
+  const failed = scene === 'failed';
+  const invocations = [
+    createWorkflowInvocationIndexFixture({
+      id: 'inv-gather',
+      sequence: '0',
+      memberOrdinal: '0',
+      lifecycle: 'completed',
+    }),
+    createWorkflowInvocationIndexFixture({
+      id: 'inv-tests',
+      sequence: '1',
+      memberOrdinal: '1',
+      lifecycle: failed ? 'failed' : 'completed',
+    }),
+    createWorkflowInvocationIndexFixture({
+      id: 'inv-publish',
+      sequence: '2',
+      memberOrdinal: '2',
+      lifecycle: failed ? 'skipped' : 'completed',
+    }),
+  ];
+  const byId = new Map<string, WorkflowProgressEnvelopeV1>([
+    [
+      'inv-gather',
+      progress('gather', 'inv-gather', {
+        result: 'Found 500 closed issues and 1,284 commits.',
+      }),
+    ],
+    [
+      'inv-tests',
+      progress(
+        'tests',
+        'inv-tests',
+        failed
+          ? {
+              reason: {
+                code: 'result_contract_violation',
+                message:
+                  'The step finished, but its result was missing the required field Passed, so later steps couldn’t use it.',
+              },
+            }
+          : // A succeeded step that still carries an older attempt's reason (FX-51's stale storage_unavailable).
+            ({
+              result: '1,904 tests ran; all passed.',
+              reason: {
+                code: 'storage_unavailable',
+                message: 'The Run store could not be written.',
+              },
+            }),
+      ),
+    ],
+    [
+      'inv-publish',
+      progress(
+        'publish',
+        'inv-publish',
+        failed
+          ? { reason: { code: 'condition_false' } }
+          : ({ result: 'Published.' }),
+      ),
+    ],
+  ]);
+  return {
+    run: createWorkflowRunSummaryFixture({
+      id: `run-specimen-${scene}`,
+      state: failed ? 'failed' : 'succeeded',
+      workflowCustodyState: 'settled',
+      availability: { pause: false, cancel: false },
+    }),
+    invocations,
+    byId,
+  };
+}
+
+export function WorkflowRunSpecimen(
+  props: Readonly<{ scene: WorkflowRunSpecimenScene }>,
+) {
+  const data = React.useMemo(() => sceneData(props.scene), [props.scene]);
+  const [selected, setSelected] = React.useState<string | null>('inv-tests');
+  const [view, setView] = React.useState<WorkflowRunDetailView>('activity');
+  return (
+    <View testID="workflow-run-specimen" style={styles.root}>
+      <WorkflowRunContent
+        active={false}
+        run={data.run}
+        title="Prepare the 0.3 release"
+        machineName="MacBook Pro"
+        machineReachable
+        definition={definition}
+        invocations={data.invocations}
+        invocationsLoaded
+        invocationHistoryComplete
+        firstFailedInvocationId={props.scene === 'failed' ? 'inv-tests' : null}
+        firstFailedInvocationResolution="resolved"
+        selectedInvocationId={selected}
+        selectedInvocationProgress={
+          selected === null ? null : (data.byId.get(selected) ?? null)
+        }
+        invocationProgressById={data.byId}
+        onSelectInvocation={setSelected}
+        onDeselectInvocation={() => setSelected(null)}
+        view={view}
+        onChangeView={setView}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  root: { flex: 1, backgroundColor: theme.colors.surface.base },
+}));

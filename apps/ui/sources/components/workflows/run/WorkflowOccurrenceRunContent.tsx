@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import type { AutomationRunCause, AutomationV3RunDetail } from '@happier-dev/protocol/automations/automationApiV3';
@@ -12,12 +12,10 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { layout } from '@/components/ui/layout/layout';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
-import {
-    captureActiveServerAccountScopeLifetime,
-    type ActiveServerAccountScopeLifetime,
-} from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { useAllMachines, useAutomationRunById } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScopeLifetime, useAutomationRunById, useServerScopedMachine } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -36,6 +34,9 @@ import { formatAutomationErrorMessage } from '@/components/automations/automatio
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { Icon } from '@/components/ui/icons/Icon';
 import { TriggerFromActivityEvent } from '@/components/workflows/triggers/TriggerFromActivityEvent';
+import { createWorkflowRunRoute, type WorkflowRunRouteTarget } from '@/sync/domains/workflows/workflowRunRoute';
+import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 const stylesheet = StyleSheet.create((theme) => ({
     loading: {
@@ -47,12 +48,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
 }));
-
-function normalizeParam(value: string | string[] | undefined): string | null {
-    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
-    if (Array.isArray(value) && typeof value[0] === 'string' && value[0].trim().length > 0) return value[0].trim();
-    return null;
-}
 
 function formatDate(ms: number, unknownLabel: string): string {
     try {
@@ -183,6 +178,7 @@ function getRunTargetPrompt(target: AutomationRunDetailTarget): string {
 
 export function AutomationRunDetailEvidenceItems(props: Readonly<{
     evidence: AutomationRunDetailEvidence;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): React.ReactElement | null {
     const { evidence } = props;
     if (evidence === null) return null;
@@ -216,7 +212,7 @@ export function AutomationRunDetailEvidenceItems(props: Readonly<{
                     copy={payload}
                     showChevron={false}
                 />
-                <TriggerFromActivityEvent evidence={evidence} />
+                <TriggerFromActivityEvent evidence={evidence} accountLifetime={props.accountLifetime} />
             </>
         );
     }
@@ -244,6 +240,7 @@ export function AutomationRunDetailEvidenceItems(props: Readonly<{
 
 function AutomationRunDetailRecipeItems(props: Readonly<{
     recipe: AutomationRunDetailPrivateContentInspection['recipe'];
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): React.ReactElement {
     const { recipe } = props;
     switch (recipe.kind) {
@@ -276,7 +273,7 @@ function AutomationRunDetailRecipeItems(props: Readonly<{
                         showChevron={false}
                         mode="info"
                     />
-                    <AutomationRunDetailEvidenceItems evidence={recipe.evidence} />
+                    <AutomationRunDetailEvidenceItems evidence={recipe.evidence} accountLifetime={props.accountLifetime} />
                     <Item
                         title={t('automations.detail.runDetail.target')}
                         subtitle={formatRunTarget(recipe.target)}
@@ -450,10 +447,11 @@ function joinRunFactLines(lines: readonly (string | null)[]): string | undefined
 
 function AutomationRunDetailPrivateContent(props: Readonly<{
     content: AutomationRunDetailPrivateContentInspection;
+    accountLifetime: ServerAccountScopeLifetime | null;
 }>): React.ReactElement {
     return (
         <ItemGroup title={t('automations.detail.runDetail.title')}>
-            <AutomationRunDetailRecipeItems recipe={props.content.recipe} />
+            <AutomationRunDetailRecipeItems recipe={props.content.recipe} accountLifetime={props.accountLifetime} />
             <AutomationRunDetailResultItems result={props.content.result} />
             <AutomationRunDetailFailureDetailItems failureDetail={props.content.failureDetail} />
         </ItemGroup>
@@ -466,7 +464,7 @@ type RouteScopedState<T> = Readonly<{
 }>;
 
 type AccountScopedRouteState<T> = RouteScopedState<T> & Readonly<{
-    accountLifetime: ActiveServerAccountScopeLifetime | null;
+    accountLifetime: ServerAccountScopeLifetime | null;
 }>;
 
 /**
@@ -475,22 +473,28 @@ type AccountScopedRouteState<T> = RouteScopedState<T> & Readonly<{
  * through the canonical Account crypto owner and keeps that projection route-
  * local, never in the bounded Run cache.
  */
-export function AutomationRunDetailScreen(): React.ReactElement {
+/** The occurrence reader of the canonical Run page; it never probes a managed Run to select a reader. */
+export function WorkflowOccurrenceRunContent(props: Readonly<{
+    target: Extract<WorkflowRunRouteTarget, { kind: 'occurrence' }>;
+    serverId: string | null;
+}>): React.ReactElement {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const router = useRouter();
-    const params = useLocalSearchParams<{ id?: string | string[]; runId?: string | string[] }>();
-    const automationId = normalizeParam(params.id);
-    const runId = normalizeParam(params.runId);
-    const machines = useAllMachines();
+    const { automationId, runId } = props.target;
+    const activeLifetime = useActiveServerAccountScopeLifetime();
+    const { binding, resolution } = useServerCredentialAccountScopeBinding(props.serverId);
+    const accountLifetime = props.serverId ? binding : activeLifetime;
+    const scopeUnavailable = props.serverId !== null && resolution.kind !== 'resolving' && binding === null;
     // Resolved from the one Account-scoped Run row owner by exact `runId`. The
     // Automation is route provenance here, not the key: a Run reached by deep
     // link or notification resolves the same body with no list loaded.
-    const cachedRun = useAutomationRunById(runId);
-    const accountLifetime = captureActiveServerAccountScopeLifetime();
+    const activeCachedRun = useAutomationRunById(runId);
+    const cachedRun = areServerAccountScopesEqual(activeLifetime?.scope, accountLifetime?.scope) ? activeCachedRun : null;
     const routeCurrentRef = React.useRef({
         automationId,
         runId,
+        accountLifetime,
         generation: 0,
         mounted: true,
     });
@@ -501,10 +505,12 @@ export function AutomationRunDetailScreen(): React.ReactElement {
     if (
         routeCurrentRef.current.automationId !== automationId
         || routeCurrentRef.current.runId !== runId
+        || routeCurrentRef.current.accountLifetime !== accountLifetime
     ) {
         routeCurrentRef.current = {
             automationId,
             runId,
+            accountLifetime,
             generation: routeCurrentRef.current.generation + 1,
             mounted: routeCurrentRef.current.mounted,
         };
@@ -519,6 +525,7 @@ export function AutomationRunDetailScreen(): React.ReactElement {
     const isCurrentRoute = React.useCallback((expectedAutomationId: string | null, expectedRunId: string | null, expectedGeneration: number): boolean => {
         const current = routeCurrentRef.current;
         return current.mounted
+            && current.accountLifetime?.isCurrent() === true
             && current.automationId === expectedAutomationId
             && current.runId === expectedRunId
             && current.generation === expectedGeneration;
@@ -566,7 +573,8 @@ export function AutomationRunDetailScreen(): React.ReactElement {
     const workflowRunId = directDetailIsCurrent
         ? directDetail.detail.workflowRun?.workflowRunId
         : undefined;
-    const loading = loadingState.generation !== routeGeneration || loadingState.value;
+    const loading = loadingState.generation !== routeGeneration || loadingState.value
+        || (props.serverId !== null && resolution.kind === 'resolving');
     const loadFailed = loadFailureState.generation === routeGeneration && loadFailureState.value;
     const cancelling = cancellingState.generation === routeGeneration && cancellingState.value;
     const retryingReplyHandoff = retryingReplyHandoffState.generation === routeGeneration
@@ -615,7 +623,8 @@ export function AutomationRunDetailScreen(): React.ReactElement {
         if (!cachedRun) {
             setLoadingState({ generation: request.generation, value: true });
         }
-        const directRead = sync.getAutomationRunDetailInspection(automationId, runId)
+        const directRead = sync.getAutomationRunDetailInspection(automationId, runId,
+            props.serverId ? { accountLifetime } : {})
             .then((detail) => {
                 if (
                     !isCurrentRequest()
@@ -636,7 +645,7 @@ export function AutomationRunDetailScreen(): React.ReactElement {
                     setLoadFailureState({ generation: request.generation, value: true });
                 }
             });
-        const rootPageRefresh = cachedRun
+        const rootPageRefresh = cachedRun || props.serverId
             ? Promise.resolve()
             : sync.fetchAutomationRuns(automationId).catch(() => {
                 if (isCurrentRequest()) {
@@ -650,11 +659,14 @@ export function AutomationRunDetailScreen(): React.ReactElement {
                     setLoadingState({ generation: request.generation, value: false });
                 }
             });
-    }, [accountLifetime, automationId, cachedRun, isCurrentRoute, routeGeneration, runId]);
+    }, [accountLifetime, automationId, cachedRun, isCurrentRoute, props.serverId, routeGeneration, runId]);
 
     React.useEffect(() => {
         refresh();
     }, [refresh]);
+    React.useEffect(() => !props.serverId ? undefined : subscribeHomeAccountChange(event => {
+        if (areServerProfileIdentifiersEquivalent(event.serverId, props.serverId)) refresh();
+    }), [props.serverId, refresh]);
 
     const handleCancel = React.useCallback(async () => {
         if (!runId) return;
@@ -667,12 +679,13 @@ export function AutomationRunDetailScreen(): React.ReactElement {
         if (!confirmed || !isCurrentRoute(request.automationId, request.runId, request.generation)) return;
         try {
             setCancellingState({ generation: request.generation, value: true });
-            await sync.cancelAutomationRun(request.runId);
+            await sync.cancelAutomationRun(request.runId, props.serverId ? { accountLifetime } : {});
             if (!isCurrentRoute(request.automationId, request.runId, request.generation)) return;
             directReadEpochRef.current += 1;
             // The mutation's bounded Run projection is already in the one
             // cache owner. Clear the direct private response so it cannot
             // visually regress the freshly cancelled state.
+            if (props.serverId) { refresh(); return; }
             setDirectDetailState({
                 generation: request.generation,
                 accountLifetime,
@@ -689,16 +702,17 @@ export function AutomationRunDetailScreen(): React.ReactElement {
                 setCancellingState({ generation: request.generation, value: false });
             }
         }
-    }, [accountLifetime, automationId, isCurrentRoute, routeGeneration, runId]);
+    }, [accountLifetime, automationId, isCurrentRoute, props.serverId, refresh, routeGeneration, runId]);
 
     const handleRetryReplyHandoff = React.useCallback(async () => {
         if (!runId) return;
         const request = { automationId, runId, generation: routeGeneration };
         try {
             setRetryingReplyHandoffState({ generation: request.generation, value: true });
-            await sync.retryAutomationReplyHandoff(request.runId);
+            await sync.retryAutomationReplyHandoff(request.runId, props.serverId ? { accountLifetime } : {});
             if (!isCurrentRoute(request.automationId, request.runId, request.generation)) return;
             directReadEpochRef.current += 1;
+            if (props.serverId) { refresh(); return; }
             setDirectDetailState({
                 generation: request.generation,
                 accountLifetime,
@@ -715,7 +729,7 @@ export function AutomationRunDetailScreen(): React.ReactElement {
                 setRetryingReplyHandoffState({ generation: request.generation, value: false });
             }
         }
-    }, [accountLifetime, automationId, isCurrentRoute, routeGeneration, runId]);
+    }, [accountLifetime, automationId, isCurrentRoute, props.serverId, refresh, routeGeneration, runId]);
 
     /**
      * Sends the same result to the same conversation as a new delivery. It is
@@ -739,9 +753,11 @@ export function AutomationRunDetailScreen(): React.ReactElement {
         if (!confirmed || !isCurrentRoute(request.automationId, request.runId, request.generation)) return;
         try {
             setRedeliveringResultState({ generation: request.generation, value: true });
-            await sync.deliverAutomationResultAgain({ runId: request.runId, expectedRevision });
+            await sync.deliverAutomationResultAgain({ runId: request.runId, expectedRevision },
+                props.serverId ? { accountLifetime } : {});
             if (!isCurrentRoute(request.automationId, request.runId, request.generation)) return;
             directReadEpochRef.current += 1;
+            if (props.serverId) { refresh(); return; }
             setDirectDetailState({
                 generation: request.generation,
                 accountLifetime,
@@ -758,7 +774,7 @@ export function AutomationRunDetailScreen(): React.ReactElement {
                 setRedeliveringResultState({ generation: request.generation, value: false });
             }
         }
-    }, [accountLifetime, automationId, isCurrentRoute, routeGeneration, runId]);
+    }, [accountLifetime, automationId, isCurrentRoute, props.serverId, refresh, routeGeneration, runId]);
 
     const unknownDate = t('automations.detail.unknownDate');
     const title = runId ? t('runs.runLabel', { runId }) : t('runs.title');
@@ -798,14 +814,14 @@ export function AutomationRunDetailScreen(): React.ReactElement {
         ? directDetail.detail.executionNativeSidechainId
         : null;
     const runHistory = directDetailIsCurrent ? directDetail.detail.events : [];
-    const claimedByMachine = run?.claimedByMachineId
-        ? machines.find((candidate) => candidate.id === run.claimedByMachineId)
-        : undefined;
+    const claimedByMachine = useServerScopedMachine(accountLifetime?.scope.serverId ?? '', run?.claimedByMachineId ?? '');
     const claimedByLabel = claimedByMachine ? getMachineDisplayName(claimedByMachine) : null;
+
+    if (scopeUnavailable) return <SurfaceStateCard testID="workflow-run-unavailable" kind="unavailable"
+        title={t('workflows.destination.history.loadFailedTitle')} reason={t('workflows.destination.history.loadFailedBody')} />;
 
     return (
         <ItemList>
-            <Stack.Screen options={{ headerShown: true, headerTitle: title }} />
             {/*
               * The run's identity first: what state it is in, what started it and when. The
               * facts keep their line while the run loads so nothing below moves.
@@ -1046,7 +1062,7 @@ export function AutomationRunDetailScreen(): React.ReactElement {
                                     subtitle={t('automations.detail.runDetail.title')}
                                     onPress={() => navigateWithBlurOnWeb(() => {
                                         if (!accountLifetime?.isCurrent()) return;
-                                        router.push(`/workflows/runs/${workflowRunId}` as never);
+                                        router.push(createWorkflowRunRoute(workflowRunId, accountLifetime.scope.serverId) as never);
                                     })}
                                 />
                             ) : null}
@@ -1173,7 +1189,7 @@ export function AutomationRunDetailScreen(): React.ReactElement {
                             </ItemGroup>
                         ) : null}
                         {privateContent ? (
-                            <AutomationRunDetailPrivateContent content={privateContent} />
+                            <AutomationRunDetailPrivateContent content={privateContent} accountLifetime={accountLifetime} />
                         ) : null}
                     </>
                 )}

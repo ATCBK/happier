@@ -10,6 +10,7 @@ import { getWorkflowDefinition } from '@/sync/domains/workflows/workflowDefiniti
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { useWorkflowDefinitionLibrary } from '../library/workflowLibraryReads';
 import { formatWorkflowDefinitionContentUnavailableReason, formatWorkflowDefinitionLibraryTitle } from '../presentation/workflowProblemPresentation';
+import { resolveWorkflowBuiltinInputPresentation } from '../presentation/workflowBuiltinInputPresentation';
 
 export type WorkflowStartSelection = Readonly<{
     id: string;
@@ -24,6 +25,8 @@ export function WorkflowStartPicker(props: Readonly<{
     onSelect: (selection: WorkflowStartSelection) => void;
     onRequestClose: () => void;
     maxHeight: number;
+    /** Opened inside a Session: built-ins that run in their origin Session become startable. */
+    hasOriginSession?: boolean;
 }>): React.ReactElement {
     const library = useWorkflowDefinitionLibrary();
     const savedSelections = React.useRef(new Map<string, Readonly<{
@@ -38,16 +41,21 @@ export function WorkflowStartPicker(props: Readonly<{
         id: entry.workflow, name: entry.title, description: entry.description ?? '', definition: entry.definition,
         source: { kind: 'catalog', workflow: entry.workflow, pluginVersion: entry.version },
     })), [library.pluginWorkflows]);
-    const asks = React.useCallback((definition: WorkflowDefinitionV1) => definition.inputs.length === 0
-        ? t('workflows.start.noInputs')
-        : t('workflows.start.asksFor', { names: definition.inputs.map((input) => workflowInputTitle(input)).join(', ') }), []);
+    const asks = React.useCallback((definition: WorkflowDefinitionV1, workflowRef?: string) => {
+        const presentation = resolveWorkflowBuiltinInputPresentation(workflowRef);
+        return definition.inputs.length === 0 ? t('workflows.start.noInputs')
+            : t('workflows.start.asksFor', { names: definition.inputs
+                .map(input => presentation?.[input.name]?.title ?? workflowInputTitle(input)).join(', ') });
+    }, []);
     const rootStep = React.useMemo<SelectionListStep>(() => ({
         id: 'workflow-start-picker', inputPlaceholder: t('workflows.start.search'),
         sections: [
             { kind: 'static', id: 'builtins', title: t('workflows.start.builtin'), options: builtinSelections.map((entry) => ({
-                id: entry.id, label: entry.name, subtitle: asks(entry.definition),
+                // What it does helps choose; what it asks for is shown once it is chosen.
+                id: entry.id, label: entry.name, subtitle: entry.description || asks(entry.definition, entry.id),
                 testID: `workflow-choice:${entry.id}`,
-                disabled: BUILTIN_WORKFLOW_CATALOG_V1.find((candidate) => candidate.id === entry.id)?.requiresOriginSession,
+                disabled: props.hasOriginSession !== true
+                    && BUILTIN_WORKFLOW_CATALOG_V1.find((candidate) => candidate.id === entry.id)?.requiresOriginSession,
             })) },
             { kind: 'dynamic', id: 'library', title: t('workflows.start.library'),
                 resolverKey: JSON.stringify(library.definitions.map((entry) => [entry.definitionId, entry.revision, entry.contentStatus,
@@ -71,7 +79,7 @@ export function WorkflowStartPicker(props: Readonly<{
                             definition: result.definition,
                             source: { kind: 'saved', definitionId: result.definitionId, revision: result.revision },
                         } satisfies WorkflowStartSelection;
-                        return { option: { id: selection.id, label: selection.name, subtitle: asks(selection.definition) }, selection };
+                        return { option: { id: selection.id, label: selection.name, subtitle: selection.description || asks(selection.definition) }, selection };
                     }));
                     if (signal.aborted || !lifetime.isCurrent()) return { options: [] };
                     savedSelections.current = new Map(rows.flatMap((entry) => entry.selection === null ? []
@@ -80,10 +88,10 @@ export function WorkflowStartPicker(props: Readonly<{
                 },
             },
             { kind: 'static', id: 'plugins', title: t('workflows.plugins.fromPlugins'), options: pluginSelections.map((entry) => ({
-                id: entry.id, label: entry.name, subtitle: asks(entry.definition), testID: `workflow-choice:${entry.id}`,
+                id: entry.id, label: entry.name, subtitle: entry.description || asks(entry.definition, entry.id), testID: `workflow-choice:${entry.id}`,
             })) },
         ],
-    }), [asks, builtinSelections, library.definitions, pluginSelections]);
+    }), [asks, builtinSelections, library.definitions, pluginSelections, props.hasOriginSession]);
     return <View>
         <SelectionList rootStep={rootStep} maxHeight={props.maxHeight} heightBehavior="content" autoFocusInputOnWeb
             onSelect={(id) => {

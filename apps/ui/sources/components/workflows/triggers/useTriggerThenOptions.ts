@@ -6,6 +6,8 @@ import {
     useWorkflowLibraryReferenceOptions,
 } from '@/components/workflows/presentation/workflowReferenceOptions';
 import { callWorkflowAction } from '@/sync/domains/workflows/callWorkflowAction';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 export { useWorkflowReferenceDefinition as useTriggerWorkflowDefinition } from '@/components/workflows/presentation/useWorkflowReferenceDefinition';
 
 import { NOTIFY_ME_ACTION_ID } from './sessionTriggerForm';
@@ -19,12 +21,13 @@ const KEEP_GOING_REF = 'builtin:keep-going';
  * library), from the existing reference owners: the built-in catalog the Run-a-workflow step lists
  * and the Account's definition list. Rows read a workflow's name through the same resolver.
  */
-export function useTriggerThenOptions(options?: Readonly<{ libraryEnabled?: boolean }>): Readonly<{
+export function useTriggerThenOptions(options?: Readonly<{ libraryEnabled?: boolean; accountLifetime?: ServerAccountScopeLifetime | null }>): Readonly<{
     workflowOptions: readonly TriggerWorkflowOption[];
     resolveWorkflowTitle: (ref: string) => string | null;
 }> {
     const libraryEnabled = options?.libraryEnabled ?? true;
-    const libraryOptions = useWorkflowLibraryReferenceOptions({ enabled: libraryEnabled });
+    const libraryOptions = useWorkflowLibraryReferenceOptions({ enabled: libraryEnabled,
+        ...(options?.accountLifetime === undefined ? {} : { accountLifetime: options.accountLifetime }) });
     const workflowOptions = React.useMemo((): readonly TriggerWorkflowOption[] => [
         ...listBuiltinWorkflowReferenceOptions()
             .filter((option) => option.ref !== KEEP_GOING_REF)
@@ -45,11 +48,13 @@ export type SendToOption = Readonly<{ value: string; label: string }>;
  * resolved through the Action front door only while the row is shown.
  */
 export function useNotifyMeChannelOptions(): readonly SendToOption[] {
+    const accountLifetime = useWorkflowAccountLifetime();
     const [options, setOptions] = React.useState<readonly SendToOption[]>([]);
     React.useEffect(() => {
         const controller = new AbortController();
         const outputSchema = getActionSpec('action.options.resolve').outputSchema;
         void callWorkflowAction({
+            ...(accountLifetime === undefined ? {} : { accountLifetime }),
             actionId: 'action.options.resolve',
             input: { actionId: NOTIFY_ME_ACTION_ID, fieldPath: 'channels' },
             parseResult: (value) => {
@@ -68,6 +73,6 @@ export function useNotifyMeChannelOptions(): readonly SendToOption[] {
             if (!controller.signal.aborted) setOptions(resolved);
         }).catch(() => undefined);
         return () => controller.abort();
-    }, []);
+    }, [accountLifetime]);
     return options;
 }

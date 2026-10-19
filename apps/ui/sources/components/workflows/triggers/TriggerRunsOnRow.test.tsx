@@ -6,8 +6,7 @@ import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testk
 import { SelectionList } from '@/components/ui/selectionList';
 import { storage } from '@/sync/domains/state/storage';
 import { authoringMemoryDefaults } from '@/sync/store/domains/authoringMemory';
-import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable,
-    publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { installNewSessionComponentsCommonModuleMocks } from '@/components/sessions/new/components/newSessionComponentsTestHelpers';
 
 installNewSessionComponentsCommonModuleMocks();
@@ -16,28 +15,22 @@ vi.mock('@/components/ui/popover', async (importOriginal) =>
     (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
 const { TriggerRunsOnRow } = await import('./TriggerRunsOnRow');
-let previousState = storage.getState();
-let previousSnapshot = getAppliedActiveServerSnapshot();
-let previousAvailability = isAppliedActiveServerRuntimeAvailable();
+let home: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
 const machines = ['studio', 'linux'].map((id) => createMachineFixture({ id, activeAt: Date.now() }));
 
-beforeEach(() => {
-    previousState = storage.getState();
-    previousSnapshot = getAppliedActiveServerSnapshot();
-    previousAvailability = isAppliedActiveServerRuntimeAvailable();
-    publishAppliedActiveServerSnapshot({ ...previousSnapshot, serverId: 'server-a', serverUrl: 'https://triggers.test' }, false);
+beforeEach(async () => {
+    home = await createPlainArtifactHomeFixture('https://triggers.test');
     storage.setState({
-        profileScope: { serverId: 'server-a', accountId: 'account-a' },
         machines: Object.fromEntries(machines.map((machine) => [machine.id, machine])),
-        machineListByServerId: { 'server-a': machines },
-        machineListStatusByServerId: { 'server-a': 'idle' },
+        machineListByServerId: { [home.home.id]: machines },
+        machineListStatusByServerId: { [home.home.id]: 'idle' },
         authoringMemory: { ...authoringMemoryDefaults, recentMachinePaths: [{ machineId: 'linux', path: '/repo/service' }] },
     });
 });
 afterEach(async () => {
     await standardCleanup();
-    storage.setState(previousState);
-    publishAppliedActiveServerSnapshot(previousSnapshot, previousAvailability);
+    await home?.dispose();
+    home = undefined;
 });
 
 describe('trigger Runs on', () => {
@@ -50,7 +43,7 @@ describe('trigger Runs on', () => {
         const lists = screen.findAllByType(SelectionList);
         expect(lists).toHaveLength(1);
         const options = lists[0].props.rootStep.sections.flatMap((section: import('@/components/ui/selectionList').SelectionListSection) =>
-            section.kind === 'static' ? section.options : []);
+            section.options);
         expect(options.map((option: import('@/components/ui/selectionList').SelectionListOption) => option.id).sort()).toEqual(['linux', 'studio']);
         const linux = options.find((option: import('@/components/ui/selectionList').SelectionListOption) => option.id === 'linux');
         expect(linux?.disabled).not.toBe(true);

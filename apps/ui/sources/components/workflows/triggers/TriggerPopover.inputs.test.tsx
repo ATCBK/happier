@@ -7,6 +7,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHo
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -27,6 +28,7 @@ vi.mock('@/utils/web/radixCjs', async () => (await import('@/dev/testkit/mocks/r
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 installSessionActionRpcBoundary(request => machineRpc(request));
+await import('@/sync/syncEngine');
 const { ModalProvider } = await import('@/modal');
 const { WebAlertModal } = await import('@/modal/components/WebAlertModal');
 const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
@@ -58,6 +60,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
     await standardCleanup();
+    await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
     (await import('../library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
     (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
     (await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs')).clearDaemonMergedProjectionCacheForTests();
@@ -252,9 +255,15 @@ describe('Run a workflow trigger inputs', () => {
             expect(screen.findByTestId('pending-event-test-result')).toBeNull();
             if (change === 'actionRefused') {
                 expect(screen.findByType(WebAlertModal).props.config).toMatchObject({ title: 'common.error', message: expect.any(String) });
-                await screen.pressByTestIdAsync('web-modal-button-0');
-                expect(screen.findAllByType(WebAlertModal)).toEqual([]);
-            } else expect(screen.findAllByType(WebAlertModal)).toEqual([]);
+                // The real modal host retains its hidden entry through exit.
+                // Assert the primitive count so a failure cannot traverse Fibers.
+                vi.useFakeTimers();
+                try {
+                    await screen.pressByTestIdAsync('web-modal-button-0');
+                    await act(async () => { await vi.advanceTimersByTimeAsync(motionTokens.overlay.modal.exitMs); });
+                } finally { vi.useRealTimers(); }
+                expect(screen.findAllByType(WebAlertModal).length).toBe(0);
+            } else expect(screen.findAllByType(WebAlertModal).length).toBe(0);
         });
     it('points the trigger form back to its resolved anchor', async () => {
         const screen = await renderScreen(<TriggerPopover testID="anchored-trigger" anchorRef={React.createRef()}
@@ -302,7 +311,8 @@ describe('Run a workflow trigger inputs', () => {
         expect(field('maxRounds')?.props.value).toBe('3');
         expect(screen.findByTestId('typed-trigger-submit')?.props.disabled).toBe(true);
         await act(async () => {
-            screen.findAll((node) => node.props.label === 'engines' && typeof node.props.onChange === 'function')[0]?.props.onChange(['codex']);
+            screen.find((node) => node.props.testID === 'typed-trigger-input-engines'
+                && typeof node.props.onChange === 'function').props.onChange(['codex']);
         });
         await act(async () => { screen.changeTextByTestId('typed-trigger-input-maxRounds', '3e'); });
         expect(field('maxRounds')?.props.value).toBe('3e');
@@ -312,12 +322,26 @@ describe('Run a workflow trigger inputs', () => {
         await act(async () => { screen.changeTextByTestId('typed-trigger-input-maxRounds', '5'); });
         expect(screen.findByTestId('typed-trigger-submit')?.props.disabled).toBe(false);
         await act(async () => {
-            screen.findAll((node) => node.props.label === 'workflows.builtins.reviewAndConverge.apply'
-                && typeof node.props.onChange === 'function')[0]?.props.onChange('report');
+            screen.find((node) => node.props.testID === 'typed-trigger-input-apply'
+                && typeof node.props.onChange === 'function').props.onChange('report');
         });
         await act(async () => { screen.pressByTestId('typed-trigger-submit'); });
         expect(submit.mock.calls[0]?.[1]).toMatchObject({ target: { kind: 'workflow', ref: 'builtin:review-and-converge' },
-            inputs: { engines: ['codex'], maxRounds: 5, apply: 'report', useJudge: false } });
+            inputs: { engines: ['codex'], maxRounds: 5, apply: 'report', useJudge: false,
+                reviewSession: { serverId, sessionId: 'session-1' } } });
+    });
+
+    it('leaves an origin Session default for the new-session trigger claim to bind', async () => {
+        const submit = vi.fn<Extract<React.ComponentProps<typeof TriggerPopover>, { creatingSession: true }>['onSubmit']>(async () => {});
+        const screen = await renderScreen(<TriggerPopover testID="new-review-trigger" anchorRef={React.createRef()}
+            onRequestClose={vi.fn()} whenKinds={['sessionStarts']} creatingSession sessionId={null} serverId={serverId}
+            initial={{ when: { kind: 'sessionStarts' }, enabled: true,
+                then: { kind: 'runWorkflow', ref: 'builtin:review-and-converge', inputs: { engines: ['codex'] } } }}
+            workflowOptions={[{ ref: 'builtin:review-and-converge', title: 'Review & converge' }]} onSubmit={submit} />);
+        expect(screen.findByTestId('new-review-trigger-submit')?.props.disabled).toBe(false);
+        await screen.pressByTestIdAsync('new-review-trigger-submit');
+        expect(submit).toHaveBeenCalled();
+        expect(submit.mock.calls[0]?.[1].inputs).not.toHaveProperty('reviewSession');
     });
 
     it('keeps JSON drafts distinct from string values and preserves an explicit false input on reopen', async ({ onTestFinished }) => {

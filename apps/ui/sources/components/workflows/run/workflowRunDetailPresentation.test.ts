@@ -3,6 +3,8 @@ import { WorkflowProgressEnvelopeV1Schema, WORKFLOW_RUN_STATES_V1 } from '@happi
 import { WorkflowDefinitionV1Schema } from '@happier-dev/protocol/workflows/workflowV1';
 import type { WorkflowRunInvocationIndexV1 } from '@happier-dev/protocol';
 import { projectWorkflowInvocationStructure } from './workflowInvocationStructure';
+import { projectWorkflowFlow } from '../flow/workflowFlowProjection';
+import { createWorkflowRunReleaseScene } from '@/dev/testkit/render/workflowRunDesignScene';
 
 import {
     createWorkflowInvocationIndexFixture,
@@ -28,9 +30,79 @@ import {
     formatWorkflowWorkspaceSourceLabel,
     isObservedCompletionTransition,
     projectWorkflowInvocationRecovery,
+    projectWorkflowRunFailure,
+    selectWorkflowRunFailureInvocation,
+    formatWorkflowRunFailureCauseLine,
+    formatWorkflowLostContact,
 } from './workflowRunDetailPresentation';
 
 describe('managed workflow Run presentation', () => {
+    it('does not replace authoritative empty or unresolved failure discovery with a different loaded failure', () => {
+        const loaded = createWorkflowInvocationIndexFixture({ lifecycle: 'failed' });
+        const structure = new Map([[loaded.id, { invocationId: loaded.id, nodeId: 'work', blockId: 'work',
+            isFrame: false, occurrence: [], coverageKind: 'executable' as const }]]);
+        expect(selectWorkflowRunFailureInvocation({ invocations: [loaded], structure, firstFailedInvocationId: null })).toBeNull();
+        expect(selectWorkflowRunFailureInvocation({ invocations: [loaded], structure, firstFailedInvocationId: 'off-page' })).toBeNull();
+    });
+    it.each([1_900_000_000_000, null])('projects the reachable Z16 design fixture with its reported reset (%s)', resetAtMs => {
+        const run = createWorkflowRunSummaryFixture({ state: 'failed', workflowCustodyState: 'settled' });
+        const scene = createWorkflowRunReleaseScene({ runId: run.id, rootId: 'root', holdId: 'hold', failed: true, usageLimitResetAtMs: resetAtMs });
+        const failed = scene.rows.find(row => row.progress?.reason?.runtimeIssueV1?.code === 'usage_limit')!;
+        const invocations = scene.rows.map(row => row.index);
+        const structure = projectWorkflowInvocationStructure({ definition: scene.definition, invocations,
+            progressByInvocationId: new Map(scene.rows.flatMap(row => row.progress ? [[row.index.id, row.progress] as const] : [])) });
+        const presentation = projectWorkflowRunFailure({ run, invocation: failed.index, progress: failed.progress,
+            structure, projection: projectWorkflowFlow(scene.definition), machineHomeDirectory: null });
+        expect(presentation).toMatchObject({ invocationId: failed.index.id, step: { name: 'Publish summary', ordinal: '7' },
+            recovery: { canReattach: false, canRetrySameConversation: false, canRetryFreshAgent: false,
+                failureCause: { kind: 'reported_failure', message: 'Usage limit reached', runtimeIssue: { usageLimit: { resetAtMs } } } } });
+        if (resetAtMs === null) expect(presentation?.recovery.failureCause).toMatchObject({ reset: null });
+        // The page's one cause line: the step's number, the provider's words, and only a reported reset.
+        const line = formatWorkflowRunFailureCauseLine(presentation!);
+        const reset = presentation?.recovery.failureCause?.kind === 'reported_failure' ? presentation.recovery.failureCause.reset : null;
+        expect(line).toBe(resetAtMs === null ? `${t('workflows.run.stepNumber', { ordinal: '7' })} · Usage limit reached`
+            : `${t('workflows.run.stepNumber', { ordinal: '7' })} · Usage limit reached · ${reset}`);
+        if (resetAtMs !== null) expect(reset).toBeTruthy();
+        expect(projectWorkflowRunFailure({ run: { ...run, id: 'another-run' }, invocation: failed.index, progress: failed.progress,
+            structure, projection: projectWorkflowFlow(scene.definition), machineHomeDirectory: null })).toBeNull();
+    });
+    it('keeps lost contact on the failed Run root without blaming its completed child (R4)', () => {
+        const run = createWorkflowRunSummaryFixture({ state: 'failed', workflowCustodyState: 'settled' });
+        const root = createWorkflowInvocationIndexFixture({ id: 'root', lifecycle: 'failed' });
+        const child = createWorkflowInvocationIndexFixture({ id: 'child', lifecycle: 'completed', parentRecordId: root.id, sequence: '1' });
+        const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: {}, blocks: [
+            { kind: 'wait', id: 'check', name: 'Review release readiness', document: { text: 'Ready?', references: [], attachments: [] } },
+        ] });
+        const params = { run, invocation: root, progress: null, machineHomeDirectory: null,
+            machine: { name: 'Build box', reachable: false, lastSeenAt: 1791633660000 },
+            structure: projectWorkflowInvocationStructure({ definition, invocations: [root, child] }), projection: projectWorkflowFlow(definition) };
+        expect(projectWorkflowRunFailure(params)).toMatchObject({ invocationId: root.id, step: null,
+            recovery: { failureCause: { kind: 'lost_contact', machine: 'Build box', lastSeenAt: 1791633660000 } } });
+        expect(projectWorkflowRunFailure({ ...params, invocation: child })).toBeNull();
+        // Without a failed step the line names no number; it says which Machine was lost and when.
+        expect(formatWorkflowRunFailureCauseLine(projectWorkflowRunFailure(params)!))
+            .toBe(formatWorkflowLostContact('Build box', 1791633660000));
+        expect(formatWorkflowLostContact('Build box', 1791633660000)).toContain('Build box');
+        // A Machine last seen after the Run settled was not why it failed: the line does not blame it.
+        expect(formatWorkflowRunFailureCauseLine(projectWorkflowRunFailure(params)!, 1791633660000 - 60_000)).toBeNull();
+        expect(formatWorkflowRunFailureCauseLine(projectWorkflowRunFailure(params)!, 1791633660000 + 60_000))
+            .toBe(formatWorkflowLostContact('Build box', 1791633660000));
+    });
+    it.each([1_900_000_000_000, null])('presents the source runtime issue and only a reported reset (%s)', resetAtMs => {
+        const run = createWorkflowRunSummaryFixture({ state: 'interrupted' });
+        const invocation = createWorkflowInvocationIndexFixture({ lifecycle: 'failed' });
+        const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
+            invocationPath: { blockId: 'work', scope: [] }, attempt: '0', logicalInvocationRecordId: invocation.id,
+            reason: { code: 'session_input_failed', message: 'Current turn failed', runtimeIssueV1: {
+                v: 1, scope: 'primary_session', status: 'failed', code: 'usage_limit', source: 'usage_limit', occurredAt: 100,
+                sanitizedPreview: 'Usage limit reached',
+                usageLimit: { v: 1, resetAtMs, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' },
+            } } });
+        const presentation = projectWorkflowInvocationRecovery({ run, invocation, progress, machineHomeDirectory: null });
+        expect(presentation.failureCause).toMatchObject({ kind: 'reported_failure', message: 'Usage limit reached',
+            runtimeIssue: progress.reason?.runtimeIssueV1,
+            ...(resetAtMs === null ? { reset: null } : { reset: expect.stringContaining('2030') }) });
+    });
     it('keeps every persisted outcome stable across competing Machine observations', () => {
         const coverage = { observedLeafCounts: { completed: 0, failed: 0, attention: 0 }, coverage: 'complete' as const, knownFailure: false };
         for (const state of WORKFLOW_RUN_STATES_V1) {
@@ -704,6 +776,27 @@ describe('managed workflow Run presentation', () => {
         })).toBeNull();
         expect(describeWorkflowInvocationCause({
             lifecycle: 'running', reasonCode: null, blockLabel: 'Analyze',
+        })).toBeNull();
+    });
+
+    /**
+     * An uncertain step says what that means for its kind (07 §6.2): an Agent step may already have
+     * changed the workspace, an Action may have run without Happier getting its answer. A plain failed
+     * step keeps stating nothing invented.
+     */
+    it('states an uncertain step by its kind and never for a plain failed step', () => {
+        expect(describeWorkflowInvocationCause({
+            lifecycle: 'outcome_uncertain', reasonCode: 'workflow_startup_owner_absent', blockKind: 'step', blockLabel: 'ONE',
+        })).toBe(t('workflows.recovery.uncertainEffects', { block: 'ONE' }));
+        expect(describeWorkflowInvocationCause({
+            lifecycle: 'outcome_uncertain', reasonCode: null, blockKind: 'action', blockLabel: 'Open pull request',
+        })).toBe(t('workflows.recovery.uncertainAction', { action: 'Open pull request' }));
+        expect(describeWorkflowInvocationCause({
+            lifecycle: 'failed', reasonCode: 'workflow_startup_owner_absent', blockKind: 'step', blockLabel: 'ONE',
+        })).toBeNull();
+        // A block that cannot be named is not guessed at.
+        expect(describeWorkflowInvocationCause({
+            lifecycle: 'outcome_uncertain', reasonCode: null, blockKind: 'step', blockLabel: null,
         })).toBeNull();
     });
 

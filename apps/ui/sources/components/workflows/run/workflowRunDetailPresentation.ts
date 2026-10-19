@@ -11,12 +11,16 @@ import type {
 } from '@happier-dev/protocol';
 
 import { t } from '@/text';
+import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { formatWorkflowConversationProblem } from '@/components/workflows/presentation/workflowProblemPresentation';
 import type { WorkflowInvocationStructureEntry } from './workflowInvocationStructure';
 import { findWorkflowBlock, findWorkflowBlockListRef, getWorkflowBlockList } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
 import type { WorkStatusPresentation } from '@/components/work/status/resolveWorkStatusTone';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
+import { presentSessionRuntimeIssue } from '@/components/sessions/presentation/sessionRuntimeIssuePresentation';
+import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import type { WorkflowFlowProjection } from '../flow/workflowFlowProjection';
 import {
     describeWorkflowRunState,
     isTerminalWorkflowRunState,
@@ -122,6 +126,9 @@ export type WorkflowInvocationRecoveryPresentation = Readonly<{
         blockKind: WorkflowProgressEnvelopeV1['blockKind'];
         code: string;
         message: string | null;
+        /** Source-owned sanitized issue, including the reported usage-limit resetAtMs. */
+        runtimeIssue?: SessionRuntimeIssueV1 | null;
+        reset?: string | null;
         at: string | null;
     }> | Readonly<{ kind: 'lost_contact'; machine: string; lastSeenAt: number | null }> | null;
     /** Connectivity is separate from the recorded failure and exact recovery eligibility. */
@@ -244,11 +251,14 @@ export function projectWorkflowInvocationRecovery(params: Readonly<{
             ? lastSeenAt : null } : null;
     const failed = invocation?.lifecycle === 'failed' || invocation?.lifecycle === 'needs_attention'
         || invocation?.lifecycle === 'outcome_uncertain';
+    const issue = presentSessionRuntimeIssue(failed ? params.progress?.reason?.runtimeIssueV1 : undefined);
     const failureCause: WorkflowInvocationRecoveryPresentation['failureCause'] = failed && params.progress?.reason
         ? { kind: 'reported_failure', blockKind: params.progress.blockKind, code: params.progress.reason.code,
-            message: params.progress.reason.message ?? null, at: params.progress.timing?.finishedAt ?? null }
+            message: issue.message ?? params.progress.reason.message ?? null, reset: issue.reset,
+            runtimeIssue: params.progress.reason.runtimeIssueV1 ?? null,
+            at: params.progress.timing?.finishedAt ?? null }
         : invocation !== null && (failed || POSSIBLY_ACTIVE_INVOCATION_LIFECYCLES.has(invocation.lifecycle))
-            && params.run.state === 'interrupted' && unavailableMachine
+            && (params.run.state === 'interrupted' || params.run.state === 'failed') && unavailableMachine
             ? { kind: 'lost_contact', machine: unavailableMachine.name, lastSeenAt: unavailableMachine.lastSeenAt }
             : null;
 
@@ -293,6 +303,79 @@ export function projectWorkflowInvocationRecovery(params: Readonly<{
         remainingNotStartedSiblingCount,
         workspaceUnavailable,
         workspace,
+    };
+}
+
+/** The page and its exact failure inspector consume one cause/recovery projection. */
+export type WorkflowRunFailurePresentation = Readonly<{
+    invocationId: string;
+    /** A structural Run failure does not turn a completed child into a failed step. */
+    step: Readonly<{ name: string; ordinal: string | null }> | null;
+    recovery: WorkflowInvocationRecoveryPresentation;
+}>;
+
+/** "Lost contact with <Machine> at <time>": one wording for the Run page and its recovery card. */
+export function formatWorkflowLostContact(machine: string, lastSeenAt: number | null): string {
+    return lastSeenAt === null
+        ? t('workflows.recovery.lostContact', { machine })
+        : t('workflows.recovery.lostContactAt', { machine, time: formatAsOfTime(lastSeenAt) });
+}
+
+/**
+ * Why a Run failed, as the one quiet line under its outcome: the failed step's ordinal (the number
+ * its Map row carries), what happened in the provider's words or the lost Machine and when, and when
+ * a usage limit resets. Null when nothing is known beyond the outcome sentence.
+ */
+export function formatWorkflowRunFailureCauseLine(
+    failure: WorkflowRunFailurePresentation,
+    /** When the Run settled: a Machine last seen after it cannot be why it failed, so the line does not blame it. */
+    finishedAtMs?: number | null,
+): string | null {
+    const cause = failure.recovery.failureCause ?? null;
+    const unavailable = failure.recovery.unavailableMachine ?? null;
+    const lostBeforeFinish = (lastSeenAt: number | null) => lastSeenAt === null || finishedAtMs === null
+        || finishedAtMs === undefined || !Number.isFinite(finishedAtMs) || lastSeenAt <= finishedAtMs;
+    const headline = cause?.kind === 'reported_failure' ? cause.message
+        : cause?.kind === 'lost_contact' ? lostBeforeFinish(cause.lastSeenAt) ? formatWorkflowLostContact(cause.machine, cause.lastSeenAt) : null
+            : unavailable !== null && lostBeforeFinish(unavailable.lastSeenAt)
+                ? formatWorkflowLostContact(unavailable.name, unavailable.lastSeenAt) : null;
+    if (headline === null || headline === undefined || headline === '') return null;
+    const reset = cause?.kind === 'reported_failure' ? cause.reset ?? null : null;
+    const ordinal = failure.step?.ordinal ?? null;
+    return [ordinal === null ? null : t('workflows.run.stepNumber', { ordinal }), headline, reset]
+        .filter((part): part is string => part !== null && part !== '')
+        .join(' · ');
+}
+
+/** Prefer the known failed work to its aggregate frame; never blame a completed child. */
+export function selectWorkflowRunFailureInvocation(params: Readonly<{
+    invocations: readonly WorkflowRunInvocationIndexV1[];
+    firstFailedInvocationId: string | null;
+    structure: ReadonlyMap<string, WorkflowInvocationStructureEntry>;
+}>): WorkflowRunInvocationIndexV1 | null {
+    const first = params.invocations.find(row => row.id === params.firstFailedInvocationId && row.lifecycle === 'failed');
+    // Empty or off-page discovery is not permission to substitute an unrelated loaded failure.
+    if (!first) return null;
+    if (params.structure.get(first.id)?.isFrame !== true) return first;
+    return params.invocations.find(row => row.lifecycle === 'failed' && params.structure.get(row.id)?.coverageKind === 'executable')
+        ?? first;
+}
+
+export function projectWorkflowRunFailure(params: Parameters<typeof projectWorkflowInvocationRecovery>[0] & Readonly<{
+    structure: ReadonlyMap<string, WorkflowInvocationStructureEntry>;
+    projection: WorkflowFlowProjection | null;
+}>): WorkflowRunFailurePresentation | null {
+    const invocation = params.invocation;
+    if (invocation === null || invocation.runId !== params.run.id
+        || (invocation.lifecycle !== 'failed' && invocation.lifecycle !== 'needs_attention'
+            && invocation.lifecycle !== 'outcome_uncertain' && invocation.lifecycle !== 'waiting_for_review'
+            && invocation.lifecycle !== 'waiting_for_approval')) return null;
+    const entry = params.structure.get(invocation.id);
+    const node = entry?.nodeId == null ? null : params.projection?.nodesById.get(entry.nodeId);
+    return {
+        invocationId: invocation.id,
+        step: !entry?.isFrame && node ? { name: node.label, ordinal: node.stepOrdinal ?? null } : null,
+        recovery: projectWorkflowInvocationRecovery(params),
     };
 }
 
@@ -491,8 +574,14 @@ export function describeWorkflowInvocationCause(params: Readonly<{
     reasonDetails?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['details'];
     /** The invocation's authored block label, resolved against the frozen definition. */
     blockLabel: string | null;
+    /** An uncertain step is said by its kind: an Agent step or an Action (07 §6.2). */
+    blockKind?: WorkflowProgressEnvelopeV1['blockKind'] | undefined;
 }>): string | null {
     if (params.lifecycle === 'waiting_for_capacity') return t('workflows.run.capacityOccupied');
+    if (params.lifecycle === 'outcome_uncertain' && params.blockLabel !== null) {
+        if (params.blockKind === 'action') return t('workflows.recovery.uncertainAction', { action: params.blockLabel });
+        if (params.blockKind === 'step') return t('workflows.recovery.uncertainEffects', { block: params.blockLabel });
+    }
     if (params.reasonDetails && (params.reasonDetails.code === params.reasonCode || params.reasonCode === 'conversation_workspace_mismatch')) {
         return formatWorkflowConversationProblem(params.reasonDetails);
     }

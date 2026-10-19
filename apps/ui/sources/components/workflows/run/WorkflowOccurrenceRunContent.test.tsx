@@ -13,9 +13,10 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHo
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { AutomationSourceSelectorIdV1Schema, AutomationTriggerIdSchema, AutomationV3RunDetailSchema, createCanonicalJsonSigningInput, deriveAutomationOccurrenceKeyV1, materializeAutomationRunExecutionRecipeV1, sealAutomationRunResultStoredEnvelopeV1, sealAutomationRunFailureDetailStoredEnvelopeV1, serializeAutomationRunExecutionRecipeV1, type AutomationV3RunDetail, type AutomationV3RunListItem } from '@happier-dev/protocol';
-import { installAutomationScreensCommonModuleMocks } from './automationScreensTestHelpers';
+import { installAutomationScreensCommonModuleMocks } from '@/components/automations/screens/automationScreensTestHelpers';
+import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 
-const routeParamsState = vi.hoisted(() => ({ id: 'a1', runId: 'run-1' }));
+const routeParamsState = vi.hoisted(() => ({ id: 'a1', runId: 'run-1', serverId: undefined as string | undefined }));
 const routerPushSpy = vi.hoisted(() => vi.fn());
 const modalConfirmSpy = vi.hoisted(() => vi.fn(async () => false));
 const harness = createHomeGovernanceHarness();
@@ -30,7 +31,7 @@ installAutomationScreensCommonModuleMocks({
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         const expoRouterMock = createExpoRouterMock({
-            params: () => ({ id: routeParamsState.id, runId: routeParamsState.runId }),
+            params: () => ({ ...routeParamsState, target: 'occurrence', automationId: routeParamsState.id }),
             router: { push: routerPushSpy },
         });
         return {
@@ -242,8 +243,8 @@ async function cache(rows: AutomationV3RunListItem[]) {
 }
 async function open(row: AutomationV3RunListItem | null = run()) {
     await cache(row ? [row] : []);
-    const { AutomationRunDetailScreen } = await import('./AutomationRunDetailScreen');
-    return renderScreen(<AutomationRunDetailScreen />);
+    const { WorkflowRunScreen } = await import('../screens/WorkflowRunScreen');
+    return renderScreen(<WorkflowRunScreen />);
 }
 async function respond(row: AutomationV3RunListItem, overrides: Partial<AutomationV3RunDetail> = {}) {
     harness.answer(serverId, DETAIL_PATH, { body: detail(row, overrides) });
@@ -253,18 +254,21 @@ async function respond(row: AutomationV3RunListItem, overrides: Partial<Automati
 }
 
 async function connectAccount(accountId: string) {
-    connection = await restoreServerAccountForTest({ serverUrl: 'https://run-detail.test', accountId });
+    const restored = await restoreServerAccountForTest({ serverUrl: 'https://run-detail.test', accountId,
+        additionalRequestOrigins: ['https://run-detail-b.test'], request: harness.request });
+    connection = restored;
     const { storage } = await import('@/sync/domains/state/storage');
-    const { profileDefaults } = await import('@/sync/domains/profiles/profile');
-    storage.setState({ profileScope: { serverId, accountId }, profile: { ...profileDefaults, id: accountId } });
+    await waitForHomeGovernance(() => expect(storage.getState().profileScope).toEqual({ serverId: restored.serverId, accountId }));
 }
 
 // Compile the real Sync graph during collection; each test still restores its
 // singleton bridge and isolates the Account/store through the canonical harness.
 await loadSyncSingletonForTests();
-await import('./AutomationRunDetailScreen');
+await import('../screens/WorkflowRunScreen');
+const { WorkspaceProvider } = await import('@/components/appShell/workspace/WorkspaceProvider');
+const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
 
-describe('AutomationRunDetailScreen', () => {
+describe('canonical Run page occurrence target', () => {
     beforeEach(async () => {
         await harness.reset();
         await loadSyncSingletonForTests();
@@ -272,6 +276,7 @@ describe('AutomationRunDetailScreen', () => {
         await connectAccount('account-a');
         routeParamsState.id = 'a1';
         routeParamsState.runId = 'run-1';
+        routeParamsState.serverId = undefined;
         routerPushSpy.mockReset();
         modalConfirmSpy.mockReset();
         modalConfirmSpy.mockResolvedValue(false);
@@ -301,6 +306,90 @@ describe('AutomationRunDetailScreen', () => {
         expect(screen.getTextContent()).toContain('Finished');
         screen.pressByTestId('automation-run-detail-produced-session');
         expect(routerPushSpy).toHaveBeenCalledWith(expect.stringContaining('/session/session-produced-1'));
+    });
+
+    it('opens Home B with the same Run ids while Home A is active, without reading A content', async () => {
+        const homeB = await harness.addHome({ name: 'Another Home', serverUrl: 'https://run-detail-b.test', accountId: 'account-a', active: false, currentAccount: true });
+        harness.answer(homeB, DETAIL_PATH, { body: privateDetail(run(), 'Home B') });
+        harness.answer(homeB, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+        harness.answer(serverId, DETAIL_PATH, { body: privateDetail(run(), 'Home A') });
+        routeParamsState.serverId = homeB;
+        const screen = await open(run({ errorCode: 'home_a_cached_error' }));
+        await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain('Frozen prompt'));
+        expect(screen.getTextContent()).toContain('Home B private recipe');
+        expect(screen.getTextContent()).not.toContain('Home A private recipe');
+        expect(screen.getTextContent()).not.toContain('home_a_cached_error');
+        const { storage } = await import('@/sync/domains/state/storage');
+        expect(storage.getState().profileScope?.serverId).toBe(serverId);
+    });
+
+    it('refuses an unknown Home instead of opening the active Home Run', async () => {
+        routeParamsState.serverId = 'unknown-home';
+        const screen = await open(run({ errorCode: 'home_a_cached_error' }));
+        await waitForHomeGovernance(() => expect(screen.findAllByProps({ testID: 'workflow-run-unavailable' }).length > 0
+            || screen.getTextContent().includes('Admitted recipe')).toBe(true));
+        expect(screen.findAllByProps({ testID: 'workflow-run-unavailable' }).length).toBeGreaterThan(0);
+        expect(screen.getTextContent()).not.toContain('home_a_cached_error');
+        expect(harness.requestsFor(DETAIL_PATH)).toHaveLength(0);
+    });
+
+    it('returns from an unknown Home to the active Home Run in the same mounted route', async () => {
+        const { WorkflowRunDetailRoute } = await import('@/app/(app)/workflows/runs/[runId]');
+        const { resolveCompactAppDestinations, hrefForDestinationRef } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+        const { createWorkflowRunRoute } = await import('@/sync/domains/workflows/workflowRunRoute');
+        const { Platform } = await import('react-native');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const platformDescriptor = Object.getOwnPropertyDescriptor(Platform, 'OS')!;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+        const unqualified = createWorkflowRunRoute({ kind: 'occurrence', automationId: 'a1', runId: 'run-1' });
+        const location = { pathname: '/workflows/runs/run-1', search: unqualified.slice(unqualified.indexOf('?')), hash: '' };
+        const history = { state: null as unknown,
+            replaceState(state: unknown, _unused: string, href?: string | URL | null) {
+                history.state = state;
+                if (!href) return;
+                const next = new URL(href, 'https://happier.invalid');
+                location.pathname = next.pathname; location.search = next.search; location.hash = next.hash;
+            },
+            pushState(state: unknown, unused: string, href: string) { history.replaceState(state, unused, href); },
+            go() {},
+        };
+        const events = new EventTarget();
+        vi.stubGlobal('window', { location, history, sessionStorage: { getItem: () => 'fix113-run' },
+            addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events),
+            dispatchEvent: events.dispatchEvent.bind(events) });
+        storage.setState({ isDataReady: true });
+        harness.answer(serverId, DETAIL_PATH, { body: privateDetail(run(), 'Home A') });
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: true, friends: false } });
+        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>{current => {
+            const state = current.state;
+            const tab = state.tabs[state.groups[state.focusedGroupId].activeTabId];
+            return <>{React.createElement('WorkspaceOwner', { navigation: current })}
+                <DestinationInstanceHost tabId={tab.id} ref={tab.target} pathname={hrefForDestinationRef(catalog, tab.target)!}
+                    focused visible navigation={current.navigationForTab(tab.id)}><WorkflowRunDetailRoute /></DestinationInstanceHost></>;
+        }}</WorkspaceProvider>);
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        try {
+            expect(navigation().active).toBe(true);
+            await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain('Home A private recipe'));
+            // The legacy redirect / hosted navigation first mirrors this canonical Run URL to Expo.
+            await act(async () => { navigation().openHref(unqualified, { replace: true }); });
+            const activeRequests = harness.requestsFor(DETAIL_PATH).length;
+            // Expo's imperative push publishes browser history before its search-parameter hooks.
+            await act(async () => { history.pushState({}, '', `${unqualified}&serverId=unknown-home`); });
+            await waitForHomeGovernance(() => expect(screen.findAllByProps({ testID: 'workflows-gate-disabled' }).length).toBeGreaterThan(0));
+            expect(screen.getTextContent()).not.toContain('Home A private recipe');
+            expect(harness.requestsFor(DETAIL_PATH)).toHaveLength(activeRequests);
+
+            await act(async () => { history.pushState({}, '', unqualified); });
+
+            expect(screen.findAllByProps({ testID: 'workflows-gate-disabled' })).toHaveLength(0);
+            await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain('Home A private recipe'));
+            expect(storage.getState().profileScope?.serverId).toBe(serverId);
+        } finally {
+            await screen.unmount();
+            vi.unstubAllGlobals();
+            Object.defineProperty(Platform, 'OS', platformDescriptor);
+        }
     });
 
     it('uses the built-in exact Run cache without refreshing the root page', async () => {
@@ -395,8 +484,8 @@ describe('AutomationRunDetailScreen', () => {
             await connection?.dispose();
             await connectAccount('account-b');
         });
-        const { AutomationRunDetailScreen } = await import('./AutomationRunDetailScreen');
-        await screen.update(<AutomationRunDetailScreen />);
+        const { WorkflowRunScreen } = await import('../screens/WorkflowRunScreen');
+        await screen.update(<WorkflowRunScreen />);
         await waitForHomeGovernance(() => expect(screen.findByTestId('automation-run-detail-load-error')).toBeTruthy());
         expect(screen.getTextContent()).not.toContain('Account A');
         expect(screen.getTextContent()).not.toContain('account-a-direct-status');
@@ -452,12 +541,19 @@ describe('AutomationRunDetailScreen', () => {
 
     it('does not let an older direct response regress cached status or reveal its private recipe', async () => {
         const pending = createDeferred<void>();
+        const currentnessRequested = createDeferred<void>();
         const stale = privateDetail(run({ state: 'running', updatedAt: 11, errorCode: 'stale-direct-status' }), 'Stale');
         harness.answer(serverId, DETAIL_PATH, { body: stale, respondAfter: pending.promise });
+        harness.answer(serverId, '/v1/account/encryption/currentness', { select: () => {
+            currentnessRequested.resolve();
+            return { body: createPlainAccountEncryptionCurrentnessFixture() };
+        } });
         const screen = await open(run({ state: 'cancelled', updatedAt: 20, finishedAt: 20, errorCode: null }));
         await waitForHomeGovernance(() => expect(harness.requestsFor(DETAIL_PATH)).toHaveLength(1));
-        await act(async () => pending.resolve());
-        await waitForHomeGovernance(() => expect(harness.requestsFor('/v1/account/encryption/currentness')).toHaveLength(1));
+        await act(async () => {
+            pending.resolve();
+            await currentnessRequested.promise;
+        });
         expect(screen.getTextContent()).toContain('Cancelled');
         expect(screen.getTextContent()).not.toContain('stale-direct-status');
         expect(screen.getTextContent()).not.toContain('Stale private');
@@ -496,7 +592,8 @@ describe('AutomationRunDetailScreen', () => {
         await screen.pressByTestIdAsync('automation-run-retry-reply-handoff');
         expect(harness.requestsFor(retryPath)).toHaveLength(1);
         const { storage } = await import('@/sync/domains/state/storage');
-        expect(storage.getState().workflowRunsById['run-1'].automation?.replyHandoffState).toBe('ready');
+        const { workflowRunStoreKey } = await import('@/sync/store/domains/workflowRuns');
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(row.id)].automation?.replyHandoffState).toBe('ready');
     });
 
     it('does not offer recovery that the server cannot dispatch', async () => {
@@ -528,8 +625,8 @@ describe('AutomationRunDetailScreen', () => {
         harness.answer(serverId, '/v3/automations/a2/runs?limit=20', { body: { runs: [], nextCursor: null }, respondAfter: pending.promise });
         routeParamsState.id = 'a2';
         routeParamsState.runId = 'run-2';
-        const { AutomationRunDetailScreen } = await import('./AutomationRunDetailScreen');
-        await screen.update(<AutomationRunDetailScreen />);
+        const { WorkflowRunScreen } = await import('../screens/WorkflowRunScreen');
+        await screen.update(<WorkflowRunScreen />);
         expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
         expect(screen.getTextContent()).not.toContain('runs.runDetails.failedToLoad');
         await act(async () => pending.resolve());
@@ -585,7 +682,7 @@ describe('AutomationRunDetailScreen', () => {
         expect(screen.findAllByProps({ testID: 'automation-run-open-workflow' }).length,
             JSON.stringify({ text: screen.getTextContent(), detailRequests: harness.requestsFor(DETAIL_PATH).map(({ path }) => path) })).toBeGreaterThan(0);
         await screen.pressByTestIdAsync('automation-run-open-workflow');
-        expect(routerPushSpy).toHaveBeenCalledWith('/workflows/runs/run-1');
+        expect(routerPushSpy).toHaveBeenCalledWith(`/workflows/runs/run-1?serverId=${encodeURIComponent(serverId)}`);
         expect(screen.findAllByProps({ testID: 'automation-run-retry-reply-handoff' }).length).toBeGreaterThan(0);
     });
 

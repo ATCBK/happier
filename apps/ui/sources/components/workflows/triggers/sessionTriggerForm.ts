@@ -1,8 +1,8 @@
 import { normalizeWorkflowIngress } from '@happier-dev/protocol/workflows/workflowValidationV1';
 import { resolveWorkflowStepSelectionV1 } from '@happier-dev/protocol/workflows/workflowStepSelectionV1';
 import { SessionInitialTriggerDefinitionV1Schema, type WorkflowTriggerSetV1, type SessionInitialTriggerDefinitionV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
-import type { AutomationSessionLifecycleEvent } from '@happier-dev/protocol/automations/automationSessionLifecycle';
-import type { AutomationTriggerDefinitionInput } from '@happier-dev/protocol/automations/automationTriggerDefinition';
+import { AUTOMATION_SESSION_LIFECYCLE_EVENT_GROUPS_V1, type AutomationSessionLifecycleEvent } from '@happier-dev/protocol/automations/automationSessionLifecycle';
+import { projectFollowEventConditionPickerV1, type AutomationTriggerDefinitionInput } from '@happier-dev/protocol/automations/automationTriggerDefinition';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { TriggerTargetV1 } from '@happier-dev/protocol/workflows/triggers/triggerTargetV1';
 import type { WorkflowBlock, WorkflowDefinitionV1, WorkflowSessionAuthoringSelection } from '@happier-dev/protocol/workflows/workflowV1';
@@ -20,14 +20,10 @@ import { withWorkflowAuthoringEngineFields } from '@/sync/domains/workflows/work
 
 /** The session kinds, in 07 S16's order. */
 export const SESSION_TRIGGER_WHEN_KINDS = [
-    'turnEnds',
-    'needsYou',
-    'sessionArchived',
-    'sessionStarts',
-    'schedule',
-    'prComment',
-    'ciFailed',
-] as const;
+    ...Object.keys(AUTOMATION_SESSION_LIFECYCLE_EVENT_GROUPS_V1) as Array<keyof typeof AUTOMATION_SESSION_LIFECYCLE_EVENT_GROUPS_V1>,
+    ...projectFollowEventConditionPickerV1({ usage: 'habit' }).flatMap(({ condition }) =>
+        condition.kind === 'schedule' || condition.kind === 'prComment' || condition.kind === 'ciFailed' ? [condition.kind] : []),
+];
 export type SessionTriggerWhenKind = (typeof SESSION_TRIGGER_WHEN_KINDS)[number] | 'pluginEvent';
 
 /** Saved projections omit private source setup; only the exact Event editor can supply it. */
@@ -77,13 +73,17 @@ export type TriggerThenValue =
 
 export type TriggerFormValue = Readonly<{ when: TriggerWhenValue; then: TriggerThenValue; enabled: boolean }>;
 
-const LIFECYCLE_EVENTS: Readonly<Record<'turnEnds' | 'needsYou' | 'sessionArchived' | 'sessionStarts', readonly AutomationSessionLifecycleEvent[]>> = {
-    // A turn that completes, fails or is stopped all end it (04 §5.5 kind 1, `parentTurn*`).
-    turnEnds: ['parentTurnCompleted', 'parentTurnFailed', 'parentTurnCancelled'],
-    needsYou: ['userActionRequired'],
-    sessionArchived: ['sessionArchived'],
-    sessionStarts: ['sessionStarted'],
-};
+const LIFECYCLE_EVENTS = AUTOMATION_SESSION_LIFECYCLE_EVENT_GROUPS_V1;
+
+/** Exact event identity for a When, independent of persisted event ordering. */
+export function matchesSessionLifecycleEvents(
+    events: readonly AutomationSessionLifecycleEvent[],
+    kind: keyof typeof LIFECYCLE_EVENTS,
+): boolean {
+    const actual = new Set(events);
+    const expected = LIFECYCLE_EVENTS[kind];
+    return actual.size === expected.length && expected.every(event => actual.has(event));
+}
 
 /** The device's own zone, which a new schedule is written in (07 S4 "At", its description). */
 export function readDeviceTimeZone(): string | null {

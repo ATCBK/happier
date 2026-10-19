@@ -4,17 +4,21 @@ import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkflowProgressEnvelopeV1 } from '@happier-dev/protocol';
+import { SessionRuntimeIssueV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
 import type { WorkflowInvocationDetailProps } from './WorkflowInvocationDetail';
 import type { WorkflowInvocationRecoveryPresentation } from './workflowRunDetailPresentation';
+import { projectWorkflowInvocationRecovery } from './workflowRunDetailPresentation';
 
 /**
  * A detached Workflow invocation's requests are answered through the SAME
@@ -35,7 +39,8 @@ vi.mock('react-native-unistyles', async () => {
 });
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: (key) => key });
+    return createTextModuleMock({ translate: (key, params) => key === 'usage.board.plans.capacityResets'
+        ? `${key}(${String(params?.time)})` : key });
 });
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -59,7 +64,6 @@ const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRu
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } =
     await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
 const { AppSessionTranscriptSourceProvider } = await import('@/components/sessions/transcript/source/appSessionTranscriptSource');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { PermissionPromptCard } = await import('@/components/tools/shell/permissions/PermissionPromptCard');
@@ -178,12 +182,7 @@ describe('WorkflowInvocationDetail canonical request cards', () => {
         const credentials = await TokenStorage.getCredentialsForServerUrl('https://workflow-prompt-cards.test');
         if (!credentials) throw new Error('Prompt-card Home must be signed in');
         connection = await restoreServerAccountForTest({ serverUrl: 'https://workflow-prompt-cards.test',
-            accountId: 'account-a', credentials, request: async (url, init) => {
-                const endpoint = new URL(String(url));
-                const token = new Headers(init?.headers).get('Authorization')?.replace(/^Bearer /, '');
-                return createServerFetchAtEndpoint({ endpointUrl: endpoint.origin,
-                    ...(token ? { credentials: { token } } : {}) })(`${endpoint.pathname}${endpoint.search}`, init);
-            } });
+            accountId: 'account-a', credentials, request: homes.request });
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         storage.setState({ profileScope: { serverId, accountId: 'account-a' } });
         homes.answer(serverId, '/v1/account/encryption/currentness', {
@@ -208,6 +207,23 @@ describe('WorkflowInvocationDetail canonical request cards', () => {
         await positive.unmount();
         sessionRequests.length = 0;
     });
+    it.each([1_900_000_000_000, null])('shows the failed leaf issue and only a reported usage reset (%s)', async resetAtMs => {
+        const runtimeIssueV1 = SessionRuntimeIssueV1Schema.parse({ v: 1, scope: 'primary_session', status: 'failed',
+            code: 'usage_limit', source: 'usage_limit', occurredAt: 100, sanitizedPreview: 'Usage limit reached',
+            usageLimit: { v: 1, resetAtMs, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' } });
+        const progress: WorkflowProgressEnvelopeV1 = { kind: 'happier.workflow-progress.v1', blockKind: 'step',
+            invocationPath: { blockId: 'work', scope: [] }, attempt: '0', logicalInvocationRecordId: 'leaf',
+            reason: { code: 'session_input_failed', message: 'Current turn failed', runtimeIssueV1 } };
+        const screen = await renderDetail({ progress, lifecycle: 'failed', recovery: projectWorkflowInvocationRecovery({
+            run: createWorkflowRunSummaryFixture({ state: 'interrupted' }),
+            invocation: createWorkflowInvocationIndexFixture({ lifecycle: 'failed' }),
+            progress, machineHomeDirectory: null,
+        }) });
+        expect(screen.getTextContent()).toContain('Usage limit reached');
+        expect(screen.getTextContent()).not.toContain('Current turn failed');
+        expect(screen.findByTestId('workflow-run-runtime-issue-reset') !== null).toBe(resetAtMs !== null);
+        if (resetAtMs !== null) expect(screen.getTextContent()).toContain('2030');
+    });
     it.each(['cancelled', 'cancel_requested'] as const)('keeps a stopped attempt\'s partial result as one card, its status left to the header, for %s (DESIGN-16 D4)', async lifecycle => {
         const progress: WorkflowProgressEnvelopeV1 = { kind: 'happier.workflow-progress.v1', blockKind: 'action',
             invocationPath: { blockId: 'inspect', scope: [] }, attempt: '0', logicalInvocationRecordId: 'stopped',
@@ -221,6 +237,15 @@ describe('WorkflowInvocationDetail canonical request cards', () => {
         const unanswered = await renderDetail({ progress: null, lifecycle, waitPrompt: 'Does #1482 fix the crash?' });
         expect(unanswered.getTextContent()).toContain('Does #1482 fix the crash?');
         expect(unanswered.findByTestId('workflow-run-invocation-unanswered')).not.toBeNull();
+    });
+    it('keeps a completed Wait\'s question and says it was continued, never unanswered, when it carries no value', async () => {
+        const progress: WorkflowProgressEnvelopeV1 = { kind: 'happier.workflow-progress.v1', blockKind: 'wait',
+            invocationPath: { blockId: 'review', scope: [] }, attempt: '0', logicalInvocationRecordId: 'continued',
+            timing: { startedAt: '2026-10-12T10:00:00.000Z', finishedAt: '2026-10-12T11:05:00.000Z' } };
+        const screen = await renderDetail({ progress, lifecycle: 'completed', waitPrompt: 'Does #1482 fix the crash?' });
+        expect(screen.getTextContent()).toContain('Does #1482 fix the crash?');
+        expect(screen.findByTestId('workflow-run-invocation-continued')).not.toBeNull();
+        expect(screen.findByTestId('workflow-run-invocation-unanswered')).toBeNull();
     });
     afterEach(async () => {
         standardCleanup();
@@ -367,7 +392,7 @@ describe('WorkflowInvocationDetail canonical request cards', () => {
         expect(screen.readModals()).toMatchObject([{ type: 'alert', title: 'common.error', message: 'machine unreachable' }]);
         expect(screen.getTextContent()).toContain('machine unreachable');
         await screen.pressByTestIdAsync('web-modal-button-0');
-        expect(screen.readModals()).toEqual([]);
+        await waitForHomeGovernance(() => expect(screen.readModals()).toEqual([]));
         expect(screen.get('ask-user-question.submit').props.accessibilityState)
             .toMatchObject({ disabled: false });
     });

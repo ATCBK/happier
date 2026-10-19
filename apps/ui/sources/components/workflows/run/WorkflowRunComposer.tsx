@@ -6,6 +6,7 @@ import type { JsonValue, RoleOverrideV1, WorkflowDefinitionV1, WorkflowMateriali
 import { workflowInputTitle, workflowInputToFieldHint, type WorkflowInputDefinition } from '@happier-dev/protocol/workflows/workflowV1';
 import { validateWorkflowDefinition } from '@happier-dev/protocol/workflows/workflowValidationV1';
 import type { InputOptionsConsumerV1 } from '@happier-dev/protocol/inputs';
+import type { ActionSessionAddressV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 import { actionInputOptionValueKey, isSameActionInputOptionValue, readActionInputOptionValue, type ActionInputOptionValue } from '@happier-dev/protocol/actions/actionInputHintsRuntime';
 import { AgentInput } from '@/components/sessions/agentInput';
 import { registerComposerFocusTarget, requestRegisteredComposerFocus } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
@@ -14,6 +15,7 @@ import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput
 import { createExecutionRunStartContentChip } from '@/components/sessions/runs/launcher/executionRunStartChips';
 import { useInputFieldOptions } from '@/components/sessions/actions/useInputFieldOptions';
 import { InputTypePickerHostProvider } from '@/components/sessions/actions/InputTypePickerHostProvider';
+import { useExecutableParticipantLabel } from '@/components/sessions/authoring/useExecutableParticipantLabel';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { SurfaceStateCard } from '@/components/ui/surfaces';
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
@@ -96,7 +98,10 @@ export type WorkflowRunComposerProps = Readonly<{
     includesUnsavedEdits?: boolean;
     notice?: string;
     machineId?: string | null;
+    directory?: string | null;
     serverId?: string | null;
+    /** Exact invoking Session, used by the shared declared context-default owner. */
+    originSession?: ActionSessionAddressV1;
     /** Placement comes from the host, including New's phone floating composer. */
     surfaceGroup?: React.ComponentProps<typeof AgentInput>['surfaceGroup'];
     /** Where and Roles come from their incumbent composer control owners. */
@@ -108,6 +113,8 @@ export type WorkflowRunComposerProps = Readonly<{
         'machineName' | 'machinePopover' | 'currentPath' | 'folderChipState' | 'onRemoveFolder' | 'pathPopover'>;
     /** Catalog-facing input copy (built-ins); authored workflows name their inputs themselves. */
     inputPresentation?: WorkflowRunInputPresentation;
+    /** Demand-mounted choice from the shared executable participant picker. */
+    pickAgentParticipant?: React.ComponentProps<typeof InputTypePickerHostProvider>['pickAgentParticipant'];
 }>;
 
 export type WorkflowRunInputPresentation = Readonly<Record<string, Readonly<{
@@ -142,8 +149,8 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
     const rawTextValues = props.rawTextValues ?? localRawTextValues;
     const setRawTextValues = props.onChangeRawTextValues ?? setLocalRawTextValues;
     const fields = React.useMemo(() => projectWorkflowRunInputFields({
-        inputs: props.inputs, values: props.values, rawTextValues,
-    }), [props.inputs, props.values, rawTextValues]);
+        inputs: props.inputs, values: props.values, rawTextValues, originSession: props.originSession,
+    }), [props.inputs, props.values, props.originSession, rawTextValues]);
     const main = fields.find((field) => field.definition.valueType === 'string' && !isWorkflowChoiceInput(field.definition)) ?? null;
     const remaining = fields.filter((field) => field !== main);
     const missingFields = fields.filter((field) => field.errorCode === 'missing_required_input');
@@ -238,6 +245,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                 onChangeText={changeText} onChangeValue={changeValue} pending={props.pending === true}
                 machineId={props.machineId ?? null} serverId={props.serverId ?? null} prefix={prefix}
                 optionsConsumer={props.optionsConsumer}
+                pickAgentParticipant={props.pickAgentParticipant}
                 {...(props.inputPresentation === undefined ? {} : { presentation: props.inputPresentation })} />
             </View>,
         })]),
@@ -265,6 +273,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                     </Text>
                     {roleDraft.status === 'failed' ? <RoundButton size="small" title={t('common.retry')} onPress={roleDraft.retry} /> : null}
                 </View> : <WorkflowRunRoles definition={props.definition} roleIds={roleIds}
+                    serverId={props.serverId} machineId={props.machineId ?? null} directory={props.directory ?? null}
                     overrides={roleOverrides} onChange={roleDraft.onChange} pending={props.pending === true} prefix={prefix} />}</View>,
         })]),
         ...(props.materializedLeaves === undefined ? [] : [createExecutionRunStartContentChip({
@@ -289,8 +298,8 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                 : chip.key === 'workflow-start-roles' ? { controlId: 'workflowRoles' as const }
                     : chip.key === 'workflow-start-targets' ? { controlId: 'workflowTargets' as const }
                         : chip.key === 'workflow-start-visibility' ? { controlId: 'sessionAccess' as const } : {}),
-    })), [changeText, changeValue, main, missing, missingFields, props.inputPresentation, prefix, props.extraActionChips, props.machineId, props.pending,
-        props.preview, props.serverId, props.optionsConsumer, props.values, props.workflowChip, props.workflowName, rawTextValues, remaining,
+    })), [changeText, changeValue, main, missing, missingFields, props.inputPresentation, prefix, props.extraActionChips, props.machineId, props.directory, props.pending,
+        props.preview, props.serverId, props.optionsConsumer, props.pickAgentParticipant, props.values, props.workflowChip, props.workflowName, rawTextValues, remaining,
         acceptedRepeat, props.definition, props.materializedLeaves, roleDraft.onChange, roleDraft.retry, roleDraft.status, roleIds, roleOverrides,
         visibility.teams, visibility.onChange, visibilityLabel, visibleTeamId, workflowLabel]);
     return (
@@ -396,6 +405,31 @@ function readWorkflowSelection(value: unknown): JsonValue | undefined {
     });
 }
 
+function isParticipantInput(definition: WorkflowInputDefinition): boolean {
+    return definition.inputType !== undefined && 'hostType' in definition.inputType && definition.inputType.hostType === 'agentParticipant';
+}
+
+/** Opened by a participant field's Browse; the picker module and its reads load only then. */
+const pickAgentParticipantOnDemand: NonNullable<WorkflowRunComposerProps['pickAgentParticipant']> = async (request) => {
+    const { presentExecutableParticipantPicker } = await import('@/components/sessions/authoring/ExecutableParticipantPickerModal');
+    if (request.signal.aborted) return null;
+    return presentExecutableParticipantPicker({ accountLifetime: request.accountLifetime, multiple: request.multiple,
+        ...(request.selected === undefined ? {} : { selected: request.selected }), signal: request.signal });
+};
+
+/** A chosen participant reads as its session or model; other choice fields keep their option labels. */
+function WithParticipantLabel(props: Readonly<{ participant: boolean; value: unknown; serverId: string | null;
+    children: (valueLabel: string | undefined) => React.ReactElement }>): React.ReactElement {
+    return props.participant && props.value !== undefined
+        ? <ParticipantLabel value={props.value} serverId={props.serverId}>{props.children}</ParticipantLabel>
+        : props.children(undefined);
+}
+
+function ParticipantLabel(props: Readonly<{ value: unknown; serverId: string | null;
+    children: (valueLabel: string | undefined) => React.ReactElement }>): React.ReactElement {
+    return props.children(useExecutableParticipantLabel(props.value, props.serverId));
+}
+
 /** Only mounted while Inputs is open; option reads stay local to this leaf. */
 export function WorkflowRunInputs(props: Readonly<{
     fields: readonly WorkflowRunInputFieldState[];
@@ -408,6 +442,7 @@ export function WorkflowRunInputs(props: Readonly<{
     serverId: string | null;
     prefix: string;
     optionsConsumer?: WorkflowRunComposerProps['optionsConsumer'];
+    pickAgentParticipant?: WorkflowRunComposerProps['pickAgentParticipant'];
     /** Catalog-facing copy; input names and option values remain the authored contract. */
     presentation?: WorkflowRunInputPresentation;
 }>) {
@@ -425,6 +460,7 @@ export function WorkflowRunInputs(props: Readonly<{
     });
     return <InputTypePickerHostProvider enabled={props.fields.some((field) => field.definition.inputType !== undefined)}
         {...resolveOptions.pickerContext}
+        pickAgentParticipant={props.pickAgentParticipant ?? pickAgentParticipantOnDemand}
         contextKey={JSON.stringify([props.optionsConsumer, props.values, snapshot])}>
         <CoreCollectionScope><View style={styles.fields}>{props.fields.map((field) => {
         const definition = field.definition;
@@ -450,13 +486,16 @@ export function WorkflowRunInputs(props: Readonly<{
                 })
                 : readActionInputOptionValue(field.value);
             return <FieldItem key={definition.name} label={title} supportingText={repair ?? state}>
+                <WithParticipantLabel participant={isParticipantInput(definition)} value={field.value} serverId={props.serverId}>{(valueLabel) =>
                 <HappierInputField<ActionInputOptionValue> frame="none" field={hint} value={field.value}
+                    {...(valueLabel === undefined ? {} : { valueLabel })}
                     selection={selected} options={options} optionsStatus={optionState.status}
                     optionsNotice={<SurfaceStateCard kind="error" size="line" title={t('common.error')}
                         diagnosticCode={optionState.errorCode} action={{ label: t('common.retry'), onPress: retry }} />}
                     isEqual={isSameActionInputOptionValue} keyForOption={(option) => actionInputOptionValueKey(option.value)}
                     theme={selectTheme} disabled={props.pending} testID={id}
-                    onChange={(value) => props.onChangeValue(definition.name, readWorkflowSelection(value))} />
+                    onChange={(value) => props.onChangeValue(definition.name, readWorkflowSelection(value))} />}
+                </WithParticipantLabel>
             </FieldItem>;
         }
         if (definition.valueType === 'boolean') return <SegmentedChoiceItem

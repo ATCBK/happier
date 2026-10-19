@@ -8,7 +8,7 @@ import {
 
 import { renderScreen } from '@/dev/testkit';
 import { setPreferredLanguageFromSettings, t } from '@/text';
-import * as presentation from './AutomationRunDetailScreen';
+import * as presentation from './WorkflowOccurrenceRunContent';
 
 // Native/platform boundaries only: the screen's translator, recipe projection and Items stay real.
 vi.mock('react-native', async () => {

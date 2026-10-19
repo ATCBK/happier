@@ -1,6 +1,6 @@
 import { AutomationEventFilterV1Schema, type AutomationEventFilterV1 } from '@happier-dev/protocol/automations/automationEventFilterV1';
 import { AutomationTriggerDefinitionInputSchema, type AutomationPluginEventDefinitionTrigger, type AutomationPluginEventObservationTransportInput } from '@happier-dev/protocol/automations/automationTriggerDefinition';
-import { arePluginMachineExecutionOriginsEqual, PluginMachineMaterializationExecutionOriginV1Schema, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { arePluginMachineExecutionOriginsEqual, PluginMachineMaterializationExecutionOriginV1Schema, type PluginMachineMaterializationExecutionOriginV1, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginWebhookEndpointIdV1Schema, type PluginWebhookEndpointIdV1 } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
 import type { DaemonContributionRegistryProjectionAutomationEligibleEventV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginEventAutomationSetupResultV1 } from '@happier-dev/protocol/automations/event-setup-result';
@@ -37,7 +37,7 @@ export type PluginEventAutomationAuthoringDraft = Readonly<{
      * watcher and, for durable push, the endpoint target materialization —
      * one machine selection, never two competing ones.
      */
-    watcherOrigin: PluginMachineExecutionOriginV1;
+    watcherOrigin: PluginMachineMaterializationExecutionOriginV1;
     observation: PluginEventAutomationObservationDraft;
     filter: AutomationEventFilterV1 | null;
     maximumObservationAgeMs: number | null;

@@ -5,8 +5,10 @@ import { PromptLibraryRowsListResponseV1Schema, sealPromptLibraryContentV1 } fro
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createWorkflowDefinitionFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -16,11 +18,12 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
-const { getStorage } = await import('@/sync/domains/state/storageStore');
-const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { WorkflowAcceptedRunRoles, WorkflowRunRoles } = await import('./WorkflowRunRoles');
 let disposeLoader: (() => void) | undefined;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+
+await loadSyncSingletonForTests();
 
 const definition = createWorkflowDefinitionFixture({ defaults: { engine: { role: 'portable_builder' } }, roles: [{
     roleId: 'portable_builder', name: 'Accepted builder', instructions: 'Build carefully', runsAs: { kind: 'session' },
@@ -31,18 +34,20 @@ describe('workflow run role controls', () => {
         await home.reset();
         disposeLoader = await installRealActionExecutorModuleLoader();
         const serverUrl = `https://workflow-roles-${crypto.randomUUID()}.test`;
-        const serverId = await home.addHome({ name: 'Workflow roles', serverUrl, accountId: 'account-a' });
+        const serverId = await home.addHome({ name: 'Workflow roles', serverUrl, accountId: 'account-a', currentAccount: true });
         home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         home.answer(serverId, '/v1/account/entity-rows/prompt-library', { body: PromptLibraryRowsListResponseV1Schema.parse({
             status: 'listed', rows: [{ key: 'role-overrides', revision: 1, content: sealPromptLibraryContentV1({
                 record: { key: 'role-overrides', value: { v: 1, overrides: {} } }, mode: 'plain', material: null,
             }) }],
         }) });
-        getStorage().setState({ profileScope: { serverId, accountId: 'account-a' }, settingsScope: { serverId, accountId: 'account-a' } });
-        publishAppliedActiveServerSnapshot({ serverId, serverUrl, generation: 1 });
+        connection = await restoreServerAccountForTest({ serverUrl, accountId: 'account-a', request: home.request,
+            credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) } });
     });
     afterEach(async () => {
         await standardCleanup();
+        await connection?.dispose();
+        connection = undefined;
         retireActiveServerAccountScopeLifetime();
         await home.reset();
         disposeLoader?.();

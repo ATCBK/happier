@@ -112,8 +112,6 @@ export function InlinePluginEventEditor(props: Readonly<{
     }, [props]);
     return (
         <FloatingOverlay surfaceChrome="theme" maxHeight={props.maxHeight ?? 640}
-            header={insideSheet ? undefined : <ListPresentationProvider value="page"><ItemGroup surface="none"
-                title={t('workflows.triggers.popover.configureEvent')} /></ListPresentationProvider>}
             footer={<View style={styles.footer}>
                 <RoundButton testID="automation-plugin-event-cancel" size="small" display="inverted"
                     title={t('common.cancel')} onPress={props.onCancel} />
@@ -125,7 +123,12 @@ export function InlinePluginEventEditor(props: Readonly<{
                     disabled={!props.model.createDraft}
                 />
             </View>}>
-            <View style={styles.content}><PluginEventAutomationComposerContent model={props.model} /></View>
+            {insideSheet ? <View style={styles.content}><PluginEventAutomationComposerContent model={props.model} /></View>
+                : <ListPresentationProvider value="page"><ItemGroup surface="none" title={t('workflows.triggers.popover.configureEvent')}>
+                    <ListPresentationProvider value="grouped">
+                        <View style={styles.content}><PluginEventAutomationComposerContent model={props.model} /></View>
+                    </ListPresentationProvider>
+                </ItemGroup></ListPresentationProvider>}
         </FloatingOverlay>
     );
 }

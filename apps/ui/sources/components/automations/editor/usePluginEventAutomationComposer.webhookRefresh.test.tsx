@@ -16,11 +16,12 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
 import type { PluginEventAutomationEditSeed } from '@/sync/domains/automations/pluginEventAutomationEditSeed';
 
@@ -284,14 +285,21 @@ describe('usePluginEventAutomationComposer webhook refresh', () => {
             name: 'Webhook composer', serverUrl: SERVER_URL,
             serverIdentityId: SERVER_IDENTITY_ID, accountId: 'account-a',
         });
-        connection = await restoreServerAccountForTest({ serverUrl: SERVER_URL, accountId: 'account-a' });
+        harness.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: WATCHER_MACHINE_ID, accountId: 'account-a' })] });
+        connection = await restoreServerAccountForTest({ serverUrl: SERVER_URL, serverIdentityId: SERVER_IDENTITY_ID,
+            accountId: 'account-a', request: harness.request, configureSocket: configureConnectedServerSocketBoundary });
         const { storage } = await import('@/sync/domains/state/storage');
-        const { profileDefaults } = await import('@/sync/domains/profiles/profile');
         const { replacePluginAccountAvailabilityProjection } = await import('@/sync/domains/plugins/availability/projection');
-        const scope = { serverId: SERVER_IDENTITY_ID, accountId: 'account-a' };
-        storage.setState({ profileScope: scope, settingsScope: scope, profile: { ...profileDefaults, id: 'account-a' }, isDataReady: true });
-        // This endpoint's target is live, not the fixture factory's epoch-old presence observation.
-        storage.getState().applyMachines([createMachineFixture({ id: WATCHER_MACHINE_ID, updatedAt: Date.now() })], true, { sourceServerId: serverId });
+        const scope = { serverId: connection.serverId, accountId: 'account-a' };
+        await waitForHomeGovernance(() => {
+            expect(storage.getState().profileScope).toEqual(scope);
+            expect(captureActiveServerAccountScopeLifetime()?.isCurrent()).toBe(true);
+        });
+        // This suite owns webhook rereads, not background bootstrap scheduling.
+        // Load its inventory through the same public Sync owner as a foreground refresh.
+        const { sync } = await import('@/sync/sync');
+        await sync.refreshMachines({ serverId: connection.serverId });
+        await waitForHomeGovernance(() => expect(storage.getState().machines[WATCHER_MACHINE_ID]?.active).toBe(true));
         replacePluginAccountAvailabilityProjection({ scope, snapshot: {
             availabilityCursor: 1,
             intentReads: [{ pluginId: PLUGIN_ID, response: availabilityResponse }],
@@ -301,7 +309,7 @@ describe('usePluginEventAutomationComposer webhook refresh', () => {
     });
 
     afterEach(async () => {
-        standardCleanup();
+        await standardCleanup();
         await connection?.dispose();
         connection = null;
         restoreActionLoader?.();
@@ -309,8 +317,6 @@ describe('usePluginEventAutomationComposer webhook refresh', () => {
         const { clearPluginAccountAvailabilityProjection } = await import('@/sync/domains/plugins/availability/projection');
         clearPluginAccountAvailabilityProjection();
         await harness.reset();
-        const { storage } = await import('@/sync/domains/state/storage');
-        storage.setState(storage.getInitialState(), true);
     });
 
     it('releases an unresolved refresh latch when the setup scope rotates', async () => {

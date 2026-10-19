@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { WorkflowEngineSelectionV1, RoleEngineV1 } from '@happier-dev/protocol';
+import type { WorkflowReplayAgentOverrideV1, RoleEngineV1 } from '@happier-dev/protocol';
 import { buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { RoleEngineField } from '@/components/roles/engine/RoleEngineField';
 import { useRoleEnginePresentation } from '@/components/roles/catalog/useRoleEnginePresentation';
@@ -11,9 +11,12 @@ import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTarget
 /** Only the explicit engine-group choice is editable; admission owns its resolution. */
 export function WorkflowRunAgentOverrideField(props: Readonly<{
     step: string;
-    value: WorkflowEngineSelectionV1 | undefined;
-    onChange: (engine: WorkflowEngineSelectionV1 | undefined) => void;
+    value: WorkflowReplayAgentOverrideV1['engine'] | undefined;
+    onChange: (engine: WorkflowReplayAgentOverrideV1['engine'] | undefined) => void;
     disabled: boolean;
+    serverId?: string | null;
+    machineId?: string | null;
+    directory?: string | null;
 }>) {
     const presentEngine = useRoleEnginePresentation();
     const roles = useRoleRailItems();
@@ -29,6 +32,7 @@ export function WorkflowRunAgentOverrideField(props: Readonly<{
     return <FieldItem label={t('workflows.start.agentForStep', { step: props.step })}
         supportingText={targetUnavailable ? t('roles.settings.engineUnavailable') : undefined}>
         <RoleEngineField engine={engine} label={role?.name ?? presentation.label ?? t('workflows.start.chooseAgent')}
+            serverId={props.serverId} machineId={props.machineId} directory={props.directory}
             leading={role?.engineIcon ?? presentation.icon} disabled={props.disabled}
             testID="workflow-run-another-agent-field"
             roleSelection={{ value: roleId, roles, onChange: (id) => {

@@ -52,6 +52,7 @@ import {
 } from './sessionTriggerForm';
 import { buildSimpleScheduleCron, formatClockTimeInput, parseClockTime, type SimpleScheduleRepeat } from './triggerSchedule';
 import { useNotifyMeChannelOptions, useTriggerWorkflowDefinition } from './useTriggerThenOptions';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { SessionTriggerPullRequestPicker } from './SessionTriggerPullRequestPicker';
 import { WorkflowExamplesSection } from '../library/WorkflowExamplesSection';
 import { resolveWorkflowBuiltinInputPresentation } from '../presentation/workflowBuiltinInputPresentation';
@@ -104,6 +105,7 @@ type TriggerPopoverBaseProps = Readonly<{
     machineId?: string | null;
     directory?: string | null;
     serverId?: string | null;
+    accountLifetime?: ServerAccountScopeLifetime | null;
     /** The exact saved row, whose private source configuration is read only when editing it. */
     eventEdit?: Readonly<{ automationId: string; triggerId: string }>;
     /** Route-local retained observation for a non-executing draft test. Never re-admitted. */
@@ -281,6 +283,8 @@ function FieldSelect(props: Readonly<{
  */
 export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
     const Shell = props.shell ?? TriggerAnchoredPopoverShell;
+    const scope = useActiveServerAccountScope();
+    const originServerId = props.serverId ?? scope?.serverId;
     const isNew = props.initial === null;
     const [when, setWhen] = React.useState<TriggerWhenValue>(() => props.initial?.when ?? props.initialWhen
         ?? createDefaultWhen(props.whenKinds[0] ?? 'turnEnds', props.pullRequestLinks));
@@ -292,13 +296,17 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
     const [examplesOpen, setExamplesOpen] = React.useState(false);
     const [eventEditing, setEventEditing] = React.useState(false);
     const workflow = useTriggerWorkflowDefinition(then.kind === 'runWorkflow' ? then.ref : null,
-        props.libraryWorkflowsAvailable !== false);
+        props.libraryWorkflowsAvailable !== false, props.accountLifetime);
     const inlineDefinition = then.kind === 'kept' && then.target.kind === 'inline' ? then.target.definition : null;
     const inputFields = React.useMemo(() => projectWorkflowRunInputFields({
         inputs: inlineDefinition?.inputs ?? workflow.definition?.inputs ?? [],
         values: then.kind === 'runWorkflow' || then.kind === 'kept' ? then.inputs : {},
         rawTextValues: rawInputText,
-    }), [inlineDefinition, workflow.definition, then, rawInputText]);
+        ...(props.sessionId && originServerId ? { originSession: {
+            serverId: originServerId, sessionId: props.sessionId,
+        } } : {}),
+        deferOriginSessionDefault: props.creatingSession === true,
+    }), [inlineDefinition, workflow.definition, then, rawInputText, props.sessionId, props.creatingSession, originServerId]);
     const inputPresentation = resolveWorkflowBuiltinInputPresentation(then.kind === 'runWorkflow' ? then.ref : null);
     const changeThen = (next: TriggerThenValue) => {
         if (next.kind !== then.kind || (next.kind === 'runWorkflow' && then.kind === 'runWorkflow' && next.ref !== then.ref)) {

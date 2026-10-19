@@ -91,7 +91,7 @@ export type WorkflowRunNowController = Readonly<{
     clearRefusal: () => void;
 }>;
 
-async function startWorkflowRun(request: WorkflowRunNowRequest & Readonly<{ runId: string }>): Promise<WorkflowRunStartResultV1> {
+async function startWorkflowRun(request: WorkflowRunNowRequest & Readonly<{ runId: string }>, accountLifetime?: ActiveServerAccountScopeLifetime | null): Promise<WorkflowRunStartResultV1> {
     const input = WorkflowRunStartRequestV1Schema.parse({
         runId: request.runId,
         source: request.source,
@@ -109,6 +109,7 @@ async function startWorkflowRun(request: WorkflowRunNowRequest & Readonly<{ runI
         input,
         parseResult: (value) => WorkflowRunStartResultV1Schema.parse(value),
         fallbackMessage: 'Workflow run request failed',
+        ...(accountLifetime === undefined ? {} : { accountLifetime }),
         ...(request.project === undefined && request.originSessionId === undefined
             ? {}
             : { context: {
@@ -149,6 +150,7 @@ function reconcileWorkflowRunStart(runId: string, lifetime: ActiveServerAccountS
                     actionId: 'workflow.run.get', input: { runId },
                     parseResult: (value) => WorkflowRunGetResultV1Schema.parse(value),
                     fallbackMessage: 'Workflow admission outcome unavailable',
+                    accountLifetime: lifetime,
                 });
                 if (!lifetime.isCurrent()) { retire(); return; }
                 if (!settled) {
@@ -185,8 +187,8 @@ function reconcileWorkflowRunStart(runId: string, lifetime: ActiveServerAccountS
  * open it immediately; this controller keeps no Run cache, no polling and no
  * Run-state interpretation of its own.
  */
-export function useWorkflowRunNowController(): WorkflowRunNowController {
-    const command = useTransientCommandAcknowledgement<WorkflowRunStartResultV1>('workflow.runNow');
+export function useWorkflowRunNowController(accountLifetime?: ActiveServerAccountScopeLifetime | null): WorkflowRunNowController {
+    const command = useTransientCommandAcknowledgement<WorkflowRunStartResultV1>('workflow.runNow', accountLifetime);
     type OwnedAdmission = Readonly<{ runId: string; lifetime: ActiveServerAccountScopeLifetime }>;
     const ownedRef = React.useRef<OwnedAdmission | null>(null);
     const [owned, setOwned] = React.useState<OwnedAdmission | null>(null);
@@ -208,7 +210,7 @@ export function useWorkflowRunNowController(): WorkflowRunNowController {
             setRefusal(null);
             let admission: OwnedAdmission | null = null;
             if (request.runId === undefined) {
-                const lifetime = captureActiveServerAccountScopeLifetime();
+                const lifetime = accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : accountLifetime;
                 if (lifetime === null) return null;
                 admission = ownedRef.current?.lifetime.isCurrent() ? ownedRef.current : { runId: randomUUID(), lifetime };
                 ownedRef.current = admission;
@@ -218,7 +220,7 @@ export function useWorkflowRunNowController(): WorkflowRunNowController {
             if (runId === undefined) return null;
             const result = await command.run({
                 commandId: runId,
-                submit: () => startWorkflowRun({ ...request, runId }),
+                submit: () => startWorkflowRun({ ...request, runId }, accountLifetime),
                 recoverUnknownOutcome: {
                     isUnknown: (error) => error instanceof WorkflowActionError && error.code === 'workflow_outcome_unresolved',
                     reconcile: (lifetime) => reconcileWorkflowRunStart(runId, lifetime),
@@ -230,7 +232,7 @@ export function useWorkflowRunNowController(): WorkflowRunNowController {
                     storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(
                         result.run,
                         request.metadata ? { kind: 'available', value: request.metadata } : null,
-                    )]);
+                    )], accountLifetime?.scope);
                 },
                 ...(request.isInvocationCurrent
                     ? { isInvocationCurrent: request.isInvocationCurrent }
@@ -253,5 +255,5 @@ export function useWorkflowRunNowController(): WorkflowRunNowController {
             }
             return result;
         },
-    }), [clearRefusal, command, owned, refusal]);
+    }), [accountLifetime, clearRefusal, command, owned, refusal]);
 }
