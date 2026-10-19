@@ -22,12 +22,14 @@ describe('runNativeCryptoWorkerProbe', () => {
         expect(report.checks.secretbox.status).toBe('pass');
         expect(report.checks.aesGcm.status).toBe('pass');
         expect(report.checks.invalidItems.status).toBe('pass');
+        expect(report.checks.fixedLengthDataKey.status).toBe('pass');
         expect(report.checks.jsResponsive.status).toBe('skipped');
         expect(report.status).toBe('pass');
-        expect(report.evidence.dataKey).toMatchObject({ validItems: 5, nullItems: 2 });
+        expect(report.evidence.dataKey).toMatchObject({ validItems: 5, nullItems: 4 });
         expect(report.evidence.secretbox).toMatchObject({ validItems: 9, nullItems: 2 });
         expect(report.evidence.aesGcm).toMatchObject({ validItems: 9, nullItems: 2 });
-        expect(report.evidence.invalidItems).toMatchObject({ nullItems: 6, validItemsAfterInvalid: 3 });
+        expect(report.evidence.invalidItems).toMatchObject({ nullItems: 8, validItemsAfterInvalid: 3 });
+        expect(report.evidence.fixedLengthDataKey).toEqual({ rejectedItems: 2, expectedItems: 2 });
     });
 
     it('includes lenient-valid base64 vectors in the runtime probe batches', async () => {
