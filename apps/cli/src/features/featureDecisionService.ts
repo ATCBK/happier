@@ -1,4 +1,5 @@
 import { applyFeatureDependencies, evaluateFeatureDecisionBase } from '@happier-dev/protocol/features/featureDecisionEngine';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 import { createFeatureDecision } from '@happier-dev/protocol/features/decision';
 import { isFeatureServerRepresented } from '@happier-dev/protocol/features/catalog';
 import { isServerFeatureOperationReady } from '@happier-dev/protocol/features/payload/capabilities/teamCredentialCapabilities';
@@ -133,7 +134,7 @@ function resolveCliFeatureDecisionFromInputs(
 
 export function resolveCliFeatureDecision(params: {
   featureId: FeatureId;
-  env: NodeJS.ProcessEnv;
+  env: ProcessEnvInput;
   serverSnapshot?: CliServerFeaturesSnapshot;
 }): FeatureDecision {
   const inputs = createCliFeatureDecisionInputs({
@@ -146,7 +147,7 @@ export function resolveCliFeatureDecision(params: {
 
 export async function resolveCliFeatureDecisionForServer(params: {
   featureId: FeatureId;
-  env: NodeJS.ProcessEnv;
+  env: ProcessEnvInput;
   serverUrl: string;
   timeoutMs?: number;
   resolveAuthorizationHeaders?: (request: Readonly<{

@@ -1,7 +1,8 @@
 import { parseBooleanEnv } from '@happier-dev/protocol/env/parseBooleanEnv';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 import type { FeatureId } from '@happier-dev/protocol';
 
-type FeatureLocalPolicyResolver = (env: NodeJS.ProcessEnv) => boolean;
+type FeatureLocalPolicyResolver = (env: ProcessEnvInput) => boolean;
 
 const LOCAL_POLICY_BY_FEATURE: Readonly<Partial<Record<FeatureId, FeatureLocalPolicyResolver>>> = {
   automations: (env) => parseBooleanEnv(env.HAPPIER_FEATURE_AUTOMATIONS__ENABLED, true),
@@ -28,14 +29,14 @@ const LOCAL_POLICY_BY_FEATURE: Readonly<Partial<Record<FeatureId, FeatureLocalPo
   // derivation (5.1/5.2) still governs actual render.
 };
 
-export function resolveCliLocalFeaturePolicyEnabled(featureId: FeatureId, env: NodeJS.ProcessEnv): boolean {
+export function resolveCliLocalFeaturePolicyEnabled(featureId: FeatureId, env: ProcessEnvInput): boolean {
   const resolver = LOCAL_POLICY_BY_FEATURE[featureId];
   if (!resolver) return true;
   return resolver(env);
 }
 
 /** Snapshot the declared local decisions without duplicating their environment vocabulary. */
-export function readCliLocalFeaturePolicySnapshot(env: NodeJS.ProcessEnv): Readonly<Record<string, boolean>> {
+export function readCliLocalFeaturePolicySnapshot(env: ProcessEnvInput): Readonly<Record<string, boolean>> {
   return Object.fromEntries(Object.keys(LOCAL_POLICY_BY_FEATURE).map(featureId => [
     featureId, resolveCliLocalFeaturePolicyEnabled(featureId as FeatureId, env),
   ]));

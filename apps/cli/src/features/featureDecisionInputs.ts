@@ -1,4 +1,5 @@
 import { featureRequiresServerSnapshot } from '@happier-dev/protocol/features/catalog';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 import type { FeatureId } from '@happier-dev/protocol';
 
 import { getCliFeatureBuildPolicyDecision } from './featureBuildPolicy';
@@ -11,7 +12,7 @@ import {
 
 export type CliFeatureDecisionInputs = Readonly<{
   featureId: FeatureId;
-  env: NodeJS.ProcessEnv;
+  env: ProcessEnvInput;
   buildPolicy: 'allow' | 'deny' | 'neutral';
   localPolicyEnabled: boolean;
   serverSnapshot?: CliServerFeaturesSnapshot;
@@ -19,7 +20,7 @@ export type CliFeatureDecisionInputs = Readonly<{
 
 export function createCliFeatureDecisionInputs(params: {
   featureId: FeatureId;
-  env: NodeJS.ProcessEnv;
+  env: ProcessEnvInput;
   serverSnapshot?: CliServerFeaturesSnapshot;
 }): CliFeatureDecisionInputs {
   return {
@@ -33,7 +34,7 @@ export function createCliFeatureDecisionInputs(params: {
 
 export async function loadCliFeatureDecisionInputsForServer(params: {
   featureId: FeatureId;
-  env: NodeJS.ProcessEnv;
+  env: ProcessEnvInput;
   serverUrl: string;
   timeoutMs?: number;
   resolveAuthorizationHeaders?: (request: Readonly<{
