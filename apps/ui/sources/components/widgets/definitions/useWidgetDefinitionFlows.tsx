@@ -71,6 +71,11 @@ export function useWidgetDefinitionFlows(input: Readonly<{
     instance: WidgetInstanceV1 | null;
     scope: WidgetSurfaceRefV1 | null;
     anchorRef: React.RefObject<View | null>;
+    /**
+     * Post a snapshot opens on its own card, not at the ⋯: `anchorRef` sits at the card's top edge and
+     * `reveal` brings the card into view first, so the panel never opens over a sibling.
+     */
+    snapshotCard?: Readonly<{ anchorRef: React.RefObject<View | null>; reveal: () => void }>;
     editInputs?: Readonly<{ onPress: () => void; binding: string | null }> | undefined;
     sessionItem?: WidgetDefinitionSessionItem | null;
     providedContext?: Readonly<Record<string, readonly JsonValue[]>>;
@@ -109,8 +114,9 @@ export function useWidgetDefinitionFlows(input: Readonly<{
         || canPromoteSessionWidgetDefinitionSourceV1({ kind: 'widget', instance })) ? () => setFlow('addTo') : undefined), [instance, scope]);
     const onBoard = scope?.owner.kind === 'sessionBoard';
     const saveAsYours = React.useMemo(() => (onBoard && sessionItem?.savable ? () => setFlow('save') : undefined), [onBoard, sessionItem?.savable]);
-    const postSnapshot = React.useMemo(() => (onBoard && sessionItem?.canEdit && capturable ? () => setFlow('snapshot') : undefined),
-        [capturable, onBoard, sessionItem?.canEdit]);
+    const snapshotCard = input.snapshotCard;
+    const postSnapshot = React.useMemo(() => (onBoard && sessionItem?.canEdit && capturable ? () => { snapshotCard?.reveal(); setFlow('snapshot'); } : undefined),
+        [capturable, onBoard, sessionItem?.canEdit, snapshotCard]);
 
     let panel: React.ReactElement | null = null;
     if (flow === 'about' && scope && instance) {
@@ -126,7 +132,7 @@ export function useWidgetDefinitionFlows(input: Readonly<{
             : flow === 'addTo' ? t('widgetFrame.groupAddTo') : t('widgetDefinition.snapshotTitle');
         const account = { serverId: scope.serverId, accountId: scope.accountId };
         panel = (
-            <WidgetFlowShell anchorRef={anchorRef} title={title} onRequestClose={close} testID={`${testID}.${flow}`}
+            <WidgetFlowShell anchorRef={flow === 'snapshot' && snapshotCard ? snapshotCard.anchorRef : anchorRef} title={title} onRequestClose={close} testID={`${testID}.${flow}`}
                 {...(flow === 'addTo' ? { width: WIDGET_FLOW_WIDTH_PX.setup } : {})}>
                 {flow === 'addTo' && placeInstance && copyTo !== null ? (
                     <WidgetCopyPanel instance={placeInstance} current={scope} destinationKey={copyTo} providedContext={input.providedContext ?? {}}
@@ -276,7 +282,8 @@ function AboutPanelContent(props: Parameters<typeof AboutBoundFlow>[0] & Readonl
             {...(artifactId ? { onDuplicate: async () => {
                 duplicate.current ??= createWidgetArtifactWriteAttempt('widgets.definition.duplicate', account);
                 const outcome = await duplicate.current.run(() => ({ account, artifactId, newArtifactId: randomUUID() }));
-                if (outcome.kind === 'applied') duplicate.current = null;
+                // Approval now owns this copy too; a later explicit Duplicate is a new intent.
+                if (outcome.kind !== 'refused') duplicate.current = null;
                 return outcome.kind === 'applied' ? outcome.result.definition.name : null;
             } } : {})}
             testID={props.testID}

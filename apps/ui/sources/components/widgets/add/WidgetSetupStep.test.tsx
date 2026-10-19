@@ -251,7 +251,7 @@ describe('WidgetSetupStep discovery', () => {
         await vi.waitFor(() => expect(screen.findAllByType(HappierInputField).find(field => field.props.field.path === 'period')!.props.options)
             .toEqual([expect.objectContaining({ value: 'choice', label: 'ambient:none' })]));
     });
-    it('retries the same add after gallery entries rebuild, then permits an intentional new copy', async () => {
+    it('retries the same add after gallery entries rebuild, then adds another copy only by choosing the widget again', async () => {
         const board = createWorkBoardV1({ id: 'retry-board', name: 'Overview' });
         const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [board] });
         let lostAck = false;
@@ -266,8 +266,10 @@ describe('WidgetSetupStep discovery', () => {
         }, () => true);
         const target = { ...scope, owner: { kind: 'workBoard', boardId: board.id } } as const;
         const completed = vi.fn();
+        const addAnother = vi.fn();
         let entriesBuilt = 0;
         function GalleryStep() {
+            const [chosen, setChosen] = React.useState(0);
             const boards = React.useSyncExternalStore(store.subscribe, store.getBoards, store.getBoards);
             const sections = buildAccountWidgetAddSections({ candidates: [{ ...candidate, target: 'app', sessionInputPath: undefined, inputs: { fields: [] } }],
                 instances: boards.boards[0]?.widgets?.map(item => item.instance) ?? [], scope: target,
@@ -280,7 +282,8 @@ describe('WidgetSetupStep discovery', () => {
             });
             entriesBuilt++;
             const setup = sections.flatMap(section => section.entries).find(entry => entry.id === `plugin-${candidate.key}`)!.setup!();
-            return <WidgetSetupStep setup={setup} phone={false} presentation="pane" onDone={completed} testID="retry-copy" />;
+            return <WidgetSetupStep key={chosen} setup={setup} phone={false} presentation="pane" onDone={completed}
+                onAddAnother={() => { addAnother(); setChosen(count => count + 1); }} testID="retry-copy" />;
         }
         const screen = await renderScreen(<GalleryStep />);
         await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });
@@ -294,6 +297,12 @@ describe('WidgetSetupStep discovery', () => {
         await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });
         await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
         expect(persistence.acknowledged().boards[0]?.widgets).toHaveLength(1);
+        // After an applied Add the button only returns to the picker: pressing it writes nothing.
+        await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });
+        expect(addAnother).toHaveBeenCalledTimes(1);
+        expect(completed).toHaveBeenCalledTimes(1);
+        expect(persistence.acknowledged().boards[0]?.widgets).toHaveLength(1);
+        // Choosing the widget again opens a fresh step whose Add is the intentional second copy.
         await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });
         await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(2));
         const ids = persistence.acknowledged().boards[0]?.widgets?.map(item => item.instance.id);

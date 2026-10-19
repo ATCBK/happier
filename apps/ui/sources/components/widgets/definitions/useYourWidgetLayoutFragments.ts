@@ -80,8 +80,10 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
                 }
                 const copied = await attempt.run(() => ({ account: scope, artifactId, newArtifactId: randomUUID() }), signal);
                 if (!current()) return;
+                // An accepted approval owns its prepared copy. A later Duplicate is another intent,
+                // including after that request is rejected; only uncertain failures stay here.
+                if (copied.kind !== 'refused' && duplicateAttempts.get(artifactId) === attempt) duplicateAttempts.delete(artifactId);
                 if (copied.kind === 'applied') {
-                    if (duplicateAttempts.get(artifactId) === attempt) duplicateAttempts.delete(artifactId);
                     refresh();
                 }
                 else notify(copied);

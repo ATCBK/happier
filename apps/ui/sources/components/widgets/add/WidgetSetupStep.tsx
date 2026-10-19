@@ -80,6 +80,11 @@ export function WidgetSetupStep(props: Readonly<{
     onCancel?: () => void;
     /** Edit inputs on a phone: the header caret closes the sheet (lab Ep), as Cancel does on desktop. */
     onClose?: () => void;
+    /**
+     * After an applied Add the pane's button reads "Add another" and returns here (to the picker)
+     * instead of writing: a second copy is a deliberate choice of a widget, never a repeated press.
+     */
+    onAddAnother?: () => void;
     /** After the Action acknowledged the write or retained it for approval. */
     onDone: (result: Extract<WidgetSetupSubmitResult, { ok: true }>) => void;
     /** The Action refused; the step keeps the reason on its line and the button retries. */
@@ -120,6 +125,7 @@ export function WidgetSetupStep(props: Readonly<{
     const finishable = completion !== 'approvalPending' && widgetSetupBlockingIssues(setup.fields, resolution).length === 0
         && (!props.blockedReason || submission.current !== null);
     const pane = props.presentation === 'pane';
+    const offersAnother = pane && completion === 'added' && props.onAddAnother !== undefined;
 
     // Choices come from the one options resolver, read only while this step is open.
     const discoveryContext = React.useMemo(() => setup.optionsContext?.(draft), [draft, setup]);
@@ -156,6 +162,7 @@ export function WidgetSetupStep(props: Readonly<{
     }, [options.state, requests]);
 
     const submit = React.useCallback(async () => {
+        if (offersAnother) { props.onAddAnother?.(); return; }
         if (busy || !finishable) return;
         setBusy(true);
         setError(null);
@@ -178,7 +185,7 @@ export function WidgetSetupStep(props: Readonly<{
         } finally {
             setBusy(false);
         }
-    }, [busy, draft, finishable, props, setup]);
+    }, [busy, draft, finishable, offersAnother, props, setup]);
     // The first needed input asked for the focus, and how many times (each ask moves it again).
     const [focusRequest, setFocusRequest] = React.useState<Readonly<{ path: string; count: number }> | null>(null);
     const blockerPath = blocker?.path ?? null;
@@ -186,11 +193,11 @@ export function WidgetSetupStep(props: Readonly<{
     React.useEffect(() => {
         if (!commandRef) return undefined;
         commandRef.current = () => {
-            if (finishable) { void submit(); return; }
+            if (finishable || offersAnother) { void submit(); return; }
             if (blockerPath) setFocusRequest((current) => ({ path: blockerPath, count: (current?.count ?? 0) + 1 }));
         };
         return () => { commandRef.current = null; };
-    }, [blockerPath, commandRef, finishable, submit]);
+    }, [blockerPath, commandRef, finishable, offersAnother, submit]);
 
     // The fields' own predicates over the current draft (shown, required, disabled), from the one
     // neutral field owner: a hidden input leaves the step and a disabled one cannot be changed.
@@ -361,7 +368,7 @@ export function WidgetSetupStep(props: Readonly<{
             label: pane && completion === 'added' ? t('widgetAdd.addAnother') : setup.submitLabel,
             ...(pane ? { icon: 'plus' as const } : {}),
             onPress: () => { void submit(); },
-            disabled: busy || !finishable,
+            disabled: !offersAnother && (busy || !finishable),
             busy,
             busyNote: pane ? t('widgetAdd.adding') : t('widgetAdd.savingInputs'),
         },

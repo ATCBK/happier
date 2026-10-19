@@ -260,6 +260,8 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
         if (!split) { setPushed(true); setDirection('forward'); }
     }, [split]);
     const back = React.useCallback(() => { setPushed(false); setDirection('backward'); }, []);
+    // "Add another" returns to the picker: the split list stays beside an empty stage, a phone pops to the list.
+    const addAnother = React.useCallback(() => { if (split) setSelectedId(null); else back(); }, [back, split]);
 
     // The selected widget's Add, for ⌘↵ and ↵: its setup registers its own submit.
     const commandRef = React.useRef<(() => void) | null>(null);
@@ -340,6 +342,7 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
             commandRef={commandRef}
             onPick={pickEntry}
             onDone={onDone}
+            onAddAnother={addAnother}
             {...(split ? { onClose: close } : { onBack: back })}
             {...(props.serverId ? { serverId: props.serverId } : {})}
             {...(props.sessionId ? { sessionId: props.sessionId } : {})}
@@ -584,6 +587,7 @@ function WidgetAddDetail(props: Readonly<{
     commandRef: React.MutableRefObject<(() => void) | null>;
     onPick: (entry: WidgetAddEntry) => void;
     onDone: (entry: WidgetAddEntry, result: WidgetSetupSubmitResult) => void;
+    onAddAnother: () => void;
     onBack?: () => void;
     onClose?: () => void;
     serverId?: string;
@@ -612,6 +616,7 @@ function WidgetAddDetail(props: Readonly<{
                 footerAccessory={keys}
                 commandRef={props.commandRef}
                 onDone={(result) => props.onDone(entry, result)}
+                onAddAnother={props.onAddAnother}
                 onRefused={(message) => props.onDone(entry, { ok: false, message })}
                 {...(props.serverId ? { serverId: props.serverId } : {})}
                 {...(props.sessionId ? { sessionId: props.sessionId } : {})}
