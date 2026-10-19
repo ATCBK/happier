@@ -231,6 +231,10 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
                   {
                     "archivePath": "bin/codex-code-mode-host",
                     "destinationPath": "bin/codex-code-mode-host"
+                  },
+                  {
+                    "archivePath": "codex-resources/bwrap",
+                    "destinationPath": "codex-resources/bwrap"
                   }
                 ],
                 "win32": [
@@ -272,7 +276,8 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
               },
               "binaryName": "codex",
               "githubRepo": "openai/codex",
-              "kind": "github_release_binary"
+              "kind": "github_release_binary",
+              "releaseTag": "rust-v0.162.1"
             },
             "manual": {
               "kind": "command"
@@ -749,6 +754,7 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
         "version": 1
       }
     ],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -935,7 +941,8 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       }
     ],
     "webhooks": [],
-    "workflows": []
+    "workflows": [],
+    "workItems": []
   },
   "description": "OpenAI Codex coding agent.",
   "displayName": "Codex",
@@ -1108,6 +1115,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -2534,7 +2542,8 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       }
     ],
     "webhooks": [],
-    "workflows": []
+    "workflows": [],
+    "workItems": []
   },
   "displayName": "ElevenLabs Voice",
   "engines": {
@@ -2612,6 +2621,7 @@ const GOOGLE_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -2971,7 +2981,8 @@ const GOOGLE_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       }
     ],
     "webhooks": [],
-    "workflows": []
+    "workflows": [],
+    "workItems": []
   },
   "description": "Google Gemini speech-to-text and Google Cloud text-to-speech.",
   "displayName": "Google Voice",
@@ -3082,6 +3093,7 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -3629,7 +3641,8 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       }
     ],
     "webhooks": [],
-    "workflows": []
+    "workflows": [],
+    "workItems": []
   },
   "displayName": "OpenAI Realtime Voice",
   "engines": {
@@ -3710,6 +3723,7 @@ const OPENAI_COMPAT_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -4141,7 +4155,8 @@ const OPENAI_COMPAT_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       }
     ],
     "webhooks": [],
-    "workflows": []
+    "workflows": [],
+    "workItems": []
   },
   "description": "Batch speech-to-text and text-to-speech through a selected-machine OpenAI-compatible endpoint.",
   "displayName": "OpenAI-compatible Speech",
@@ -4224,6 +4239,7 @@ const XAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -5016,7 +5032,8 @@ const XAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       }
     ],
     "webhooks": [],
-    "workflows": []
+    "workflows": [],
+    "workItems": []
   },
   "displayName": "xAI Grok Voice",
   "engines": {
