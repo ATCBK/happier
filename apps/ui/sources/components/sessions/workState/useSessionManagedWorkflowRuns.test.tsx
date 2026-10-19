@@ -17,7 +17,8 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { WorkflowRunListPage } from '@/sync/domains/workflows/workflowRunListActions';
-import type { SessionManagedWorkflowRunsState } from './useSessionManagedWorkflowRuns';
+import type { SessionManagedWorkflowRunsState } from '@/components/workflows/run/useContextManagedWorkflowRuns';
+import { WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT_V1 } from '@happier-dev/protocol/workflows';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -28,8 +29,8 @@ const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orch
 const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
 const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 const { workflowRunRowFromSummary, workflowRunStoreKey } = await import('@/sync/store/domains/workflowRuns');
-const { useSessionManagedWorkflowRuns } = await import('./useSessionManagedWorkflowRuns');
-const { useSessionManagedWorkflowRunFlow } = await import('./useSessionManagedWorkflowRuns');
+const { useSessionManagedWorkflowRuns } = await import('@/components/workflows/run/useContextManagedWorkflowRuns');
+const { useSessionManagedWorkflowRunFlow } = await import('@/components/workflows/run/useContextManagedWorkflowRuns');
 const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 
 const accountId = 'account-a';
@@ -40,6 +41,7 @@ const readStorage = vi.fn<(input: Record<string, unknown>) => Promise<unknown>>(
 let serverId: string;
 let previousState = storage.getState();
 let previousSnapshot = getActiveServerSnapshot();
+const discussionOrigins = new Map<string, Readonly<{ discussion: { serverId: string; discussionId: string }; messageId: string; throughSeq: number }>>();
 
 beforeEach(async () => {
     previousState = storage.getState();
@@ -49,6 +51,7 @@ beforeEach(async () => {
     home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     readPage.mockReset();
     readStorage.mockReset();
+    discussionOrigins.clear();
     storage.setState({ workflowRunsById: {}, workflowRunListWindows: {}, workflowRunInvocationsByRunId: {},
         settings: { ...storage.getState().settings, experiments: true, featureToggles: { automations: true } } });
     storage.getState().activateProfileScope({ serverId, accountId });
@@ -69,11 +72,13 @@ beforeEach(async () => {
             const metadata = page.metadataByRunId[run.id];
             const materialized = await materializeWorkflowAcceptedSnapshotV1({
                 definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait',
-                    document: { text: 'Continue', references: [], attachments: [] } }] }),
+                    document: { text: 'Continue', references: [], attachments: [] } }],
+                    inputs: discussionOrigins.has(run.id) ? [{ name: WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT_V1, valueType: 'json', required: false }] : [] }),
                 admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true },
                 context: { source: run.origin.kind === 'automation' ? { kind: 'automation', automationId: run.origin.automationId } : { kind: 'inline' }, inputs: {}, machineId: run.machineId,
                     executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
-                    origin: { kind: 'direct', ...(run.origin.originSessionId ? { originSessionId: run.origin.originSessionId } : {}) },
+                    origin: { kind: 'direct', ...(run.origin.originSessionId ? { originSessionId: run.origin.originSessionId } : {}),
+                        ...(discussionOrigins.has(run.id) ? { discussion: discussionOrigins.get(run.id) } : {}) },
                     authorization: { principal: { kind: 'host' } },
                     ...(metadata?.kind === 'available' ? { metadata: metadata.value } : {}) },
             });
@@ -103,7 +108,7 @@ let latest: SessionManagedWorkflowRunsState | null = null;
 let probeRenders = 0;
 
 async function renderHook(sessionId: string | null = 'session-1', targetServerId: string | null = serverId) {
-    const { useSessionManagedWorkflowRuns } = await import('./useSessionManagedWorkflowRuns');
+    const { useSessionManagedWorkflowRuns } = await import('@/components/workflows/run/useContextManagedWorkflowRuns');
     function Probe(): null {
         probeRenders += 1;
         latest = useSessionManagedWorkflowRuns({ sessionId, serverId: targetServerId });
@@ -115,6 +120,29 @@ async function renderHook(sessionId: string | null = 'session-1', targetServerId
 }
 
 describe('useSessionManagedWorkflowRuns', () => {
+    it('discovers Discussion Runs on demand through filtered continuations and the canonical Run store', async () => {
+        const { useDiscussionManagedWorkflowRuns } = await import('@/components/discussions/useDiscussionManagedWorkflowRuns');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('missing_account_scope');
+        const run = createWorkflowRunSummaryFixture({ ownerAccountId: accountId, id: 'discussion-run', state: 'running' });
+        discussionOrigins.set(run.id, { discussion: { serverId, discussionId: 'discussion-1' }, messageId: 'question-1', throughSeq: 1 });
+        readPage.mockImplementation(async ({ filter }) => ({ runs: filter?.cursor ? [run] : [],
+            metadataByRunId: {}, nextCursor: filter?.cursor ? undefined : 'filtered-next' }));
+        const hook = await renderHookState(({ enabled }: { enabled: boolean }) => useDiscussionManagedWorkflowRuns({
+            discussion: { serverId, discussionId: 'discussion-1' }, accountLifetime: lifetime, enabled,
+        }), { initialProps: { enabled: false } });
+        expect(readPage).not.toHaveBeenCalled();
+        expect(hook.getCurrent().phase).toBe('idle');
+        await hook.rerender({ enabled: true });
+        await flushHookEffects({ cycles: 40 });
+        // The Action filters the opened accepted origin; private membership never reaches storage.
+        expect(readPage.mock.calls.every(([request]) => request.filter?.originDiscussionId === undefined)).toBe(true);
+        expect(hook.getCurrent().runs.map(value => value.id)).toEqual(['discussion-run']);
+        expect(hook.getCurrent().supportsAnotherRoundByRunId?.[run.id]).toBe(true);
+        expect(hook.getCurrent().callerAccessByRunId?.[run.id]).toEqual({ canEdit: true });
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(run.id, lifetime.scope)]?.summary?.id).toBe(run.id);
+    });
     it('keeps scope-unread Automation Runs unavailable instead of guessing membership from the client catalog', async () => {
         const { automationScopeSessionId: _unread, ...run } = createWorkflowRunSummaryFixture({ ownerAccountId: accountId,
             origin: { kind: 'automation', automationId: 'retired-automation', cause: AutomationRunCauseSchema.parse({
@@ -371,6 +399,23 @@ describe('useSessionManagedWorkflowRuns', () => {
         });
         await flushHookEffects({ cycles: 40 });
         expect(readPage).toHaveBeenCalledTimes(4);
+    });
+
+    it('discovers a newly admitted Run when its wake arrives during the initial empty membership read', async () => {
+        const first = createDeferred<WorkflowRunListPage>();
+        readPage.mockResolvedValue({ runs: [], metadataByRunId: {}, nextCursor: undefined });
+        readPage.mockImplementationOnce(() => first.promise);
+        await renderHook();
+        expect(latest?.phase).toBe('loading');
+        const started = createWorkflowRunSummaryFixture({ ownerAccountId: accountId, id: 'before-first-answer',
+            origin: { kind: 'direct', originSessionId: 'session-1' } });
+        readPage.mockImplementation(async ({ filter }) => ({ runs: filter?.attention ? [] : [started],
+            metadataByRunId: {}, nextCursor: undefined }));
+        await act(async () => { publishHomeAccountChange(serverId, [`workflow-run:${started.id}`]); });
+        await flushHookEffects({ cycles: 40 });
+        await act(async () => first.resolve({ runs: [], metadataByRunId: {}, nextCursor: undefined }));
+        await flushHookEffects({ cycles: 40 });
+        expect(latest?.runs.map(run => run.id)).toEqual([started.id]);
     });
 
     /**

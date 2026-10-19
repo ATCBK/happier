@@ -6,11 +6,13 @@ import type { WorkflowRunGetResultV1, WorkflowRunListResultV1 } from '@happier-d
 
 import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { supportsWorkflowAnotherRoundV1 } from '@happier-dev/protocol/workflows';
 
 /** Opened detail uses the same Account body owner as the exact Run screen. Callers fence the read before publication. */
 export function publishOpenedWorkflowRunDetail(detail: WorkflowRunGetResultV1, scope?: ServerAccountScope | null): void {
     storage.getState().upsertWorkflowRuns([{ ...workflowRunRowFromSummary(detail.run,
-        detail.acceptedContext.metadata ? { kind: 'available', value: detail.acceptedContext.metadata } : null), detail }], scope);
+        detail.acceptedContext.metadata ? { kind: 'available', value: detail.acceptedContext.metadata } : null,
+        supportsWorkflowAnotherRoundV1(detail.definition), detail.callerAccess), detail }], scope);
 }
 
 // Only pending reads are shared; the Account's existing Run/fact maps own all resolved content.

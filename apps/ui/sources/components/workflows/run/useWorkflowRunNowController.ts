@@ -52,6 +52,8 @@ export type WorkflowRunNowRequest = Readonly<{
      */
     executionTarget?: WorkflowRunStartRequestV1['executionTarget'];
     onComplete?: WorkflowRunStartRequestV1['onComplete'];
+    /** Exact committed Discussion question; admission derives its frontier. */
+    origin?: WorkflowRunStartRequestV1['origin'];
     /** Exact page-selected project, stamped as host context rather than Action input. */
     project?: WorkflowProjectTargetV1;
     /**
@@ -69,6 +71,11 @@ export type WorkflowRunNowRequest = Readonly<{
     refusal?: 'alert' | 'inline';
 }>;
 
+/** Preparation is part of this same press, including its retained id and pending/reconciliation custody. */
+export type WorkflowRunNowPreparationRequest = Pick<WorkflowRunNowRequest, 'runId' | 'isInvocationCurrent' | 'refusal'> & Readonly<{
+    prepareRequest: (runId: string) => Promise<Omit<WorkflowRunNowRequest, 'runId' | 'isInvocationCurrent' | 'refusal'>>;
+}>;
+
 export type WorkflowRunNowController = Readonly<{
     /** The controller-owned ordinary admission, not an admitted Run's lifecycle. */
     pendingRunId: string | null;
@@ -81,7 +88,7 @@ export type WorkflowRunNowController = Readonly<{
      * call: no active Account, an admission already in flight for this id, a
      * retired Account scope, or a failure that was surfaced to the user.
      */
-    runNow: (request: WorkflowRunNowRequest) => Promise<WorkflowRunStartResultV1 | null>;
+    runNow: (request: WorkflowRunNowRequest | WorkflowRunNowPreparationRequest) => Promise<WorkflowRunStartResultV1 | null>;
     /**
      * The last `inline` refusal, as the canonical problem owner describes it.
      * The next press replaces it; `clearRefusal` drops it when the composer that
@@ -102,6 +109,7 @@ async function startWorkflowRun(request: WorkflowRunNowRequest & Readonly<{ runI
             ? {}
             : { executionTarget: request.executionTarget }),
         ...(request.onComplete === undefined ? {} : { onComplete: request.onComplete }),
+        ...(request.origin === undefined ? {} : { origin: request.origin }),
     });
     // Dispatch and failure mapping stay at the one shared workflow Action seam.
     const result = await callWorkflowAction({
@@ -208,19 +216,23 @@ export function useWorkflowRunNowController(accountLifetime?: ActiveServerAccoun
         clearRefusal,
         runNow: async (request) => {
             setRefusal(null);
+            const requestLifetime = accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : accountLifetime;
+            if (requestLifetime === null || !requestLifetime.isCurrent()) return null;
             let admission: OwnedAdmission | null = null;
             if (request.runId === undefined) {
-                const lifetime = accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : accountLifetime;
-                if (lifetime === null) return null;
-                admission = ownedRef.current?.lifetime.isCurrent() ? ownedRef.current : { runId: randomUUID(), lifetime };
+                admission = ownedRef.current?.lifetime.isCurrent() ? ownedRef.current : { runId: randomUUID(), lifetime: requestLifetime };
                 ownedRef.current = admission;
                 setOwned(admission);
             }
             const runId = request.runId ?? admission?.runId;
             if (runId === undefined) return null;
+            let submitted: Omit<WorkflowRunNowRequest, 'runId' | 'isInvocationCurrent' | 'refusal'> | null = null;
             const result = await command.run({
                 commandId: runId,
-                submit: () => startWorkflowRun({ ...request, runId }, accountLifetime),
+                submit: async () => {
+                    submitted = 'prepareRequest' in request ? await request.prepareRequest(runId) : request;
+                    return startWorkflowRun({ ...submitted, runId }, requestLifetime);
+                },
                 recoverUnknownOutcome: {
                     isUnknown: (error) => error instanceof WorkflowActionError && error.code === 'workflow_outcome_unresolved',
                     reconcile: (lifetime) => reconcileWorkflowRunStart(runId, lifetime),
@@ -231,8 +243,8 @@ export function useWorkflowRunNowController(accountLifetime?: ActiveServerAccoun
                 onAccepted: (result) => {
                     storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(
                         result.run,
-                        request.metadata ? { kind: 'available', value: request.metadata } : null,
-                    )], accountLifetime?.scope);
+                        submitted?.metadata ? { kind: 'available', value: submitted.metadata } : null,
+                    )], requestLifetime.scope);
                 },
                 ...(request.isInvocationCurrent
                     ? { isInvocationCurrent: request.isInvocationCurrent }

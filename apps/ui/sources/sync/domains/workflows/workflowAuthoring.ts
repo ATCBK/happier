@@ -410,12 +410,6 @@ export type WorkflowRunInputFieldState = Readonly<{
  * Projects the Run-now sheet in authored declaration order. Required status
  * marks a field and blocks the command; it never reorders the form.
  */
-/**
- * The input Another round fills with the previous round's outcomes (`workflow.run.start` replay intent
- * `another_round`). A definition that declares it can be continued; nobody types it at start.
- */
-export const WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT = 'previousRoundContext';
-
 export function projectWorkflowRunInputFields(params: Readonly<{
   inputs: readonly WorkflowInputDefinition[];
   values: Readonly<Record<string, JsonValue | undefined>>;

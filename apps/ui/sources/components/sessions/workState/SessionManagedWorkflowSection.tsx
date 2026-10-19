@@ -13,7 +13,7 @@ import {
 } from '@/components/workflows/presentation/workflowRunDisplayName';
 import { formatWorkflowRunOriginLabel } from '@/components/workflows/run/workflowRunDetailPresentation';
 
-import type { SessionManagedWorkflowRunsState } from './useSessionManagedWorkflowRuns';
+import type { SessionManagedWorkflowRunsState } from '@/components/workflows/run/useContextManagedWorkflowRuns';
 
 /**
  * Managed Workflow Runs started from this Session.

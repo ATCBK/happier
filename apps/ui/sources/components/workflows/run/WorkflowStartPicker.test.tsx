@@ -1032,6 +1032,72 @@ describe('WorkflowStartPicker plugin workflows', () => {
     })).toMatchObject({ kind: 'available', content: { inputs: { request: draft, previousRoundContext: null },
       origin: { kind: 'direct', originSessionId: session.id } } });
   });
+  it.each([false, true])('keeps Discussion pattern reads on demand and submits the reviewed committed question (prepare=%s)', async (prepare) => {
+    const { useDiscussionWorkflowRun } = await import('@/components/discussions/useDiscussionWorkflowRun');
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime) throw new Error('missing_account_scope');
+    const machine = createMachineFixture();
+    storage.setState({ machines: { [machine.id]: machine } });
+    const onStarted = vi.fn();
+    const discussion = { serverId: lifetime.scope.serverId, discussionId: 'discussion-1' };
+    const project = { machineId: machine.id, directory: '/repo' };
+    let preparedQuestion: Readonly<{ localId: string; retainedDraft: string; submittedDraft: string }> | null = null;
+    // This entry selects an existing committed parent; posting/rejoining remains the repository's contract.
+    const prepareAddressingMessage = async (request: Readonly<{ localId: string; retainedDraft: string; submittedDraft: string }>) => {
+      preparedQuestion = request;
+      return { messageId: 'committed-question-1' };
+    };
+    const hook = await renderHook(({ messageId }: { messageId: string }) => useDiscussionWorkflowRun({
+      discussion, accountLifetime: lifetime, project, addressingMessageId: prepare ? null : messageId,
+      ...(prepare ? { prepareAddressingMessage } : {}),
+      readDraft: () => 'Check the relay migration', onStarted,
+    }), { wrapper: withPanes, initialProps: { messageId: 'committed-question-1' } });
+    expect(hook.getCurrent().chip.controlId).toBe('workflow');
+    expect(modals).toEqual([]);
+    expect(home.requests.filter(request => request.path === '/v3/automations/runs/workflow-storage')).toEqual([]);
+    expect(machineRpc).not.toHaveBeenCalled();
+    // Reuse an actual catalog definition rather than a second executable-definition fixture.
+    const panel = BUILTIN_WORKFLOW_CATALOG_V1.find(entry => entry.id === 'builtin:plan-with-a-panel')!;
+    await act(async () => hook.getCurrent().select({ id: panel.id, name: 'Relay check', description: '', definition: panel.definition,
+      source: { kind: 'catalog', workflow: panel.id } }));
+    expect(starts()).toEqual([]);
+    expect(preparedQuestion).toBeNull();
+    await hook.rerender({ messageId: 'later-question-2' });
+    const composer = hook.tree.root.findByType(WorkflowRunComposer);
+    const main = panel.definition.inputs.find(input => input.valueType === 'string')!;
+    expect(composer.props.values[main.name]).toBe('Check the relay migration');
+    await act(async () => {
+      composer.props.onRun({ [main.name]: 'Check the revised relay migration' });
+      await vi.waitFor(() => expect(onStarted).toHaveBeenCalled());
+    });
+    expect(starts()[0]?.input).toMatchObject({ origin: { kind: 'discussion', discussion, addressingMessageId: 'committed-question-1' },
+      onComplete: { kind: 'originating_discussion' } });
+    if (prepare) expect(preparedQuestion).toMatchObject({ localId: starts()[0]?.input.runId,
+      retainedDraft: 'Check the relay migration', submittedDraft: 'Check the revised relay migration' });
+    expect(hook.getCurrent().saveAsPattern).toEqual({ status: 'unavailable',
+      reason: 'workflow_definition_capture_unavailable', actionId: 'workflow.definition.capture' });
+  });
+  it('keeps a reviewed start on its captured Account when a later render has no caller scope', async () => {
+    const { useWorkflowComposerStart } = await import('./useWorkflowComposerStart');
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime) throw new Error('missing_account_scope');
+    const onStarted = vi.fn();
+    const hook = await renderHook(({ current }: { current: boolean }) => useWorkflowComposerStart({
+      accountLifetime: current ? lifetime : null, project: { machineId: 'machine-1', directory: '/repo' }, onStarted,
+    }), { wrapper: withPanes, initialProps: { current: true } });
+    const panel = BUILTIN_WORKFLOW_CATALOG_V1.find(entry => entry.id === 'builtin:plan-with-a-panel')!;
+    await act(async () => hook.getCurrent()({ id: panel.id, name: 'Retained review', description: '',
+      definition: panel.definition, source: { kind: 'catalog', workflow: panel.id } }));
+    await hook.rerender({ current: false });
+    const main = panel.definition.inputs.find(input => input.valueType === 'string')!;
+    await act(async () => {
+      hook.tree.root.findByType(WorkflowRunComposer).props.onRun({ [main.name]: 'Review the selected question' });
+      await vi.waitFor(() => expect(onStarted).toHaveBeenCalled());
+    });
+    expect(starts()).toHaveLength(1);
+  });
   it('keeps a Session start refusal inline in the open form with its typed reason and the draft', async () => {
     const alert = vi.spyOn(Modal, 'alert');
     const session = createSessionFixture({

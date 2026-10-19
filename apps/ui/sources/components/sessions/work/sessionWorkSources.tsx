@@ -7,7 +7,7 @@ import { resolveAgentActivityStatusPresentation } from '@/components/sessions/ag
 import {
     useSessionManagedWorkflowRuns,
     type SessionManagedWorkflowRunsState,
-} from '@/components/sessions/workState/useSessionManagedWorkflowRuns';
+} from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import {
     useSessionWorkflowActivity,
     type SessionWorkflowActivityState,

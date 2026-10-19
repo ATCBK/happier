@@ -21,7 +21,7 @@ import type {
 import { useTranscriptSessionCommon } from '@/components/sessions/transcript/transcriptSessionCommon';
 import { useStableValueBySignature } from '@/components/sessions/transcript/items/stableValueBySignature';
 import { preloadEnrichedMarkdownRuntime } from '@/components/markdown/enriched/preloadEnrichedMarkdownRuntime';
-import { useSessionManagedWorkflowRuns } from '@/components/sessions/workState/useSessionManagedWorkflowRuns';
+import { useSessionManagedWorkflowRuns } from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import { useTranscriptRootDerivedItems } from '@/components/sessions/transcript/items/useTranscriptRootDerivedItems';
 import { useTranscriptRootNavigationState } from '@/components/sessions/transcript/navigation/useTranscriptRootNavigationState';
 import { useTranscriptRootPendingRequests } from '@/components/sessions/transcript/items/useTranscriptRootPendingRequests';

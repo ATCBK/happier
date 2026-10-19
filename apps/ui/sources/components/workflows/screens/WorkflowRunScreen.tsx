@@ -25,7 +25,7 @@ import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions
 import { WorkflowResultContractSchema } from '@happier-dev/protocol/workflows/workflowV1';
 import { parseWorkflowDefinitionRefV1, resolveBuiltinWorkflowDefinitionV1, prepareWorkflowRunStartV1 } from '@happier-dev/protocol/workflows';
 import { readWorkflowPlanResult } from '@/sync/domains/workflows/workflowPlanReview';
-import { WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT } from '@/sync/domains/workflows/workflowAuthoring';
+import { canStartWorkflowAnotherRound } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
@@ -2066,9 +2066,8 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                     : undefined}
                 runAgainAnchorRef={runAgainAnchorRef}
                 // Offered where the definition takes the previous round as context (Debate, Panel, Fresh opinions).
-                onAnotherRound={canEdit && visibleAcceptedContext !== null && isTerminalWorkflowRunState(summary.state)
-                    && !isWorkflowRunStopPending({ ...summary, cancelRequested })
-                    && visibleDefinition?.inputs.some((input) => input.name === WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT) === true
+                onAnotherRound={canStartWorkflowAnotherRound({ run: summary, canEdit, cancelRequested,
+                    hasAcceptedContext: visibleAcceptedContext !== null, definition: visibleDefinition })
                     ? requestAnotherRound
                     : undefined}
                 onSaveAsWorkflow={visibleDefinition === null

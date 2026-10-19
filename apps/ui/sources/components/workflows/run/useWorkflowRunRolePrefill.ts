@@ -3,12 +3,15 @@ import type { RoleOverrideV1 } from '@happier-dev/protocol';
 import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { readWorkflowRunRolePrefill } from '@/sync/domains/workflows/workflowRunListActions';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 
 const EMPTY_OVERRIDES: readonly RoleOverrideV1[] = Object.freeze([]);
 
 /** Review-local draft, seeded by FIN's existing accepted-run reader. No persisted role memory. */
 export function useWorkflowRunRolePrefill(sourceArtifactId: string | null | undefined) {
-    const lifetime = useActiveServerAccountScopeLifetime();
+    const activeLifetime = useActiveServerAccountScopeLifetime();
+    const addressedLifetime = useWorkflowAccountLifetime();
+    const lifetime = addressedLifetime === undefined ? activeLifetime : addressedLifetime;
     const scope = lifetime?.scope ?? null;
     const identity = JSON.stringify([scope?.serverId, scope?.accountId, sourceArtifactId]);
     const [attempt, retry] = React.useReducer((value: number) => value + 1, 0);
@@ -28,7 +31,7 @@ export function useWorkflowRunRolePrefill(sourceArtifactId: string | null | unde
         const abort = new AbortController();
         const retirement = lifetime.onRetire(() => abort.abort());
         setState({ identity, lifetime, status: 'loading', overrides: EMPTY_OVERRIDES });
-        void readWorkflowRunRolePrefill({ sourceArtifactId, accountId: lifetime.scope.accountId, signal: abort.signal })
+        void readWorkflowRunRolePrefill({ sourceArtifactId, accountId: lifetime.scope.accountId, signal: abort.signal, accountLifetime: lifetime })
             .then((overrides) => {
                 if (!abort.signal.aborted && lifetime.isCurrent()) setState({ identity, lifetime, status: 'ready', overrides: overrides ?? EMPTY_OVERRIDES });
             }, () => {

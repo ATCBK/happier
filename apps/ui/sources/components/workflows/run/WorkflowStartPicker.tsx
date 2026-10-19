@@ -11,6 +11,8 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { useWorkflowDefinitionLibrary } from '../library/workflowLibraryReads';
 import { formatWorkflowDefinitionContentUnavailableReason, formatWorkflowDefinitionLibraryTitle } from '../presentation/workflowProblemPresentation';
 import { resolveWorkflowBuiltinInputPresentation } from '../presentation/workflowBuiltinInputPresentation';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 export type WorkflowStartSelection = Readonly<{
     id: string;
@@ -27,8 +29,10 @@ export function WorkflowStartPicker(props: Readonly<{
     maxHeight: number;
     /** Opened inside a Session: built-ins that run in their origin Session become startable. */
     hasOriginSession?: boolean;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): React.ReactElement {
-    const library = useWorkflowDefinitionLibrary();
+    const accountLifetime = useWorkflowAccountLifetime(props.accountLifetime);
+    const library = useWorkflowDefinitionLibrary({ accountLifetime });
     const savedSelections = React.useRef(new Map<string, Readonly<{
         selection: WorkflowStartSelection;
         lifetime: NonNullable<ReturnType<typeof captureActiveServerAccountScopeLifetime>>;
@@ -62,8 +66,8 @@ export function WorkflowStartPicker(props: Readonly<{
                     entry.contentStatus === 'unavailable' ? entry.contentUnavailableReason : null])),
                 showSkeletonsOnFirstLoad: true,
                 resolve: async (query, signal) => {
-                    const lifetime = captureActiveServerAccountScopeLifetime();
-                    if (lifetime === null) return { options: [] };
+                    const lifetime = accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : accountLifetime;
+                    if (lifetime === null || !lifetime.isCurrent()) return { options: [] };
                     // Hydrate only the matching loaded page, through FIN's exact read. No second catalog/cache.
                     const rows = await Promise.all(library.definitions.filter((entry) =>
                         formatWorkflowDefinitionLibraryTitle(entry).toLocaleLowerCase().includes(query.toLocaleLowerCase()),
@@ -73,7 +77,7 @@ export function WorkflowStartPicker(props: Readonly<{
                                 subtitle: formatWorkflowDefinitionContentUnavailableReason(header.contentUnavailableReason), disabled: true },
                             selection: null,
                         };
-                        const result = await getWorkflowDefinition({ definitionId: header.definitionId, signal });
+                        const result = await getWorkflowDefinition({ definitionId: header.definitionId, signal, accountLifetime: lifetime });
                         const selection = {
                             id: result.definitionId, name: result.metadata.title, description: result.metadata.description ?? '',
                             definition: result.definition,
@@ -91,7 +95,7 @@ export function WorkflowStartPicker(props: Readonly<{
                 id: entry.id, label: entry.name, subtitle: entry.description || asks(entry.definition, entry.id), testID: `workflow-choice:${entry.id}`,
             })) },
         ],
-    }), [asks, builtinSelections, library.definitions, pluginSelections, props.hasOriginSession]);
+    }), [accountLifetime, asks, builtinSelections, library.definitions, pluginSelections, props.hasOriginSession]);
     return <View>
         <SelectionList rootStep={rootStep} maxHeight={props.maxHeight} heightBehavior="content" autoFocusInputOnWeb
             onSelect={(id) => {

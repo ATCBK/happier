@@ -10,6 +10,8 @@ import { KeyboardShortcutContextBridge, useKeyboardShortcutContextSnapshot, type
 
 import { useWorkflowCardModal } from './useWorkflowCardModal';
 import { WorkflowRunComposer } from './WorkflowRunComposer';
+import { WorkflowAccountLifetimeProvider, useWorkflowAccountLifetime } from '../workflowAccountScope';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 /**
  * The focused-modal presenter for the workflow start composer.
@@ -23,13 +25,16 @@ import { WorkflowRunComposer } from './WorkflowRunComposer';
 export type WorkflowRunComposerModalProps = React.ComponentProps<typeof WorkflowRunComposer>;
 
 function WorkflowRunComposerModal(
-    props: WorkflowRunComposerModalProps & CustomModalInjectedProps & Readonly<{ keyboardContext: KeyboardShortcutContextSnapshot }>,
+    props: WorkflowRunComposerModalProps & CustomModalInjectedProps & Readonly<{
+        keyboardContext: KeyboardShortcutContextSnapshot;
+        accountLifetime?: ServerAccountScopeLifetime | null;
+    }>,
 ): React.ReactElement {
     // The modal's own close control dismisses it (`onRequestClose`); the composer has no Cancel row.
-    const { keyboardContext, ...composerProps } = props;
-    return <KeyboardShortcutContextBridge snapshot={keyboardContext}>
+    const { keyboardContext, accountLifetime, ...composerProps } = props;
+    return <WorkflowAccountLifetimeProvider value={accountLifetime}><KeyboardShortcutContextBridge snapshot={keyboardContext}>
         <WorkflowRunComposer {...composerProps} autoFocusComposer={composerProps.autoFocusComposer ?? true} />
-    </KeyboardShortcutContextBridge>;
+    </KeyboardShortcutContextBridge></WorkflowAccountLifetimeProvider>;
 }
 
 export function useWorkflowRunComposerModal(params: Readonly<{
@@ -42,9 +47,11 @@ export function useWorkflowRunComposerModal(params: Readonly<{
     props: WorkflowRunComposerModalProps | null;
     testID?: string;
     anchorRef?: React.RefObject<View | null>;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): React.ReactElement | null {
     const { width } = useWindowDimensions();
     const keyboardContext = useKeyboardShortcutContextSnapshot();
+    const accountLifetime = useWorkflowAccountLifetime(params.accountLifetime);
     // An entry point whose trigger is not on screen (a step's "run with another agent" while the
     // header's Run again is withdrawn) has nothing to anchor to and uses the canonical modal.
     const anchored = params.anchorRef !== undefined && params.anchorRef.current != null && !isMobileLayoutWidth(width);
@@ -63,7 +70,7 @@ export function useWorkflowRunComposerModal(params: Readonly<{
         onCancel?.();
     }, [onCancel]);
     const modalProps = React.useMemo(() => params.props === null ? null
-        : { ...params.props, onRun: runForCurrentIntent, keyboardContext }, [keyboardContext, params.props, runForCurrentIntent]);
+        : { ...params.props, onRun: runForCurrentIntent, keyboardContext, accountLifetime }, [accountLifetime, keyboardContext, params.props, runForCurrentIntent]);
     useWorkflowCardModal({
         open: params.open && !anchored,
         component: WorkflowRunComposerModal,
@@ -93,7 +100,9 @@ export function useWorkflowRunComposerModal(params: Readonly<{
             {({ maxHeight, maxWidth }) => (
                 <FloatingOverlay role="panel" maxHeight={maxHeight} surfaceChrome="theme"
                     containerStyle={{ width: Math.min(maxWidth, 520) }}>
-                    <WorkflowRunComposer {...composerProps} autoFocusComposer={composerProps.autoFocusComposer ?? true} triggerNamesShortcut />
+                    <WorkflowAccountLifetimeProvider value={accountLifetime}>
+                        <WorkflowRunComposer {...composerProps} autoFocusComposer={composerProps.autoFocusComposer ?? true} triggerNamesShortcut />
+                    </WorkflowAccountLifetimeProvider>
                 </FloatingOverlay>
             )}
         </Popover>

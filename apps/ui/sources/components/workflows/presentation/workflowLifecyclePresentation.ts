@@ -17,8 +17,24 @@ import {
     WORK_STATUS_PILL_VARIANT,
 } from '@/components/work/status/resolveWorkStatusTone';
 import { t } from '@/text';
+import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
+import { supportsWorkflowAnotherRoundV1 } from '@happier-dev/protocol/workflows';
 
 export { isTerminalWorkflowRunState, isWorkflowRunStopping, isWorkflowRunStopPending };
+
+/** The full Run page and inline controls offer the same accepted continuation. */
+export function canStartWorkflowAnotherRound(params: Readonly<{
+    run: WorkflowRunSummaryV1;
+    definition: Pick<WorkflowDefinitionV1, 'inputs'> | null;
+    canEdit: boolean;
+    hasAcceptedContext: boolean;
+    supportsAnotherRound?: boolean;
+    cancelRequested?: boolean;
+}>): boolean {
+    return params.canEdit && params.hasAcceptedContext && isTerminalWorkflowRunState(params.run.state)
+        && !isWorkflowRunStopPending({ ...params.run, cancelRequested: params.cancelRequested })
+        && (params.definition ? supportsWorkflowAnotherRoundV1(params.definition) : params.supportsAnotherRound === true);
+}
 
 /**
  * The one neutral presenter for the managed Workflow invocation lifecycle.

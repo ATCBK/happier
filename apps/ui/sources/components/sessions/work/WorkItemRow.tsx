@@ -6,7 +6,7 @@ import type { SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol';
 
 import { SessionAgentActivitySummary } from '@/components/sessions/agents/presentation/SessionAgentActivitySummary';
 import type { SessionAgentActivityPresentation } from '@/components/sessions/agents/presentation/sessionAgentActivityPresentation';
-import { useSessionManagedWorkflowRunFlow } from '@/components/sessions/workState/useSessionManagedWorkflowRuns';
+import { useSessionManagedWorkflowRunFlow } from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import { useWorkTheme } from '@/components/work/map/WorkMapView';
 import { WorkflowFlowView } from '@/components/workflows/flow/WorkflowFlowView';
 import { projectObservedWorkflowFlow } from '@/components/workflows/flow/workflowFlowProjection';

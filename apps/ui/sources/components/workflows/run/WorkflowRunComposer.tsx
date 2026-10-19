@@ -32,7 +32,8 @@ import { useKeyboardShortcutHandlers } from '@/keyboard';
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
-import { buildWorkflowRunStartInputs, projectWorkflowRunInputFields, WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT, type WorkflowRunInputFieldState } from '@/sync/domains/workflows/workflowAuthoring';
+import { buildWorkflowRunStartInputs, projectWorkflowRunInputFields, type WorkflowRunInputFieldState } from '@/sync/domains/workflows/workflowAuthoring';
+import { WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT_V1 } from '@happier-dev/protocol/workflows';
 import { formatWorkflowInputValue } from '@/sync/domains/workflows/workflowInputText';
 import { describeWorkflowCommandBlockedReason, describeWorkflowInputRepair } from '@/components/workflows/presentation/workflowBlockedReasonText';
 import { WorkflowAcceptedRunRoles, WorkflowRunRoles, workflowUsedRoleIds } from './WorkflowRunRoles';
@@ -40,6 +41,7 @@ import { useWorkflowRunRolePrefill } from './useWorkflowRunRolePrefill';
 import { useWorkflowRunVisibility } from './useWorkflowRunVisibility';
 import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
 import { countWorkflowStepsV1, walkWorkflowBlocks } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 
 const styles = StyleSheet.create((theme) => ({
     root: { minWidth: 0 },
@@ -153,7 +155,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
     }), [props.inputs, props.values, props.originSession, rawTextValues]);
     const main = fields.find((field) => field.definition.valueType === 'string' && !isWorkflowChoiceInput(field.definition)) ?? null;
     // The previous round is Another round's to fill; a first start keeps its default without asking.
-    const remaining = fields.filter((field) => field !== main && field.definition.name !== WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT);
+    const remaining = fields.filter((field) => field !== main && field.definition.name !== WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT_V1);
     const missingFields = fields.filter((field) => field.errorCode === 'missing_required_input');
     const missing = missingFields.length;
     const inputTitle = (definition: WorkflowInputDefinition) => workflowInputTitle(definition, props.inputPresentation?.[definition.name]);
@@ -448,6 +450,7 @@ export function WorkflowRunInputs(props: Readonly<{
     presentation?: WorkflowRunInputPresentation;
 }>) {
     const { theme } = useUnistyles();
+    const accountLifetime = useWorkflowAccountLifetime();
     const selectTheme = usePluginUiTheme(theme);
     const requests = props.fields.map(({ definition }) => ({
         field: workflowInputToFieldHint(definition, props.presentation?.[definition.name]),
@@ -457,6 +460,7 @@ export function WorkflowRunInputs(props: Readonly<{
     const { resolveOptions, state: optionsState, retry, snapshot } = useInputFieldOptions({
         requests,
         machineId: props.machineId, serverId: props.serverId,
+        accountLifetime,
         enabled: props.fields.some((field) => field.definition.optionsSourceId !== undefined || field.definition.inputType !== undefined),
     });
     return <InputTypePickerHostProvider enabled={props.fields.some((field) => field.definition.inputType !== undefined)}
