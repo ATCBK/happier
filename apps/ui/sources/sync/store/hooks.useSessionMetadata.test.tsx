@@ -8,7 +8,9 @@ import { storage } from '@/sync/domains/state/storageStore';
 import type { Session } from '@/sync/domains/state/storageTypes';
 
 import { useSessionDisplayNameSource, useSessionDisplayNameProjections } from './hooks';
-import { readableSessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
+import { readableSessionDisplayTitle, useSessionDisplayTitles } from '@/utils/sessions/sessionDisplayTitle';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
 
 afterEach(() => {
     standardCleanup();
@@ -102,6 +104,44 @@ describe('useSessionMetadata', () => {
 });
 
 describe('useSessionDisplayNameSource', () => {
+    it('uses the sidebar display row when a same-Home live shell has not opened metadata', async () => {
+        const previousState = storage.getState();
+        try {
+            const opened = createSessionFixture({ id: 'opened', serverId: 'home-b', encryptionMode: 'e2ee',
+                metadataLayoutVersion: 1, metadata: { path: '', host: '' },
+                ownerMetadataView: { name: 'Release review', host: 'review-box', path: '/release' } });
+            const row = buildSessionListRenderableFromSession(opened);
+            const shell = { ...opened, metadata: null, ownerMetadataView: null, encryptedContentAvailability: 'encrypted_access_pending' as const };
+            storage.setState({ sessions: { opened: shell }, sessionListRowsByServerId: { 'home-b': { opened: row } } });
+            const hook = await renderHook(() => useSessionDisplayTitles([{ serverId: 'home-b', sessionId: 'opened' }]));
+            expect(hook.getCurrent()).toEqual([getSessionName(row, 'home-b')]);
+            await hook.unmount();
+        } finally { storage.setState(previousState); }
+    });
+    it('names opened Home-qualified list rows like the sidebar, including recipients and keyless untitled Sessions', async () => {
+        const previousState = storage.getState();
+        try {
+            const opened = createSessionFixture({ id: 'opened', serverId: 'home-b', encryptionMode: 'e2ee',
+                metadataLayoutVersion: 1, metadata: { path: '', host: '', summary: { text: 'Review release', updatedAt: 1 } },
+                ownerMetadataView: { name: 'Review release', host: 'review-box', path: '/release' } });
+            const recipient = createSessionFixture({ id: 'recipient', serverId: 'home-b', encryptionMode: 'e2ee',
+                metadataLayoutVersion: 1, metadata: null, ownerMetadataView: null, accessLevel: 'view',
+                encryptedContentAvailability: 'encrypted_access_pending', lockedDisplayTitle: 'Shared review' });
+            const untitled = createSessionFixture({ id: 'untitled', serverId: 'home-b', metadata: null });
+            const sessions = [opened, recipient, untitled];
+            const rows = Object.fromEntries(sessions.map(session => [session.id, buildSessionListRenderableFromSession(session)]));
+            storage.setState({ sessions: {}, sessionListRowsByServerId: { 'home-b': rows } });
+            const addresses = sessions.map(session => ({ serverId: 'home-b', sessionId: session.id }));
+            const hook = await renderHook(() => useSessionDisplayTitles(addresses));
+            expect(hook.getCurrent()).toEqual(sessions.map(session => getSessionName(rows[session.id]!, 'home-b')));
+            expect(hook.getCurrent()).toEqual(['Review release', 'Shared review', 'Untitled session']);
+            // A same-id record on the focused Home must never name the captured Home's row.
+            await act(async () => { storage.setState({ sessions: { opened: createSessionFixture({ id: 'opened', serverId: 'home-a',
+                metadata: { name: 'Wrong Home', host: 'other', path: '/other' } }) } }); });
+            expect(hook.getCurrent()[0]).toBe('Review release');
+            await hook.unmount();
+        } finally { storage.setState(previousState); }
+    });
     it('keeps batched readable titles stable across lifecycle changes and withdraws a cached title when content locks', async () => {
         const previousState = storage.getState();
         try {

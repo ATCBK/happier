@@ -254,6 +254,7 @@ export function useSessionSelector<T>(id: string, serverId: string | null | unde
 export type SessionDisplayNameSource = Readonly<Pick<
   Session,
   'id' | 'serverId' | 'metadataLayoutVersion' | 'ownerMetadataView' | 'encryptionMode' | 'encryptedContentAvailability'
+  | 'lockedDisplayTitle' | 'access' | 'accessLevel'
 > & { metadata: Session['metadata'] | SessionListRenderableSession['metadata'] }>;
 
 export function useSessionDisplayNameSource(sessionId: string, serverId?: string | null): SessionDisplayNameSource | null {
@@ -265,9 +266,9 @@ export function useSessionDisplayNameSource(sessionId: string, serverId?: string
 }
 
 /**
- * The display-name projection of one Home-qualified session: the hydrated record when it belongs to
- * that Home, else its list row. One selection owner for every title reader (a session header, a
- * workspace tab), so they cannot disagree about which record names a session.
+ * The display-name projection of one Home-qualified session: its canonical sidebar row when held,
+ * otherwise the hydrated record for that Home. The row already composes opened owner metadata and
+ * transcript-derived titles; a still-loading live shell must not replace it with an encrypted label.
  */
 export function selectSessionDisplayNameSource(
   state: StorageState,
@@ -277,15 +278,19 @@ export function selectSessionDisplayNameSource(
   const normalizedSessionId = normalizeSessionId(sessionId);
   const normalizedServerId = normalizeTrimmedString(serverId);
   const directSession = state.sessions[normalizedSessionId];
-  const session = !normalizedServerId || areServerProfileIdentifiersEquivalent(directSession?.serverId, normalizedServerId)
-    ? directSession
-    : findSessionListLookupSession(state, { serverId: normalizedServerId, sessionId: normalizedSessionId })?.session;
+  const session = findSessionListLookupSession(state, normalizedServerId
+    ? { serverId: normalizedServerId, sessionId: normalizedSessionId } : normalizedSessionId)?.session
+    ?? (!normalizedServerId || areServerProfileIdentifiersEquivalent(directSession?.serverId, normalizedServerId)
+      ? directSession : undefined);
   if (!session) return null;
   return {
     id: session.id,
     serverId: normalizedServerId || directSession?.serverId,
     encryptionMode: session.encryptionMode,
     encryptedContentAvailability: session.encryptedContentAvailability,
+    lockedDisplayTitle: session.lockedDisplayTitle,
+    access: session.access,
+    accessLevel: session.accessLevel,
     metadata: session.metadata,
     metadataLayoutVersion: session.metadataLayoutVersion,
     ownerMetadataView: session === directSession
