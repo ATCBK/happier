@@ -398,6 +398,19 @@ export function createWorkspaceSyncRelationshipOwner(
         }
       };
 
+      const restoreStagedIntent = async (): Promise<void> => {
+        if (!durableIntentStaged || !runtimeOwnedByTransaction || publishedRelationship.relationshipId !== relationship.relationshipId) return;
+        const rollbackVersion = await mutateDesiredRelationships(relationship.relationshipId, (relationships) => {
+          const current = relationships.find((value) => value.relationshipId === relationship.relationshipId);
+          if (!current) return relationships;
+          if (existing) {
+            return relationships.map((value) => value.relationshipId === relationship.relationshipId ? existing : value);
+          }
+          return relationships.filter((value) => value.relationshipId !== relationship.relationshipId);
+        });
+        await options.waitForProjectReconciliation(rollbackVersion);
+      };
+
       await stageDurableIntent();
       let status: WorkspaceSyncStatusV1;
       try {
@@ -420,7 +433,12 @@ export function createWorkspaceSyncRelationshipOwner(
         );
         status = await options.flushRelationship(relationship.relationshipId, input.signal);
       } catch (error) {
-        if (runtimeOwnedByTransaction && !isIndeterminate(error)) await options.terminateRelationshipRuntime(relationship);
+        if (runtimeOwnedByTransaction && !isIndeterminate(error)) {
+          await options.terminateRelationshipRuntime(relationship);
+          // A refused preparation (for example a destination that needs bootstrap) must not leave
+          // the staged paused link behind; the caller's refusal stays the reported failure.
+          await restoreStagedIntent().catch(() => undefined);
+        }
         throw error;
       }
       return Object.freeze({
@@ -487,17 +505,7 @@ export function createWorkspaceSyncRelationshipOwner(
         },
         async abort(): Promise<void> {
           if (closed) return;
-          if (durableIntentStaged && runtimeOwnedByTransaction && publishedRelationship.relationshipId === relationship.relationshipId) {
-            const rollbackVersion = await mutateDesiredRelationships(relationship.relationshipId, (relationships) => {
-              const current = relationships.find((value) => value.relationshipId === relationship.relationshipId);
-              if (!current) return relationships;
-              if (existing) {
-                return relationships.map((value) => value.relationshipId === relationship.relationshipId ? existing : value);
-              }
-              return relationships.filter((value) => value.relationshipId !== relationship.relationshipId);
-            });
-            await options.waitForProjectReconciliation(rollbackVersion);
-          }
+          await restoreStagedIntent();
           if (runtimeOwnedByTransaction) await options.terminateRelationshipRuntime(runtimeRelationship);
           closed = true;
         },

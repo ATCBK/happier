@@ -439,6 +439,20 @@ describe('WorkspaceSyncRelationshipOwner', () => {
     expect(harness.terminateRelationshipRuntime).toHaveBeenCalledWith(expect.objectContaining({ relationshipId: 'relationship_1' }));
   });
 
+  it('restores a reused paused relationship when a later create is refused during preparation', async () => {
+    const harness = createHarness();
+    const first = await harness.owner.prepareCreate(createInput);
+    await first.commit();
+    await harness.owner.setEnabled('relationship_1', false);
+    harness.ensureRelationship.mockRejectedValueOnce(Object.assign(new Error('refused'), { code: 'target_bootstrap_required' }));
+
+    await expect(harness.owner.prepareCreate(createInput)).rejects.toMatchObject({ code: 'target_bootstrap_required' });
+
+    expect(harness.read().relationships).toEqual([
+      expect.objectContaining({ relationshipId: 'relationship_1', enabled: false }),
+    ]);
+  });
+
   it('restores a reused disabled relationship when target commit fails after temporary publication', async () => {
     const harness = createHarness();
     const first = await harness.owner.prepareCreate(createInput);
@@ -615,6 +629,8 @@ describe('WorkspaceSyncRelationshipOwner', () => {
     determinate.ensureRelationship.mockRejectedValueOnce(Object.assign(new Error('rejected'), { code: 'target_unavailable' }));
     await expect(determinate.owner.prepareCreate(createInput)).rejects.toMatchObject({ code: 'target_unavailable' });
     expect(determinate.terminateRelationshipRuntime).toHaveBeenCalledWith(expect.objectContaining({ relationshipId: 'relationship_1' }));
+    // A create refused before the first commit leaves no paused link that can never resume.
+    expect(determinate.read().relationships).toEqual([]);
 
     const indeterminate = createHarness();
     indeterminate.ensureRelationship.mockRejectedValueOnce(Object.assign(new Error('unknown'), { code: 'indeterminate' }));
