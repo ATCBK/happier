@@ -3,8 +3,9 @@ import { readWidgetInputTargetV1, WidgetConnectedAccountPurposeBindingV1Schema, 
 import { buildQualifiedPluginContributionKey, PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { PluginJsonSchemaV2Schema } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
 import { InputHintsSchema, InputPathSchema, type InputHints } from '@happier-dev/protocol/inputs';
-import { BUILTIN_WIDGET_DESCRIPTORS_V1, readBuiltinWidgetDescriptorV1, readWidgetDefinitionResourcesV1, type BuiltinWidgetDescriptorV1, type WidgetDefinitionV1, type WidgetDefinitionRefV1, type WidgetCandidateIdentityV1 } from '@happier-dev/protocol/widgets';
+import { BUILTIN_WIDGET_DESCRIPTORS_V1, readBuiltinWidgetDescriptorV1, readWidgetDefinitionResourcesV1, type BuiltinWidgetDescriptorV1, type WidgetDefinitionV1, type WidgetInstanceV1, type WidgetDefinitionRefV1, type WidgetCandidateIdentityV1 } from '@happier-dev/protocol/widgets';
 import { t } from '@/text';
+import { readUsageBreakdownsInstanceTitle } from '@/components/settings/usage/usageBreakdownTitle';
 import { localizeBuiltinInputHints } from '@/text/builtinInputPrompts';
 import { isAtmosphereMomentOn, readAtmosphereMoments } from '@/components/atmosphere/atmosphereMoments';
 
@@ -136,6 +137,15 @@ function describeBuiltinWidgetCandidate(descriptor: BuiltinWidgetDescriptorV1): 
             : readWidgetInputTargetV1(descriptor).kind !== 'session' ? t(descriptor.titleKey)
             : t(`widgetAdd.nativeDescriptions.${descriptor.definition.id as 'session_summary' | 'agent_plan' | 'changes' | 'local_services'}`),
         pluginName: t('widgetAdd.builtIn'), sharedPluginName: false });
+}
+
+/**
+ * A built-in placed with its own inputs may be called by what they make it show: two Usage Breakdowns widgets, one
+ * ranking Models and one Machines, are not both "Breakdowns". Every other widget keeps its definition's title.
+ */
+export function describeBuiltinWidgetInstance(candidate: WidgetCandidate, instance: WidgetInstanceV1): WidgetCandidate {
+    const title = readUsageBreakdownsInstanceTitle(instance);
+    return title === null || title === candidate.title ? candidate : Object.freeze({ ...candidate, title });
 }
 
 /** All Gallery/setup surfaces share descriptive copy; provenance remains available for About. */
