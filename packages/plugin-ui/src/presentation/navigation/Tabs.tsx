@@ -297,16 +297,28 @@ export function HappierTabs(props: Readonly<{
   const badgeStyle = resolveHappierTypeRoleStyle('micro', props.theme, typography);
   const rtl = localization ? localization.direction === 'rtl' : I18nManager.isRTL;
   const instanceId = useId().replace(/:/gu, '');
-  const tabs = Children.toArray(props.children)
+  const descriptors = Children.toArray(props.children)
     .filter((child): child is ReactElement<HappierTabDescriptor> => isValidElement(child))
     .map((child) => child.props);
   const admittedTabValues = new Set<string>();
-  for (const tab of tabs) {
+  const duplicateTabValues = new Set<string>();
+  const tabs = descriptors.filter(tab => {
     if (admittedTabValues.has(tab.value)) {
-      throw new Error(`Tabs contains duplicate tab value '${tab.value}'.`);
+      duplicateTabValues.add(tab.value);
+      return false;
     }
     admittedTabValues.add(tab.value);
-  }
+    return true;
+  });
+  const reportedDuplicates = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    // A duplicate is an upstream inventory defect. Report it without taking down
+    // the page, and keep one trigger/panel identity while that inventory recovers.
+    for (const value of duplicateTabValues) if (!reportedDuplicates.current.has(value)) {
+      console.error(`Tabs contains duplicate tab value '${value}'. Keeping the first tab.`);
+    }
+    reportedDuplicates.current = duplicateTabValues;
+  });
   const selected = tabs.find((tab) => tab.value === props.value) ?? tabs.find((tab) => !tab.disabled);
   const glyphOnly = resolveHappierTabGlyphOnly({ labels: props.labels, tabs });
   const tabRefs = useRef(new Map<string, View>());

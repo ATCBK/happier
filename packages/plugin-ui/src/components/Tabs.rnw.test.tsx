@@ -110,13 +110,35 @@ describe('controlled Tabs', () => {
     mount.unmount();
   });
 
-  it('rejects duplicate opaque values before rendering ambiguous tab and panel identities', () => {
-    expect(() => mountTabs(
+  it('reports duplicate opaque values without crashing the page or rendering ambiguous tabs and panels', async () => {
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onValueChange = vi.fn();
+    const mount = mountTabs(
       <Tabs value="activity" onValueChange={() => {}} ariaLabel="Inspector sections">
-        <Tabs.Item value="activity" title="Activity one" />
-        <Tabs.Item value="activity" title="Activity two" />
+        <Tabs.Item value="activity" title="Activity one"><Text value="Kept content" /></Tabs.Item>
+        <Tabs.Item value="activity" title="Activity two"><Text value="Ambiguous content" /></Tabs.Item>
+        <Tabs.Item value="logs" title="Logs"><Text value="Logs content" /></Tabs.Item>
       </Tabs>,
-    )).toThrow(/duplicate tab value/u);
+    );
+    try {
+      const tabs = [...mount.container.querySelectorAll<HTMLElement>('[role="tab"]')];
+      expect(tabs.map(tab => tab.getAttribute('aria-label'))).toEqual(['Activity one', 'Logs']);
+      expect(mount.container.querySelectorAll('[role="tabpanel"]')).toHaveLength(1);
+      expect(mount.container.textContent).toContain('Kept content');
+      expect(mount.container.textContent).not.toContain('Ambiguous content');
+      expect(diagnostic).toHaveBeenCalledWith(expect.stringContaining("duplicate tab value 'activity'"));
+      await mount.render(
+        <PluginUiProvider hostApi={createHostApiStub(createSurfaceContext())} context={createSurfaceContext()}>
+          <Tabs value="activity" onValueChange={onValueChange} ariaLabel="Inspector sections">
+            <Tabs.Item value="activity" title="Activity one" />
+            <Tabs.Item value="logs" title="Logs" />
+          </Tabs>
+        </PluginUiProvider>,
+      );
+      const recovered = [...mount.container.querySelectorAll<HTMLElement>('[role="tab"]')];
+      await act(async () => { recovered[1]?.click(); });
+      expect(onValueChange).toHaveBeenCalledWith('logs');
+    } finally { mount.unmount(); diagnostic.mockRestore(); }
   });
 
   it('recovers focus by semantic value when an opaque value contains the former delimiter', async () => {
