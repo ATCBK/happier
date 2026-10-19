@@ -4,12 +4,12 @@ import type { PluginContributionIdentity } from '../manifest.js';
 import type { PluginJsonSchema, ProtocolComposableSchema } from './protocolFacade.js';
 
 /** Declaration-neutral projection of the canonical source-qualified identity. */
-export type TriageEntryRefV1 = {
+export type TriageEntryRefV1 = Readonly<{
     source: PluginContributionIdentity;
     kindId: string;
     collisionScope: string;
     entryId: string;
-};
+}>;
 
 /** The SDK projects the same executable values; it owns no identity parser. */
 export const TriageEntryRefV1Schema: ProtocolComposableSchema<TriageEntryRefV1> = canonical.TriageEntryRefV1Schema;

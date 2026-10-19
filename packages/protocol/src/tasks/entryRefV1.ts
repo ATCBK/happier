@@ -3,7 +3,7 @@ import {
   defineProtocolUtf8String,
   type ProtocolComposableSchema,
 } from '../plugins/actions/protocolComposableSchema.js';
-import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { PluginContributionIdentityV1Schema, type PluginContributionIdentityV1 } from '../plugins/contributionIdentity.js';
 import type { PluginJsonSchemaV2 } from '../plugins/contributions/publicTypes.js';
 
 /** Existing Triage V1 projected-text grammar: no C0 controls or DEL. */
@@ -38,6 +38,10 @@ export function defineTriageCompositeIdentifierStringV1(maxUtf8Bytes: number): P
 export const TriageIdentifierV1ProtocolSchema = defineTriageSingleLineStringV1(MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1);
 export const TriageCollisionScopeV1ProtocolSchema = defineTriageCompositeIdentifierStringV1(MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1);
 
+// Triage's existing public identity is readonly, including the nested source.
+// Preserve that declaration contract while retaining the exact source parser.
+const sourceIdentity: ProtocolComposableSchema<Readonly<PluginContributionIdentityV1>> = PluginContributionIdentityV1Schema;
+
 /**
  * The minimal source-qualified Task/entry identity, shared with Protocol
  * consumers such as Discussion anchors. Qualification is not execution/read
@@ -46,7 +50,7 @@ export const TriageCollisionScopeV1ProtocolSchema = defineTriageCompositeIdentif
  * Keep this leaf independent of the SDK and Triage feature protocol.
  */
 export const TriageEntryRefV1Schema = defineProtocolObject({
-  source: PluginContributionIdentityV1Schema,
+  source: sourceIdentity,
   kindId: TriageIdentifierV1ProtocolSchema,
   collisionScope: TriageCollisionScopeV1ProtocolSchema,
   entryId: TriageIdentifierV1ProtocolSchema,

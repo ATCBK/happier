@@ -97,12 +97,12 @@ export interface ProtocolComposableSchema<TInput = ProtocolJsonValue, TOutput = 
 }
 // These are the external SDK declarations Triage now re-exports. No parser or
 // identity grammar is supplied by this isolated declaration-boundary fixture.
-export type TriageEntryRefV1 = {
-    source: { pluginId: string; localId: string };
+export type TriageEntryRefV1 = Readonly<{
+    source: Readonly<{ pluginId: string; localId: string }>;
     kindId: string;
     collisionScope: string;
     entryId: string;
-};
+}>;
 export const TriageEntryRefV1Schema: ProtocolComposableSchema<TriageEntryRefV1>;
 export const TriageEntryRefV1JsonSchema: PluginJsonSchema;
 export const TriageIdentifierV1ProtocolSchema: ProtocolComposableSchema<string>;
