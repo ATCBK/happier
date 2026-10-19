@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 
-const boundary = vi.hoisted(() => ({ watch: vi.fn() }));
+const boundary = vi.hoisted(() => ({ watch: vi.fn(), stat: vi.fn() }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+    const fs = await importOriginal<typeof import('node:fs/promises')>();
+    boundary.stat.mockImplementation(fs.stat);
+    return { ...fs, stat: boundary.stat };
+});
 vi.mock('node:fs', async (importOriginal) => {
     const fs = await importOriginal<typeof import('node:fs')>();
     // Observe the genuine OS-watch boundary; filesystem events and recovery remain real.
@@ -12,6 +17,31 @@ vi.mock('node:fs', async (importOriginal) => {
 });
 
 import { startFileWatcher } from './startFileWatcher';
+
+it('keeps named rename revalidation independent of the number of sibling transcripts', async () => {
+    boundary.watch.mockClear();
+    const directory = await mkdtemp(join(tmpdir(), 'native-watch-rename-sharing-'));
+    const files = Array.from({ length: 4 }, (_, index) => join(directory, `${index}.jsonl`));
+    const stops: Array<() => void> = [];
+    const delivered = Promise.withResolvers<void>();
+    try {
+        await Promise.all(files.map(file => writeFile(file, 'initial\n')));
+        await Promise.all(files.map((file, index) => new Promise<void>(resolve => {
+            stops.push(startFileWatcher(file, () => { if (index === 0) delivered.resolve(); },
+                { emitInitial: false, onWatcherAttached: resolve }));
+        })));
+        boundary.stat.mockClear();
+        // Native rename events cover both atomic file replacement and parent
+        // replacement. Revalidate the shared parent once before fan-out.
+        boundary.watch.mock.results[0].value.emit('change', 'rename', '0.jsonl');
+        await delivered.promise;
+        const parentReads = boundary.stat.mock.calls.filter(([path]) => path === directory).length;
+        expect(parentReads).toBeLessThanOrEqual(2);
+    } finally {
+        for (const stop of stops) stop();
+        await rm(directory, { recursive: true, force: true });
+    }
+});
 
 it('shares native parent observation across transcript subscriptions without sharing their lifetime or delivery', async () => {
     boundary.watch.mockClear();

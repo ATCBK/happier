@@ -95,14 +95,23 @@ function observeDirectory(directory: string, directoryVersion: string, targetNam
             if (directoryObservations.get(directory) === next) directoryObservations.delete(directory);
         };
         next.watcher.on('change', (eventType, filename) => {
-            // A parent rename can replace the directory itself, so all logical
-            // watchers must revalidate its identity. Ordinary appends dispatch
-            // only to the named file and directory observers, not the corpus.
             const name = typeof filename === 'string' && filename ? filename : null;
-            const groups = eventType === 'rename' || name === null
-                ? next.subscribers.values()
-                : [next.subscribers.get(name), next.subscribers.get(null)];
-            for (const group of groups) for (const events of group ?? []) events.emit('change', eventType, filename);
+            const dispatch = (all: boolean) => {
+                const groups = all ? next.subscribers.values()
+                    : [next.subscribers.get(name), next.subscribers.get(null)];
+                for (const group of groups) for (const events of group ?? []) events.emit('change', eventType, filename);
+            };
+            if (eventType !== 'rename' || name === null) {
+                dispatch(name === null);
+                return;
+            }
+            // A named rename usually concerns one file. Check parent identity
+            // once at the shared attachment, rather than statting it once per
+            // sibling transcript. Parent replacement still wakes every reader.
+            void readVersion(directory).then(
+                current => dispatch(identity(current) !== next.identity),
+                () => dispatch(true),
+            );
         });
         next.watcher.on('error', error => {
             forget();
