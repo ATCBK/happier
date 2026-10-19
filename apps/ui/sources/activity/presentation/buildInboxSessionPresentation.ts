@@ -29,18 +29,27 @@ export type InboxSessionPresentation = Readonly<{
     pendingRequestHydrationTargets: readonly SessionAddress[];
 }>;
 
-export type InboxSessionCandidateClassification = 'needs_attention' | 'ready' | null;
+export type InboxSessionCandidateClassification = Readonly<{
+    section: 'needs_attention' | 'ready' | null;
+    type: 'approval' | 'decision' | 'blocked' | 'mention' | 'update';
+}>;
 
 /**
- * Classifies one canonical Activity candidate for Inbox without constructing
- * rows, pending-request details, or bulk-action targets.
+ * Owns both Inbox admission and row kind, without constructing rows or loading
+ * pending-request details. Manual attention belongs in Updates and survives a
+ * session read; its attention-section membership does not make it a decision.
  */
 export function classifyInboxSessionCandidate(
     candidate: SessionActivityAttention,
+    questionType?: NonNullable<PendingPermissionRequest['questionV1']>['type'],
 ): InboxSessionCandidateClassification {
-    if (!candidate.hasAttention) return null;
-
     const reasons = candidate.personalAttention.reasons;
+    const type = reasons.includes('permission_required') ? 'approval'
+        : reasons.includes('user_action_required') ? questionType ?? 'decision'
+        : candidate.reasons.hasBlockedPendingDelivery ? 'blocked'
+        : reasons.includes('mentioned') ? 'mention' : 'update';
+    if (!candidate.hasAttention) return { section: null, type };
+
     const hasSessionReadAttention = reasons.some(isClearedBySessionManualRead);
     const hasOtherAttention = reasons.some((reason) => !isClearedBySessionManualRead(reason));
     const isWorking = candidate.awareness.operational.reasons.includes('working')
@@ -53,8 +62,7 @@ export function classifyInboxSessionCandidate(
             || candidate.awareness.operational.reasons.includes('ready')
         );
 
-    if (hasOtherAttention) return 'needs_attention';
-    return hasReadyForReviewAttention ? 'ready' : null;
+    return { section: hasOtherAttention ? 'needs_attention' : hasReadyForReviewAttention ? 'ready' : null, type };
 }
 
 /**
@@ -97,7 +105,7 @@ export function buildInboxSessionPresentation(params: Readonly<{
 
     for (const candidate of params.overview.candidates) {
         const classification = classifyInboxSessionCandidate(candidate);
-        if (classification === null) continue;
+        if (classification.section === null) continue;
 
         const reasons = candidate.personalAttention.reasons;
         const serverId = candidate.address?.serverId ?? candidate.serverId ?? null;
@@ -106,7 +114,7 @@ export function buildInboxSessionPresentation(params: Readonly<{
         // transcript progress remains a server-owned unread fact, but it is not
         // Inbox work until the existing awareness projection says the turn is
         // ready for review. Concurrent actionable reasons still render below.
-        if (classification === 'needs_attention') {
+        if (classification.section === 'needs_attention') {
             // Notification privacy is not the in-app content-readability authority.
             const mayShowDetails = isSessionAwarenessContentReadableV1(candidate.awareness.encryption);
             // Missing exact-Home data must not fall back to the ambient same-id transcript.
@@ -131,7 +139,7 @@ export function buildInboxSessionPresentation(params: Readonly<{
             continue;
         }
 
-        if (classification === 'ready') {
+        if (classification.section === 'ready') {
             readySessions.push(candidate);
             markAllReadTargets.push({
                 key: buildServerScopedSessionKey(candidate.sessionId, serverId),

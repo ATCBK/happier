@@ -1,5 +1,5 @@
 import type { InboxWorkGroup } from '@/activity/presentation/buildInboxWorkGroups';
-import type { InboxSessionPresentation } from '@/activity/presentation/buildInboxSessionPresentation';
+import { classifyInboxSessionCandidate, type InboxSessionPresentation } from '@/activity/presentation/buildInboxSessionPresentation';
 import { isOpenAccountNotice, type AccountNoticeArtifact } from '@/sync/domains/artifacts/usageNoticeArtifacts';
 import { createInboxItemRoute, readInboxApprovalServerId, resolveInboxItemPageRoute, type InboxItemFocus } from './inboxItemFocus';
 import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from '@/components/workflows/presentation/workflowRunDisplayName';
@@ -81,12 +81,8 @@ export function buildInboxItems(input: InboxItemsInput, previous: readonly Inbox
             const candidate = item.entry.candidate;
             const serverId = candidate.address?.serverId ?? candidate.serverId;
             if (!serverId) continue;
-            const reasons = candidate.personalAttention.reasons;
             const question = item.entry.pendingUserActions[0];
-            const type: InboxItemType = reasons.includes('permission_required') ? 'approval'
-                : reasons.includes('user_action_required') ? question?.questionV1?.type ?? 'decision'
-                : candidate.reasons.hasBlockedPendingDelivery ? 'blocked'
-                : reasons.includes('mentioned') ? 'mention' : 'update';
+            const { type } = classifyInboxSessionCandidate(candidate, question?.questionV1?.type);
             const focus = { kind: 'session', id: candidate.sessionId, serverId } as const;
             rows.push({ key: item.key, producer: 'live', type, view: inboxItemView(type), title: candidate.title,
                 context: candidate.subtitle || null, createdAt: candidate.session.updatedAt, read: false, focus,

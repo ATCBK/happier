@@ -10,7 +10,7 @@ import { buildActivityOverviewFromCandidates } from '@/activity/attention/buildA
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { storage } from '@/sync/domains/state/storageStore';
 
-import { buildInboxSessionPresentation } from './buildInboxSessionPresentation';
+import { buildInboxSessionPresentation, classifyInboxSessionCandidate } from './buildInboxSessionPresentation';
 import { buildInboxWorkGroups } from './buildInboxWorkGroups';
 import { buildInboxItems } from '@/components/inbox/inboxItems';
 
@@ -153,6 +153,13 @@ describe('buildInboxSessionPresentation', () => {
         const readyAfterRead = candidate('ready', ['ready_after_read']);
         const reminder = candidate('reminder', ['reminder_due']);
         const manual = candidate('manual', ['manual']);
+
+        // Summary admission and the eventual row consume this one classification.
+        // Manual attention remains an Updates row and is not cleared by session read.
+        expect(classifyInboxSessionCandidate(manual)).toEqual({ section: 'needs_attention', type: 'update' });
+        expect(classifyInboxSessionCandidate(permissionAndUnread)).toEqual({ section: 'needs_attention', type: 'approval' });
+        expect(classifyInboxSessionCandidate(mentioned)).toEqual({ section: 'needs_attention', type: 'mention' });
+        expect(classifyInboxSessionCandidate(readyAfterRead)).toEqual({ section: 'ready', type: 'update' });
 
         const presentation = buildInboxSessionPresentation({
             overview: buildActivityOverviewFromCandidates([
