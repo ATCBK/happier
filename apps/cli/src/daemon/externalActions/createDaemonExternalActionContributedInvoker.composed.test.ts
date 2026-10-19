@@ -4,6 +4,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { isDeepStrictEqual } from 'node:util';
 import tweetnacl from 'tweetnacl';
+import fastify from 'fastify';
+import { Server } from 'socket.io';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { ClientToServerEvents, ServerToClientEvents } from '@/api/types';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { registerApprovalRpcHandlers } from '@/rpc/handlers/approvals';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { listCompiledActionCliCommands } from '@/cli/actions/compiledCommands';
+import { runCompiledActionCliCommand } from '@/cli/actions/executeCommand';
+import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
+import { createDaemonApprovalExecutionOriginCurrentness } from './daemonExternalActionTargetResolver';
 
 const externalActionTargetResolverMocks = vi.hoisted(() => ({
   fetchSessionById: vi.fn(),
@@ -485,6 +501,134 @@ function createExternalActionIngressExecutor(scope: 'global' | 'session' = 'sess
 
 describe('createDaemonExternalActionContributedInvoker', () => {
   afterEach(() => { vi.restoreAllMocks(); });
+
+  it.each(['current', 'wrong-home', 'stale-source'] as const)('decides target approvals through the real CLI and exact daemon (%s)', async mode => {
+    const scratch = await mkdtemp(join(tmpdir(), 'happier-fx45-'));
+    const effectPath = join(scratch, 'target-effect.json');
+    const token = `fixture.${Buffer.from(JSON.stringify({ sub: 'account-1', session: 'terminal', tokenEpoch: 7,
+      provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
+    const credentials = { token, encryption: null, credentialProvenance: 'stored_session' } as const;
+    const app = fastify();
+    const sockets = new Server<ClientToServerEvents, ServerToClientEvents>(app.server, { path: '/v1/updates' });
+    const rows = new Map<string, Record<string, unknown>>();
+    const calls: string[] = [];
+    const features = (await import('@happier-dev/protocol')).FeaturesResponseSchema.parse({ features: {},
+      capabilities: { serverIdentity: { serverIdentityId: mode === 'wrong-home' ? 'srv_wrong_fx45' : 'srv_fx45' } } });
+    app.get('/v1/features', async () => features);
+    app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
+    app.get('/v1/account/profile', async () => ({ id: 'account-1' }));
+    app.get('/v1/machines/machine-local', async () => ({ machine: { id: 'machine-local', active: true,
+      kind: 'persistent', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+      revokedAt: null, replacedByMachineId: null } }));
+    app.get<{ Params: { id: string } }>('/v1/artifacts/:id', async (request, reply) =>
+      rows.get(request.params.id) ?? reply.code(404).send({ error: 'not_found' }));
+    app.post<{ Body: { id: string; header: string; body: string; dataEncryptionKey: string } }>('/v1/artifacts', async request => {
+      const row = { ...request.body, ownerAccountId: 'account-1', access: 'owner', encryptionMode: 'plain',
+        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+      rows.set(row.id, row);
+      return row;
+    });
+    app.post<{ Params: { id: string }; Body: { header: string; body: string; expectedHeaderVersion: number;
+      expectedBodyVersion: number } }>('/v1/artifacts/:id', async request => {
+      const previous = rows.get(request.params.id)!;
+      expect(request.body.expectedHeaderVersion).toBe(previous.headerVersion);
+      expect(request.body.expectedBodyVersion).toBe(previous.bodyVersion);
+      const row = { ...previous, header: request.body.header, body: request.body.body,
+        headerVersion: request.body.expectedHeaderVersion + 1, bodyVersion: request.body.expectedBodyVersion + 1 };
+      rows.set(request.params.id, row);
+      return { success: true, headerVersion: row.headerVersion, bodyVersion: row.bodyVersion };
+    });
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing fixture Home');
+    const serverApiUrl = `http://127.0.0.1:${address.port}`;
+    let effects = 0;
+    const runtime = createExternalActionRuntime('global', 'acme.external', async () => {
+      effects++;
+      await writeFile(effectPath, JSON.stringify({ applied: true }));
+    }, undefined, () => ({ serverId: 'server-external', machineId: 'machine-local' }), undefined,
+    undefined, 'writesRemote', undefined, { surfaces: ['cli'] });
+    const lease = { registry: runtime, source: 'ephemeral' as const,
+      durableRevision: runtime.durableRevision ?? -1, release: async () => {} };
+    const store = createCliApprovalsArtifactStore({ credentials, serverId: 'server-external', serverHttpBaseUrl: serverApiUrl });
+    const replay = createDaemonExternalActionContributedApprovalReplay({ credentials,
+      acquireRuntimeRegistryLease: async () => lease, targetActionApprovals: store,
+      isApprovalExecutionOriginCurrent: createDaemonApprovalExecutionOriginCurrentness({
+        accountId: 'account-1', machineId: 'machine-local', serverId: 'server-external',
+        // Installed Machine/Home observation is an OS boundary; the real origin,
+        // target and Account admission logic below remains in the currentness owner.
+        resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'machine-local',
+          serverIdentityId: mode === 'stale-source' ? 'srv_retired_fx45' : 'srv_fx45' }),
+        resolveTarget: createDaemonExternalActionTargetResolver({ credentials, serverApiUrl }),
+        isAccountCurrent: async () => (await axios.get<{ id: string }>(`${serverApiUrl}/v1/account/profile`)).data.id === 'account-1',
+        listAccountApiTokens: async () => { throw new Error('Ordinary CLI source has no PAT'); },
+      }) });
+    const daemon = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      targetActionApprovalReplay: replay });
+    const handlers = new Map<string, (input: unknown, context?: import('@/api/rpc/types').RpcHandlerContext) => Promise<unknown>>();
+    registerApprovalRpcHandlers({ actionExecutor: daemon,
+      rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } } });
+    sockets.on('connection', socket => {
+      expect(socket.handshake.auth.token).toBe(token);
+      socket.on(SOCKET_RPC_EVENTS.CALL, async (packet, acknowledge) => {
+        calls.push(packet.method);
+        const method = packet.method.replace('machine-local:', '');
+        const handler = handlers.get(method);
+        if (!handler) return acknowledge({ ok: false, error: 'method_not_found' });
+        const result = await handler(packet.params, { callerAuthority: 'present_user' });
+        acknowledge({ ok: true, result });
+      });
+    });
+    try {
+      const invoke = createDaemonExternalActionContributedInvoker({ acquireRuntimeRegistryLease: async () => lease,
+        requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+          create: request => store.targetActionApprovalsCreate({ request }),
+          read: artifactId => store.targetActionApprovalsGet({ artifactId }),
+        }) });
+      const { principalId: _principal, credentialId: _credential, ...ordinaryOrigin } = createApiActionApprovalOrigin();
+      const created = await invoke({ action: { pluginId: 'acme.external', localId: 'inspect' }, input: {},
+        approvalExecutionOrigin: { ...ordinaryOrigin, serverIdentityId: 'srv_fx45',
+          surface: 'cli', authority: 'present_user' }, context: { surface: 'cli', authority: 'present_user',
+          actionCaller: { kind: 'host' } } });
+      expect(created).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      const artifactId = [...rows.keys()][0]!;
+      expect(await store.targetActionApprovalsGet({ artifactId })).toMatchObject({ status: 'open' });
+      const standalone = createCliActionExecutorFromCredentials({ credentials, serverId: 'deciding-device', serverApiUrl,
+        actionsSettingsProvider: createActionSettingsProvider() });
+      for (const surface of ['mcp', 'agent'] as const) {
+        expect(await standalone.execute('approval.request.decide', { artifactId, decision: 'approve' }, {
+          surface, authority: 'account_automation', actionCaller: { kind: 'session', sessionId: 'requesting-agent' },
+        })).toMatchObject({ ok: false });
+      }
+      expect(calls).toEqual([]);
+      expect(await store.targetActionApprovalsGet({ artifactId })).toMatchObject({ status: 'open' });
+      const command = listCompiledActionCliCommands().find(row => row.actionId === 'approval.request.decide')!;
+      const output = captureConsoleJsonOutput();
+      try {
+        await runWithServerHttpBaseUrl(serverApiUrl, () => runCompiledActionCliCommand({ command,
+          argv: [...command.path, '--input-json', JSON.stringify({ artifactId, decision: 'approve' }), '--json'],
+          deps: { readCredentialsFn: async () => credentials, getServerProfileFn: async () => { throw new Error('No ambient profile'); },
+            createExecutorFn: params => createCliActionExecutorFromCredentials({ ...params,
+              serverId: 'deciding-device', serverApiUrl,
+              actionsSettingsProvider: createActionSettingsProvider(),
+            }) },
+        }));
+        expect(output.json()).toMatchObject(mode === 'wrong-home'
+          ? { ok: false, error: { code: 'approval_stale' } }
+          : { ok: true, data: { status: mode === 'stale-source' ? 'failed' : 'executed' } });
+      } finally { output.restore(); process.exitCode = 0; }
+      const settled = await store.targetActionApprovalsGet({ artifactId });
+      expect(settled).toMatchObject({ status: mode === 'wrong-home' ? 'open' : mode === 'stale-source' ? 'failed' : 'executed' });
+      expect(effects).toBe(mode === 'current' ? 1 : 0);
+      expect(calls).toEqual(mode === 'wrong-home' ? [] : [`machine-local:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`]);
+      if (mode === 'current') expect(JSON.parse(await readFile(effectPath, 'utf8'))).toEqual({ applied: true });
+    } finally {
+      await runtime.dispose();
+      await new Promise<void>(resolve => sockets.close(() => resolve()));
+      await app.close();
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
 
   it.each(['pat', 'session'] as const)('retains signed %s source custody through nested production services', async sourceKind => {
     const source = createSharedBotContributedContext(sourceKind);
