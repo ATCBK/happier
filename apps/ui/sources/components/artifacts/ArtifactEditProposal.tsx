@@ -1,5 +1,15 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import {
+  HappierDocEditProposal,
+  type HappierDocEditProposalButtonProps,
+  type HappierDocEditProposalDiffProps,
+  type HappierDocEditProposalLine,
+  type HappierDocEditProposalMark,
+  type HappierDocEditProposalMarkProps,
+  type HappierDocEditProposalState,
+  type HappierDocEditProposalTextProps,
+  type HappierDocEditProposalTone,
+} from '@happier-dev/plugin-ui/components';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { DocEditProposalV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 import type { DocEditProposalDispositionV1 } from '@happier-dev/protocol/discussions/models';
@@ -203,233 +213,109 @@ export function ArtifactEditProposal(
       : (props.resolveAccountLabel(accountId) ??
         t('artifacts.browser.proposal.someone'));
 
-  if (disposition.state === 'accepted') {
-    const who = decider(disposition.decidedBy.accountId);
-    return (
-      <View testID={testID} style={styles.card}>
-        <Settled
-          testID={`${testID}.accepted`}
-          icon="check"
-          text={
-            who
-              ? t('artifacts.browser.proposal.acceptedBy', {
-                  who,
-                  n: disposition.acceptedRevision.bodyVersion,
-                })
-              : t('artifacts.browser.proposal.acceptedByYou', {
-                  n: disposition.acceptedRevision.bodyVersion,
-                })
-          }
-          action={
-            undo?.state === 'done'
-              ? null
-              : {
-                  label: t('artifacts.browser.proposal.undo'),
-                  busy: busy === 'undo',
-                  onPress: () => void undoAccepted(),
-                  testID: `${testID}.undo`,
-                }
-          }
-        />
-        {undo?.state === 'done' ? (
-          <Line
-            testID={`${testID}.undone`}
-            icon="clock-counter-clockwise"
-            text={t('artifacts.browser.proposal.undone', {
-              n: undo.revision.bodyVersion,
-            })}
-          />
-        ) : null}
-        {undo?.state === 'conflict' ? (
-          <Line
-            testID={`${testID}.undoConflict`}
-            tone="warning"
-            icon="warning"
-            text={t('artifacts.browser.proposal.undoConflict')}
-            action={{
-              label: t('artifacts.browser.proposal.openDocument'),
-              onPress: openDocument,
-            }}
-          />
-        ) : null}
-        {undo?.state === 'failed' ? (
-          <Line
-            testID={`${testID}.undoFailed`}
-            tone="danger"
-            icon="warning-circle"
-            text={t('artifacts.browser.proposal.failed')}
-          />
-        ) : null}
-      </View>
-    );
-  }
-  if (disposition.state === 'declined') {
-    const who = decider(disposition.decidedBy.accountId);
-    return (
-      <View testID={testID} style={styles.card}>
-        <Settled
-          testID={`${testID}.declined`}
-          icon="x"
-          action={null}
-          text={
-            who
-              ? t('artifacts.browser.proposal.declinedBy', { who })
-              : t('artifacts.browser.proposal.declinedByYou')
-          }
-        />
-      </View>
-    );
-  }
+  const decision = ((): HappierDocEditProposalState => {
+    if (disposition.state === 'accepted') {
+      const who = decider(disposition.decidedBy.accountId);
+      const n = disposition.acceptedRevision.bodyVersion;
+      const lines: HappierDocEditProposalLine[] = [];
+      if (undo?.state === 'done') lines.push({
+        testID: `${testID}.undone`, mark: 'undone',
+        text: t('artifacts.browser.proposal.undone', { n: undo.revision.bodyVersion }),
+      });
+      if (undo?.state === 'conflict') lines.push({
+        testID: `${testID}.undoConflict`, mark: 'warning', tone: 'warning',
+        text: t('artifacts.browser.proposal.undoConflict'),
+        action: { label: t('artifacts.browser.proposal.openDocument'), onPress: openDocument },
+      });
+      if (undo?.state === 'failed') lines.push({
+        testID: `${testID}.undoFailed`, mark: 'failed', tone: 'danger', text: t('artifacts.browser.proposal.failed'),
+      });
+      return {
+        state: 'settled',
+        receipt: {
+          testID: `${testID}.accepted`, mark: 'accepted',
+          text: who ? t('artifacts.browser.proposal.acceptedBy', { who, n }) : t('artifacts.browser.proposal.acceptedByYou', { n }),
+          action: undo?.state === 'done' ? undefined : {
+            label: t('artifacts.browser.proposal.undo'), busy: busy === 'undo',
+            onPress: () => void undoAccepted(), testID: `${testID}.undo`,
+          },
+        },
+        lines,
+      };
+    }
+    if (disposition.state === 'declined') {
+      const who = decider(disposition.decidedBy.accountId);
+      return {
+        state: 'settled',
+        receipt: {
+          testID: `${testID}.declined`, mark: 'declined',
+          text: who ? t('artifacts.browser.proposal.declinedBy', { who }) : t('artifacts.browser.proposal.declinedByYou'),
+        },
+      };
+    }
+    const decline = proposalRef ? {
+      testID: `${testID}.decline`, label: t('artifacts.browser.proposal.decline'),
+      disabled: busy !== null, onPress: () => void decide('decline'),
+    } : undefined;
+    const open = {
+      state: 'open' as const,
+      title: t('artifacts.browser.proposal.title'),
+      basedOn: t('artifacts.browser.proposal.basedOn', { n: base.bodyVersion }),
+      reason: proposal.reason,
+    };
+    if (currency === 'movedOn' || refusal === 'movedOn') {
+      // Two ways forward (lab K1-ST): see what changed, or ask for a fresh suggestion. A suggestion
+      // that can no longer apply can still be declined; that needs no Doc rewrite.
+      return { ...open, footer: {
+        kind: 'stale',
+        line: {
+          testID: `${testID}.movedOn`, mark: 'warning', tone: 'warning',
+          text: refusal === 'failed' ? t('artifacts.browser.proposal.failed') : t('artifacts.browser.proposal.movedOn'),
+        },
+        compare: { testID: `${testID}.compare`, label: t('artifacts.browser.proposal.compare'), onPress: compare },
+        decline: decline && !readOnly ? { ...decline, busy: busy === 'decline' } : undefined,
+        askRedo: askable ? {
+          testID: `${testID}.askRedo`, label: t('artifacts.browser.proposal.askRedo'),
+          disabled: busy !== null, onPress: askToRedo,
+        } : undefined,
+      } };
+    }
+    if (readOnly) {
+      return { ...open, footer: { kind: 'note', line: {
+        testID: `${testID}.cantEdit`, mark: 'locked', text: t('artifacts.browser.proposal.cantEdit'),
+      } } };
+    }
+    return { ...open, footer: {
+      kind: 'decide',
+      status: busy === 'accept' || busy === 'decline'
+        ? { indicator: 'busy', text: busy === 'accept' ? t('artifacts.browser.proposal.accepting') : t('artifacts.browser.proposal.declining') }
+        : refusal === 'failed' ? { text: t('artifacts.browser.proposal.failed') }
+          : currency === 'current'
+            ? { indicator: 'current', testID: `${testID}.current`, text: t('artifacts.browser.proposal.current', { n: base.bodyVersion }) }
+            : undefined,
+      decline,
+      accept: proposalRef ? {
+        testID: `${testID}.accept`, label: t('artifacts.browser.proposal.accept'),
+        disabled: busy !== null, busy: busy === 'accept', onPress: () => void decide('accept'),
+      } : undefined,
+    } };
+  })();
 
-  const movedOn = currency === 'movedOn' || refusal === 'movedOn';
   return (
-    <View testID={testID} style={styles.card}>
-      <View style={styles.head}>
-        <Icon
-          name="pencil-simple"
-          size={ICON_SIZE.sm}
-          color={theme.colors.text.secondary}
-        />
-        <Text variant="label" emphasis="semiBold" style={styles.title}>
-          {t('artifacts.browser.proposal.title')}
-        </Text>
-        <Text variant="meta" style={styles.meta}>
-          {t('artifacts.browser.proposal.basedOn', { n: base.bodyVersion })}
-        </Text>
-      </View>
-      <ProseDiffViewer
-        mode="text"
-        testID={`${testID}.diff`}
-        oldText={proposal.before}
-        newText={proposal.after}
-        contextLines={0}
-        prose={{
-          oldLabel: t('artifacts.browser.proposal.before'),
-          newLabel: t('artifacts.browser.proposal.after'),
-        }}
-      />
-      {proposal.reason.trim() ? (
-        <View style={styles.reason}>
-          <Icon
-            name="arrow-elbow-down-right"
-            size={ICON_SIZE.sm}
-            color={theme.colors.text.tertiary}
-          />
-          <Text variant="body" style={styles.reasonText}>
-            {proposal.reason}
-          </Text>
-        </View>
-      ) : null}
-      {movedOn ? (
-        <>
-          <Line
-            testID={`${testID}.movedOn`}
-            tone="warning"
-            icon="warning"
-            text={
-              refusal === 'failed'
-                ? t('artifacts.browser.proposal.failed')
-                : t('artifacts.browser.proposal.movedOn')
-            }
-          />
-          {/* Two ways forward (lab K1-ST): see what changed, or ask for a fresh suggestion. A suggestion
-              that can no longer apply can still be declined; that needs no Doc rewrite. */}
-          <View style={styles.foot}>
-            <RoundButton
-              testID={`${testID}.compare`}
-              size="small"
-              display="inverted"
-              title={t('artifacts.browser.proposal.compare')}
-              textStyle={{ color: theme.colors.text.secondary }}
-              onPress={compare}
-            />
-            <View style={styles.grow} />
-            <View style={styles.buttons}>
-              {proposalRef && !readOnly ? (
-                <RoundButton
-                  testID={`${testID}.decline`}
-                  size="small"
-                  display="inverted"
-                  title={t('artifacts.browser.proposal.decline')}
-                  textStyle={{ color: theme.colors.text.secondary }}
-                  loading={busy === 'decline'}
-                  disabled={busy !== null}
-                  onPress={() => void decide('decline')}
-                />
-              ) : null}
-              {askable ? (
-                <RoundButton
-                  testID={`${testID}.askRedo`}
-                  size="small"
-                  title={t('artifacts.browser.proposal.askRedo')}
-                  disabled={busy !== null}
-                  onPress={askToRedo}
-                />
-              ) : null}
-            </View>
-          </View>
-        </>
-      ) : refusal === 'cantEdit' || admitted?.access === 'view' ? (
-        <Line
-          testID={`${testID}.cantEdit`}
-          icon="lock"
-          text={t('artifacts.browser.proposal.cantEdit')}
-        />
-      ) : (
-        <View style={styles.foot}>
-          <View style={styles.status} accessibilityLiveRegion="polite">
-            {busy === 'accept' || busy === 'decline' ? (
-              <ActivitySpinner size="small" />
-            ) : currency === 'current' ? (
-              <Icon
-                name="check"
-                size={ICON_SIZE.sm}
-                color={theme.colors.text.tertiary}
-              />
-            ) : null}
-            <Text
-              testID={currency === 'current' ? `${testID}.current` : undefined}
-              variant="meta"
-              style={styles.meta}
-              numberOfLines={2}
-            >
-              {busy === 'accept'
-                ? t('artifacts.browser.proposal.accepting')
-                : busy === 'decline'
-                  ? t('artifacts.browser.proposal.declining')
-                  : refusal === 'failed'
-                    ? t('artifacts.browser.proposal.failed')
-                    : currency === 'current'
-                      ? t('artifacts.browser.proposal.current', {
-                          n: base.bodyVersion,
-                        })
-                      : ''}
-            </Text>
-          </View>
-          {proposalRef ? (
-            <View style={styles.buttons}>
-              <RoundButton
-                testID={`${testID}.decline`}
-                size="small"
-                display="inverted"
-                title={t('artifacts.browser.proposal.decline')}
-                textStyle={{ color: theme.colors.text.secondary }}
-                disabled={busy !== null}
-                onPress={() => void decide('decline')}
-              />
-              <RoundButton
-                testID={`${testID}.accept`}
-                size="small"
-                title={t('artifacts.browser.proposal.accept')}
-                disabled={busy !== null}
-                loading={busy === 'accept'}
-                onPress={() => void decide('accept')}
-              />
-            </View>
-          ) : null}
-        </View>
-      )}
-    </View>
+    <HappierDocEditProposal
+      testID={testID}
+      before={proposal.before}
+      after={proposal.after}
+      labels={{ before: t('artifacts.browser.proposal.before'), after: t('artifacts.browser.proposal.after') }}
+      decision={decision}
+      Text={ProposalText}
+      Mark={ProposalMark}
+      Button={ProposalButton}
+      Diff={ProposalDiff}
+      Spinner={ProposalSpinner}
+      style={styles.card}
+      space={theme.space}
+    />
   );
 }
 
@@ -438,123 +324,88 @@ export type ProposalAuthor = Readonly<{
   mention: Readonly<{ accountId: string }> | Readonly<{ sessionId: string }>;
 }>;
 
-type LineAction = Readonly<{
-  label: string;
-  onPress: () => void;
-  busy?: boolean;
-  testID?: string;
-}>;
+const MARK: Readonly<Record<HappierDocEditProposalMark, IconName>> = {
+  proposal: 'pencil-simple', reason: 'arrow-elbow-down-right', current: 'check', accepted: 'check', declined: 'x',
+  undone: 'clock-counter-clockwise', warning: 'warning', failed: 'warning-circle', locked: 'lock',
+};
 
-/** The one-line receipt a settled suggestion folds into (lab K1r). */
-function Settled(
-  props: Readonly<{
-    testID: string;
-    icon: IconName;
-    text: string;
-    action: LineAction | null;
-  }>,
-) {
+function toneColor(theme: ReturnType<typeof useUnistyles>['theme'], tone: HappierDocEditProposalTone | undefined): string {
+  return tone === 'warning' ? theme.colors.state.warning.foreground
+    : tone === 'danger' ? theme.colors.text.destructive
+      : tone === 'muted' ? theme.colors.text.tertiary : theme.colors.text.secondary;
+}
+
+function ProposalMark(props: HappierDocEditProposalMarkProps) {
+  const { theme } = useUnistyles();
+  return <Icon name={MARK[props.mark]} size={ICON_SIZE.sm} color={toneColor(theme, props.tone)} />;
+}
+
+function ProposalText(props: HappierDocEditProposalTextProps) {
+  const { theme } = useUnistyles();
+  const styles = stylesheet;
+  if (props.role === 'title') {
+    return <Text variant="label" emphasis="semiBold" style={styles.title}>{props.children}</Text>;
+  }
+  if (props.role === 'meta') {
+    return <Text testID={props.testID} variant="meta" style={styles.meta} numberOfLines={props.numberOfLines}>{props.children}</Text>;
+  }
+  if (props.role === 'reason') return <Text variant="body" style={styles.reasonText}>{props.children}</Text>;
+  // A receipt reads in primary ink; a status line takes its tone's colour.
+  const color = props.role === 'receipt' ? theme.colors.text.primary : toneColor(theme, props.tone);
   return (
-    <Line
+    <Text variant="meta" emphasis={props.role === 'receipt' ? 'medium' : undefined} style={[styles.lineText, { color }]}>
+      {props.children}
+    </Text>
+  );
+}
+
+function ProposalButton(props: HappierDocEditProposalButtonProps) {
+  const { theme } = useUnistyles();
+  return (
+    <RoundButton
       testID={props.testID}
-      icon={props.icon}
-      text={props.text}
-      action={props.action ?? undefined}
-      strong
+      size="small"
+      display={props.emphasis === 'primary' ? undefined : 'inverted'}
+      title={props.label}
+      textStyle={props.emphasis === 'secondary' ? { color: theme.colors.text.secondary } : undefined}
+      loading={props.busy}
+      disabled={props.disabled}
+      onPress={props.onPress}
     />
   );
 }
 
-function Line(
-  props: Readonly<{
-    testID: string;
-    icon: IconName;
-    text: string;
-    tone?: 'warning' | 'danger';
-    strong?: boolean;
-    action?: LineAction;
-  }>,
-) {
-  const { theme } = useUnistyles();
-  const styles = stylesheet;
-  const color =
-    props.tone === 'warning'
-      ? theme.colors.state.warning.foreground
-      : props.tone === 'danger'
-        ? theme.colors.text.destructive
-        : theme.colors.text.secondary;
+function ProposalDiff(props: HappierDocEditProposalDiffProps) {
   return (
-    <View
+    <ProseDiffViewer
+      mode="text"
       testID={props.testID}
-      style={styles.line}
-      accessibilityLiveRegion="polite"
-    >
-      <Icon name={props.icon} size={ICON_SIZE.sm} color={color} />
-      <Text
-        variant="meta"
-        emphasis={props.strong ? 'medium' : undefined}
-        style={[
-          styles.lineText,
-          { color: props.strong ? theme.colors.text.primary : color },
-        ]}
-      >
-        {props.text}
-      </Text>
-      {props.action ? (
-        <RoundButton
-          testID={props.action.testID}
-          size="small"
-          display="inverted"
-          title={props.action.label}
-          loading={props.action.busy}
-          onPress={props.action.onPress}
-        />
-      ) : null}
-    </View>
+      oldText={props.before}
+      newText={props.after}
+      contextLines={0}
+      prose={{ oldLabel: props.beforeLabel, newLabel: props.afterLabel }}
+    />
   );
+}
+
+function ProposalSpinner() {
+  return <ActivitySpinner size="small" />;
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
   card: {
     marginTop: theme.space.s8,
     padding: theme.space.s12,
-    gap: theme.space.s10,
     borderRadius: theme.borderRadius.lg,
     backgroundColor: theme.colors.surface.inset,
     ...resolveThemeHairlineBorderStyle(theme.colors.border.subtle),
   },
-  head: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
-  title: { flex: 1, color: theme.colors.text.primary },
+  title: { color: theme.colors.text.primary },
   meta: { color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'] },
-  reason: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: theme.space.s6,
-  },
-  reasonText: { flex: 1, color: theme.colors.text.secondary },
-  foot: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: theme.space.s8,
-  },
-  status: {
-    flex: 1,
-    minWidth: 160,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s6,
-  },
-  buttons: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
-  grow: { flex: 1 },
-  // One line: the receipt text takes what is left and wraps inside itself, so its action stays at
-  // the end of the line even in a narrow Doc margin (lab K1-R).
-  line: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s6,
-  },
-  lineText: { flex: 1, minWidth: 0 },
+  reasonText: { color: theme.colors.text.secondary },
+  // The receipt text wraps inside itself, so its action stays at the end of the line even in a
+  // narrow Doc margin (lab K1-R).
+  lineText: { minWidth: 0 },
 }));
 
 const ACCEPTED_NOTICE_KEY = 'artifacts.proposal.accepted';

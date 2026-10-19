@@ -106,6 +106,8 @@ const APPROVED_CATALOG_VOCABULARY = [
   'FollowPolicyEditor',
   // C3/C4 R7: one host-mediated, controlled participant choice/search presentation.
   'ExecutableParticipantPicker',
+  // C6/C5 (N3 FR1-10): the controlled Memory duplicate choice and the Doc suggested-edit card.
+  'MemoryDuplicateChoice', 'DocEditProposal',
 ] as const;
 
 type DeclarativeDisposition = Readonly<{
@@ -2085,6 +2087,46 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     declarative: { kind: 'not-applicable', reason: 'V2 has no returned-answer node; answer admission and the question read are caller-owned.' },
   },
   {
+    publicName: 'MemoryDuplicateChoice',
+    propTypeName: 'MemoryDuplicateChoiceProps',
+    family: 'Memory duplicate choice',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/MemoryDuplicateChoice.tsx',
+    sharedSymbol: 'HappierMemoryDuplicateChoice',
+    pluginOwner: { module: 'components/MemoryDuplicateChoice.tsx', symbol: 'MemoryDuplicateChoice' },
+    coreConsumers: ['components/memory/MemoryDocumentBody.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/memoryDuplicateChoiceSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no duplicate-choice node; the review, the write and its effect are caller-owned Actions.' },
+    deletedCoreDuplicates: [{ path: 'components/memory/MemoryDocumentBody.tsx', symbol: 'compareRowChosen' }],
+  },
+  {
+    publicName: 'DocEditProposal',
+    propTypeName: 'DocEditProposalProps',
+    family: 'Doc suggested edit',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/DocEditProposal.tsx',
+    sharedSymbol: 'HappierDocEditProposal',
+    pluginOwner: { module: 'components/DocEditProposal.tsx', symbol: 'DocEditProposal' },
+    coreConsumers: ['components/artifacts/ArtifactEditProposal.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/docEditProposalSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no suggested-edit node; currency reads and the person-only Accept/Decline stay in the Doc Actions.' },
+    deletedCoreDuplicates: [{ path: 'components/artifacts/ArtifactEditProposal.tsx', symbol: 'Settled' }],
+  },
+  {
     publicName: 'ExecutableParticipantPicker',
     propTypeName: 'ExecutableParticipantPickerProps',
     family: 'Host-mediated executable participant picker',
@@ -2889,7 +2931,7 @@ describe('graduated shared presentation families (§8.2)', () => {
       'NavigationList.Row',
       'DragSource', 'DropTarget',
       'DetailsPane', 'DetailsPaneFooter', 'PaneHeaderContent', 'Avatar', 'AgentCursor', 'PresenceCapsule', 'StatusCapsule',
-      'SetupSteps', 'LocalDateTimeField', 'WidgetGlanceRow', 'DiffStat', 'ThreadMessage', 'ReplyQuote', 'ReturnedAnswerQuote', 'ExecutableParticipantPicker', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
+      'SetupSteps', 'LocalDateTimeField', 'WidgetGlanceRow', 'DiffStat', 'ThreadMessage', 'ReplyQuote', 'ReturnedAnswerQuote', 'MemoryDuplicateChoice', 'DocEditProposal', 'ExecutableParticipantPicker', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
     ]);
   });
 

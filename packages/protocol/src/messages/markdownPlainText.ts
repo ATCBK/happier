@@ -1,6 +1,21 @@
 /** Canonical Markdown-to-plain preview, shared by transcript previews and Run summaries. */
 export function stripMarkdown(text: string): string {
-  return text
+  const literals: string[] = [];
+  const protectLiteral = (literal: string) => {
+    literals.push(literal);
+    return `\u0000${literals.length - 1}\u0000`;
+  };
+
+  // Code contents are literal, including pipes and Markdown emphasis/link syntax.
+  // Protect input NULs too: formatting can join them into a restoration token.
+  let literalPattern = /(^|[^`])(`+)(?!`)([\s\S]*?[^`])\2(?!`)/g;
+  if (text.includes('\u0000')) literalPattern = new RegExp(`${literalPattern.source}|\\u0000`, 'g');
+  const protectedText = text.replace(literalPattern,
+    (_match, prefix: string, _delimiter: string, code: string | undefined) => {
+      if (code === undefined) return protectLiteral('\u0000');
+      return `${prefix === '\u0000' ? protectLiteral(prefix) : prefix}${protectLiteral(code)}`;
+    });
+  return protectedText
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/^\s*\|?[\s:|-]+\|[\s:|-]*$/gm, '')
     .replace(/\|/g, ' ')
@@ -8,12 +23,12 @@ export function stripMarkdown(text: string): string {
     .replace(/\*([^*]+)\*/g, '$1')
     .replace(/__([^_]+)__/g, '$1')
     .replace(/_([^_]+)_/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
     .replace(/```[\s\S]*?```/g, '[code]')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/^---+$/gm, '')
     .replace(/^\s*[-*+]\s+/gm, '')
     .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/\u0000(\d+)\u0000/g, (_match, index: string) => literals[Number(index)]!)
     .replace(/\s+/g, ' ')
     .trim();
 }

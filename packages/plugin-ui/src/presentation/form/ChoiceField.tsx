@@ -25,6 +25,7 @@ import {
   resolveHappierFieldBoxLabel,
 } from './FieldBox.js';
 import {
+  HAPPIER_FIELD_DISABLED_OPACITY,
   HappierTextField,
   planHappierSelectOptions,
   type HappierSelectOption,
@@ -227,7 +228,9 @@ export function HappierChoiceField<Value = string>(
           if (props.onOpen) props.onOpen();
           else setOpen((current) => !current);
         }}
-        style={{ alignSelf: 'stretch', ...HAPPIER_FOCUS_RING_DELEGATED_STYLE }}
+        // A field box that cannot open yet (its choices are loading or failed) reads as unavailable, not as a
+        // field that ignores the press.
+        style={{ alignSelf: 'stretch', ...HAPPIER_FOCUS_RING_DELEGATED_STYLE, opacity: disabled ? HAPPIER_FIELD_DISABLED_OPACITY : 1 }}
       >
         {(state) => (
           <HappierFieldBoxTrigger

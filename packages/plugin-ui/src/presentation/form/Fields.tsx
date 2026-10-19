@@ -294,6 +294,9 @@ function combineAccessibilityHints(...hints: readonly (string | undefined)[]): s
   }, '');
 }
 
+/** How far a field that cannot be used right now (disabled, or waiting on its choices) recedes. */
+export const HAPPIER_FIELD_DISABLED_OPACITY = 0.5;
+
 export function HappierField(props: HappierFieldProps) {
   const captionStyle = useHappierTypeRoleStyle('micro', props.theme);
   const generatedIssueId = useId();
@@ -316,7 +319,7 @@ export function HappierField(props: HappierFieldProps) {
       <HappierFieldScopeContext.Provider value>
       <View
         testID={props.testID}
-        style={[{ gap: props.theme.spacing.xsmall, opacity: props.disabled ? 0.5 : 1 }, props.style]}
+        style={[{ gap: props.theme.spacing.xsmall, opacity: props.disabled ? HAPPIER_FIELD_DISABLED_OPACITY : 1 }, props.style]}
       >
         <HappierLabel theme={props.theme}>
           {props.label}{props.required ? ' *' : ''}

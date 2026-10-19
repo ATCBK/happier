@@ -1,5 +1,12 @@
 import { HappierDisclosure, HappierSkeletonBlock, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
-import { HappierMemoryFactRow, type HappierMemoryFactRowHost } from '@happier-dev/plugin-ui/components';
+import {
+  HappierMemoryDuplicateChoice,
+  HappierMemoryFactRow,
+  type HappierMemoryDuplicateChoiceControlProps,
+  type HappierMemoryDuplicateChoiceKind,
+  type HappierMemoryDuplicateChoiceTextProps,
+  type HappierMemoryFactRowHost,
+} from '@happier-dev/plugin-ui/components';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
 import {
@@ -58,7 +65,7 @@ const JUST_NOW_MS = 60_000;
 type Notice = 'pending' | 'conflict' | 'refused' | null;
 
 export type DuplicateReview = NonNullable<ReturnType<typeof readMemoryDuplicateReview>>;
-export type DuplicateChoiceKind = 'update' | 'replace' | 'keep_both';
+export type DuplicateChoiceKind = HappierMemoryDuplicateChoiceKind;
 
 /** The candidate the review leads with: a word-for-word match before a related one. */
 export function leadingCandidateId(review: DuplicateReview): string | null {
@@ -910,9 +917,9 @@ function duplicateSaveLabel(choice: DuplicateChoiceKind): string {
 }
 
 /**
- * The write owner found a saved fact like this one before saving anything (lab K2 `Sd`). The same
- * form leads with one grouped comparison: what is saved, what is new, the explicit effect and one line
- * saying what that effect does. Replace strikes the saved text; the main button names the effect.
+ * The write owner found a saved fact like this one before saving anything (lab K2 `Sd`): the shared
+ * plugin-ui comparison plugins draw too, bound to this review, the app's copy and its own controls.
+ * The review, the effect's revision binding and the write stay here.
  */
 export function MemoryDuplicateChoice(props: Readonly<{
   testID: string;
@@ -925,88 +932,87 @@ export function MemoryDuplicateChoice(props: Readonly<{
   onChoiceChange: (choice: DuplicateChoiceKind) => void;
   disabled: boolean;
 }>) {
-  const { review, candidateId, onCandidateChange, choice } = props;
+  const { theme } = useUnistyles();
   const styles = stylesheet;
   const candidates = React.useMemo(
-    () => [...review.candidates].sort((a, b) => (a.match === b.match ? 0 : a.match === 'exact' ? -1 : 1)),
-    [review.candidates],
+    () => [...props.review.candidates]
+      .sort((a, b) => (a.match === b.match ? 0 : a.match === 'exact' ? -1 : 1))
+      .map((candidate) => ({
+        id: candidate.factId,
+        text: candidate.text,
+        meta: [
+          candidate.match === 'exact' ? t('memoryContext.memory.duplicateExact') : t('memoryContext.memory.duplicateRelated'),
+          candidate.topic ? memoryTopicLabel(candidate.topic) : null,
+          candidate.decision ? (candidate.decision.approvedBy ? t('memoryContext.memory.decision') : t('memoryContext.memory.decisionNotApproved')) : null,
+        ].filter((part): part is string => Boolean(part)).join(' · '),
+      })),
+    [props.review.candidates],
   );
-  const tabs = React.useMemo(() => [
-    { id: 'update' as const, label: t('memoryContext.memory.duplicateUpdate') },
-    { id: 'replace' as const, label: t('memoryContext.memory.duplicateReplace') },
-    { id: 'keep_both' as const, label: t('memoryContext.memory.duplicateKeepBoth') },
-  ], []);
-  const effect = choice === 'update' ? t('memoryContext.memory.duplicateUpdateHint')
-    : choice === 'replace' ? t('memoryContext.memory.duplicateReplaceHint')
-      : t('memoryContext.memory.duplicateKeepBothHint');
-  const selectable = candidates.length > 1 && choice !== 'keep_both';
-  const newText = props.newText.trim();
   return (
-    <View testID={props.testID} style={styles.duplicate} accessibilityLiveRegion="polite">
-      <Text style={styles.duplicateTitle} accessibilityRole="header">
-        {candidates.length > 1
+    <HappierMemoryDuplicateChoice
+      testID={props.testID}
+      candidates={candidates}
+      newText={props.newText}
+      candidateId={props.candidateId}
+      onCandidateChange={props.onCandidateChange}
+      choice={props.choice}
+      onChoiceChange={props.onChoiceChange}
+      disabled={props.disabled}
+      labels={{
+        title: candidates.length > 1
           ? t('memoryContext.memory.duplicateTitleMany', { count: candidates.length })
-          : t('memoryContext.memory.duplicateTitle')}
-      </Text>
-      <View style={styles.compare} accessibilityRole={selectable ? 'radiogroup' : undefined}>
-        {candidates.map((candidate, index) => {
-          const chosen = candidate.factId === (candidateId ?? candidates[0]?.factId);
-          const retiring = choice === 'replace' && chosen;
-          const meta = [
-            candidate.match === 'exact' ? t('memoryContext.memory.duplicateExact') : t('memoryContext.memory.duplicateRelated'),
-            candidate.topic ? memoryTopicLabel(candidate.topic) : null,
-            candidate.decision ? (candidate.decision.approvedBy ? t('memoryContext.memory.decision') : t('memoryContext.memory.decisionNotApproved')) : null,
-          ].filter((part): part is string => Boolean(part)).join(' · ');
-          return (
-            <Pressable
-              key={candidate.factId}
-              testID={`${props.testID}.candidate.${candidate.factId}`}
-              style={({ hovered, pressed }: Readonly<{ hovered?: boolean; pressed: boolean }>) => [
-                styles.compareRow,
-                selectable && chosen ? styles.compareRowChosen : null,
-                selectable && !chosen && (hovered || pressed) ? styles.compareRowHover : null,
-              ]}
-              disabled={!selectable || props.disabled}
-              onPress={selectable ? () => onCandidateChange(candidate.factId) : undefined}
-              accessibilityRole={selectable ? 'radio' : undefined}
-              accessibilityState={selectable ? { checked: chosen, disabled: props.disabled } : undefined}
-            >
-              <Text style={styles.compareLabel}>{index === 0 ? t('memoryContext.memory.duplicateSaved') : ''}</Text>
-              <View style={styles.compareBody}>
-                <Text
-                  testID={`${props.testID}.candidate.${candidate.factId}.text`}
-                  style={[styles.compareText, retiring ? styles.retired : null]}
-                  numberOfLines={3}
-                >
-                  {candidate.text}
-                </Text>
-                {meta ? <Text style={styles.factMeta} numberOfLines={1}>{meta}</Text> : null}
-              </View>
-            </Pressable>
-          );
-        })}
-        <View style={styles.compareRow}>
-          <Text style={styles.compareLabel}>{t('memoryContext.memory.duplicateNew')}</Text>
-          <View style={styles.compareBody}>
-            <Text testID={`${props.testID}.new`} style={styles.compareText} numberOfLines={3}>{newText}</Text>
-          </View>
-        </View>
-      </View>
-      <View style={styles.choiceBar}>
-        <SegmentedTabBar<DuplicateChoiceKind>
-          tabs={tabs}
-          activeTabId={choice}
-          onSelectTab={props.onChoiceChange}
-          segmentSizing="content"
-          targetSize="platform"
-          role="radiogroup"
-          accessibilityLabel={t('memoryContext.memory.duplicateChoice')}
-          disabled={props.disabled}
-          testIDPrefix={`${props.testID}.choice`}
-        />
-      </View>
-      <Text testID={`${props.testID}.effect`} style={styles.effect}>{effect}</Text>
-    </View>
+          : t('memoryContext.memory.duplicateTitle'),
+        saved: t('memoryContext.memory.duplicateSaved'),
+        new: t('memoryContext.memory.duplicateNew'),
+        choice: t('memoryContext.memory.duplicateChoice'),
+        options: {
+          update: t('memoryContext.memory.duplicateUpdate'),
+          replace: t('memoryContext.memory.duplicateReplace'),
+          keep_both: t('memoryContext.memory.duplicateKeepBoth'),
+        },
+        effects: {
+          update: t('memoryContext.memory.duplicateUpdateHint'),
+          replace: t('memoryContext.memory.duplicateReplaceHint'),
+          keep_both: t('memoryContext.memory.duplicateKeepBothHint'),
+        },
+      }}
+      Text={DuplicateChoiceText}
+      Choice={DuplicateChoiceControl}
+      style={styles.duplicate}
+      colors={{ chosen: theme.colors.surface.selected, hover: theme.colors.surface.pressed }}
+      radius={theme.borderRadius.md}
+      space={theme.space}
+    />
+  );
+}
+
+function DuplicateChoiceText(props: HappierMemoryDuplicateChoiceTextProps) {
+  const styles = stylesheet;
+  const style = props.role === 'title' ? styles.duplicateTitle
+    : props.role === 'label' ? styles.duplicateLabel
+      : props.role === 'meta' ? styles.factMeta
+        : props.role === 'effect' ? styles.duplicateEffect
+          : [styles.duplicateText, props.retired ? styles.retired : null];
+  return (
+    <Text testID={props.testID} style={style} numberOfLines={props.numberOfLines} accessibilityRole={props.accessibilityRole}>
+      {props.children}
+    </Text>
+  );
+}
+
+function DuplicateChoiceControl(props: HappierMemoryDuplicateChoiceControlProps) {
+  return (
+    <SegmentedTabBar<DuplicateChoiceKind>
+      tabs={props.options}
+      activeTabId={props.value}
+      onSelectTab={props.onChange}
+      segmentSizing="content"
+      targetSize="platform"
+      role="radiogroup"
+      accessibilityLabel={props.accessibilityLabel}
+      disabled={props.disabled}
+      testIDPrefix={props.testIDPrefix}
+    />
   );
 }
 
@@ -1268,57 +1274,27 @@ const stylesheet = StyleSheet.create((theme) => ({
     marginBottom: theme.space.s12,
     paddingVertical: theme.space.s12,
     paddingHorizontal: theme.space.s12,
-    gap: theme.space.s8,
     borderRadius: theme.borderRadius.lg,
     backgroundColor: theme.colors.surface.inset,
   },
   duplicateTitle: {
-    paddingHorizontal: theme.space.s4,
     ...Typography.default('semiBold'),
     ...happierPageTextMetrics('rowTitle'),
     color: theme.colors.text.primary,
   },
-  compare: {
-    gap: theme.space.s2,
-  },
-  compareRow: {
-    flexDirection: 'row',
-    gap: theme.space.s12,
-    paddingVertical: theme.space.s4,
-    paddingHorizontal: theme.space.s4,
-    borderRadius: theme.borderRadius.md,
-  },
-  compareRowChosen: {
-    backgroundColor: theme.colors.surface.selected,
-  },
-  compareRowHover: {
-    backgroundColor: theme.colors.surface.pressed,
-  },
-  compareLabel: {
-    // One label column, so Saved and New texts start on one edge; the label sits on the text's line.
-    minWidth: 48,
+  duplicateLabel: {
+    // The label sits on the text's first line.
     ...Typography.default(),
     ...happierPageTextMetrics('rowDescription'),
     lineHeight: happierPageTextMetrics('rowTitle').lineHeight,
     color: theme.colors.text.tertiary,
   },
-  compareBody: {
-    flex: 1,
-    minWidth: 0,
-    gap: theme.space.s2,
-  },
-  compareText: {
+  duplicateText: {
     ...Typography.default(),
     ...happierPageTextMetrics('rowTitle'),
     color: theme.colors.text.primary,
   },
-  choiceBar: {
-    flexDirection: 'row',
-    paddingHorizontal: theme.space.s4,
-    paddingTop: theme.space.s4,
-  },
-  effect: {
-    paddingHorizontal: theme.space.s4,
+  duplicateEffect: {
     ...Typography.default(),
     ...happierPageTextMetrics('rowDescription'),
     color: theme.colors.text.secondary,
