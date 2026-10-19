@@ -3,6 +3,7 @@ import { afterAll } from 'vitest';
 import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import { describe, expect, it, vi } from 'vitest';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import {
   localVoiceAgentRpc,
@@ -25,6 +26,98 @@ afterAll(() => restoreHarnessModuleLoader());
 
 describe('local voice engine stop', () => {
   registerLocalVoiceEngineHarnessHooks();
+
+  it.each(['end', 'close', 'provider', 'remount', 'account', 'dismiss'] as const)('cancels a pending Start waiting for an unanswered Stop on %s, then retries cleanup before Start', async (cancel) => {
+    const storage = await getStorage();
+    const local = readLocalConversationVoiceSettings(storage.getState().settings.voice);
+    storage.__setState({ settings: { ...storage.getState().settings, voice: {
+      ...storage.getState().settings.voice, providerId: 'local_conversation',
+      providers: { ...storage.getState().settings.voice.providers,
+        local_conversation: { schemaVersion: 1, config: { ...local, conversationMode: 'agent',
+          agent: { ...local.agent, prewarmOnConnect: true },
+          tts: { ...local.tts, autoSpeakReplies: false },
+        } },
+      },
+    } } });
+    await loadLocalVoiceEngineWithCompatState();
+    const { createLocalConversationVoiceAdapter } = await import('@/voice/adapters/localConversation/localConversationAdapter');
+    const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+    const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+    const { sessionRpcWithServerScope, localVoiceHomeId } = await import('./localVoiceEngine.testHarness');
+    registerVoiceAdapters([createLocalConversationVoiceAdapter()]);
+    let lifecycle = createVoiceSessionLifecycleController();
+    lifecycle.setConfiguredProviderId('local_conversation');
+    const target = { serverId: localVoiceHomeId, sessionId: 's1' };
+    const responder = sessionRpcWithServerScope.getMockImplementation()!;
+    let stalled = true;
+    let entered!: () => void;
+    const entering = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const acknowledgement = new Promise<void>(resolve => { release = resolve; });
+    sessionRpcWithServerScope.mockImplementation(async request => {
+      if (stalled && request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) {
+        entered();
+        await acknowledgement;
+      }
+      return responder(request);
+    });
+    try {
+      await lifecycle.toggle(target);
+      await vi.waitFor(() => expect(localVoiceAgentRpc.readRetainedRun()?.status).toBe('running'));
+      let stopSettled = false;
+      const stopping = lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID).catch(() => undefined).finally(() => { stopSettled = true; });
+      await entering;
+      if (cancel === 'remount') {
+        const retiring = new AbortController();
+        const retiringAttempt = lifecycle.dispose(retiring.signal);
+        lifecycle = createVoiceSessionLifecycleController({ retiringAttempt, cancelRetiringAttempt: () => retiring.abort() });
+        lifecycle.setConfiguredProviderId('local_conversation');
+      }
+      let settled = false;
+      const starting = lifecycle.toggle(target).finally(() => { settled = true; });
+      expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connecting', canStop: true });
+      const cancelled = cancel === 'close' ? lifecycle.dispose()
+        : cancel === 'provider' ? Promise.resolve(lifecycle.setConfiguredProviderId('off'))
+        : lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+      await vi.waitFor(() => expect(settled).toBe(true));
+      await vi.waitFor(() => expect(stopSettled).toBe(true));
+      await Promise.all([stopping, starting, cancelled]);
+      expect(lifecycle.getSnapshot()).toMatchObject({ mode: 'idle', canStop: false });
+      if (cancel === 'end' || cancel === 'account' || cancel === 'dismiss') expect(lifecycle.getSnapshot()).toMatchObject({
+        status: 'error', errorCode: 'service_temporarily_unavailable', errorMessage: 'voice_previous_session_stop_failed',
+        errorRecoveryAction: 'retry',
+      });
+      expect(localVoiceAgentRpc.readRetainedRun()?.status).toBe('running');
+      stalled = false;
+      if (cancel === 'account' || cancel === 'dismiss') {
+        const failedSessionId = lifecycle.getSnapshot().sessionId ?? null;
+        if (cancel === 'account') {
+          lifecycle.rearmAfterCredentialAuthorityChange();
+          expect(lifecycle.getSnapshot().status).toBe('error');
+          lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
+        } else {
+          await lifecycle.dismissFailedAttempt('another-session');
+          expect(lifecycle.getSnapshot().status).toBe('error');
+          await lifecycle.dismissFailedAttempt(failedSessionId);
+        }
+        expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', mode: 'idle', canStop: false });
+        expect(lifecycle.getSnapshot().errorCode).toBeUndefined();
+        await lifecycle.retry(failedSessionId ?? VOICE_AGENT_GLOBAL_SESSION_ID);
+        expect(lifecycle.getSnapshot().status).toBe('disconnected');
+      }
+      if (cancel === 'close') lifecycle = createVoiceSessionLifecycleController();
+      lifecycle.setConfiguredProviderId('local_conversation');
+      if (cancel === 'end') await lifecycle.retry(VOICE_AGENT_GLOBAL_SESSION_ID);
+      else await lifecycle.toggle(target);
+      await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true }));
+      const { isLocalVoiceAgentActive } = await import('./localVoiceEngine');
+      await vi.waitFor(() => expect(isLocalVoiceAgentActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(true));
+    } finally {
+      stalled = false;
+      release();
+      await lifecycle.dispose();
+    }
+  });
 
   it('stops an in-progress recording turn without sending', async () => {
     const { toggleLocalVoiceTurn, getLocalVoiceState, stopLocalVoiceSession } = await loadLocalVoiceEngineWithCompatState();

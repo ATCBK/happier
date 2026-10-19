@@ -320,7 +320,7 @@ describe('sessionRpcWithServerScope', () => {
       await client.stop({ sessionId: 'session-1', voiceAgentId: 'run-a' });
     };
     const pending = cleanup();
-    const recoveryStopped = recovery.stop('session-1', () => captureStopped);
+    const recoveryStopped = recovery.prepareStop('session-1', () => captureStopped).run();
     getActiveServerSnapshotSpy.mockReturnValue({
       serverId: transition === 'home-switch' ? 'server-b' : 'server-a',
       serverUrl: transition === 'home-switch' ? 'https://server-b.example.test' : 'https://server-a.example.test',

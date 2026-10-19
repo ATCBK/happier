@@ -221,6 +221,131 @@ describe('DaemonVoiceInferenceClient', () => {
     }));
   });
 
+  it('cancels a stalled TTS download phase and allows the next synthesis', async () => {
+    const chunkEntered = createDeferred<void>();
+    const caller = new AbortController();
+    let first = true;
+    machineRpcWithServerScopeMock.mockImplementation(async (input: { method: string; payload: { requestId?: string } }) => {
+      if (input.method === 'daemon.voiceInference.tts.synthesize') return {
+        ok: true, requestId: input.payload.requestId, output: { codec: 'wav', mimeType: 'audio/wav' },
+        downloadId: 'download-cancellable', chunkSizeBytes: 1024, sizeBytes: 1, name: 'tts.wav',
+      };
+      if (input.method === 'daemon.voiceInference.tts.chunk') {
+        if (first) { first = false; chunkEntered.resolve(); return await new Promise(() => {}); }
+        return { success: true, contentBase64: Buffer.from('a').toString('base64'), isLast: true };
+      }
+      return { success: true };
+    });
+    const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
+    const client = new DaemonVoiceInferenceClient();
+    const request = { text: 'hello', packId: null, voiceId: null, speed: null,
+      output: { codec: 'wav' as const, mimeType: 'audio/wav' as const } };
+    let outcome = 'pending';
+    const pending = client.synthesizeText({ ...request, signal: caller.signal })
+      .then(() => { outcome = 'resolved'; }, () => { outcome = 'cancelled'; });
+    await chunkEntered.promise;
+    caller.abort();
+    // Let the real RPC owner and transfer unwind; a nonreplying chunk must not retain the request.
+    await vi.waitFor(() => expect(outcome).toBe('cancelled'));
+    await pending;
+    await expect(client.synthesizeText(request)).resolves.toMatchObject({ bytes: new Uint8Array([97]) });
+  });
+
+  it.each(['tts download', 'stt upload'] as const)('awaits Account-owned %s cleanup after capture cancellation', async kind => {
+    const chunkEntered = createDeferred<void>();
+    const cleanupEntered = createDeferred<void>();
+    const cleanupReply = createDeferred<void>();
+    const caller = new AbortController();
+    const recipient = createTransferRecipientKeyPair();
+    const chunkMethod = kind === 'tts download'
+      ? 'daemon.voiceInference.tts.chunk' : 'daemon.voiceInference.stt.upload.chunk';
+    const abortMethod = kind === 'tts download'
+      ? 'daemon.voiceInference.tts.abort' : 'daemon.voiceInference.stt.upload.abort';
+    machineRpcWithServerScopeMock.mockImplementation(async (input: { method: string; payload: { requestId?: string } }) => {
+      if (input.method === 'daemon.voiceInference.tts.synthesize') return {
+        ok: true, requestId: input.payload.requestId, output: { codec: 'wav', mimeType: 'audio/wav' },
+        downloadId: 'cleanup-download', chunkSizeBytes: 1024, sizeBytes: 1, name: 'tts.wav',
+      };
+      if (input.method === 'daemon.voiceInference.stt.upload.init') return {
+        success: true, uploadId: 'cleanup-upload', chunkSizeBytes: 1024,
+        recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
+      };
+      if (input.method === chunkMethod) {
+        chunkEntered.resolve();
+        return await new Promise(() => {});
+      }
+      if (input.method === abortMethod) {
+        cleanupEntered.resolve();
+        await cleanupReply.promise;
+        return { success: true };
+      }
+      if (input.method === 'daemon.voiceInference.tts.cancel' || input.method === 'daemon.voiceInference.stt.cancel') {
+        return { ok: true };
+      }
+      throw new Error(`unexpected method: ${input.method}`);
+    });
+    const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
+    const client = new DaemonVoiceInferenceClient();
+    let settled = false;
+    const operation = kind === 'tts download'
+      ? client.synthesizeText({ text: 'hello', packId: null, voiceId: null, speed: null,
+        output: { codec: 'wav', mimeType: 'audio/wav' }, signal: caller.signal })
+      : client.transcribeRecordedAudio({ source: { kind: 'native', uri: 'file:///recording.wav', sizeBytes: 5 },
+        inputMimeType: 'audio/wav', packId: null, language: null, signal: caller.signal });
+    const pending = operation.then(
+      () => { settled = true; return 'returned_audio' as const; },
+      () => { settled = true; return 'cancelled' as const; },
+    );
+    try {
+      await chunkEntered.promise;
+      caller.abort();
+      await cleanupEntered.promise;
+      // Drain the RPC/transfer continuation: capture abort must not detach cleanup.
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+      cleanupReply.resolve();
+      await expect(pending).resolves.toBe('cancelled');
+    } finally {
+      cleanupReply.resolve();
+      caller.abort();
+      await pending;
+    }
+  });
+
+  it('awaits Account-owned segmented TTS cleanup after capture cancellation', async () => {
+    const cleanupEntered = createDeferred<void>();
+    const cleanupReply = createDeferred<void>();
+    const caller = new AbortController();
+    machineRpcWithServerScopeMock.mockImplementation(async (input: { method: string; payload: { requestId?: string } }) => {
+      if (input.method === 'daemon.voiceInference.tts.stream.start') return {
+        ok: true, requestId: input.payload.requestId, streamId: 'cleanup-stream', generation: 1, segmentCount: 1,
+        output: { codec: 'wav', mimeType: 'audio/wav' },
+      };
+      if (input.method === 'daemon.voiceInference.tts.stream.cancel') {
+        cleanupEntered.resolve();
+        await cleanupReply.promise;
+        return { ok: true, streamId: 'cleanup-stream', generation: 1 };
+      }
+      throw new Error(`unexpected method: ${input.method}`);
+    });
+    const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
+    const stream = await new DaemonVoiceInferenceClient().startSegmentedTts({ text: 'hello',
+      packId: null, voiceId: null, speed: null, output: { codec: 'wav', mimeType: 'audio/wav' }, signal: caller.signal });
+    let settled = false;
+    const pending = stream.cancel().then(() => { settled = true; });
+    try {
+      await cleanupEntered.promise;
+      caller.abort();
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+      cleanupReply.resolve();
+      await pending;
+    } finally {
+      cleanupReply.resolve();
+      await pending;
+    }
+  });
+
   it('starts segmented daemon TTS, receives ready segments, and sends playback acknowledgements', async () => {
     machineRpcWithServerScopeMock.mockImplementation(async (input: any) => {
       if (input.method === 'daemon.voiceInference.tts.stream.start') {

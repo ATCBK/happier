@@ -1432,7 +1432,7 @@ export async function toggleLocalVoiceTurn(
   }
 }
 
-export async function stopLocalVoiceSession(reason?: 'continued_elsewhere'): Promise<void> {
+export async function stopLocalVoiceSession(reason?: 'continued_elsewhere', signal?: AbortSignal): Promise<void> {
   // A Voice Home carrier may still be resolving before capture starts. Fence
   // that work before reading the machine so a late completion cannot revive
   // the microphone after Stop (including a same-session retry).
@@ -1459,7 +1459,10 @@ export async function stopLocalVoiceSession(reason?: 'continued_elsewhere'): Pro
     noteTtsStopped();
     let captureCleanupError: unknown = null;
     // Capture the admitted run before native cleanup yields across a Home/Account switch.
-    const agentStop = voiceAgentSessions.stop(activeSessionId, reason).catch(() => {});
+    let agentCleanupError: unknown = null;
+    const agentStop = voiceAgentSessions.stop(activeSessionId, reason, signal).catch(error => {
+      if (signal) agentCleanupError = error;
+    });
 
     if (activeTurnAbortController && activeTurnAbortSessionId === activeSessionId) {
       try {
@@ -1503,6 +1506,7 @@ export async function stopLocalVoiceSession(reason?: 'continued_elsewhere'): Pro
     if (captureCleanupError) {
       throw captureCleanupError;
     }
+    if (agentCleanupError) throw agentCleanupError;
   }).finally(() => {
     releaseCaptureAdmission(activeSessionId);
   });

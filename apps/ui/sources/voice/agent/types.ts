@@ -142,6 +142,7 @@ export function readVoiceAgentActionEffectId(action: unknown): string | null {
 }
 
 export type VoiceAgentHandle = Readonly<{
+  signal?: AbortSignal;
   voicePolicy?: ExecutionRunVoiceAgentIntentInputV1['voicePolicy'];
   accountLifetime: ServerAccountScopeLifetime;
   metadataSessionId: string | null;
@@ -181,10 +182,11 @@ export interface VoiceAgentClient {
       speechSegmentTargetChars?: number;
       resume?: boolean;
       userTranscript?: ExecutionRunUserTranscriptDirective;
+      signal?: AbortSignal;
     }>,
   ): Promise<{ streamId: string }>;
   readTurnStream(
-    params: Readonly<{ sessionId: string; voiceAgentId: string; streamId: string; cursor: number; maxEvents?: number }>,
+    params: Readonly<{ sessionId: string; voiceAgentId: string; streamId: string; cursor: number; maxEvents?: number; signal?: AbortSignal }>,
   ): Promise<{ streamId: string; events: VoiceAgentTurnStreamEvent[]; nextCursor: number; done: boolean }>;
   cancelTurnStream(params: Readonly<{ sessionId: string; voiceAgentId: string; streamId: string }>): Promise<{ ok: true }>;
   commitUserTranscript?(params: Readonly<{
@@ -195,5 +197,5 @@ export interface VoiceAgentClient {
     localId: string;
   }>): Promise<{ ok: true }>;
   commit(params: Readonly<{ sessionId: string; voiceAgentId: string; kind: 'session_instruction'; maxChars?: number }>): Promise<{ commitText: string }>;
-  stop(params: Readonly<{ sessionId: string; voiceAgentId: string }>): Promise<{ ok: true }>;
+  stop(params: Readonly<{ sessionId: string; voiceAgentId: string; signal?: AbortSignal }>): Promise<{ ok: true }>;
 }

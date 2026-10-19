@@ -1110,6 +1110,22 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
         await hook.unmount();
     });
 
+    it('says the previous session could not stop, with Retry, instead of the generic service message', async () => {
+        const hook = await renderControl({
+            adapterId: 'local_conversation', sessionId: 'control-1', status: 'error', mode: 'idle',
+            canStop: false,
+            errorCode: 'service_temporarily_unavailable', errorMessage: 'voice_previous_session_stop_failed',
+            errorPresentation: 'error', errorRecoveryAction: 'retry',
+        });
+        expect(hook.getCurrent()).toMatchObject({
+            surfaceState: 'error',
+            captionLabel: t('settingsVoice.local.machineErrors.previous_session_stop_failed'),
+            recoveryAvailable: true,
+            recoveryLabel: t('common.retry'),
+        });
+        await hook.unmount();
+    });
+
     it('names a muted conversation "Muted" while its mode still says it is listening or speaking', async () => {
         const hook = await renderControl({
             adapterId: 'local_conversation',

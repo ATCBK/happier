@@ -401,6 +401,40 @@ describe('initializeVoiceAgentHandle', () => {
         }
     });
 
+    it('cancels the retired initializer cleanup wait when its caller leaves', async () => {
+        omitIncidentalProfile();
+        const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+        voiceSessionBindingStore.getState().bind({ adapterId: 'local_conversation', controlSessionId: 's1',
+            conversationSessionId: 's1', conversationSessionAddress: { serverId: connection.home.id, sessionId: 's1' },
+            lifetime: 'runtime_attempt', transcriptMode: 'synthetic',
+            targetSessionAddress: { serverId: connection.home.id, sessionId: 's1' }, updatedAt: 1 });
+        let entered!: () => void;
+        const entering = new Promise<void>(resolve => { entered = resolve; });
+        let release!: () => void;
+        const acknowledgement = new Promise<void>(resolve => { release = resolve; });
+        sessionExecutionRunStop.mockImplementationOnce(async () => { entered(); await acknowledgement; return { ok: true }; });
+        start.mockImplementationOnce(async () => {
+            voiceSessionBindingStore.getState().unbind('s1');
+            return { ok: true as const, runId: 'voice-agent-1', created: true };
+        });
+        const caller = new AbortController();
+        let settled = false;
+        const { initializeVoiceAgentHandle } = await import('./initializeVoiceAgentHandle');
+        const initializing = initializeVoiceAgentHandle({ sessionId: 's1', signal: caller.signal,
+            getDaemonVoiceAgentClient: scope => new DaemonVoiceAgentClient(scope),
+            setDeferredTargetSessionContext: vi.fn() }).catch(error => error).finally(() => { settled = true; });
+        try {
+            await entering;
+            caller.abort();
+            await vi.waitFor(() => expect(settled).toBe(true));
+            expect(await initializing).toMatchObject({ message: 'voice_agent_binding_changed' });
+        } finally {
+            release();
+            await initializing;
+            voiceSessionBindingStore.getState().unbind('s1');
+        }
+    });
+
     it('reconnects with retained greeting bytes without re-reading an unavailable current selection', async () => {
         omitIncidentalProfile();
         const previousSettings = state.settings;

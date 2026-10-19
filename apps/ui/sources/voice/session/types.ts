@@ -95,7 +95,7 @@ export type VoiceAdapterController = Readonly<{
     initialContext?: string;
     textOnly?: boolean;
   }>): Promise<void>;
-  stop(input: Readonly<{ sessionId: string; reason?: 'continued_elsewhere' }>): Promise<void>;
+  stop(input: Readonly<{ sessionId: string; reason?: 'continued_elsewhere'; signal?: AbortSignal }>): Promise<void>;
   toggle(input: Readonly<{ sessionId: string }>): Promise<void>;
   /** Routes a recovery through the exact active attempt without replacing it. */
   retry?(input: Readonly<{

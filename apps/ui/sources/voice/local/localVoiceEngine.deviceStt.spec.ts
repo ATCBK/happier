@@ -380,7 +380,9 @@ describe('local voice engine device STT (experimental)', () => {
             lifecycle.setConfiguredProviderId(providerId);
             await lifecycle.toggle(target);
             expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', mode: 'listening' });
-            const end = lifecycle.stop('s1');
+            const end = lifecycle.stop('s1').catch((error: unknown) => {
+                if (!(error instanceof Error) || error.name !== 'AbortError') throw error;
+            });
             const snapshot = lifecycle.getSnapshot();
             expect(snapshot).toMatchObject({ status: 'disconnected', canStop: false });
             const control = resolveVoiceAttemptControl({
@@ -390,7 +392,8 @@ describe('local voice engine device STT (experimental)', () => {
             expect(control).toMatchObject({ surfaceState: 'idle', live: false, primaryAction: 'start' });
             expect(getVoiceSessionEndedAttempt()).toMatchObject({ sessionId: 's1', reason: { kind: 'stopped' } });
             expect(getVoiceConversationRuntimeSnapshot().state).toBe('ending');
-            const restart = lifecycle.toggle(target);
+            let restartSettled = false;
+            const restart = lifecycle.toggle(target).finally(() => { restartSettled = true; });
             const pending = lifecycle.getSnapshot();
             expect(pending).toMatchObject({ adapterId: providerId, sessionId: 's1', status: 'connecting', canStop: true });
             expect(lifecycle.getAttemptTargetSessionAddress()).toEqual(target);
@@ -404,9 +407,20 @@ describe('local voice engine device STT (experimental)', () => {
                 : outcome === 'dispose' ? lifecycle.dispose() : Promise.resolve();
             if (outcome === 'account') lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
             if (outcome === 'provider') lifecycle.setConfiguredProviderId('off');
-            if (outcome !== 'start') expect(lifecycle.getSnapshot().status).toBe('disconnected');
+            if (outcome !== 'start') {
+                expect(lifecycle.getSnapshot().status).toBe('disconnected');
+                expect(lifecycle.getSnapshot().errorCode).toBeUndefined();
+                expect(lifecycle.getSnapshot().errorMessage).toBeUndefined();
+                // Cancelling Start retires its observer while the OS still
+                // owns capture cleanup and has not acknowledged End.
+                await vi.waitFor(() => expect(restartSettled).toBe(true));
+            }
             emitSpeechRecEvent('end');
             await Promise.all([end, restart, cancellation]);
+            if (outcome !== 'start') {
+                expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', mode: 'idle', canStop: false });
+                expect(lifecycle.getSnapshot().errorCode).toBeUndefined();
+            }
             expect(speechRecStart).toHaveBeenCalledTimes(outcome === 'start' ? 2 : 1);
             if (outcome === 'start') {
                 expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 's1', status: 'connected', mode: 'listening' });

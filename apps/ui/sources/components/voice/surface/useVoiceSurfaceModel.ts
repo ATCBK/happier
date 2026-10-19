@@ -224,7 +224,7 @@ export function useVoiceSurfaceModel(props: VoiceSurfaceProps): VoiceSurfaceView
     const controlsLoading = snap.status === 'connecting' && !canStop;
     const controlsDisabled = !canStop && !canStart;
     const errorSubtitle = isVoiceMachineErrorKind(snap.errorCode)
-        ? t(resolveVoiceMachineErrorTranslationKey(snap.errorCode))
+        ? t(resolveVoiceMachineErrorTranslationKey(snap.errorCode, snap.errorMessage))
         : null;
     // Target/error channel only. Agent-authored `display_status` text now travels on
     // `delegatedWork` so it stops competing with the target label in one flattened string.

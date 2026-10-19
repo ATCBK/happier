@@ -33,6 +33,8 @@ import {
     type DaemonVoiceInferenceNormalizationDecision,
 } from '@happier-dev/protocol/daemon/voiceInference';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { runWithServerAccountScopeRequestGuard } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
 
 import { isRuntimeFeatureEnabled } from '@/sync/domains/features/featureDecisionInputs';
 import type { LocalUploadSource } from '@/sync/runtime/files/localUploadSourceReader';
@@ -209,6 +211,21 @@ export class DaemonVoiceInferenceClient {
         };
     }
 
+    /** Cleanup outlives speech interruption, but never its admitting Account. */
+    private captureCleanupRpc() {
+        const account = captureActiveServerAccountScopeLifetime();
+        return async (request: Parameters<typeof machineRpcWithServerScope>[0]): Promise<unknown> => {
+            if (!account) throw createDaemonVoiceInferenceClientError('cancelled');
+            return await runWithServerAccountScopeRequestGuard({
+                scope: account.scope,
+                isCurrent: account.isCurrent,
+                staleError: () => createDaemonVoiceInferenceClientError('cancelled'),
+            }, async guard => await this.deps.machineRpcWithServerScope({ ...request,
+                serverId: account.scope.serverId, accountId: account.scope.accountId, signal: guard.signal,
+            }));
+        };
+    }
+
     private async assertFeatureEnabled(): Promise<void> {
         const enabled = await this.deps.isRuntimeFeatureEnabled({
             featureId: 'voice.daemonInference',
@@ -258,13 +275,14 @@ export class DaemonVoiceInferenceClient {
         return response;
     }
 
-    async listModels(scope?: DaemonVoiceInferenceModelMachineScope): Promise<readonly DaemonVoiceInferenceModelStatus[]> {
+    async listModels(scope?: DaemonVoiceInferenceModelMachineScope, signal?: AbortSignal): Promise<readonly DaemonVoiceInferenceModelStatus[]> {
         const machineId = await this.resolveMachineId(scope);
         const response = parseSchema(
             DaemonVoiceInferenceModelsListResponseSchema,
             await this.deps.machineRpcWithServerScope({
                 machineId,
                 method: RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_LIST,
+                signal,
                 payload: {},
             }),
         );
@@ -275,6 +293,7 @@ export class DaemonVoiceInferenceClient {
     async getModelsStatus(
         packIds?: readonly string[] | null,
         scope?: DaemonVoiceInferenceModelMachineScope,
+        signal?: AbortSignal,
     ): Promise<readonly DaemonVoiceInferenceModelStatus[]> {
         const machineId = await this.resolveMachineId(scope);
         const response = parseSchema(
@@ -282,6 +301,7 @@ export class DaemonVoiceInferenceClient {
             await this.deps.machineRpcWithServerScope({
                 machineId,
                 method: RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_STATUS,
+                signal,
                 payload: packIds && packIds.length > 0 ? { packIds } : {},
             }),
         );
@@ -315,6 +335,7 @@ export class DaemonVoiceInferenceClient {
     async acceptModelPackLicense(
         input: DaemonVoiceInferenceModelLicenseAcceptRequest,
         scope?: DaemonVoiceInferenceModelMachineScope,
+        signal?: AbortSignal,
     ): Promise<DaemonVoiceInferenceModelStatus> {
         const machineId = await this.resolveMachineId(scope);
         const response = parseSchema(
@@ -322,6 +343,7 @@ export class DaemonVoiceInferenceClient {
             await this.deps.machineRpcWithServerScope({
                 machineId,
                 method: RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_LICENSE_ACCEPT,
+                signal,
                 payload: input,
             }),
         );
@@ -329,13 +351,14 @@ export class DaemonVoiceInferenceClient {
         return response.model;
     }
 
-    async removeModel(packId: string, scope?: DaemonVoiceInferenceModelMachineScope): Promise<void> {
+    async removeModel(packId: string, scope?: DaemonVoiceInferenceModelMachineScope, signal?: AbortSignal): Promise<void> {
         const machineId = await this.resolveMachineId(scope);
         const response = parseSchema(
             DaemonVoiceInferenceModelsRemoveResponseSchema,
             await this.deps.machineRpcWithServerScope({
                 machineId,
                 method: RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_REMOVE,
+                signal,
                 payload: { packId },
             }),
         );
@@ -351,6 +374,7 @@ export class DaemonVoiceInferenceClient {
         output: DaemonVoiceInferenceAudioOutput;
         signal?: AbortSignal | null;
     }>): Promise<Readonly<{ bytes: Uint8Array; output: DaemonVoiceInferenceAudioOutput }>> {
+        const cleanupRpc = this.captureCleanupRpc();
         const machineTarget = await this.resolveMachineTarget();
         const requestId = this.deps.createRequestId();
         const diagnostics = this.deps.resolveDiagnosticsCaptureContext({
@@ -360,7 +384,7 @@ export class DaemonVoiceInferenceClient {
         });
         const cancelRequest = async () => {
             try {
-                await this.deps.machineRpcWithServerScope({
+                await cleanupRpc({
                     machineId: machineTarget.machineId,
                     method: RPC_METHODS.DAEMON_VOICE_INFERENCE_TTS_CANCEL,
                     payload: { requestId },
@@ -411,6 +435,7 @@ export class DaemonVoiceInferenceClient {
                         await this.deps.machineRpcWithServerScope({
                             machineId: machineTarget.machineId,
                             method: RPC_METHODS.DAEMON_VOICE_INFERENCE_TTS_CHUNK,
+                            ...(params.signal ? { signal: params.signal } : {}),
                             payload: { downloadId, index },
                         }),
                     ),
@@ -420,13 +445,14 @@ export class DaemonVoiceInferenceClient {
                         await this.deps.machineRpcWithServerScope({
                             machineId: machineTarget.machineId,
                             method: RPC_METHODS.DAEMON_VOICE_INFERENCE_TTS_FINALIZE,
+                            ...(params.signal ? { signal: params.signal } : {}),
                             payload: { downloadId },
                         }),
                     ),
                 abort: async ({ downloadId }) =>
                     parseSchema(
                         DaemonVoiceInferenceTtsAbortResponseSchema,
-                        await this.deps.machineRpcWithServerScope({
+                        await cleanupRpc({
                             machineId: machineTarget.machineId,
                             method: RPC_METHODS.DAEMON_VOICE_INFERENCE_TTS_ABORT,
                             payload: { downloadId },
@@ -460,6 +486,7 @@ export class DaemonVoiceInferenceClient {
         output: DaemonVoiceInferenceAudioOutput;
         signal?: AbortSignal | null;
     }>): Promise<DaemonSegmentedTtsSession> {
+        const cleanupRpc = this.captureCleanupRpc();
         const machineTarget = await this.resolveMachineTarget();
         const requestId = this.deps.createRequestId();
         const rpcSignal = params.signal ?? null;
@@ -507,7 +534,7 @@ export class DaemonVoiceInferenceClient {
             try {
                 const response = parseSchema(
                     DaemonVoiceInferenceTtsStreamCancelResponseSchema,
-                    await this.deps.machineRpcWithServerScope({
+                    await cleanupRpc({
                         machineId: machineTarget.machineId,
                         method: RPC_METHODS.DAEMON_VOICE_INFERENCE_TTS_STREAM_CANCEL,
                         payload: {
@@ -573,6 +600,7 @@ export class DaemonVoiceInferenceClient {
                     await this.deps.machineRpcWithServerScope({
                         machineId: machineTarget.machineId,
                         method: RPC_METHODS.DAEMON_VOICE_INFERENCE_TTS_STREAM_ACK,
+                        ...(rpcSignal ? { signal: rpcSignal } : {}),
                         payload: {
                             streamId: segment.streamId,
                             generation: segment.generation,
@@ -607,6 +635,7 @@ export class DaemonVoiceInferenceClient {
         language: string | null;
         modelPackId: string | null;
     }>> {
+        const cleanupRpc = this.captureCleanupRpc();
         const machineTarget = await this.resolveMachineTarget(params.machineTarget);
         const requestId = this.deps.createRequestId();
         const durationMs = typeof params.durationMs === 'number' && Number.isFinite(params.durationMs)
@@ -619,7 +648,7 @@ export class DaemonVoiceInferenceClient {
         });
         const cancelRequest = async () => {
             try {
-                await this.deps.machineRpcWithServerScope({
+                await cleanupRpc({
                     machineId: machineTarget.machineId,
                     method: RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_CANCEL,
                     payload: { requestId },
@@ -651,6 +680,7 @@ export class DaemonVoiceInferenceClient {
                         await this.deps.machineRpcWithServerScope({
                             machineId: machineTarget.machineId,
                             method: RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_INIT,
+                            ...(params.signal ? { signal: params.signal } : {}),
                             payload: {
                                 requestId,
                                 sizeBytes,
@@ -664,6 +694,7 @@ export class DaemonVoiceInferenceClient {
                         await this.deps.machineRpcWithServerScope({
                             machineId: machineTarget.machineId,
                             method: RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_CHUNK,
+                            ...(params.signal ? { signal: params.signal } : {}),
                             payload: request,
                         }),
                     ),
@@ -673,13 +704,14 @@ export class DaemonVoiceInferenceClient {
                         await this.deps.machineRpcWithServerScope({
                             machineId: machineTarget.machineId,
                             method: RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_FINALIZE,
+                            ...(params.signal ? { signal: params.signal } : {}),
                             payload: { uploadId },
                         }),
                     ),
                 abort: async ({ uploadId }) =>
                     parseSchema(
                         DaemonVoiceInferenceSttUploadAbortResponseSchema,
-                        await this.deps.machineRpcWithServerScope({
+                        await cleanupRpc({
                             machineId: machineTarget.machineId,
                             method: RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_UPLOAD_ABORT,
                             payload: { uploadId },
@@ -732,6 +764,7 @@ export class DaemonVoiceInferenceClient {
         language: string | null;
         signal?: AbortSignal | null;
     }>): Promise<DaemonSpeechStreamSender> {
+        const cleanupRpc = this.captureCleanupRpc();
         const machineTarget = await this.resolveMachineTarget();
         const requestId = this.deps.createRequestId();
         const rpcSignal = params.signal ?? null;
@@ -769,7 +802,7 @@ export class DaemonVoiceInferenceClient {
             cancel: async (payload) => {
                 const response = parseSchema(
                     DaemonVoiceInferenceSttStreamCancelResponseSchema,
-                    await this.deps.machineRpcWithServerScope({
+                    await cleanupRpc({
                         machineId: machineTarget.machineId,
                         method: RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_CANCEL,
                         payload,

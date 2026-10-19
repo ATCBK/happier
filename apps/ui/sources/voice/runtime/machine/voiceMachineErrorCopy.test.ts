@@ -34,4 +34,17 @@ describe('voiceMachineErrorCopy', () => {
             expect(resolveVoiceMachineErrorTranslationKey(kind as VoiceMachineErrorKind)).toBe(key);
         }
     });
+
+    it('gives the previous-session Stop failure its own sentence and keeps other reasons on the kind copy', () => {
+        expect(resolveVoiceMachineErrorTranslationKey(
+            'service_temporarily_unavailable',
+            'voice_previous_session_stop_failed',
+        )).toBe('settingsVoice.local.machineErrors.previous_session_stop_failed');
+        expect(resolveVoiceMachineErrorTranslationKey(
+            'service_temporarily_unavailable',
+            'socket hang up',
+        )).toBe('errors.voiceServiceUnavailable');
+        expect(resolveVoiceMachineErrorTranslationKey('provider_error', 'voice_previous_session_stop_failed'))
+            .toBe('settingsVoice.local.machineErrors.provider_error');
+    });
 });

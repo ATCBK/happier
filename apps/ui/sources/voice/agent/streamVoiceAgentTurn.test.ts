@@ -52,6 +52,31 @@ beforeEach(async () => {
 afterAll(() => network.dispose());
 
 describe('streamVoiceAgentTurn', () => {
+    it('cancels an unanswered stream admission and permits a fresh turn', async () => {
+        const caller = new AbortController();
+        let entered!: () => void;
+        const admitted = new Promise<void>(resolve => { entered = resolve; });
+        let first = true;
+        const client = serveVoiceStream({
+            start: async () => {
+                if (first) { first = false; entered(); return await new Promise(() => {}); }
+                return { streamId: 'retry-stream' };
+            },
+            read: async () => ({ streamId: 'retry-stream', events: [{ t: 'done', assistantText: 'ready' }], nextCursor: 1, done: true }),
+            cancel: async () => ({ ok: true }),
+        });
+        const handle = { client, voiceAgentId: 'run_1', rpcSessionId: 'sys_voice' };
+        let outcome = 'pending';
+        const pending = streamVoiceAgentTurn({ sessionId: 'sys_voice', handle, userText: 'hello',
+            displayUserText: 'hello', options: { signal: caller.signal } })
+            .then(() => { outcome = 'resolved'; }, () => { outcome = 'cancelled'; });
+        await admitted;
+        caller.abort();
+        await vi.waitFor(() => expect(outcome).toBe('cancelled'));
+        await pending;
+        await expect(streamVoiceAgentTurn({ sessionId: 'sys_voice', handle, userText: 'again', displayUserText: 'again' }))
+            .resolves.toMatchObject({ assistantText: 'ready' });
+    });
     it('returns the useful incomplete predecessor reply through the real consumer without cancelling it', async () => {
         const text = '你好🙂'.repeat(15_000);
         const accepted: VoiceAgentAcceptedOutputV1[] = [];

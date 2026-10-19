@@ -3,6 +3,8 @@ import { initializeVoiceAgentHandle } from '@/voice/agent/initializeVoiceAgentHa
 import type { VoiceAgentHandle, VoiceAgentSendTurnOptions } from '@/voice/agent/types';
 import type { VoiceAssistantAction } from '@happier-dev/protocol';
 import { clearRetainedLocalVoiceEffectOutcomes } from '@/voice/tools/localVoiceEffectOutcomeCustody';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { createAbortRacer } from '@/voice/agent/voiceAgentAbort';
 
 import { createVoiceRunRecovery } from './voiceRunRecovery';
 import { createVoiceTurnStreaming } from './voiceTurnStreaming';
@@ -31,7 +33,7 @@ export type VoiceExecutionTransport = Readonly<{
         userText: string,
         options?: VoiceAgentSendTurnOptions,
     ) => Promise<Readonly<{ assistantText: string; actions: VoiceAssistantAction[] }>>;
-    stop: (sessionId: string, reason?: 'continued_elsewhere') => Promise<void>;
+    stop: (sessionId: string, reason?: 'continued_elsewhere', signal?: AbortSignal) => Promise<void>;
 }>;
 
 export function createVoiceExecutionTransport(): VoiceExecutionTransport {
@@ -44,7 +46,12 @@ export function createVoiceExecutionTransport(): VoiceExecutionTransport {
     const latestAutomaticUiContextBySessionId = new Map<string, string>();
     const voiceAgentActiveTurnSettlementsBySessionId = new Map<string, Set<Promise<void>>>();
     const voiceAgentTurnAbortControllerBySessionId = new Map<string, AbortController>();
-    const voiceAgentStopPromiseBySessionId = new Map<string, Promise<void>>();
+    const voiceAgentStopPromiseBySessionId = new Map<string, {
+        completion: Promise<void>;
+        cleanup: ReturnType<ReturnType<typeof createVoiceRunRecovery>['prepareStop']>;
+        failed: boolean;
+    }>();
+    const voiceAgentLifetimeBySessionId = new Map<string, AbortController>();
 
     const trackActiveTurn = async <T>(sessionId: string, task: () => Promise<T>): Promise<T> => {
         let turn: Promise<T>;
@@ -83,17 +90,41 @@ export function createVoiceExecutionTransport(): VoiceExecutionTransport {
     };
 
     const recovery = createVoiceRunRecovery({
-        createHandle: (sessionId: string) =>
-            initializeVoiceAgentHandle({
-                sessionId,
-                getDaemonVoiceAgentClient: (scope) => new DaemonVoiceAgentClient(scope),
-                setDeferredTargetSessionContext: (pendingSessionId, update) => {
-                    const text = update.trim();
-                    if (!text) return;
-                    if (deferredTargetSessionContextBySessionId.get(pendingSessionId) === null) return;
-                    deferredTargetSessionContextBySessionId.set(pendingSessionId, text);
-                },
-            }),
+        createHandle: async (sessionId: string) => {
+            voiceAgentLifetimeBySessionId.get(sessionId)?.abort();
+            const lifetime = new AbortController();
+            voiceAgentLifetimeBySessionId.set(sessionId, lifetime);
+            const retirement = captureActiveServerAccountScopeLifetime()?.onRetire(() => lifetime.abort());
+            lifetime.signal.addEventListener('abort', () => retirement?.dispose(), { once: true });
+            try {
+                const retiringStop = voiceAgentStopPromiseBySessionId.get(sessionId);
+                if (retiringStop && retiringStop.cleanup.accountLifetime?.isCurrent()) {
+                    // A cancelled acknowledgement did not prove cleanup. The
+                    // next explicit activation repeats the same ordered Stop.
+                    await createAbortRacer(lifetime.signal).race(retiringStop.failed
+                        ? runStop(sessionId, undefined, lifetime.signal)
+                        : retiringStop.completion);
+                } else if (retiringStop) {
+                    // A different Account cannot retry the old Account's Stop.
+                    voiceAgentStopPromiseBySessionId.delete(sessionId);
+                }
+                return await initializeVoiceAgentHandle({
+                    sessionId,
+                    signal: lifetime.signal,
+                    getDaemonVoiceAgentClient: (scope) => new DaemonVoiceAgentClient(scope, lifetime.signal),
+                    setDeferredTargetSessionContext: (pendingSessionId, update) => {
+                        const text = update.trim();
+                        if (!text) return;
+                        if (deferredTargetSessionContextBySessionId.get(pendingSessionId) === null) return;
+                        deferredTargetSessionContextBySessionId.set(pendingSessionId, text);
+                    },
+                });
+            } catch (error) {
+                lifetime.abort();
+                if (voiceAgentLifetimeBySessionId.get(sessionId) === lifetime) voiceAgentLifetimeBySessionId.delete(sessionId);
+                throw error;
+            }
+        },
         voiceAgentBySessionId,
         voiceAgentInitBySessionId,
         voiceAttemptExplicitContextBySessionId,
@@ -117,32 +148,38 @@ export function createVoiceExecutionTransport(): VoiceExecutionTransport {
         voiceAgentTurnAbortControllerBySessionId,
     });
 
-    const stop = (sessionId: string, reason?: 'continued_elsewhere'): Promise<void> => {
+    const runStop = (sessionId: string, reason?: 'continued_elsewhere', signal?: AbortSignal): Promise<void> => {
         const existingStop = voiceAgentStopPromiseBySessionId.get(sessionId);
-        if (existingStop) return existingStop;
+        if (existingStop && !existingStop.failed) return existingStop.completion;
+        const cleanup = existingStop?.cleanup ?? recovery.prepareStop(sessionId, () => waitForActiveTurns(sessionId), reason);
 
-        interruptActiveTurn(sessionId);
         const stopPromise = (async () => {
             try {
-                await recovery.stop(sessionId, () => waitForActiveTurns(sessionId), reason);
+                await cleanup.run(signal);
             } finally {
                 clearRetainedLocalVoiceEffectOutcomes(sessionId);
             }
         })();
-        voiceAgentStopPromiseBySessionId.set(sessionId, stopPromise);
+        const stop = { completion: stopPromise, cleanup, failed: false };
+        voiceAgentStopPromiseBySessionId.set(sessionId, stop);
         void stopPromise.then(
             () => {
-                if (voiceAgentStopPromiseBySessionId.get(sessionId) === stopPromise) {
+                if (voiceAgentStopPromiseBySessionId.get(sessionId) === stop) {
                     voiceAgentStopPromiseBySessionId.delete(sessionId);
                 }
             },
             () => {
-                if (voiceAgentStopPromiseBySessionId.get(sessionId) === stopPromise) {
-                    voiceAgentStopPromiseBySessionId.delete(sessionId);
-                }
+                stop.failed = true;
             },
         );
         return stopPromise;
+    };
+
+    const stop = (sessionId: string, reason?: 'continued_elsewhere', signal?: AbortSignal): Promise<void> => {
+        interruptActiveTurn(sessionId);
+        voiceAgentLifetimeBySessionId.get(sessionId)?.abort();
+        voiceAgentLifetimeBySessionId.delete(sessionId);
+        return runStop(sessionId, reason, signal);
     };
 
     const commitUserTranscript = async (sessionId: string, text: string, localId: string): Promise<void> => {

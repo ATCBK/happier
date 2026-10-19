@@ -795,7 +795,7 @@ export async function initializeVoiceAgentHandle({
     try {
         assertWelcomeInputsCurrent();
     } catch (error) {
-        await client.stop({ sessionId: rpcSessionId, voiceAgentId: started.voiceAgentId }).catch(() => {});
+        await client.stop({ sessionId: rpcSessionId, voiceAgentId: started.voiceAgentId, signal }).catch(() => {});
         throw error;
     }
 

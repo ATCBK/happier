@@ -161,12 +161,17 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
 
   // Ensure adapters are registered before the user can interact with voice controls.
   React.useLayoutEffect(() => {
+    const retiringController = getVoiceSessionLifecycleController();
+    const retirement = new AbortController();
+    const retiringAttempt = retiringController?.dispose(retirement.signal);
     const assembly = createBuiltinVoiceAdapterAssembly({
       ...(currentUiContext ? { currentUiContext } : {}),
     });
     registerVoiceAdapters(assembly.adapters);
     const continuation = createVoiceContinuationProjection();
     const controller = createVoiceSessionLifecycleController({
+      retiringAttempt,
+      cancelRetiringAttempt: () => retirement.abort(),
       acquireConnectivityLease: () => sync.acquireUserRequestLease(),
       onSyncedConversationMessages: (address, messages) => {
         const observed = continuation.observe(address, messages);

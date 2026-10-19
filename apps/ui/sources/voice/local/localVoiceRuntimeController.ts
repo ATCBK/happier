@@ -31,7 +31,7 @@ export type LocalVoiceRuntimeController = Readonly<{
     onAccepted?: () => Promise<void>;
   }>) => Promise<void>;
   sendAgentTextUpdate: (sessionId: string, update: string) => Promise<void>;
-  stopSession: (reason?: 'continued_elsewhere') => Promise<void>;
+  stopSession: (reason?: 'continued_elsewhere', signal?: AbortSignal) => Promise<void>;
   toggleTurn: (
     sessionId: string,
     currentUiContext?: VoiceCurrentUiToolPort,
@@ -50,7 +50,7 @@ export function createLocalVoiceRuntimeController(): LocalVoiceRuntimeController
     sendAgentTextTurn: async ({ controlSessionId, text, durableDispatch, onAccepted }) =>
       await sendLocalVoiceAgentTextTurn(controlSessionId, text, durableDispatch, onAccepted),
     sendAgentTextUpdate: async (sessionId, update) => await sendLocalVoiceAgentTextUpdate(sessionId, update),
-    stopSession: async (reason) => await stopLocalVoiceSession(reason),
+    stopSession: async (reason, signal) => await stopLocalVoiceSession(reason, signal),
     toggleTurn: async (sessionId, currentUiContext, requestedTargetSessionAddress) =>
       await toggleLocalVoiceTurn(sessionId, currentUiContext, requestedTargetSessionAddress),
   };

@@ -90,7 +90,10 @@ function createMachineRpcTimeoutError(params: Readonly<{
 }
 
 function createMachineRpcAbortError(method: string, cause?: unknown): Error {
-    const error = new Error(`Machine RPC for ${method} was aborted by the caller`);
+    const error = createRpcCallError({
+        error: `Machine RPC for ${method} was aborted by the caller`,
+        errorCode: 'MACHINE_RPC_ABORTED',
+    });
     error.name = 'AbortError';
     Object.assign(error, { code: 'MACHINE_RPC_ABORTED' });
     const disposition = readRpcRequestDisposition(cause);

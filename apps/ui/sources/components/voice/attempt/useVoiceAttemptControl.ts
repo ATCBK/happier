@@ -645,7 +645,7 @@ export function useVoiceAttemptControl(idleTarget: VoiceAttemptIdleTarget): Voic
      * last line said as if the call were fine.
      */
     const failureReason = surfaceState === 'error' && isVoiceMachineErrorKind(snap.errorCode)
-        ? translateVoiceReadiness(resolveVoiceMachineErrorTranslationKey(snap.errorCode), { service: serviceTitle })
+        ? translateVoiceReadiness(resolveVoiceMachineErrorTranslationKey(snap.errorCode, snap.errorMessage), { service: serviceTitle })
         : null;
     const captionLabel = surfaceState === 'permission_required'
         ? t('voicePresence.captions.blocked')
