@@ -77,6 +77,33 @@ export const MachineAgentInventoryItemSchema = lazyZodSchema(() => (<T extends z
 })));
 export type MachineAgentInventoryItem = z.output<typeof MachineAgentInventoryItemSchema>;
 
+/** Shared installation/authentication prerequisite, before UI update/job presentation. */
+export const MachineAgentExecutionStateV1Schema = lazyZodSchema(() => z.enum([
+  'ready', 'needsSignIn', 'notInstalled', 'unsupported', 'checking', 'unknown',
+]));
+export type MachineAgentExecutionStateV1 = z.infer<typeof MachineAgentExecutionStateV1Schema>;
+
+export function resolveMachineAgentExecutionStateV1(input: Pick<MachineAgentInventoryItem,
+  'installed' | 'platform' | 'fit'> & Readonly<{
+  dependencies: readonly Pick<MachineAgentInventoryItem['dependencies'][number], 'installed'>[];
+  signIn: Readonly<{ status: MachineAgentInventoryItem['signIn']['status']; native?: Readonly<{ required?: boolean }> }>;
+  known?: boolean;
+  checking?: boolean;
+  credentialRouteReady?: boolean;
+  authenticationRequired?: boolean;
+}>): MachineAgentExecutionStateV1 {
+  if (input.known === false) return input.checking ? 'checking' : 'unknown';
+  if (input.fit?.kind === 'unknown') return 'unknown';
+  if (!input.platform.supported) return 'unsupported';
+  if (!input.installed || input.dependencies.some(dependency => !dependency.installed)) return 'notInstalled';
+  if (input.credentialRouteReady === false) return 'unknown';
+  if (input.authenticationRequired ?? input.signIn.native?.required !== false) {
+    if (input.signIn.status === 'signedOut') return 'needsSignIn';
+    if (input.signIn.status !== 'signedIn') return 'unknown';
+  }
+  return 'ready';
+}
+
 /** A failed probe carries no installation or readiness facts. */
 export const MachineAgentInventoryUnavailableSchema = lazyZodSchema(() => z.strictObject({
   agentId: z.string().check(z.minLength(1)),
@@ -120,7 +147,7 @@ export function buildMachineAgentsDetectRequest(input: Readonly<{
   agents: readonly MachineAgentInventoryDescriptor[];
   refresh?: boolean;
   includeLatestVersion?: boolean;
-}> & DefinitionInventoryInput): CapabilitiesDetectRequest {
+}> & DefinitionInventoryInput): Pick<CapabilitiesDetectRequest, 'requests' | 'bypassCache'> {
   return {
     requests: [...input.agents.filter(agent => agent.definitionId === undefined).map(({ agentId }) => ({
       id: `cli.${agentId}`,
