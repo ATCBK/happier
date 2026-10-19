@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/lists/SegmentedChoiceItem';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { t } from '@/text';
+import type { ManagedReceiptFact } from './managedMachineDisplay';
 
 /**
  * D53 (plan 51): what Happier sets up on every machine made from a preset, after it joins and before
@@ -363,7 +364,7 @@ export const MachineEnvironmentSection = React.memo(
 /** The receipt's read-only environment lines: what each new machine is set up with. */
 export function describeMachineEnvironment(
   environment: MachineEnvironmentV1 | undefined,
-) {
+): ManagedReceiptFact[] {
   if (!environment) return [];
   const adapter = environment.toolchain
     ? environmentAdapters().find(

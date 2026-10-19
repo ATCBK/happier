@@ -15,7 +15,7 @@ import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/r
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
@@ -152,7 +152,7 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
                 // Retained checks describe the card; the current controller catalog admits the handoff.
                 ...(catalog.error || !catalog.binding?.isCurrent() || unreadable ? { disabled: true } : {}) } }];
     });
-    const controllerName = scope.machine ? getMachineDisplayName(scope.machine) ?? scope.machine.id : '';
+    const controllerName = scope.machine ? getMachineSentenceName(scope.machine) : '';
     const observedMachines = React.useMemo(() => scope.machine ? [scope.machine] : [], [scope.machine]);
     const presenceNowMs = useMachinePresenceNowMs(observedMachines);
     const controllerOnline = scope.machine ? resolveMachinePickerPresence(scope.machine, presenceNowMs,

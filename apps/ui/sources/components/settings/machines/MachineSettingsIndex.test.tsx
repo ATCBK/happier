@@ -18,12 +18,7 @@ type Group = {
   serverId: string;
   serverName: string;
   status: 'idle' | 'loading' | 'signedOut' | 'error';
-  machines: Array<{
-    id: string;
-    active: boolean;
-    activeAt: number;
-    metadata?: { displayName?: string; host?: string; platform?: string };
-  }>;
+  machines: Array<ReturnType<typeof createMachineFixture>>;
 };
 
 const routerPushSpy = vi.fn();
@@ -149,7 +144,7 @@ function machine(id: string, displayName: string, host: string) {
     installationId: `${id}-installation`,
     active: true,
     activeAt: 0,
-    metadata: { displayName, host, platform: 'darwin' },
+    metadata: { ...createMachineFixture().metadata!, displayName, host, platform: 'darwin' },
   });
 }
 
@@ -559,6 +554,35 @@ describe('All machines (the Settings door index)', () => {
       ).length,
     ).toBeGreaterThan(0);
     expect(tree.findAllByType('SelectionTiles' as never)).toHaveLength(0);
+  });
+
+  it('holds the whole first answer behind the collection loading, then publishes rows, headline and count together, and keeps them through a re-read', async () => {
+    const profileId = homeProfiles.get('srv_a')!;
+    const managedFirstReply = createDeferred<void>();
+    home.answer(profileId, '/v1/machines/managed/actions/list', { body: { machines: [] }, respondAfter: managedFirstReply.promise });
+    const rowId = 'machines.index.row.machine:srv_a:machine-a1';
+    const has = (tree: Awaited<ReturnType<typeof renderPage>>, testID: string) => tree.findAll(node => node.props?.testID === testID).length > 0;
+    const screen = await renderScreen(React.createElement(MachinesSettingsView));
+    await waitForHomeGovernance(() => expect(home.requests.some(request => request.path === '/v1/machines/managed/actions/list')).toBe(true));
+    await flushHookEffects();
+    // One machine is already known, but the created machines have not answered: no partial row, no count.
+    expect(screen.tree.findAll(node => node.props?.testID === 'machines.index.collection' && node.props?.loading === true).length).toBeGreaterThan(0);
+    expect(has(screen.tree, rowId)).toBe(false);
+    expect(has(screen.tree, 'machines.index.count')).toBe(false);
+    await act(async () => managedFirstReply.resolve());
+    await waitForHomeGovernance(() => expect(has(screen.tree, rowId)).toBe(true));
+    expect(has(screen.tree, 'machines.index.count')).toBe(true);
+    // A later read keeps the answer already shown.
+    const rereply = createDeferred<void>();
+    home.answer(profileId, '/v1/machines/managed/actions/list', { body: { machines: [] }, respondAfter: rereply.promise });
+    const requests = home.requests.filter(request => request.path === '/v1/machines/managed/actions/list').length;
+    const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+    await act(async () => publishHomeAccountChange('srv_a'));
+    await waitForHomeGovernance(() => expect(home.requests.filter(request => request.path === '/v1/machines/managed/actions/list').length).toBeGreaterThan(requests));
+    expect(has(screen.tree, rowId)).toBe(true);
+    expect(has(screen.tree, 'machines.index.count')).toBe(true);
+    await act(async () => rereply.resolve());
+    await screen.unmount();
   });
 
   it('ends in a named failure with Retry, not the add tiles, when the Home cannot list its machines', async () => {

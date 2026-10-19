@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { MachineProvisionerContributionV1Schema, MachineProvisionerOptionsResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import { ManagedCredentialSelectionV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
-import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/public-types';
+import { PluginJsonValueV2Schema, type PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/public-types';
+import { normalizePluginActionInputHintsV2, PluginActionContributionV2Schema } from '@happier-dev/protocol/plugins/actions/v2';
 import { writeInputPath } from '@happier-dev/protocol/inputs/inputFieldRuntime';
 import { FlyLaunchQueryV1Schema, FlyLaunchV1Schema } from '../../../../../../../packages/plugins/machine-fly/src/machine/schemas';
 import { CRABBOX_PLUGIN } from '../../../../../../../packages/plugins/machine-crabbox/src/manifest';
@@ -50,16 +51,16 @@ describe('managed configurator draft owner', () => {
 
     it('admits a Devcontainer review query entered through its declared shared Action fields', () => {
         const descriptor = MachineProvisionerContributionV1Schema.parse(DEVCONTAINER_PLUGIN.manifest.contributes.machineProvisioners?.[0]);
-        const action = DEVCONTAINER_PLUGIN.manifest.contributes.actions.find(action => action.id === descriptor.actions.options)!;
+        const action = PluginActionContributionV2Schema.parse(DEVCONTAINER_PLUGIN.manifest.contributes.actions?.find(action => action.id === descriptor.actions.options));
         const values = { workspaceFolder: '/projects/source', configPath: '/projects/source/.devcontainer/devcontainer.json' };
-        let selectors: unknown = {};
-        for (const field of resolveEffectiveActionInputFields(action, {})) {
+        let selectors: Readonly<Record<string, unknown>> = {};
+        for (const field of resolveEffectiveActionInputFields({ inputHints: normalizePluginActionInputHintsV2(action.inputHints) }, {})) {
             selectors = writeInputPath(selectors, field.path, values[field.path as keyof typeof values]);
         }
         const draft = setManagedConfiguratorOptionsSelectors(createManagedConfiguratorDraft({
             provisioner: { contribution: { pluginId: DEVCONTAINER_PLUGIN.manifest.id, localId: descriptor.id }, occurrenceId: 'devcontainer', descriptor },
             controller, name: 'Project child',
-        }), selectors as Readonly<Record<string, unknown>>);
+        }), selectors);
         expect(managedConfiguratorOptionsSelectors(draft, action.inputSchema!)).toEqual(values);
     });
     it('qualifies saved BYOC recipes using the current selected native variant, with descriptor fallback', () => {
@@ -67,8 +68,8 @@ describe('managed configurator draft owner', () => {
         const byoc = { contribution: { pluginId: CUA_PLUGIN.manifest.id, localId: descriptor.id }, occurrenceId: 'byoc', descriptor };
         for (const cloud of ['modal', 'aws', 'gcp'] as const) {
             const finite = cloud === 'modal';
-            const launch = { cloud, region: 'west', nativeImageId: 'linux', nativeSizeId: 'native-size',
-                nativeLifetime: finite ? { kind: 'finite', durationSeconds: 7200 } : { kind: 'no-native-ttl' } };
+            const launch = PluginJsonValueV2Schema.parse({ cloud, region: 'west', nativeImageId: 'linux', nativeSizeId: 'native-size',
+                nativeLifetime: finite ? { kind: 'finite', durationSeconds: 7200 } : { kind: 'no-native-ttl' } });
             const loaded = MachineProvisionerOptionsResultV1Schema.parse({ choices: [{ id: 'native-choice', title: 'Native choice', launch,
                 retention: finite ? { supportedIntents: ['delete'], finiteOnly: true }
                     : { supportedIntents: ['start', 'stop', 'delete'], finiteOnly: false },
@@ -94,7 +95,7 @@ describe('managed configurator draft owner', () => {
                 expect(managedConfiguratorAcquireInput(fresh, 'home')?.selection).toMatchObject({ launch: { choices: launch }, wakeOnAcceptedMessage: false });
                 // A real duration alternative still requires an explicit selection of its complete launch.
                 const ambiguous = refreshManagedConfiguratorOptions(createManagedConfiguratorDraft({ provisioner: byoc, controller, name: 'New BYOC' }), {
-                    choices: [...loaded.choices, { ...loaded.choices[0]!, id: 'longer', launch: { ...launch, nativeLifetime: { kind: 'finite', durationSeconds: 10800 } },
+                    choices: [...loaded.choices, { ...loaded.choices[0]!, id: 'longer', launch: { cloud, region: 'west', nativeImageId: 'linux', nativeSizeId: 'native-size', nativeLifetime: { kind: 'finite', durationSeconds: 10800 } },
                         nativeFacts: { ...loaded.choices[0]!.nativeFacts, duration: { id: '10800', title: '3 hours', afterMs: 10_800_000 } } }],
                 });
                 let staged = ambiguous;
@@ -183,7 +184,8 @@ describe('managed configurator draft owner', () => {
             [{ kind: 'create', sizeGb: 10 }, 'attach', 'volume.volumeId', 'reviewed-volume'],
             [{ kind: 'attach', volumeId: 'reviewed-volume' }, 'create', 'volume.sizeGb', 20],
         ] as const) {
-            const launch = { ...base, volume: original };
+            const launch = PluginJsonValueV2Schema.parse({ ...base, volume: original });
+            if (!launch || typeof launch !== 'object' || Array.isArray(launch)) throw new Error('Expected a native Fly launch object');
             const saved = { ...createManagedConfiguratorDraft({ provisioner: fly, controller, name: 'Saved Fly',
                 preset: { id: 'fly-preset', revision: 1 } }), selected: { id: 'preset:fly-preset', title: 'Saved Fly', launch } };
             expect(managedConfiguratorOptionsSelectors(saved, FlyLaunchQueryV1Schema.jsonSchema)).toEqual(launch);

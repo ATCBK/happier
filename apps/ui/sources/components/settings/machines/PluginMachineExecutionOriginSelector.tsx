@@ -195,6 +195,8 @@ function PluginOriginPickerGroups(props: Readonly<{
 
 export type PluginMachineExecutionOriginPresentation = Readonly<{
     title: string;
+    /** `title` in its two parts, for a one-line chip: the name shortens, the telling suffix stays whole. */
+    titleParts?: Readonly<{ name: string; hint: string | null }>;
     subtitle?: string;
     detail: string;
     selected: boolean;
@@ -222,9 +224,8 @@ export function resolvePluginMachineExecutionOriginPresentation(
         )) : null;
         return {
             title: labels.machine,
-            subtitle: labels.machine === selectedTarget.machineId
-                ? labels.server
-                : [labels.server, selectedTarget.machineId].join(' · '),
+            titleParts: labels.machineParts,
+            subtitle: labels.server,
             detail: selection.state.kind === 'unavailable'
                 ? selection.state.reasons.map(originReasonDetail).join(' · ')
                 : selectedCandidate
@@ -268,6 +269,12 @@ export function PluginMachineExecutionOriginSelectorView(props: Readonly<{
     /** Contextual label for the machine scope this selector presents. */
     groupTitle?: string;
     presentation?: 'section' | 'chip';
+    /**
+     * A chip in a phone's navigation header, where the page title and the page's own action have the
+     * room's priority: the chip is its glyph (with the offline dot and the open caret) and its accessible
+     * name carries the Machine and how it was chosen. The full name and the choice stay in the picker.
+     */
+    compact?: boolean;
     machineCandidates?: readonly MachineAdministrationCandidateV1[];
 }>) {
     const { theme } = useUnistyles();
@@ -330,11 +337,16 @@ export function PluginMachineExecutionOriginSelectorView(props: Readonly<{
         return <><SelectionListFilterChip filter={{
             id: 'plugin-execution',
             label: groupTitle,
-            valueLabel: current.title,
+            valueLabel: current.titleParts?.name ?? current.title,
+            ...(current.titleParts?.hint ? { valueQualifier: current.titleParts.hint } : {}),
             // Picked for the viewer: named like a choice, with one quiet word that it was picked, so an
             // explicit pin (no word) and an unavailable pin (the offline dot) each read as themselves.
-            ...(current.automatic ? { note: t('settingsPlugins.surfaces.runOnAuto'), accessibilityHint: t('settingsPlugins.surfaces.runOnAutoHint') } : {}),
+            ...(current.automatic ? {
+                ...(props.compact ? {} : { note: t('settingsPlugins.surfaces.runOnAuto') }),
+                accessibilityHint: t('settingsPlugins.surfaces.runOnAutoHint'),
+            } : {}),
             icon: <Icon name="desktop" size={14} color={theme.colors.text.secondary} />,
+            ...(props.compact ? { iconOnly: true } : {}),
             muted: !current.selected,
             // The chosen Machine is named either way; when it cannot answer, the chip says so with the
             // shared presence dot (healthy stays quiet) and announces why.

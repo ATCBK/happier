@@ -19,6 +19,7 @@ export function managedCreationSetup(machine: ManagedMachineV1) {
 /** What the page knows beside the row: the controller's name and presence, and the provider's display name. */
 export type ManagedCreationContext = Readonly<{
     controller?: Readonly<{ name: string; online: boolean }>;
+    enrolledMachine?: Readonly<{ machineId: string; installationId: string; online: boolean; serviceManaged: boolean }>;
     provider?: string;
     providerAvailable?: boolean;
     operation?: ActionOperationProjection | null;
@@ -34,7 +35,7 @@ export function managedCreationState(machine: ManagedMachineV1, context: Managed
     if (machine.observation?.availability === 'absent') return { kind: 'absent' };
     if (machine.observation?.storage === 'lost') return { kind: 'volumeLost' };
     if (context.providerAvailable === false) return { kind: 'providerRemoved', provider: context.provider ?? t('common.machine') };
-    const operation = currentManagedCreationOperation(machine, context.operation);
+    const operation = currentManagedCreationOperation(machine, context.operation, context);
     if (operation?.observation === 'available' && !operation.isUnavailableProjection && operation.snapshot.state === 'failed'
         && operation.snapshot.error?.errorCode === 'credential_unavailable') return { kind: 'credentialRefused' };
     if (operation?.observation === 'available' && !operation.isUnavailableProjection && operation.snapshot.state === 'running') {
@@ -64,6 +65,15 @@ export function describeManagedCreation(machine: ManagedMachineV1, context?: Man
     return describeManagedLifecycleState(managedCreationState(machine, context));
 }
 
+/**
+ * A created machine its provider reports stopped or suspended is offline because of that power state; its own
+ * state row and receipt (Start) explain it, so the page must not say a second, vaguer "offline".
+ */
+export function managedPowerExplainsOffline(machine: Pick<ManagedMachineV1, 'creationState' | 'observation'> | undefined): boolean {
+    const power = machine?.observation?.power;
+    return machine?.creationState === 'active' && (power === 'stopped' || power === 'suspended');
+}
+
 /** Enrolled healthy resources use the observation row instead of repeating their creation state. */
 export function isManagedCreationStateRowVisible(machine: Pick<ManagedMachineV1, 'enrolledMachineId'>, state: ManagedLifecycleState): boolean {
     return !machine.enrolledMachineId || state.kind !== 'resourceReady';
@@ -71,13 +81,13 @@ export function isManagedCreationStateRowVisible(machine: Pick<ManagedMachineV1,
 
 /** Retained unenrolled resources remain recoverable when controller history is lost. */
 export function canRetryManagedInstallation(machine: ManagedMachineV1, operation?: ActionOperationProjection | null,
-    context: Pick<ManagedCreationContext, 'providerAvailable'> = {}): boolean {
+    context: Pick<ManagedCreationContext, 'providerAvailable' | 'enrolledMachine'> = {}): boolean {
     const lifecycle = managedCreationState(machine);
     if (context.providerAvailable === false || machine.creationState !== 'active' || machine.archivedAt !== undefined || machine.desired === 'delete'
         || machine.allocation !== 'bound' || !machine.resource || machine.cleanup
         || lifecycle.kind === 'cleanupPending' || lifecycle.kind === 'absent' || lifecycle.kind === 'volumeLost') return false;
     if (!operation) return !machine.enrolledMachineId;
-    operation = currentManagedCreationOperation(machine, operation);
+    operation = currentManagedCreationOperation(machine, operation, context);
     const snapshot = operation?.snapshot;
     return operation?.observation === 'available' && !operation.isUnavailableProjection
         && snapshot?.state === 'failed' && snapshot.scope.machineId === machine.controller.machineId
@@ -87,7 +97,8 @@ export function canRetryManagedInstallation(machine: ManagedMachineV1, operation
 }
 
 /** A replaced resource or installation cannot borrow a previous operation's observations. */
-export function currentManagedCreationOperation(machine: ManagedMachineV1, operation?: ActionOperationProjection | null): ActionOperationProjection | null {
+export function currentManagedCreationOperation(machine: ManagedMachineV1, operation?: ActionOperationProjection | null,
+    context: Pick<ManagedCreationContext, 'enrolledMachine'> = {}): ActionOperationProjection | null {
     if (!operation) return null;
     const snapshot = operation.snapshot;
     if (snapshot.domainRef?.kind === 'machineEnvironment') {
@@ -101,10 +112,32 @@ export function currentManagedCreationOperation(machine: ManagedMachineV1, opera
     if (snapshot.scope.machineId !== machine.controller.machineId
         || snapshot.domainRef?.kind !== 'managedMachine' || snapshot.domainRef.id !== machine.id) return null;
     const reference = snapshot.domainRef;
-    if (reference.resource || reference.controller) return reference.resource && reference.controller
+    const matches = reference.resource || reference.controller ? reference.resource && reference.controller
         && sameStrictJsonValue(reference.resource, machine.resource)
-        && sameStrictJsonValue(reference.controller, machine.controller) ? operation : null;
-    return machine.allocation === 'unsubmitted' || machine.allocation === 'may-exist' ? operation : null;
+        && sameStrictJsonValue(reference.controller, machine.controller)
+        : machine.allocation === 'unsubmitted' || machine.allocation === 'may-exist';
+    if (!matches) return null;
+    // Existing 0.3 installation operations stored this CLI activation refusal as
+    // action_failed. The enrolled guest's current connection resolves only that
+    // readiness failure; unrelated bootstrap/setup failures remain actionable.
+    const guest = context.enrolledMachine;
+    if (machine.creationState === 'active' && machine.allocation === 'bound' && !machine.cleanup
+        && machine.archivedAt === undefined && machine.desired !== 'delete'
+        && guest && guest.machineId === machine.enrolledMachineId && guest.installationId && guest.online && guest.serviceManaged
+        && operation.observation === 'available' && !operation.isUnavailableProjection && snapshot.state === 'failed'
+        && (snapshot.actionId === 'machines.managed.acquire' || snapshot.actionId === 'machines.managed.bootstrap.retry')
+        && snapshot.error?.errorCode === 'action_failed'
+        && snapshot.error.error.startsWith('Background service install completed, but the expected background service did not become the active daemon for the selected Home within ')) return null;
+    return operation;
+}
+
+/** The installer task's open sign-in consent, while its operation still runs; the add flow asks the same task kind the same way. */
+export function readManagedInstallationPrompt(operation: ActionOperationProjection | null | undefined) {
+    const snapshot = operation?.snapshot;
+    if (!snapshot || snapshot.state !== 'running' || operation.observation !== 'available' || operation.isUnavailableProjection
+        || snapshot.domainRef?.kind !== 'managedMachine' || !snapshot.domainRef.bootstrapTask) return null;
+    const { prompt, id } = snapshot.domainRef.bootstrapTask;
+    return prompt?.kind === 'auth.approveRemoteProvisioning' ? { ...prompt, taskId: id } : null;
 }
 
 /** A durable managed deep link becomes an ordinary Machine destination only after verified binding. */

@@ -212,6 +212,7 @@ async function actionResponse(url: string, init?: RequestInit): Promise<Response
         if (action === 'update') return Response.json(await boundaries.update(boundaries.serverId, input));
         if (action === 'delete') {
             await boundaries.remove(boundaries.serverId, input);
+            boundaries.pools = boundaries.pools?.filter(view => view.pool.id !== input.poolId) ?? null;
             return Response.json({ poolId: input.poolId, deleted: true });
         }
         return Response.json({ code: 'invalid_request', message: `Unexpected action ${action}` }, { status: 400 });
@@ -442,9 +443,9 @@ describe('MachinePoolEditorScreen', () => {
 
         if (action === 'delete') {
             await screen.pressByTestIdAsync(originTestId);
-            await act(async () => screen.tree.update(
+            await screen.update(
                 <FocusReturnProvider><MachinePoolEditorScreen serverId={boundaries.serverId} poolId={current.pool.id} /></FocusReturnProvider>,
-            ));
+            );
         }
         if (action !== 'delete') {
             boundaries.routeStack.push(action === 'create'
@@ -462,7 +463,7 @@ describe('MachinePoolEditorScreen', () => {
 
         await screen.pressByTestIdAsync('settings.machinePools.editor.approval');
         expect(boundaries.routeStack).toHaveLength(3);
-        await act(async () => screen.tree.update(<FocusReturnProvider><ApprovalDetailPage /></FocusReturnProvider>));
+        await screen.update(<FocusReturnProvider><ApprovalDetailPage /></FocusReturnProvider>);
         await vi.waitFor(() => expect(screen.findByTestId('approvals.approve')).not.toBeNull());
         await screen.pressByTestIdAsync('approvals.approve');
 
@@ -473,9 +474,9 @@ describe('MachinePoolEditorScreen', () => {
         expect(actionBoundary).toHaveBeenCalledTimes(1);
 
         if (action === 'delete') {
-            await act(async () => screen.tree.update(
+            await screen.update(
                 <FocusReturnProvider><MachinePoolsSection groups={[group]} /></FocusReturnProvider>,
-            ));
+            );
             await vi.waitFor(() => expect(boundaries.pressableFocus).toHaveBeenCalledWith(nextTestId));
             expect(boundaries.pressableFocus).not.toHaveBeenCalledWith(originTestId);
         }
@@ -577,10 +578,11 @@ describe('MachinePoolEditorScreen', () => {
         const { MachinePoolEditorScreen } = await import('./MachinePoolEditorScreen');
         const element = <MachinePoolEditorScreen serverId={boundaries.serverId} poolId={poolView(1).pool.id} />;
         const screen = await renderScreen(element);
+        await vi.waitFor(() => expect(screen.findByTestId('settings.machinePools.editor.name')?.props.value).toBe('Development'));
 
         boundaries.pools = [poolView(9)];
         await act(async () => publishBoundaryState());
-        await act(async () => screen.tree.update(element));
+        await screen.update(element);
         await act(async () => screen.changeTextByTestId('settings.machinePools.editor.name', 'Development renamed'));
         await screen.pressByTestIdAsync('settings.machinePools.editor.save');
         await vi.waitFor(() => expect(boundaries.update).toHaveBeenCalledOnce());
@@ -608,7 +610,7 @@ describe('MachinePoolEditorScreen', () => {
             const { storage } = await import('@/sync/domains/state/storage');
             storage.getState().setMachinePoolListStatus(boundaries.serverId, 'error');
         });
-        await act(async () => screen.tree.update(element));
+        await screen.update(element);
 
         // A failed read is not an offline Home, and it must not silently remove administration.
         expect(screen.findByTestId('settings.machinePools.editor.offline')).toBeNull();
@@ -681,6 +683,9 @@ describe('MachinePoolEditorScreen', () => {
     it('retires the editor with a pending Delete approval when the Home credential changes', async () => {
         boundaries.pools = [poolView(1)];
         await act(async () => publishBoundaryState());
+        getStorage().getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+            actions: { 'machines.pools.delete': { approvalRequiredSurfaces: ['ui'] } },
+        }) });
         const { MachinePoolEditorScreen } = await import('./MachinePoolEditorScreen');
         const screen = await renderScreen(
             <MachinePoolEditorScreen serverId={boundaries.serverId} poolId={poolView(1).pool.id} />,
@@ -716,17 +721,18 @@ describe('MachinePoolEditorScreen', () => {
         const { MachinePoolEditorScreen } = await import('./MachinePoolEditorScreen');
         const element = <MachinePoolEditorScreen serverId={boundaries.serverId} poolId={poolView(3).pool.id} />;
         const screen = await renderScreen(element);
+        await vi.waitFor(() => expect(screen.findByTestId('settings.machinePools.editor.name')?.props.value).toBe('Development'));
 
         boundaries.pools = [poolView(7)];
         await act(async () => publishBoundaryState());
-        await act(async () => screen.tree.update(element));
+        await screen.update(element);
         await chooseDelete(screen);
         await vi.waitFor(() => expect(boundaries.remove).toHaveBeenCalledOnce());
         expect(boundaries.remove.mock.calls[0]?.[1].expectedRevision).toBe(3);
 
         boundaries.machineStatus = 'signedOut';
         await act(async () => publishBoundaryState());
-        await act(async () => screen.tree.update(<MachinePoolEditorScreen serverId={boundaries.serverId} poolId={poolView(3).pool.id} />));
+        await screen.update(<MachinePoolEditorScreen serverId={boundaries.serverId} poolId={poolView(3).pool.id} />);
         expect(screen.findByTestId('settings.machinePools.editor.offline')).not.toBeNull();
     });
 
@@ -964,21 +970,17 @@ describe('MachinePoolEditorScreen', () => {
         );
         await screen.pressByTestIdAsync(originTestId);
 
-        await act(async () => {
-            screen.tree.update(
+        await screen.update(
                 <FocusReturnProvider>
                     <MachinePoolEditorScreen serverId={boundaries.serverId} poolId={current.pool.id} />
                 </FocusReturnProvider>,
-            );
-        });
+        );
         await chooseDelete(screen);
         await vi.waitFor(() => expect(boundaries.back).toHaveBeenCalledOnce());
 
-        await act(async () => {
-            screen.tree.update(
+        await screen.update(
                 <FocusReturnProvider><MachinePoolsSection groups={[group]} /></FocusReturnProvider>,
-            );
-        });
+        );
 
         await vi.waitFor(() => expect(boundaries.pressableFocus).toHaveBeenCalledWith(nextTestId));
         expect(boundaries.pressableFocus).not.toHaveBeenCalledWith(originTestId);

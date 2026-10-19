@@ -32,4 +32,15 @@ describe('managed provisioner presentation', () => {
         expect(unknown.tree.findAll(node => node.props.name === 'puzzle-piece').length).toBeGreaterThan(0);
         await unknown.unmount();
     });
+    it('holds a blank mark of the same size while the controller projection resolves, never the generic glyph first (UIR5c)', async () => {
+        function PresetMark() {
+            const presentation = useManagedProvisionerPresentation({ serverId: 'srv_resolving', schemaVersion: 1,
+                controller: { machineId: 'controller', installationId: 'installation' }, provider: { pluginId: 'custom.compute', localId: 'native' } });
+            return <>{presentation.markAt(17)}</>;
+        }
+        const screen = await renderScreen(<PresetMark />);
+        expect(screen.tree.findAll(node => node.props.name === 'puzzle-piece')).toHaveLength(0);
+        expect(screen.tree.findAll(node => node.props.style?.width === 17 && node.props.style?.height === 17).length).toBeGreaterThan(0);
+        await screen.unmount();
+    });
 });

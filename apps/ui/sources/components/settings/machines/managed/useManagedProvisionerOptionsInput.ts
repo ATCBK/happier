@@ -42,6 +42,7 @@ export function useManagedProvisionerOptionsInput(input: Readonly<{
             if (abort.signal.aborted || !binding.isCurrent()) return;
             const value: ManagedProvisionerOptionsInput = !result.supported ? { kind: 'unavailable', error: result.reason }
                 : !result.result.ok ? { kind: 'unavailable', error: result.result.code }
+                    : !result.result.inputSchema ? { kind: 'unavailable', error: 'option_unavailable' }
                     : { kind: 'ready', action, schema: result.result.inputSchema };
             setState({ key, value });
         }).catch(() => {

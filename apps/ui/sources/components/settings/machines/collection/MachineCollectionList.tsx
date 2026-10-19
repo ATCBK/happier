@@ -42,7 +42,7 @@ import {
 import { recordMachineCollectionVisit, readLastVisitedMachine } from './machineCollectionVisit';
 import { useMachineAddOptions, type MachineAddOption } from './useMachineAddOptions';
 import { useMachineAddDraftRow } from '@/components/machines/add/useMachineAddFlow';
-import { CollectionDraftRow, CollectionList, CollectionListGroupLabel, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
+import { CollectionDraftRow, CollectionList, CollectionListGroupLabel, CollectionSkeletonRows, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { CollectionIndexRow } from '@/components/ui/lists/collection/CollectionIndexRow';
 import { useRevealSelectedRow } from '@/components/ui/lists/collection/useRevealSelectedRow';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
@@ -208,12 +208,13 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
     const selectedKey = rail ? resolveSelectedMachineCollectionKey(pathname, { serverId: readParam(params.serverId) }) : null;
 
     const [query, setQuery] = React.useState(() => readLastVisitedMachine()?.query ?? '');
-    const total = React.useMemo(
+    const unfiltered = React.useMemo(
         () => buildMachineCollection({ groups: viewModel.visibleMachineGroups,
             groupedByHome: viewModel.showMachinesGroupedByServer, managedByServerId: viewModel.managedByServerId,
-            presetsByServerId: viewModel.presetsByServerId }).count,
+            presetsByServerId: viewModel.presetsByServerId }),
         [viewModel.visibleMachineGroups, viewModel.showMachinesGroupedByServer, viewModel.managedByServerId, viewModel.presetsByServerId, viewModel.reachabilityRevision],
     );
+    const total = unfiltered.count;
     const searchable = total > SEARCH_THRESHOLD;
     const teamServerIds = React.useMemo(() => Object.entries(viewModel.presetsByServerId ?? {})
         .filter(([, presets]) => presets.some(preset => preset.owner.kind === 'team')).map(([serverId]) => serverId), [viewModel.presetsByServerId]);
@@ -277,7 +278,7 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
                     serverId={row.serverId}
                     machineId={row.kind === 'machine' ? row.machineId : row.enrolledMachineId ?? null}
                     online={row.online}
-                    quietWord={row.reason ?? (!row.online && row.kind === 'managed' ? row.presence : !row.online ? t('machineDetailPage.offline') : row.ownership)}
+                    quietWord={row.reason ?? (!row.online && row.kind === 'managed' ? row.presenceWord ?? row.presence : !row.online ? t('machineDetailPage.offline') : row.ownership)}
                 />
             )}
             icon={(
@@ -358,8 +359,12 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
         />
     );
 
-    const loading = viewModel.isLoadingMachines && total === 0;
+    // The first load holds until the list can be read whole: every listed machine has its name and the created
+    // machines have answered once. Otherwise rows land as "Loading…" and groups and counts jump as each read arrives.
+    const loading = (viewModel.isLoadingMachines && total === 0) || collection.namesPending || viewModel.managedFirstAnswerPending;
     const empty = !loading && total === 0;
+    // The header counts machines, the same rows its groups count; recipes and retired creations are not machines.
+    const machineCount = unfiltered.machineCount;
     const managedReadFailures = readManagedMachineReadFailures(viewModel);
     const renderManagedReadFailures = () => managedReadFailures.map(group => {
         const entry = viewModel.managedInventory?.entries[group.serverId];
@@ -491,7 +496,7 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
         <CollectionList
             testID="settings.machines.rail"
             title={t('settings.machines')}
-            count={loading ? null : total}
+            count={loading ? null : machineCount}
             headerAction={<AddMachineMenu options={addOptions} replaceInCollection={replaceConfiguration} />}
             search={searchable ? {
                 value: query,
@@ -515,7 +520,7 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
             {renderManagedReadFailures()}
             {managedReadApprovals}
             {loading ? (
-                <Item title={t('common.loading')} density="compact" showChevron={false} mode="info" />
+                <CollectionSkeletonRows count={Math.max(3, Math.min(unfiltered.machineCount, 6))} />
             ) : unreadableGroup ? (
                 renderUnreadable(unreadableGroup, true)
             ) : empty && managedReadFailures.length > 0 ? null : empty ? (
@@ -550,9 +555,12 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
                     ) : renderRailSectionRows(section)}
                 </React.Fragment>
             ))}
-            {thisComputerRow}
-            <MachinePoolsSection groups={viewModel.visibleMachineGroups} variant="rail" selectedKey={selectedKey} />
-            {presetSections}
+            {/* The column fills top-down: what follows the machines waits for them, so nothing lands above them and moves. */}
+            {loading ? null : <>
+                {thisComputerRow}
+                <MachinePoolsSection groups={viewModel.visibleMachineGroups} variant="rail" selectedKey={selectedKey} />
+                {presetSections}
+            </>}
         </CollectionList>
     );
 });

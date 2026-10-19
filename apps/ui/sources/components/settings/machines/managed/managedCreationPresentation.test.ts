@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { t } from '@/text';
-import { canRetryManagedInstallation, describeManagedCreation, managedCreationState, managedMachineDestination, managedCreationSetup } from './managedCreationPresentation';
+import { canRetryManagedInstallation, currentManagedCreationOperation, describeManagedCreation, managedCreationState, managedMachineDestination, managedCreationSetup, managedPowerExplainsOffline } from './managedCreationPresentation';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
+import { ProviderObservationV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 
 const machine: ManagedMachineV1 = { id: 'managed', homeId: 'home', custodianAccountId: 'owner',
     launch: { provider: { pluginId: 'custom.provisioner', localId: 'native' }, schemaVersion: 1, name: 'Guest', choices: {} },
@@ -11,6 +12,34 @@ const machine: ManagedMachineV1 = { id: 'managed', homeId: 'home', custodianAcco
     desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false };
 
 describe('managed creation presentation', () => {
+    it('retires only the selected service activation failure after the enrolled guest connects', () => {
+        const enrolled = { ...machine, enrolledMachineId: 'guest', preset: { id: 'preset', revision: 1 } };
+        const operation: ActionOperationProjection = { serverId: machine.homeId, observation: 'available', isUnavailableProjection: false,
+            snapshot: { version: 1, operationId: 'late-service', revision: 1, actionId: 'machines.managed.bootstrap.retry', state: 'failed',
+                scope: { accountId: 'owner', machineId: machine.controller.machineId }, title: 'Retry installation', createdAt: 1, settledAt: 2,
+                domainRef: { kind: 'managedMachine', id: machine.id, resource: machine.resource, controller: machine.controller },
+                cancellation: 'supported', error: { errorCode: 'action_failed',
+                    error: 'Background service install completed, but the expected background service did not become the active daemon for the selected Home within 30000ms. Run `happier service status` to inspect the active owner and system service state.' } } };
+        const connected = { enrolledMachine: { machineId: 'guest', installationId: 'guest-installation', online: true, serviceManaged: true } };
+        expect(currentManagedCreationOperation(enrolled, operation, connected)).toBeNull();
+        expect(canRetryManagedInstallation(enrolled, operation, connected)).toBe(false);
+        expect(currentManagedCreationOperation(enrolled, operation)).toBe(operation);
+        expect(currentManagedCreationOperation(enrolled, operation, { enrolledMachine: { ...connected.enrolledMachine, online: false } })).toBe(operation);
+        expect(currentManagedCreationOperation(enrolled, operation, { enrolledMachine: { ...connected.enrolledMachine, serviceManaged: false } })).toBe(operation);
+        expect(currentManagedCreationOperation(enrolled, operation, { enrolledMachine: { ...connected.enrolledMachine, machineId: 'another-guest' } })).toBe(operation);
+        expect(currentManagedCreationOperation(enrolled, operation, { enrolledMachine: { ...connected.enrolledMachine, installationId: '' } })).toBe(operation);
+        for (const error of [
+            { errorCode: 'native_boot_unconfirmed', error: 'The native daemon boot configuration was not confirmed.' },
+            { errorCode: 'credential_unavailable', error: 'Credential unavailable' },
+            { errorCode: 'action_failed', error: 'The provider could not configure the guest.' },
+        ]) expect(currentManagedCreationOperation(enrolled, { ...operation, snapshot: { ...operation.snapshot, error } }, connected)).not.toBeNull();
+        expect(currentManagedCreationOperation(enrolled, { ...operation, observation: 'unavailable' }, connected)).not.toBeNull();
+        expect(currentManagedCreationOperation(enrolled, { ...operation, snapshot: { ...operation.snapshot, state: 'running', settledAt: undefined } }, connected)).not.toBeNull();
+        const setup = { ...operation, snapshot: { ...operation.snapshot, actionId: 'machines.environment.apply' as const,
+            scope: { ...operation.snapshot.scope, machineId: 'guest' },
+            domainRef: { kind: 'machineEnvironment' as const, serverId: machine.homeId, machineId: 'guest', managedId: machine.id, preset: enrolled.preset } } };
+        expect(currentManagedCreationOperation(enrolled, setup, connected)).toBe(setup);
+    });
     it('recovers a retained unenrolled resource after controller operation history is lost', () => {
         const retained: ManagedMachineV1 = { ...machine,
             preset: { id: 'admitted-preset', revision: 1 },
@@ -102,7 +131,8 @@ describe('managed creation presentation', () => {
             observation: { availability: 'present' as const, observedAt: 10, power: 'running' as const, storage: 'retained' as const } };
         expect(managedCreationState(pending)).toEqual({ kind: 'stopPending' });
         expect(managedCreationState({ ...pending, submittedNativeEffect: undefined,
-            observation: { ...pending.observation, power: 'stopped' } })).toEqual({ kind: 'stoppedStorage' });
+            observation: ProviderObservationV1Schema.parse({ ...pending.observation, power: 'stopped',
+                billing: { location: 'local', stoppedBilling: 'not-billed' } }) })).toEqual({ kind: 'stoppedStorage' });
         expect(managedCreationState({ ...machine,
             observation: { availability: 'present', observedAt: 20, power: 'stopped', storage: 'lost' } })).toEqual({ kind: 'volumeLost' });
     });
@@ -113,5 +143,18 @@ describe('managed creation presentation', () => {
         expect(managedCreationState(starting).kind).toBe('powerPending');
         expect(managedCreationState(starting, { provider: 'Hetzner' })).toMatchObject({ kind: 'powerPending', provider: 'Hetzner' });
         expect(managedCreationState({ ...starting, observation: { ...starting.observation!, power: 'running' } }).kind).toBe('resourceReady');
+    });
+});
+
+describe('managedPowerExplainsOffline (UIR5)', () => {
+    it('lets an observed stopped or suspended created machine own its offline explanation, never a running or unknown one', () => {
+        const observed = (power: 'running' | 'stopped' | 'suspended' | 'unknown'): ManagedMachineV1 => ({ ...machine, observation: { availability: 'present', observedAt: 1, power } });
+        expect(managedPowerExplainsOffline(observed('stopped'))).toBe(true);
+        expect(managedPowerExplainsOffline(observed('suspended'))).toBe(true);
+        expect(managedPowerExplainsOffline(observed('running'))).toBe(false);
+        expect(managedPowerExplainsOffline(observed('unknown'))).toBe(false);
+        expect(managedPowerExplainsOffline(machine)).toBe(false);
+        expect(managedPowerExplainsOffline(undefined)).toBe(false);
+        expect(managedPowerExplainsOffline({ ...observed('stopped'), creationState: 'retired' })).toBe(false);
     });
 });

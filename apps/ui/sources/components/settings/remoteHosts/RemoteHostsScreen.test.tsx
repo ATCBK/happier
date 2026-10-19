@@ -1,12 +1,13 @@
 import * as React from 'react';
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { RemoteHostCatalogRowMutationV1Schema, type RemoteHostRecordV1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { SavedSecretResourceMaterialV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
-import { renderScreen, flushHookEffects, standardCleanup, createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit';
+import { renderScreen, renderSettingsView, flushHookEffects, standardCleanup, createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 import type { RemoteHostsCollectionController } from './collection/remoteHostsCollectionController';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
@@ -263,6 +264,7 @@ installSettingsViewCommonModuleMocks({
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+beforeEach(() => installHomeGovernanceBoundaries(home));
 
 vi.mock('@/components/ui/popover', async importOriginal =>
     (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
@@ -348,6 +350,8 @@ vi.mock('@/components/systemTasks/nativeSshBridgeInterruptionStore', () => ({
 
 	    afterEach(async () => {
 	        await standardCleanup();
+            const { resetRemoteHostCatalogEngineForTests } = await import('@/sync/engine/settings/remoteHostCatalogEngine');
+            resetRemoteHostCatalogEngineForTests();
             const { resetRemoteHostCatalogSnapshotsForTests } = await import('@/sync/store/settings/remoteHostCatalogSnapshot');
             resetRemoteHostCatalogSnapshotsForTests();
             const { publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
@@ -485,6 +489,7 @@ async function loadRemoteHostsScreen() {
 }
 
 // Keep the real store and collection graph out of each behavior-test deadline.
+await loadSyncSingletonForTests();
 await import('@/sync/domains/state/storageStore');
 await import('@/sync/store/hooks');
 await import('./collection/RemoteHostsCollection');
@@ -948,7 +953,7 @@ await import('./collection/remoteHostsCollectionController');
         ];
 
         const { RemoteHostsScreen } = await loadRemoteHostsScreen();
-        const screen = await renderScreen(React.createElement(RemoteHostsScreen));
+        const screen = await renderSettingsView(React.createElement(RemoteHostsScreen));
 
         const rowActionsProps = itemRowActionsSpy.props as { actions?: Array<{ id: string; onPress: () => void }> } | null;
         const connectFromThisDevice = rowActionsProps?.actions?.find((action) => action.id === 'connectFromThisDevice');
@@ -960,7 +965,7 @@ await import('./collection/remoteHostsCollectionController');
         await screen.update(React.createElement(RemoteHostsScreen));
 
         expect(screen.findByTestId('settings.server.accessEndpoints.channel:access-channel:ssh-tunnel-native:host-a:native-key-a')).toBeTruthy();
-        expect(screen.findByTestId('settings.server.accessEndpoints.channel:access-channel:ssh-tunnel-native:host-a:native-key-a.recommendedUse')?.props.title).toBe(
+        expect(screen.findRow('settings.server.accessEndpoints.channel:access-channel:ssh-tunnel-native:host-a:native-key-a.recommendedUse')?.props.title).toBe(
             'settings.accessEndpoints.recommendedUse.native-this-device',
         );
         expect(screen.findByTestId('settings.server.accessEndpoints.channel:access-channel:ssh-tunnel-native:host-a:native-key-a.action:ssh-tunnel-native:native-lease-1:stop')).toBeTruthy();

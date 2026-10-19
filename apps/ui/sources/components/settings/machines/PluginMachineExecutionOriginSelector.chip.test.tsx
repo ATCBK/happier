@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit';
+import { flattenTestStyle, renderScreen, reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit';
 import { composePluginMachineExecutionOriginV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import type { PluginMachineExecutionOriginCandidateV1, PluginMachineSourceExecutionOriginCandidateV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import type { PluginMachineExecutionOriginSelectionV1 } from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
@@ -259,6 +259,48 @@ describe('PluginMachineExecutionOriginSelector header chip', () => {
         await pinned.pressByTestIdAsync('pin.execution.chip');
         expect(pinned.findHostByTestId('pin.execution.clear')).not.toBeNull();
         await pinned.unmount();
+    }));
+
+    it('lets a phone header chip shrink to its glyph while still naming the Machine and announcing that Happier picked it', () => withPopoverWebGlobals(async () => {
+        const fixture = createSelection();
+        const origin = composePluginMachineExecutionOriginV1(fixture.candidates[0]!.materialization);
+        const selection: PluginMachineExecutionOriginSelectionV1 = { ...fixture.selection, selectedOrigin: origin,
+            state: { kind: 'selected', origin, candidate: fixture.candidates[0]!, selectionSource: 'auto' }, canExecute: true };
+        const wide = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={selection} presentation="chip" testIDPrefix="wide.execution" />);
+        expect(wide.getTextContent()).toContain('settingsPlugins.surfaces.runOnAuto');
+        const wideName = wide.findHostByTestId('wide.execution.chip')?.props.accessibilityLabel;
+        expect(wide.getTextContent()).not.toBe('');
+        await wide.unmount();
+        const compact = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={selection} presentation="chip" compact testIDPrefix="compact.execution" />);
+        // Beside the page title and the page's action there is no room for a name: the glyph stands for it.
+        expect(compact.getTextContent()).toBe('');
+        const compactName = compact.findHostByTestId('compact.execution.chip')?.props.accessibilityLabel;
+        expect(compactName).toBeTruthy();
+        expect(wideName).toContain(compactName);
+        expect(compact.findHostByTestId('compact.execution.chip')?.props.accessibilityHint).toBe('settingsPlugins.surfaces.runOnAutoHint');
+        await compact.unmount();
+    }));
+
+    it('keeps the telling suffix of a same-named Machine whole while its name shortens, and announces the full identity', () => withPopoverWebGlobals(async () => {
+        const fixture = createSelection();
+        const origin = composePluginMachineExecutionOriginV1(fixture.candidates[0]!.materialization);
+        const selection: PluginMachineExecutionOriginSelectionV1 = { ...fixture.selection, selectedOrigin: origin,
+            state: { kind: 'selected', origin, candidate: fixture.candidates[0]!, selectionSource: 'pinned' }, canExecute: true };
+        const machineCandidates = [{
+            target: { serverIdentityId: 'srv_picker_one', machineId: 'machine-a' },
+            displayName: 'Build box · 3ca2', displayNameParts: { name: 'Build box', hint: '3ca2' }, serverLabel: 'Home', availability: 'online' as const, observation: 'live' as const, observedAt: 100,
+        }];
+        const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={selection} machineCandidates={machineCandidates}
+            presentation="chip" testIDPrefix="suffix.execution" />);
+        const texts = screen.findAllByType('Text');
+        const name = texts.find((node) => node.props.children === 'Build box');
+        const suffix = texts.find((node) => node.props.children === '· 3ca2');
+        expect(name).toBeTruthy();
+        expect(suffix).toBeTruthy();
+        expect(flattenTestStyle(name!.props.style).flexShrink).toBe(1);
+        expect(flattenTestStyle(suffix!.props.style).flexShrink).toBe(0);
+        expect(screen.findHostByTestId('suffix.execution.chip')?.props.accessibilityLabel).toContain('Build box · 3ca2');
+        await screen.unmount();
     }));
 
     it('keeps Clear selection inside the machine list so a long list cannot clip it out of the popover', () => withPopoverWebGlobals(async () => {

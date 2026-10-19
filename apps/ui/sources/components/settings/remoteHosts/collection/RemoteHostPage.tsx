@@ -20,7 +20,7 @@ import type { RemoteHost } from '@/sync/domains/remoteHosts/remoteHostModel';
 
 import { RemoteHostEditorSections, useRemoteHostEditor } from '../RemoteHostForm';
 import { getRemoteHostLocalOverrides, useRemoteHostsCollection } from './remoteHostsCollectionController';
-import { publishRemoteHostDraftTitle } from './remoteHostDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { RemoteHostInterruptedSetups, RemoteHostTunnelRows } from './RemoteHostsCollection';
 import { REMOTE_HOSTS_ROOT, remoteHostHref } from './remoteHostsRoutes';
 
@@ -70,10 +70,11 @@ const RemoteHostEditorPage = React.memo(function RemoteHostEditorPage(props: Rea
     });
 
     // The collection's draft row shows the name as it is typed.
+    const { publish: publishRemoteHostDraftTitle } = useCollectionDraftTitle();
     React.useEffect(() => {
         if (isNew) publishRemoteHostDraftTitle(editor.state.name);
-    }, [editor.state.name, isNew]);
-    React.useEffect(() => (isNew ? () => publishRemoteHostDraftTitle('') : undefined), [isNew]);
+    }, [editor.state.name, isNew, publishRemoteHostDraftTitle]);
+    React.useEffect(() => (isNew ? () => publishRemoteHostDraftTitle('') : undefined), [isNew, publishRemoteHostDraftTitle]);
 
     // Navigation waits for the render that marks the draft clean, so the guard lets it through.
     const [pendingHref, setPendingHref] = React.useState<string | null>(null);

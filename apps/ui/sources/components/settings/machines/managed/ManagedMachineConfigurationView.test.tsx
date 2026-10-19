@@ -56,6 +56,33 @@ const provisioner = { contribution: { pluginId: 'custom.compute', localId: 'vm' 
 } };
 
 describe('mounted managed configurator', () => {
+    it('refuses a schema-less options Action without probing native options or losing the configurator', async () => {
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://missing-options-schema.example',
+            serverIdentityId: 'srv_missing_options_schema', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
+        const read = nativeBoundary.rpc.getMockImplementation();
+        nativeBoundary.rpc.mockImplementation(async (request: { method: string }) => request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ
+            ? { ok: true } : read?.(request));
+        for (const [actionId, result] of [['machines.provisioners.list', { controller: defaultController, provisioners: [provisioner] }],
+            ['machines.provisioners.check', { available: true }]] as const)
+            harness.answer(serverId, `/v1/actions/${actionId}`, { select: value => {
+                const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+                return { body: { v: 1, actionId, requestId: request.requestId, execution: { ok: true, result } } };
+            } });
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId}
+            provisioner={buildQualifiedPluginContributionKey(provisioner.contribution)} initialController={defaultController} />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.error')).not.toBeNull());
+        expect(nativeBoundary.rpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: defaultController.machineId,
+            method: RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ, payload: { machineId: defaultController.machineId,
+                expectedOccurrenceId: 'options-occurrence',
+                qualifiedActionId: buildQualifiedPluginContributionKey({ pluginId: provisioner.contribution.pluginId, localId: 'options' }) } }));
+        expect(screen.findByTestId('managed-config.create')?.props.disabled).toBe(true);
+        expect(harness.requestsFor('/v1/actions/machines.provisioners.options')).toEqual([]);
+        expect(harness.requestsFor('/v1/actions/machines.managed.acquire')).toEqual([]);
+        await screen.unmount();
+    });
     it('offers retained wake for a resume-only provisioner and preserves the choice in composer intent', async () => {
         const viewport = vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 1280, height: 844, scale: 1, fontScale: 1 });
         restoreViewport = () => viewport.mockRestore();
@@ -85,6 +112,62 @@ describe('mounted managed configurator', () => {
         await screen.pressByTestIdAsync('managed-config.use');
         expect(onUse).toHaveBeenCalledWith(expect.objectContaining({ selection: expect.objectContaining({ wakeOnAcceptedMessage: true }),
             receipt: expect.objectContaining({ wakeOnAcceptedMessage: true }) }));
+        await screen.unmount();
+    });
+    it('keeps a local VM receipt free of a bill before any choice exists (UIR5c)', async () => {
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://local-empty-receipt.example',
+            serverIdentityId: 'srv_local_empty_receipt', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
+        const local = { ...provisioner, descriptor: { ...provisioner.descriptor, billing: { location: 'local', stoppedBilling: 'not-billed' } } };
+        for (const [actionId, result] of [['machines.provisioners.list', { controller: defaultController, provisioners: [local] }],
+            ['machines.provisioners.check', { available: true }], ['machines.provisioners.options', { choices: [] }]] as const)
+            harness.answer(serverId, `/v1/actions/${actionId}`, { select: value => {
+                const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+                return { body: { v: 1, actionId, requestId: request.requestId, execution: { ok: true, result } } };
+            } });
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const { t } = await import('@/text');
+        const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId}
+            provisioner={buildQualifiedPluginContributionKey(local.contribution)} initialController={defaultController} />);
+        await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain(t('managedMachines.price.noBill')));
+        expect(screen.getTextContent()).not.toContain(t('managedMachines.price.unavailable', { provider: 'Virtual machine' }));
+        await screen.unmount();
+    });
+    it('does not call an untouched recipe "no choices": the required fields are what it awaits, and once filled a truly empty answer says so', async () => {
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://untouched-recipe.example',
+            serverIdentityId: 'srv_untouched_recipe', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
+        const local = { ...provisioner, descriptor: { ...provisioner.descriptor, billing: { location: 'local', stoppedBilling: 'not-billed' } } };
+        const action = PluginProjectedActionV2Schema.parse({ id: 'options', pluginId: provisioner.contribution.pluginId, occurrenceId: 'options-occurrence',
+            title: 'Native options', scopes: ['machine'], surfaces: ['cli', 'plugin'], execution: { target: 'daemon' }, available: true, dangerLevel: 'safe',
+            inputHints: { fields: [{ path: 'instance', title: 'Instance name', widget: 'text', required: true }] } });
+        const projection = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection: {
+            ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, agentsById: {}, diagnostics: [],
+            installedPackagesById: { [action.pluginId]: { ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE.installedPackagesById['acme.review'], id: action.pluginId } },
+            actionsById: { [buildQualifiedPluginContributionKey({ pluginId: action.pluginId, localId: action.id })]: action },
+        } });
+        nativeBoundary.rpc.mockImplementation(async (request: { method: string }) => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+            ? projection : request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ
+                ? { ok: true, inputSchema: { type: 'object', properties: { instance: { type: 'string' } }, additionalProperties: false } } : { ok: false, code: 'unsupported' });
+        for (const [actionId, result] of [['machines.provisioners.list', { controller: defaultController, provisioners: [local] }],
+            ['machines.provisioners.check', { available: true }], ['machines.provisioners.options', { choices: [] }]] as const)
+            harness.answer(serverId, `/v1/actions/${actionId}`, { select: value => {
+                const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+                return { body: { v: 1, actionId, requestId: request.requestId, execution: { ok: true, result } } };
+            } });
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const { t } = await import('@/text');
+        const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId}
+            provisioner={buildQualifiedPluginContributionKey(local.contribution)} initialController={defaultController} />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.field:instance')).not.toBeNull());
+        await waitForHomeGovernance(() => expect(harness.requests.some(request => request.path === '/v1/actions/machines.provisioners.options')).toBe(true));
+        await flushHookEffects({ cycles: 10 });
+        const emptyNotice = t('managedMachines.options.empty', { provider: 'Virtual machine' });
+        expect(screen.getTextContent()).not.toContain(emptyNotice);
+        await act(async () => screen.changeTextByTestId('managed-config.field:instance', 'studio'));
+        await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain(emptyNotice));
         await screen.unmount();
     });
     it('discloses conditional cloud quotes and lets coupled native dimensions be staged without acquiring', async () => {
@@ -162,8 +245,9 @@ describe('mounted managed configurator', () => {
         harness.answer(serverId, '/v1/actions/machines.provisioners.options', { select: value => {
             const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
             if (!request.input || typeof request.input !== 'object' || Array.isArray(request.input)) throw new Error('The native options input must be an object');
-            capturedSelectors.push(request.input.selectors);
-            const complete = ModalLaunchV1Schema.safeParse(request.input.selectors);
+            const selectors = Reflect.get(request.input, 'selectors');
+            capturedSelectors.push(selectors);
+            const complete = ModalLaunchV1Schema.safeParse(selectors);
             const selected = complete.success ? complete.data : null;
             return { body: { v: 1, actionId: 'machines.provisioners.options', requestId: request.requestId, execution: { ok: true,
                 result: { choices: selected ? [{ id: 'reviewed', title: selected.appReference, launch: selected,
@@ -354,8 +438,9 @@ describe('mounted managed configurator', () => {
         expect(harness.requests.some(request => request.path.endsWith('machines.managed.acquire'))).toBe(false);
         const current = createMachineFixture({ id: 'host', installationId: 'replacement-installation' });
         if (!current.metadata) throw new Error('Canonical machine fixture metadata is required');
-        await act(async () => storage.setState({ machineListByServerId: { [serverId]: [{ ...current,
-            metadata: { ...current.metadata, host: 'Replacement controller' } }] } }));
+        const replacement = createMachineFixture({ id: 'host', installationId: 'replacement-installation',
+            metadata: { ...current.metadata, host: 'Replacement controller' } });
+        await act(async () => storage.setState({ machineListByServerId: { [serverId]: [replacement] } }));
         const { t } = await import('@/text');
         const receipts = screen.tree.findAll(node => node.props.model?.facts?.some((fact: { id: string }) => fact.id === 'controller'));
         expect(receipts.length).toBeGreaterThan(0);

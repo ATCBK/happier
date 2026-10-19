@@ -65,7 +65,10 @@ export function buildManagedConfigurationReceipt(input: ManagedConfigurationRece
         rows.push({ id: dimension, label: dimension === 'duration' ? t('managedRetention.ends') : t(`managedMachines.config.${dimension}`),
             value: flag ? `${flag} ${value}` : value });
     }
-    const sizeSpec = size ? describeManagedSize(localized(size.title), size) : null;
+    // A size titled with the machine's own name (a local VM) would repeat the receipt's heading.
+    const sizeTitle = size ? localized(size.title) : null;
+    const sizeSpec = size ? sizeTitle === input.launch.name ? managedSizeDimensions(size).join(' · ')
+        : describeManagedSize(sizeTitle ?? '', size) : null;
     // Lab receipt order: where and what, then who pays, who manages it and where it joins.
     const credentials = input.launch.credentials ?? [];
     for (const [index, credential] of credentials.entries()) {
@@ -141,7 +144,9 @@ export function managedSizeDimensions(size: NativeSizeFact): string[] {
     return [size.cpuCores === undefined ? null : t('managedMachines.receipt.cores', { count: size.cpuCores }),
         size.memoryBytes === undefined ? null : formatHappierDataBytes(size.memoryBytes, { kind: 'memory' }),
         size.diskBytes === undefined ? null : formatHappierDataBytes(size.diskBytes, { kind: 'storage' })]
-        .filter((part): part is string => part !== null);
+        .filter((part): part is string => part !== null)
+        // A dimension never splits from its unit when the line wraps ("4 GB", not "4 / GB").
+        .map(part => part.replace(/ /g, '\u00a0'));
 }
 
 /** "CX32 · 4 cores · 8 GB · 80 GB": the size's name, then whichever dimensions it declares. */

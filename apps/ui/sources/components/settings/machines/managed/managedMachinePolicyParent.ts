@@ -7,6 +7,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { PluginJsonValueV2Schema } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -43,7 +44,8 @@ async function readManagedMachineNativeReview(input: ManagedMachineNativeReadInp
     if (!current()) return { kind: 'failed', code: 'action_account_scope_changed' };
     const options = { signal, onApprovalPending: input.onApprovalPending };
     const client = createManagedProvisionerClient(binding.scope, machine.homeId);
-    const catalog = await client.read('machines.provisioners.list', { homeId: machine.homeId, controller }, options);
+    const catalog = await client.read('machines.provisioners.list', { homeId: machine.homeId, controller,
+        contribution: machine.launch.provider }, options);
     if (!current()) return { kind: 'failed', code: 'action_account_scope_changed' };
     if (catalog.kind === 'failed') return catalog;
     const provisioner = catalog.value.provisioners.find(row => sameStrictJsonValue(row.contribution, machine.launch.provider)
@@ -66,12 +68,13 @@ async function readManagedMachineNativeReview(input: ManagedMachineNativeReadInp
         if (!current()) return { kind: 'failed', code: 'action_account_scope_changed' };
         if (!schemas.supported) return { kind: 'failed', code: schemas.reason };
         if (!schemas.result.ok) return { kind: 'failed', code: schemas.result.code };
+        if (!schemas.result.inputSchema) return { kind: 'failed', code: 'managed_parent_unavailable' };
         // The same current options input projection used for a saved recipe: query fields only.
         // Reset's selected variant must still equal the complete retained launch.
         const querySchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(schemas.result.inputSchema));
         const selectors = querySchema.safeParse(machine.launch.choices);
         if (!selectors.success) return { kind: 'failed', code: 'managed_parent_unavailable' };
-        const nativeOptions = await client.read('machines.provisioners.options', { ...nativeInput, selectors: selectors.data }, options);
+        const nativeOptions = await client.read('machines.provisioners.options', { ...nativeInput, selectors: PluginJsonValueV2Schema.parse(selectors.data) }, options);
         if (!current()) return { kind: 'failed', code: 'action_account_scope_changed' };
         if (nativeOptions.kind === 'failed') return nativeOptions;
         selected = nativeOptions.value.choices.find(choice => choice.available !== false

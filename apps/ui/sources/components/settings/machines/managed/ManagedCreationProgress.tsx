@@ -13,10 +13,12 @@ import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet } from 'react-native-unistyles';
 import { t } from '@/text';
 import { ManagedMachineStateRow, type ManagedLifecycleHandlers } from './ManagedMachineStateRow';
-import { canRetryManagedInstallation, currentManagedCreationOperation, managedCreationSetup, managedCreationState } from './managedCreationPresentation';
+import { canRetryManagedInstallation, currentManagedCreationOperation, isManagedCreationStateRowVisible, managedCreationSetup, managedCreationState, readManagedInstallationPrompt, type ManagedCreationContext } from './managedCreationPresentation';
 import { describeManagedLifecycleState } from './managedLifecyclePresentation';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { describeActionOperationStatusLabel, resolveActionOperationStatus } from '@/components/inbox/actionOperations/actionOperationPresentation';
+import { resolveSystemTaskFailureMessage } from '@/components/systemTasks/resolveSystemTaskFailureMessage';
+import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 
 /** Only durable allocation/enrollment observations; task stages are supplied by their operation owner. */
 export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachineV1; handlers?: ManagedLifecycleHandlers;
@@ -26,17 +28,55 @@ export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachin
     mark?: React.ReactNode;
     /** The controller's name and presence: an offline one is what an unsubmitted creation waits on. */
     controller?: Readonly<{ name: string; online: boolean }>;
+    enrolledMachine?: ManagedCreationContext['enrolledMachine'];
     operation?: ActionOperationProjection | null;
     /** D53: a failed Set up recovers on this same machine, or is skipped; never re-acquired. */
-    setupRecovery?: Readonly<{ retry?: () => void; skip?: () => void }> }>) {
+    setupRecovery?: Readonly<{ retry?: () => void; skip?: () => void }>;
+    /** Answers the installer task's open sign-in consent; Continue lets it sign the guest in, Cancel ends the attempt. */
+    answerPrompt?: (approved: boolean) => void;
+    /** The page's name for this resource (its enrolled Machine's name); the launch name is only what Create was given. */
+    title?: string;
+    /** Opens the exact Ask the shared executor holds this operation on (Inbox). */
+    reviewApproval?: (artifactId: string) => void;
+    /** The created-machine list could not be re-read: this is the last answer, and its one freshness says so with Retry. */
+    staleRead?: Readonly<{ retry: () => void }> }>) {
     const { machine } = props;
+    const name = props.title ?? machine.launch.name;
     const state = managedCreationState(machine, { controller: props.controller, provider: props.provider,
-        providerAvailable: props.providerAvailable, operation: props.operation });
+        providerAvailable: props.providerAvailable, operation: props.operation, enrolledMachine: props.enrolledMachine });
     const lifecycle = describeManagedLifecycleState(state);
-    const awaitingConnection = !machine.enrolledMachineId || state.kind !== 'resourceReady';
-    const operation = currentManagedCreationOperation(machine, props.operation);
+    const showStateRow = isManagedCreationStateRowVisible(machine, state);
+    const operation = currentManagedCreationOperation(machine, props.operation, props);
     const status = operation ? resolveActionOperationStatus(operation.snapshot, operation.observation) : null;
+    const canRetryInstallation = canRetryManagedInstallation(machine, props.operation, props);
+    const prompt = readManagedInstallationPrompt(operation);
+    const progress = operation?.snapshot.progress;
+    // A held Ask is the user's step, not a stage to wait on: say so and open it (QB76 projection).
+    const heldAsk = operation?.snapshot.state === 'running' && progress?.kind === 'phase' ? progress.approval ?? null : null;
     const setup = managedCreationSetup(machine);
+    // A local machine runs on its controller and never bills; "may bill" would contradict its receipt.
+    const mayBill = machine.reviewedFacts?.billing?.location !== 'local';
+    // Native identity is for finding a resource Happier may have lost; a healthy one is already named by its size and image.
+    const needsRecovery = Boolean(machine.recovery) || machine.creationState !== 'active' || machine.allocation === 'may-exist' || Boolean(machine.cleanup);
+    const stateRowChecks = showStateRow && lifecycle.actions.includes('checkNow') && Boolean(props.handlers?.checkNow);
+    // Freshness qualifies the state it dates: on the state row's own sheet, or standing alone with Check now.
+    // A failed re-read is said here too, not in a second "As of" line above the page: one freshness per page.
+    const staleRead = props.staleRead;
+    const observationRow = machine.observation || staleRead ? <Item testID="managed-machine.observation" mode="info" showChevron={false}
+        title={machine.observation ? t('surfaceState.asOf', { time: formatAsOfTime(machine.observation.observedAt) })
+            : t('managedMachines.detail.loadFailed')}
+        subtitle={machine.observation && staleRead ? t('managedMachines.detail.loadFailed') : undefined}
+        subtitleLines={0}
+        accessoryLayout={staleRead ? 'adaptive' : undefined}
+        rightElement={staleRead ? <RoundButton title={t('common.retry')} display="inverted" size="small"
+                testID="managed-machine.observation-retry" onPress={staleRead.retry} />
+            : stateRowChecks || !props.handlers?.checkNow ? undefined
+            : <RoundButton title={t('managedMachines.inspect.checkNow')} display="inverted" size="small"
+                testID="managed-machine.observation-check" onPress={props.handlers.checkNow} />} /> : null;
+    const installationRetryOnly = !(operation && status) && canRetryInstallation && Boolean(props.handlers?.reinstall);
+    const installationRetry = canRetryInstallation && props.handlers?.reinstall ?
+        <RoundButton title={t('managedMachines.creation.retryInstall')} display="secondary" size="small"
+            testID="managed-machine.installation-retry" onPress={props.handlers.reinstall} /> : undefined;
     return <>
         {setup?.state === 'failed' ? <ItemGroup>
             <Item title={t('managedMachines.creation.setupFailed', { name: machine.launch.name })} titleLines={0}
@@ -49,30 +89,43 @@ export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachin
                         testID="managed-machine.setup-retry" onPress={props.setupRecovery.retry} /> : null}
                 </View> : undefined} />
         </ItemGroup> : null}
-        {operation && status ? <ItemGroup>
-            <Item title={machine.launch.name} subtitle={describeActionOperationStatusLabel(status.label)}
-                mode="info" showChevron={false} testID="managed-machine.installation"
-                subtitleLeading={status.tone === 'active' ? <ActivitySpinner size="small"
+        {operation && status && status.tone !== 'success' || installationRetryOnly && !(showStateRow && !lifecycle.banner) ? <ItemGroup>
+            {/* The task waits on the user here: its own question replaces the stage, with its answer beside it. */}
+            <Item title={name} subtitle={prompt ? prompt.message : heldAsk ? t('approvals.waitingForYou')
+                : status ? describeActionOperationStatusLabel(status.label) : lifecycle.line}
+                mode="info" showChevron={false} testID="managed-machine.installation" subtitleLines={prompt ? 0 : undefined}
+                accessoryLayout={prompt && props.answerPrompt ? 'adaptive' : undefined}
+                subtitleLeading={!prompt && !heldAsk && status?.tone === 'active' ? <ActivitySpinner size="small"
                     accessibilityElementsHidden importantForAccessibility="no" /> : undefined}
-                rightElement={canRetryManagedInstallation(machine, operation) && props.handlers?.reinstall ?
-                    <RoundButton title={t('managedMachines.creation.retryInstall')} display="secondary" size="small"
-                        testID="managed-machine.installation-retry" onPress={props.handlers.reinstall} /> : undefined} />
-            {operation.snapshot.error ? <SurfaceStateCard kind="error" size="line"
-                title={operation.snapshot.error.error} diagnosticCode={operation.snapshot.error.errorCode}
+                rightElement={heldAsk && props.reviewApproval ? <RoundButton title={t('approvals.review')} display="secondary" size="small"
+                    testID="managed-machine.installation-review" onPress={() => props.reviewApproval?.(heldAsk.artifactId)} />
+                : prompt && props.answerPrompt ? <View style={setupActions}>
+                    <RoundButton title={t('common.cancel')} display="inverted" size="small"
+                        testID="managed-machine.installation-prompt-decline" onPress={() => props.answerPrompt?.(false)} />
+                    <RoundButton title={t('common.continue')} size="small"
+                        testID="managed-machine.installation-prompt-approve" onPress={() => props.answerPrompt?.(true)} />
+                </View> : installationRetry} />
+            {operation?.snapshot.error ? <SurfaceStateCard kind="error" size="line"
+                title={resolveSystemTaskFailureMessage({ code: operation.snapshot.error.errorCode, message: operation.snapshot.error.error }) ?? operation.snapshot.error.error}
+                diagnosticCode={operation.snapshot.error.errorCode}
                 testID="managed-machine.installation-error" /> : null}
         </ItemGroup> : null}
         {/* A blocking or billing-uncertain state is the page's banner, which already says what may bill. */}
-        {awaitingConnection && lifecycle.banner ? <ManagedMachineStateRow name={machine.launch.name} mark={null}
+        {showStateRow && lifecycle.banner ? <ManagedMachineStateRow name={name} mark={null}
             state={state} provider={props.provider} handlers={props.handlers ?? {}} testID="managed-machine.progress" /> : null}
-        {awaitingConnection && !lifecycle.banner ? <ItemGroup>
-            <ManagedMachineStateRow name={machine.launch.name}
+        {showStateRow && !lifecycle.banner ? <ItemGroup>
+            <ManagedMachineStateRow name={name}
                 mark={props.mark ?? <Icon name="desktop" />}
                 state={state} provider={props.provider} handlers={props.handlers ?? {}}
                 ended={machine.allocation === 'confirmed-absent'} testID="managed-machine.progress" />
-            {machine.allocation !== 'confirmed-absent' && (machine.allocation === 'may-exist' || machine.cleanup) ? <Item title={t('managedMachines.creation.mayBill')}
+            {/* Without an operation to report, the install is a step of this same resource, not a second copy of its row. */}
+            {installationRetryOnly ? <Item title={t('managedMachines.creation.install')} mode="info" showChevron={false}
+                testID="managed-machine.installation" rightElement={installationRetry} /> : null}
+            {mayBill && machine.allocation !== 'confirmed-absent' && (machine.allocation === 'may-exist' || machine.cleanup) ? <Item title={t('managedMachines.creation.mayBill')}
                 mode="info" showChevron={false} titleLines={0} testID="managed-machine.possible-cost" /> : null}
-        </ItemGroup> : null}
-        {machine.resource || machine.recovery ? <ItemGroup title={t('managedMachines.detail.recoveryTitle')}>
+            {observationRow}
+        </ItemGroup> : observationRow ? <ItemGroup>{observationRow}</ItemGroup> : null}
+        {needsRecovery && (machine.resource || machine.recovery) ? <ItemGroup title={t('managedMachines.detail.recoveryTitle')}>
             <Item title={t('managedMachines.detail.nativeIdentity')} mode="info" showChevron={false}
                 testID="managed-machine.recovery" accessoryLayout="stacked" rightElement={
                     <Text selectable style={styles.identity}>{machine.recovery?.reference ?? describeNativeIdentity(machine.resource?.value)}</Text>

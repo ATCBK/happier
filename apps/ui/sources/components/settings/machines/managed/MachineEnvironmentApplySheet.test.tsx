@@ -2,7 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFailed, onTestFinished, vi } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
-import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import {
   computeExternalActionRequestEnvelopeDigestV1,
   signExternalActionApprovalInputV1,
@@ -171,20 +172,30 @@ describe('Set up from a preset (D53)', () => {
           }));
       },
     } satisfies Partial<ActionExecutorDeps>;
-    // Unrelated executor ports are deliberately absent at this native process boundary.
-    const nativeExecutor = createActionExecutor(nativeDeps as ActionExecutorDeps);
+    const nativeExecutor = createActionExecutor(createActionExecutorBoundaryFixture(nativeDeps));
     nativeRpc.replay = artifactId => nativeExecutor.replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' });
+    // Ordinary Account approval now returns through the same Home-to-Machine
+    // HTTP front door as its originating Action; the native executor stays real.
+    harness.answer(home, '/v1/actions/approval.request.decide', { select: async input => {
+      const envelope = ExternalActionRequestEnvelopeV1Schema.parse(input);
+      const execution = await nativeExecutor.execute('approval.request.decide', envelope.input, {
+        surface: 'ui', authority: 'present_user', serverId: home, runtimeAccountId: 'owner',
+      });
+      return { body: ExternalActionResponseEnvelopeV1Schema.parse({
+        v: 1, actionId: 'approval.request.decide', requestId: envelope.requestId, execution,
+      }) };
+    } });
     harness.answer(home, '/v1/actions/machines.environment.apply', {
       select: async (input) => {
         const envelope = ExternalActionRequestEnvelopeV1Schema.parse(input);
         const authentication = readOriginalAccountActionAuthentication(account.credentials.token);
         if (!authentication || envelope.target?.kind !== 'machine') throw new Error('Expected an ordinary Account machine invocation');
-        const authorization = { v: 1 as const, token: 'native-environment-authorization', binding: {
+        const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'native-environment-authorization', binding: {
           accountId: 'owner', authentication, serverIdentityId: 'srv_build', machineId: 'devbox',
           custodianAccountId: 'owner', installationId: 'test-installation', actionId: 'machines.environment.apply' as const,
           requestId: envelope.requestId, target: envelope.target,
           requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
-        } };
+        } });
         const execution = await nativeExecutor.execute('machines.environment.apply', envelope.input, {
           surface: 'ui', authority: 'present_user', serverId: home, serverIdentityId: 'srv_build', runtimeAccountId: 'owner',
           actionRequestId: envelope.requestId, externalActionTarget: envelope.target,
@@ -213,7 +224,6 @@ describe('Set up from a preset (D53)', () => {
         machineName="devbox"
         onClose={onClose}
         setChrome={vi.fn()}
-        {...({} as never)}
       />,
     );
     const mounted = screen;
@@ -287,7 +297,8 @@ describe('Set up from a preset (D53)', () => {
     expect(artifacts.list()).toHaveLength(2);
     const approvedId = artifacts.list()[1]!.id;
     phase = 'approve and replay at exact native machine';
-    await expect(decideApprovalAsInbox(home, approvedId, 'approve')).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+    const approved = await decideApprovalAsInbox(home, approvedId, 'approve');
+    expect(approved, JSON.stringify(approved)).toMatchObject({ ok: true, result: { status: 'executed' } });
     phase = 'open setup output';
     await flushHookEffects();
     expect(Modal.show).toHaveBeenCalledWith(expect.objectContaining({
@@ -311,7 +322,7 @@ describe('Set up from a preset (D53)', () => {
     const { MachineEnvironmentApplySheet } = await import('./MachineEnvironmentApplySheet');
     const onClose = vi.fn();
     const screen = await renderScreen(<MachineEnvironmentApplySheet serverId={serverId} machineId="devbox" machineName="devbox"
-      onClose={onClose} setChrome={vi.fn()} {...({} as never)} />);
+      onClose={onClose} setChrome={vi.fn()} />);
     await waitForHomeGovernance(() => expect(screen.tree.findAll(node => node.props?.testID === 'machine-environment-apply.state'
       && node.props.kind === 'empty').length).toBeGreaterThan(0));
     expect(screen.findByTestId('machine-environment-apply.state-action')).not.toBeNull();

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { View } from 'react-native';
 import type { ManagedControllerV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { ManagedMachinePresetV1 } from '@happier-dev/protocol/machines/managed/managedMachinePresetV1';
 import type { MachineProvisionersListResultV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
@@ -36,11 +37,15 @@ type ProvisionerMarkProps = Readonly<{
     installedPackage?: PluginProjectionInstalledPackageV2 | null;
     machineId?: string;
     serverId: string;
+    /** The controller's projection is still loading and the descriptor's glyph isn't known yet. */
+    resolving?: boolean;
 }>;
 
 /** The provisioner's identity: its package's contributed brand mark, else the glyph its descriptor names. */
 function ManagedProvisionerMark(props: ProvisionerMarkProps) {
     if (props.installedPackage?.brand?.state === 'available' && props.machineId) return <ManagedProvisionerBrandMark {...props} />;
+    // Hold the mark's place blank rather than draw the generic glyph and swap it for the real one a moment later.
+    if (props.resolving) return <View style={{ width: props.size, height: props.size }} />;
     return <ManagedProvisionerGlyph icon={props.icon} size={props.size} />;
 }
 
@@ -90,10 +95,12 @@ export function useManagedProvisionerPresentation(input: Readonly<{
     // The brand belongs to the package, so a recipe whose definition this controller no longer projects
     // (another schema version) still carries its provider's mark.
     const markedProvisioner = provisioner ?? (input.provider ? { contribution: input.provider } : undefined);
+    const projectionResolving = Boolean(input.controller) && !projection.inputs
+        && (projection.phase === 'loading' || projection.phase === 'idle');
     // Each slot owner names the size it draws the mark at; the header's is the default.
     const markFor = (row?: Readonly<{ contribution: Provisioner['contribution']; descriptor?: Pick<Provisioner['descriptor'], 'icon'> }>,
         size: number = MANAGED_PROVISIONER_MARK_SIZE.header) => (
-        <ManagedProvisionerMark icon={row?.descriptor?.icon} size={size}
+        <ManagedProvisionerMark icon={row?.descriptor?.icon} size={size} resolving={!row?.descriptor?.icon && projectionResolving}
             installedPackage={row ? installedPackages?.[row.contribution.pluginId] : null} machineId={input.controller?.machineId} serverId={input.serverId} />
     );
     return { localized, title: provisioner ? localized(provisioner.contribution.pluginId, provisioner.descriptor.title) : null,

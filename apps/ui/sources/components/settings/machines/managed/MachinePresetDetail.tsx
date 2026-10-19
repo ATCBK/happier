@@ -237,7 +237,7 @@ export function managedPresetLimitRow(
     title: t('machinePresets.atMost'),
     subtitle: input.limit ? t('machinePresets.limitWaits') : undefined,
     choices: [
-      { id: NO_LIMIT, title: t('machinePresets.noLimit') },
+      { id: NO_LIMIT, title: t('machinePresets.limitNone') },
       ...values.map((value) => ({ id: String(value), title: String(value) })),
       { id: OTHER_LIMIT, title: t('machinePresets.otherLimit') },
     ],

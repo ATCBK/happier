@@ -4,6 +4,7 @@ import { ManagedMachineActionOutputSchemasV1 } from '@happier-dev/protocol/machi
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import type { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useServerCredentialAccountScopeStates, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { isArtifactOnlyHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -18,7 +19,7 @@ type InventoryRead = {
     homeId: string;
     managedId: string | undefined;
     includeArchived: boolean;
-    executeAction: ReturnType<typeof createFrontDoorActionExecute>;
+    executeAction: ReturnType<typeof createDefaultActionExecutor>['execute'];
     controller: AbortController;
     retirement: { dispose(): void };
     awaitingApproval: boolean;
@@ -37,7 +38,7 @@ export type ManagedMachineInventoryEntry = Readonly<{
 
 /** A demanded projection of the canonical server inventory, with no persisted UI resource state. */
 export function useManagedMachineInventory(serverIds: readonly string[], managedId?: string,
-    executeAction: ReturnType<typeof createFrontDoorActionExecute> = execute, includeArchived = false) {
+    executeAction: ReturnType<typeof createDefaultActionExecutor>['execute'] = execute, includeArchived = false) {
     const idsKey = JSON.stringify([...new Set(serverIds.map(id => resolveServerProfileScopeIdForIdentifier(id) || id))].sort());
     const requestedIdsKey = JSON.stringify(serverIds);
     const ids = React.useMemo(() => JSON.parse(idsKey) as string[], [idsKey]);

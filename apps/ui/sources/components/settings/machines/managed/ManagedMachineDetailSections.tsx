@@ -93,12 +93,12 @@ function WakeRow(
           accessibilityLabel={t('managedRetention.wake')}
           value={keep.policy.wakeOnAcceptedMessage}
           disabled={keep.disabled}
-          onValueChange={(wake) =>
-            keep.onChange({
+          onValueChange={async (wake) => {
+            await keep.onChange({
               retention: keep.policy.retention,
               wakeOnAcceptedMessage: wake,
-            })
-          }
+            });
+          }}
         />
       }
     />

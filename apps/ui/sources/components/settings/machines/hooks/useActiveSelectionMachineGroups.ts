@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import type { ActiveServerSnapshot, ServerProfile } from '@/sync/domains/server/serverProfiles';
 import { resolveServerProfileScopeId, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import { filterVisibleMachines, resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { filterVisibleMachines, resolveServerScopedMachineInventory } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { getEffectiveServerSelectionFromRawSettings } from '@/sync/domains/server/selection/serverSelectionResolution';
 import {
     listServerProfileScopeIds,
@@ -70,15 +70,15 @@ export function useActiveSelectionMachineGroups(params: Readonly<{
         }
         return visibleMachineServerIds.map((serverId) => {
             const binding = bindings.get(resolveServerProfileScopeIdForIdentifier(serverId));
-            const machines = resolveServerScopedMachines({
+            const inventory = resolveServerScopedMachineInventory({
                 serverId,
                 activeServerId: params.activeServerSnapshot.serverId,
                 activeMachines: params.allMachines,
                 machineListByServerId: params.machineListByServerId,
                 machineListStatusByServerId: params.machineListStatusByServerId,
-            }) ?? [];
-            const status = params.machineListStatusByServerId[serverId] ?? 'idle';
-            const visibleMachines = filterVisibleMachines(machines);
+            });
+            const status = inventory.status ?? 'loading';
+            const visibleMachines = filterVisibleMachines(inventory.machines ?? []);
             return {
                 serverId,
                 accountScope: binding?.isCurrent() ? binding.scope : null,
