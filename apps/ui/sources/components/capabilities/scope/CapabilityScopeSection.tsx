@@ -27,6 +27,7 @@ import { useReachRules } from '@/sync/domains/capabilities/reach/useReachRules';
 import { useFoundSkillsCount } from '@/sync/domains/skills/useFoundSkills';
 import { t } from '@/text';
 import { joinList } from '@/utils/text/joinList';
+import { describeOfflineMachines } from '@/components/capabilities/where/whereItsOnPresentation';
 
 import {
   SCOPE_ROW_LIMIT,
@@ -323,6 +324,7 @@ export const CapabilityScopeSection = React.memo(
     );
     const migratedNames = data.migrated.names;
     const placeOffline = props.place.t === 'machine' && data.offlineNames.length > 0;
+    const offlineNote = describeOfflineMachines(data.offlineNames);
     return (
       <ItemGroup
         testID={props.testID}
@@ -330,13 +332,11 @@ export const CapabilityScopeSection = React.memo(
         description={props.description}
         surface="none"
       >
-        {data.offlineNames.length > 0 && props.offlineStatedAbove !== true ? (
+        {offlineNote && props.offlineStatedAbove !== true ? (
           <View style={styles.offline}>
             <SurfaceFreshnessLine
               testID={`${props.testID}.offline`}
-              reason={t('capabilities.where.offlineNote', {
-                machine: joinList(data.offlineNames),
-              })}
+              reason={offlineNote}
             />
           </View>
         ) : null}

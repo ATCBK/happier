@@ -6,6 +6,7 @@ import { projectReachForMachinesV1 } from '@happier-dev/protocol/reach/projectRe
 import { t } from '@/text';
 import {
     describeReach,
+    describeOfflineMachines,
     describeReachRule,
     formatWhereItsOnConsequence,
     formatWhereItsOnSentence,
@@ -129,5 +130,23 @@ describe('describeReach', () => {
         expect(consequence.onlineMachineNames).toEqual(['MacBook Pro', 'nl2']);
         expect(consequence.notes).toEqual(['Windows desktop is offline. It gets this when it’s back.', 'Gemini can’t load skills.']);
         expect(formatWhereItsOnConsequence(consequence, names)).toBe('Available to Claude and Codex on MacBook Pro and nl2');
+    });
+
+    it('states several offline machines once, by count, instead of one sentence per machine', () => {
+        const many = ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => ({
+            machineId: id,
+            agents: [{ agentId: 'claude', enabled: true, decidedBy: null }],
+        }));
+        const offline = many.map(({ machineId }) => ({ machineId, online: false }));
+        const consequence = describeReach(many, offline, names, () => 'full', 'skill');
+        expect(consequence.notes).toEqual(['6 offline machines get it when they’re back.']);
+    });
+});
+
+describe('describeOfflineMachines', () => {
+    it('names one machine and counts several', () => {
+        expect(describeOfflineMachines([])).toBeNull();
+        expect(describeOfflineMachines(['Windows desktop'])).toBe('Windows desktop is offline. It gets this when it’s back.');
+        expect(describeOfflineMachines(['mbp', 'nl2'])).toBe('2 offline machines get it when they’re back.');
     });
 });

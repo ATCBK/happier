@@ -611,17 +611,8 @@ function CapabilityAddDetail<Item>(
       style={styles.detail}
       testID={`${props.config.testID}:detail:${props.itemKey}`}
     >
-      {props.pushed ? (
-        <View style={styles.detailBack}>
-          <IconButton
-            iconName="caret-left"
-            variant="plain"
-            accessibilityLabel={t('capabilities.add.back')}
-            onPress={props.onCloseDetail}
-            testID={`${props.config.testID}:close-detail`}
-          />
-        </View>
-      ) : (
+      {/* Pushed, the Collection leads the page with the one way back; beside the list the details close here. */}
+      {props.pushed ? null : (
         <View style={styles.detailClose}>
           <IconButton
             iconName="x"
@@ -666,10 +657,6 @@ const styles = StyleSheet.create((theme) => ({
   failures: { paddingTop: theme.space.s12 },
   failuresAlone: { paddingHorizontal: theme.space.s24, paddingTop: theme.space.s16 },
   detail: { flex: 1, minHeight: 0 },
-  detailBack: {
-    paddingHorizontal: theme.space.s16,
-    paddingTop: theme.space.s8,
-  },
   detailClose: {
     position: 'absolute',
     top: theme.space.s12,

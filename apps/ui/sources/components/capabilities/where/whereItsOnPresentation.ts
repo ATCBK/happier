@@ -241,6 +241,14 @@ export function describeReachRule(
   return { title: place, effect };
 }
 
+/** One line for every offline machine that would get an item: its name when one, the count when several. */
+export function describeOfflineMachines(machineNames: readonly string[]): string | null {
+  if (machineNames.length === 0) return null;
+  return machineNames.length === 1
+    ? t('capabilities.where.offlineNote', { machine: machineNames[0]! })
+    : t('capabilities.where.offlineNoteMany', { count: machineNames.length });
+}
+
 /**
  * The live consequence of the rules (IR-80): only Agents that can take the item are named as available; Agents that
  * cannot are named once in `notes`. `online` comes from the caller's reachability owner (C4).
@@ -257,7 +265,7 @@ export function describeReach(
   );
   const available: string[] = [];
   const onlineMachineNames: string[] = [];
-  const offlineNotes: string[] = [];
+  const offlineMachineNames: string[] = [];
   const cannotTake: string[] = [];
   const projectKeys = new Set<string>();
   let availableOutsideProjects = false;
@@ -275,10 +283,8 @@ export function describeReach(
     );
     if (taking.length === 0) continue;
     if (online.get(row.machineId) === false) {
-      const note = t('capabilities.where.offlineNote', {
-          machine: names.machineName(row.machineId),
-        });
-      if (!offlineNotes.includes(note)) offlineNotes.push(note);
+      const machineName = names.machineName(row.machineId);
+      if (!offlineMachineNames.includes(machineName)) offlineMachineNames.push(machineName);
       continue;
     }
     if (row.projectKey) projectKeys.add(row.projectKey); else availableOutsideProjects = true;
@@ -287,6 +293,7 @@ export function describeReach(
     for (const agent of taking)
       if (!available.includes(agent.agentId)) available.push(agent.agentId);
   }
+  const offlineNote = describeOfflineMachines(offlineMachineNames);
   return {
     availabilityUnknown: available.length === 0 && projection.some(row =>
       row.agentInventoryComplete === false && online.get(row.machineId) !== false),
@@ -294,7 +301,7 @@ export function describeReach(
     onlineMachineNames,
     onlyProjectNames: availableOutsideProjects ? [] : [...projectKeys].map(names.projectName),
     notes: [
-      ...offlineNotes,
+      ...(offlineNote ? [offlineNote] : []),
       ...cannotTake.map((agentId) =>
         t('capabilities.where.cantTake', {
           agent: names.agentName(agentId),

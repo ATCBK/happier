@@ -67,6 +67,8 @@ export type CapabilityKitTranslation = Readonly<{
     ) => string;
     availableNowhere: string;
     offlineNote: (params: Readonly<{ machine: string }>) => string;
+    /** Several offline machines, said once. */
+    offlineNoteMany: (params: Readonly<{ count: number }>) => string;
     cantTake: (params: Readonly<{ agent: string } & ItemKind>) => string;
   }>;
   control: Readonly<{
@@ -97,7 +99,6 @@ export type CapabilityKitTranslation = Readonly<{
   }>;
   add: Readonly<{
     closeDetails: string;
-    back: string;
     backTo: (params: Readonly<{ title: string }>) => string;
     added: string;
     done: string;
@@ -206,6 +207,8 @@ const en: CapabilityKitTranslation = {
     availableNowhere: 'Not available anywhere yet',
     offlineNote: ({ machine }) =>
       `${machine} is offline. It gets this when it’s back.`,
+    offlineNoteMany: ({ count }) =>
+      `${count} offline machines get it when they’re back.`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} can’t load skills.`
@@ -239,7 +242,6 @@ const en: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: 'Close details',
-    back: 'Back',
     backTo: ({ title }) => `Back to ${title}`,
     added: 'Added',
     done: 'Done',
@@ -335,6 +337,8 @@ const ca: CapabilityKitTranslation = {
     availableNowhere: 'Encara no està disponible enlloc',
     offlineNote: ({ machine }) =>
       `${machine} està fora de línia. El rebrà quan torni.`,
+    offlineNoteMany: ({ count }) =>
+      `${count} màquines fora de línia ho rebran quan tornin.`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} no pot carregar habilitats.`
@@ -368,7 +372,6 @@ const ca: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: 'Tanca els detalls',
-    back: 'Enrere',
     backTo: ({ title }) => `Torna a ${title}`,
     added: 'Afegit',
     done: 'Fet',
@@ -474,6 +477,8 @@ const de: CapabilityKitTranslation = {
     availableNowhere: 'Noch nirgends verfügbar',
     offlineNote: ({ machine }) =>
       `${machine} ist offline. Es bekommt dies, sobald es zurück ist.`,
+    offlineNoteMany: ({ count }) =>
+      `${count} Geräte sind offline. Sie bekommen dies, sobald sie zurück sind.`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} kann keine Skills laden.`
@@ -507,7 +512,6 @@ const de: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: 'Details schließen',
-    back: 'Zurück',
     backTo: ({ title }) => `Zurück zu ${title}`,
     added: 'Hinzugefügt',
     done: 'Fertig',
@@ -599,6 +603,8 @@ const es: CapabilityKitTranslation = {
     availableNowhere: 'Aún no está disponible en ningún sitio',
     offlineNote: ({ machine }) =>
       `${machine} está sin conexión. Lo recibirá cuando vuelva.`,
+    offlineNoteMany: ({ count }) =>
+      `${count} máquinas sin conexión lo recibirán cuando vuelvan.`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} no puede cargar habilidades.`
@@ -632,7 +638,6 @@ const es: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: 'Cerrar detalles',
-    back: 'Atrás',
     backTo: ({ title }) => `Volver a ${title}`,
     added: 'Añadido',
     done: 'Listo',
@@ -739,6 +744,8 @@ const fr: CapabilityKitTranslation = {
     availableNowhere: 'Disponible nulle part pour l’instant',
     offlineNote: ({ machine }) =>
       `${machine} est hors ligne. Il la recevra à son retour.`,
+    offlineNoteMany: ({ count }) =>
+      `${count} machines hors ligne la recevront à leur retour.`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} ne peut pas charger de compétences.`
@@ -772,7 +779,6 @@ const fr: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: 'Fermer les détails',
-    back: 'Retour',
     backTo: ({ title }) => `Retour à ${title}`,
     added: 'Ajouté',
     done: 'Terminé',
@@ -882,6 +888,8 @@ const it: CapabilityKitTranslation = {
     availableNowhere: 'Non ancora disponibile da nessuna parte',
     offlineNote: ({ machine }) =>
       `${machine} è offline. Lo riceverà quando torna.`,
+    offlineNoteMany: ({ count }) =>
+      `${count} macchine offline lo riceveranno quando tornano.`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} non può caricare skill.`
@@ -915,7 +923,6 @@ const it: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: 'Chiudi dettagli',
-    back: 'Indietro',
     backTo: ({ title }) => `Torna a ${title}`,
     added: 'Aggiunto',
     done: 'Fatto',
@@ -1009,6 +1016,8 @@ const ja: CapabilityKitTranslation = {
     availableNowhere: 'まだどこでも利用できません',
     offlineNote: ({ machine }) =>
       `${machine} はオフラインです。戻ったときに受け取ります。`,
+    offlineNoteMany: ({ count }) =>
+      `オフラインのマシン ${count} 台は、戻ったときに受け取ります。`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} はスキルを読み込めません。`
@@ -1042,7 +1051,6 @@ const ja: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: '詳細を閉じる',
-    back: '戻る',
     backTo: ({ title }) => `戻る: ${title}`,
     added: '追加済み',
     done: '完了',
@@ -1154,6 +1162,8 @@ const pl: CapabilityKitTranslation = {
     availableNowhere: 'Jeszcze nigdzie niedostępne',
     offlineNote: ({ machine }) =>
       `${machine} jest offline. Dostanie to po powrocie.`,
+    offlineNoteMany: ({ count }) =>
+      `${count} maszyn offline dostanie to po powrocie.`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} nie może wczytywać umiejętności.`
@@ -1187,7 +1197,6 @@ const pl: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: 'Zamknij szczegóły',
-    back: 'Wstecz',
     backTo: ({ title }) => `Wróć do ${title}`,
     added: 'Dodano',
     done: 'Gotowe',
@@ -1279,6 +1288,8 @@ const pt: CapabilityKitTranslation = {
     availableNowhere: 'Ainda não está disponível em lugar nenhum',
     offlineNote: ({ machine }) =>
       `${machine} está offline. Vai receber quando voltar.`,
+    offlineNoteMany: ({ count }) =>
+      `${count} máquinas offline vão receber quando voltarem.`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} não pode carregar habilidades.`
@@ -1312,7 +1323,6 @@ const pt: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: 'Fechar detalhes',
-    back: 'Voltar',
     backTo: ({ title }) => `Voltar para ${title}`,
     added: 'Adicionado',
     done: 'Concluído',
@@ -1423,6 +1433,8 @@ const ru: CapabilityKitTranslation = {
     availableNowhere: 'Пока нигде не доступно',
     offlineNote: ({ machine }) =>
       `${machine} не в сети. Получит, когда вернётся.`,
+    offlineNoteMany: ({ count }) =>
+      `${count} машин не в сети получат это, когда вернутся.`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} не может загружать навыки.`
@@ -1456,7 +1468,6 @@ const ru: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: 'Закрыть подробности',
-    back: 'Назад',
     backTo: ({ title }) => `Назад: ${title}`,
     added: 'Добавлено',
     done: 'Готово',
@@ -1545,6 +1556,8 @@ const zhHans: CapabilityKitTranslation = {
     available: ({ agents, machines, projects }) => `${machines} 上的 ${agents} 可用${projects ? `，仅限 ${projects}` : ''}`,
     availableNowhere: '尚未在任何地方可用',
     offlineNote: ({ machine }) => `${machine} 已离线。恢复后会获得。`,
+    offlineNoteMany: ({ count }) =>
+      `${count} 台离线的机器恢复后会获得。`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} 无法加载技能。`
@@ -1578,7 +1591,6 @@ const zhHans: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: '关闭详情',
-    back: '返回',
     backTo: ({ title }) => `返回 ${title}`,
     added: '已添加',
     done: '完成',
@@ -1666,6 +1678,8 @@ const zhHant: CapabilityKitTranslation = {
     available: ({ agents, machines, projects }) => `${machines} 上的 ${agents} 可用${projects ? `，僅限 ${projects}` : ''}`,
     availableNowhere: '尚未在任何地方可用',
     offlineNote: ({ machine }) => `${machine} 已離線。恢復後會取得。`,
+    offlineNoteMany: ({ count }) =>
+      `${count} 台離線的機器恢復後會取得。`,
     cantTake: ({ agent, kind }) =>
       kind === 'skill'
         ? `${agent} 無法載入技能。`
@@ -1699,7 +1713,6 @@ const zhHant: CapabilityKitTranslation = {
   },
   add: {
     closeDetails: '關閉詳情',
-    back: '返回',
     backTo: ({ title }) => `返回 ${title}`,
     added: '已新增',
     done: '完成',

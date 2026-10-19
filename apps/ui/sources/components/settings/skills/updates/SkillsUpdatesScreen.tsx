@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { formatCapabilityCount } from '@/components/capabilities/facts/formatCapabilityCount';
 import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
@@ -52,15 +53,6 @@ function formatTime(ms: number): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(ms);
-}
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat(undefined, {
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  })
-    .format(value)
-    .toLowerCase();
 }
 
 function fileText(file: SkillUpdateFileV1['mine']): string {
@@ -323,7 +315,7 @@ function ReadyRow(
               ? { cost: { tokensWhenUsed: cost.to } }
               : {
                   extra: [
-                    `${formatCount(cost.tokens)} → ${t('capabilities.facts.tokensWhenUsed', { count: formatCount(cost.to) })}`,
+                    `${formatCapabilityCount(cost.tokens)} → ${t('capabilities.facts.tokensWhenUsed', { count: formatCapabilityCount(cost.to) })}`,
                   ],
                 }
             : {}),
