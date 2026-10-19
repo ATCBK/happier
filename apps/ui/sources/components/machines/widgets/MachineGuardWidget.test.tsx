@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WidgetPresentationProvider } from '@happier-dev/plugin-ui';
 import { MachineGuardPolicyV1Schema } from '@happier-dev/protocol/machines/guard/guardPolicyV1';
 import type { MachineGuardViewV1 } from '@happier-dev/protocol/machines/guard/guardRpcV1';
+import { MachineGuardActivityRowV1Schema, type MachineGuardActivityRowV1 } from '@happier-dev/protocol/machines/guard/activityV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 
@@ -74,6 +75,7 @@ async function mount(
   options: Readonly<{
     size?: WidgetSizeV1;
     view?: MachineGuardViewV1;
+    activity?: MachineGuardActivityRowV1[];
     overrides?: Partial<Machine>;
     rpc?: (method: string, payload: Record<string, unknown>) => unknown;
   }> = {},
@@ -106,6 +108,8 @@ async function mount(
         return new Promise(() => {});
       if (method === RPC_METHODS.MACHINES_GUARD_GET)
         return options.view ?? createMachineGuardViewFixture();
+      if (method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST)
+        return { entries: options.activity ?? [], counts: { stopped: options.activity?.length ?? 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: Date.now() };
       throw new Error(`unexpected ${method}`);
     },
   );
@@ -148,6 +152,32 @@ afterEach(async () => {
 });
 
 describe('MachineGuardWidget', () => {
+  it.each(['medium', 'wide', 'full', 'tall', 'large'] as const)('reads yesterday-only Last action and Recent from the default Activity history at %s size', async size => {
+    const yesterday = MachineGuardActivityRowV1Schema.parse({ v: 1, id: 'yesterday', at: Date.now() - 86_400_000,
+      kind: 'stopped_session', rule: 'idle_sessions', subject: { kind: 'session', sessionId: 'old-session', title: 'Yesterday build' },
+      outcome: 'done', attribution: { kind: 'unknown' }, freedBytes: GiB });
+    const { screen } = await mount({ size, activity: [yesterday], view: createMachineGuardViewFixture({
+      policy: MachineGuardPolicyV1Schema.parse({ memoryGuard: { enabled: true } }), recentActivity: [],
+    }) });
+    await act(async () => {
+      await vi.waitFor(() => expect(screen.getTextContent()).toContain(size === 'wide' ? 'It last acted' : 'Yesterday build'));
+    });
+    expect(transport.rpc.mock.calls.some(([call]) => call.method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST
+      && call.payload.range === '7d' && call.payload.filter === 'all')).toBe(true);
+  });
+
+  it('keeps Last action absent when Activity has no receipt, even if the operational view has one', async () => {
+    const view = createMachineGuardViewFixture({ policy: MachineGuardPolicyV1Schema.parse({ memoryGuard: { enabled: true } }),
+      recentActivity: [MachineGuardActivityRowV1Schema.parse({ v: 1, id: 'operational-only', at: Date.now(), kind: 'closed_browser',
+        rule: 'memory_guard', outcome: 'done', attribution: { kind: 'unknown' } })],
+    });
+    const { screen } = await mount({ view });
+    await act(async () => {
+      await vi.waitFor(() => expect(transport.rpc.mock.calls.some(([call]) => call.method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST)).toBe(true));
+    });
+    expect(screen.getTextContent()).not.toContain('Last action');
+  });
+
   it('does not project synced default Off before the Guard read proves a state', async () => {
     const answer = createDeferred<unknown>();
     const { screen } = await mount({
