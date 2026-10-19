@@ -1,5 +1,5 @@
 import * as React from 'react';
-import renderer, { act } from 'react-test-renderer';
+import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { renderScreen } from '@/dev/testkit';
@@ -81,8 +81,7 @@ describe('useWorkspaceFileEditorState (start from diff)', () => {
             return state;
         };
 
-        let tree: renderer.ReactTestRenderer;
-        tree = (await renderScreen(<Harness displayMode={initial.displayMode} fileText={initial.fileText} />)).tree;
+        const tree = await renderScreen(<Harness displayMode={initial.displayMode} fileText={initial.fileText} />);
 
         expect(latest).not.toBeNull();
 
@@ -93,7 +92,7 @@ describe('useWorkspaceFileEditorState (start from diff)', () => {
         expect(readLatest().isEditingFile).toBe(false);
 
         await act(async () => {
-            tree.update(<Harness displayMode="file" fileText={'console.log(1);'} />);
+            await tree.update(<Harness displayMode="file" fileText={'console.log(1);'} />);
         });
 
         expect(readLatest().isEditingFile).toBe(true);
@@ -138,13 +137,13 @@ describe('useWorkspaceFileEditorState (start from diff)', () => {
             return state;
         };
 
-        const tree = (await renderScreen(<Harness displayMode="file" fileText={'console.log(1);'} />)).tree;
+        const tree = await renderScreen(<Harness displayMode="file" fileText={'console.log(1);'} />);
         await act(async () => {});
 
         const firstSaveFileEdits = readLatest().saveFileEdits;
 
         await act(async () => {
-            tree.update(<Harness displayMode="file" fileText={'console.log(1);'} />);
+            await tree.update(<Harness displayMode="file" fileText={'console.log(1);'} />);
         });
 
         expect(readLatest().saveFileEdits).toBe(firstSaveFileEdits);
@@ -185,7 +184,7 @@ describe('useWorkspaceFileEditorState (start from diff)', () => {
             return state;
         };
 
-        const tree = (await renderScreen(<Harness displayMode="file" fileText={'console.log(1);'} fileHash="hash-1" />)).tree;
+        const tree = await renderScreen(<Harness displayMode="file" fileText={'console.log(1);'} fileHash="hash-1" />);
 
         await act(async () => {
             readLatest().startEditingFile();
@@ -195,7 +194,7 @@ describe('useWorkspaceFileEditorState (start from diff)', () => {
         const seedBeforeRefresh = readLatest().editorSeedText;
 
         await act(async () => {
-            tree.update(<Harness displayMode="file" fileText={'console.log(1);\n// refreshed'} fileHash="hash-2" />);
+            await tree.update(<Harness displayMode="file" fileText={'console.log(1);\n// refreshed'} fileHash="hash-2" />);
         });
 
         expect(readLatest().editorResetKey).toBe(resetKeyBeforeRefresh);

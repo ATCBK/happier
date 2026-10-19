@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
@@ -83,7 +83,7 @@ export type FilesystemBrowserRowProps = Readonly<{
     basePaddingLeft?: number;
     depthIndent?: number;
     paddingRight?: number;
-    style?: StyleProp<ViewStyle>;
+    style?: ItemProps['style'] & React.ComponentProps<typeof HappierTreeRow>['style'];
     onRetryError?: (node: FilesystemBrowserNode) => void | Promise<void>;
     wrapContent?: ((input: FilesystemBrowserWrapContentInput) => React.ReactElement) | null;
 }>;

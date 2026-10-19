@@ -76,8 +76,8 @@ describe('SearchResultsList', () => {
         const props = { theme: searchResultsTheme, searchQuery: 'a', searchResults: [file], onFilePress: vi.fn() };
         const screen = await renderScreen(<SearchResultsList {...props} isSearching={false} />);
         const list = screen.tree.findByType('LegendList');
-        await act(async () => { screen.tree.update(<SearchResultsList {...props} searchQuery="a.ts" isSearching />); });
-        expect(screen.tree.findByType('LegendList')).toBe(list);
+        await screen.update(<SearchResultsList {...props} searchQuery="a.ts" isSearching />);
+        expect(screen.tree.findByType('LegendList') === list).toBe(true);
         expect(screen.tree.findAllByType(Item)).toHaveLength(1);
         expect(screen.tree.findAllByType('Text').some(node => React.Children.toArray(node.props.children).includes('files.previousSearchResults'))).toBe(true);
         await screen.update(<SearchResultsList {...props} searchQuery="a.ts" searchResultsQuery="a" isSearching={false} />);

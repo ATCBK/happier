@@ -82,6 +82,10 @@ function flattenToolbarStyle(style: any): Record<string, any> {
     return typeof style === 'object' ? style : {};
 }
 
+// The real toolbar graph is shared by every case. Load it during collection so a
+// cold transform cannot outlive a case's act() scope and corrupt later renders.
+await import('./FileActionToolbar');
+
 describe('FileActionToolbar', () => {
     const theme = createThemeFixture({
         colors: {
@@ -139,6 +143,7 @@ describe('FileActionToolbar', () => {
 
     it('shows Stage file for untracked files even when hasPendingDelta is false', async () => {
         const { FileActionToolbar } = await import('./FileActionToolbar');
+        const onStageFile = vi.fn();
 
         const screen = await renderScreen(
             React.createElement(FileActionToolbar as any, {
@@ -155,7 +160,7 @@ describe('FileActionToolbar', () => {
                 selectedLineCount: 0,
                 isApplyingStage: false,
                 inFlightScmOperation: null,
-                onStageFile: () => {},
+                onStageFile,
                 onUnstageFile: () => {},
                 onApplySelectedLines: () => {},
                 onClearSelection: () => {},
@@ -164,10 +169,11 @@ describe('FileActionToolbar', () => {
         );
 
         expect(screen.findByTestId('file-details-stage-file')).toBeTruthy();
-        const stageFileButton = screen.findByTestId('file-details-stage-file');
-        expect(stageFileButton?.props.accessibilityRole).toBe('button');
+        const stageFileButton = screen.findHostByTestId('file-details-stage-file');
+        expect(stageFileButton?.props.role).toBe('button');
         expect(stageFileButton?.props.accessibilityLabel).toBe('files.fileActions.stageFile');
-        expect(typeof stageFileButton?.props.onPress).toBe('function');
+        await screen.pressByTestIdAsync('file-details-stage-file');
+        expect(onStageFile).toHaveBeenCalledOnce();
     });
 
     it('hides include/exclude controls when backend does not support them', async () => {
@@ -424,11 +430,56 @@ describe('FileActionToolbar', () => {
             }),
         );
 
-        const stageFileButton = screen.findByTestId('file-details-stage-file');
-        expect(typeof stageFileButton?.props.onPressIn).not.toBe('function');
+        const stageFileButton = screen.findHostByTestId('file-details-stage-file');
+        await act(async () => {
+            stageFileButton?.props.onPressIn?.();
+        });
 
         expect(onStartLineSelection).not.toHaveBeenCalled();
         expect(onStageFile).not.toHaveBeenCalled();
+        await screen.pressByTestIdAsync('file-details-stage-file');
+        expect(onStageFile).toHaveBeenCalledOnce();
+        expect(onStartLineSelection).not.toHaveBeenCalled();
+    });
+
+    it('offers Select lines among the file actions on the header row rather than on a row of its own', async () => {
+        const { FileActionToolbar } = await import('./FileActionToolbar');
+        const { DetailsTabHeader } = await import('@/components/appShell/panes/details/header/DetailsTabHeader');
+        const onStartLineSelection = vi.fn();
+
+        const screen = await renderScreen(
+            React.createElement(FileActionToolbar as any, {
+                theme,
+                displayMode: 'diff',
+                onDisplayMode: () => {},
+                diffMode: 'pending',
+                onDiffMode: () => {},
+                hasPendingDelta: true,
+                hasIncludedDelta: false,
+                scmWriteEnabled: true,
+                includeExcludeEnabled: false,
+                virtualSelectionEnabled: true,
+                isSelectedForCommit: false,
+                lineSelectionEnabled: true,
+                lineSelectionActive: false,
+                selectedLineCount: 0,
+                isApplyingStage: false,
+                inFlightScmOperation: null,
+                onStageFile: () => {},
+                onUnstageFile: () => {},
+                onApplySelectedLines: () => {},
+                onClearSelection: () => {},
+                onStartLineSelection,
+                isUntrackedFile: false,
+            }),
+        );
+
+        const header = screen.findAllByType(DetailsTabHeader)[0]!;
+        expect(header.props.buttons.map((button: { testID?: string }) => button.testID)).toEqual(['file-details-select-lines', 'file-details-stage-file']);
+        expect(screen.findByTestId('file-details-change-actions')).toBeNull();
+        expect(screen.findByTestId('file-details-line-selection-available')).not.toBeNull();
+        await screen.pressByTestIdAsync('file-details-select-lines');
+        expect(onStartLineSelection).toHaveBeenCalledTimes(1);
     });
 
     it('keeps whole-file selection available without a line selection handler', async () => {

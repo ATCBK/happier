@@ -1,3 +1,4 @@
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import { useRepositoryTreeBrowserState } from '@/hooks/workspaces/files/repositoryTreeBrowserState';
 import { RepositoryTreeVisibilityControl } from '@/components/workspaces/files/repositoryTree/RepositoryTreeVisibilityControl';
 import * as React from 'react';
@@ -292,16 +293,25 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     const createHostRef = React.useRef({ workspaceScope, folderPath: folderPage?.path, enabled: allowCreateActions });
     createHostRef.current = { workspaceScope, folderPath: folderPage?.path, enabled: allowCreateActions };
     const mounted = React.useRef(true);
+    const createRequestRef = React.useRef<AbortController | null>(null);
     React.useEffect(() => {
         mounted.current = true;
         return () => { mounted.current = false; };
     }, []);
+    React.useEffect(() => () => {
+        createRequestRef.current?.abort();
+        createRequestRef.current = null;
+    }, [accountScope?.serverId, accountScope?.accountId, workspaceScope, folderPage?.path, allowCreateActions]);
     const captureCreateLifetime = React.useCallback(() => {
+        createRequestRef.current?.abort();
+        const controller = new AbortController();
+        createRequestRef.current = controller;
         const lifetime = captureActiveServerAccountScopeLifetime();
         const host = createHostRef.current;
         return {
             scope: lifetime?.scope,
-            isCurrent: () => mounted.current && (!lifetime || lifetime.isCurrent())
+            signal: controller.signal,
+            isCurrent: () => !controller.signal.aborted && mounted.current && (!lifetime || lifetime.isCurrent())
                 && createHostRef.current.enabled
                 && createHostRef.current.workspaceScope === host.workspaceScope
                 && createHostRef.current.folderPath === host.folderPath,
@@ -338,7 +348,13 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                 revealPath(path);
                 (props.onOpenFilePinned ?? props.onOpenFile)(path);
             };
-            const res = await workspaceWriteFile(workspaceScope, path, '', null);
+            let res: Awaited<ReturnType<typeof workspaceWriteFile>>;
+            try {
+                res = await workspaceWriteFile(workspaceScope, path, '', null, { signal: lifetime.signal });
+            } catch (error) {
+                if (lifetime.isCurrent()) Modal.alert(t('common.error'), error instanceof Error ? error.message : t('files.createFileFailed'));
+                return;
+            }
             if (!lifetime.isCurrent()) return;
             if (!res.success) {
                 if (res.errorCode === 'approval_required' && res.approvalArtifactId) {
@@ -617,7 +633,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     // the page down); every other host shows the sheet row above the tree.
     const openActionApproval = React.useCallback(() => {
         if (!actionApproval.approvalId) return;
-        router.push(`/inbox/approvals/${encodeURIComponent(actionApproval.approvalId)}?serverId=${encodeURIComponent(workspaceScope.serverId)}`);
+        router.push(buildApprovalHref(actionApproval.approvalId, workspaceScope.serverId));
     }, [actionApproval.approvalId, router, workspaceScope.serverId]);
     const approvalNotice = (presentation: 'row' | 'inline') => (
         <ActionApprovalPendingNotice presentation={presentation} message={t('approvals.status.open')}

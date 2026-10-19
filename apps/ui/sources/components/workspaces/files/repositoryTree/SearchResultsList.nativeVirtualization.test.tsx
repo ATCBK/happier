@@ -2,6 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -39,13 +40,13 @@ describe('SearchResultsList native virtualization', () => {
         }));
 
         const element = <SearchResultsList
-                theme={{
+                theme={createThemeFixture({
                     colors: {
                         border: { default: '#ddd' },
                         surface: { inset: '#eee' },
                         text: { link: '#09f', primary: '#111', secondary: '#999' },
                     },
-                } as any}
+                })}
                 isSearching={false}
                 searchQuery="session"
                 searchResults={searchResults as any}

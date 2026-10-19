@@ -405,6 +405,7 @@ describe('WorkspaceRepositoryTreeBrowserView (toolbar actions)', () => {
             'src/new-file.ts',
             '',
             null,
+            { signal: expect.any(AbortSignal) },
         );
         expect(onOpenFilePinnedSpy).toHaveBeenCalledWith('src/new-file.ts');
     });

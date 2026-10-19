@@ -3,6 +3,7 @@ import type renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -57,13 +58,13 @@ vi.mock('@legendapp/list/react-native', async () => {
 });
 
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
-const theme = {
+const theme = createThemeFixture({
     colors: {
         border: { default: '#ddd' },
         surface: { inset: '#eee' },
         text: { link: '#09f', primary: '#111', secondary: '#999' },
     },
-} as any;
+});
 
 function makeFile(name: string) {
     return { fileType: 'file', fileName: name, filePath: 'src/', fullPath: `src/${name}` } as any;

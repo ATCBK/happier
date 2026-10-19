@@ -4,10 +4,9 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
+import { nativeDocumentPickerBoundary } from '@/components/workspaces/files/repositoryTree/repositoryUploadBrowserTestFixture';
 
-installSessionFilesViewBoundaries();
-const nativePicker = vi.hoisted(() => vi.fn(async () => ({ canceled: true, assets: [] })));
-vi.mock('expo-document-picker', () => ({ getDocumentAsync: nativePicker }));
+installSessionFilesViewBoundaries({ confirmResult: true });
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit')).createExpoVectorIconsMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit')).createTextModuleMock({ translate: key => key }));
 const { ProjectBrowseFilesSurface } = await import('./ProjectBrowseFilesSurface');
@@ -99,8 +98,8 @@ it('keeps root creation, upload and View controls usable without a second search
                 ...(created ? [{ name: 'created.ts', path: `${path}/created.ts`, type: 'file' }] : []),
             ] };
         }
-        if (request.method === RPC_METHODS.WRITE_FILE) {
-            expect(request.payload).toMatchObject({ path: `${rootPath}/created.ts`, content: '' });
+        if (request.method === 'daemon.filesystem.writeFile') {
+            expect(request.payload).toMatchObject({ rootPath, path: `${rootPath}/created.ts`, content: '' });
             created = true;
             return { success: true, hash: 'created-hash' };
         }
@@ -121,13 +120,15 @@ it('keeps root creation, upload and View controls usable without a second search
     await screen.pressByTestIdAsync('repository-tree-create-button');
     await vi.waitFor(() => expect(screen.findByTestId('repository-tree-create-file')).toBeTruthy());
     await screen.pressByTestIdAsync('repository-tree-create-file');
+    await vi.waitFor(() => expect(created, JSON.stringify(vi.mocked(Modal.alert).mock.calls)).toBe(true));
     await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-created.ts')).toBeTruthy());
     expect(onOpenFilePinned).toHaveBeenCalledWith('created.ts');
     await screen.pressByTestIdAsync('repository-tree-create-button');
     await vi.waitFor(() => expect(screen.findByTestId('repository-tree-upload-files')).toBeTruthy());
+    nativeDocumentPickerBoundary.mockResolvedValueOnce({ canceled: true, assets: [] });
     await screen.pressByTestIdAsync('repository-tree-upload-files');
-    await vi.waitFor(() => expect(nativePicker).toHaveBeenCalledWith({ multiple: true, type: '*/*' }));
-    expect(fixture.requests.filter(request => request.method === RPC_METHODS.WRITE_FILE)).toHaveLength(1);
+    await vi.waitFor(() => expect(nativeDocumentPickerBoundary).toHaveBeenCalledWith({ multiple: true, type: '*/*' }));
+    expect(fixture.requests.filter(request => request.method === 'daemon.filesystem.writeFile')).toHaveLength(1);
     const listedBeforeRefresh = fixture.requests.filter(request => request.method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY).length;
     await screen.pressByTestIdAsync('workspace-repository-tree-view');
     await vi.waitFor(() => expect(screen.findByTestId('workspace-repository-tree-refresh')).toBeTruthy());

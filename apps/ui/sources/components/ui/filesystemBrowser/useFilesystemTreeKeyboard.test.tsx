@@ -1,6 +1,9 @@
+import * as React from 'react';
+import { Pressable } from 'react-native';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { renderScreen } from '@/dev/testkit';
 import { useFilesystemTreeKeyboard, type FilesystemTreeKeyboardNode } from './useFilesystemTreeKeyboard';
 
 const folder = { path: 'src', depth: 0, type: 'directory', isExpanded: false } as const;
@@ -12,28 +15,24 @@ describe('filesystem tree keyboard', () => {
         const first = { path: 'unrelated', parentPath: null, depth: 0, type: 'directory', isExpanded: false };
         const parent = { path: 'folder', parentPath: null, depth: 0, type: 'directory', isExpanded: true };
         const child = { path: 'opaque:file', parentPath: 'folder', depth: 1, type: 'file', isExpanded: false };
-        const hook = await renderHook((nodes: readonly FilesystemTreeKeyboardNode[]) => useFilesystemTreeKeyboard(nodes), {
-            initialProps: [first, parent, child],
+        let focusedPath: string | null = null;
+        let keyboard!: ReturnType<typeof useFilesystemTreeKeyboard>;
+        function Tree({ nodes }: { nodes: readonly FilesystemTreeKeyboardNode[] }) {
+            keyboard = useFilesystemTreeKeyboard(nodes);
+            return <>{nodes.map(node => <Pressable key={node.path} testID={node.path}
+                ref={keyboard.getRowProps(node).pressableRef} />)}</>;
+        }
+        // Physical focus is the native host boundary; refs, traversal and repair stay real.
+        const screen = await renderScreen(<Tree nodes={[first, parent, child]} />, {
+            createNodeMock: element => ({ focus: () => {
+                focusedPath = typeof element.props.testID === 'string' ? element.props.testID : null;
+            } }),
         });
-        const parentFocus = vi.fn();
-        const childFocus = vi.fn();
-        // Physical focus is the native host boundary; traversal and repair stay real.
-        const focusTarget = (focus: () => void) => ({ focus, blur: vi.fn(), measure: vi.fn(),
-            measureInWindow: vi.fn(), measureLayout: vi.fn(), setNativeProps: vi.fn() });
-        await act(async () => {
-            const bindParent = hook.getCurrent().getRowProps(parent).pressableRef;
-            const bindChild = hook.getCurrent().getRowProps(child).pressableRef;
-            if (typeof bindParent === 'function') bindParent(focusTarget(parentFocus));
-            if (typeof bindChild === 'function') bindChild(focusTarget(childFocus));
-        });
-        await act(async () => { hook.getCurrent().getRowProps(child).onFocus?.(); });
-        await act(async () => {
-            const unbindChild = hook.getCurrent().getRowProps(child).pressableRef;
-            if (typeof unbindChild === 'function') unbindChild(null);
-        });
-        await hook.rerender([first, { ...parent, isExpanded: false }]);
-        expect(hook.getCurrent().activePath).toBe('folder');
-        expect(parentFocus).toHaveBeenCalledOnce();
+        focusedPath = child.path;
+        await act(async () => { keyboard.getRowProps(child).onFocus?.(); });
+        await screen.update(<Tree nodes={[first, { ...parent, isExpanded: false }]} />);
+        expect(keyboard.activePath).toBe('folder');
+        expect(focusedPath).toBe(parent.path);
     });
 
     it('does not treat a sibling path prefix as a parent when repairing removed focus', async () => {

@@ -7,8 +7,9 @@ import { createDeferred, renderScreen } from '@/dev/testkit';
 import { createWorkspaceFileDownloadHarness } from '@/dev/testkit/harness/workspaceFileDownloadHarness';
 import type { createExpoFileSystemFileMock } from '@/dev/testkit/mocks/expoFileSystem';
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { Modal } from '@/modal';
 
-const alert = vi.hoisted(() => vi.fn());
+const alert = vi.mocked(Modal.alert);
 const nativeActions = vi.hoisted(() => ({
     saveFile: vi.fn(async (_input: unknown) => ({ canceled: false })),
     openFile: vi.fn(async (_input: unknown) => ({ canceled: false })),
@@ -37,10 +38,6 @@ vi.mock('@/text', async () => {
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
-});
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: { alert } }).module;
 });
 vi.mock('@/components/ui/popover', async (importOriginal) => {
     const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
@@ -108,6 +105,11 @@ describe('WorkspaceFileDownloadButton', () => {
     ] as const)('performs the selected Android %s action after downloading the file', async (action, method) => {
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
         harness = await createWorkspaceFileDownloadHarness({ name: 'notes.txt' });
+        const entered = createDeferred<void>();
+        nativeActions[method].mockImplementationOnce(async () => {
+            entered.resolve();
+            return { canceled: false };
+        });
         const { WorkspaceFileDownloadButton } = await import('./WorkspaceFileDownloadButton');
         const screen = await renderScreen(
             <WorkspaceFileDownloadButton testID="workspace-file-download" workspaceScope={harness.scope} path="notes.txt" />,
@@ -116,7 +118,7 @@ describe('WorkspaceFileDownloadButton', () => {
         await screen.pressByTestIdAsync('workspace-file-download');
         await act(async () => {
             screen.pressByTestId(`workspace-file-download-action-${action}`);
-            await vi.waitFor(() => expect(nativeActions[method]).toHaveBeenCalled());
+            await entered.promise;
         });
         expect(nativeActions[method]).toHaveBeenCalledWith(expect.stringMatching(/^file:/), 'notes.txt');
         for (const other of Object.keys(nativeActions) as (keyof typeof nativeActions)[]) {
@@ -127,8 +129,12 @@ describe('WorkspaceFileDownloadButton', () => {
     it.each(['canceled', 'failed'] as const)('distinguishes a %s native action from a successful download', async (outcome) => {
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
         harness = await createWorkspaceFileDownloadHarness({ name: 'notes.txt' });
-        if (outcome === 'canceled') nativeActions.saveFile.mockResolvedValueOnce({ canceled: true });
-        else nativeActions.saveFile.mockRejectedValueOnce(new Error('OS file action failed'));
+        const entered = createDeferred<void>();
+        nativeActions.saveFile.mockImplementationOnce(async () => {
+            entered.resolve();
+            if (outcome === 'failed') throw new Error('OS file action failed');
+            return { canceled: true };
+        });
         const { WorkspaceFileDownloadButton } = await import('./WorkspaceFileDownloadButton');
         const screen = await renderScreen(
             <WorkspaceFileDownloadButton testID="workspace-file-download" workspaceScope={harness.scope} path="notes.txt" />,
@@ -137,7 +143,7 @@ describe('WorkspaceFileDownloadButton', () => {
         await screen.pressByTestIdAsync('workspace-file-download');
         await act(async () => {
             screen.pressByTestId('workspace-file-download-action-save');
-            await vi.waitFor(() => expect(nativeActions.saveFile).toHaveBeenCalled());
+            await entered.promise;
         });
         await vi.waitFor(() => expect(screen.findByType(IconButton).props.disabled).toBe(false));
         if (outcome === 'canceled') expect(alert).not.toHaveBeenCalled();

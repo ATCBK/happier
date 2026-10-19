@@ -8,7 +8,6 @@ import {
     prepareWorkspaceFileDetailsActionBoundary,
     getWorkspaceFileDetailsActionBoundary,
 } from './workspaceFileDetailsTestHelpers';
-import { useWorkspaceFileDetailsLoading } from './useWorkspaceFileDetailsLoading';
 installWorkspaceFileDetailsCommonModuleMocks();
 installWorkspaceFileDetailsActionBoundary();
 const transport = vi.hoisted(() => ({ diff: vi.fn(), stat: vi.fn() }));
@@ -20,6 +19,8 @@ vi.mock('@/platform/digest', () => ({ digest: async () => new Uint8Array(32) }))
 const patch = (text: string) => `diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+${text}\n`;
 const input = { scope: { serverId: 'server', machineId: 'machine', rootPath: '/repo' }, filePath: 'file.txt', diffMode: 'pending' as const, fileEntryKind: 'modified' as const, isActive: true, refreshFingerprint: '1' };
 const workspaceFileDetailsActionBoundary = getWorkspaceFileDetailsActionBoundary();
+// Load the loader only after the socket boundary is installed.
+const { useWorkspaceFileDetailsLoading } = await import('./useWorkspaceFileDetailsLoading');
 let current: ReturnType<typeof useWorkspaceFileDetailsLoading>;
 function Harness(props: Parameters<typeof useWorkspaceFileDetailsLoading>[0]) { current = useWorkspaceFileDetailsLoading(props); return null; }
 beforeEach(async () => {

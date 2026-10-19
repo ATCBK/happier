@@ -49,7 +49,7 @@ import { DestinationInstanceHost } from '@/components/appShell/workspace/Destina
 let harness: Awaited<ReturnType<typeof createWorkspaceFileDownloadHarness>>;
 let currentScreen: Awaited<ReturnType<typeof renderScreen>> | null = null;
 async function waitForPlayer(screen: Awaited<ReturnType<typeof renderScreen>>) {
-    await vi.waitFor(async () => { await flushHookEffects(); expect(screen.root.findAllByType('VideoView')).toHaveLength(1); });
+    await vi.waitFor(async () => { await flushHookEffects(); expect(screen.root.findAllByType('VideoView'), screen.getTextContent()).toHaveLength(1); });
 }
 const theme = createThemeFixture({ colors: { surface: { base: '#000', inset: '#000' }, border: { default: '#333' }, text: { secondary: '#ccc' } } });
 function file(revision = '[12,123]', focused = true, isActive = true) {

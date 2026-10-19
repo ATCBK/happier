@@ -69,9 +69,9 @@ export const CodeReadmeCard = React.memo(function CodeReadmeCard(props: Readonly
                         action={{ label: t('common.retry'), onPress: () => setRetry(value => value + 1), testID: `${testID}-error-action` }} />
                 ) : (
                     <View aria-busy style={styles.skeleton}>
-                        <HappierSkeletonBlock width="40%" height={18} radius={6} color={theme.colors.surface.pressedOverlay} reducedMotion={reducedMotion} />
-                        <HappierSkeletonBlock width="86%" height={10} radius={5} color={theme.colors.surface.pressedOverlay} reducedMotion={reducedMotion} />
-                        <HappierSkeletonBlock width="72%" height={10} radius={5} color={theme.colors.surface.pressedOverlay} reducedMotion={reducedMotion} />
+                        <HappierSkeletonBlock width="40%" height={18} radius={6} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
+                        <HappierSkeletonBlock width="86%" height={10} radius={5} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
+                        <HappierSkeletonBlock width="72%" height={10} radius={5} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
                     </View>
                 )}
             </View>

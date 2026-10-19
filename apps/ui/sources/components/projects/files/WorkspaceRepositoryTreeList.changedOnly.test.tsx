@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { createThemeFixture, renderScreen } from '@/dev/testkit';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import { selectScmChangedFiles } from '@/scm/scmStatusFiles';
@@ -83,7 +83,7 @@ const rowId = (path: string) => `repository-tree-row-${toTestIdSafeValue(path)}`
 const textOf = (node: any): string => (node == null ? '' : typeof node === 'string' ? node : (node.children ?? []).map(textOf).join(''));
 
 describe('WorkspaceRepositoryTreeList · Changed only', () => {
-    const theme = {
+    const theme = createThemeFixture({
         colors: {
             text: { primary: '#111', link: '#09f', secondary: '#aaa' },
             surface: { pressed: '#222', base: '#fff' },
@@ -94,7 +94,7 @@ describe('WorkspaceRepositoryTreeList · Changed only', () => {
                 active: { foreground: '#07f', background: '#eef' },
             },
         },
-    } as any;
+    });
 
 
     async function render(props: Partial<React.ComponentProps<typeof import('./WorkspaceRepositoryTreeList').WorkspaceRepositoryTreeList>> = {}) {
