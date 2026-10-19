@@ -5061,9 +5061,10 @@ const WORK_BOARD_ACTION_SPECS_V1: readonly PreNormalizedActionSpec[] = WORK_BOAR
     uiConfirmationForInput: (input: unknown) => {
       const parsed = WorkBoardActionInputSchemasV1['boards.apply'].safeParse(input);
       if (!parsed.success) return true;
-      // Ordinary Board edits preserve their referenced work. Delete removes the
-      // Artifact; widget intents retain their existing capability confirmation.
-      return !['create', 'update', 'add_items', 'remove_item', 'set_positions'].includes(parsed.data.intent.kind);
+      // Board and widget edits are reversible and keep their referenced work, as the same widget
+      // edits through widgets.item.* do. Delete removes the Artifact and a widget's network access
+      // widens what a guest may reach, so those two confirm.
+      return parsed.data.intent.kind === 'delete' || parsed.data.intent.kind === 'widget_network';
     },
   } } : {}),
   title: WORK_BOARD_ACTION_TITLES[id],

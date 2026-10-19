@@ -208,7 +208,12 @@ describe('isApprovalRequiredByActionsSettings', () => {
     [{ intent: { kind: 'remove_item', boardId: 'board-1', ref: { kind: 'session', qualifiedId: { serverId: 'home-1', id: 'session-1' } } } }, false],
     [{ intent: { kind: 'set_positions', boardId: 'board-1', positionsByItemRef: {} } }, false],
     [{ intent: { kind: 'delete', boardId: 'board-1' } }, true],
-    [{ intent: { kind: 'widget_remove', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' } } }, true],
+    // A person's own Board widget edits are as reversible as the same edit through widgets.item.*, which admits them directly.
+    [{ intent: { kind: 'widget_add', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' }, instance: { v: 1, id: 'widget-1', definition: { kind: 'builtin', id: 'changes' }, bindings: {} } } }, false],
+    [{ intent: { kind: 'widget_remove', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' } } }, false],
+    [{ intent: { kind: 'widget_move', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' }, toIndex: 0 } }, false],
+    [{ intent: { kind: 'widget_size', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' }, size: 'wide' } }, false],
+    [{ intent: { kind: 'widget_inputs_reset', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' } } }, false],
     [{ intent: { kind: 'widget_network', boardId: 'board-1', ref: { surface: { serverId: 'home-1', accountId: 'account-1', owner: { kind: 'workBoard', boardId: 'board-1' } }, instanceId: 'widget-1' }, network: { network: 'open' } } }, true],
     [{ intent: { kind: 'delete' } }, true],
     [undefined, true],

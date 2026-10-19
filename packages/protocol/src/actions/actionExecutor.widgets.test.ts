@@ -659,15 +659,21 @@ describe('configured widget Actions', () => {
       expect(await executor.execute('widgets.item.rename', { ref, displayName: 'Await approval' },
         { surface: 'ui', authority: 'present_user', actionsSettings: ask }))
         .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+      const nativeRename = { intent: { kind: 'widget_rename', boardId: 'board', ref, displayName: 'Native' } } as const;
       if (kind === 'workBoard') {
-        expect(await executor.execute('boards.apply', { intent: { kind: 'widget_rename', boardId: 'board', ref, displayName: 'Native' } },
-          { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        const askBoard = normalizeActionsSettingsV1({ v: 1, actions: { 'boards.apply': { approvalRequiredSurfaces: ['ui'] } } });
+        expect(await executor.execute('boards.apply', nativeRename, { surface: 'ui', authority: 'present_user', actionsSettings: askBoard }))
+          .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
       }
       expect(boundary.rows.get(row.artifactId)).toBe(before);
       const actionsSettings = normalizeActionsSettingsV1({ v: 1,
         approvalWaivedSurfaces: { 'widgets.item.rename': ['ui'] } });
       expect(await executor.execute('widgets.item.rename', { ref, displayName: 'Shared' }, { surface: 'ui', authority: 'present_user', actionsSettings }))
         .toMatchObject({ ok: true });
+      // The Board's own Action admits the same reversible edit with no confirmation.
+      if (kind === 'workBoard') {
+        expect(await executor.execute('boards.apply', nativeRename, { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
+      }
     }
   });
 });
