@@ -1,4 +1,4 @@
-import { deriveHappierRadiusScale, HAPPIER_RADIUS_BASE_PX } from '@happier-dev/plugin-ui/environment';
+import { deriveHappierRadiusScale, HAPPIER_RADIUS_BASE_PX, HAPPIER_SPACE_STEPS } from '@happier-dev/plugin-ui/environment';
 import { Platform } from 'react-native';
 
 /**
@@ -52,8 +52,7 @@ const PART_RADIUS_STEPS: Readonly<Record<ThemePartName, ThemeRadiusStep>> = {
 const ANDROID_COMPOSER_RADIUS_EXTRA = Platform.OS === 'android' ? 4 : 0;
 
 
-/** Value-named spacing steps shared by every app theme. */
-export const HAPPIER_SPACE_STEPS = Object.freeze({ s2: 2, s4: 4, s6: 6, s8: 8, s10: 10, s12: 12, s16: 16, s20: 20, s24: 24, s32: 32, s40: 40, s48: 48 } as const);
+export { HAPPIER_SPACE_STEPS } from '@happier-dev/plugin-ui/environment';
 export type ThemeSpaceStep = keyof typeof HAPPIER_SPACE_STEPS;
 type Space = Readonly<Record<ThemeSpaceStep, number>>;
 

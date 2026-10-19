@@ -40,6 +40,16 @@ describe('resolveThemeProfile', () => {
         }, dark: {} }) });
         expect(explicitMarkerInk.colors.state.success.textForeground).toBe(lightTheme.colors.state.success.foreground);
     });
+    it('derives loading-placeholder ink from the profile text ink unless the profile sets it', () => {
+        const unrelated = resolveThemeProfile({ mode: 'light', profile: profile({ light: { 'background.canvas': '#fafafa' }, dark: {} }) });
+        expect(unrelated.colors.surface.skeleton).toBe(lightTheme.colors.surface.skeleton);
+
+        const tinted = resolveThemeProfile({ mode: 'dark', profile: profile({ light: {}, dark: { 'text.primary': '#CDD6F4' } }) });
+        expect(tinted.colors.surface.skeleton).toBe('rgba(205, 214, 244, 0.16)');
+
+        const explicit = resolveThemeProfile({ mode: 'dark', profile: profile({ light: {}, dark: { 'text.primary': '#CDD6F4', 'surface.skeleton': 'rgba(255,255,255,0.03)' } }) });
+        expect(explicit.colors.surface.skeleton).toBe('rgba(255,255,255,0.03)');
+    });
     it('preserves canonical visual values when no profile is active', () => {
         expect(resolveThemeProfile({ mode: 'light', profile: null })).toBe(lightTheme);
         expect(resolveThemeProfile({ mode: 'dark', profile: null })).toBe(darkTheme);
