@@ -478,6 +478,30 @@ describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
 });
 
 describe('materializePrepublicationWorkspacePackageRoots', () => {
+  it('materializes reachable public author dependencies using the shared prepublication rule', () => {
+    const root = createTempRoot('workspace-public-author-closure-');
+    const destinationRoot = join(root, 'author');
+    const bundle = createPrepublicationBundleWriter({ sourceRoot: join(root, 'packages'), destinationRoot });
+    const sdk = bundle('@happier-dev/plugin-sdk', 'sdk');
+    const ui = bundle('@happier-dev/plugin-ui', 'ui', {
+      peerDependencies: { '@happier-dev/plugin-sdk': '>=0.0.0 <1.0.0' },
+    });
+    const sources = bundle('@happier-dev/triage-sources', 'sources', {
+      dependencies: { '@happier-dev/plugin-ui': '0.0.0' },
+      optionalDependencies: { '@happier-dev/channels-protocol': '^1.0.0' },
+    });
+    const unused = bundle('@happier-dev/channels-protocol', 'channels');
+    materializePrepublicationWorkspacePackageRoots({
+      bundles: [sources, ui, sdk, unused],
+      rootPackageNames: ['@happier-dev/triage-sources'],
+    });
+
+    expect(existsSync(join(ui.destDir, 'dist/index.js'))).toBe(true);
+    expect(existsSync(join(sdk.destDir, 'dist/index.js'))).toBe(true);
+    expect(existsSync(unused.destDir)).toBe(false);
+    expect(readPackageJson(sources.destDir).dependencies).toMatchObject({ '@happier-dev/plugin-ui': '0.0.0' });
+  });
+
   it('materializes only requested packages carrying the canonical public author classification', () => {
     const root = createTempRoot('cli-common-public-author-roots-');
     const writePublicPackage = createPrepublicationBundleWriter({

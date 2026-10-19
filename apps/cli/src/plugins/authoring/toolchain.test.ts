@@ -727,9 +727,7 @@ describe('runPluginAuthorToolchain', () => {
       }), 'utf8');
       const packageRootsByName = new Map([
         ['@happier-dev/plugin-sdk', join(materializedRoot, 'plugin-sdk')],
-        ['@happier-dev/plugin-ui', join(materializedRoot, 'plugin-ui')],
         ['@happier-dev/channels-protocol', join(materializedRoot, 'channels-protocol')],
-        ['@happier-dev/triage-protocol', join(materializedRoot, 'triage-protocol')],
       ]);
       const spawn = vi.fn(async () => {
         const workspaceConfig = await readFile(join(projectRoot, 'pnpm-workspace.yaml'), 'utf8');

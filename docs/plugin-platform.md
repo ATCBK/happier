@@ -3748,6 +3748,11 @@ prepare the requested public packages and their dependencies; copying an older
 Packaged hosts and admitted source bundles use their supplied package closure.
 Repeated preparations reuse its pnpm
 virtual-store identity; the transient workspace config selects pnpm's native
+The selected packages' satisfying public runtime dependencies and peers follow
+the same rule, so a declared helper package can bring its public UI dependency
+without asking npmjs for an unpublished version. Explicit bundled dependencies
+keep their existing nested package closure; package development tools do not
+become author dependencies.
 immediate orphan pruning when the closure changes. Both temporary package roots
 and the workspace config are released after preparation. Published registry
 resolution keeps its existing policy.

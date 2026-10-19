@@ -234,7 +234,7 @@ export async function materializePrepublicationAuthorWorkspacePackages(params: R
   let installRoot: string | undefined;
   try {
     const bundles = remapWorkspaceBundleDestinations({ materializationRoot, bundles: params.bundles });
-    materializePrepublicationWorkspacePackageRoots({
+    const materializedPackageNames = materializePrepublicationWorkspacePackageRoots({
       bundles,
       rootPackageNames: params.packageNames,
     });
@@ -279,7 +279,7 @@ export async function materializePrepublicationAuthorWorkspacePackages(params: R
     return Object.freeze({
       packageRootsByName: resolveMaterializedPrepublicationAuthorPackageRoots(
         installRoot,
-        params.packageNames,
+        materializedPackageNames,
       ),
       cleanup: async () => {
         try {
@@ -487,15 +487,14 @@ async function prepareBundledPrepublicationResolution(params: Readonly<{
     return null;
   }
   try {
+    for (const packageName of requestedPackageNames) {
+      if (!materialization.packageRootsByName.has(packageName)) {
+        throw new Error(`The running Happier CLI could not materialize declared public author package '${packageName}'`);
+      }
+    }
     const cleanupWorkspaceConfig = await writeTransientBundledPrepublicationWorkspaceConfig({
       projectRoot: params.projectRoot,
-      packageRootsByName: new Map(requestedPackageNames.map((packageName) => {
-        const packageRoot = materialization.packageRootsByName.get(packageName);
-        if (!packageRoot) {
-          throw new Error(`The running Happier CLI could not materialize declared public author package '${packageName}'`);
-        }
-        return [packageName, packageRoot] as const;
-      })),
+      packageRootsByName: materialization.packageRootsByName,
     });
     return Object.freeze({
       args: withTransientBundledAuthorPackageInstallArgs(params.args),
