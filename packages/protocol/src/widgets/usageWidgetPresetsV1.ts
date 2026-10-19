@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import * as z from 'zod/mini';
+import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { instantiateWidgetLayoutFragmentGroupV1, type WidgetLayoutFragmentDraftV1, type WidgetLayoutFragmentGroupV1 } from './widgetLayoutFragmentV1.js';
 import { readBuiltinWidgetDescriptorV1 } from './builtinWidgetDescriptorV1.js';
 import type { WidgetAreaPresetV1 } from './widgetSurfaceArtifactV1.js';
@@ -12,9 +13,9 @@ export const USAGE_WIDGET_PRESET_IDS = ['overview', 'costs', 'work', 'usage', 'p
 export type UsageWidgetPresetId = typeof USAGE_WIDGET_PRESET_IDS[number];
 
 const scopes = USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow');
-const scopeSchema = (inventoryOnly: boolean) => PluginJsonSchemaV2Schema.parse(z.toJSONSchema((inventoryOnly ? UsageSourceInventoryScopeSchema : lazyZodSchema(() => z.pick(UsageQuerySchema, {
+const scopeSchema = (inventoryOnly: boolean) => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject((inventoryOnly ? UsageSourceInventoryScopeSchema : lazyZodSchema(() => z.pick(UsageQuerySchema, {
     period: true, agents: true, machines: true, projects: true, sources: true, session: true, costBasis: true,
-}))), { io: 'input', target: 'draft-7' }));
+}))), { target: 'draft-7' }));
 
 type PresetWidget = Readonly<{ id: string; size: WidgetSizeV1; metric?: 'tokens' | 'cost';
     breakdown?: readonly UsageAnalyticsBreakdownDimension[] }>;
@@ -31,17 +32,21 @@ const arrangements: Readonly<Record<UsageWidgetPresetId, readonly Arrangement[]>
         // beside the Projections list, so neither column ends in a half-empty cell (lab wgusage-CD).
         w('usage_coach', 'full'), w('usage_projections', 'medium'), w('usage_efficiency', 'small'),
         w('usage_rhythm', 'medium')] }],
-    // Cost facts holds the money facts and the prices line behind them, so it takes the full band.
+    // Cost facts holds the money facts and the prices line behind them, so it takes the full band. The daily
+    // cost bars sit beside Breakdowns over Efficiency (lab d2views-COST 2-up), so the chart's plot takes that
+    // column's height rather than a short list's; Plan fit and Outcomes follow as their own bands.
     costs: [{ width: 'full', widgets: [w('usage_cost_facts', 'full', { metric: 'cost' }), w('usage_daily', 'tall', { metric: 'cost' }),
-        w('usage_breakdowns', 'tall', { metric: 'cost', breakdown: ['agent'] }), w('usage_plan_fit', 'medium', { metric: 'cost' }),
-        w('usage_efficiency', 'medium', { metric: 'cost' }), w('usage_outcomes', 'full', { metric: 'cost' })] }],
+        w('usage_breakdowns', 'medium', { metric: 'cost', breakdown: ['agent'] }), w('usage_efficiency', 'medium', { metric: 'cost' }),
+        w('usage_plan_fit', 'full', { metric: 'cost' }), w('usage_outcomes', 'full', { metric: 'cost' })] }],
     work: [{ width: 'full', widgets: [w('usage_project_ledger', 'large'), w('usage_session_value', 'tall'), w('usage_outcomes', 'tall')] }],
     // Daily beside the model breakdown; Efficiency is one compact band, so a period without a basis
     // costs a line, never a tall empty cell beside the chart.
     usage: [{ width: 'full', widgets: [w('usage_daily', 'tall'), w('usage_breakdowns', 'tall', { breakdown: ['model'] }),
         w('usage_efficiency', 'wide'), w('usage_flow', 'full'), w('usage_breakdowns', 'full', { breakdown: ['machine'] })] }],
-    plans: [{ width: 'full', widgets: [w('usage_capacity', 'full'), w('usage_projections', 'tall'), w('usage_resets', 'tall'),
-        w('usage_plan_fit', 'full')] }],
+    // Projections and Plan fit stack beside the longer Resets list: a short projection list never leaves a
+    // tall empty column.
+    plans: [{ width: 'full', widgets: [w('usage_capacity', 'full'), w('usage_projections', 'medium'), w('usage_resets', 'tall'),
+        w('usage_plan_fit', 'medium')] }],
     coach: [{ width: 'full', widgets: [w('usage_coach', 'large')] }],
     'how-you-work': [{ width: 'full', widgets: [w('usage_rhythm', 'full'), w('usage_parallel', 'full'), w('usage_human_loop', 'medium'),
         w('usage_night_shift', 'medium'), w('usage_recap', 'large')] }],

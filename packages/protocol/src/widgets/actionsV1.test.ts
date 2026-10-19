@@ -3,6 +3,39 @@ import { createActionExecutor } from '../actions/actionExecutor.js';
 import { createHomeHubArtifactPortV1 } from '../home/homeHubArtifactV1.js';
 import { createWorkBoardArtifactBoundary } from '../boards/workBoardArtifactV1.testkit.js';
 import { flattenWidgetLayoutWidgetsV1 } from './widgetLayoutItemV1.js';
+import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1 } from './widgetSurfaceArtifactV1.js';
+
+it('keeps surface-read failure and cancellation separate from a real Account scope change, then admits retry', async () => {
+  const boundary = createWorkBoardArtifactBoundary();
+  let scope = { serverId: 'home', accountId: 'owner' };
+  const surface = { ...scope, owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'coach' } } as const;
+  let fail = true;
+  let changeScope = false;
+  let cancel: AbortController | undefined;
+  const transport = { ...boundary.forAccount('owner'), read: async () => {
+    if (changeScope) scope = { ...scope, accountId: 'other' };
+    if (cancel) { cancel.abort(); cancel.signal.throwIfAborted(); }
+    if (fail) throw new Error('Artifact read failed');
+    return null;
+  } };
+  const owner = createWidgetAreaActionPortV1(target => createWidgetSurfaceArtifactPortV1(transport, {
+    surface: target, presets: [{ id: 'coach', name: 'Coach', items: [] }], isCurrent: () => true,
+  }));
+  const executor = createActionExecutor({ widgetAccountScope: () => scope, widgetSurfaceActions: { corePage: owner } });
+  const read = (signal?: AbortSignal) => executor.execute('widgets.item.list', { surface }, { surface: 'ui', ...(signal ? { signal } : {}) });
+  expect(await read()).toMatchObject({ ok: false, errorCode: 'widget_area_unavailable' });
+  cancel = new AbortController();
+  expect(await read(cancel.signal)).toMatchObject({ ok: false, errorCode: 'cancelled' });
+  cancel = undefined;
+  fail = false;
+  expect(await read()).toMatchObject({ ok: true, result: { surface, preset: { id: 'coach' } } });
+  changeScope = true;
+  expect(await read()).toMatchObject({ ok: false, errorCode: 'widget_scope_unavailable' });
+  changeScope = false;
+  expect(await read()).toMatchObject({ ok: false, errorCode: 'account_target_mismatch' });
+  scope = { serverId: 'home', accountId: 'owner' };
+  expect(await read()).toMatchObject({ ok: true, result: { surface } });
+});
 
 it('changes and copies only the stored guest-network choice through the widget Action owner', async () => {
   const boundary = createWorkBoardArtifactBoundary();

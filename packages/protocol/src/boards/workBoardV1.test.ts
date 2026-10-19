@@ -27,6 +27,44 @@ function applied(result: ReturnType<typeof applyWorkBoardIntentV1>): WorkBoardsV
 }
 
 describe('WorkBoardV1', () => {
+    it('normalizes external plugin task references without mixing their identities or losing positions', () => {
+        const ref = { kind: 'task', qualifiedId: { serverId: ' home-a ', id: ' issue-7 ' }, pluginId: ' com.acme.tasks ' };
+        const other = { ...ref, pluginId: 'com.other.tasks' };
+        const key = JSON.stringify(['task', 'home-a', 'com.acme.tasks', 'issue-7']);
+        const result = applied(applyWorkBoardIntentV1(boardsWith(createWorkBoardV1({ id: 'b1', name: 'Tasks' })),
+            WorkBoardIntentV1Schema.parse({ kind: 'add_items', boardId: 'b1', refs: [ref, ref, other] })));
+        expect(result.boards[0]?.source.picked).toEqual([
+            { kind: 'task', qualifiedId: { serverId: 'home-a', id: 'issue-7' }, pluginId: 'com.acme.tasks' },
+            { kind: 'task', qualifiedId: { serverId: 'home-a', id: 'issue-7' }, pluginId: 'com.other.tasks' },
+        ]);
+        expect(buildWorkBoardItemKeyV1(result.boards[0]!.source.picked[0]!)).toBe(key);
+        expect(readWorkBoardItemKeyV1(key)).toEqual(result.boards[0]!.source.picked[0]);
+        const restored = WorkBoardsV1Schema.parse({ ...result, boards: [{ ...result.boards[0], positionsByItemRef: { [key]: { x: 12, y: 24 } } }] });
+        expect(restored.boards[0]?.positionsByItemRef[key]).toEqual({ x: 12, y: 24 });
+        expect(WorkBoardIntentV1Schema.safeParse({ kind: 'add_items', boardId: 'b1', refs: [{ kind: 'task', qualifiedId: ref.qualifiedId }] }).success).toBe(false);
+    });
+
+    it('retains an Under-session filter through the Board intent and stored-document readers', () => {
+        const initial = boardsWith(createWorkBoardV1({ id: 'tree', name: 'Payments' }));
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home-a'], underSessionId: ' coordinator ' });
+        const result = applied(applyWorkBoardIntentV1(initial, WorkBoardIntentV1Schema.parse({
+            kind: 'update', boardId: 'tree', patch: { source: { picked: [], filter }, mode: 'by_status' },
+        })));
+        const restored = WorkBoardsV1Schema.parse(JSON.parse(JSON.stringify(result)));
+        expect(restored.boards[0]?.source.filter).toEqual(filter);
+        expect(restored.boards[0]?.source.filter?.underSessionId).toBe('coordinator');
+    });
+
+    it('rejects unknown item kinds at the mutation boundary while retaining stored unknown picks', () => {
+        const ref = { kind: 'future-task', qualifiedId: { serverId: 'home-a', id: 'item' } };
+        expect(WorkBoardIntentV1Schema.safeParse({ kind: 'add_items', boardId: 'b1', refs: [ref] }).success).toBe(false);
+        const stored = WorkBoardsV1Schema.parse({ v: 1, boards: [{
+            ...createWorkBoardV1({ id: 'b1', name: 'Overview' }), source: { picked: [ref, session('home-a', 's1')] },
+        }] });
+        expect(stored.boards[0]?.source.picked).toEqual([session('home-a', 's1')]);
+        expect(stored.boards[0]?.source.unknown?.picked).toEqual([ref]);
+    });
+
     it('reads known persisted fields and drops extras throughout the Board collection', () => {
         const ref = session('home-a', 's1');
         const key = buildWorkBoardItemKeyV1(ref);

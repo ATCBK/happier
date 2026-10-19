@@ -51,16 +51,26 @@ export async function readWidgetActionSurfaceAdmissionV1(
     || surface.owner.kind === 'pluginArea' || surface.owner.kind === 'corePage') {
     const port = readWidgetActionSurfacePortV1(deps, surface);
     if (!port) return failure('unsupported_widget_surface');
+    const isAccountCurrent = () => {
+      try {
+        const current = deps.widgetAccountScope?.();
+        return !!current && current.serverId === scope.serverId && current.accountId === scope.accountId;
+      } catch { return false; }
+    };
     try {
       const admitted = await port.read(surface, context, context.signal);
       if ('ok' in admitted) return admitted;
       const parsed = WidgetSurfaceReadV1Schema.safeParse(admitted);
       if (!parsed.success || !sameStrictJsonValue(parsed.data.surface, surface)) return failure('invalid_action_output');
       if (context.signal?.aborted) return failure('cancelled');
-      const current = deps.widgetAccountScope?.();
-      if (!current || current.serverId !== scope.serverId || current.accountId !== scope.accountId) return failure('widget_scope_unavailable');
+      if (!isAccountCurrent()) return failure('widget_scope_unavailable');
       return { ok: true, read: parsed.data };
-    } catch { return failure('widget_scope_unavailable'); }
+    } catch {
+      if (context.signal?.aborted) return failure('cancelled');
+      // A failed surface read does not establish that its Account authority changed.
+      // Recheck that authority before distinguishing a retryable layout read failure.
+      return failure(isAccountCurrent() ? 'widget_area_unavailable' : 'widget_scope_unavailable');
+    }
   }
   return { ok: true, read: null };
 }
