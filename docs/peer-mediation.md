@@ -71,6 +71,15 @@ remains available where independently trusted; identity, authentication, integri
 and stale-target failures remain fail-closed.
 
 The native carrier is active in the current 0.3 development source for Home and Machine traffic.
+Its shared native runtime starts on the first endpoint operation, rather than addon loading or
+availability inspection. The multi-thread Tokio scheduler keeps incoming acceptors and tunnels
+running between host calls. Its async worker pool uses the available CPU count capped at 32,
+based on direct/relay addon throughput and sustained-transfer measurements; Tokio's separate
+blocking pool retains its normal lifecycle. Node/Bun, Tauri and mobile bindings consume this same
+native owner. Daemon startup prepares a live endpoint for Home and incoming Machine traffic;
+zero active Sessions therefore does not imply that Iroh is unused. Existing processes need a
+reload with the rebuilt native library to consume the worker cap.
+
 Its single applied policy is `automatic` or `disabled`: `automatic` uses only the explicitly
 configured relay set while allowing Iroh to select direct or relayed reachability, and `disabled`
 contacts no relay. The dialer always authenticates the remote peer as the exact EndpointId selected
@@ -411,6 +420,12 @@ in `apps/cli/src/daemon/peer/mediation/stream/relay.ts`, not the capture produce
 Server relay admission rechecks signed expiry after reading Account mode, before retaining stream
 state. An authorization that expires during that read cannot open a stream.
 
+The server owns relay credit and clamps viewer acknowledgements to its admitted network window.
+After admitting an acknowledgement, `machineLiveStreamRelayHandler` forwards it to the source's
+verified installation. The daemon passes it to the existing capture session so demand-driven
+Computer capture can produce its next frame. Rejected acknowledgements never wake capture;
+forwarding an acknowledgement does not move relay credit ownership into the daemon.
+
 Daemon browser views register `sourceKind: 'browser'` and stream family `browser.streamed` in the
 same live-stream capture registry. Their exact source id is the protocol `browserViewKey` for the
 Happier session and view. `daemon.browser.view.list` projects that session's current views from the
@@ -418,6 +433,9 @@ control broker, including navigation events and capture metadata only when the s
 registered; CDP handles stay daemon-local. Browser starts require that exact source id, and the
 signed relay authorization binds it. A family-only registry lookup refuses ambiguous matches.
 The shared viewer ingestion hook carries that source id through both initial admission and renewal.
+The registry-backed capture adapter returns the exact admitted source's capabilities with its
+session. The relay consumes those facts for input policy; it has no independent registry lookup
+that can disagree with capture admission. Adapters without source facts retain lease enforcement.
 
 `apps/cli/src/daemon/browser/capture/cdpScreencast.ts` owns one CDP screencast and one frame ACK per
 view. Recording and live viewers subscribe to that producer independently: closing either consumer
@@ -425,6 +443,14 @@ does not stop the other, while closing the view retires both. Viewer tap, keyboa
 uses the existing stream control path and daemon automation/controller owner for human takeover;
 it does not acquire a simulator lease. Capture acknowledgement and viewer network credit remain
 separate authorities.
+
+In 0.3 development, controller and navigation metadata uses that same scoped frame carrier
+without requiring a new CDP picture. The server uses the Protocol stream meter for both image
+and metadata delivery. Metadata consumes byte credit and the signed byte budgets, but not image
+FPS, image-count credit or the image queue's frame-count budget. Its ordered delivery does not
+wait for a keyframe; only dependent image deltas do. Byte-pressure coalescing retains newer
+metadata and does not request image recovery when no image was lost. Viewer ingestion
+acknowledges metadata without decoding pixels or replacing its held picture.
 
 Receipts distinguish terminal outcomes explicitly with `terminal: true` and a `stopped` or `error`
 outcome. Temporary backpressure is nonterminal. The relay owns network acknowledgement credit;
@@ -607,6 +633,13 @@ through the daemon preview lifecycle; an already registered preview also request
 admission on Open. Preview snapshot reads only project the current rows and never mint admissions.
 A registration failure stays on its own row as a typed diagnostic, so healthy previews remain
 visible and usable.
+
+In 0.3 development, the Machine Action `localServices.actions.openPreview` delegates to
+that same lifecycle as `localServices.preview.openOrCreate`. Both return the Protocol-owned
+`DaemonLocalServicePreviewOpenOrCreateResponseV1` (registration status, preview row and
+snapshot). Detected targets retain their requested Session; source-qualified managed Services
+retain their Service binding without adopting the invoking Session. The older audited-control
+aggregate does not admit Preview Open; UI callers use the canonical Machine Action transport.
 
 In current 0.3 development, a scoped registration without an isolated private origin is retained
 with null `accessUrl`/`expiresAt` and `accessUnavailableReasonCode: preview_private_route_unavailable`.
