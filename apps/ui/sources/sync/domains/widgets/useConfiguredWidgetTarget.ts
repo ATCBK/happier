@@ -19,6 +19,7 @@ import { useHydrateSession } from '@/hooks/session/useHydrateSessionForRoute';
 import { isSessionRouteHydrationPending } from '@/sync/domains/session/sessionRouteHydrationState';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { useProjectAccountWorkspaceRefs } from '@/sync/domains/workspaces/projectAccountRows';
 
 const NO_PURPOSE_BINDINGS: QualifiedConnectedAccountPurposeBindingsV1 = { v: 1, bindings: [] };
 
@@ -45,6 +46,7 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions, re
     const targetDeclaration = readWidgetInputTargetV1(input.descriptor);
     const sessionPath = targetDeclaration.kind === 'session' ? targetDeclaration.path : undefined;
     const viewer = useActiveServerAccountScope();
+    const workspaceRefs = useProjectAccountWorkspaceRefs(input.enabled !== false && targetDeclaration.kind === 'workspace');
     const profile = useProfile();
     const purposePaths = Object.entries(input.instance.bindings).filter(([path, binding]) => binding.kind === 'viewer'
         && input.descriptor.connectedAccountPurposeBindings?.some(declaration => declaration.path === path && declaration.purpose === binding.purpose)
@@ -88,7 +90,8 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions, re
         return resolved;
     };
     const provisional = resolve(input.descriptor);
-    const currentViewer = !!viewer && areServerProfileIdentifiersEquivalent(input.scope.serverId, viewer.serverId)
+    const currentViewer = !!viewer && (input.appRuntime.accountLifetime?.isCurrent() ?? true)
+        && areServerProfileIdentifiersEquivalent(input.scope.serverId, viewer.serverId)
         && (input.scope.accountId === viewer.accountId || areServerAccountScopesEqual(viewer, input.admittedViewer));
     const authored = input.descriptor.authoredDefinition;
     const builtin = input.instance.definition.kind === 'builtin' || authored?.body.kind === 'builtin';
@@ -221,7 +224,7 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions, re
             machineId: executableRuntime.phase === 'current' && executableRuntime.interactionEnabled ? executableRuntime.machineId : null,
             resources: Object.values(executableRuntime.pluginUiProjection?.resourcesById ?? {}) } },
         descriptor: candidate ?? input.descriptor,
-        providedContext: input.providedContext, appRuntime: input.appRuntime,
+        providedContext: input.providedContext, workspaceRefs, appRuntime: input.appRuntime,
         readSession: ref => {
             if (!requested || !areServerProfileIdentifiersEquivalent(requested.serverId, ref.serverId) || requested.sessionId !== ref.sessionId)
                 return { status: 'denied', reasonCode: 'widget_target_identity_mismatch' };

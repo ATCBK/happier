@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Modal } from '@/modal';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -22,6 +23,7 @@ vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harne
 installDisconnectedServerSocketBoundary();
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const initialState = getStorage().getState();
+beforeEach(() => { vi.spyOn(Modal, 'confirm').mockResolvedValue(true); });
 afterEach(() => {
     resetAcpCatalogEngineForTests(); resetAcpCatalogSnapshotsForTests(); retireActiveServerAccountScopeLifetime();
     resetRuntimeFetch(); invalidateAccountEncryptionModeCache(); resetServerFeaturesClientForTests(); vi.restoreAllMocks();

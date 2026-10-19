@@ -16,7 +16,6 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
-import { ExternalActionExecutionAuthorizationV1Schema, type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import type { SessionCreationTargetPreparationRequestV1, SessionCreationTargetPreparationResultV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationTargetPreparationV1';
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 
@@ -34,7 +33,7 @@ installDisconnectedServerSocketBoundary(socket => {
   vi.spyOn(socket, 'timeout').mockReturnValue(socket);
   vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, payload: SocketRpcRequestPayload) => {
     if (event === SOCKET_RPC_EVENTS.CALL) {
-      if (!payload.method.endsWith(`:${RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE}`)) throw new Error('Unexpected machine RPC');
+      if (!payload.method.endsWith(`:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`)) throw new Error('Unexpected machine RPC');
       return { ok: true, result: preparedDirectory };
     }
     return { ok: true };
@@ -49,16 +48,8 @@ const { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } = await 
   createDaemonApprovalExecutionOriginCurrentnessFromCredentials(input: Readonly<{
     credentials: { token: string; encryption: null }; serverId: string; serverApiUrl: string; machineId: string;
     resolveCurrentMachineExecutionOriginContext(): Promise<{ serverIdentityId: string; machineId: string }>;
-    isRequesterCurrent?: () => Promise<boolean>;
   }>): ActionExecutorDeps['isApprovalExecutionOriginCurrent'];
 }>(currentnessSource);
-const requesterSource = '../../../../../cli/src/daemon/sessionEncryption/requesterAccountActionProjection';
-const { admitRequesterAccountActionContext } = await vi.importActual<{
-  admitRequesterAccountActionContext(input: Readonly<{
-    authorization: ExternalActionExecutionAuthorizationV1; credentials: { token: string; encryption: null };
-    serverId: string; serverIdentityId: string; serverHttpBaseUrl: string; isCurrent(): Promise<boolean>;
-  }>): Promise<{ isCurrent(): Promise<boolean>; dispose(): Promise<void> } | null>;
-}>(requesterSource);
 const preparationSource = '../../../../../cli/src/session/creation/prepareSessionCreationTarget';
 const { prepareSessionCreationTarget } = await vi.importActual<{
   prepareSessionCreationTarget(input: { request: SessionCreationTargetPreparationRequestV1; signal?: AbortSignal }): Promise<SessionCreationTargetPreparationResultV1>;
@@ -80,7 +71,7 @@ const installationStore = await vi.importActual<{ readInstallationIdentityIfExis
 
 afterEach(() => { vi.restoreAllMocks(); });
 
-it.each(['available', 'rate_limited', 'account_changed', 'home_changed', 'machine_changed', 'revoked', 'missing_directory', 'requester_retired', 'settings_advanced'] as const)(
+it.each(['available', 'rate_limited', 'account_changed', 'home_changed', 'machine_changed', 'revoked', 'missing_directory', 'settings_advanced'] as const)(
   'rechecks unsigned UI spawn approval currentness (%s)', async scenario => {
   socketUpdates.clear();
   const webLocks = installWebLockManagerMock();
@@ -101,7 +92,6 @@ it.each(['available', 'rate_limited', 'account_changed', 'home_changed', 'machin
   const { writeApprovalRequestArtifact } = await import('./approvalArtifactWriter');
   const account = await captureLazyActionAccountContext(homeId);
   const temporaryRoot = mkdtempSync(join(tmpdir(), 'approvalstale-c2-'));
-  let requester: Awaited<ReturnType<typeof admitRequesterAccountActionContext>> = null;
   try {
     // Installation key storage is a real OS boundary; no machine secrets are read.
     vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue(null);
@@ -127,22 +117,11 @@ it.each(['available', 'rate_limited', 'account_changed', 'home_changed', 'machin
       return revoked ? { status: 401, data: { error: 'invalid_token' } }
         : { status: 200, data: AccountProfileSchema.parse({ id: accountId }) };
     });
-    requester = await admitRequesterAccountActionContext({
-      authorization: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'synthetic-decider-root', binding: {
-        accountId: 'spawn-account', custodianAccountId: 'spawn-account', authentication: { kind: 'account', tokenEpoch: 0 },
-        accountEncryptionMode: 'plain', serverIdentityId: 'srv_spawn', machineId: 'spawn-machine', installationId: 'fixture-installation',
-        actionId: 'approval.request.decide', requestId: 'fixture-decider', requestEnvelopeDigest: 'a'.repeat(43),
-        target: { kind: 'machine', machineId: 'spawn-machine' },
-      } }),
-      credentials: { token: credential, encryption: null }, serverId: 'daemon-profile', serverIdentityId: 'srv_spawn',
-      serverHttpBaseUrl: 'https://ui-spawn.test', isCurrent: async () => true,
-    });
-    if (!requester) throw new Error('Requester admission failed');
     const currentness = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({
       credentials: { token: credential, encryption: null }, serverId: 'daemon-profile', serverApiUrl: 'https://ui-spawn.test',
       machineId: 'spawn-machine', resolveCurrentMachineExecutionOriginContext: async () => ({
         serverIdentityId: currentHome, machineId: currentMachine,
-      }), isRequesterCurrent: requester.isCurrent,
+      }),
     });
     if (!currentness) throw new Error('Currentness owner missing');
     const path = scenario === 'missing_directory' ? join(temporaryRoot, 'new-directory') : temporaryRoot;
@@ -232,7 +211,6 @@ it.each(['available', 'rate_limited', 'account_changed', 'home_changed', 'machin
     if (scenario === 'machine_changed') currentMachine = 'other-machine';
     if (scenario === 'account_changed') accountId = 'other-account';
     if (scenario === 'revoked') revoked = true;
-    if (scenario === 'requester_retired') await requester.dispose();
     const approved = await app.execute('approval.request.decide', { artifactId, decision: 'approve' }, {
       surface: 'ui', authority: 'present_user', serverId: homeId,
     });
@@ -253,7 +231,6 @@ it.each(['available', 'rate_limited', 'account_changed', 'home_changed', 'machin
     });
     expect(spawned).toHaveLength(1);
   } finally {
-    await requester?.dispose();
     rmSync(temporaryRoot, { recursive: true, force: true });
     account.dispose();
     await connection.dispose();

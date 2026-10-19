@@ -13,7 +13,7 @@ import { resolveListReorderFailure } from './listReorderFailure';
 
 /** The answering UI's existing sync Account owns execution; no mounted reorder registry. */
 export async function executeListReorderAction(args: Readonly<{
-    actionId: 'session.pending.reorder' | 'todos.reorder'; input: unknown; signal?: AbortSignal;
+    actionId: 'session.pending.reorder' | 'tasks.internal.reorder'; input: unknown; signal?: AbortSignal;
 }>): Promise<ListReorderOutputV1> {
     const parsed = (args.actionId === 'session.pending.reorder' ? PendingReorderInputV1Schema : TodoReorderInputV1Schema).safeParse(args.input);
     if (!parsed.success) return { status: 'refused', reason: 'invalid_input' };

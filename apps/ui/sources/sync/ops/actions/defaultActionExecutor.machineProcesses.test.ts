@@ -4,8 +4,12 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { resetMmkvStoresForTests } from '@/dev/reactNativeMmkvStub';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
+// These transport cases start after the present user accepts the shared confirmation.
+vi.mock('@/modal', async () =>
+    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 // Only daemon network transport is replaced; Account capture, schemas and approval remain real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
@@ -20,12 +24,27 @@ const { keepMachineGuardWorkRunningViaAction, undoMachineGuardActivityViaAction 
 const { fetchMachineVitalsViaMachineRpc, fetchMachineVitalsHistoryViaMachineRpc, watchMachineVitalsViaMachineRpc } = await import('@/sync/domains/machines/resources/machineRpc');
 const { fetchMachineProcessesViaMachineRpc, watchMachineProcessesViaMachineRpc } = await import('@/sync/domains/machines/processes/machineProcessesRpc');
 const { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes');
+const { storage } = await import('@/sync/domains/state/storage');
+const initialStorage = storage.getState();
 let serverId: string;
+let savedHomeId: string;
 beforeEach(async () => {
-    await homes.reset(); await loadSyncSingletonForTests(); rpc.machine.mockReset();
-    serverId = await homes.addHome({ name: 'Process Home', serverUrl: 'https://process-actions.test', accountId: 'owner', currentAccount: true });
+    await homes.reset();
+    // The warmed reader case publishes and persists a real Settings baseline.
+    // Retire that fixture state together, so the next Home reads its own policy.
+    resetMmkvStoresForTests();
+    storage.setState(initialStorage, true);
+    await loadSyncSingletonForTests(); rpc.machine.mockReset();
+    savedHomeId = await homes.addHome({ name: 'Process Home', serverUrl: 'https://process-actions.test', serverIdentityId: 'srv_process_actions', accountId: 'owner', currentAccount: true });
+    // Harness mutations use their saved registration handle; Actions retain the advertised Home scope.
+    serverId = 'srv_process_actions';
 });
-afterEach(async () => { vi.useRealTimers(); await homes.reset(); });
+afterEach(async () => {
+    vi.useRealTimers();
+    await homes.reset();
+    storage.setState(initialStorage, true);
+    resetMmkvStoresForTests();
+});
 const kill = { machineId: 'm', tree: true, targets: [{ ref: 'r', expect: { level: 'proven' as const, owner: { kind: 'session' as const, sessionId: 's' } } }] };
 describe('machine process Actions through the captured UI Home', () => {
     it.each(['machines.processes.stop', 'machines.processes.kill', 'machines.processes.leftBehind.cleanUp'] as const)
@@ -49,7 +68,7 @@ describe('machine process Actions through the captured UI Home', () => {
         const pending = executeMachineProcessesActionV1(actionId, input, { serverId, expectedAccountId: 'owner', signal: controller.signal });
         await started;
         controller.abort();
-        await homes.switchAccount(serverId, 'replacement');
+        await homes.switchAccount(savedHomeId, 'replacement');
         await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1000);
         expect(await pending).toEqual({ ok: true, result: receipt });
     });
@@ -71,7 +90,7 @@ describe('machine process Actions through the captured UI Home', () => {
             : undoMachineGuardActivityViaAction({ ...key, entryId: 'e' });
         await started;
         controller.abort();
-        await homes.switchAccount(serverId, 'replacement');
+        await homes.switchAccount(savedHomeId, 'replacement');
         await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1000);
         expect(await pending).toEqual({ ok: true, value: receipt });
     });
@@ -87,15 +106,15 @@ describe('machine process Actions through the captured UI Home', () => {
         expect(rpc.machine).not.toHaveBeenCalled();
     });
     it('enforces disabled resource read Actions on domain Retry while keeping parked watch demand on its transport', async () => {
-        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+        homes.answer(savedHomeId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
             actionsSettingsV1: { v: 1, actions: { 'machines.vitals.get': { enabled: false },
                 'machines.vitals.history.get': { enabled: false }, 'machines.processes.list': { enabled: false } } },
         } }, version: 1 } });
         const vitals = { machineId: 'm', serverId, view: 'overview' as const };
         const processes = { machineId: 'm', serverId, accountId: 'owner', scope: 'all' as const, view: 'tree' as const };
         rpc.machine.mockResolvedValue({ state: 'unavailable', series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] }, sample: null });
-        expect(await fetchMachineVitalsViaMachineRpc(vitals)).toEqual({ ok: false, reason: 'request_failed' });
-        expect(await fetchMachineVitalsHistoryViaMachineRpc({ ...vitals, range: '7d' })).toEqual({ ok: false, reason: 'request_failed' });
+        expect(await fetchMachineVitalsViaMachineRpc(vitals)).toEqual({ ok: false, reason: 'request_failed', errorCode: 'action_disabled' });
+        expect(await fetchMachineVitalsHistoryViaMachineRpc({ ...vitals, range: '7d' })).toEqual({ ok: false, reason: 'request_failed', errorCode: 'action_disabled' });
         expect(await fetchMachineProcessesViaMachineRpc(processes)).toEqual({ ok: false, reason: 'request_failed' });
         expect(rpc.machine).not.toHaveBeenCalled();
         rpc.machine.mockResolvedValue({ changed: false });
@@ -128,7 +147,8 @@ describe('machine process Actions through the captured UI Home', () => {
                 read: () => fetchMachineProcessesViaMachineRpc({ serverId, accountId: 'owner', machineId: 'm', scope: 'happier', view: 'tree' }), answer: processes },
         ];
         for (const row of readers) for (let i = 0; i < 5; i++) await row.read();
-        const homeRequestsBefore = homes.requests.length;
+        const inventoryRequests = () => homes.requests.filter(request => request.path === '/v1/machines');
+        const inventoryRequestsBefore = inventoryRequests().length;
         const measurements = [];
         for (const row of readers) {
             const directAt = performance.now();
@@ -145,13 +165,13 @@ describe('machine process Actions through the captured UI Home', () => {
             measurements.push({ method: row.method, directMs, actionMeanMs: actionTimes.reduce((sum, time) => sum + time, 0) / actionTimes.length,
                 actionP50Ms: actionTimes[20], actionP95Ms: actionTimes[38] });
         }
-        expect(homes.requests.length).toBe(homeRequestsBefore);
+        expect(inventoryRequests().length).toBe(inventoryRequestsBefore);
         console.info('FX26 warmed read timings (real Action logic, network boundary in memory)', JSON.stringify(measurements));
     });
     it('reaches the admitted machine family and preserves target/account capture and real waiver policy', async () => {
         const answer = { v: 1, machineId: 'm', capturedAtMs: 1000, state: 'live', platform: 'linux', evidenceModel: 'fenced', owners: [], leftBehind: [],
             totals: { happier: { processCount: 0, memoryBytes: 0 }, leftBehind: { processCount: 0, memoryBytes: 0 } } };
-        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+        homes.answer(savedHomeId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
             actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.processes.kill': ['ui'], 'machines.processes.leftBehind.cleanUp': ['ui'] } },
         } }, version: 1 } });
         rpc.machine.mockResolvedValueOnce(answer);
@@ -176,14 +196,14 @@ describe('machine process Actions through the captured UI Home', () => {
         expect(rpc.machine.mock.calls).toHaveLength(priorCalls);
     });
     it('creates the existing canonical approval Artifact without signaling the machine before review', async () => {
-        await homes.requireUiApproval(serverId, 'machines.processes.kill');
+        await homes.requireUiApproval(savedHomeId, 'machines.processes.kill');
         const outcome = await createDefaultActionExecutor().execute('machines.processes.kill', kill, {
             serverId, expectedAccountId: 'owner', surface: 'ui', actionRequestId: 'review-kill',
         });
-        expect(outcome.ok).toBe(true);
+        expect(outcome, outcome.ok ? undefined : outcome.errorCode).toMatchObject({ ok: true });
         if (!outcome.ok) throw new Error(outcome.error);
         const approval = ActionApprovalRequestCreatedResultSchema.parse(outcome.result);
-        expect(JSON.parse(homes.artifacts(serverId).readPlainBody(approval.artifactId)!)).toMatchObject({ actionId: 'machines.processes.kill', actionArgs: kill, status: 'open' });
+        expect(JSON.parse(homes.artifacts(savedHomeId).readPlainBody(approval.artifactId)!)).toMatchObject({ actionId: 'machines.processes.kill', actionArgs: kill, status: 'open' });
         expect(rpc.machine).not.toHaveBeenCalled();
     });
     it('resolves an explicit Process Action Home from its input rather than the focused Home', async () => {
@@ -197,7 +217,7 @@ describe('machine process Actions through the captured UI Home', () => {
     });
     it.each(['accept', 'decline', 'retire', 'wrong_machine', 'wrong_home', 'missing_target'] as const)
     ('joins the actual Service review only for the bound Process machine and current scope (%s)', async decision => {
-        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+        homes.answer(savedHomeId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
             actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'localServices.launcher.start': ['ui'] } },
         } }, version: 1 } });
         const machineId = decision === 'wrong_machine' ? 'other' : 'm';

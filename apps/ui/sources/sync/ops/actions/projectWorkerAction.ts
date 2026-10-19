@@ -16,6 +16,7 @@ import { machineWorkerPolicyGet, machineWorkerPolicySet } from '@/sync/ops/machi
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { readUiWorkspaceSyncChildMachineFacts } from '../workspaceSyncChildMachineFacts';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 /** Account Action port; row content is never published into a consumer-owned settings cache. */
 export function createUiProjectWorkerActionV1(account: LazyActionAccountContext): NonNullable<ActionExecutorDeps['projectWorkerAction']> {
@@ -34,10 +35,19 @@ export function createUiProjectWorkerActionV1(account: LazyActionAccountContext)
             const spec = getActionSpec(actionId);
             const method = spec.bindings?.rpcMethod;
             if (!method) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
-            const raw = await machineRpcWithServerScope({
-                serverId: account.serverId, machineId, accountId: account.accountId, method, payload: request,
-                ...(signal ? { signal } : {}),
-            });
+            const retired = new AbortController();
+            const retirement = account.accountLifetime.onRetire(() => retired.abort());
+            const cancellation = mergeAbortSignals([retired.signal, signal]);
+            let raw: unknown;
+            try {
+                raw = await machineRpcWithServerScope({
+                    serverId: account.serverId, machineId, accountId: account.accountId, method, payload: request,
+                    operationTimeoutMs: null, signal: cancellation.signal,
+                });
+            } finally {
+                cancellation.dispose();
+                retirement.dispose();
+            }
             account.assertResultCurrent(spec.sideEffectClass);
             const failure = ActionExecuteFailureSchema.safeParse(raw);
             if (failure.success) return failure.data;
@@ -100,16 +110,26 @@ export function createUiProjectWorkerActionV1(account: LazyActionAccountContext)
             const request = ProjectWorkerActionInputSchemasV1[actionId].parse(input);
             const desired = await client.getService(request);
             if (desired.status !== 'ready') return desired;
-            const unavailable = { ...desired, actual: { status: 'unavailable' as const } };
+            const unavailable = (reasonCode: 'account_rows_unavailable' | 'external_observation_unsupported' | 'observation_unavailable') => ({
+                ...desired, actual: { status: 'unavailable' as const, reasonCode },
+            });
             const rows = readCurrentProjectAccountRows(storage.getState());
-            if (context.externalActionCredential || context.externalActionExecutionAuthorization || !rows || rows.status !== 'ready'
+            if (context.externalActionCredential || context.externalActionExecutionAuthorization) return unavailable('external_observation_unsupported');
+            if (!rows || rows.status !== 'ready'
                 || rows.coverage !== 'complete' || rows.scope.accountId !== account.accountId
-                || !areServerProfileIdentifiersEquivalent(rows.scope.serverId, account.serverId)) return unavailable;
-            const isCurrent = () => account.accountLifetime.isCurrent()
-                && readCurrentProjectAccountRows(storage.getState()) === rows;
+                || !areServerProfileIdentifiersEquivalent(rows.scope.serverId, account.serverId)) return unavailable('account_rows_unavailable');
+            const isCurrent = () => {
+                const current = readCurrentProjectAccountRows(storage.getState());
+                // Organization/pinning and row revision updates do not change native
+                // custody. Only the admitted topology consumed by this read fences it.
+                return account.accountLifetime.isCurrent() && current?.status === 'ready' && current.coverage === 'complete'
+                    && current.scope.accountId === rows.scope.accountId
+                    && areServerProfileIdentifiersEquivalent(current.scope.serverId, rows.scope.serverId)
+                    && current.workspaceRefs === rows.workspaceRefs && current.relationships === rows.relationships;
+            };
             let facts: Awaited<ReturnType<typeof readUiWorkspaceSyncChildMachineFacts>>;
             try { facts = await readUiWorkspaceSyncChildMachineFacts(account, signal); }
-            catch { return unavailable; }
+            catch { return unavailable('observation_unavailable'); }
             const actual = await observeProjectServicePlacementActualV1({ ...request, ...facts,
                 workspaceRefs: rows.workspaceRefs, relationships: rows.relationships, isCurrent,
                 context: { normalizeServerId: resolveServerProfileScopeIdForIdentifier },

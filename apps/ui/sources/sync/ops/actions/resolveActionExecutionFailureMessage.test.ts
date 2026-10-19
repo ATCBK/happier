@@ -9,6 +9,17 @@ describe('Action failure presentation', () => {
         expect(resolveActionExecutionFailureMessage({ ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' }, 'Fallback'))
             .toBe(t('errors.permissionDenied'));
     });
+    it('uses runner restart guidance for returned Review launch failures at each Action envelope', () => {
+        const refused = { ok: false, errorCode: 'RUNNER_AGENT_SESSION_RUNTIME_SOURCE_MISSING',
+            error: 'RUNNER_AGENT_SESSION_RUNTIME_SOURCE_MISSING' };
+        for (const result of [refused, { ok: true, result: refused },
+            { ok: true, result: { results: [{ key: 'claude', ...refused }] } }]) {
+            expect(resolveActionExecutionFailureMessage(result, 'Launch failed'))
+                .toBe(t('session.staleRunner.banner.body'));
+        }
+        expect(resolveActionExecutionErrorMessage({ code: refused.errorCode }, 'Launch failed'))
+            .toBe(t('session.staleRunner.banner.body'));
+    });
 
     it('says the Home did not confirm a widget write whose acknowledgement never came back, instead of the generic fallback', () => {
         for (const errorCode of ['widget_add_unknown', 'widget_write_ack_unknown']) {

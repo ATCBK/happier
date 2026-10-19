@@ -10,6 +10,12 @@ import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExec
     ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { readSpawnSessionRpcTimeoutMsFromEnv } from '@/sync/domains/session/spawn/spawnSessionRpcTimeout';
+import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -27,10 +33,19 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 const { createFrontDoorActionExecute } = await import('./frontDoorRuntimeActionExecutor');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+const { executeManualSessionSpawnNewAction, buildManualSessionCreationKey } = await import('./sessionSpawnNewAction');
 
 describe('requester credential disclosure at the human Action front door', () => {
-    beforeEach(async () => { await harness.reset(); machineDispatch.mockReset(); requesterConsent.mockReset(); });
-    afterEach(() => standardCleanup());
+    beforeEach(async () => {
+        await harness.reset(); machineDispatch.mockReset(); requesterConsent.mockReset();
+        machineDispatch.mockImplementation(async request => {
+            if (request.method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) {
+                return createExistingSessionDirectoryPreflightResult(request.payload);
+            }
+            throw new Error('Shared raw spawn must not be used');
+        });
+    });
+    afterEach(() => { vi.useRealTimers(); standardCleanup(); });
 
     it.each(['accept', 'missing-key', 'lost-home', 'retire', 'substituted-origin'] as const)('uses fresh Bob private custody for an original native Ask decision (%s)', async scenario => {
         const homeId = 'srv_native_decision_requester';
@@ -125,7 +140,12 @@ describe('requester credential disclosure at the human Action front door', () =>
         else expect(result.errorCode).toBeTruthy();
     });
 
-    it.each(['ui', 'voice'] as const)('honors an ordinary foreign spawn waiver without a second consent modal (%s)', async surface => {
+    it.each([
+        { surface: 'ui', response: 'accepted' },
+        { surface: 'voice', response: 'accepted' },
+        { surface: 'ui', response: 'withheld' },
+        { surface: 'ui', response: 'ack-lost' },
+    ] as const)('settles an ordinary foreign spawn through its original custody ($surface, $response)', async ({ surface, response }) => {
         const homeId = 'srv_requester_send';
         const serverId = await harness.addHome({ name: 'Original requester Home', serverUrl: 'https://requester-send.test',
             serverIdentityId: homeId, accountId: 'bob', currentAccount: true });
@@ -157,6 +177,7 @@ describe('requester credential disclosure at the human Action front door', () =>
             } }) };
         } });
         let reachedRequesterSender = false;
+        let requesterIssuedAt = 0;
         harness.answer(serverId, '/v1/actions/session.spawn_new', { select: body => {
             const carried = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
             expect(openExternalActionRequesterAccountContextV1({ authorization: carried.executionAuthorization,
@@ -164,21 +185,50 @@ describe('requester credential disclosure at the human Action front door', () =>
                 serverIdentityId: homeId, installationPrivateKey: installation.secretKey })).toEqual({ token: home.token });
             expect(JSON.stringify(carried)).not.toContain(home.token);
             reachedRequesterSender = true;
+            requesterIssuedAt = Date.now();
+            if (response === 'withheld') return { respondAfter: new Promise<void>(() => {}) };
+            if (response === 'ack-lost') return { status: 502 };
             return { body: { v: 1, actionId: 'session.spawn_new', requestId: carried.envelope.requestId,
                 execution: { ok: true, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' } } } };
         } });
-        machineDispatch.mockRejectedValue(new Error('Shared raw spawn must not be used'));
-        const result = await createFrontDoorActionExecute(createDefaultActionExecutor())('session.spawn_new', {
+        if (response === 'withheld') vi.useFakeTimers();
+        let settled = false;
+        const spawnInput = SessionSpawnNewInputV2Schema.parse({
             executionTarget: { serverId: homeId, machineId: 'alice-machine' },
             directory: { kind: 'path', path: '/workspace/project' },
             agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
-        }, { surface, serverId, actionRequestId: `requester-send-${surface}` });
+        });
+        const userAttemptId = `requester-send-${surface}`;
+        const context = { surface, serverId, actionRequestId: userAttemptId };
+        const pending = (response === 'withheld'
+            ? executeManualSessionSpawnNewAction({ ...spawnInput, creationKey: buildManualSessionCreationKey(userAttemptId) }, context, {
+                scope: { serverId: homeId, accountId: 'bob' }, machineHomeDir: '/home/alice', userAttemptId,
+            }).then(execution => {
+                if (execution.status !== 'executed') throw new Error('Expected acquired manual launch custody');
+                return execution.action;
+            })
+            : createFrontDoorActionExecute(createDefaultActionExecutor())('session.spawn_new', spawnInput, context))
+            .finally(() => { settled = true; });
+        void pending.catch(() => {});
+        if (response === 'withheld') {
+            await waitForHomeGovernance(() => expect(reachedRequesterSender).toBe(true));
+            const remaining = readSpawnSessionRpcTimeoutMsFromEnv() - (Date.now() - requesterIssuedAt);
+            expect(remaining).toBeGreaterThan(0);
+            await vi.advanceTimersByTimeAsync(remaining - 1);
+            expect(settled).toBe(false);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(settled).toBe(true);
+        }
+        const result = await pending;
         const outcome = result.ok && result.result && typeof result.result === 'object' && 'type' in result.result
             ? result.result.type : result.ok ? 'other_success' : result.errorCode;
         expect(requesterConsent, JSON.stringify({ ok: result.ok, outcome, reachedRequesterSender })).not.toHaveBeenCalled();
         expect(reachedRequesterSender).toBe(true);
-        expect(result).toEqual({ ok: true, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' } });
-        expect(machineDispatch).not.toHaveBeenCalled();
+        expect(result).toEqual({ ok: true, result: SessionSpawnNewResultV1Schema.parse({
+            type: 'pending', retryWithSameCreationKey: true, outcome: response === 'accepted' ? 'accepted' : 'unknown',
+        }) });
+        expect(machineDispatch.mock.calls.map(([request]) => request.method))
+            .toEqual([RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT]);
     });
 
     it.each([
@@ -186,13 +236,19 @@ describe('requester credential disclosure at the human Action front door', () =>
         { surface: 'ui', route: 'provider' }, { surface: 'ui', route: 'auth-free' },
     ] as const)('discloses the original requester custody before a $surface $route Ask can launch', async ({ surface, route }) => {
         const serverId = await harness.addHome({ name: 'Original requester Home', serverUrl: 'https://requester-disclosure.test',
-            accountId: 'bob', currentAccount: true });
+            serverIdentityId: 'srv_requester_disclosure', accountId: 'bob', currentAccount: true });
         const home = harness.findByServerUrl('https://requester-disclosure.test');
         if (!home?.token) throw new Error('Missing original requester credential');
         harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
             actionsSettingsV1: { v: 1, actions: { 'session.spawn_new': { approvalRequiredSurfaces: [surface] } } },
         } }, version: 1 } });
         const custodian = { accountId: 'alice', displayName: 'Alice' };
+        const machine = { ...createPlainMachineRowFixture({ id: 'alice-machine', accountId: 'alice' }),
+            installationId: 'alice-installation',
+            installationPublicKey: encodeBase64(tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(9)).publicKey),
+            access: { custodian, role: 'use', resourceMode: 'plain', accessState: 'ready' } as const };
+        harness.answer(serverId, '/v1/machines', { body: [machine] });
+        harness.answer(serverId, '/v1/machines/alice-machine', { body: { machine } });
         harness.answer(serverId, '/v1/machines/alice-machine/access', { body: {
             machineId: 'alice-machine', custodian,
             access: { custodian, role: 'use', resourceMode: 'plain', accessState: 'ready' },
@@ -230,8 +286,9 @@ describe('requester credential disclosure at the human Action front door', () =>
                     supportsFreeformModelIds: true, suppressedConnectedServiceIds: ['anthropic', 'claude-subscription'], rows: [],
                 }],
             });
+            const preparationBoundary = machineDispatch.getMockImplementation()!;
             machineDispatch.mockImplementation(async request => request.method === 'daemon.providers.model.projection'
-                ? modelProjection : { ok: false, errorCode: 'unsupported', error: 'unsupported' });
+                ? modelProjection : preparationBoundary(request));
         }
         // A different focused Home must not become the preview's actor or target.
         await harness.addHome({ name: 'Other Home', serverUrl: 'https://requester-disclosure-other.test', accountId: 'carol' });

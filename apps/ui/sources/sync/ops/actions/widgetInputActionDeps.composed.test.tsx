@@ -24,6 +24,8 @@ import { readBuiltinWidgetDescriptorV1, type WidgetDefinitionV1 } from '@happier
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { createPlainProjectAccountRowListFixture, createProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 
 // The viewer accepts the real Action confirmation at its presentation boundary.
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
@@ -173,16 +175,20 @@ it('constrains saved host choices while schema-valid followed Usage inputs retai
     } finally { storage.setState(previous, true); await connection.dispose(); bridge.dispose(); }
 });
 
-it('refuses a builtin checkout pin outside the admitted context and after Account retirement', async () => {
+it('admits checkout pins through authorized Project rows on any host and retires removed or forged targets', async () => {
     const bridge = await loadSyncSingletonForTests();
     const http = createHomeHubArtifactHttpBoundary('viewer');
-    const connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-declared-inputs.test', accountId: 'viewer', request: http.request });
+    let workspaceRefs: WorkspaceRefV1[] = [];
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-declared-inputs.test', accountId: 'viewer', request: async (url, init) =>
+        new URL(String(url)).pathname === '/v1/account/project-rows/list'
+            ? Response.json(createPlainProjectAccountRowListFixture({ workspaceRefs })) : http.request(url, init) });
     const account = await captureLazyActionAccountContext(connection.home.id);
     const previous = storage.getState();
     try {
         const scope = { serverId: account.serverId, accountId: account.accountId };
         const surface = { ...scope, owner: { kind: 'project' as const, projectId: 'project' } };
         const checkout = { id: 'checkout', serverId: scope.serverId, machineId: 'machine', rootPath: '/repo', createdAtMs: 1 };
+        workspaceRefs = [checkout];
         const { createWidgetAreaActionDepsV1 } = await import('./widgetAreaActionDeps');
         const deps = createWidgetInputActionDepsV1(account, createActionExecutorBoundaryFixture({
             widgetAccountScope: () => scope, ...createWidgetAreaActionDepsV1(account),
@@ -191,9 +197,34 @@ it('refuses a builtin checkout pin outside the admitted context and after Accoun
             definition: { kind: 'builtin' as const, id: 'project_code' }, bindings: { checkout: { kind: 'value' as const, value: checkout } } },
             context: { surface: 'ui' as const, widgetAreaContext: { surface, values: { checkout: [checkout] } } } };
         expect(await deps.widgetInputs!.resolve(request)).toEqual({ status: 'ready', input: { checkout } });
+        for (const owner of [{ kind: 'home' }, { kind: 'pluginArea', pluginId: 'acme.page', pageId: 'page', area: 'main' },
+            { kind: 'corePage', pageId: 'usage', area: 'main' }] as const) {
+            expect(await deps.widgetInputs!.resolve({ ...request, ref: { ...request.ref, surface: { ...surface, owner } },
+                context: { surface: 'ui' } })).toEqual({ status: 'ready', input: { checkout } });
+        }
         expect(await deps.widgetInputs!.resolve({ ...request, instance: { ...request.instance,
             bindings: { checkout: { kind: 'value', value: { ...checkout, rootPath: '/other' } } } } })).toMatchObject({ status: 'denied',
             fields: [{ path: 'checkout', reasonCode: 'widget_target_identity_mismatch' }] });
+        const { useConfiguredWidgetTarget } = await import('@/sync/domains/widgets/useConfiguredWidgetTarget');
+        const descriptor = readWidgetDescriptor(null, request.instance.definition)!;
+        const hook = await renderHook((owner: typeof surface.owner | { kind: 'home' } | { kind: 'workBoard'; boardId: string }
+            | { kind: 'pluginArea'; pluginId: string; pageId: string; area: string }) => useConfiguredWidgetTarget({
+            scope: { ...surface, owner }, instance: request.instance, descriptor, providedContext: {},
+            appRuntime: { phase: 'current', interactionEnabled: true, machineId: null, serverId: null, platform: 'web',
+                pluginUiProjection: null, pluginBrowserProjection: null, accountLifetime: account.accountLifetime },
+        }), { initialProps: surface.owner });
+        try {
+            expect(hook.getCurrent()).toMatchObject({ status: 'ready', target: { kind: 'workspace', checkout } });
+            for (const owner of [{ kind: 'home' }, { kind: 'workBoard', boardId: 'board' },
+                { kind: 'pluginArea', pluginId: 'acme.page', pageId: 'page', area: 'main' }] as const) {
+                await hook.rerender(owner);
+                expect(hook.getCurrent()).toMatchObject({ status: 'ready', target: { kind: 'workspace', checkout } });
+            }
+            workspaceRefs = [];
+            expect(await deps.widgetInputs!.resolve(request)).toMatchObject({ status: 'denied' });
+            await act(async () => storage.setState({ projectAccountRows: createProjectAccountRowsFixture(scope) }));
+            expect(hook.getCurrent()).toMatchObject({ status: 'denied' });
+        } finally { await hook.unmount(); }
         await connection.dispose();
         await expect(deps.widgetInputs!.resolve(request)).rejects.toThrow();
     } finally {

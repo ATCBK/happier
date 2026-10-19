@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Modal } from '@/modal';
 import { ed25519, x25519 } from '@noble/curves/ed25519';
 import {
     ARTIFACT_PLAIN_DATA_KEY_MARKER,
@@ -14,6 +15,7 @@ import {
 } from '@happier-dev/protocol';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 import { encodeHex } from '@/encryption/hex';
 import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
@@ -31,6 +33,8 @@ import { buildWidgetDefinitionArtifactHeaderV1, type WidgetDefinitionV1 } from '
 // Only HTTP, device credentials and native UI modules are substituted. Account,
 // Artifact, Action, kind-policy and cryptographic owners execute their real logic.
 installApprovalCommonModuleMocks({ storage: (importOriginal) => importOriginal() });
+beforeAll(loadSyncSingletonForTests);
+beforeEach(() => { vi.spyOn(Modal, 'confirm').mockResolvedValue(true); });
 const initialStorageState = getStorage().getState();
 afterEach(() => {
     retireActiveServerAccountScopeLifetime();

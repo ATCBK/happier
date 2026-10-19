@@ -1,12 +1,14 @@
 import { ExternalActionAccountAuthenticationV1Schema, ExternalActionHttpErrorSchema, ExternalActionMachineBootstrapV1Schema,
     ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema, ExternalActionExecutionAuthorizationV1Schema,
     ExternalActionExecutionAuthorizationRequestV1Schema, bindExternalActionExecutionAuthorizationHttpPathV1,
+    isExternalActionSubmittedUnknownHttpResponse,
     type ExternalActionRequestEnvelopeV2 } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { sealExternalActionRequesterAccountContextV1, ExternalActionRequesterInvocationV1Schema,
     type ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { openExternalActionResponseV2, sealExternalActionRequestV2, type ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import type { ActionExecuteFailure, ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { projectUnexpectedActionFailureV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
 import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
@@ -14,11 +16,16 @@ import { readAuthTokenProvenance } from '@happier-dev/protocol/auth/authToken';
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { parseTokenPayload } from '@/utils/auth/parseToken';
 import { getRandomBytes } from '@/platform/cryptoRandom';
-import { fetchMachineRows } from '@/sync/engine/machines/syncMachines';
+import { fetchMachineRows, type FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
 import { readMachineInstallationPublicKey } from '@/sync/domains/machines/machineInstallationPublicKey';
+import { resolveFreshMachineAdministrationExecutionTarget } from '@/sync/domains/machines/administration/useTargetSelection';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { storage } from '@/sync/domains/state/storageStore';
 import { serializeRequesterAccountCredentials } from '@/sync/ops/actions/requesterSessionSpawnPreparation';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { ServerFetchWriteTimeoutError } from '@/sync/http/client';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 
 type MachineCustody = Readonly<{
     accountMode: 'plain' | 'e2ee'; installationId: string; installationPublicKey?: Uint8Array;
@@ -38,13 +45,8 @@ export function readOriginalAccountActionAuthentication(token: string) {
         ? authentication.data : null;
 }
 
-/** Account discovery has content; validate the canonical identity projection. */
-export async function readOriginalAccountActionMachine(account: LazyActionAccountContext, machineId: string, signal?: AbortSignal) {
-    const machines = await fetchMachineRows({ credentials: account.credentials,
-        request: (path, init) => account.request(path, { ...init, ...(signal ? { signal } : {}) }) });
-    account.assertCurrent();
-    if (!Array.isArray(machines)) return null;
-    const source = machines.find(candidate => candidate && typeof candidate === 'object' && candidate.id === machineId);
+function projectActionMachine(source: Pick<FetchedMachineRow, 'id' | 'kind' | 'active' | 'revokedAt' | 'replacedByMachineId'
+    | 'installationId' | 'dataEncryptionKey' | 'runnerContentKeyBinding' | 'access' | 'installationPublicKey'> | null | undefined) {
     const projection = ExternalActionMachineBootstrapV1Schema.safeParse(source && {
         id: source.id, kind: source.kind, active: source.active, revokedAt: source.revokedAt,
         replacedByMachineId: source.replacedByMachineId, installationId: source.installationId,
@@ -54,6 +56,26 @@ export async function readOriginalAccountActionMachine(account: LazyActionAccoun
     return projection.success ? { ...projection.data, installationPublicKey: readMachineInstallationPublicKey(source?.installationPublicKey) } : null;
 }
 
+/** Account discovery has content; validate the canonical identity projection. */
+export async function readOriginalAccountActionMachine(account: LazyActionAccountContext, machineId: string, signal?: AbortSignal) {
+    const machines = await fetchMachineRows({ credentials: account.credentials,
+        request: (path, init) => account.request(path, { ...init, ...(signal ? { signal } : {}) }) });
+    account.assertCurrent();
+    if (!Array.isArray(machines)) return null;
+    return projectActionMachine(machines.find(candidate => candidate && typeof candidate === 'object' && candidate.id === machineId));
+}
+
+function readCurrentOwnActionMachine(account: LazyActionAccountContext, machineId: string) {
+    if (!account.serverIdentityId || !areServerAccountScopesEqual(storage.getState().profileScope, account.accountLifetime.scope)) return null;
+    // Reuse Administration's live, settled full-row admission, never a display
+    // or warm snapshot. A stopped Machine remains a valid explicit target.
+    const target = resolveFreshMachineAdministrationExecutionTarget({ serverIdentityId: account.serverIdentityId, machineId }, {
+        intent: 'retry', accountScope: account.accountLifetime.scope,
+    });
+    const row = projectActionMachine(target?.machine);
+    return row?.access?.custodian.accountId === account.accountId ? row : null;
+}
+
 /** Reuses the external Action codecs; caller admission and result schemas stay with their owners. */
 export async function executeOriginalAccountActionTransport(params: Readonly<{
     account: LazyActionAccountContext;
@@ -61,15 +83,17 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
     input: unknown;
     authority?: ActionRequiredAuthority;
     material?: Material;
-    managedAdmission?: ExternalActionRequestEnvelopeV2['managedAdmission'];
     handoffAdmission?: ExternalActionRequestEnvelopeV2['handoffAdmission'];
     pluginInvocation?: ExternalActionRequestEnvelopeV2['pluginInvocation'];
     signal?: AbortSignal;
+    /** The invoking Action owns its budget; other Actions retain caller lifetime. */
+    timeoutMs?: number;
     invalidResponseCode?: string;
     requestFailureCode?: string;
     /** Fresh captured-Home identity only; inventory hints never select private custody. */
     machineCustody?: MachineCustody;
     invocation?: ExternalActionRequesterInvocationV1;
+    onTransportIssued?: () => void;
 }>): Promise<ActionExecuteResult> {
     const { account, binding, material } = params;
     const headers = { 'Content-Type': 'application/json',
@@ -91,11 +115,15 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
     if ((foreignGuest || params.invocation) && custody) {
         if (!custody.installationPublicKey || binding.target.kind !== 'machine') return failure('content_unavailable');
     }
+    // App producers carry native optional object members. Project them once
+    // before either strict envelope codec; non-JSON values still fail closed.
+    let input: ReturnType<typeof projectNativeJsonValueForTransport>;
+    try { input = projectNativeJsonValueForTransport(params.input); }
+    catch { return failure('invalid_parameters'); }
     const sealed = material
-        ? sealExternalActionRequestV2({ binding, material, randomBytes: getRandomBytes, input: params.input,
-            ...(params.pluginInvocation ? { pluginInvocation: params.pluginInvocation } : {}),
-            ...(params.managedAdmission ? { managedAdmission: params.managedAdmission } : {}) })
-        : ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: binding.requestId, target: binding.target, input: params.input,
+        ? sealExternalActionRequestV2({ binding, material, randomBytes: getRandomBytes, input,
+            ...(params.pluginInvocation ? { pluginInvocation: params.pluginInvocation } : {}) })
+        : ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: binding.requestId, target: binding.target, input,
             ...(params.pluginInvocation ? { pluginInvocation: params.pluginInvocation } : {}) });
     const envelope = params.handoffAdmission ? { ...sealed, handoffAdmission: params.handoffAdmission } : sealed;
     let request: unknown = envelope;
@@ -161,19 +189,44 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
         account.assertCurrent();
         params.signal?.throwIfAborted();
     }
-    const response = await account.request(`/v1/actions/${binding.actionId}`, {
-        method: 'POST', headers, body: JSON.stringify(request),
-        ...(params.signal ? { signal: params.signal } : {}),
-    }, { includeAuth: true, retry: 'none' });
+    let issued = false;
+    let response: Response;
+    try {
+        response = await account.request(`/v1/actions/${binding.actionId}`, {
+            method: 'POST', headers, body: JSON.stringify(request),
+            ...(params.signal ? { signal: params.signal } : {}),
+        }, { includeAuth: true, retry: 'none',
+            ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
+            onIssued: () => { issued = true; params.onTransportIssued?.(); },
+        });
+    } catch (error) {
+        if (error instanceof ServerFetchWriteTimeoutError) {
+            return failure(issued ? 'outcome_uncertain' : 'admission_unavailable');
+        }
+        throw error;
+    }
     let payload: unknown;
-    try { payload = await response.json(); } catch { return failure(invalid); }
+    try {
+        if (response.status === 502) {
+            // The Home deliberately sends no Action envelope after losing the
+            // daemon's acknowledgement. It cannot prove whether the effect ran.
+            const body = await response.text();
+            if (isExternalActionSubmittedUnknownHttpResponse(response.status, body)) return failure('outcome_uncertain');
+            payload = JSON.parse(body);
+        } else {
+            payload = await response.json();
+        }
+    } catch { return failure(invalid); }
     if (!response.ok) {
         const refusal = ExternalActionHttpErrorSchema.safeParse(payload);
         // Only the authenticated pre-open error contract proves that no Action
         // ran. An invalid or differently bound reply cannot settle an issued request.
         if (!refusal.success || 'requestId' in refusal.data && refusal.data.requestId !== undefined
             && refusal.data.requestId !== envelope.requestId) return failure(invalid);
-        const result = failure('code' in refusal.data ? refusal.data.code : params.requestFailureCode ?? 'project_transport_unavailable');
+        const code = 'code' in refusal.data ? refusal.data.code : params.requestFailureCode ?? 'project_transport_unavailable';
+        const result = code === 'action_not_admitted' || code === 'action_outcome_unknown'
+            ? projectUnexpectedActionFailureV1(code === 'action_not_admitted' ? false : null,
+                'requestId' in refusal.data ? refusal.data.requestId : undefined) : failure(code);
         return 'managedAdmission' in refusal.data
             && (envelope.v === 1 || refusal.data.requestId === envelope.requestId) ? { ...result, details: refusal.data } : result;
     }
@@ -194,7 +247,9 @@ type OriginalAccountMachineActionParams = Readonly<{
     handoffAdmission?: ExternalActionRequestEnvelopeV2['handoffAdmission'];
     actionCaller?: ActionExecutorContext['actionCaller'];
     signal?: AbortSignal;
+    timeoutMs?: number;
     invocation?: ExternalActionRequesterInvocationV1;
+    onTransportIssued?: () => void;
 }>;
 
 export function executeOriginalAccountMachineAction(params: OriginalAccountMachineActionParams & Readonly<{ foreignTargetOnly: true }>): Promise<ActionExecuteResult | null>;
@@ -215,17 +270,22 @@ export async function executeOriginalAccountMachineAction(params: OriginalAccoun
         } };
     }
     account.assertCurrent();
+    params.signal?.throwIfAborted();
     if (params.machineTarget && params.machineTarget.machineId !== params.machineId) return failure('target_not_local');
     if (params.actionId === 'session.agent.transition' && !params.invocation) return failure('admission_unavailable');
     if (params.invocation && (account.credentialAuthorityKind !== 'account'
         || !ExternalActionRequesterInvocationV1Schema.safeParse(params.invocation).success)) return failure('admission_unavailable');
-    const row = await readOriginalAccountActionMachine(account, params.machineId, params.signal);
+    const finite = Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, params.actionId);
+    // This incumbent own-Machine transport carries no private requester box.
+    // Foreign custody, finite placement and requester invocations still prove
+    // their exact Home identity freshly before selecting private custody.
+    const currentOwnRow = !finite && !params.invocation ? readCurrentOwnActionMachine(account, params.machineId) : null;
+    const row = currentOwnRow ?? await readOriginalAccountActionMachine(account, params.machineId, params.signal);
     if (!row || row.kind !== 'persistent' || row.revokedAt !== null || row.replacedByMachineId !== null
         || !row.access || row.access.accessState !== 'ready') return failure('admission_unavailable');
     const foreignCustody = row.access.custodian.accountId !== account.accountId;
     // Non-finite own targets retain their incumbent transport. Finite placement
     // is Home-owned even when its guest belongs to the requester.
-    const finite = Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, params.actionId);
     if (params.foreignTargetOnly && !foreignCustody && !finite && !params.invocation) return null;
     const authentication = readOriginalAccountActionAuthentication(account.credentials.token);
     if (!authentication || !account.serverIdentityId) return failure('admission_unavailable');
@@ -235,6 +295,8 @@ export async function executeOriginalAccountMachineAction(params: OriginalAccoun
     if ((foreignCustody || params.invocation) && !row.installationPublicKey) return failure('content_unavailable');
     if (accountMode === 'e2ee' && !encryption) return failure('content_unavailable');
     return await executeOriginalAccountActionTransport({ account, input: params.input, authority: params.authority,
+        ...(params.onTransportIssued ? { onTransportIssued: params.onTransportIssued } : {}),
+        ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
         ...(pluginInvocation ? { pluginInvocation } : {}),
         ...(params.invocation ? { invocation: params.invocation } : {}),
         // Open owns checkout effects; an untrusted post-dispatch response cannot

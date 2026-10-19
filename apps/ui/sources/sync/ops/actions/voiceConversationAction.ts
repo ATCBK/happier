@@ -13,7 +13,7 @@ import { resolveVoiceAdapterSurfaceCapabilities } from '@/voice/session/voiceAda
 import { voiceSessionManager } from '@/voice/session/voiceSession';
 import { getVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleControllerStore';
 import { canDismissVoiceSessionFailedAttempt, dismissVoiceSessionEndedAttempt, getVoiceSessionEndedAttempt,
-    getVoiceSessionPresentedAttemptId, getVoiceSessionPresentedBinding } from '@/voice/session/voiceSessionStore';
+    getVoiceSessionPresentedAttemptId, getVoiceSessionPresentedBinding, getVoiceSessionRestartTarget } from '@/voice/session/voiceSessionStore';
 import { resolveVoiceBindingBySessionId } from '@/voice/binding/resolveVoiceBindingBySessionId';
 import { resolveVoiceExecutionMachinePresentationFromState } from '@/voice/credentials/useExecutionMachinePresentation';
 import { resolveVoiceStartAdmission, resolveCurrentVoiceRuntimePlatform } from '@/components/voice/surface/resolveVoiceStartAdmission';
@@ -70,6 +70,7 @@ async function readConversation(target: VoiceStartIntent = { kind: 'default' }):
         capabilities = resolveVoiceAdapterSurfaceCapabilities(providerId, voiceSettings);
     }
     const idleTarget = resolveVoiceIdleTarget({ intent: target, scopeDefault: voiceSettings.ui.scopeDefault,
+        restartTarget: getVoiceSessionRestartTarget(providerId, state.profileScope),
         allowsGlobalStart: capabilities?.allowsGlobalStart === true, focusedSessionAddress: getFocusedSessionAddress(),
         lastFocusedSessionAddress: useVoiceTargetStore.getState().lastFocusedSessionAddress });
     const admission = resolveVoiceStartAdmission({ bindingScope: idleTarget.kind,

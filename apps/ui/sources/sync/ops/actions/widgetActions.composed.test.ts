@@ -96,7 +96,7 @@ function setActionPolicy(raw: unknown) {
     state.applySettingsForScope(accountScope, settings, version);
     homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version } });
 }
-function waiveUiAction(actionId: 'session.reports_to.set' | 'widgets.item.remove') {
+function waiveUiAction(actionId: 'session.manager.set' | 'widgets.item.remove') {
     setActionPolicy({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } });
 }
 
@@ -187,18 +187,18 @@ describe('widget semantic Actions through production UI composition', () => {
     );
 
     it('uses current Home relation evidence for Put under after an unopened list relation becomes stale', async () => {
-        waiveUiAction('session.reports_to.set');
+        waiveUiAction('session.manager.set');
         storage.setState({ sessions: {
-            child: createSessionFixture({ id: 'child', serverId, reportsTo: { sessionId: 'old-lead' } }),
+            child: createSessionFixture({ id: 'child', serverId, manager: { sessionId: 'old-lead' } }),
             lead: createSessionFixture({ id: 'lead', serverId }),
         } });
-        homes.answer(serverId, '/v1/sessions/child/reports-to/options', { body: { sessionId: 'child', currentLeadSessionId: null,
+        homes.answer(serverId, '/v1/sessions/child/manager/options', { body: { sessionId: 'child', currentManagerSessionId: null,
             candidates: [{ sessionId: 'lead', allowed: true }] } });
-        homes.answer(serverId, '/v1/sessions/child/reports-to', { body: { ok: true, sessionId: 'child', leadSessionId: 'lead', attachedAt: 1 } });
-        const result = await putSessionUnderLead({ serverId, sessionId: 'child', leadSessionId: 'lead', accountId });
-        expect(result, JSON.stringify(homes.requests.filter(request => request.path.includes('/reports-to')).map(request => ({ path: request.path, input: request.input })))).toBe('applied');
-        expect(homes.requestsFor('/v1/sessions/child/reports-to').at(-1)?.input)
-            .toEqual({ leadSessionId: 'lead', expectedLeadSessionId: null });
+        homes.answer(serverId, '/v1/sessions/child/manager', { body: { ok: true, sessionId: 'child', managerSessionId: 'lead', attachedAt: 1 } });
+        const result = await putSessionUnderLead({ serverId, sessionId: 'child', managerSessionId: 'lead', accountId });
+        expect(result, JSON.stringify(homes.requests.filter(request => request.path.includes('/manager')).map(request => ({ path: request.path, input: request.input })))).toBe('applied');
+        expect(homes.requestsFor('/v1/sessions/child/manager').at(-1)?.input)
+            .toEqual({ managerSessionId: 'lead', expectedManagerSessionId: null });
     });
     it('keeps a Home group and its children when removal is awaiting approval or canceled, and honors the removal waiver', async () => {
         const surface = scope({ kind: 'home' });
@@ -327,8 +327,8 @@ describe('widget semantic Actions through production UI composition', () => {
     it('writes Board placements through both native and widget Actions and refuses a mis-bound Board', async () => {
         const executor = createDefaultActionExecutor();
         const surface = scope({ kind: 'workBoard', boardId: 'board' });
-        expect(await executor.execute('boards.apply', { intent: { kind: 'create', board: { id: 'board', name: 'Checks' } } }, context()))
-            .toMatchObject({ ok: true });
+        const created = await executor.execute('boards.apply', { intent: { kind: 'create', board: { id: 'board', name: 'Checks' } } }, context());
+        expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
         const ref = { surface, instanceId: 'board-copy' };
         expect(await executor.execute('boards.apply', { intent: { kind: 'widget_add', boardId: 'board', ref, instance: instance(ref.instanceId) } }, context()))
             .toMatchObject({ ok: true });
@@ -377,8 +377,8 @@ describe('widget semantic Actions through production UI composition', () => {
         const executor = createDefaultActionExecutor();
         const base = scope({ kind: 'corePage', pageId: 'usage', area: 'main' });
         const surface = scope({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'checks' });
-        expect(await executor.execute('widgets.area.layout.create', { surface: base, layoutId: 'checks', name: 'Checks' }, context()))
-            .toMatchObject({ ok: true });
+        const created = await executor.execute('widgets.area.layout.create', { surface: base, layoutId: 'checks', name: 'Checks' }, context());
+        expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
         expect(await executor.execute('widgets.item.add', { surface, instance: instance('area-copy') }, context())).toMatchObject({ ok: true });
         const layout = WidgetAreaLayoutV1Schema.parse(storedBody(buildWidgetSurfaceArtifactIdV1(surface)));
         expect(layout).toMatchObject({ surface, items: [{ instance: instance('area-copy') }] });

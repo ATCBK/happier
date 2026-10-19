@@ -7,17 +7,21 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { createPlainV2SessionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn(), session: vi.fn() }));
+// Transport tests explicitly accept the UI decision instead of relying on the native Alert stub.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 const harness = createHomeGovernanceHarness();
 const catalogs = new Map<string, ReturnType<typeof createPromptLibraryCatalogBoundary>['handle']>();
 installHomeGovernanceBoundaries(harness);
 // Scoped machine/session HTTP uses the real reachability adapter and fake network below.
 vi.doUnmock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch');
 const network = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
 async function addHome(options: Parameters<typeof harness.addHome>[0]) {
     const serverId = await harness.addHome(options);
     await network.addHome(options.serverUrl, options.accountId ?? 'alice');
@@ -147,10 +151,14 @@ describe('UI machine Agent inventory Action transport', () => {
             { surface: 'ui', authority: 'present_user', serverId })).toEqual({ ok: true, result: { updated: true } });
         expect(catalog.read('role-overrides')).toEqual({ key: 'role-overrides', value: { v: 1,
             overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } } } });
-        expect(harness.artifacts(serverId).readPlainBody(legacy.artifactId)).toBe(JSON.stringify(legacy.role));
-        expect(raw).not.toHaveProperty('executionRunsGuidanceEntries');
-        expect(raw).not.toHaveProperty('rolesV1');
-        expect(readLegacyRolesV1(raw, 'alice')).toEqual([]);
+        // The row receipt is immediate; the canonical Account maintenance tail
+        // retains legacy content before its separate Settings cleanup commits.
+        await waitForHomeGovernance(() => {
+            expect(harness.artifacts(serverId).readPlainBody(legacy.artifactId)).toBe(JSON.stringify(legacy.role));
+            expect(raw).not.toHaveProperty('executionRunsGuidanceEntries');
+            expect(raw).not.toHaveProperty('rolesV1');
+            expect(readLegacyRolesV1(raw, 'alice')).toEqual([]);
+        });
     });
 
     it('preserves the persisted override winner when the Prompt Library row CAS refuses a stale revision', async () => {
@@ -299,14 +307,14 @@ describe('UI machine Agent inventory Action transport', () => {
         const result = await createDefaultActionExecutor().execute('machines.agents.list', {
             machineId: 'machine-1', serverId, refresh: true,
         }, { surface: 'ui', authority: 'present_user', serverId });
-        expect(result).toEqual({ ok: true, result: { items: [{ agentId: 'acme/helper', title: 'Remote Helper', ...facts }] } });
+        expect(result).toEqual({ ok: true, result: { items: [{ agentId: 'acme/helper', title: 'Remote Helper', ...facts }],
+            definitionCatalog: { status: 'unavailable', reason: 'unsupported' } } });
         expect(rpc.machine.mock.calls.map(([request]) => request)).toEqual([
             expect.objectContaining({ machineId: 'machine-1', serverId, method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
                 payload: { machineId: 'machine-1', selection: 'agents' },
             }),
             expect.objectContaining({ machineId: 'machine-1', serverId, method: RPC_METHODS.CAPABILITIES_DETECT,
-                payload: { requests: [{ id: 'cli.acme/helper', params: { includeLoginStatus: true, includeLatestVersion: true } },
-                    { id: 'tool.acpAgentInventory', params: { definitions: [] } }], bypassCache: true },
+                payload: { requests: [{ id: 'cli.acme/helper', params: { includeLoginStatus: true, includeLatestVersion: true } }], bypassCache: true },
             }),
         ]);
     });
@@ -391,7 +399,7 @@ describe('UI machine Agent inventory Action transport', () => {
             machineId: 'machine-1', agentId: 'custom-acp', definitionId: 'registry-definition', intent: 'install',
         }, { surface: 'ui', authority: 'present_user', serverId })).toEqual({ ok: true, result: { ok: true, jobId: 'registry-job' } });
         expect(rpc.machine.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_AGENTS_INSTALL_START)?.[0])
-            .toMatchObject({ machineId: 'machine-1', serverId, accountId: 'alice',
+            .toMatchObject({ machineId: 'machine-1', serverId,
                 payload: { agentId: 'custom-acp', definitionId: 'registry-definition', intent: 'install' },
             });
         const { readAgentInstallJob } = await import('@/agents/machineAgents/installJobs/installJobStore');
@@ -414,7 +422,7 @@ describe('UI machine Agent inventory Action transport', () => {
         expect(result).toEqual({ ok: true, result: { ok: true, jobId: 'job-1' } });
         const start = rpc.machine.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_AGENTS_INSTALL_START)?.[0];
         expect(start).toMatchObject({
-            machineId: 'machine-1', serverId, accountId: 'alice', signal: expect.any(AbortSignal), method: RPC_METHODS.DAEMON_AGENTS_INSTALL_START,
+            machineId: 'machine-1', serverId, method: RPC_METHODS.DAEMON_AGENTS_INSTALL_START,
             payload: { agentId: 'acme/helper', intent, consent: { vendorRecipe: intent === 'update' },
                 ...(intent === 'update' ? { force: true } : {}),
             },

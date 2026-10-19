@@ -4,8 +4,9 @@ import { act } from 'react-test-renderer';
 import { createSessionFixture, renderHook, renderScreen } from '@/dev/testkit';
 import { MetadataSchema } from '@happier-dev/session-core/state';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { MemoryDocBodyV1Schema } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
-import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1, SessionMetadataOwnerPatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1, SessionMetadataOwnerPatchV1Schema, SessionMetadataVersionConflictV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -25,6 +26,71 @@ beforeEach(async () => { await homes.reset(); await loadSyncSingletonForTests();
 afterEach(async () => { await homes.reset(); });
 
 describe('reviewed Session context through the default UI Action host', () => {
+    it.each(['memory', 'context', 'instructions', 'voice'] as const)(
+        'rebases the %s Action over active-runtime metadata, and refuses a competing field edit', async (field) => {
+            const serverId = await homes.addHome({ name: 'Active Context Home', serverUrl: 'https://active-context-owner.test', accountId: 'context-owner' });
+            const sessionId = 'c123456789012345678901234';
+            const ref = { kind: 'doc', artifactId: 'memory', serverId } as const;
+            const initialWork = { memoryEnabled: false, voicePreference: {
+                providerContributionId: 'example.voice/speech', settingFieldPath: 'voice', value: 'first',
+            }, promptStack: [{ id: 'session.instructions', ref, enabled: true, placement: 'system_append' as const }],
+                sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: 'Original notes' } };
+            let row = SessionCurrentProjectionRecordV1Schema.parse({ id: sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
+                encryptionMode: 'plain', metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }), metadataVersion: 5,
+                ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, work: initialWork }),
+                agentState: null, agentStateVersion: 1, dataEncryptionKey: null, share: null, responsibleAccountId: null, responsibleAccount: null,
+                effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities } });
+            await homes.artifacts(serverId).handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({ id: 'memory',
+                header: encodePlainArtifactStoredContent({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }),
+                body: encodePlainArtifactStoredContent({ body: JSON.stringify(MemoryDocBodyV1Schema.parse({ v: 1, index: [], topics: [] })) }),
+                dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            }) });
+            homes.answer(serverId, '/v1/account/encryption/currentness', { body: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+            const path = `/v2/sessions/${sessionId}`;
+            for (const suffix of ['', '?accessProjectionVersion=1']) homes.answer(serverId, `GET ${path}${suffix}`, { select: () => ({ body: { session: row } }) });
+            let race: 'unrelated' | 'same-field' | null = 'unrelated';
+            let commits = 0;
+            homes.answer(serverId, `PATCH ${path}`, { select: input => {
+                const patch = SessionMetadataOwnerPatchV1Schema.parse(input);
+                if (race) {
+                    const competingWork = { ...initialWork, sessionRolesV1: { ...initialWork.sessionRolesV1, notes: 'Concurrent runtime notes' },
+                        ...(race === 'same-field' ? field === 'memory' ? { memoryEnabled: true }
+                            : field === 'voice' ? { voicePreference: { ...initialWork.voicePreference, value: 'competing' } }
+                            : { promptStack: [{ ...initialWork.promptStack[0]!, enabled: false }] } : {}) };
+                    row = { ...row, metadataVersion: row.metadataVersion + 1,
+                        ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, work: competingWork }) };
+                    race = null;
+                    return { status: 409, body: SessionMetadataVersionConflictV1Schema.parse({ code: 'session_metadata_version_conflict',
+                        metadataLayoutVersion: 1, sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } }) };
+                }
+                expect(patch.sharedMetadata.expectedVersion).toBe(row.metadataVersion);
+                expect(patch.expectedOwnerMetadata).toEqual(row.ownerMetadata);
+                row = { ...row, metadata: patch.sharedMetadata.ciphertext, metadataVersion: row.metadataVersion + 1,
+                    ownerMetadata: patch.ownerMetadata, agentState: patch.agentState.ciphertext, agentStateVersion: row.agentStateVersion! + 1 };
+                commits += 1;
+                return { body: { success: true, metadataLayoutVersion: 1, sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } } };
+            } });
+            const executor = createDefaultActionExecutor();
+            const target = { sessionId, serverId, expectedMetadataRevision: 4 };
+            const execute = () => field === 'memory' ? executor.execute('session.memory.set', { ...target, enabled: true }, { surface: 'ui', authority: 'present_user' })
+                : field === 'context' ? executor.execute('session.context.update', { ...target, intent: { kind: 'attach', entry: { id: 'own-memory', ref } } }, { surface: 'ui', authority: 'present_user' })
+                : field === 'instructions' ? executor.execute('session.instructions.set', { ...target, ref: null }, { surface: 'ui', authority: 'present_user' })
+                : executor.execute('session.voice.preference.set', { ...target, preference: null }, { surface: 'ui', authority: 'present_user' });
+            const applied = await execute();
+            expect(applied, JSON.stringify(applied)).toMatchObject({ ok: true });
+            expect(commits).toBe(1);
+            expect(row.ownerMetadata).toMatchObject({ t: 'plain', v: { work: { sessionRolesV1: { notes: 'Concurrent runtime notes' },
+                ...(field === 'memory' ? { memoryEnabled: true } : field === 'context' ? { promptStack: [expect.anything(), expect.objectContaining({ id: 'own-memory' })] }
+                    : field === 'instructions' ? { promptStack: [] } : {}) } } });
+            if (field === 'voice' && row.ownerMetadata?.t === 'plain') expect(row.ownerMetadata.v.work).not.toHaveProperty('voicePreference');
+            row = { ...row, ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, work: initialWork }), metadataVersion: row.metadataVersion + 1 };
+            race = 'same-field';
+            expect(await execute()).toMatchObject({ ok: false, errorCode: 'conflict' });
+            expect(commits).toBe(1);
+            expect(homes.requests.some(request => request.path.includes('/machines/'))).toBe(false);
+        },
+    );
+
     it('sets and undoes session capability overrides through the real owner tuple CAS while offline', async () => {
         const serverId = await homes.addHome({ name: 'Capabilities Home', serverUrl: 'https://session-capabilities-owner.test', accountId: 'capability-owner' });
         const sessionId = 'c123456789012345678901234';
@@ -38,14 +104,15 @@ describe('reviewed Session context through the default UI Action host', () => {
             effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities } });
         homes.answer(serverId, '/v1/account/encryption/currentness', { body: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
         const path = `/v2/sessions/${sessionId}`;
-        let changeAfterRead = false;
-        for (const suffix of ['', '?accessProjectionVersion=1']) homes.answer(serverId, `GET ${path}${suffix}`, { select: () => {
-            const response = { body: { session: row } };
-            if (changeAfterRead) { changeAfterRead = false; row = { ...row, metadataVersion: row.metadataVersion + 1 }; }
-            return response;
-        } });
+        let conflictOnPatch = false;
+        for (const suffix of ['', '?accessProjectionVersion=1']) homes.answer(serverId, `GET ${path}${suffix}`, { select: () => ({ body: { session: row } }) });
         homes.answer(serverId, `PATCH ${path}`, { select: input => {
             const patch = SessionMetadataOwnerPatchV1Schema.parse(input);
+            if (conflictOnPatch) {
+                row = { ...row, metadataVersion: row.metadataVersion + 1 };
+                return { status: 409, body: SessionMetadataVersionConflictV1Schema.parse({ code: 'session_metadata_version_conflict',
+                    metadataLayoutVersion: 1, sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } }) };
+            }
             expect(patch.sharedMetadata.expectedVersion).toBe(row.metadataVersion);
             expect(patch.expectedOwnerMetadata).toEqual(row.ownerMetadata);
             row = { ...row, metadata: patch.sharedMetadata.ciphertext, metadataVersion: row.metadataVersion + 1,
@@ -82,8 +149,9 @@ describe('reviewed Session context through the default UI Action host', () => {
         }
         await act(async () => { expect(await hook.getCurrent().setItem('skill', skillId, 'on')).toMatchObject({ ok: true }); });
         const beforeFailedUndo = hook.getCurrent().selection;
-        changeAfterRead = true; // Another client commits after the Action's captured read.
+        conflictOnPatch = true; // Another client wins each tuple CAS, including the owner's retries.
         await act(async () => { expect(await hook.getCurrent().undoLast()).toMatchObject({ ok: false, message: 'conflict' }); });
+        conflictOnPatch = false;
         expect(hook.getCurrent().selection).toEqual(beforeFailedUndo);
         expect(metadata()).toMatchObject({ skillSelectionV1: { forceIncludeSkillIds: [skillId], forceExcludeSkillIds: [] } });
         await act(async () => { expect(await hook.getCurrent().undoLast()).toMatchObject({ ok: true }); });
@@ -214,7 +282,7 @@ describe('reviewed Session context through the default UI Action host', () => {
         } finally { await hook.unmount(); }
     });
 
-    it('admits the named Home header, preserves neighbors and refuses a stale reviewed draft without waking compute', async () => {
+    it('admits the named Home header, preserves neighbors and retains a genuinely conflicted draft without waking compute', async () => {
         const serverId = await homes.addHome({ name: 'Context Home', serverUrl: 'https://session-context-owner.test', accountId: 'context-owner', active: false });
         await homes.addHome({ name: 'Focused Home', serverUrl: 'https://session-context-focused.test', accountId: 'focused-owner' });
         const sessionId = 'c123456789012345678901234';
@@ -241,8 +309,18 @@ describe('reviewed Session context through the default UI Action host', () => {
         homes.answer(serverId, `GET ${path}`, { select: () => ({ body: { session: row } }) });
         homes.answer(serverId, `GET ${path}?accessProjectionVersion=1`, { select: () => ({ body: { session: row } }) });
         let commits = 0;
+        let competingContextOnPatch = false;
         homes.answer(serverId, `PATCH ${path}`, { select: input => {
             const patch = SessionMetadataOwnerPatchV1Schema.parse(input);
+            if (competingContextOnPatch) {
+                if (row.ownerMetadata?.t !== 'plain') throw new Error('Missing plain owner fixture');
+                row = { ...row, metadataVersion: row.metadataVersion + 1,
+                    ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ ...row.ownerMetadata.v,
+                        work: { ...row.ownerMetadata.v.work, disabledInheritedEntryIds: ['competing-entry'] } }) };
+                competingContextOnPatch = false;
+                return { status: 409, body: SessionMetadataVersionConflictV1Schema.parse({ code: 'session_metadata_version_conflict',
+                    metadataLayoutVersion: 1, sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } }) };
+            }
             expect(patch.sharedMetadata.expectedVersion).toBe(row.metadataVersion);
             expect(patch.expectedOwnerMetadata).toEqual(row.ownerMetadata);
             row = { ...row, metadata: patch.sharedMetadata.ciphertext, metadataVersion: row.metadataVersion + 1,
@@ -260,10 +338,6 @@ describe('reviewed Session context through the default UI Action host', () => {
         const ref = { kind: 'doc', artifactId: 'instructions', serverId } as const;
         expect(await sessionInstructionsActions.set(target, ref))
             .toMatchObject({ ok: true, result: { version: 5 } });
-        const draft = { kind: 'inherited_enable', entryId: 'account-entry', enabled: false };
-        expect(await executor.execute('session.context.update', { ...target, intent: draft }, context))
-            .toMatchObject({ ok: false, errorCode: 'conflict' });
-        expect(commits).toBe(1);
         expect(await executor.execute('session.memory.set', { ...target, expectedMetadataRevision: 5, enabled: true }, context))
             .toMatchObject({ ok: true, result: { enabled: true, version: 6 } });
         expect(row.ownerMetadata).toMatchObject({ t: 'plain', v: { work: { memoryEnabled: true,
@@ -284,6 +358,7 @@ describe('reviewed Session context through the default UI Action host', () => {
         expect(authored.createdRef?.artifactId).toEqual(expect.any(String));
         const createdId = authored.createdRef!.artifactId;
         expect(homes.artifacts(serverId).readPlainBody(createdId)).toContain('"markdown":""');
+        competingContextOnPatch = true;
         const conflicted = await sessionInstructionsActions.createAndAttach({ ...clearTarget, expectedMetadataRevision: 7 },
             { title: 'Retained draft', markdown: 'Keep this after conflict' });
         expect(conflicted).toMatchObject({ result: { ok: false, errorCode: 'conflict' },
@@ -297,7 +372,7 @@ describe('reviewed Session context through the default UI Action host', () => {
         const pendingCreate = await sessionInstructionsActions.createAndAttach({ ...clearTarget, expectedMetadataRevision: 8 }, pendingDraft);
         expect(pendingCreate).toMatchObject({ createdRef: null, draft: pendingDraft,
             result: { ok: true, result: { kind: 'approval_request_created', actionId: 'prompt_doc.create' } } });
-        expect(row.metadataVersion).toBe(8);
+        expect(row.metadataVersion).toBe(9);
         expect(new Set(homes.requestsFor(path).filter(request => request.input && typeof request.input === 'object' && 'mode' in request.input)
             .map(request => request.token))).toEqual(new Set([createAccountTokenForTests('context-owner')]));
         expect(homes.requests.some(request => request.path.includes('/machines/'))).toBe(false);

@@ -25,6 +25,7 @@ import { admitWidgetActionSurfaceV1 } from '@happier-dev/protocol/widgets';
 import { readWidgetInputTargetV1, validateWidgetWorkspaceInputV1 } from '@happier-dev/protocol/widgets/widgetInputAdmissionV1';
 import { readSessionWidgetProvidedContext } from '@/components/widgets/surface/sessionWidgetContext';
 import { MachineTargetV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { canUsePrivateProjectAccountAction, createUiProjectAccountRowsClient } from '@/sync/api/projects/projectAccountRowsClient';
 
 const NO_PURPOSE_BINDINGS: QualifiedConnectedAccountPurposeBindingsV1 = { v: 1, bindings: [] };
 
@@ -250,8 +251,17 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
             const targetDeclaration = descriptor ? readWidgetInputTargetV1(descriptor) : null;
             if (targetDeclaration?.kind === 'invalid') return { status: 'unavailable', reasonCode: targetDeclaration.reasonCode };
             if (targetDeclaration?.kind === 'workspace' && targetDeclaration.path === field.path) {
-                return validateWidgetWorkspaceInputV1({ value, serverId: account.serverId,
-                    contextValues: readContext(request)[targetDeclaration.path] ?? [] }, workspaceRefResolutionContextV1);
+                if (!isCurrent() || !canUsePrivateProjectAccountAction(account, request.context))
+                    return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+                const rows = await createUiProjectAccountRowsClient(account).read(request.signal);
+                account.assertCurrent();
+                request.signal?.throwIfAborted();
+                if (!isCurrent() || !canUsePrivateProjectAccountAction(account, request.context)
+                    || !areServerAccountScopesEqual(rows.scope, viewer))
+                    return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+                if (rows.status !== 'ready' || rows.coverage !== 'complete')
+                    return { status: 'unavailable', reasonCode: 'widget_workspace_authority_unavailable' };
+                return validateWidgetWorkspaceInputV1({ value, serverId: account.serverId, workspaceRefs: rows.workspaceRefs }, workspaceRefResolutionContextV1);
             }
             if (targetDeclaration?.kind !== 'session' || targetDeclaration.path !== field.path) return { status: 'valid' };
             const address = VoiceTrackedSessionAddressV1Schema.safeParse(value);

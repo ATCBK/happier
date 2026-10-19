@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as React from 'react';
+import { renderScreen } from '@/dev/testkit';
 
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import {
     createHomeGovernanceHarness,
     installHomeGovernanceBoundaries,
@@ -9,10 +12,12 @@ import {
 import type { StorageState } from '@/sync/store/types';
 import nacl from 'tweetnacl';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
-import { ExternalActionExecutionAuthorizationRequestV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
 
 let daemonResult: unknown;
 let beforeDaemonReply: (() => Promise<void>) | undefined;
@@ -25,6 +30,8 @@ let machineState: Pick<StorageState, 'machines' | 'machineListByServerId'>;
 // module preparation belongs to collection rather than the first hook timeout.
 await import('@/sync/domains/state/storage');
 await import('./defaultActionExecutor');
+const { createWorkNotificationOwnerFixture } = await import('@/dev/testkit/harness/workNotificationOwner');
+const { RunWorkNotifyOperation } = await import('@/components/sessions/work/RunWorkNotifications');
 
 async function addHome() {
     const serverId = await harness.addHome({
@@ -34,7 +41,7 @@ async function addHome() {
         serverIdentityId: 'srv_notifications', currentAccount: true,
     });
     const { storage } = await import('@/sync/domains/state/storage');
-    const machine = createMachineFixture({ id: 'notification-relay', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    const machine = createMachineFixture({ id: 'machine-one', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
     storage.setState({
         machines: { [machine.id]: machine },
         machineListByServerId: { [serverId]: [machine] },
@@ -55,14 +62,29 @@ async function addHome() {
         } });
         harness.answer(serverId, `/v1/actions/${actionId}`, { select: async body => {
             const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
-            expect(openExternalActionRequesterAccountContextV1({ authorization: request.executionAuthorization, purpose: { kind: 'external_action' },
+            const opened = openExternalActionRequesterAccountContextV1({ authorization: request.executionAuthorization, purpose: { kind: 'external_action' },
                 machineId: machine.id, installationId: 'notification-installation', serverIdentityId: 'srv_notifications',
-                installationPrivateKey: installation.secretKey, includeInvocation: true })).toMatchObject({ invocation: {
+                installationPrivateKey: installation.secretKey, includeInvocation: true });
+            expect(opened).toMatchObject({ invocation: {
                     caller: { kind: 'host' }, authority: actionId === 'notifications.notify_me' ? 'account_automation' : 'present_user',
                     surface: actionId === 'notifications.notify_me' ? 'voice' : 'ui' } });
+            if (!opened?.invocation) throw new Error('Missing authenticated invocation');
             await beforeDaemonReply?.();
+            // Only HTTP and the daemon's channel catalog are boundaries. In particular,
+            // keep the real field-options surface admission beneath the UI adapter.
+            const execution = actionId === 'action.options.resolve'
+                ? await createActionExecutor(createActionExecutorBoundaryFixture({ notificationChannelsList: async () => {
+                    if (daemonResult && typeof daemonResult === 'object' && 'options' in daemonResult
+                        && Array.isArray(daemonResult.options)) return { items: daemonResult.options };
+                    throw new Error('Missing channel catalog fixture');
+                } })).execute(actionId, ExternalActionRequestEnvelopeV1Schema.parse(request.envelope).input, {
+                    surface: opened.invocation.surface,
+                    serverId, runtimeAccountId: 'account-a',
+                })
+                : daemonResult && typeof daemonResult === 'object' && 'ok' in daemonResult
+                    ? daemonResult : { ok: true, result: daemonResult };
             return { body: { v: 1, actionId, requestId: request.envelope.requestId,
-                execution: daemonResult && typeof daemonResult === 'object' && 'ok' in daemonResult ? daemonResult : { ok: true, result: daemonResult } } };
+                execution } };
         } });
     }
     return serverId;
@@ -94,10 +116,10 @@ describe('default Action notification daemon transport', () => {
             surface: 'voice', serverId,
         })).resolves.toEqual({ ok: true, result: { attemptedChannels: 1, deliveredChannels: 1 } });
         expect(harness.requestsFor('/v1/actions/notifications.notify_me').map(request =>
-            ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.input).envelope.input)).toEqual([input]);
+            ExternalActionRequestEnvelopeV1Schema.parse(ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.input).envelope).input)).toEqual([input]);
     });
 
-    it('resolves Send to options from that same Account host through the declared Action route', async () => {
+    it('resolves channels through real daemon admission and keeps direct UI delivery forbidden', async () => {
         const serverId = await addHome();
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
         const options = [{ value: 'plugin/channel', label: 'Plugin channel', disabled: true }];
@@ -110,8 +132,37 @@ describe('default Action notification daemon transport', () => {
             optionsSourceId: 'notifications.channels.available',
         }, { surface: 'ui', serverId })).resolves.toEqual({ ok: true, result });
         expect(harness.requestsFor('/v1/actions/action.options.resolve').map(request =>
-            ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.input).envelope.input))
-            .toEqual([{ actionId: 'notifications.notify_me', fieldPath: 'channels' }]);
+            ExternalActionRequestEnvelopeV1Schema.parse(ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.input).envelope).input))
+            .toEqual([{ optionsSourceId: 'notifications.channels.available' }]);
+        await expect(createDefaultActionExecutor().execute('action.options.resolve', {
+            actionId: 'notifications.notify_me', fieldPath: 'channels',
+        }, { surface: 'ui', serverId })).resolves.toMatchObject({ ok: false, errorCode: 'action_disabled' });
+    });
+
+    it('arms a Run notification through the UI adapter and real daemon options policy', async () => {
+        const serverId = await addHome();
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        daemonResult = { options: [{ value: 'plugin/channel', label: 'Plugin channel' }] };
+        const owner = createWorkNotificationOwnerFixture({ notificationChannelsList: async context => {
+            const result = await executor.execute('action.options.resolve', {
+                optionsSourceId: 'notifications.channels.available',
+            }, { ...context, serverId });
+            if (!result.ok) return result;
+            const parsed = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(result.result);
+            return { items: parsed.options };
+        } });
+        owner.acceptCreate();
+        const screen = await renderScreen(React.createElement(RunWorkNotifyOperation, {
+            source: { kind: 'workflow_run', runId: 'run-one' },
+            project: { machineId: 'machine-one', directory: '/workspace' }, read: owner.runRead, execute: owner.execute }));
+        try {
+            const prefix = 'notify-run-terminal';
+            const sourceId = 'run-one';
+            await screen.pressByTestIdAsync(`${prefix}:${sourceId}`);
+            expect(screen.findByTestId(`${prefix}-armed:${sourceId}`)).not.toBeNull();
+            expect([...owner.rows.values()].flatMap(row => row.triggers)).toHaveLength(1);
+        } finally { await screen.unmount(); }
     });
 
     it('does not borrow the focused Home daemon for a notification Account on another Home', async () => {

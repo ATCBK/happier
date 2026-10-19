@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -80,6 +80,7 @@ const { router } = await import('expo-router');
 const { ProfileDetailScreen } = await import('@/components/settings/profiles/ProfileDetailScreen');
 const initialState = getStorage().getState();
 beforeAll(loadSyncSingletonForTests);
+beforeEach(() => { vi.spyOn(Modal, 'confirm').mockResolvedValue(true); });
 let disposeConnection: (() => Promise<void>) | undefined;
 afterEach(async () => {
     standardCleanup();

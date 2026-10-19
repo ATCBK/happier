@@ -13,7 +13,8 @@ export type FrontDoorRuntimeActionExecute = (
   options?: Pick<NonNullable<Parameters<typeof createDefaultActionExecutor>[0]>, 'presentUserActionConfirmation'>,
 ) => Promise<unknown>;
 export type UiActionOperation = Pick<UiActionExecutorContext,
-  'signal' | 'presentUserConfirmation' | 'defaultSessionId' | 'actionRequestId' | 'onTransportIssued' | 'isPluginSettingsIntentCurrent'>;
+  'signal' | 'presentUserConfirmation' | 'defaultSessionId' | 'actionRequestId' | 'onTransportIssued' | 'isPluginSettingsIntentCurrent'
+  | 'executionRunTargetMachineId' | 'executionRunLaunchOrigin' | 'externalActionTarget'>;
 
 /** Retain typed refusal and pending custody instead of exposing either as a completed effect. */
 export function requireActionSuccess(result: ActionExecuteResult): asserts result is Extract<ActionExecuteResult, { ok: true }> {
@@ -91,6 +92,9 @@ export function createFrontDoorUiActionExecutor(
       ...(options?.actionRequestId ? { actionRequestId: options.actionRequestId } : {}),
       ...(options?.onTransportIssued ? { onTransportIssued: options.onTransportIssued } : {}),
       ...(options?.isPluginSettingsIntentCurrent ? { isPluginSettingsIntentCurrent: options.isPluginSettingsIntentCurrent } : {}),
+      ...(options?.executionRunTargetMachineId ? { executionRunTargetMachineId: options.executionRunTargetMachineId } : {}),
+      ...(options?.executionRunLaunchOrigin ? { executionRunLaunchOrigin: options.executionRunLaunchOrigin } : {}),
+      ...(options?.externalActionTarget ? { externalActionTarget: options.externalActionTarget } : {}),
     });
     requireActionSuccess(result);
     return result.result;

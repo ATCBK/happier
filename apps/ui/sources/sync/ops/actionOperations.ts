@@ -20,6 +20,7 @@ export type ActionOperationRpc = <Response, Request>(params: Readonly<{
     accountId?: string | null;
     timeoutMs?: number;
     onIssued?: () => void;
+    signal?: AbortSignal;
 }>) => Promise<Response>;
 
 type ActionOperationTransportParams = Readonly<{
@@ -27,6 +28,8 @@ type ActionOperationTransportParams = Readonly<{
     serverId?: string | null;
     accountId?: string | null;
     rpc?: ActionOperationRpc;
+    timeoutMs?: number;
+    signal?: AbortSignal;
 }>;
 
 type ResponseSchema<T> = Readonly<{
@@ -67,6 +70,8 @@ async function readActionOperationObservation<Response, Request>(
         payload,
         serverId: params.serverId,
         accountId: params.accountId,
+        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
     }), method);
     try {
         return await read(methods.current);
@@ -103,10 +108,13 @@ export async function getActionOperation(
         requireCurrentDomainFacts?: true;
         /** A human setup decision must await the retained producer's fresh effect. */
         refreshSetupReview?: true;
+        /** Join the canonical runner; requester operations have no custodian push stream. */
+        waitForTerminal?: true;
     }>,
 ): Promise<ActionOperationGetV1Response> {
     return await readActionOperationObservation(params, { operationId: params.operationId,
-        ...(params.refreshSetupReview ? { refreshSetupReview: true } : {}) }, ActionOperationGetV1ResponseSchema, {
+        ...(params.refreshSetupReview ? { refreshSetupReview: true } : {}),
+        ...(params.waitForTerminal ? { waitForTerminal: true } : {}) }, ActionOperationGetV1ResponseSchema, {
         current: ACTION_OPERATION_RPC_METHODS_V2.get, predecessor: ACTION_OPERATION_RPC_METHODS_V1.get,
-    }, params.requireCurrentDomainFacts === true || params.refreshSetupReview === true);
+    }, params.requireCurrentDomainFacts === true || params.refreshSetupReview === true || params.waitForTerminal === true);
 }

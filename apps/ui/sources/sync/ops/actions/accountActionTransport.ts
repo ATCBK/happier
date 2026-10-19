@@ -17,6 +17,7 @@ export type AccountActionTransport = (input: Readonly<{
     actionId: ActionId;
     requestId: string;
     invocation: ExternalActionRequesterInvocationV1;
+    onTransportIssued?: () => void;
 }>) => Promise<unknown>;
 
 export type UiAccountActionExecute = (args: Readonly<{
@@ -74,6 +75,7 @@ export function createUiAccountActionTransport(params: Readonly<{
             method: method ?? '',
             payload: args.input,
             actionId: args.actionId, requestId: args.context.actionRequestId ?? randomUUID(), invocation: provenance.data,
+            ...(args.context.onTransportIssued ? { onTransportIssued: args.context.onTransportIssued } : {}),
             ...(signal ? { signal } : {}),
             // Admission may finish after connection/key hydration consumed the
             // ordinary RPC budget. Keep its authoritative result rather than

@@ -135,5 +135,7 @@ describe('action operation transport', () => {
         });
         await expect(getActionOperation({ machineId: 'machine-1', operationId: 'operation-1', rpc, refreshSetupReview: true }))
             .rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+        await expect(getActionOperation({ machineId: 'machine-1', operationId: 'operation-1', rpc, waitForTerminal: true }))
+            .rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
     });
 });

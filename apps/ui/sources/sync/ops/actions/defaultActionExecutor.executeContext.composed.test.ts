@@ -1,3 +1,4 @@
+// Real Server event producer→UI consumer composition is not a package-local compiler root.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createScmCapabilities } from '@happier-dev/protocol/scm';
@@ -12,10 +13,19 @@ import { buildUpdateArtifactUpdate } from '../../../../../server/sources/app/eve
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import {
     createHomeGovernanceHarness,
+    createAccountTokenForTests,
     installHomeGovernanceBoundaries,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
+import { DiscussionCreateRequestV1Schema, DiscussionCreateResponseV1Schema, type DiscussionCreateRequestV1 } from '@happier-dev/protocol/discussions/api';
+import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
+import type { DataKeyAuthCredentials } from '@/auth/storage/tokenStorage';
+import { encodeBase64 } from '@/encryption/base64';
+import tweetnacl from 'tweetnacl';
+import type { PluginActionInputById } from '@happier-dev/plugin-sdk/actions';
 
 installDisconnectedServerSocketBoundary();
 
@@ -108,7 +118,7 @@ const APPROVAL_REQUIRED_ACTIONS_SETTINGS = {
                 disabledPlacements: [],
                 approvalRequiredSurfaces: ['ui'],
             },
-            'session.discussion.archive': {
+            'discussion.archive': {
                 enabledPlacements: [],
                 disabledSurfaces: [],
                 disabledPlacements: [],
@@ -757,12 +767,125 @@ describe('withDefaultActionExecuteContext', () => {
         });
     });
 
-    it('replays an approved Session-discussion mutation from the Inbox through the captured Home scope', async () => {
+    it('creates an encrypted Discussion with the captured UI data-key credential public key', async () => {
+        const machineKey = new Uint8Array(32).fill(19);
+        const publicKey = tweetnacl.box.keyPair.fromSecretKey(machineKey).publicKey;
+        const credentials: DataKeyAuthCredentials = { token: createAccountTokenForTests(ACCOUNT_ID), encryption: {
+            machineKey: encodeBase64(machineKey, 'base64'), publicKey: encodeBase64(publicKey, 'base64'),
+        } };
+        const serverId = await harness.addHome({ name: 'Data-key Home', serverUrl: 'https://data-key-home.example',
+            accountId: ACCOUNT_ID, credentials, accountEncryptionMode: 'e2ee' });
+        const sent: DiscussionCreateRequestV1[] = [];
+        harness.answer(serverId, '/v1/discussions', { select: (input, request) => {
+            if (request.init?.method === 'GET') return { body: { discussions: [], nextCursor: null } };
+            const body = DiscussionCreateRequestV1Schema.parse(input);
+            sent.push(body);
+            const firstMessage = { id: 'encrypted-first-message', discussionId: 'encrypted-discussion', localId: body.firstMessage.localId,
+                seq: 1, authorAccountId: ACCOUNT_ID, accountActor: { v: 1, accountId: ACCOUNT_ID, profile: null }, producerV1: null,
+                content: body.firstMessage.content, mentionedAccountIds: body.firstMessage.mentionedAccountIds, createdAt: 1 };
+            const { content: _content, mentionedAccountIds: _mentions, discussionId: _discussion, ...latestMessage } = firstMessage;
+            return { body: DiscussionCreateResponseV1Schema.parse({ discussion: {
+                id: firstMessage.discussionId, ownerAccountId: ACCOUNT_ID, encryptionMode: 'e2ee', anchor: null,
+                access: 'owner', keyReadiness: true, dataEncryptionKey: body.dataEncryptionKey,
+                creationLocalId: body.creationLocalId, titleContent: body.titleContent, latestMessage,
+                messageSeq: 1, lastReadSeq: 1, unreadCount: 0, unreadMentionCount: 0,
+                recentAuthorAccountIds: [ACCOUNT_ID], archivedAt: null,
+                capabilities: { postMessages: true, rename: true, archive: true, restore: false,
+                    askAgent: true, sendToSession: true, manageAccess: true, leave: false },
+            }, firstMessage }) };
+        } });
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { executeDiscussionActionInAccountContext } = await import('@/sync/api/discussions/discussionActions');
+        const account = await captureLazyActionAccountContext(serverId);
+        const content = { v: 1 as const, parts: [{ t: 'text' as const, text: 'Data-key credentials work' }] };
+        try {
+            await expect(executeDiscussionActionInAccountContext(account, 'available', { actionId: 'discussion.create',
+                input: { creationLocalId: 'data-key-create', title: 'Encrypted', firstMessage: { localId: 'data-key-first-message', content } },
+                context: { surface: 'ui', serverId } })).resolves.toMatchObject({
+                discussion: { id: 'encrypted-discussion', title: 'Encrypted' }, firstMessage: { content },
+            });
+            expect(sent).toHaveLength(1);
+            expect(sent[0]?.expectedOwnerContentPublicKeyFingerprint).toBe(computeContentPublicKeyFingerprint(publicKey));
+        } finally { account.dispose(); }
+    });
+
+    it('revokes only the denied Discussion while an unrelated Home read is in flight', async () => {
+        const serverId = await addHome({ collaboration: true });
+        const { createDiscussionClient } = await import('@/sync/api/discussions/discussionActions');
+        const { createDiscussionRepository } = await import('@/sync/ops/discussions/discussionRepository');
+        const row = (id: string) => DiscussionSummaryV1Schema.parse({
+            id, ownerAccountId: ACCOUNT_ID, encryptionMode: 'plain', anchor: null, access: 'owner',
+            keyReadiness: true, dataEncryptionKey: null, creationLocalId: null,
+            titleContent: { t: 'plain', v: { v: 1, title: id } }, latestMessage: {
+                id: `${id}-message-1`, localId: null, seq: 1, authorAccountId: ACCOUNT_ID,
+                accountActor: { v: 1, accountId: ACCOUNT_ID, profile: null }, producerV1: null, createdAt: 1,
+            },
+            messageSeq: 2, lastReadSeq: 0, unreadCount: 2, unreadMentionCount: 0,
+            recentAuthorAccountIds: [ACCOUNT_ID], archivedAt: null,
+            capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false },
+        });
+        const readBody = (discussionId: string, seq: number) => ({ messages: [{
+            id: `${discussionId}-message-${seq}`, discussionId, localId: null, seq,
+            authorAccountId: ACCOUNT_ID, accountActor: { v: 1, accountId: ACCOUNT_ID, profile: null },
+            producerV1: null, content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: `${discussionId}:${seq}` }] } },
+            mentionedAccountIds: [], createdAt: seq,
+        }], hasMoreOlder: false, messageSeq: seq });
+        harness.answer(serverId, '/v1/discussions', { select: (_input, request) => ({ body: {
+            discussions: new URL(request.url).searchParams.get('state') === 'archived' ? [] : [row('discussion-a'), row('discussion-b')],
+            nextCursor: null,
+        } }) });
+        const oldA = createDeferred<void>();
+        const currentB = createDeferred<void>();
+        const aArrived = createDeferred<void>();
+        const bArrived = createDeferred<void>();
+        let pendingReads = false;
+        let denied = false;
+        for (const id of ['discussion-a', 'discussion-b']) {
+            harness.answer(serverId, `/v1/discussions/${id}`, { body: { discussion: row(id) } });
+            harness.answer(serverId, `/v1/discussions/${id}/messages`, { select: () => {
+                if (id === 'discussion-a' && denied) return { status: 403, body: { error: 'discussion_read_denied' } };
+                if (!pendingReads) return { body: readBody(id, 1) };
+                (id === 'discussion-a' ? aArrived : bArrived).resolve();
+                return { body: readBody(id, 2), respondAfter: id === 'discussion-a' ? oldA.promise : currentB.promise };
+            } });
+        }
+        const repository = createDiscussionRepository({ scope: { serverId, accountId: ACCOUNT_ID }, address: { serverId },
+            client: createDiscussionClient({ scope: { serverId, accountId: ACCOUNT_ID }, availability: 'available' }) });
+        await repository.refreshList('active');
+        const requestsBeforeWrongAccount = harness.requestsFor('/v1/discussions').length;
+        const wrongAccount = createDiscussionClient({ scope: { serverId, accountId: 'another-account' }, availability: 'available' });
+        expect(await wrongAccount.list()).toMatchObject({ kind: 'failed' });
+        expect(harness.requestsFor('/v1/discussions')).toHaveLength(requestsBeforeWrongAccount);
+        await repository.refreshMessages('discussion-a');
+        await repository.refreshMessages('discussion-b');
+        expect(repository.getSnapshot().threads['discussion-b']?.messages).toHaveLength(1);
+        pendingReads = true;
+        const staleRead = repository.refreshMessages('discussion-a');
+        const neighborRead = repository.refreshMessages('discussion-b');
+        await Promise.all([aArrived.promise, bArrived.promise]);
+        denied = true;
+        await repository.refreshMessages('discussion-a');
+        oldA.resolve();
+        currentB.resolve();
+        await Promise.all([staleRead, neighborRead]);
+        const snapshot = repository.getSnapshot();
+        expect(snapshot.lists.active.items.map(item => item.id)).toEqual(['discussion-b']);
+        expect(snapshot.threads['discussion-a']?.messages ?? []).toEqual([]);
+        expect(snapshot.threads['discussion-b']).toMatchObject({ status: 'ready', messageSeq: 2 });
+        expect(snapshot.threads['discussion-b']?.messages.map(message => message.seq)).toEqual([1, 2]);
+    });
+
+    it('replays an approved Discussion mutation from the Inbox through the captured Home without a Session', async () => {
         const serverId = await addHome({ collaboration: true });
         const { createDefaultActionExecutor } = await loadExecutor();
         const archivedDiscussion = {
             id: 'discussion-a',
-            sessionId: 'session-1',
+            ownerAccountId: ACCOUNT_ID,
+            encryptionMode: 'plain',
+            anchor: null,
+            access: 'owner',
+            keyReadiness: true,
+            dataEncryptionKey: null,
             creationLocalId: 'create-local-a',
             titleContent: { t: 'plain', v: { v: 1, title: 'Release readiness' } },
             latestMessage: {
@@ -787,79 +910,44 @@ describe('withDefaultActionExecuteContext', () => {
                 restore: true,
                 askAgent: false,
                 sendToSession: false,
+                manageAccess: true,
+                leave: false,
             },
         };
-        // The Session system-record runtime is the Home request authority plus the
-        // Session's stored-content context; its HTTP request is the boundary. The
-        // captured-scope port, its Account check and the real Discussion adapter
-        // run beneath it.
-        const discussionHttp: Array<{ path: string; method: string | undefined }> = [];
-        const runtimeAddresses: unknown[] = [];
-        const { sync } = await import('@/sync/syncEngine');
-        const runtime = vi.spyOn(sync, 'withSessionSystemRecordRuntime').mockImplementation((async (
-            address: unknown,
-            operation: (runtime: unknown) => Promise<unknown>,
-        ) => {
-            runtimeAddresses.push(address);
-            return {
-                status: 'ok',
-                value: await operation({
-                    scope: { serverId, accountId: ACCOUNT_ID },
-                    contentContext: { mode: 'plain' },
-                    request: async (path: string, init?: RequestInit) => {
-                        discussionHttp.push({ path, method: init?.method });
-                        return new Response(JSON.stringify({ discussion: archivedDiscussion }), { status: 200 });
-                    },
-                }),
-            };
-        }) as unknown as typeof sync.withSessionSystemRecordRuntime);
-        try {
-            const input = { sessionId: 'session-1', discussionId: 'discussion-a' };
-            // The mounted Discussion surface owns its family port; approval defers it.
-            const mountedPort = vi.fn();
-            const mounted = createDefaultActionExecutor({ sessionDiscussionAction: mountedPort });
-            const created = await mounted.execute('session.discussion.archive', input, {
-                serverId,
-                surface: 'ui',
-                authority: 'present_user',
-                defaultSessionId: 'session-1',
-                actionRequestId: 'discussion-archive-request-1',
-            });
-            expect(created).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
-            const artifactId = createdArtifactId(created);
-            expect(mountedPort).not.toHaveBeenCalled();
-            expect(discussionHttp).toHaveLength(0);
+        const discussionPath = '/v1/discussions/discussion-a/archive';
+        harness.answer(serverId, discussionPath, { body: { discussion: archivedDiscussion } });
+        const input = { discussionId: 'discussion-a' };
+        // The mounted Discussion surface owns its family port; approval defers it.
+        const mountedPort = vi.fn();
+        const mounted = createDefaultActionExecutor({ discussionAction: mountedPort });
+        const created = await mounted.execute('discussion.archive', input, {
+            serverId,
+            surface: 'ui',
+            authority: 'present_user',
+            actionRequestId: 'discussion-archive-request-1',
+        });
+        expect(created).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        const artifactId = createdArtifactId(created);
+        expect(mountedPort).not.toHaveBeenCalled();
+        expect(harness.requestsFor(discussionPath)).toHaveLength(0);
 
-            // Approval Detail / Inbox decides through a generic executor with no mounted port.
-            const inbox = createDefaultActionExecutor();
-            const decided = await inbox.execute(
-                'approval.request.decide',
-                { artifactId, decision: 'approve' },
-                { serverId, surface: 'ui', authority: 'present_user' },
-            );
-            expect(decided, storedApproval(serverId, artifactId).json).toMatchObject({ ok: true, result: { status: 'executed' } });
+        // Approval Detail / Inbox decides through a generic executor with no mounted port.
+        const inbox = createDefaultActionExecutor();
+        const decided = await inbox.execute(
+            'approval.request.decide',
+            { artifactId, decision: 'approve' },
+            { serverId, surface: 'ui', authority: 'present_user' },
+        );
+        expect(decided, storedApproval(serverId, artifactId).json).toMatchObject({ ok: true, result: { status: 'executed' } });
 
-            // The captured scope addresses the Session by the Home's canonical
-            // scope id (its published identity), not the device-local profile id.
-            const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
-            expect(runtimeAddresses).toEqual([{
-                serverId: resolveServerProfileScopeIdForIdentifier(serverId),
-                sessionId: 'session-1',
-            }]);
-            expect(discussionHttp).toEqual([{
-                path: '/v2/sessions/session-1/discussions/discussion-a/archive',
-                method: 'POST',
-            }]);
-            expect(storedApproval(serverId, artifactId).request).toMatchObject({
-                status: 'executed',
-                execution: {
-                    ok: true,
-                    result: { sessionId: 'session-1', discussion: { id: 'discussion-a', archivedAt: 20 } },
-                },
-            });
-        } finally {
-            runtime.mockRestore();
-        }
+        expect(harness.requestsFor(discussionPath)).toHaveLength(1);
+        expect(storedApproval(serverId, artifactId).request).toMatchObject({
+            status: 'executed',
+            execution: {
+                ok: true,
+                result: { discussion: { id: 'discussion-a', archivedAt: 20 } },
+            },
+        });
     });
 
     it('stamps the captured stable Home identity into a prepared UI approval artifact', async () => {
@@ -964,6 +1052,7 @@ describe('withDefaultActionExecuteContext', () => {
             source: {
                 sourceSessionId: 'source-session',
                 destinationSessionId: 'destination-session',
+                policy: { preset: 'important' },
                 deliveryState: 'eligible',
                 hasPendingUpdates: true,
             },
@@ -973,16 +1062,17 @@ describe('withDefaultActionExecuteContext', () => {
         const { createDefaultActionExecutor } = await loadExecutor();
 
         const result = await createDefaultActionExecutor().execute(
-            'session.follow.sources.set',
+            'follow.set',
             {
-                sourceSessionId: 'source-session',
-                destinationSessionId: 'destination-session',
+                source: { kind: 'session', sessionId: 'source-session' },
+                receiver: { kind: 'session', sessionId: 'destination-session' },
+                policy: { preset: 'important' },
             },
             {
                 serverId,
                 surface: 'ui',
                 authority: 'present_user',
-                presentUserConfirmation: { actionId: 'session.follow.sources.set' },
+                presentUserConfirmation: { actionId: 'follow.set' },
             },
         );
 
@@ -1000,6 +1090,7 @@ describe('withDefaultActionExecuteContext', () => {
             source: {
                 sourceSessionId: 'source-session',
                 destinationSessionId: 'destination-session',
+                policy: { preset: 'important' },
                 deliveryState: 'eligible',
                 hasPendingUpdates: false,
             },
@@ -1012,16 +1103,17 @@ describe('withDefaultActionExecuteContext', () => {
         const { createDefaultActionExecutor } = await loadExecutor();
 
         await expect(createDefaultActionExecutor().execute(
-            'session.follow.sources.set',
+            'follow.set',
             {
-                sourceSessionId: 'source-session',
-                destinationSessionId: 'destination-session',
+                source: { kind: 'session', sessionId: 'source-session' },
+                receiver: { kind: 'session', sessionId: 'destination-session' },
+                policy: { preset: 'important' },
             },
             {
                 serverId,
                 surface: 'ui',
                 authority: 'present_user',
-                presentUserConfirmation: { actionId: 'session.follow.sources.set' },
+                presentUserConfirmation: { actionId: 'follow.set' },
             },
         )).resolves.toMatchObject({
             ok: false,
@@ -1202,6 +1294,67 @@ describe('withDefaultActionExecuteContext', () => {
             const state = parseSessionPaneUrlState(Object.fromEntries(href.searchParams));
             expect(state?.details).toMatchObject({ kind: 'scmReview', explain });
             expect(createSessionPaneDetailsTab(state!.details!)?.resource).toMatchObject({ explain });
+        } finally {
+            release();
+        }
+    });
+
+    it.each(['agent', 'plugin'] as const)('opens pending Commits from a public %s request through the mounted adapter', async (surface) => {
+        const serverId = await addHome();
+        const { registerMountedWorkspaceAction } = await import('@/components/appShell/workspace/workspaceActionRuntime');
+        const { parseSessionPaneUrlState, createSessionPaneDetailsTab } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+        const opened: string[] = [];
+        const release = registerMountedWorkspaceAction(async ({ actionId, input }) => {
+            if (actionId !== 'workspace.tabs.open') throw new Error('Unexpected workspace request');
+            opened.push((input as { href: string }).href);
+            return { ok: true };
+        });
+        try {
+            const input = {
+                sessionId: 'session-a', destination: { kind: 'scmReview', comparison: { kind: 'workingTree' }, view: 'commits' },
+            } satisfies PluginActionInputById['session.open'];
+            const { createDefaultActionExecutor } = await loadExecutor();
+            const outcome = await createDefaultActionExecutor().execute('session.open', input, {
+                serverId, surface, defaultSessionId: 'session-a',
+            });
+            expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true });
+            expect(opened).toHaveLength(1);
+            const href = new URL(opened[0]!, 'https://app.example');
+            expect(href.pathname).toBe('/session/session-a');
+            expect(href.searchParams.get('serverId')).toBe(serverId);
+            const state = parseSessionPaneUrlState(Object.fromEntries(href.searchParams));
+            expect(createSessionPaneDetailsTab(state!.details!)?.resource).toMatchObject({
+                kind: 'scmReview', comparison: { kind: 'workingTree' }, view: 'commits',
+            });
+        } finally {
+            release();
+        }
+    });
+
+    it.each([
+        { kind: 'session', sessionId: 'session-a' },
+        { kind: 'turnCheckpoint', turnId: 'turn-a' },
+        { kind: 'branch', head: 'feature', base: 'main' },
+        { kind: 'commit', commit: 'a'.repeat(40) },
+        { kind: 'pullRequest', locator: { providerId: 'hosting-source', repository: 'owner/repo', number: 17 } },
+    ] as const)('refuses Commits for a $kind source before mounted navigation', async (comparison) => {
+        const serverId = await addHome();
+        const { registerMountedWorkspaceAction } = await import('@/components/appShell/workspace/workspaceActionRuntime');
+        const opened: unknown[] = [];
+        const release = registerMountedWorkspaceAction(async request => {
+            opened.push(request);
+            return { ok: true };
+        });
+        try {
+            const input = {
+                sessionId: 'session-a', destination: { kind: 'scmReview', comparison, view: 'commits' },
+            } satisfies PluginActionInputById['session.open'];
+            const { createDefaultActionExecutor } = await loadExecutor();
+            const outcome = await createDefaultActionExecutor().execute('session.open', input, {
+                serverId, surface: 'agent', defaultSessionId: 'session-a',
+            });
+            expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: false, errorCode: 'commits_require_working_tree' });
+            expect(opened).toEqual([]);
         } finally {
             release();
         }

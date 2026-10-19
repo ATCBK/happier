@@ -4,7 +4,7 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/
 
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import type { LazyActionAccountContext } from './actionAccountContext';
+import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
 import { canUsePrivateProjectAccountAction } from '@/sync/api/projects/projectAccountRowsClient';
 
@@ -37,14 +37,14 @@ export function createUiProjectDefinitionAction(account?: LazyActionAccountConte
             account.assertResultCurrent(spec.sideEffectClass);
             if (execution) return execution.ok ? execution.result : execution;
         }
-        const result = await machineRpcWithServerScope({
+        const result = await withActionAccountRequestSignal(account, context.signal, signal => machineRpcWithServerScope({
             serverId: request.workspace.serverId,
             machineId: request.workspace.machineId,
             accountId: account?.accountId ?? context.runtimeAccountId,
             method,
             payload: request,
-            ...(context.signal ? { signal: context.signal } : {}),
-        });
+            signal,
+        }));
         account?.assertResultCurrent(spec.sideEffectClass);
         return result;
     };

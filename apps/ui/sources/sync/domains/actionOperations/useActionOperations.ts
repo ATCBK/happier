@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { actionOperationSelectors } from './actionOperationSelectors';
 import { actionOperationStore } from './actionOperationStore';
-import type { ActionOperationAddress, ActionOperationSessionAddress, ActionOperationProjectScriptQuery, ActionOperationProjectWorkspaceQuery, ActionOperationManagedMachineQuery } from './qualifiedActionOperation';
+import type { ActionOperationAddress, ActionOperationSessionAddress, ActionOperationProjectScriptQuery, ActionOperationProjectWorkspaceQuery, ActionOperationManagedMachineQuery, ActionOperationProjectServicesQuery } from './qualifiedActionOperation';
 
 function useActionOperationSelector<T>(selector: () => T): T {
     return React.useSyncExternalStore(
@@ -68,6 +68,10 @@ export function useProjectScriptActionOperation(query: ActionOperationProjectScr
 
 export function useProjectSetupActionOperation(query: ActionOperationProjectWorkspaceQuery) {
     return useActionOperationSelector(() => actionOperationSelectors.selectForProjectSetup(actionOperationStore.getSnapshot(), query));
+}
+
+export function useProjectServiceActionOperations(query: ActionOperationProjectServicesQuery) {
+    return useActionOperationSelector(() => actionOperationSelectors.selectForProjectServices(actionOperationStore.getSnapshot(), query));
 }
 
 export function useManagedMachineActionOperation(query: ActionOperationManagedMachineQuery) {

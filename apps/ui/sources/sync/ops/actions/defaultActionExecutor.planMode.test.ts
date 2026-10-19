@@ -1,25 +1,32 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { ExecutionRunStartResponseSchema, SessionCurrentProjectionRecordV1Schema, SessionMetadataTuplePatchV1Schema,
-  SessionMetadataTuplePatchSuccessV1Schema, MACHINE_PLAIN_DATA_KEY_MARKER,
+  SessionMetadataTuplePatchSuccessV1Schema, SessionMetadataVersionConflictV1Schema, MACHINE_PLAIN_DATA_KEY_MARKER,
   SessionSpawnNewInputV2Schema, SessionOwnerMetadataEnvelopeV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonSessionGoalGetRequestV1Schema, DaemonSessionGoalSetRequestV2Schema,
   DaemonSessionGoalClearRequestV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { SessionMessageSendResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { ComposerAttachmentDraftV1Schema } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { bindMachineAccessActionHttpRequestV1, normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions';
+import { actionSpecToActionDefinitionV1 } from '@happier-dev/protocol/actions/actionCatalog';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { act, renderHook } from '@/dev/testkit/hooks/renderHook';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 
 // A real product platform is required for executing-client evidence. The
 // generic Node RN stub intentionally has no client category.
@@ -63,8 +70,6 @@ installDisconnectedServerSocketBoundary((socket) => {
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();
-const restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
-afterAll(restoreExecutorModuleLoader);
 const { storage } = await import('@/sync/domains/state/storage');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { resetDynamicModelProbeCacheForTests } = await import('@/sync/domains/models/dynamicModelProbeCache');
@@ -75,9 +80,9 @@ let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefi
 let serverId = '';
 let webLocks: ReturnType<typeof installWebLockManagerMock> | undefined;
 
-function installSession(id: string, partialMetadata: Partial<NonNullable<ReturnType<typeof createSessionFixture>['metadata']>>) {
+function installSession(id: string, partialMetadata: Partial<NonNullable<ReturnType<typeof createSessionFixture>['metadata']>>, ownerServerId = serverId) {
   const metadata = { path: '/repo', host: 'tester.local', ...partialMetadata };
-  const session = createSessionFixture({ id, serverId, active: true, metadata });
+  const session = createSessionFixture({ id, serverId: ownerServerId, active: true, metadata });
   storage.setState({ sessions: { ...storage.getState().sessions, [id]: session } });
   let row = SessionCurrentProjectionRecordV1Schema.parse({
     ...session, metadataLayoutVersion: 0, metadata: JSON.stringify(metadata),
@@ -98,9 +103,37 @@ function installSession(id: string, partialMetadata: Partial<NonNullable<ReturnT
     return { body: SessionMetadataTuplePatchSuccessV1Schema.parse({ success: true, metadataLayoutVersion: 1,
       sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } }) };
   } };
-  homes.answer(serverId, `/v2/sessions/${id}`, answer);
-  homes.answer(serverId, `/v2/sessions/${id}?accessProjectionVersion=1`, answer);
+  homes.answer(ownerServerId, `/v2/sessions/${id}`, answer);
+  homes.answer(ownerServerId, `/v2/sessions/${id}?accessProjectionVersion=1`, answer);
   return () => row;
+}
+
+/** Hold actual HTTP body bytes after headers, retaining the request's abort semantics. */
+function holdSessionResponseBody(sessionId: string, suffix = '', method = 'GET') {
+  const reading = createDeferred<void>();
+  const released = createDeferred<void>();
+  let held = false;
+  setRuntimeFetch(async (input, init) => {
+    const response = await homes.request(input, init);
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (held || (init?.method ?? 'GET') !== method || url.pathname !== `/v2/sessions/${sessionId}${suffix}`) return response;
+    held = true;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return new Response(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        reading.resolve();
+        await released.promise;
+        if (init?.signal?.aborted) {
+          controller.error(init.signal.reason ?? new DOMException('Aborted', 'AbortError'));
+          return;
+        }
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }, { highWaterMark: 0 }), { status: response.status, headers: response.headers });
+  });
+  return { reading: reading.promise, release: () => released.resolve(),
+    restore: () => installHomeGovernanceBoundaries(homes) };
 }
 
 const modes = (agentId: string, currentModeId: string, ids: readonly string[]) => ({
@@ -119,6 +152,406 @@ function installActionSettings(actions: unknown) {
 }
 
 describe('default Action executor mode and catalog contracts', () => {
+  it('sends structured ordinary input to an exact cold Session on the active Home without warming the Session store', async () => {
+    installSession('cold-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    storage.setState({ sessions: {} });
+    const baseline = createRootLayoutFeaturesResponse();
+    const features = createRootLayoutFeaturesResponse({ capabilities: { ...baseline.capabilities,
+      session: { ...baseline.capabilities.session, pendingInput: { protocolVersion: 1 } } } });
+    homes.answer(serverId, '/v1/features', { body: features });
+    homes.answer(serverId, '/v1/features/authenticated', { body: features });
+    const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+    const structuredInput = { v: 1, mentions: [{ kind: 'happier.session', ref: 'session:source', token: '@source' }] };
+    homes.answer(serverId, '/v2/sessions/cold-session/pending', { select: body => {
+      const input = StrictJsonValueSchema.parse(body);
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Expected Pending mutation object');
+      if (!('requestedAction' in input) || !('localId' in input)) throw new Error('Expected Pending mutation identity');
+      expect(input).toMatchObject({ localId: 'cold-input', requestedAction: { v: 1, kind: 'send_now' },
+        content: { t: 'plain', v: { content: { text: '@source inspect it.' }, meta: { happierStructuredInputV1: structuredInput } } } });
+      return { body: { requestedAction: input.requestedAction, pending: { localId: input.localId } } };
+    } });
+    const result = await createDefaultActionExecutor().execute('session.message.send', {
+      sessionId: 'cold-session', message: '@source inspect it.', reply: 'none', localId: 'cold-input', structuredInput,
+      requestedAction: { v: 1, kind: 'send_now' },
+    }, context());
+    expect(result).toEqual({ ok: true, result: { status: 'accepted', localId: 'cold-input' } });
+    expect(storage.getState().sessions['cold-session']).toBeUndefined();
+    expect(homes.requestsFor('/v2/sessions/cold-session/pending')).toHaveLength(1);
+  });
+  it('retires default ACP metadata publication while the captured Session body is held', async () => {
+    const sessionId = 'retired-acp-body';
+    installSession(sessionId, { path: '/private/captured-account', flavor: 'opencode' });
+    storage.setState({ sessions: {} });
+    const body = holdSessionResponseBody(sessionId);
+    const { sync } = await import('@/sync/sync');
+    const publication = sync.publishSessionAcpSessionModeOverrideToMetadata({ sessionId, modeId: 'plan', updatedAt: 2 })
+      .then(() => ({ status: 'fulfilled' as const }), error => ({ status: 'rejected' as const, error }));
+    try {
+      await Promise.race([body.reading, publication.then(() => { throw new Error('ACP publication completed before the held Session body'); })]);
+      const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+      const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+      await disconnectActiveServerConnection();
+      await TokenStorage.removeCredentialsForServerUrl('https://mode-actions.test', { serverId });
+      body.release();
+      const outcome = await publication;
+      expect(storage.getState().sessions[sessionId]).toBeUndefined();
+      expect(homes.requestsFor(`/v2/sessions/${sessionId}`).filter(request => request.input !== null)).toEqual([]);
+      expect(outcome).toMatchObject({ status: 'rejected', error: { cause: { code: 'session_account_scope_retired' } } });
+    } finally {
+      body.release();
+      await publication;
+      body.restore();
+    }
+  });
+  it('retires a basic Action send before outbox custody while the captured Session body is held', async () => {
+    const sessionId = 'retired-send-body';
+    const localId = 'retired-send-input';
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const originalScope = captureActiveServerAccountScopeLifetime()!.scope;
+    installSession(sessionId, { path: '/private/captured-account', flavor: 'claude' });
+    storage.setState({ sessions: {} });
+    const baseline = createRootLayoutFeaturesResponse();
+    const features = createRootLayoutFeaturesResponse({ capabilities: { ...baseline.capabilities,
+      session: { ...baseline.capabilities.session, pendingInput: { protocolVersion: 1 } } } });
+    const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+    homes.answer(serverId, `/v2/sessions/${sessionId}/pending`, { status: 503, body: { error: 'unavailable' } });
+    const body = holdSessionResponseBody(sessionId);
+    const send = createDefaultActionExecutor().execute('session.message.send', {
+      sessionId, message: 'Do not send after logout.', reply: 'none', localId,
+      requestedAction: { v: 1, kind: 'send_now' },
+    }, context());
+    const { loadPendingOutboxForSession, removePendingOutboxMessage } = await import('@/sync/domains/state/pendingOutboxPersistence');
+    try {
+      await Promise.race([body.reading, send.then(() => { throw new Error('Basic Action send completed before the held Session body'); })]);
+      const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+      const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+      await disconnectActiveServerConnection();
+      await TokenStorage.removeCredentialsForServerUrl('https://mode-actions.test', { serverId });
+      body.release();
+      const outcome = await send;
+      expect({ pendingRequests: homes.requestsFor(`/v2/sessions/${sessionId}/pending`).length,
+        outboxRows: (await loadPendingOutboxForSession(sessionId, originalScope)).length,
+      }).toEqual({ pendingRequests: 0, outboxRows: 0 });
+      expect(outcome).toMatchObject({ ok: false, errorCode: 'tool_cancelled' });
+    } finally {
+      body.release();
+      await send.catch(() => undefined);
+      await removePendingOutboxMessage(sessionId, localId, originalScope);
+      body.restore();
+    }
+  });
+  it.each(['focus-switch', 'credential-replacement'] as const)(
+    'keeps explicit Home metadata authority independent from ambient %s', async change => {
+    const targetServerId = await homes.addHome({ name: 'Target metadata Home', serverUrl: 'https://target-metadata.test',
+      accountId: 'bob', currentAccount: true });
+    const nextServerId = await homes.addHome({ name: 'Next ambient Home', serverUrl: 'https://next-ambient.test',
+      accountId: 'carol', currentAccount: true });
+    const sessionId = 'explicit-home-metadata';
+    const read = installSession(sessionId, { path: '/private/target-account', flavor: 'claude' }, targetServerId);
+    storage.setState({ sessions: {} });
+    const body = holdSessionResponseBody(sessionId);
+    const publication = createDefaultActionExecutor().execute('session.approval_reviewer.set', {
+      sessionId, enabled: true,
+    }, { ...context(), serverId: targetServerId });
+    try {
+      await Promise.race([body.reading, publication.then(() => { throw new Error('Explicit Home publication completed before the held Session body'); })]);
+      if (change === 'focus-switch') {
+        const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+        const { switchConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+        await setActiveServerId(nextServerId, { scope: 'device' });
+        await switchConnectionToActiveServer();
+      } else {
+        await homes.switchAccount(targetServerId, 'replacement', { currentAccount: true });
+        homes.answer(targetServerId, `/v2/sessions/${sessionId}`, { status: 403, body: { error: 'Forbidden' } });
+        homes.answer(targetServerId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, { status: 403, body: { error: 'Forbidden' } });
+      }
+      body.release();
+      const result = await publication;
+      const writes = homes.requestsFor(`/v2/sessions/${sessionId}`).filter(request => request.input !== null);
+      if (change === 'focus-switch') {
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+        expect(writes.map(request => request.serverId)).toEqual([targetServerId]);
+        const owner = SessionOwnerMetadataEnvelopeV1Schema.parse(read().ownerMetadata);
+        if (owner.t !== 'plain') throw new Error('Unreadable owner metadata');
+        expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: JSON.parse(read().metadata), ownerMetadata: owner.v })
+          .approvalReviewerEnabled).toBe(true);
+      } else {
+        expect(writes).toHaveLength(0);
+        expect(storage.getState().sessions[sessionId]).toBeUndefined();
+        expect(result).toMatchObject({ ok: false });
+      }
+    } finally {
+      body.release();
+      await publication.catch(() => undefined);
+      body.restore();
+    }
+  });
+  it('withdraws acquired metadata writer authority on a same-Home semantic invalidation before CAS', async () => {
+    const sessionId = 'retired-metadata-writer';
+    installSession(sessionId, { path: '/private/captured-account', flavor: 'claude' });
+    storage.setState({ sessions: {} });
+    const { sync } = await import('@/sync/sync');
+    const { invalidateAccountEncryptionModeCacheForChanges } = await import('@/sync/api/account/apiAccountEncryptionMode');
+    const publication = sync.patchSessionMetadataWithRetry(sessionId, metadata => {
+      // The real tuple has already been acquired. An unknown self hint is a
+      // conservative encryption withdrawal, including between read and CAS.
+      expect(homes.requests.some(request => request.path.split('?')[0] === `/v2/sessions/${sessionId}`
+        && request.input === null)).toBe(true);
+      invalidateAccountEncryptionModeCacheForChanges([{ kind: 'account', entityId: 'self' }]);
+      return { ...metadata, approvalReviewerEnabled: true };
+    }, { serverId });
+    await expect(publication).rejects.toMatchObject({ code: 'account_encryption_currentness_changed' });
+    expect(homes.requestsFor(`/v2/sessions/${sessionId}`).filter(request => request.input !== null)).toHaveLength(0);
+  });
+  it.each(['success', 'malformed', 'unmatched', 'retired-conflict'] as const)(
+    'retains only a matched metadata commit receipt without projecting after semantic withdrawal during ACK consumption (%s)', async ack => {
+    const sessionId = 'committed-metadata-before-withdrawal';
+    const read = installSession(sessionId, { path: '/private/captured-account', flavor: 'claude' });
+    const originalProjection = storage.getState().sessions[sessionId];
+    const initialRevision = read().metadataVersion;
+    const committed: number[] = [];
+    if (ack === 'retired-conflict') {
+      const answer = { select: (input: unknown) => input === null || input === undefined
+        ? { body: { session: read() } }
+        : { status: 409, body: SessionMetadataVersionConflictV1Schema.parse({
+          code: 'session_metadata_version_conflict', metadataLayoutVersion: 1,
+          sharedMetadata: { version: initialRevision + 1 }, agentState: { version: (read().agentStateVersion ?? 0) + 1 },
+        }) } };
+      homes.answer(serverId, `/v2/sessions/${sessionId}`, answer);
+      homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, answer);
+    }
+    const { invalidateAccountEncryptionModeCacheForChanges } = await import('@/sync/api/account/apiAccountEncryptionMode');
+    setRuntimeFetch(async (input, init) => {
+      const response = await homes.request(input, init);
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (init?.method !== 'PATCH' || url.pathname !== `/v2/sessions/${sessionId}`) return response;
+      // The real Home has committed and returned its strict success envelope.
+      // Deliver a semantic wake while the client consumes those ACK bytes.
+      const bytes = ack === 'malformed' ? new TextEncoder().encode(JSON.stringify({ success: true }))
+        : ack === 'unmatched' ? new TextEncoder().encode(JSON.stringify(SessionMetadataTuplePatchSuccessV1Schema.parse({
+          success: true, metadataLayoutVersion: 1, sharedMetadata: { version: initialRevision + 99 },
+          agentState: { version: (read().agentStateVersion ?? 0) + 99 },
+        }))) : new Uint8Array(await response.arrayBuffer());
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          invalidateAccountEncryptionModeCacheForChanges([{ kind: 'account', entityId: 'self' }], { serverId });
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }, { highWaterMark: 0 }), { status: response.status, headers: response.headers });
+    });
+    try {
+      const { sync } = await import('@/sync/sync');
+      const publication = sync.patchSessionMetadataWithRetry(sessionId,
+        metadata => ({ ...metadata, approvalReviewerEnabled: true }),
+        { serverId, onMetadataCommitted: revision => committed.push(revision) },
+      );
+      if (ack === 'success') {
+        await expect(publication).resolves.toBeUndefined();
+        expect(committed).toEqual([read().metadataVersion]);
+      } else {
+        await expect(publication).rejects.toBeInstanceOf(Error);
+        expect(committed).toEqual([]);
+      }
+      expect(read().metadataVersion).toBe(initialRevision + (ack === 'retired-conflict' ? 0 : 1));
+      expect(storage.getState().sessions[sessionId]).toBe(originalProjection);
+      const requests = homes.requests.filter(request => request.path.split('?')[0] === `/v2/sessions/${sessionId}`);
+      expect(requests.filter(request => request.input === null)).toHaveLength(1);
+      expect(requests.filter(request => request.input !== null)).toHaveLength(1);
+    } finally {
+      installHomeGovernanceBoundaries(homes);
+    }
+  });
+  it('resolves a manager selector from the exact authorized Session projection', async () => {
+    installSession('manager-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const readWorker = installSession('worker-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const worker = SessionCurrentProjectionRecordV1Schema.parse({ ...readWorker(), manager: { sessionId: 'manager-session' } });
+    homes.answer(serverId, '/v2/sessions/worker-session', { body: { session: worker } });
+    homes.answer(serverId, '/v2/sessions/worker-session?accessProjectionVersion=1', { body: { session: worker } });
+    const result = await createDefaultActionExecutor().execute('session.status.get', {
+      sessionId: { selector: 'manager', of: 'worker-session' },
+    }, context());
+    expect(result).toMatchObject({ ok: true, result: { session: { id: 'manager-session' } } });
+  });
+  it('controls only the selected check-in revision through its captured Home', async () => {
+    installSession('exchange-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const state = { v: 1, observedStarts: 5, pauseAtStarts: null, stopped: false, afterTurns: 5 };
+    const observedRevision = 'session-message-row-revision:v1:3';
+    homes.answer(serverId, '/v2/sessions/exchange-session/exchanges/original-input', { select: body => {
+      if (body === undefined || body === null) return { body: { state, observedRevision } };
+      expect(body).toEqual({ control: 'continue_more_10', observedRevision });
+      return { status: 409, body: { error: 'exchange_revision_conflict' } };
+    } });
+    const result = await createDefaultActionExecutor().execute('session.exchange.control', {
+      sessionId: 'exchange-session', originInputLocalId: 'original-input', decision: 'continue_more',
+    }, context());
+    expect(result).toMatchObject({ ok: false, errorCode: 'exchange_revision_conflict' });
+    expect(homes.requestsFor('/v2/sessions/exchange-session/exchanges/original-input').map(request => request.input))
+      .toEqual([null, { control: 'continue_more_10', observedRevision }]);
+  });
+  it.each(['continue', 'continue_more_10', 'stop'] as const)('keeps the displayed exchange root/revision for banner %s without silently preparing a newer revision', async control => {
+    const { controlSessionExchange } = await import('@/sync/ops/sessions/sessionExchangeActions');
+    installSession('banner-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const state = { v: 1 as const, observedStarts: 5, pauseAtStarts: null, stopped: false, afterTurns: 5 };
+    const displayed = 'session-message-row-revision:v1:3';
+    homes.answer(serverId, '/v2/sessions/banner-session/exchanges/root-1', { select: body => {
+      if (body == null) return { body: { state, observedRevision: 'session-message-row-revision:v1:4' } };
+      expect(body).toEqual({ control, observedRevision: displayed });
+      return { status: 409, body: { error: 'exchange_revision_conflict' } };
+    } });
+    const result = await controlSessionExchange({ address: { serverId, sessionId: 'banner-session' },
+      accountId: 'alice', originInputLocalId: 'root-1', status: { state, observedRevision: displayed } }, control);
+    expect(result).toMatchObject({ ok: false, errorCode: 'exchange_revision_conflict' });
+    expect(homes.requestsFor('/v2/sessions/banner-session/exchanges/root-1').map(request => request.input))
+      .toEqual([{ control, observedRevision: displayed }]);
+  });
+  it('loads a check-in banner only for the selected original, retaining its observation on failed refresh and dropping it on root change', async () => {
+    const { useSessionExchangeControl } = await import('@/hooks/session/useSessionExchangeControl');
+    const state = { v: 1 as const, observedStarts: 5, pauseAtStarts: null, stopped: false, afterTurns: 5 };
+    let failing = false;
+    homes.answer(serverId, '/v2/sessions/banner-session/exchanges/root-1', { select: () => failing
+      ? { status: 503, body: {} } : { body: { state, observedRevision: 'session-message-row-revision:v1:3' } } });
+    const hook = await renderHook<ReturnType<typeof useSessionExchangeControl>, { root: string | null }>(({ root }) => useSessionExchangeControl({
+      serverId, sessionId: 'banner-session' }, root), { initialProps: { root: null } });
+    try {
+      expect(homes.requestsFor('/v2/sessions/banner-session/exchanges/root-1')).toHaveLength(0);
+      await hook.rerender({ root: 'root-1' });
+      await flushHookEffects();
+      expect(hook.getCurrent()).toMatchObject({ admission: 'check_in', observation: { originInputLocalId: 'root-1',
+        address: { serverId, sessionId: 'banner-session' }, status: { observedRevision: 'session-message-row-revision:v1:3' } } });
+      const before = hook.getCurrent().observation;
+      failing = true;
+      await act(async () => { await hook.getCurrent().refresh(); });
+      expect(hook.getCurrent()).toMatchObject({ error: 'exchange_unavailable', observation: before });
+      await hook.rerender({ root: null });
+      expect(hook.getCurrent().observation).toBeNull();
+    } finally { await hook.unmount(); }
+  });
+  it('keeps a newer selected exchange observation when an earlier root control completes late', async () => {
+    const { useSessionExchangeControl } = await import('@/hooks/session/useSessionExchangeControl');
+    installSession('banner-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const state = { v: 1 as const, observedStarts: 5, pauseAtStarts: null, stopped: false, afterTurns: 5 };
+    homes.answer(serverId, '/v2/sessions/banner-session/exchanges/root-1', { select: body => ({ body: {
+      state, observedRevision: body == null ? 'session-message-row-revision:v1:3' : 'session-message-row-revision:v1:4' } }) });
+    homes.answer(serverId, '/v2/sessions/banner-session/exchanges/root-2', { body: { state, observedRevision: 'session-message-row-revision:v1:8' } });
+    const hook = await renderHook(({ root }: { root: string }) => useSessionExchangeControl({ serverId, sessionId: 'banner-session' }, root),
+      { initialProps: { root: 'root-1' } });
+    await vi.waitFor(() => expect(hook.getCurrent().observation?.originInputLocalId).toBe('root-1'));
+    const held = holdSessionResponseBody('banner-session', '/exchanges/root-1', 'POST');
+    let operation: Promise<unknown> | undefined;
+    try {
+      await act(async () => { operation = hook.getCurrent().control('continue'); await held.reading; });
+      await hook.rerender({ root: 'root-2' });
+      await vi.waitFor(() => expect(hook.getCurrent().observation?.originInputLocalId).toBe('root-2'));
+      await act(async () => { held.release(); await operation; });
+      expect(hook.getCurrent().observation).toMatchObject({ originInputLocalId: 'root-2',
+        status: { observedRevision: 'session-message-row-revision:v1:8' } });
+    } finally { held.release(); held.restore(); await hook.unmount(); }
+  });
+  it.each(['ui', 'voice', 'legacy', 'schema_legacy', 'extended_send', 'native_command', 'schema_nested_legacy', 'schema_nested_legacy_none', 'review_send'] as const)('keeps an Ask on the canonical daemon send owner with its exact input and observation intent (%s)', async client => {
+    const surface = client === 'voice' ? 'voice' : 'ui';
+    const reply = client === 'extended_send' || client === 'native_command' || client === 'schema_nested_legacy_none' || client === 'review_send' ? 'none' : 'wait';
+    const withReview = client === 'schema_nested_legacy' || client === 'schema_nested_legacy_none' || client === 'review_send';
+    const withStructuredInput = client === 'ui' || client === 'schema_legacy' || withReview;
+    const overrides = client === 'extended_send' ? { modelOverride: 'provider/claude-sonnet',
+      providerConnectionId: 'pc_01J00000000000000000000000' } : {};
+    installSession('ask-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const machine = createMachineFixture({ id: 'machine-a', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    storage.setState({ machines: { 'machine-a': machine }, machineListByServerId: { [serverId]: [machine] } });
+    const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
+    homes.answer(serverId, '/v1/machines', { body: [{ ...createPlainMachineRowFixture({ id: 'machine-a', accountId: 'alice' }),
+      installationId: 'ask-installation', installationPublicKey: encodeBase64(installation.publicKey),
+      ...(client === 'legacy' || client === 'extended_send' || client === 'native_command' ? {} : { operationProtocolCapabilities: { sessionMessageReply: { protocolVersions: [1] } }, operationProtocolCapabilitiesRevision: 1 }) }] });
+    if (client === 'extended_send' || client === 'native_command' || client === 'schema_nested_legacy_none' || client === 'review_send') {
+      const sessions = { ...storage.getState().sessions };
+      delete sessions['ask-session'];
+      storage.setState({ sessions });
+      const baseline = createRootLayoutFeaturesResponse();
+      const features = createRootLayoutFeaturesResponse({ capabilities: { ...baseline.capabilities,
+        session: { ...baseline.capabilities.session, pendingInput: { protocolVersion: 1 } } } });
+      const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+      primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+      homes.answer(serverId, '/v2/sessions/ask-session/pending', { select: body => {
+        const input = StrictJsonValueSchema.parse(body);
+        if (!input || typeof input !== 'object' || !('localId' in input) || !('requestedAction' in input)) throw new Error('Expected Pending input');
+        return { body: { requestedAction: input.requestedAction, pending: { localId: input.localId } } };
+      } });
+    }
+    for (const actionId of ['action.spec.get', 'session.message.send'] as const) homes.answer(serverId, `/v1/actions/${actionId}/execution-authorization`, { select: body => {
+      const authorized = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+      return { body: { v: 1, token: 'ask-root', binding: { accountId: 'alice', authentication: { kind: 'account', tokenEpoch: 0 },
+        serverIdentityId: 'srv_mode_home', machineId: 'machine-a', installationId: 'ask-installation', custodianAccountId: 'alice',
+        accountEncryptionMode: 'plain', actionId, requestId: authorized.envelope.requestId,
+        target: authorized.envelope.target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(authorized.envelope) } } };
+    } });
+    const definition = actionSpecToActionDefinitionV1(getActionSpec('session.message.send'), { surface, includeOutputSchema: false });
+    function withoutAdvertisedReviewMember(value: unknown): unknown {
+      if (Array.isArray(value)) return value.map(withoutAdvertisedReviewMember);
+      if (value === null || typeof value !== 'object') return value;
+      return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'reviewComments')
+        .map(([key, item]) => [key, withoutAdvertisedReviewMember(item)]));
+    }
+    homes.answer(serverId, '/v1/actions/action.spec.get', { select: body => {
+      const authorized = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+      return { body: { v: 1, actionId: 'action.spec.get', requestId: authorized.envelope.requestId, execution: { ok: true,
+        result: { actionSpec: client === 'schema_legacy' ? { ...definition, inputSchema: { type: 'object', properties: {
+          sessionId: { type: 'string' }, message: { type: 'string' }, reply: { enum: ['none', 'wait', 'return'] },
+        }, additionalProperties: true } } : client === 'schema_nested_legacy' || client === 'schema_nested_legacy_none'
+          ? { ...definition, inputSchema: withoutAdvertisedReviewMember(definition.inputSchema) } : definition } } } };
+    } });
+    const structuredInput = withReview ? { v: 1 as const,
+      reviewComments: { sessionId: 'source-session', comments: [] } }
+      : { v: 1 as const, mentions: [{ kind: 'happier.session', ref: 'session:source', token: 'find' }] };
+    const outcome = SessionMessageSendResultV1Schema.parse({ status: 'accepted', localId: 'ask-input' });
+    let boundaryFailure: unknown;
+    homes.answer(serverId, '/v1/actions/session.message.send', { select: body => {
+      try {
+      const authorized = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+      if (authorized.envelope.v !== 1) throw new Error('Expected the plain Ask fixture envelope');
+      expect(authorized.envelope).toMatchObject({ target: { kind: 'machine', machineId: 'machine-a' }, input: client === 'native_command' ? {
+        sessionId: 'ask-session', kind: 'sessionSubagentCommand', command: { kind: 'agent_team_delete', teamId: 'team-1' },
+        localId: 'ask-input', idempotencyKey: 'native-command-1',
+      } : {
+        sessionId: 'ask-session', message: 'What did you find?', reply, localId: 'ask-input', timeoutSeconds: 61,
+        requestedAction: { v: 1, kind: 'send_now' },
+        ...overrides,
+        ...(withStructuredInput ? { structuredInput } : {}),
+      } });
+      expect(openExternalActionRequesterAccountContextV1({ authorization: authorized.executionAuthorization,
+        purpose: { kind: 'external_action' }, machineId: 'machine-a', installationId: 'ask-installation', serverIdentityId: 'srv_mode_home',
+        installationPrivateKey: installation.secretKey, includeInvocation: true })).toMatchObject({ invocation: {
+          caller: { kind: 'host' }, surface, authority: surface === 'voice' ? 'account_automation' : 'present_user' } });
+      return { body: { v: 1, actionId: 'session.message.send', requestId: authorized.envelope.requestId, execution: { ok: true, result: outcome } } };
+      } catch (error) { boundaryFailure = error; throw error; }
+    } });
+    const input = client === 'native_command' ? {
+      sessionId: 'ask-session', kind: 'sessionSubagentCommand', command: { kind: 'agent_team_delete', teamId: 'team-1' },
+      localId: 'ask-input', idempotencyKey: 'native-command-1',
+    } as const : {
+      sessionId: 'ask-session', message: 'What did you find?', reply, localId: 'ask-input', timeoutSeconds: 61,
+      requestedAction: { v: 1, kind: 'send_now' },
+      ...overrides,
+      ...(withStructuredInput ? { structuredInput } : {}),
+    } as const;
+    const result = surface === 'voice'
+      ? JSON.parse(await (await import('@/voice/tools/handlers')).createVoiceToolHandlers({
+          resolveSessionId: explicit => explicit ?? 'origin-session', currentSessionAddress: { serverId, sessionId: 'origin-session' },
+        }).action_execute({ actionId: 'session.message.send', input }, { serverId }))
+      : await createDefaultActionExecutor().execute('session.message.send', input, context());
+    if (client === 'legacy' || client === 'schema_legacy' || client === 'schema_nested_legacy' || client === 'schema_nested_legacy_none') {
+      expect(result).toMatchObject({ ok: false, errorCode: 'session_input_target_update_required' });
+      expect(homes.requestsFor('/v1/actions/session.message.send')).toHaveLength(0);
+      expect(homes.requestsFor('/v2/sessions/ask-session/pending')).toHaveLength(0);
+      expect(outgoing.some(request => request.method.endsWith(RPC_METHODS.DAEMON_TRANSFER_COMPOSER_MEDIA_CLAIM))).toBe(false);
+      return;
+    }
+    expect(boundaryFailure).toBeUndefined();
+    expect(result, JSON.stringify(homes.requestsFor('/v1/actions/session.message.send').map(request => request.path))).toEqual({ ok: true, result: outcome });
+    expect(homes.requestsFor('/v1/actions/session.message.send')).toHaveLength(1);
+    expect(homes.requestsFor('/v2/sessions/ask-session/pending')).toHaveLength(0);
+  });
   it('inspects an exact continuation through the selected Session daemon', async () => {
     installSession('inspect-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
     const machine = createMachineFixture({ id: 'machine-a', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
@@ -296,6 +729,11 @@ describe('default Action executor mode and catalog contracts', () => {
         sentInputs.push(typeof init?.body === 'string' ? JSON.parse(init.body) : null);
         return Response.json({ v: 1, actionId: 'session.message.send', execution: { ok: true, result: outcome } });
       }
+      if (url.pathname === '/v1/actions/session.permission_mode.set') {
+        return Response.json({ v: 1, actionId: 'session.permission_mode.set', execution: {
+          ok: false, errorCode: 'unsupported_action', error: 'endpoint-owned-refusal',
+        } });
+      }
       throw new Error(`Unexpected embed HTTP request: ${url.pathname}`);
     });
     const refuseCredentialMutation = async (): Promise<never> => { throw new Error('Injected credential'); };
@@ -337,6 +775,29 @@ describe('default Action executor mode and catalog contracts', () => {
         .toMatchObject({ type: 'success', localId: 'real-input' });
       expect(handedOff).toBe(true);
       expect(sentInputs.at(-1)).toMatchObject({ input: { permissionModeOverride: 'read-only' } });
+      const composerExecutor = createDefaultActionExecutor({ sessionMessageComposerSubmission: {
+        sourceComposerRef: { kind: 'session', sessionId: 'source-composer' }, isCurrent: () => true,
+      } });
+      const attachment = ComposerAttachmentDraftV1Schema.parse({ v: 1, instanceId: 'media-attachment',
+        attachment: { pluginId: 'com.example.media', localId: 'image' }, key: 'photo', value: {},
+        presentation: { label: 'Photo', typeLabel: 'Image' }, content: { kind: 'stagedMedia', handle: {
+          v: 1, id: 'captured-source-media', executionTarget: { serverId, machineId: 'source-machine' },
+          owner: { pluginId: 'com.example.media', localId: 'image' }, mediaKind: 'image', mimeType: 'image/png',
+          name: 'photo.png', sizeBytes: 7, sha256: 'a'.repeat(64),
+        } } });
+      const composerInput = { sessionId: 'external-send', message: 'Targeted media', localId: 'composer-token-input',
+        structuredInput: { composerAttachments: [attachment] } };
+      const inputsBeforePrivateComposer = sentInputs.length;
+      const executed = await composerExecutor.execute('session.message.send', composerInput, { surface: 'ui' });
+      const prepared = await composerExecutor.prepare('session.message.send', composerInput, { surface: 'ui' });
+      expect({ executed, prepared }).toMatchObject({
+        executed: { ok: false, errorCode: 'session_input_target_unavailable' },
+        prepared: { kind: 'settled', result: { ok: false, errorCode: 'session_input_target_unavailable' } },
+      });
+      expect(sentInputs.slice(inputsBeforePrivateComposer)).toEqual([]);
+      expect(await composerExecutor.execute('session.permission_mode.set', {
+        sessionId: 'external-send', permissionMode: 'read-only',
+      }, { surface: 'ui' })).toEqual({ ok: false, errorCode: 'unsupported_action', error: 'endpoint-owned-refusal' });
     } finally {
       sync.disposeEmbedSession();
       setCurrentAuth(previousAuth);
@@ -653,7 +1114,8 @@ describe('default Action executor mode and catalog contracts', () => {
       initialInput: { text: 'Inspect this project.' } });
     const spawnResult = { type: 'success', disposition: 'created', sessionId: 'session-new', executionTarget: input.executionTarget,
       organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'accepted', localId: 'message-new' } };
-    daemonAnswer = () => spawnResult;
+    daemonAnswer = request => request.method === `machine-a:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`
+      ? createExistingSessionDirectoryPreflightResult(request.params) : spawnResult;
     const result = await createDefaultActionExecutor().execute('session.spawn_new', input, { ...context(), signal: new AbortController().signal });
     expect(result).toEqual({ ok: true, result: spawnResult });
     expect(outgoing).toContainEqual(expect.objectContaining({ method: `machine-a:${RPC_METHODS.SESSION_SPAWN_NEW}`, params: input }));

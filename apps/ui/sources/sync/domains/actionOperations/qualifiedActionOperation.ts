@@ -1,7 +1,7 @@
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol';
 import type { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 export type ActionOperationProjectScriptSelection = z.infer<(typeof PROJECT_ACTION_INPUT_SCHEMAS_V1)['projects.script.run']>['selection'];
 
@@ -14,6 +14,13 @@ export type ActionOperationProjectWorkspaceQuery = Readonly<{
 
 export type ActionOperationProjectScriptQuery = ActionOperationProjectWorkspaceQuery & Readonly<{
     selection: ActionOperationProjectScriptSelection;
+}>;
+
+export type ActionOperationProjectServicesQuery = Readonly<{
+    serverId: string;
+    accountId: string | null;
+    machineId: string;
+    refId: string;
 }>;
 
 export type ActionOperationAddress = Readonly<{

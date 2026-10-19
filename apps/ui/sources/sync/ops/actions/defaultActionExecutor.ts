@@ -1,5 +1,6 @@
 import { isTransientConnectivityError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
 import type { ApprovalStaleReason } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { SessionMessageReplyMutationResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { inspectSessionContinuationOnMachine } from '@/sync/ops/sessionContinuationInspection';
 import { projectAutomationEligibleEventsCatalogV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
@@ -14,6 +15,8 @@ import { isPluginSkillIdV1 } from '@happier-dev/protocol/prompts/library/skills/
 import { readFoundSkillBundle } from '@/sync/domains/transfers/runtime/transferRuntime/families/foundSkillTransfers';
 import { SKILL_MACHINE_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { createUiProjectContextAction } from './projectContextAction';
+import { createUiSessionStatusGet } from './sessionStatusAction';
+import { readSessionTranscriptForAction } from '@/sync/api/session/sessionTranscriptActions';
 import { readUiMemoryInheritedContext, readUiMemoryScopeContext } from './readUiMemoryInheritedContext';
 import { createWidgetRefreshActionDepsV1 } from './widgetRefreshActionDeps';
 import { createWidgetDefinitionActionDepsV1 } from './widgetDefinitionActionDeps';
@@ -33,7 +36,7 @@ import { startAgentSignInRpc, checkAgentSignInRpc } from '@/agents/machineAgents
 import { buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { buildMachineAgentsDetectRequest, projectMachineAgentsDetectResponse, projectAcpCatalogForMachineInventory, MachineAgentInventoryUnavailableError } from '@happier-dev/protocol/capabilities/machineAgentInventory';
-import { approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeaderV1, listApprovalArtifactsV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { StoredApprovalRequestSchema, requiresExactDaemonApprovalReplay, isMountedPluginBlockingApprovalEligibleForLiveClient, type ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
@@ -47,6 +50,8 @@ import { readPluginInstallApprovalPendingReview } from '@happier-dev/protocol/ac
 import { presentActionApproval, readActionApprovalSubject, readActionApprovalRoleId } from '@/components/approvals/actionApprovalPresentation';
 import { buildRoleCatalog } from '@/sync/domains/roles/roleCatalog';
 import { readApprovalReferenceForConfirmation } from '@/components/approvals/approvalReferenceReading';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import { CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD, type CurrentSessionPresentationActionResultV1 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createUiProviderActionExecuteV1 } from './providerActionDeps';
@@ -116,10 +121,15 @@ import { searchDaemonMemory } from '@/sync/domains/memory/searchDaemonMemory';
 import type { MemoryWindowV1, MemoryWindowRequestV1 } from '@happier-dev/protocol/memory/memoryWindow';
 import { clearDaemonMemoryIndex } from '@/sync/domains/memory/clearDaemonMemoryIndex';
 import { supportsMachineOperationProtocolCapabilityV1, supportsMachineSessionSpawnProtocolVersionV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { fetchMachineRows } from '@/sync/engine/machines/syncMachines';
+import { AutonomousExchangeStatusV1Schema } from '@happier-dev/protocol/sessions/messages/autonomousExchangeV1';
+import { readSessionExchangeStatus } from '@/sync/api/session/sessionExchangeApi';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
+import { readCompleteActionSpecV1, supportsSessionMessageInputJsonSchema } from '@happier-dev/protocol/actions/actionInputJsonSchemaValidation';
 import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 import { getActionRequiredServerFeatureId } from '@happier-dev/protocol/actions/actionRequiredServerFeature';
 import { projectSessionFollowSourceKeyPreparationAfterSetV1, type SessionFollowSourceKeyPreparationResultV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
-import type { SessionFollowActionOutputV1 } from '@happier-dev/protocol/sessions/follow/actions';
+import type { SessionFollowActionInputV1, SessionFollowActionOutputV1 } from '@happier-dev/protocol/sessions/follow/actions';
 import { machineContributionRegistryProjectionDescribe, machinePluginUiTargetedContributionsRead } from '@/sync/ops/machineContributionRegistryProjection';
 import { machineWorkspaceFileSearch } from '@/sync/ops/machineWorkspaceFileSearch';
 import { randomUUID } from '@/platform/randomUUID';
@@ -154,7 +164,7 @@ import { t } from '@/text';
 import { HappyError } from '@/utils/errors/errors';
 import { isActionAccountScopeChangedError } from '@/sync/domains/scope/actionAccountScopeError';
 
-import { captureLazyActionAccountContext, captureHomeOpenApprovalSettlementAccount, type LazyActionAccountContext } from './actionAccountContext';
+import { captureLazyActionAccountContext, captureHomeOpenApprovalSettlementAccount, withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import { resolveRequesterSessionSpawnDisposition } from './requesterSessionSpawnPreparation';
 import { createUiArtifactAction } from './artifactActionDeps';
 import { createUiProfileActionExecuteV1 } from './profileActionDeps';
@@ -175,7 +185,7 @@ import { createSessionOrganizationMutationScopeForAccount, writeSessionOrganizat
 import { invokeSessionTerminalAction } from '@/components/sessions/terminal/sessionTerminalActions';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { serializeSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
-import { scmReviewComparisonOfSource } from '@/sync/domains/scm/diffSummary/selection';
+import { scmReviewComparisonOfSource, scmReviewViewUnavailableReason } from '@/sync/domains/scm/diffSummary/selection';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
@@ -184,7 +194,7 @@ import { resolveAgentIdForPermissionUi } from '@/agents/catalog/resolve';
 import { computeSessionConfigOptionControls } from '@/sync/domains/sessionControl/configOptionsControl';
 import { resolveSessionPermissionBehavior } from '@/sync/ops/sessionPermissionAnswers';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { createSettingsDeclarationAction, resolveSettingsDeclarationOperationApprovalRequired } from './settingsDeclarationAction';
+import { createSettingsDeclarationAction, isBuiltInLocalSettingMutation, resolveSettingsDeclarationOperationApprovalRequired } from './settingsDeclarationAction';
 import { createAtmosphereSettingServices } from './atmosphereSettingServices';
 import { createSettingsOwnerActionExecutor } from './settingsOwnerActionExecutor';
 import { getAutomationSettings, updateAutomationSettings } from '@/sync/api/automations/apiAutomations';
@@ -254,6 +264,7 @@ import { ensureAgentInstallablesBackground } from '@/capabilities/ensureAgentIns
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { readAgentScopedPluginSettingsSnapshot } from '@/agents/registry/agentScopedPluginSettings';
 import { readSessionSnapshotForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
+import { getSessionRunnerRuntimeStatus, restartSessionRunnerOnCurrentRuntime } from '@/sync/ops/sessionRunnerRestart';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { resolveMachineControlTargetForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
 import {
@@ -274,7 +285,7 @@ import {
   projectServerScopedSessionSendMessageResult,
 } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import { createUiSessionSpawnNewDirectoryApprovalPreflight, dispatchSessionSpawnNewWithReportsToPreparation } from './sessionSpawnNewAction';
+import { createUiSessionSpawnNewDirectoryApprovalPreflight, dispatchSessionSpawnNewWithManagerPreparation } from './sessionSpawnNewAction';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import {
   authorizeMemorySessionRange,
@@ -341,13 +352,14 @@ import { sessionFollowAction } from '@/sync/api/session/sessionFollowApi';
 import { prepareSessionFollowSourceKey } from '@/components/sessions/follow/prepareSessionFollowSourceKey';
 import { sessionReadStateAction } from '@/sync/api/session/sessionReadStateAction';
 import { executeSessionAttentionSetAction } from '@/sync/ops/sessionOrganization/setSessionAttentionStanding';
-import { createSessionReportsToAction } from '@/sync/api/session/sessionReportsToAction';
+import { createSessionManagerAction } from '@/sync/api/session/sessionManagerAction';
 import { createSessionBoardActionAdapter, prepareSessionBoardItemForUi } from '@/sync/api/session/sessionBoardActions';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { resolveRuntimeFeatureDecisionFromSnapshot } from '@/sync/domains/features/featureDecisionRuntime';
 import { sync } from '@/sync/sync';
 import { executeListReorderAction } from './listReorderAction';
 import { executeTodoSessionLinkAction } from './todoSessionLinkAction';
+import { executeInternalTaskHostAction } from './internalTaskAction';
 import { createHomeDomainActionExecutorForScope } from '@/sync/api/home/homeDomainActions';
 import { createUiPersonalSavedSecretActionExecute } from '@/sync/ops/settings/personalSavedSecretActionHost';
 import { createSessionOrganizationResourceAction, isSessionOrganizationResourceAction } from '@/sync/ops/sessionOrganization/sessionOrganizationAction';
@@ -505,6 +517,8 @@ export async function replayApprovalRequestAtExactDaemon(input: Readonly<{
     serverId: input.executionTarget.serverId,
     machineId: input.executionTarget.machineId,
     method: RPC_METHODS.APPROVAL_REQUEST_DECIDE,
+    // The approved Action owns its execution lifetime after bounded setup.
+    operationTimeoutMs: null,
     payload: {
       artifactId: input.artifactId,
       decision: input.decision,
@@ -540,6 +554,7 @@ export async function replayApprovedApprovalRequestAtExactDaemon(input: Readonly
     serverId: input.executionTarget.serverId,
     machineId: input.executionTarget.machineId,
     method: RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED,
+    operationTimeoutMs: null,
     payload: { artifactId: input.artifactId },
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
@@ -597,6 +612,21 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
   beforeLocalSettingCommit?: () => void;
   /** Optional delivery leaf used by a surface that needs specialized ingress semantics. */
   sessionSendMessage?: NonNullable<ActionExecutorDeps['sessionSendMessage']>;
+  /** Exact captured host Composer; never Action input, plugin metadata, or serialized authority. */
+  sessionMessageComposerSubmission?: Readonly<{
+    sourceComposerRef: import('@happier-dev/protocol/plugins/ui/composerRef').ComposerRefV1;
+    isCurrent: () => boolean;
+    legacyAttachments?: Readonly<{
+      drafts: readonly import('@/components/sessions/attachments/attachmentDraftModel').AttachmentDraft[];
+      config: import('@/sync/domains/transfers/ops/uploadSessionAttachment').AttachmentsUploadConfig;
+      originalMessage: string;
+      onUploadedDraftCheckpoint: (checkpoint: import('@/components/sessions/attachments/uploadAttachmentDraftsToSession').AttachmentTargetUploadedDraftCheckpoint) => Promise<void> | void;
+      onUploadedDraftCheckpointStale: (attempt: Readonly<Pick<import('@/components/sessions/attachments/uploadAttachmentDraftsToSession').AttachmentTargetUploadedDraftCheckpoint,
+        'target' | 'executionTarget' | 'messageLocalId'>> & Readonly<{
+          handles: readonly import('@happier-dev/protocol/transfers/sessions/sessionAttachmentHandleV1').SessionAttachmentHandleV1[];
+        }>) => void;
+    }>;
+  }>;
   /** Selected-Machine hook delivery; Action admission and approval stay in this executor. */
   pluginSessionHookManagementAction?: NonNullable<ActionExecutorDeps['pluginSessionHookManagementAction']>;
   /** Trusted per-invocation precondition, evaluated on the metadata CAS candidate. */
@@ -650,7 +680,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
   /** Local keyholding-host delivery; never enters Action input, approval or result. */
   onPublicLinkIssued?: (link: ArtifactPublicLinkIssuedV1) => void | Promise<void>;
   /** Optional Session human-discussion family port bound by a mounted surface. */
-  sessionDiscussionAction?: NonNullable<ActionExecutorDeps['sessionDiscussionAction']>;
+  discussionAction?: NonNullable<ActionExecutorDeps['discussionAction']>;
   /** Exact mounted canvas for local pane interactions; external callers use the focused publication. */
   /**
    * The Home family port, bound by the caller to the exact Home and Account.
@@ -671,20 +701,20 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     readWidgetMovementAdmission(ref: WidgetInstanceRefV1, surface: WidgetSurfaceRefV1, context: ActionExecutorContext): ReturnType<typeof readWidgetEntityMovementAdmission>;
     readWidgetInputDescriptor(request: Parameters<NonNullable<ReturnType<typeof createWidgetInputActionDepsV1>['readWidgetInputDescriptor']>>[0]): ReturnType<NonNullable<ReturnType<typeof createWidgetInputActionDepsV1>['readWidgetInputDescriptor']>>;
   }> {
-  // Goal acknowledgements have no deadline. Signal-free UI/tool invocations belong to the
-  // captured Account; mounted editors may retire their own wait earlier.
-  const withGoalLifetime = async <T>(signal: AbortSignal | undefined, run: (signal?: AbortSignal) => Promise<T>): Promise<T> => {
-    if (!accountContext) return await run(signal);
-    const cancellation = new AbortController();
-    const retirement = accountContext.accountLifetime.onRetire(() => cancellation.abort());
-    const merged = mergeAbortSignals([cancellation.signal, signal]);
-    try {
-      return await run(merged.signal);
-    } finally {
-      merged.dispose();
-      retirement.dispose();
-    }
-  };
+  const isSettingsOwnerCurrent = () => accountContext
+    ? accountContext.accountLifetime.isCurrent() : getActiveServerAccountScope() === null;
+  // Signal-free UI/tool invocations belong to the captured Account; mounted
+  // surfaces may retire their own wait earlier. The effect owner retains receipts.
+  const withAccountLifetime = <T>(signal: AbortSignal | undefined, run: (signal?: AbortSignal) => Promise<T>): Promise<T> =>
+    withActionAccountRequestSignal(accountContext, signal, run);
+  // These leaves also serve ports whose protocol inputs do not carry a signal.
+  // Their wait still belongs to the captured Action invocation and Account.
+  const actionMachineRpc: typeof machineRpcWithServerScope = <R, A>(params: Parameters<typeof machineRpcWithServerScope<R, A>>[0]) =>
+    withAccountLifetime(params.signal ?? accountContext?.invocationSignal,
+      signal => machineRpcWithServerScope<R, A>({ ...params, signal }));
+  const actionSessionRpc: typeof sessionRpcWithServerScope = <R, A>(params: Parameters<typeof sessionRpcWithServerScope<R, A>>[0]) =>
+    withAccountLifetime(params.signal ?? accountContext?.invocationSignal,
+      signal => sessionRpcWithServerScope<R, A>({ ...params, signal }));
   const promptLibraryStore = accountContext ? createUiPromptLibraryArtifactStore(accountContext.workflowArtifacts, accountContext) : null;
   const withPromptLibraryStore = <T>(run: (store: PromptLibraryArtifactStore) => Promise<T>, signal?: AbortSignal): Promise<T> =>
     promptLibraryStore ? run(promptLibraryStore) : withUiPromptLibraryArtifactStore(run, { signal });
@@ -753,6 +783,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       if (catalog.status !== 'ready') return null;
       const projection = await loadDaemonMergedProjectionInputs({
         machineId: args.machineId, serverId: accountContext.serverId, accountLifetime: accountContext.accountLifetime,
+        signal: accountContext.invocationSignal,
       });
       accountContext.assertCurrent();
       if (!projection) return null;
@@ -826,7 +857,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         import('@/providers/session/resolveSessionRoutePresentation'),
       ]);
       const projection = await loadDaemonMergedProjectionInputs({ machineId, serverId: accountContext.serverId,
-        accountLifetime: accountContext.accountLifetime });
+        accountLifetime: accountContext.accountLifetime, signal: context.signal });
       accountContext.assertCurrent();
       const agent = getResolvedBackendCatalogEntries({ ...projection, enabledAgentIds: AGENT_IDS })
         .find(entry => entry.backendTargetKey === buildBackendTargetKeyV2(parsed.data.agentTarget))?.agentCatalogEntry;
@@ -939,6 +970,22 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       : opts?.filesystemActionDelivery ? { hostActionApprovalLifetime: {
       actionId: opts.filesystemActionDelivery.actionId, signal: opts.filesystemActionDelivery.signal, surface: 'ui' as const,
     } } : {}),
+    sessionUpdatePost: async ({ context, ...input }) => {
+      if (!accountContext) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      const sessionId = context.defaultSessionId?.trim();
+      if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
+      if (context.actionCaller?.kind === 'session' && context.actionCaller.sessionId !== sessionId) {
+        return { ok: false, errorCode: 'session_update_source_mismatch', error: 'session_update_source_mismatch' };
+      }
+      accountContext.assertCurrent();
+      context.signal?.throwIfAborted();
+      const result = await actionSessionRpc<unknown, typeof input>({
+        serverId: accountContext.serverId, sessionId, method: 'session.update.post', payload: input,
+        ...(context.signal ? { signal: context.signal } : {}),
+      });
+      accountContext.assertResultCurrent(getActionSpec('session.update.post').sideEffectClass);
+      return result;
+    },
     currentSessionPresentationApply: async ({ input, context, signal }) => {
       if (!accountContext) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       const sessionId = context.defaultSessionId?.trim();
@@ -958,7 +1005,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         accountContext.assertResultCurrent(getActionSpec('session.presentation.apply').sideEffectClass);
         return result;
       }
-      const result = await sessionRpcWithServerScope<CurrentSessionPresentationActionResultV1 | ActionExecuteFailure, typeof input>({
+      const result = await actionSessionRpc<CurrentSessionPresentationActionResultV1 | ActionExecuteFailure, typeof input>({
         serverId: accountContext.serverId,
         sessionId,
         method: CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD,
@@ -978,7 +1025,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         // The Account socket authenticates a present user; autonomous callers
         // retain the Session host's authenticated provenance path.
         if (args.context.authority !== 'present_user') return { ok: false, errorCode: 'role_rpc_origin_unavailable', error: 'role_rpc_origin_unavailable' };
-        const result = await sessionRpcWithServerScope<unknown, typeof input>({
+        const result = await actionSessionRpc<unknown, typeof input>({
           serverId: accountContext.serverId, sessionId: input.sessionId, method: args.actionId,
           payload: input, signal: args.context.signal,
         });
@@ -1025,7 +1072,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       tauriDesktop: settingsHosts.tauriDesktop(settingsHost),
       readPageGate: readSettingsPageGate,
       canUseRuntimeContributions: () => Boolean(accountContext && accountContext.readLiveSettings() !== null),
-      isCurrent: () => accountContext ? accountContext.accountLifetime.isCurrent() : getActiveServerAccountScope() === null,
+      isCurrent: isSettingsOwnerCurrent,
       openHumanInteraction: async (href, signal) => {
         throwIfAborted(signal);
         if (!accountContext || accountContext.readLiveSettings() === null) return false;
@@ -1242,34 +1289,37 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         && source.installationId === authorization.binding.installationId && source.installationPublicKey
         && verifyExternalActionApprovalInputV1({ authorizationToken: authorization.token,
           actionId: request.actionId, input: request.actionArgs, target: origin.target,
+          ...(request.v === 2 && request.requesterConfirmation ? { requesterConfirmation: request.requesterConfirmation } : {}),
+          ...(request.v === 2 && request.executionOriginV1.sessionTargetsV1 ? { sessionTargetsV1: request.executionOriginV1.sessionTargetsV1 } : {}),
           signature: origin.externalActionInputSignature, publicKey: source.installationPublicKey })) || stale('credential_changed');
     },
+    sessionFollowPreview: async (args) => sessionFollowAction({ ...args, actionId: 'follow.preview' }),
     sessionFollowAction: async (args) => {
       const result = await sessionFollowAction(args);
       const failed = typeof result === 'object'
         && result !== null
         && 'ok' in result
         && result.ok === false;
-      if (args.actionId !== 'session.follow.sources.set' || failed) return result;
+      if (args.actionId !== 'follow.set' || failed) return result;
 
       const serverId = args.serverId ?? args.context.serverId;
       if (!serverId) return result;
-      const relation = args.input as Readonly<{
-        sourceSessionId: string;
-        destinationSessionId: string;
-      }>;
+      const relation = args.input as SessionFollowActionInputV1['follow.set'];
+      if (relation.receiver.kind !== 'session' || relation.source.kind !== 'session'
+        || typeof relation.receiver.sessionId !== 'string') return result;
       let preparation: SessionFollowSourceKeyPreparationResultV1;
       try {
         preparation = await prepareSessionFollowSourceKey({
           serverId,
-          sourceSessionId: relation.sourceSessionId,
-          destinationSessionId: relation.destinationSessionId,
+          sourceSessionId: relation.source.sessionId,
+          destinationSessionId: relation.receiver.sessionId,
+          signal: args.context.signal,
         });
       } catch {
         preparation = { kind: 'waiting', reason: 'runner_unreachable' };
       }
       return projectSessionFollowSourceKeyPreparationAfterSetV1(
-        result as SessionFollowActionOutputV1['session.follow.sources.set'],
+        result as Extract<SessionFollowActionOutputV1['follow.set'], { source: { sourceSessionId: string } }>,
         preparation,
       );
     },
@@ -1307,7 +1357,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       })(params);
     } } : {}),
     sessionReadStateAction,
-    sessionReportsToSet: createSessionReportsToAction(accountContext ?? null),
+    sessionManagerSet: createSessionManagerAction(accountContext ?? null),
     readAgentHtmlNetworkPolicy: async () => {
       if (!accountContext) return 'ask';
       accountContext.assertCurrent();
@@ -1400,7 +1450,8 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       }, { defaultSafety: operationSafety, defaultUiConfirmation, input });
     },
     ...createUiExecutionRunActionDeps(accountContext?.accountLifetime.scope, accountContext),
-    resolveSessionSpawnAgentInventorySelection: resolveSessionSpawnAgentInventorySelectionForActions,
+    resolveSessionSpawnAgentInventorySelection: args => resolveSessionSpawnAgentInventorySelectionForActions({ ...args,
+      signal: accountContext?.invocationSignal, accountLifetime: accountContext?.accountLifetime }),
     runtimeActionExecute: async (args) => {
       const featureId = getActionRequiredServerFeatureId(args.actionId, args.context);
       if (featureId === 'browser.automation') {
@@ -1586,12 +1637,13 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     composerIngress: executeComposerIngressAction,
     listReorder: executeListReorderAction,
     todoSessionLink: executeTodoSessionLinkAction,
+    internalTaskAction: executeInternalTaskHostAction,
     sessionTerminalAction: invokeSessionTerminalAction,
     actionOperationAction: async ({ actionId, input, signal }) => {
       try {
         return await executeActionOperationActionV1({
           actionId, input, ...(signal ? { signal } : {}),
-          transport: async request => await machineRpcWithServerScope({
+          transport: async request => await actionMachineRpc({
             ...request,
             ...(actionId === 'action.operations.get' && 'waitForTerminal' in input && input.waitForTerminal
               ? { operationTimeoutMs: null } : {}),
@@ -1631,20 +1683,22 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         throw error;
       }
     },
-    sessionGoalGet: async ({ sessionId, serverId, signal }) => await withGoalLifetime(signal,
+    sessionGoalGet: async ({ sessionId, serverId, signal }) => await withAccountLifetime(signal,
       lifetime => sessionGoalGet(sessionId, { serverId, signal: lifetime })),
     sessionGoalSet: async ({ sessionId, objective, status, tokenBudget, resumeInactiveWithInitialGoal, serverId, signal }) =>
-      await withGoalLifetime(signal, lifetime => sessionGoalSet(sessionId, {
+      await withAccountLifetime(signal, lifetime => sessionGoalSet(sessionId, {
         ...(objective !== undefined ? { objective } : {}),
         ...(status === 'active' || status === 'paused' || status === 'complete' ? { status } : {}),
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
         ...(resumeInactiveWithInitialGoal !== undefined ? { resumeInactiveWithInitialGoal } : {}),
       }, { serverId, signal: lifetime })),
-    sessionGoalClear: async ({ sessionId, serverId, signal }) => await withGoalLifetime(signal,
+    sessionGoalClear: async ({ sessionId, serverId, signal }) => await withAccountLifetime(signal,
       lifetime => sessionGoalClear(sessionId, { serverId, signal: lifetime })),
     sessionOpen: async ({ sessionId, serverId, intent, resumeRequest, approvedNewDirectoryCreation, actionRequestId, tabId, destination, signal }) => {
       const comparison = destination ? scmReviewComparisonOfSource(destination.comparison, destination.comparisonId) : null;
       if (destination && !comparison) return { ok: false, errorCode: 'invalid_parameters', error: 'comparison_selector_unavailable' };
+      const unavailableReason = destination ? scmReviewViewUnavailableReason(destination.view, comparison) : null;
+      if (unavailableReason) return { ok: false, errorCode: unavailableReason, error: unavailableReason };
       const query = destination && comparison ? serializeSessionPaneUrlState({ details: {
         kind: 'scmReview', comparison, view: destination.view,
         ...(typeof destination.explain === 'boolean' ? { explain: destination.explain } : {}),
@@ -1685,7 +1739,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         const pluginSettings = await readAgentScopedPluginSettingsSnapshot({
           agentId: target?.defaultAgentId ?? null, machineId: machineTarget?.machineId,
           serverId: accountContext.serverId, accountLifetime: accountContext.accountLifetime,
-          accountSettings: settings,
+          accountSettings: settings, signal,
         });
         accountContext.assertCurrent();
         const base = buildResumeSessionBaseOptionsFromSession({
@@ -1701,10 +1755,13 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
           },
         });
         if (!machineTarget || !base) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.open' };
-        if (target?.defaultAgentId) {
+        const backgroundAccountLifetime = captureActiveServerAccountScopeLifetime();
+        if (target?.defaultAgentId && backgroundAccountLifetime
+          && areServerAccountScopesEqual(backgroundAccountLifetime.scope, accountContext.accountLifetime.scope)) {
           fireAndForget(ensureAgentInstallablesBackground({
             agentId: target.defaultAgentId, machineId: base.machineId,
             serverId: accountContext.serverId, settings, resumeSessionId: base.resume ?? null,
+            accountLifetime: backgroundAccountLifetime,
           }), { tag: `session.open.installables.${target.defaultAgentId}` });
         }
         const resumed = await resumeSession({
@@ -1837,10 +1894,22 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return { ok: true, status: 'forked', parentSessionId: sid, childSessionId };
     },
 
+    sessionRuntimeRefresh: async ({ sessionId, machineId, serverId, signal }) => withAccountLifetime(signal, async signal => {
+      accountContext?.assertCurrent();
+      signal?.throwIfAborted();
+      const runtimeState = await getSessionRunnerRuntimeStatus({ sessionId, machineId, serverId, signal });
+      accountContext?.assertCurrent();
+      signal?.throwIfAborted();
+      if (!runtimeState || runtimeState.machineId !== machineId) {
+        return { ok: false, status: 'unsupported_daemon', sessionId, reasonCode: 'unsupported_daemon_version' } as const;
+      }
+      return await restartSessionRunnerOnCurrentRuntime({ runtimeState, serverId, signal });
+    }),
+
     sessionStop: async ({ sessionId, serverId, signal }) =>
-      await sessionStopWithServerScope(sessionId, { serverId, signal,
+      await withAccountLifetime(signal, signal => sessionStopWithServerScope(sessionId, { serverId, signal,
         ...(accountContext ? { scope: accountContext.accountLifetime.scope,
-          isCurrent: accountContext.accountLifetime.isCurrent } : {}) }),
+          isCurrent: accountContext.accountLifetime.isCurrent } : {}) })),
 
     sessionArchiveSet: async ({ sessionId, archived, serverId }) => archived
       ? await sessionArchiveWithServerScope(sessionId, { serverId })
@@ -1876,13 +1945,13 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return { ok: true };
     },
 
-    sessionTurnCancel: async ({ sessionId, serverId }) => {
-      await sessionAbort(sessionId, serverId ? { serverId } : undefined);
+    sessionTurnCancel: async ({ sessionId, serverId, signal }) => {
+      await withAccountLifetime(signal, ownedSignal => sessionAbort(sessionId, { serverId: serverId ?? undefined, signal: ownedSignal }));
       return { requested: true };
     },
 
     sessionTerminalComposerClear: async ({ sessionId, expectedStateAtMs, serverId }) =>
-      await sessionRpcWithServerScope({
+      await actionSessionRpc({
         sessionId,
         serverId,
         method: SESSION_RPC_METHODS.SESSION_TERMINAL_COMPOSER_CLEAR,
@@ -1894,6 +1963,17 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         },
       }),
 
+    sessionPendingActionSet: async ({ sessionId, localId, requestedAction, resumeWhenAvailable, serverId, context }) => {
+      if (!accountContext) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+      accountContext.assertCurrent();
+      if (serverId !== undefined && !areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId)) {
+        throw new Error('action_account_scope_changed');
+      }
+      return await sync.updatePendingRequestedAction(sessionId, localId, requestedAction, {
+        serverId: accountContext.serverId, accountLifetime: accountContext.accountLifetime,
+        ...(resumeWhenAvailable !== undefined ? { resumeWhenAvailable } : {}), signal: context.signal,
+      });
+    },
     sessionPendingWithdraw: async ({ sessionId, localId, serverId, targetExecutionRunId }) => {
       accountContext?.assertCurrent();
       if (accountContext && serverId !== undefined
@@ -1979,7 +2059,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     },
 
     sessionPendingInputInterruptAndRun: async ({ sessionId, localId, expectedStateAtMs, serverId }) =>
-      await sessionRpcWithServerScope({
+      await actionSessionRpc({
         sessionId,
         serverId,
         method: SESSION_RPC_METHODS.SESSION_PENDING_INPUT_INTERRUPT_AND_RUN,
@@ -1992,7 +2072,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         },
       }),
 
-    sessionRollback: async ({ sessionId, serverId, target }) => {
+    sessionRollback: async ({ sessionId, serverId, target, signal }) => {
       const sid = String(sessionId ?? '').trim();
       if (!sid) return { ok: false, errorCode: 'invalid_parameters', errorMessage: 'invalid_parameters' };
       const resolvedTarget = target ?? { type: 'latest_turn' };
@@ -2004,16 +2084,17 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       })) {
         return { ok: false, errorCode: 'action_disabled', errorMessage: 'action_disabled' };
       }
-      return await rollbackSessionConversationOp({
+      return await withAccountLifetime(signal, ownedSignal => rollbackSessionConversationOp({
         sessionId: sid,
         serverId,
         target: resolvedTarget,
         currentAgentCapabilities: opts?.currentAgentCapabilities,
-      });
+        signal: ownedSignal,
+      }));
     },
 
-    checkpointCodeRollback: async ({ request, serverId }) =>
-      await rollbackSessionCheckpointCodeOp({ request, serverId }),
+    checkpointCodeRollback: async ({ request, serverId, signal }) =>
+      await withAccountLifetime(signal, ownedSignal => rollbackSessionCheckpointCodeOp({ request, serverId, signal: ownedSignal })),
 
     sessionHandoffTargetReplacementApprovalPreflight: async ({
       targetMachineId,
@@ -2151,16 +2232,16 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     sessionSpawnNewDirectoryApprovalPreflight: createUiSessionSpawnNewDirectoryApprovalPreflight(accountContext ?? null),
     sessionSpawnNew: async ({
       context,
-      sessionCreationTag: _sessionCreationTag,
-      legacyMetadataLabel: _legacyMetadataLabel,
+      admittedInput,
+      creationKey,
       actionCaller: _actionCaller,
-      callerSurface: _callerSurface,
-      sessionAgentSpawnPolicyV1: _sessionAgentSpawnPolicyV1,
       actionRequestId,
-      resumeActionRequest: _resumeActionRequest,
       signal,
-      ...input
     }) => {
+      if (!admittedInput) return { type: 'error' as const, code: 'invalid_input' as const, retryable: false as const };
+      // The daemon re-admits public selections. Host launch expansion (including
+      // the original Discussion recipe sidecar) is never a transport payload.
+      const input = { ...admittedInput, creationKey };
       const { placementOrigin, ...exactInput } = input;
       const serverId = resolveServerProfileScopeIdForIdentifier(input.executionTarget.serverId);
       const machine = storage.getState().machineListByServerId[serverId]
@@ -2214,7 +2295,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         }
       }
       accountContext?.assertCurrent();
-      return await dispatchSessionSpawnNewWithReportsToPreparation({
+      return await dispatchSessionSpawnNewWithManagerPreparation({
         payload: placementOrigin && supportsOrigin ? { ...exactInput, placementOrigin } : exactInput,
         signal,
       });
@@ -2239,12 +2320,20 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       const role = roleEntry?.success ? buildRoleCatalog({ items: [roleEntry.data], overrides: {} })[0] : null;
       context.signal?.throwIfAborted();
       accountContext.assertCurrent();
-      const presentation = presentActionApproval({ ...presentationInput, subject: reading.named ? reading.text : null, role });
+      // A Machine-targeted Action names its paths the way that Machine's home reads them (`~/work/app`).
+      const targetMachineId = input && typeof input === 'object' && typeof (input as { machineId?: unknown }).machineId === 'string'
+        ? (input as { machineId: string }).machineId : null;
+      const homeDir = targetMachineId
+        ? resolveServerScopedMachine(storage.getState(), accountContext.serverId, targetMachineId)?.metadata?.homeDir?.trim() || null : null;
+      const formatPath = homeDir ? (path: string) => formatPathRelativeToHome(path, homeDir) : null;
+      const presentation = presentActionApproval({ ...presentationInput, subject: reading.named ? reading.text : null, role, formatPath });
       const confirmed = actionId === 'account.delete'
         ? await Modal.prompt(t('settingsAccount.deleteAccountConfirmTitle'), t('settingsAccount.deleteAccountConfirmBody'), {
           placeholder: 'DELETE', confirmText: t('settingsAccount.deleteAccount'),
         }) === 'DELETE'
-        : await Modal.confirm(presentation.title ?? t('approvals.untitled'), presentation.summary ?? '');
+        : await Modal.confirm(presentation.title ?? t('approvals.untitled'), presentation.summary ?? '',
+          { ...(presentation.confirmLabel ? { confirmText: presentation.confirmLabel } : {}),
+            ...(context.signal ? { signal: context.signal } : {}), });
       // Let the Action owner project invocation cancellation before checking
       // Account currentness, which also throws for an aborted invocation.
       if (context.signal?.aborted) return false;
@@ -2252,7 +2341,34 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return confirmed;
     } : undefined,
 
-    approvalRequestApprovedReplay: async ({ artifactId, request, context, requestId, signal }) => {
+    approvalRequestApprovedReplay: async ({ artifactId, request, decision, context, requestId, signal }) => {
+      if (decision) {
+        const subject = 'requesterConfirmation' in request ? request.requesterConfirmation : undefined;
+        const route = resolveApprovalReplayRoute(request);
+        if (!subject || !accountContext || context.surface !== 'ui' || context.authority !== 'present_user'
+          || context.externalActionCredential || context.externalActionExecutionAuthorization || context.rpcSessionAuthorization
+          || context.actionCaller && context.actionCaller.kind !== 'host'
+          || subject.requesterAccountId !== accountContext.accountId) {
+          return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
+        }
+        if (!route || route.serverIdentityId !== accountContext.serverIdentityId) {
+          return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+        }
+        accountContext.assertCurrent();
+        const result = await actionSessionRpc<unknown, { artifactId: string; sessionId: string; decision: 'approve' | 'reject' | 'cancel' }>({
+          serverId: accountContext.serverId, sessionId: subject.personaSessionRef.sessionId,
+          method: RPC_METHODS.APPROVAL_REQUEST_DECIDE,
+          payload: { artifactId, sessionId: subject.personaSessionRef.sessionId, decision }, timeoutMs: null,
+          ...(signal ? { signal } : {}),
+        });
+        accountContext.assertResultCurrent(getActionSpec('approval.request.decide').sideEffectClass);
+        if (result && typeof result === 'object' && 'ok' in result && result.ok === true && 'result' in result) {
+          return { ok: true, result: result.result };
+        }
+        const failure = ActionExecuteFailureSchema.safeParse(result);
+        return failure.success ? failure.data : { ok: false, errorCode: 'invalid_action_transport_output', error: 'invalid_action_transport_output' };
+      }
+      if (request.v !== 2) return null;
       // Currentness above has revalidated the daemon-produced source identity.
       // Only this existing live continuation may spend its retained app operands;
       // durable/signed/remote replay keeps the exact-daemon route below.
@@ -2366,7 +2482,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         }
       }
       try {
-        const response = await machineRpcWithServerScope({
+        const response = await actionMachineRpc({
           serverId: input.serverId,
           machineId: input.machineId,
           accountId: accountContext?.accountId,
@@ -2429,11 +2545,8 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     },
     reviewEnginesList: async ({ sessionId, machineId, includeDisabled, scope }) => {
       if (!accountContext) return { ok: false, errorCode: 'not_authenticated', errorMessage: 'not_authenticated' };
-      const preferences = settingsParse(await accountContext.readRawSettings());
-      const { catalog } = await readAcpCatalogInContext(accountContext);
-      accountContext.assertCurrent();
       const result = await listReviewEnginesForVoiceTool({ sessionId, machineId, includeDisabled, scope, serverId: accountContext.serverId,
-        acpCatalogSnapshot: catalog, backendEnabledByTargetKey: preferences.backendEnabledByTargetKey ?? null });
+      }, accountContext);
       accountContext.assertCurrent();
       return result;
     },
@@ -2475,8 +2588,8 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     ...(machineAccessAction
       ? { machineAccessAction }
       : {}),
-    ...(opts?.sessionDiscussionAction ?? capturedFamilyPorts?.sessionDiscussionAction
-      ? { sessionDiscussionAction: opts?.sessionDiscussionAction ?? capturedFamilyPorts!.sessionDiscussionAction }
+    ...(opts?.discussionAction ?? capturedFamilyPorts?.discussionAction
+      ? { discussionAction: opts?.discussionAction ?? capturedFamilyPorts!.discussionAction }
       : {}),
     ...(opts?.homeDomainAction ?? capturedFamilyPorts?.homeDomainAction
       ? { homeDomainAction: opts?.homeDomainAction ?? capturedFamilyPorts!.homeDomainAction }
@@ -2490,7 +2603,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       if (!accountContext) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
       accountContext.assertCurrent();
       try {
-        return await machineRpcWithServerScope({ machineId, serverId: accountContext.serverId,
+        return await actionMachineRpc({ machineId, serverId: accountContext.serverId,
           accountId: accountContext.accountId,
           method: method === 'detect' ? RPC_METHODS.CAPABILITIES_DETECT : RPC_METHODS.CAPABILITIES_INVOKE,
           payload: request, operationTimeoutMs: null, preferScoped: true,
@@ -2669,7 +2782,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       if (agents.length === 0) return { items: [], ...('definitionCatalog' in inventory
         ? { definitionCatalog: inventory.definitionCatalog } : {}) };
       try {
-        const response = await machineRpcWithServerScope({
+        const response = await actionMachineRpc({
           machineId: args.machineId,
           serverId: args.serverId,
           method: RPC_METHODS.CAPABILITIES_DETECT,
@@ -2744,6 +2857,14 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         if (!target || !args.machineId) return { items: [], source: 'unavailable' };
         const result = await probeAgentModelsForActions({ ...args, machineId: args.machineId, probe: args.probe }, target);
         accountContext?.assertCurrent();
+        if (args.includeProviderProjection && args.backendTargetKey) {
+          const { describeProviderModels } = await import('@/providers/actions/client');
+          const projection = await describeProviderModels({ machineId: args.machineId, serverId: args.serverId ?? accountContext?.serverId ?? null,
+            agentTargetKey: args.backendTargetKey, mode: 'picker' }).catch(() => null);
+          accountContext?.assertCurrent();
+          return { ...result, providerProjection: projection?.status === 'success'
+            && projection.agentTargetKey === args.backendTargetKey ? projection : null };
+        }
         return result;
       }
       const { agentId, machineId, serverId, limit, backendTargetKey } = args;
@@ -2763,7 +2884,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       accountContext?.assertCurrent();
       return result;
     },
-    spawnConnectedServicesList: async (args) => await listSpawnConnectedServicesForActions(args),
+    spawnConnectedServicesList: async (args, context) => await listSpawnConnectedServicesForActions({ ...args, signal: context?.signal }),
 
     sessionContinuationInspect: async ({ input, serverId }) => {
       const machineId = resolveSessionMachineId(input.sessionId, serverId);
@@ -2784,8 +2905,128 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
           externalActionTarget: { kind: 'machine', machineId } },
       });
     },
-    sessionSendMessage: opts?.sessionSendMessage ?? (async ({ sessionId, message, serverId, recipient, requestedAction, displayText, messageMeta, permissionModeOverride, localId, signal }) => {
-      const delivery = await sendSessionMessageWithServerScope({
+    sessionSendMessage: opts?.sessionSendMessage ?? (async (args) => {
+      const { sessionId, message, serverId, recipient, requestedAction, displayText, messageMeta, permissionModeOverride, localId, signal } = args;
+      const requiresReplyCustody = args.reply === 'wait' || args.reply === 'return' || args.wait === true;
+      const authoredStructuredInput = args.authoredInput && 'message' in args.authoredInput ? args.authoredInput.structuredInput : undefined;
+      const requiresTargetInputAdmission = authoredStructuredInput?.reviewComments !== undefined
+        || authoredStructuredInput?.sessionAttachments !== undefined;
+      const composerSubmission = opts?.sessionMessageComposerSubmission;
+      if (composerSubmission && (!composerSubmission.isCurrent() || signal?.aborted)) {
+        return { ok: false, errorCode: 'session_account_scope_retired', error: 'session_account_scope_retired' };
+      }
+      if (composerSubmission || requiresReplyCustody || requiresTargetInputAdmission || args.modelOverride !== undefined || args.providerConnectionId !== undefined
+          || args.idempotencyKey !== undefined || args.attachments !== undefined || args.source !== undefined) {
+        if (!args.authoredInput) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+        const account = accountContext;
+        if (!account) return { ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' };
+        account.assertCurrent();
+        const { readSessionSnapshotForAuthority } = await import('@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority');
+        const { runWithServerRequestAuthorityForServerAccountScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope');
+        const { resolveMachineControlTargetForSessionFromState } = await import('@/sync/domains/session/resolveMachineTargetForSessionFromState');
+        const { session } = await runWithServerRequestAuthorityForServerAccountScope({ scope: account.accountLifetime.scope,
+          activeRequest: account.request }, authority => readSessionSnapshotForAuthority({ authority, sessionId,
+            isCurrent: account.accountLifetime.isCurrent }));
+        account.assertCurrent();
+        signal?.throwIfAborted();
+        const target = resolveMachineControlTargetForSessionFromState({ ...storage.getState(),
+          sessions: { [sessionId]: session }, sessionListRowsByServerId: {} }, { ...account.accountLifetime.scope, sessionId });
+        if (!target) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+        if (requiresReplyCustody) {
+          const machines = await fetchMachineRows({ credentials: account.credentials,
+            request: (path, init) => account.request(path, { ...init, ...(signal ? { signal } : {}) }) });
+          account.assertCurrent();
+          signal?.throwIfAborted();
+          const machine = machines.find(row => row.id === target.machineId && row.revokedAt === null && row.replacedByMachineId === null);
+          if (!supportsMachineOperationProtocolCapabilityV1(machine?.operationProtocolCapabilities, 'sessionMessageReply')) {
+            return { ok: false, errorCode: 'session_input_target_update_required', error: 'session_input_target_update_required' };
+          }
+        }
+        // Relay the validated authored variant, not its local text/metadata projection.
+        let input = { ...args.authoredInput, sessionId };
+        const context: ActionExecutorContext = { ...args.context, actionCaller: args.actionCaller ?? args.context.actionCaller,
+          serverId: account.serverId, runtimeAccountId: account.accountId,
+          externalActionTarget: { kind: 'machine', machineId: target.machineId } };
+        const execute = createUiAccountAction({ account });
+        let advertisedInputSchema: object;
+        try {
+          const advertised = await readCompleteActionSpecV1({ actionId: 'session.message.send', signal,
+            read: async schemaInput => execute({ actionId: 'action.spec.get', input: schemaInput, context,
+              ...(signal ? { signal } : {}) }) });
+          account.assertCurrent();
+          signal?.throwIfAborted();
+          advertisedInputSchema = advertised.inputSchema;
+          if (!supportsSessionMessageInputJsonSchema(advertised.inputSchema, input)) {
+            return { ok: false, errorCode: 'session_input_target_update_required', error: 'session_input_target_update_required' };
+          }
+        } catch {
+          signal?.throwIfAborted();
+          account.assertCurrent();
+          return { ok: false, errorCode: 'session_input_target_update_required', error: 'session_input_target_update_required' };
+        }
+        if (composerSubmission?.legacyAttachments && 'message' in input) {
+          if (!localId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          const { uploadSessionMessageAttachmentDrafts } = await import('@/components/sessions/attachments/uploadSessionMessageAttachmentDrafts');
+          const handles = await uploadSessionMessageAttachmentDrafts({
+            target: { serverId: account.serverId, accountId: account.accountId, sessionId },
+            executionTarget: { serverId: account.serverId, machineId: target.machineId },
+            drafts: composerSubmission.legacyAttachments.drafts, config: composerSubmission.legacyAttachments.config,
+            onUploadedDraftCheckpoint: composerSubmission.legacyAttachments.onUploadedDraftCheckpoint,
+            messageLocalId: localId, ...(signal ? { signal } : {}),
+            isCurrent: () => account.accountLifetime.isCurrent() && composerSubmission.isCurrent(),
+          });
+          if (!handles) return { ok: false, errorCode: 'session_input_target_unavailable', error: 'session_input_target_unavailable' };
+          input = { ...input, message: composerSubmission.legacyAttachments.originalMessage,
+            structuredInput: { v: 1, ...input.structuredInput, sessionAttachments: [...handles] } };
+        }
+        let preparedAttachments: Awaited<ReturnType<typeof import('@/sync/domains/transfers/ops/prepareTargetComposerAttachments').prepareTargetComposerAttachments>> = null;
+        if (composerSubmission && 'message' in input && input.structuredInput?.composerAttachments?.length) {
+          if (!localId || !composerSubmission.isCurrent() || signal?.aborted) {
+            return { ok: false, errorCode: 'session_account_scope_retired', error: 'session_account_scope_retired' };
+          }
+          const { prepareTargetComposerAttachments } = await import('@/sync/domains/transfers/ops/prepareTargetComposerAttachments');
+          preparedAttachments = await prepareTargetComposerAttachments({
+            attachments: input.structuredInput.composerAttachments,
+            sourceComposerRef: composerSubmission.sourceComposerRef,
+            targetComposerRef: { kind: 'session', sessionId },
+            executionTarget: { serverId: account.serverId, machineId: target.machineId },
+            messageLocalId: localId, signal, isCurrent: () => account.accountLifetime.isCurrent() && composerSubmission.isCurrent(),
+          });
+          if (!preparedAttachments) return { ok: false, errorCode: 'session_input_target_unavailable', error: 'session_input_target_unavailable' };
+          const { RawIngressStructuredInputV1Schema } = await import('@happier-dev/protocol/runtime/input/structuredInputV1');
+          input = { ...input, structuredInput: RawIngressStructuredInputV1Schema.parse({
+            ...input.structuredInput, composerAttachments: preparedAttachments.attachments,
+          }) };
+          if (!composerSubmission.isCurrent() || !account.accountLifetime.isCurrent() || signal?.aborted) {
+            await preparedAttachments.releaseOnRejection();
+            return { ok: false, errorCode: 'session_account_scope_retired', error: 'session_account_scope_retired' };
+          }
+        }
+        if (!supportsSessionMessageInputJsonSchema(advertisedInputSchema, input)) {
+          await preparedAttachments?.releaseOnRejection();
+          return { ok: false, errorCode: 'session_input_target_update_required', error: 'session_input_target_update_required' };
+        }
+        const result = await execute({ actionId: 'session.message.send', input, context, ...(signal ? { signal } : {}) });
+        const failure = ActionExecuteFailureSchema.safeParse(result);
+        if (failure.success && failure.data.errorCode === 'session_attachment_upload_checkpoint_stale'
+          && composerSubmission?.legacyAttachments && localId && 'message' in input) {
+          composerSubmission.legacyAttachments.onUploadedDraftCheckpointStale({
+            target: { serverId: account.serverId, accountId: account.accountId, sessionId },
+            executionTarget: { serverId: account.serverId, machineId: target.machineId }, messageLocalId: localId,
+            handles: input.structuredInput?.sessionAttachments ?? [],
+          });
+          await preparedAttachments?.releaseOnRejection();
+          return result;
+        }
+        const { SessionMessageSendResultV1Schema } = await import('@happier-dev/protocol/sessions/messages/sessionInputAdmission');
+        const receipt = SessionMessageSendResultV1Schema.safeParse(result);
+        if (preparedAttachments && receipt.success && (receipt.data.status === 'rejected'
+          || receipt.data.status === 'alreadyAccepted' || receipt.data.status === 'replied')) {
+          await preparedAttachments.releaseOnRejection();
+        }
+        return result;
+      }
+      const delivery = await withAccountLifetime(signal, lifetimeSignal => sendSessionMessageWithServerScope({
         sessionId,
         message,
         messageLocalId: localId,
@@ -2794,8 +3035,9 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         requestedAction,
         displayText,
         metaOverrides: permissionModeOverride ? { ...messageMeta, permissionMode: permissionModeOverride } : messageMeta,
-        signal,
-      });
+        ...(args.callerSurface === 'voice' ? { hostAdmissionOrigin: 'voice' as const } : {}),
+        signal: lifetimeSignal,
+      }));
       return projectServerScopedSessionSendMessageResult(delivery);
     }),
 
@@ -2804,7 +3046,10 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     ),
 
     sessionApprovalReviewerSet: async ({ sessionId, enabled, serverId }) => {
-      await sync.patchSessionMetadataWithRetry(sessionId, (metadata) => ({ ...metadata, approvalReviewerEnabled: enabled }), { serverId: serverId ?? null });
+      await sync.patchSessionMetadataWithRetry(sessionId, (metadata) => ({ ...metadata, approvalReviewerEnabled: enabled }), {
+        serverId: serverId ?? null,
+        ...(accountContext ? { accountLifetime: accountContext.accountLifetime } : {}),
+      });
       return { updated: true };
     },
 
@@ -2847,19 +3092,21 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
           }, { serverId: serverId ?? null,
             ...(accountContext ? { accountLifetime: accountContext.accountLifetime } : {}),
             onMetadataCommitted: (revision) => { committedRevision = revision; },
-            ...('expectedMetadataRevision' in write ? { expectedMetadataRevision: write.expectedMetadataRevision } : {}) });
+            // Field conflict detection lives in the shared registered updater.
+          });
           if (committedRevision === undefined) throw new Error('Session metadata acknowledgement is unavailable');
           return { version: committedRevision };
         },
       });
       if (!result.ok) return { ok: false, errorCode: result.reason, error: result.reason };
       return { ok: true, sessionId: sid, ...(fieldId === 'display.title' ? { title: value, updatedAt }
+        : fieldId === 'display.statusReason' ? { reason: value }
         : fieldId === 'display.bot' ? { bot: value } : fieldId === 'intent.memoryEnabled' ? { enabled: value }
         : fieldId === 'intent.voicePreference' ? { preference: value }
         : fieldId === 'intent.context' ? { updated: true } : { showToolCalls: value }), version: result.version };
     },
 
-    sessionPermissionRespond: async ({ sessionId, requestId, turnId, decision, serverId, mode, reason, answers, allowedTools, updatedPermissions, execPolicyAmendment }) => {
+    sessionPermissionRespond: async ({ sessionId, requestId, turnId, decision, serverId, mode, reason, answers, allowedTools, updatedPermissions, execPolicyAmendment, signal }) => {
       const reqId = String(requestId ?? '').trim();
       if (!reqId) {
         return { ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found', sessionId };
@@ -2874,7 +3121,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         ...(execPolicyAmendment === undefined ? {} : { execPolicyAmendment }),
       });
       try {
-        await sessionRespondToPermission(sessionId, request, serverId ? { serverId } : undefined);
+        await withAccountLifetime(signal, ownedSignal => sessionRespondToPermission(sessionId, request, { serverId: serverId ?? undefined, signal: ownedSignal }));
       } catch (error) {
         const errorCode = readRpcErrorCode(error);
         if (!errorCode) throw error;
@@ -2909,11 +3156,12 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         return rejectUnavailable('canceled');
       }
       try {
-        const result = await sessionRpcWithServerScope({
+        const result = await actionSessionRpc({
           sessionId: args.input.sessionId,
           serverId: args.serverId,
           method: args.actionId,
           payload: args.input,
+          signal: args.signal,
         });
         return args.signal?.aborted ? rejectUnavailable('canceled') : result;
       } catch (error) {
@@ -2923,7 +3171,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         throw error;
       }
     },
-    sessionUserActionAnswer: async ({ sessionId, requestId, answers, decision, reason, updatedPermissions, serverId }) => {
+    sessionUserActionAnswer: async ({ sessionId, requestId, answers, decision, reason, updatedPermissions, serverId, signal }) => {
       const reqId = String(requestId ?? '').trim();
       if (!reqId) {
         return { ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found', sessionId };
@@ -2939,13 +3187,13 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         return { ok: false, errorCode: 'invalid_parameters', errorMessage: 'invalid_parameters', sessionId };
       }
       const approved = decision ? decision === 'approve' : true;
-      return projectSessionInteractionRpcResult(await sessionRespondToUserAction(sessionId, {
+      return projectSessionInteractionRpcResult(await withAccountLifetime(signal, ownedSignal => sessionRespondToUserAction(sessionId, {
           id: reqId,
           approved,
           ...(Object.keys(normalizedAnswers).length > 0 ? { answers: normalizedAnswers } : {}),
           ...(typeof reason === 'string' && reason.trim().length > 0 ? { reason: reason.trim() } : {}),
           ...(typeof updatedPermissions !== 'undefined' ? { updatedPermissions } : {}),
-        }, serverId ? { serverId } : undefined));
+        }, { serverId: serverId ?? undefined, signal: ownedSignal })));
     },
     sessionModeSet: async ({ sessionId, modeId }) => {
       const session = (storage.getState() as any)?.sessions?.[sessionId] ?? null;
@@ -2990,7 +3238,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     sessionConnectedServicesAuthSet: setSessionConnectedServiceAuthBinding,
     sessionModelUnarm: async ({ sessionId, serverId, context }) => {
       accountContext?.assertCurrent();
-      return SessionModelTransitionResultV1Schema.parse(await sessionRpcWithServerScope({
+      return SessionModelTransitionResultV1Schema.parse(await actionSessionRpc({
         sessionId, serverId, method: SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION,
         payload: { v: 1, unarm: true }, signal: context.signal,
       }));
@@ -3087,7 +3335,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         }
         let transition: SessionModelTransitionResultV1;
         try {
-          const result = await sessionRpcWithServerScope<
+          const result = await actionSessionRpc<
             SessionModelTransitionResultV1,
             SessionModelTransitionRequestV1
           >({
@@ -3150,6 +3398,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
                   ? serverId.trim()
                   : null,
               sessionExpectation: { kind: 'inactive_model_intent' },
+              ...(accountContext ? { accountLifetime: accountContext.accountLifetime } : {}),
             },
           );
           const candidateState = candidate.readState();
@@ -3246,21 +3495,76 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         corpus: await acquireAdmittedSessionReferenceCorpusOptions(storage.getState()) ?? undefined,
     }),
     sessionList: listSessionsForVoiceTool,
+    sessionStatusGet: createUiSessionStatusGet(accountContext),
+    readSessionManager: async ({ address, signal }) => {
+      if (!accountContext || !areServerProfileIdentifiersEquivalent(address.serverId, accountContext.serverId)) return { kind: 'unavailable' };
+      try {
+        const { readSessionSnapshotForAuthority } = await import('@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority');
+        const { runWithServerRequestAuthorityForServerAccountScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope');
+        const { session } = await runWithServerRequestAuthorityForServerAccountScope({ scope: accountContext.accountLifetime.scope,
+          activeRequest: accountContext.request }, authority => readSessionSnapshotForAuthority({ authority, sessionId: address.sessionId,
+            isCurrent: accountContext.accountLifetime.isCurrent }));
+        accountContext.assertCurrent();
+        signal?.throwIfAborted();
+        const managerSessionId = readSessionManagerSessionIdV1(session);
+        return { kind: 'manager', address: managerSessionId ? { serverId: accountContext.serverId, sessionId: managerSessionId } : null };
+      } catch { return { kind: 'unavailable' }; }
+    },
+    sessionMessageReply: async ({ sessionId, requestLocalId, reviewDecision, context, serverId, signal }) => {
+      // Explicit Agent replies still require their live Session publisher. The
+      // private human decision only settles custody at the captured Account.
+      if (!reviewDecision) return { v: 1, ok: false, error: 'unavailable' };
+      if (context.authority !== 'present_user') return { v: 1, ok: false, error: 'forbidden' };
+      if (!accountContext || (serverId && !areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId))) {
+        return { v: 1, ok: false, error: 'unavailable' };
+      }
+      accountContext.assertCurrent();
+      const response = await accountContext.request(`/v2/sessions/${encodeURIComponent(sessionId)}/messages/by-local-id/${encodeURIComponent(requestLocalId)}/reply`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reviewDecision), ...(signal ? { signal } : {}) });
+      accountContext.assertCurrent();
+      const parsed = SessionMessageReplyMutationResultV1Schema.safeParse(await response.json());
+      accountContext.assertCurrent();
+      if (!response.ok) {
+        const error = parsed.success && !parsed.data.ok ? parsed.data.error : 'unavailable';
+        return { ok: false, errorCode: error, error };
+      }
+      return parsed.success ? parsed.data : { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+    },
+    sessionExchangePrepare: async ({ sessionId, originInputLocalId, serverId, signal }) => {
+      if (!accountContext || (serverId && !areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId))) return null;
+      try { return (await readSessionExchangeStatus(accountContext, sessionId, originInputLocalId, signal)).observedRevision; }
+      catch { return null; }
+    },
+    sessionExchangeControl: async ({ sessionId, originInputLocalId, request, serverId, signal }) => {
+      if (!accountContext) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      if (serverId && !areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId)) {
+        return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
+      }
+      const response = await accountContext.request(`/v2/sessions/${encodeURIComponent(sessionId)}/exchanges/${encodeURIComponent(originInputLocalId)}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), ...(signal ? { signal } : {}) });
+      accountContext.assertCurrent();
+      if (!response.ok) {
+        const code = response.status === 409 ? 'exchange_revision_conflict' : response.status === 403 ? 'forbidden'
+          : response.status === 404 ? 'not_found' : 'exchange_unavailable';
+        return { ok: false, errorCode: code, error: code };
+      }
+      const parsed = AutonomousExchangeStatusV1Schema.safeParse(await response.json());
+      accountContext.assertCurrent();
+      return parsed.success ? parsed.data : { ok: false, errorCode: 'exchange_unavailable', error: 'exchange_unavailable' };
+    },
     sessionActivityGet: async (params) => await getSessionActivityForVoiceTool(params),
     sessionEventsGet: async (_params, invocation) => {
       if (!accountContext) return { ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' };
       return await createUiAccountAction({ account: accountContext })(invocation);
     },
-    sessionTranscriptGet: async ({ sessionId, serverId, projection, limit, cursor, roles, maxCharsPerMessage }) =>
-      await getSessionTranscriptForVoiceTool({
-        sessionId,
-        ...(serverId !== undefined ? { serverId } : {}),
-        ...(projection ? { projection } : {}),
-        ...(limit !== undefined ? { limit } : {}),
-        ...(cursor !== undefined ? { cursor } : {}),
-        ...(roles ? { roles } : {}),
-        ...(maxCharsPerMessage !== undefined ? { maxCharsPerMessage } : {}),
-      }),
+    sessionTranscriptGet: async (input) => {
+      if (input.context.surface !== 'voice') {
+        if (!accountContext) return { ok: false, errorCode: 'admission_unavailable', errorMessage: 'admission_unavailable' };
+        return await readSessionTranscriptForAction(input, { serverId: accountContext.serverId, accountId: accountContext.accountId });
+      }
+      return await getSessionTranscriptForVoiceTool(input, accountContext
+        ? { serverId: accountContext.serverId, accountId: accountContext.accountId } : undefined);
+    },
     sessionRecentMessagesGet: async ({ sessionId, serverId, limit, cursor, includeUser, includeAssistant, maxCharsPerMessage }) =>
       await getSessionRecentMessagesForVoiceTool({ sessionId, serverId, limit, cursor, includeUser, includeAssistant, maxCharsPerMessage }),
 
@@ -3336,7 +3640,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       }
       if (request.source !== undefined) {
         if (!accountLifetime.isCurrent()) throw Object.assign(new Error('Exact Account scope is unavailable.'), { code: 'not_authenticated' as const });
-        const result = await machineRpcWithServerScope<MemoryWindowV1, MemoryWindowRequestV1>({ machineId, serverId: exactServerId,
+        const result = await actionMachineRpc<MemoryWindowV1, MemoryWindowRequestV1>({ machineId, serverId: exactServerId,
           accountId: accountLifetime.scope.accountId, preferScoped: true,
           method: RPC_METHODS.DAEMON_MEMORY_GET_WINDOW, payload: { ...request, v: 1 }, ...(signal ? { signal } : {}),
         });
@@ -3368,7 +3672,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
             code: 'not_authenticated' as const,
           });
         }
-        return await machineRpcWithServerScope<MemoryWindowV1, MemoryWindowRequestV1>({
+        return await actionMachineRpc<MemoryWindowV1, MemoryWindowRequestV1>({
           machineId,
           serverId: exactServerId,
           accountId: accountLifetime.scope.accountId,
@@ -3383,7 +3687,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     },
 
     daemonMemoryEnsureUpToDate: async ({ machineId, sessionId, serverId }) =>
-      await machineRpcWithServerScope({
+      await actionMachineRpc({
         machineId,
         serverId,
         method: RPC_METHODS.DAEMON_MEMORY_ENSURE_UP_TO_DATE,
@@ -3402,6 +3706,14 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return { ok: true };
     },
 
+    approvalsList: accountContext ? args => listApprovalArtifactsV1({ ...args,
+      readPage: options => accountContext.workflowArtifacts.list(options),
+      read: async artifactId => {
+        const artifact = await accountContext.fetchArtifact(artifactId);
+        return artifact?.header ? { header: artifact.rawHeader ?? artifact.header, body: artifact.body, updatedAt: artifact.updatedAt } : null;
+      },
+    }) : undefined,
+
     approvalsCreate: async ({ request }) => {
       const header: ArtifactHeader = buildApprovalRequestArtifactHeaderV1(request);
       const artifactId = await (accountContext ? accountContext.createArtifact(header, JSON.stringify(request)) : sync.createArtifactWithHeader(header, JSON.stringify(request)));
@@ -3417,7 +3729,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       // locked or header-less Artifact has nothing to match against.
       if (localHeader && typeof localBody === 'string') {
         const parsed = approvalArtifactBodyMatchesHeaderV1(localHeader, localBody);
-        if (parsed?.family === 'built_in') return parsed.request;
+        if (parsed && parsed.family !== 'execution_run_host_action') return parsed.request;
       }
 
       const full = await (accountContext ? accountContext.fetchArtifact(artifactId) : sync.fetchArtifactWithBody(artifactId));
@@ -3426,7 +3738,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         const body = full.body;
         if (typeof body !== 'string' || !full.header) return null;
         const parsed = approvalArtifactBodyMatchesHeaderV1(full.header, body);
-        return parsed?.family === 'built_in' ? parsed.request : null;
+        return parsed && parsed.family !== 'execution_run_host_action' ? parsed.request : null;
       }
 
       return null;
@@ -3534,7 +3846,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       }, signal);
       if (!accountContext) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       accountContext.assertCurrent();
-      const result = await sessionRpcWithServerScope<unknown, SkillReadInputV1>({
+      const result = await actionSessionRpc<unknown, SkillReadInputV1>({
         serverId: accountContext.serverId, sessionId: request.sessionId, method: 'skills.read', payload: request,
         timeoutMs: null, ...(signal ? { signal } : {}),
       });
@@ -3622,10 +3934,20 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
   // gate nullish, which now fails closed (INV-1 / DEC-2).
   const resolveContext = (context: Parameters<typeof executor.execute>[2], input: unknown, actionId?: ActionId): ActionExecutorContext => {
     const surface = context?.surface ?? 'ui';
-    const credential = accountContext?.credentialAuthorityKind ?? getCurrentAuth()?.credentialAuthorityKind ?? 'none';
+    const installedAuth = getCurrentAuth();
+    const credential = accountContext?.credentialAuthorityKind ?? installedAuth?.credentialAuthorityKind ?? 'none';
+    const localUiInteraction = !accountContext && credential === 'none'
+      && installedAuth?.credentialAuthorityKind === 'none' && installedAuth.isAuthenticated === false
+      && surface === 'ui' && context?.actionCaller?.kind === 'host'
+      && !context.externalActionCredential && !context.externalActionExecutionAuthorization && !context.rpcSessionAuthorization
+      && !context.signal?.aborted && storage.getState().settingsScope === null && isSettingsOwnerCurrent()
+      && isBuiltInLocalSettingMutation(actionId, input);
+    const credentialAuthority = resolveInvocationAuthority({ credential, surface, localUiInteraction });
+    // Ordinary callers can narrow the installed credential's authority, never
+    // promote it. Authenticated daemon continuations retain their admitted stamp.
     const authority = opts?.admittedClientActionId
       ? context?.authority ?? 'account_automation'
-      : context?.authority ?? resolveInvocationAuthority({ credential, surface });
+      : credentialAuthority === 'present_user' ? context?.authority ?? credentialAuthority : credentialAuthority;
     const actionCaller = context?.actionCaller ?? (credential === 'account' && (surface === 'ui' || surface === 'voice' || surface === 'rpc') && !context?.externalActionCredential
       && !context?.rpcSessionAuthorization ? { kind: 'host' as const } : undefined);
     // Ordinary UI callers do not author approval provenance. Retain stronger
@@ -3753,7 +4075,7 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext): Read
   machineProcessesAction: NonNullable<ActionExecutorDeps['machineProcessesAction']>;
   machineResourcesPolicyAction: NonNullable<ActionExecutorDeps['machineResourcesPolicyAction']>;
   skillMachineActionExecute: NonNullable<ActionExecutorDeps['skillMachineActionExecute']>;
-  sessionDiscussionAction: NonNullable<ActionExecutorDeps['sessionDiscussionAction']>;
+  discussionAction: NonNullable<ActionExecutorDeps['discussionAction']>;
   homeDomainAction: NonNullable<ActionExecutorDeps['homeDomainAction']>;
   teamMembershipHistoryAction: NonNullable<ActionExecutorDeps['teamMembershipHistoryAction']>;
 }> {
@@ -3792,10 +4114,10 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext): Read
     const spec = getActionSpec(actionId);
     const method = spec.bindings?.rpcMethod;
     if (!method) return { ok: false as const, errorCode: 'unsupported_action', error: 'unsupported_action' };
-    const result = await machineRpcWithServerScope({ ...scope, machineId: input.machineId, method,
+    const result = await withActionAccountRequestSignal(account, signal, ownedSignal => machineRpcWithServerScope({ ...scope, machineId: input.machineId, method,
       payload, preferScoped: true,
       ...(spec.sideEffectClass !== 'read' || operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
-      ...(requestId ? { requestId } : {}), ...(signal ? { signal } : {}) });
+      ...(requestId ? { requestId } : {}), signal: ownedSignal }));
     account.assertResultCurrent(spec.sideEffectClass);
     if (spec.sideEffectClass === 'read') signal?.throwIfAborted();
     return result;
@@ -3844,8 +4166,8 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext): Read
       if (input.serverId && !areServerProfileIdentifiersEquivalent(input.serverId, account.serverId)) return { ok: false as const, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       const read = async (machineId: string, method: string, payload: unknown) => {
         account.assertCurrent();
-        const result = await machineRpcWithServerScope({ serverId: account.serverId, accountId: account.accountId,
-          machineId, method, payload, preferScoped: true, ...(signal ? { signal } : {}) });
+        const result = await withActionAccountRequestSignal(account, signal, ownedSignal => machineRpcWithServerScope({ serverId: account.serverId, accountId: account.accountId,
+          machineId, method, payload, preferScoped: true, signal: ownedSignal }));
         account.assertCurrent();
         return result;
       };
@@ -3872,9 +4194,9 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext): Read
     machineWorkSummaryGet: async ({ input, signal }) => {
       account.assertCurrent();
       if (!areServerProfileIdentifiersEquivalent(input.serverId, account.serverId)) return { ok: false as const, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
-      const result = await machineRpcWithServerScope({ serverId: account.serverId, accountId: account.accountId,
+      const result = await withActionAccountRequestSignal(account, signal, ownedSignal => machineRpcWithServerScope({ serverId: account.serverId, accountId: account.accountId,
         machineId: input.machineId, method: RPC_METHODS.MACHINES_WORK_SUMMARY_GET, payload: { ...input, serverId: account.serverId }, preferScoped: true,
-        ...(signal ? { signal } : {}) });
+        signal: ownedSignal }));
       account.assertCurrent();
       return result;
     },
@@ -3915,29 +4237,13 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext): Read
         throw error;
       }
     },
-    sessionDiscussionAction: async (args) => {
+    discussionAction: async (args) => {
       account.assertCurrent();
-      const sessionId = typeof (args.input as { sessionId?: unknown } | null)?.sessionId === 'string'
-        ? (args.input as { sessionId: string }).sessionId
-        : args.context.defaultSessionId;
-      if (!sessionId) return { ok: false as const, errorCode: 'session_discussion_not_found', error: 'session_discussion_not_found' };
-      const session = { serverId: scope.serverId, sessionId };
       const availability = await readCollaborationAvailability();
-      const { createSessionDiscussionActionAdapter } = await import('@/sync/api/session/sessionDiscussionActions');
-      const result = await sync.withSessionSystemRecordRuntime(session, async (runtime) => {
-        if (runtime.scope.accountId !== scope.accountId || !isCurrent()) {
-          return { ok: false as const, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
-        }
-        return await createSessionDiscussionActionAdapter({
-          request: runtime.request,
-          contentContext: runtime.contentContext,
-          session,
-          availability,
-        })(args);
-      });
-      return result.status === 'ok'
-        ? result.value
-        : { ok: false as const, errorCode: result.status, error: result.status };
+      const { executeDiscussionActionInAccountContext } = await import('@/sync/api/discussions/discussionActions');
+      const result = await executeDiscussionActionInAccountContext(account, availability, args);
+      account.assertResultCurrent(getActionSpec(args.actionId).sideEffectClass);
+      return result;
     },
   };
 }
@@ -4140,6 +4446,12 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
     if (!scoped || !scoped.isCurrent()) throw new Error('action_account_scope_changed');
     return { request: scoped.request, target: { kind: 'session', sessionId: scoped.sessionId } };
   };
+  const apiTokenComposerSubmissionFailure = (actionId: ActionId) =>
+    actionId === 'session.message.send' && opts?.sessionMessageComposerSubmission
+      // Session-scoped token transport cannot acquire the Account/Machine
+      // source custody required by the private target-preparation adapter.
+      ? { ok: false as const, errorCode: 'session_input_target_unavailable', error: 'session_input_target_unavailable' }
+      : null;
   const accountScopeFailure = (error: unknown) => isActionAccountScopeChangedError(error)
     ? { ok: false as const, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' }
     : error instanceof ActionAdmissionHomeUnreachableError
@@ -4151,7 +4463,10 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
       const custodyFailure = opts?.filesystemActionDelivery?.actionId === actionId ? null : resolveUiFilesystemTransferCustodyFailure(actionId, input);
       if (custodyFailure) return custodyFailure;
       const api = await apiTokenTransport();
-      if (api) return await executeApiTokenAction(api, actionId, input, actionContext);
+      if (api) {
+        const failure = apiTokenComposerSubmissionFailure(actionId);
+        return failure ?? await executeApiTokenAction(api, actionId, input, actionContext);
+      }
       const serverId = resolveDefaultActionInvocationServerId(actionId, input, context);
       if (!serverId) return await ordinary().execute(actionId, input, actionContext);
       try {
@@ -4181,7 +4496,11 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
       const custodyFailure = opts?.filesystemActionDelivery?.actionId === actionId ? null : resolveUiFilesystemTransferCustodyFailure(actionId, input);
       if (custodyFailure) return { kind: 'settled', result: custodyFailure };
       const api = await apiTokenTransport();
-      if (api) return { kind: 'ready', invocation: { run: async () => await executeApiTokenAction(api, actionId, input, actionContext) } };
+      if (api) {
+        const failure = apiTokenComposerSubmissionFailure(actionId);
+        return failure ? { kind: 'settled', result: failure }
+          : { kind: 'ready', invocation: { run: async () => await executeApiTokenAction(api, actionId, input, actionContext) } };
+      }
       const serverId = resolveDefaultActionInvocationServerId(actionId, input, context);
       if (!serverId) return await ordinary().prepare(actionId, input, actionContext);
       const account = await captureLazyActionAccountContext(serverId, context?.signal);

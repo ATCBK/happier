@@ -61,7 +61,7 @@ describe('managed native UI Action frontdoor', () => {
                     ? { kind: 'approval_request_created', actionId, artifactId: 'native-ask' } : output } });
         });
         expect(await createDefaultActionExecutor().execute(actionId, input, {
-            serverId: target.id, expectedAccountId: 'account-a', surface, authority: 'present_user',
+            serverId: target.id, expectedAccountId: 'account-a', surface,
             ...(surface === 'ui' && actionId === 'machines.environment.apply' ? { presentUserConfirmation: { actionId } } : {}),
         })).toEqual({ ok: true, result: surface === 'voice' && actionId === 'machines.environment.apply'
             ? { kind: 'approval_request_created', actionId, artifactId: 'native-ask' } : output });

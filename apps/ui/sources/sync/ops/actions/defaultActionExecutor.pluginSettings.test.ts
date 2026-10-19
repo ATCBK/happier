@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginAccountAvailabilityIntentReadResponseV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { ApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { PluginSettingsContributionV2Schema } from '@happier-dev/protocol/plugins/contributions/settings';
 import { PluginAccountSettingsMutationRequestV1Schema, PluginAccountSettingsValuesV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -64,6 +66,21 @@ describe('Plugin Settings through the default Account Action host', () => {
         expect(write, JSON.stringify(write)).toMatchObject({ ok: true, result: { data: { revision: '8' } } });
         expect(values).toEqual({ claudeUnifiedTerminalEnabled: true, claudeRemoteAgentSdkEnabled: true,
             claudeUnifiedTerminalWorkspaceTrust: 'ask_every_time' });
+        await homes.requireUiApproval(serverId, 'plugins.settings.set');
+        homes.answer(serverId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, actions: { 'plugins.settings.set': { approvalRequiredSurfaces: ['ui'] } } },
+        } } } });
+        const proposed = await executor.execute('plugins.settings.set', {
+            ...input, localId: 'claudeRemoteAgentSdkEnabled', value: false, expectedRevision: '8',
+        }, { ...context, externalActionTarget: { kind: 'machine', machineId: 'origin-machine' } });
+        expect(proposed, JSON.stringify(proposed)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        const { artifactId } = ActionApprovalRequestCreatedResultSchema.parse(proposed.ok ? proposed.result : null);
+        const approval = ApprovalRequestSchema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(artifactId) ?? 'null'));
+        expect(approval).toMatchObject({ v: 2, executionOriginV1: { surface: 'ui', authority: 'present_user', accountId: 'alice',
+            machineId: 'origin-machine', target: { kind: 'machine', machineId: 'origin-machine' } } });
+        expect(await executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, context))
+            .toMatchObject({ ok: true, result: { status: 'executed' } });
+        expect(values.claudeRemoteAgentSdkEnabled).toBe(false);
         replacePluginAccountAvailabilityProjection({ scope, snapshot: { availabilityCursor: 2,
             intentReads: [{ pluginId, response: PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
                 availabilityCursor: 2, hostingCapability: { enabled: true, maxArtifactBytes: 1024, maxAccountBytes: 2048 },

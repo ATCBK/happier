@@ -13,17 +13,43 @@ type WorkReadOwner = MountedOwner & Readonly<{
         managedRuns: Readonly<{ phase: 'idle' | 'loading' | 'loaded' | 'failed'; refreshFailed: boolean }> }>;
 }>;
 type InboxReadOwner = MountedOwner & Readonly<{ read: () => InboxModel }>;
+type MountedReadAddress = Readonly<{ scope: ServerAccountScope; actionId: 'session.work.get' | 'inbox.get'; sessionId?: string }>;
 
 // Answering-client addresses only: these retain neither another projection nor another source.
 const workOwners = new Set<WorkReadOwner>();
 const inboxOwners = new Set<InboxReadOwner>();
+const addressListeners = new Set<() => void>();
+let mountedReadAddresses: readonly MountedReadAddress[] = [];
+function publishMountedReadAddresses(): void {
+    const next: MountedReadAddress[] = [];
+    for (const owner of workOwners) if (!next.some(address => address.actionId === 'session.work.get'
+        && address.sessionId === owner.sessionId && areServerAccountScopesEqual(address.scope, owner.scope))) {
+        next.push({ scope: owner.scope, actionId: 'session.work.get', sessionId: owner.sessionId });
+    }
+    for (const owner of inboxOwners) if (!next.some(address => address.actionId === 'inbox.get'
+        && areServerAccountScopesEqual(address.scope, owner.scope))) next.push({ scope: owner.scope, actionId: 'inbox.get' });
+    if (next.length === mountedReadAddresses.length && next.every((address, index) => {
+        const previous = mountedReadAddresses[index];
+        return previous?.actionId === address.actionId && previous.sessionId === address.sessionId
+            && areServerAccountScopesEqual(previous.scope, address.scope);
+    })) return;
+    mountedReadAddresses = next;
+    for (const listener of addressListeners) listener();
+}
+export const getMountedWorkReadAddresses = (): readonly MountedReadAddress[] => mountedReadAddresses;
+export function subscribeMountedWorkReadOwners(listener: () => void): () => void {
+    addressListeners.add(listener);
+    return () => { addressListeners.delete(listener); };
+}
 export function registerMountedWorkReadOwner(owner: WorkReadOwner): () => void {
     workOwners.add(owner);
-    return () => { workOwners.delete(owner); };
+    publishMountedReadAddresses();
+    return () => { workOwners.delete(owner); publishMountedReadAddresses(); };
 }
 export function registerMountedInboxReadOwner(owner: InboxReadOwner): () => void {
     inboxOwners.add(owner);
-    return () => { inboxOwners.delete(owner); };
+    publishMountedReadAddresses();
+    return () => { inboxOwners.delete(owner); publishMountedReadAddresses(); };
 }
 
 function workItem(item: WorkItem) {
@@ -122,6 +148,7 @@ export const invokeMountedWorkRead: NonNullable<ActionExecutorDeps['appShellActi
     const result = AppShellActionOutputSchemas[actionId].parse({ status: 'ready', groups,
         approvalIds: model.openApprovals.map(artifact => artifact.id),
         usageNoticeIds: model.openUsageNotices.map(entry => entry.artifact.id),
+        accountNoticeIds: model.openAccountNotices.map(entry => entry.artifact.id),
         friendRequestIds: model.friendRequests.map(request => request.id),
         automationRunIds: model.automationAttentionItems.map(item => item.run.id),
         readySessions,

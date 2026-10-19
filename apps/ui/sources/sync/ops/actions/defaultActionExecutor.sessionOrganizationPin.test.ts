@@ -1,5 +1,8 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { AccountSettingsV2GetResponseSchema, CurrentCursorResponseSchema, FeaturesResponseSchema } from '@happier-dev/protocol';
 import { SetSessionPinRequestSchema } from '@happier-dev/protocol/sessions/organization/mutations';
 

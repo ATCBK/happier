@@ -1,4 +1,5 @@
 export {
+    resolvePluginExecutionOriginReasonDetail,
     resolvePluginSurfaceStatePresentation,
     resolveReasonCopy,
 } from './resolveReasonCopy';

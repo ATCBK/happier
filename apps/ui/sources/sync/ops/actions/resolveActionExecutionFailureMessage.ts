@@ -1,4 +1,7 @@
+import { isActionTurnedOffErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+
 import { t } from '@/text';
+import { getSessionInputFailureLabelKey } from '@/components/sessions/pending/pendingMessageVisualState';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
     return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
@@ -27,9 +30,12 @@ function readFailureMessage(value: unknown): string | null {
     const code = record.errorCode ?? record.code;
     if (code === 'credential_scope_denied') return t('errors.permissionDenied');
     if (code === 'server_unreachable' || code === 'home_unreachable') return t('settingsPlugins.targetSelection.unreachableThisHome');
+    if (isActionTurnedOffErrorCode(code)) return t('actionConfirmations.turnedOffMessage');
     if (code === 'outcome_unknown' || code === 'approval_execution_outcome_unknown') return t('entityDragDrop.preview.unknownDetail');
     const widgetRefusal = readWidgetRefusalMessage(code);
     if (widgetRefusal) return widgetRefusal;
+    const sessionInputLabel = getSessionInputFailureLabelKey({ code });
+    if (sessionInputLabel) return t(sessionInputLabel);
     const error = typeof record.error === 'string' ? record.error.trim() : '';
     if (error.length > 0) return error;
     const errorMessage = typeof record.errorMessage === 'string' ? record.errorMessage.trim() : '';

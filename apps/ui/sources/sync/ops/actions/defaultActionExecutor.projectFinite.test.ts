@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { ProjectCommandActionOutputV1Schema } from '@happier-dev/protocol/actions/actionCompletion';
@@ -6,7 +7,6 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ProjectDefinitionInspectOutputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import { readProjectManifestDocument } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
 import { createDefaultWorkspaceExecutionSettingsV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
-import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -29,6 +29,7 @@ import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { encodeTerminalStreamBytes } from '@happier-dev/protocol/terminal/stream';
 import type { SessionDraftRecordV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { userRequestLeaseOwner } from '@/sync/runtime/connectivity/userRequestLease';
 
 // Component probes retain the real controller/Actions; only native rendering is substituted.
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -55,17 +56,24 @@ vi.mock('@react-navigation/native', async () => {
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 const calls: Array<{ serverUrl: string | undefined; token: unknown; request: SocketRpcRequestPayload }> = [];
+const cancellations: unknown[] = [];
 let response: unknown;
 let consumeAcknowledgement: (() => void) | undefined;
 let rejectOpenJson = false;
 let restoreHttpReplyDecoder: (() => void) | undefined;
 const rpcResponses = new Map<string, unknown>();
+let workerStatusReply: (() => Promise<unknown>) | undefined;
 const configureRelay: NonNullable<Parameters<typeof installDisconnectedServerSocketBoundary>[0]> = (socket, serverUrl) => {
     socket.connected = true;
+    socket.emit = vi.fn<typeof socket.emit>((event, ...args) => {
+        if (event === SOCKET_RPC_EVENTS.CANCEL) cancellations.push(args[0]);
+        return socket;
+    });
     socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, request: SocketRpcRequestPayload) => {
         if (event !== SOCKET_RPC_EVENTS.CALL) throw new Error(`Unexpected relay event: ${event}`);
         calls.push({ serverUrl, token: socket.auth && typeof socket.auth === 'object' ? Reflect.get(socket.auth, 'token') : undefined, request });
-        return { ok: true, result: rpcResponses.get(request.method) ?? response };
+        return { ok: true, result: request.method === 'selected-worker:projects.worker.status' && workerStatusReply
+            ? await workerStatusReply() : rpcResponses.get(request.method) ?? response };
     });
 };
 installDisconnectedServerSocketBoundary(configureRelay);
@@ -144,8 +152,8 @@ function answerExplicitScriptWorkerPlacement(): void {
 beforeEach(async () => {
     clipboard.write.mockClear();
     installDisconnectedServerSocketBoundary(configureRelay);
-    await homes.reset(); await loadSyncSingletonForTests(); calls.length = 0; rpcResponses.clear(); consumeAcknowledgement = undefined;
-    rejectOpenJson = false;
+    await homes.reset(); await loadSyncSingletonForTests(); calls.length = 0; cancellations.length = 0; rpcResponses.clear(); consumeAcknowledgement = undefined;
+    rejectOpenJson = false; workerStatusReply = undefined;
     foreignDisclosure.mockReset().mockResolvedValue(true);
     requesterHomeId = await homes.addHome({ name: 'Finite requester', serverUrl, serverIdentityId: 'srv_finite_requester',
         accountId: 'requester', currentAccount: true, active: false, machinePoolsEnabled: true });
@@ -173,6 +181,74 @@ beforeEach(async () => {
 afterEach(async () => { restoreHttpReplyDecoder?.(); restoreHttpReplyDecoder = undefined; await homes.reset(); });
 
 describe('Project finite delivery through the default UI Action host', () => {
+    it.each(['caller', 'account'] as const)('ends an issued worker status read when its %s retires on an inactive Home', async retirement => {
+        answerExplicitScriptWorkerPlacement();
+        let release!: (reply: unknown) => void;
+        let issued = false;
+        const delayedStatus = new Promise<unknown>(resolve => { release = resolve; });
+        workerStatusReply = () => { issued = true; return delayedStatus; };
+        const controller = new AbortController();
+        let settled: unknown;
+        const pending = createDefaultActionExecutor().execute('projects.worker.status', {
+            workspace: { serverId, refId: 'source-workspace' },
+            destination: { kind: 'machine', machineId: 'selected-worker' }, purpose: 'finite',
+        }, { serverId, surface: 'ui', authority: 'present_user', signal: controller.signal })
+            .then(value => { settled = value; }, error => { settled = error; });
+        try {
+            await vi.waitFor(() => expect(issued).toBe(true));
+            expect(userRequestLeaseOwner.hasActiveLease()).toBe(true);
+            const request = calls.find(call => call.request.method === 'selected-worker:projects.worker.status')!.request;
+            if (retirement === 'caller') controller.abort();
+            else await homes.switchAccount(requesterHomeId, 'replacement-requester', { currentAccount: true });
+            await vi.waitFor(() => expect(settled, 'issued RPC must settle when invoking custody retires').toBeDefined());
+            expect(settled).toMatchObject(retirement === 'caller'
+                ? { name: 'AbortError' } : { ok: false, errorCode: 'action_account_scope_changed' });
+            expect(cancellations).toEqual([{ requestId: request.requestId }]);
+            expect(userRequestLeaseOwner.hasActiveLease()).toBe(false);
+        } finally {
+            release(rpcResponses.get('selected-worker:projects.worker.status'));
+            await pending;
+        }
+    });
+
+    it('keeps Script Run admission alive beyond the scoped worker status response cutoff', async () => {
+        answerExplicitScriptWorkerPlacement();
+        const workspace = { serverId, workspaceId: 'source-workspace', machineId: 'source', rootPath: '/repo' };
+        const details = { kind: 'pendingApproval', code: 'project_setup_effect_changed', reviewedEffectDigest: 'current-effect', reviewedEffect: { commands: ['setup'] } };
+        response = { ok: false, errorCode: 'project_setup_effect_changed', error: 'project_setup_effect_changed', details };
+        let release!: (reply: unknown) => void;
+        let issued = false;
+        const delayedStatus = new Promise<unknown>(resolve => { release = resolve; });
+        workerStatusReply = () => { issued = true; return delayedStatus; };
+        const executor = createDefaultActionExecutor();
+        const client = createProjectManifestActionClient({ workspace, expectedAccountId: 'requester',
+            execute: (id, value, context) => executor.execute(id, value, { ...context,
+                actionRequestId: 'delayed-status-script', presentUserConfirmation: { actionId: 'projects.script.run' } }),
+        });
+        vi.useFakeTimers();
+        let settled: unknown;
+        const pending = client.runScript({ kind: 'named', name: 'check' }, {
+            kind: 'workers', destination: { kind: 'machine', machineId: 'selected-worker' },
+        }).then(value => { settled = value; }, error => { settled = error; });
+        try {
+            await vi.waitFor(() => expect(issued).toBe(true));
+            await vi.advanceTimersByTimeAsync(30_001);
+            expect(settled).toBeUndefined();
+            expect(ownFiniteRelayRequests('projects.script.run')).toEqual([]);
+            release(rpcResponses.get('selected-worker:projects.worker.status'));
+            await pending;
+            expect(settled).toMatchObject({ code: 'project_setup_effect_changed', consent: details });
+            expect(ownFiniteRelayRequests('projects.script.run')[0]?.input).toMatchObject({
+                requestId: 'delayed-status-script', target: { kind: 'machine', machineId: 'selected-worker' },
+            });
+            expect(cancellations).toEqual([]);
+            expect(userRequestLeaseOwner.hasActiveLease()).toBe(false);
+        } finally {
+            release(rpcResponses.get('selected-worker:projects.worker.status'));
+            vi.useRealTimers();
+            await pending;
+        }
+    });
     it('confirms project setup with the catalog human summary, never the agent specification', async () => {
         homes.answer(requesterHomeId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
             actionsSettingsV1: { v: 1 },
@@ -188,7 +264,7 @@ describe('Project finite delivery through the default UI Action host', () => {
         expect(result).toMatchObject({ ok: false, errorCode: 'approval_canceled' });
         expect(foreignDisclosure).toHaveBeenCalledOnce();
         const [title, body] = foreignDisclosure.mock.calls[0] ?? [];
-        expect(title).toBe(spec.title);
+        expect(title).toBe(`${spec.title} · Finite requester`);
         expect(body).toBe(spec.inputHints?.description);
         expect(body).not.toBe(spec.description);
         expect(body).not.toContain(actionId);
@@ -361,6 +437,56 @@ describe('Project finite delivery through the default UI Action host', () => {
         } finally { await act(async () => screen.unmount()); disposeExecutor(); }
     });
 
+    it.each(['page', 'widget'] as const)('retains the picked worker through an unchanged inspection refresh before %s Run', async presentation => withPopoverWebGlobals(async () => {
+        const { reportPopoverContentLayout } = await import('@/dev/testkit/harness/popoverHarness');
+        const { ProjectScriptsBody, ProjectScriptsContent } = await import('@/components/projects/projectSetup/ProjectScriptsBody');
+        const { WorkerDestinationPicker } = await import('@/components/projects/workers/WorkerDestinationPicker');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        const disposeExecutor = await installRealActionExecutorModuleLoader();
+        const workspace = { serverId, workspaceId: 'source-workspace', machineId: 'source', rootPath: '/repo' };
+        answerExplicitScriptWorkerPlacement();
+        const previousInventory = storage.getState().machineListByServerId;
+        const previousInventoryStatus = storage.getState().machineListStatusByServerId;
+        const worker = createMachineFixture({ id: 'selected-worker', activeAt: Date.now() });
+        storage.setState({ machineListByServerId: { ...previousInventory, [serverId]: [worker] },
+            machineListStatusByServerId: { ...previousInventoryStatus, [serverId]: 'idle' } });
+        homes.answer(requesterHomeId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'projects.script.run': ['ui'] } },
+        } } } });
+        response = { kind: 'pendingApproval', code: 'project_setup_consent_required', reviewedEffectDigest: 'exact-current-effect' };
+        const exact = { kind: 'workers', destination: { kind: 'machine', machineId: 'selected-worker' } } as const;
+        const screen = await renderScreen(React.createElement(ProjectScriptsBody, { workspace, presentation, testID: 'scripts' }), {
+            // Native/browser layout is absent in Test Renderer; the picker and activation remain real.
+            createNodeMock: () => ({ getBoundingClientRect: () => ({ left: 20, top: 20, width: 300, height: 30 }) }),
+        });
+        try {
+            await vi.waitFor(() => expect(screen.findByTestId('scripts.script:check.run.target')).not.toBeNull());
+            await screen.pressByTestIdAsync('scripts.script:check.run.target');
+            await act(async () => { reportPopoverContentLayout(screen, { width: 400, height: 500 }); });
+            const workerOption = 'scripts.script:check.run.target.list-option:selected-worker';
+            await vi.waitFor(() => expect(screen.findByTestId(workerOption)?.props.disabled).toBe(false));
+            await screen.pressByTestIdAsync(workerOption);
+            expect(screen.findAllByType(WorkerDestinationPicker)[0]?.props.selected).toEqual(exact);
+            expect(ownFiniteRelayRequests('projects.script.run')).toEqual([]);
+            await act(async () => { screen.findAllByType(ProjectScriptsContent)[0]?.props.onRetry(); });
+            expect(screen.findAllByType(WorkerDestinationPicker)[0]?.props.selected).toEqual(exact);
+            const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+            await act(async () => { await upsertServerProfile({ name: 'Refreshed requester', serverUrl }); });
+            await vi.waitFor(() => expect(screen.findByTestId('scripts.script:check.run.target')).not.toBeNull());
+            await screen.pressByTestIdAsync('scripts.script:check.run.target');
+            expect(screen.findAllByType(WorkerDestinationPicker)[0]?.props.selected).toEqual(exact);
+            await act(async () => { screen.findAllByType(WorkerDestinationPicker)[0]?.props.onRequestClose(); });
+            await screen.pressByTestIdAsync('scripts.script:check.run');
+            await vi.waitFor(() => expect(ownFiniteRelayRequests('projects.script.run')).toHaveLength(1));
+            expect(ownFiniteRelayRequests('projects.script.run')[0]?.input).toMatchObject({
+                target: { kind: 'machine', machineId: 'selected-worker' },
+                input: { workspace, selection: { kind: 'named', name: 'check' }, choice: exact },
+            });
+        } finally { await screen.unmount(); disposeExecutor();
+            storage.setState({ machineListByServerId: previousInventory, machineListStatusByServerId: previousInventoryStatus }); }
+    }));
+
     it('retains an Ask-each-time Run intent, cancels without dispatch, and resumes with a chosen exact Machine', async () => withPopoverWebGlobals(async () => {
         const { useProjectScriptsController } = await import('@/components/projects/projectSetup/useProjectScriptsController');
         const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
@@ -453,7 +579,9 @@ describe('Project finite delivery through the default UI Action host', () => {
         } finally { await controller.unmount(); disposeExecutor(); await deciding; }
     });
 
-    it.each(['projects.prepare', 'projects.script.run', 'projects.compute.exec', 'action.operations.cancel'] as const)('routes unsigned UI %s approval to its exact Machine with the captured Home', async actionId => {
+    it.each((['projects.prepare', 'projects.script.run', 'projects.compute.exec', 'action.operations.cancel'] as const).flatMap(actionId =>
+        (actionId === 'projects.script.run' || actionId === 'projects.compute.exec' ? ['source', 'selected-worker'] : ['source'])
+            .map(machineId => ({ actionId, machineId }))))('routes unsigned UI $actionId approval to $machineId with the captured Home', async ({ actionId, machineId }) => {
         const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
         const { captureLazyActionAccountContext } = await import('./actionAccountContext');
         const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
@@ -478,10 +606,13 @@ describe('Project finite delivery through the default UI Action host', () => {
         } });
         try {
             const workspace = { serverId, workspaceId: 'source-workspace', machineId: 'source', rootPath: '/repo' };
+            if (machineId === 'selected-worker') answerExplicitScriptWorkerPlacement();
+            const choice = machineId === 'source' ? { kind: 'primary' as const }
+                : { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId } };
             const input = actionId === 'projects.prepare' ? { workspace,
                 phase: 'setup', expectedEffectDigest: 'reviewed-setup-effect', consentScope: 'thisTime' }
-                : actionId === 'projects.script.run' ? { workspace, selection: { kind: 'named', name: 'check' }, choice: { kind: 'primary' } }
-                : actionId === 'projects.compute.exec' ? { workspace, executable: 'echo', argv: ['checked'], cwd: '.', choice: { kind: 'primary' } }
+                : actionId === 'projects.script.run' ? { workspace, selection: { kind: 'named', name: 'check' }, choice }
+                : actionId === 'projects.compute.exec' ? { workspace, executable: 'echo', argv: ['checked'], cwd: '.', choice }
                 : { serverId, machineId: 'source', operationId: 'held-script' };
             const result = await createDefaultActionExecutor().execute(actionId, input, { surface: 'ui', serverId, authority: 'present_user' });
             if (!result.ok) throw new Error(result.errorCode);
@@ -492,11 +623,12 @@ describe('Project finite delivery through the default UI Action host', () => {
             const prepareAdmissions = ownFiniteRelayRequests('projects.prepare').length;
             expect(await decideApprovalAsInbox(serverId, created.artifactId, 'approve'))
                 .toMatchObject({ ok: false, errorCode: 'fixture_machine_refusal' });
-            expect(proposal.executionOriginV1).toMatchObject({ serverIdentityId: account.serverIdentityId, machineId: 'source' });
+            expect(proposal.actionArgs).toEqual(input);
+            expect(proposal.executionOriginV1).toMatchObject({ serverIdentityId: account.serverIdentityId, machineId });
             const requests = homes.requestsFor('/v1/actions/approval.request.decide');
             expect(requests).toHaveLength(1);
             expect(requests[0].serverUrl).toBe(serverUrl);
-            expect(ExternalActionRequestEnvelopeV1Schema.parse(requests[0].input)).toMatchObject({ target: { kind: 'machine', machineId: 'source' },
+            expect(ExternalActionRequestEnvelopeV1Schema.parse(requests[0].input)).toMatchObject({ target: { kind: 'machine', machineId },
                 input: { artifactId: created.artifactId, serverIdentityId: account.serverIdentityId, originServerId: proposal.executionOriginV1.serverId } });
             expect(getActionSpec('approval.request.decide').inputSchema.safeParse(ExternalActionRequestEnvelopeV1Schema.parse(requests[0].input).input).success).toBe(true);
             expect(ownFiniteRelayRequests('projects.prepare')).toHaveLength(prepareAdmissions);

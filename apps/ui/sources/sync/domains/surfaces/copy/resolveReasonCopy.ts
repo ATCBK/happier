@@ -174,6 +174,9 @@ const LOCAL_SERVICE_LAUNCHER_KEYS = {
     preview_registration_unavailable: 'localServices.launcher.unavailableReason.previewRegistrationUnavailable',
     browser_target_unavailable: 'localServices.launcher.unavailableReason.browserTargetUnavailable',
     starting: 'localServices.launcher.unavailableReason.starting',
+    stopping: 'localServices.rowStatus.stopping',
+    stopped: 'localServices.rowStatus.stopped',
+    failed: 'localServices.rowStatus.failed',
     stale: 'localServices.launcher.unavailableReason.stale',
     unavailable: 'localServices.launcher.unavailableReason.unavailable',
     // Unsettled native custody (CA2-02): not Running, and Stop is the cleanup.
@@ -331,6 +334,9 @@ const PLUGIN_RUNTIME_KEYS = {
     targeted_contributions_error: 'pluginRuntime.transportUnavailable',
     artifact_source_unavailable: 'pluginRuntime.sourceUnavailable',
     artifact_not_current: 'pluginRuntime.viewNotCurrent',
+    plugin_generation_stale: 'pluginRuntime.viewNotCurrent',
+    plugin_occurrence_stale: 'pluginRuntime.viewNotCurrent',
+    plugin_action_generation_retired: 'pluginRuntime.viewNotCurrent',
     artifact_lease_revoked: 'pluginRuntime.viewNotCurrent',
     source_unavailable: 'pluginRuntime.sourceUnavailable',
     response_invalid: 'pluginRuntime.responseInvalid',
@@ -566,11 +572,16 @@ function resolvePluginSurfaceRecoveryAction(
 }
 
 type LocalServiceLauncherMessageKey =
+    | 'localServices.rowStatus.stopping'
+    | 'localServices.rowStatus.stopped'
+    | 'localServices.rowStatus.failed'
     | 'localServices.launcher.unavailableReason.launchUnavailable'
     | 'localServices.launcher.unavailableReason.previewRegistrationUnavailable'
     | 'localServices.launcher.unavailableReason.browserTargetUnavailable'
     | 'localServices.launcher.unavailableReason.starting'
     | 'localServices.launcher.unavailableReason.stale'
+    | 'localServices.launcher.unavailableReason.nativeStateUnknown'
+    | 'localServices.launcher.unavailableReason.nativeCleanupUnconfirmed'
     | 'localServices.launcher.unavailableReason.unavailable';
 
 type LocalServiceActionMessageKey =
@@ -688,6 +699,7 @@ export function resolveReasonCopy(input: Readonly<{
     kind: ReasonCopyKind;
     prerequisite?: LocalServiceNativePrerequisiteV1;
     establishmentFailure?: LocalServiceEstablishmentFailureV1;
+    machineName?: string;
 }>): ResolvedReasonCopy {
     const rawCode = input.reasonCode ?? null;
     const title = resolveTitle(input.kind);
@@ -704,7 +716,9 @@ export function resolveReasonCopy(input: Readonly<{
     const prerequisite = input.kind === 'localServiceAction' && rawCode === 'native_tool_unavailable' ? input.prerequisite : undefined;
     const failure = input.kind === 'localServiceAction' && rawCode === 'plugin_managed_service_establishment_failed'
         ? input.establishmentFailure : undefined;
-    const body = prerequisite ? t(`localServices.actions.failure.docker.${prerequisite.cause}`, { machine: prerequisite.machineName })
+    const body = input.kind === 'localServiceLauncher' && rawCode === 'project_service_binding_unavailable' && input.machineName
+        ? t('localServices.launcher.unavailableReason.bindingUnavailableOnMachine', { machine: input.machineName })
+        : prerequisite ? t(`localServices.actions.failure.docker.${prerequisite.cause}`, { machine: prerequisite.machineName })
         : failure?.cause === 'port_in_use' && failure.port !== undefined ? t(failure.sameProject
             ? 'localServices.actions.failure.portInUseSameProject' : 'localServices.actions.failure.portInUse', { port: failure.port })
         : failure?.exitCode !== undefined ? t('localServices.actions.failure.processExit', { code: String(failure.exitCode) })

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, readWidgetSurfaceArtifactV1, projectOverviewDefaultPlacementsV1, flattenWidgetLayoutWidgetsV1, WidgetAreaLayoutV1Schema, WIDGET_SURFACE_ARTIFACT_KIND_V1, type WidgetAreaLayoutV1 } from '@happier-dev/protocol/widgets';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
