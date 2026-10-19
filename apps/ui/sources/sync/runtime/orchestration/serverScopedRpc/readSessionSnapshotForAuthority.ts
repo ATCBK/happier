@@ -28,6 +28,8 @@ export async function readSessionSnapshotForAuthority(params: Readonly<{
     authority: ServerAccountRequestAuthority;
     sessionId: string;
     prefetched?: SessionByIdPrefetchedRead;
+    /** Interval consumers need an admitted projection, including a successful empty one. */
+    requireTurns?: boolean;
     isCurrent?: () => boolean;
     accountCurrentnessSource?: ReturnType<typeof createOperationAccountCurrentnessSource>;
 }>): Promise<Readonly<{ session: SessionSnapshot; callerDataKeyEnvelope: string | null }>> {
@@ -63,6 +65,11 @@ export async function readSessionSnapshotForAuthority(params: Readonly<{
             result.httpStatus,
         );
     }
+    // Hydration may omit failed optional turns. Required evidence must not turn
+    // that absence into a reusable successful snapshot on either transport.
+    if (params.requireTurns && !projection.session.sessionTurns) {
+        throw new SessionSnapshotReadError('turns_unavailable');
+    }
     return { session: projection.session, callerDataKeyEnvelope: envelopes.get(params.sessionId) ?? null };
 }
 
@@ -74,6 +81,7 @@ type SessionSnapshotResult =
 export async function readSessionSnapshotsForAuthority(params: Readonly<{
     authority: ServerAccountRequestAuthority;
     sessionIds: readonly string[];
+    requireTurns?: boolean;
     isCurrent?: () => boolean;
     signal?: AbortSignal;
     accountCurrentnessSource?: ReturnType<typeof createOperationAccountCurrentnessSource>;

@@ -12,9 +12,58 @@ import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeature
 import { createOperationAccountCurrentnessSource } from './fetchSessionByIdWithServerScope';
 import { runWithServerRequestAuthorityForServerAccountScope } from './createServerRequestWithServerScope';
 import { readSessionSnapshotForAuthority, readSessionSnapshotsForAuthority } from './readSessionSnapshotForAuthority';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
+
+it.each(['single', 'batch'] as const)('requires admitted turns only for interval demand through %s reads', async transport => {
+    let turnsOutcome: 'failed' | 'invalid' | 'empty' | 'populated' = 'failed';
+    const sessionId = 'retry-turns';
+    const boundary = createSessionReadBatchHttpBoundary(request => {
+        if (request.path === `/v2/sessions/${sessionId}`) return Response.json({ session:
+            createPlainSessionCurrentProjectionRecordFixture({ id: sessionId, seq: 1, updatedAt: 900 }) });
+        if (request.path === `/v1/sessions/${sessionId}/turns`) {
+            if (turnsOutcome === 'failed') return Response.json({ error: 'unavailable' }, { status: 503 });
+            return Response.json({ v: 1, sessionId: turnsOutcome === 'invalid' ? 'wrong-session' : sessionId, updatedAt: 900,
+                turns: turnsOutcome === 'empty' ? [] : [
+                    { turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 700, updatedAt: 900 },
+                ] });
+        }
+        return undefined;
+    });
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://required-turns.test', accountId: 'account-a' }],
+        route: request => boundary.handle(request) });
+    publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    const context = captureUiUsageQueryAccountContext(credentials)!;
+    await runWithServerRequestAuthorityForServerAccountScope({ scope: context.accountLifetime.scope, activeRequest: context.request }, async authority => {
+        const currentness = createOperationAccountCurrentnessSource({ credentials, request: authority.request, serverId: authority.scope.serverId });
+        const read = async (requireTurns: boolean) => {
+            if (transport === 'single') return readSessionSnapshotForAuthority({ authority, sessionId, requireTurns, accountCurrentnessSource: currentness });
+            const result = (await readSessionSnapshotsForAuthority({ authority, sessionIds: [sessionId], requireTurns, accountCurrentnessSource: currentness })).get(sessionId);
+            if (!result?.ok) throw result?.error ?? new Error('Missing batch result');
+            return result.snapshot;
+        };
+        try {
+            // Metadata hydration keeps its optional projection even during a turns failure.
+            const optional = await read(false);
+            expect(optional.session.id).toBe(sessionId);
+            expect(optional.session.sessionTurns).toBeUndefined();
+            await expect(read(true)).rejects.toMatchObject({ errorCode: 'turns_unavailable' });
+            turnsOutcome = 'invalid';
+            await expect(read(true)).rejects.toMatchObject({ errorCode: 'turns_unavailable' });
+            turnsOutcome = 'populated';
+            const recovered = await read(true);
+            expect(projectSessionUsageWorkEvidence(recovered.session).facts).toMatchObject([
+                { evidenceId: 'turn', kind: 'busy', startMs: 100, endMs: 700 },
+            ]);
+            turnsOutcome = 'empty';
+            expect((await read(true)).session.sessionTurns?.turns).toEqual([]);
+        } finally { currentness.dispose(); }
+    });
+});
 
 it.each([false, true])('opens identical single and batch Usage evidence with sharing enabled=%s, quarantining a denied sibling', async sharingEnabled => {
     const ids = ['first', 'second'];

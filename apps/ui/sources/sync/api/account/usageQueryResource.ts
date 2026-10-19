@@ -633,7 +633,7 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
             ]);
             await runWithServerRequestAuthorityForServerAccountScope({ scope: context.accountLifetime.scope, activeRequest: context.request }, async authority => {
                 const snapshots = await readSessionSnapshotsForAuthority({ authority, sessionIds: requests.map(request => request.sessionId),
-                    accountCurrentnessSource, isCurrent: context.accountLifetime.isCurrent, signal: ownerSignal });
+                    requireTurns: true, accountCurrentnessSource, isCurrent: context.accountLifetime.isCurrent, signal: ownerSignal });
                 for (const request of requests) {
                     try {
                         request.assertCurrent();

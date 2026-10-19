@@ -135,6 +135,62 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
 }
 
 describe('usage query captured Resource adapter', () => {
+  it.each(['recovery', 'empty-success'] as const)('admits only successfully acquired interval evidence: %s', async scenario => {
+    const ids = ['healthy-turns', 'retry-turns'];
+    let failedTurns = scenario === 'recovery';
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      const detail = /^\/v2\/sessions\/(healthy-turns|retry-turns)$/.exec(request.path);
+      if (detail) return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: detail[1]!,
+        createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1 }) });
+      const turn = /^\/v1\/sessions\/(healthy-turns|retry-turns)\/turns$/.exec(request.path);
+      if (turn) {
+        const id = turn[1]!;
+        if (id === 'retry-turns' && failedTurns) return Response.json({ error: 'unavailable' }, { status: 503 });
+        return Response.json({ v: 1, sessionId: id, updatedAt: 900,
+          turns: id === 'retry-turns' && scenario === 'empty-success' ? [] : [
+            { turnId: `${id}-turn`, agentId: 'codex', status: 'completed', startedAt: 100,
+              terminalAt: id === 'healthy-turns' ? 400 : 700, updatedAt: 900 },
+          ] });
+      }
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: Object.fromEntries(ids.map(id => [id,
+      createSessionFixture({ id, seq: 1, serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' }),
+    ])) });
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false, includeTranscriptEvidence: false });
+    const entry = getUsageQueryResourceStore(captured)
+      .getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const observed: ReturnType<typeof decodeUsageQueryResource>['results'][number][] = [];
+    const slice = () => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+    const release = entry.subscribe(() => {
+      if (entry.getSnapshot().value) observed.push(slice());
+    }, false);
+    try {
+      await entry.refresh();
+      expect(slice().pending).toBe(false);
+      if (scenario === 'recovery') {
+        expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'partial' });
+        expect(slice().howYouWork?.intervals).toBeNull();
+        expect(observed.some(row => row.sources.some(source => source.source === 'how_you_work:sessions' && source.status === 'available'))).toBe(false);
+        expect(observed.every(row => row.howYouWork?.intervals == null)).toBe(true);
+      } else {
+        expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'available' });
+        expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(300);
+      }
+      const attemptsBeforeRetry = sessionRequests().filter(request => request.path === '/v1/sessions/retry-turns/turns').length;
+      failedTurns = false;
+      // No Session/store marker changes: Retry must reacquire only failed evidence.
+      await entry.refresh();
+      expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(scenario === 'recovery' ? 900 : 300);
+      expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'available' });
+      expect(sessionRequests().filter(request => request.path === '/v1/sessions/healthy-turns/turns')).toHaveLength(1);
+      expect(sessionRequests().filter(request => request.path === '/v1/sessions/retry-turns/turns'))
+        .toHaveLength(attemptsBeforeRetry + (scenario === 'recovery' ? 1 : 0));
+      expect(home!.requests.filter(request => /^\/v[12]\/sessions\/(healthy-turns|retry-turns)(\/|$)/.test(request.path))).toEqual([]);
+    } finally { release(); }
+  });
+
   it('reads the same witnessed intervals through the Session batch owner without single-Session fan-out', async () => {
     const ids = ['batch-first', 'batch-second'];
     const captured = await context(request => {
