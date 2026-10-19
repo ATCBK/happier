@@ -12,7 +12,9 @@ import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metada
 
 export async function resolveProbeBackendContext(
   params?: Record<string, unknown>,
-  options: Readonly<{ requireCredentials?: boolean; catalogEntry?: AgentCatalogEntry | null; signal?: AbortSignal }> = {},
+  options: Readonly<{ requireCredentials?: boolean; catalogEntry?: AgentCatalogEntry | null; signal?: AbortSignal;
+    accountContext?: Readonly<{ credentials: Awaited<ReturnType<typeof readStoredCredentials>> | null;
+      accountSettings: Readonly<Record<string, unknown>> | null }> }> = {},
 ): Promise<{
   backendTarget: BackendTargetRefV1 | undefined;
   runtimeDescriptorV1?: RuntimeDescriptorV1;
@@ -43,6 +45,11 @@ export async function resolveProbeBackendContext(
   const pluginSettings = await catalogEntry?.resolveProbePluginSettings?.({ signal: options.signal });
   options.signal?.throwIfAborted();
   Object.assign(runtimeContext, pluginSettings == null ? {} : { pluginSettings });
+  // Host-owned retained Runs already carry the requester Account snapshot.
+  // Never replace it with the daemon's stored foreground credentials/settings.
+  if (options.accountContext) return { ...runtimeContext, backendTarget,
+    credentials: options.accountContext.credentials,
+    accountSettings: options.accountContext.accountSettings ? { ...options.accountContext.accountSettings } : null };
   const needsAccountSettingsForProbes =
     agentId && (
       catalogEntry?.needsAccountSettingsForProbes === true

@@ -192,6 +192,7 @@ describe('capabilities.invoke connected-service preflight', () => {
     // The real declared-tool launch clears PATH; the simulated OS executable
     // must name this test runtime directly, as native catalog fixtures do.
     writeFileSync(fixture, fixtureSource.replace(/^#![^\n]*/, `#!${process.execPath}`)
+      .replace("id: 'gpt-5.4'", "id: existsSync(join(process.env.CODEX_HOME || '', 'auth.json')) ? 'gpt-6.1-sol' : 'unselected-model'")
       .replace("existsSync, writeFileSync", "existsSync, mkdirSync, writeFileSync")
       .replace("    captureMaterializedEnvironment();", `    captureMaterializedEnvironment();
     mkdirSync(join(process.env.CODEX_HOME, 'sessions'), { recursive: true });
@@ -531,8 +532,50 @@ describe('capabilities.invoke connected-service preflight', () => {
     }
     expect(response).toMatchObject({
       ok: true,
-      result: { source: 'dynamic', availableModels: expect.arrayContaining([expect.objectContaining({ id: 'gpt-5.4' })]) },
+      result: { source: 'dynamic', availableModels: expect.arrayContaining([expect.objectContaining({ id: 'gpt-6.1-sol' })]) },
     });
+    phase = 'selected-account structured Run admission';
+    const { assertExecutionRunStructuredOutputModelAllowed } = await import('@/agent/runtime/bridges/executionRun/structuredOutputAdmission');
+    const { createRunnerExecutionRunSnapshots } = await import('@/daemon/agentRuntime/runnerExecutionRunSnapshots');
+    const { AgentRuntimeDaemonServiceRequestV1Schema, AgentRuntimeDaemonServiceResponseV1Schema } = await import('@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol');
+    const connectedServices = { v: 2, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'leeroy' },
+    } } as const;
+    const retainedAgent = lease.registry.agentRuntimesByAgentId.get('codex')?.sessionRunnerFactoryBinding;
+    if (!retainedAgent) throw new Error('Missing selected Codex runtime');
+    const context = { sessionId: 'selected-codex-review', runner: { pid: 123, processStartTimeMs: 1,
+      processCommandHash: 'a'.repeat(64), snapshotIdentity: 'selected-codex-review' }, retainedAgent,
+      invocationContext: { cwd: tempDir, environment: {}, providerBindingActive: false },
+      trackedSession: { pid: 123, startedBy: 'daemon' as const, happySessionId: 'selected-codex-review' },
+      isCurrent: async () => true };
+    const snapshots = createRunnerExecutionRunSnapshots({ machineId: 'selected-machine', controller: pluginReloadController,
+      withNativeModelAccount: async (_context, read) => read({ accountSettings: {}, promptCredentials: credentials,
+        preflightDependencies: { createApiClient: async () => api, activatePurposeBindings: purposeRuntime.activatePurposeBindings } }),
+    });
+    const dispatch = async (operation: unknown, snapshotId?: string) => AgentRuntimeDaemonServiceResponseV1Schema.parse(
+      await snapshots.dispatch(AgentRuntimeDaemonServiceRequestV1Schema.parse({ v: 1,
+        context: { token: 'A'.repeat(43), sessionId: context.sessionId,
+          ...(snapshotId ? { executionRunSnapshotId: snapshotId } : {}) }, operation }), context));
+    const backendTarget = { kind: 'backend', backendId: 'codex' };
+    const acquired = await dispatch({ kind: 'execution_run.snapshot.acquire_v1', backendTarget });
+    if (!acquired.ok || acquired.result.kind !== 'execution_run.snapshot') throw new Error('Missing selected Codex snapshot');
+    const snapshotId = acquired.result.snapshotId;
+    const nativeRequest = { backendTarget: { kind: 'builtInAgent' as const, agentId: 'codex' },
+      modelId: 'gpt-6.1-sol', cwd: tempDir, connectedServices,
+      modelSelection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-6.1-sol' } };
+    // The retained Session requester must remain authoritative even when the
+    // daemon's foreground credential store has no usable Account.
+    const persistence = await import('@/persistence');
+    const foregroundCredentials = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(null);
+    try {
+      await expect(assertExecutionRunStructuredOutputModelAllowed({ ...nativeRequest,
+        readNativeOfferedModel: async request => {
+          const result = await dispatch({ ...request, kind: 'execution_run.native_offered_model.read_v1', backendTarget }, snapshotId);
+          if (!result.ok || result.result.kind !== 'execution_run.native_offered_model') throw new Error('Missing selected native model');
+          return result.result.model ?? undefined;
+        },
+      })).resolves.toBeUndefined();
+    } finally { foregroundCredentials.mockRestore(); await snapshots.dispose(); }
     expect(credentialReads).not.toHaveLength(0);
     const captured = JSON.parse(readFileSync(captureFile, 'utf8')) as Record<string, unknown>;
     expect(captured.CODEX_HOME).toEqual(expect.any(String));

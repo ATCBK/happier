@@ -37,6 +37,8 @@ export type ExecutionRunNativeOfferedModelReader = (request: Readonly<{
   modelId: string;
   cwd: string;
   runtimeDescriptorV1?: PortableRuntimeDescriptorV1;
+  connectedServices?: ConnectedServiceBindingsV2 | null;
+  secretReferenceOverlay?: SecretReferenceOverlayV1;
 }>) => Promise<AgentProbeModel | undefined>;
 
 export type ExecutionRunManagerStartParams = Readonly<{

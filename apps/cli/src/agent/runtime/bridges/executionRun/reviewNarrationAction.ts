@@ -215,6 +215,8 @@ export async function applyReviewWalkthroughAction(host: Host): Promise<Executio
         cwd: first.launch?.cwd ?? host.cwd,
         accountSettings: first.runtimeSettings?.accountSettings,
         runtimeDescriptorV1: first.launch?.runtimeDescriptorV1,
+        connectedServices: first.launch?.connectedServicesSelection,
+        secretReferenceOverlay: first.launch?.secretReferenceOverlay,
         readNativeOfferedModel: host.readNativeOfferedModel,
       });
     } catch (error) {

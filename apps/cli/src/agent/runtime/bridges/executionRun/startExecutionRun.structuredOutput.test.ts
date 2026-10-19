@@ -7,6 +7,7 @@ import { createTestExecutionRunHostRuntime } from './testkit';
 import { startExecutionRun } from './startExecutionRun';
 import type { ExecutionRunState } from './executionRunTypes';
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
+import { isDeepStrictEqual } from 'node:util';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -20,6 +21,34 @@ describe('structured analysis Run admission', () => {
     vi.stubEnv('HAPPIER_CLAUDE_DYNAMIC_MODEL_PROBE_ENABLED', '0');
   });
   afterEach(() => vi.unstubAllEnvs());
+  it.each(['review', 'scm_diff_summary'] as const)('admits %s using the selected Connected Services catalog', async intent => {
+    const connectedServices = { v: 2, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'connected-account' },
+    } } as const;
+    const runs = new Map<string, ExecutionRunState>();
+    const voiceAgentManager = new VoiceAgentManager({ createRuntime: () => { throw new Error('Unused Voice boundary'); } });
+    try {
+      const reviewer = resolveRoleSelectionV1({ roleId: 'reviewer' });
+      if (!reviewer.ok) throw new Error('Missing canonical Reviewer role');
+      const result = await startExecutionRun({
+        params: { sessionId: 'parent-session', intent, backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+          ...(intent === 'review' ? { resolvedRole: reviewer.selection } : {}),
+          modelId: 'selected-account-model', connectedServices,
+          modelSelection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'selected-account-model' },
+          // Native catalog transport is the boundary: only the selected launch
+          // environment offers this model; the ordinary native catalog does not.
+          readNativeOfferedModel: async request => isDeepStrictEqual(Reflect.get(request, 'connectedServices'), connectedServices)
+            ? { id: request.modelId, name: 'Selected model', capabilities: { structuredOutput: 'supported' } } : undefined,
+          instructions: 'Review the selected scope.', permissionMode: 'read_only', retentionPolicy: 'resumable',
+          runClass: 'long_lived', ioMode: 'request_response' },
+        parentProvider: 'codex', sendAcp: async () => {}, streamedTranscriptSession: null,
+        createRuntime: () => createTestExecutionRunHostRuntime(), getNowMs: () => 1,
+        budgetRegistry: null, runs, controllers: new Map(), enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {},
+        finishRun: async () => {}, executeBoundedRun: async () => {}, send: async () => ({ ok: true }), voiceAgentManager,
+      });
+      expect(runs.get(result.runId)).toMatchObject({ intent, status: 'running' });
+    } finally { await voiceAgentManager.dispose(); }
+  });
   it('refuses a drained start before publishing a Run or constructing its native runtime', async () => {
     const drain = createDaemonAdmissionDrain();
     drain.beginTemporaryDrain();
