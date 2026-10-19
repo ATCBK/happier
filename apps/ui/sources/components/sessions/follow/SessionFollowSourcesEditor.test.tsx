@@ -767,6 +767,49 @@ describe('SessionFollowSourcesEditor', () => {
         await screen.unmount();
     });
 
+    it('lists every source kind as a row that opens the same panel and writes through its exact source ref', async () => {
+        const other = (source: Record<string, string>, extra: Record<string, unknown> = {}) => ({
+            source, destinationSessionId: 'destination-a', policy: { preset: 'important' as const }, deliveryState: 'eligible' as const,
+            sourceAvailability: 'available' as const, hasPendingUpdates: null, relation: 'follower' as const, ...extra,
+        });
+        api.list.mockResolvedValue({ kind: 'ok', value: { sources: [
+            { sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' }, deliveryState: 'eligible', hasPendingUpdates: false },
+            other({ kind: 'discussion', discussionId: 'disc-1' }),
+            other({ kind: 'execution_run', sessionId: 'source-a', runId: 'run-1' }),
+            other({ kind: 'workflow_run', runId: 'wf-1' }, { sourceAvailability: 'unavailable' }),
+        ] } });
+        api.remove.mockResolvedValue({ kind: 'ok', value: { changed: true } });
+        api.set.mockResolvedValue({ kind: 'ok', value: { changed: true } });
+        followState.rows = { 'home-a': {
+            'source-a': createSessionListRenderableSessionFixture({ id: 'source-a', metadata: { name: 'Alpha source', path: '/repo/alpha' }, encryptionMode: 'plain' }),
+        } };
+        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })} serverId="home-a" destinationMachineId={null}
+        />);
+        for (const key of ['source-a', 'discussion:disc-1', 'execution_run:source-a:run-1', 'workflow_run:wf-1']) {
+            await vi.waitFor(() => expect(findSourceRow(screen, key)).not.toBeNull());
+        }
+        // Each kind is named by its own owner, and a source the receiver can no longer read says so instead of a level.
+        expect(findSourceRow(screen, 'execution_run:source-a:run-1')?.props.title)
+            .toBe('session.follow.sources.executionRun:Alpha source');
+        expect(findSourceRow(screen, 'workflow_run:wf-1')?.props.subtitle).toBe('session.follow.sources.sourceUnavailable');
+
+        await openSource(screen, 'discussion:disc-1');
+        expect(screen.findByTestId('session-follow-source-discussion:disc-1-panel')).not.toBeNull();
+        expect(screen.getTextContent()).toContain('session.follow.sources.row:session.follow.sources.kindDiscussion');
+        await act(async () => { sourcePresetSegment(screen, 'discussion:disc-1', 'quiet')?.props.onPress?.(); await Promise.resolve(); });
+        expect(api.set).toHaveBeenCalledWith(expect.objectContaining({
+            destinationSessionId: 'destination-a', source: { kind: 'discussion', discussionId: 'disc-1' },
+        }));
+        await act(async () => { screen.findByTestId('session-follow-source-discussion:disc-1-remove')?.props.onPress?.(); await Promise.resolve(); });
+        await vi.waitFor(() => expect(api.remove).toHaveBeenCalledWith({
+            serverId: 'home-a', destinationSessionId: 'destination-a', source: { kind: 'discussion', discussionId: 'disc-1' },
+        }));
+        // Non-Session sources have no encrypted source key to prepare.
+        expect(preparation.run).not.toHaveBeenCalledWith(expect.objectContaining({ sourceSessionId: 'disc-1' }));
+        await screen.unmount();
+    });
+
     it('places one source panel through a pushed page with the same policy writer, and leaves the page after Stop updates', async () => {
         api.list.mockResolvedValue({ kind: 'ok', value: { sources: [{
             sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' },
@@ -777,7 +820,7 @@ describe('SessionFollowSourcesEditor', () => {
         const onClose = vi.fn();
         const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })} serverId="home-a" destinationMachineId={null}
-            page={{ sourceSessionId: 'source-a', onClose, frame: (parts) => <>{parts.body}{parts.footer}</> }}
+            page={{ sourceKey: 'source-a', onClose, frame: (parts) => <>{parts.body}{parts.footer}</> }}
         />);
         await vi.waitFor(() => expect(sourcePresetSegment(screen, 'source-a', 'quiet')).toBeDefined());
         // The page shows the source's panel, not the list.

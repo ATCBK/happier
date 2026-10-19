@@ -134,7 +134,13 @@ export const en = {
         "sourceKeyWaiting": "Waiting for encrypted access.",
         "sourceKeyUnavailable": "This computer can't provide encrypted access.",
         "sourceSessionKeyUnavailable": "This session's encrypted access is not available here.",
-        "catchUpPending": "Catch-up pending"
+        "catchUpPending": "Catch-up pending",
+        "kindDiscussion": "Discussion",
+        "kindWorkflowRun": "Workflow run",
+        "executionRun": ({ title }: { title: string }) => `A run in “${title}”`,
+        "sourceUnavailable": "No longer available",
+        "followsThis": ({ title }: { title: string }) => `${title} follows this`,
+        "managerOnly": "It hears about this session as its manager. Change that in its coordinator setup."
     },
     "preferences": {
         "title": "Automatically follow",

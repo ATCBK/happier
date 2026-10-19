@@ -23,14 +23,15 @@ export function SessionFollowSourceScreen() {
     const router = useRouter();
     const sessionId = normalizeSessionId(params.id);
     const serverId = readSessionRouteServerId(params);
-    const sourceSessionId = normalizeSessionId(params.source);
+    // A Session source's id, or another source kind's qualified key (`followSourceKey`).
+    const sourceKey = normalizeSessionId(params.source);
     const enabled = useFeatureEnabled('sessions.following', { scopeKind: 'spawn', serverId: serverId ?? '' });
     const session = useSession(sessionId ?? '', serverId);
     const back = React.useCallback(() => {
         if (!sessionId || !serverId) return;
         safeRouterBack({ router, fallbackHref: buildScopedSessionRouteHref({ sessionId, serverId }) as Href });
     }, [router, serverId, sessionId]);
-    if (!sessionId || !serverId || !sourceSessionId) return <SessionInvalidLinkFallback />;
+    if (!sessionId || !serverId || !sourceKey) return <SessionInvalidLinkFallback />;
     const header = <Stack.Screen options={{ headerShown: true, title: t('session.follow.sources.title') }} />;
     if (!enabled) return <>{header}<SessionFollowUnavailableNotice onBack={back} /></>;
     return <>
@@ -40,7 +41,7 @@ export function SessionFollowSourceScreen() {
             serverId={serverId}
             destinationMachineId={session ? (readSessionOwnerMetadataView(session)?.machineId ?? null) : null}
             page={{
-                sourceSessionId,
+                sourceKey,
                 onClose: back,
                 frame: (parts) => <FollowEditorPage title={parts.title} subtitle={parts.subtitle} footer={parts.footer}
                     footerTestID="session-follow-source-footer">{parts.body}</FollowEditorPage>,

@@ -5,6 +5,9 @@ import { createPlainSessionByIdResponseFixture, createPlainSessionCurrentProject
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
+import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
+import { ListSessionFollowSourcesResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -39,7 +42,7 @@ it('resolves rule Session followers through the captured own-Account census and 
             policy: { preset: 'quiet' }, deliveryState: 'eligible', hasPendingUpdates: false }], rules: [], coverage: 'complete', peopleCount: 3,
     } });
     homes.answer(serverId, '/v2/sessions/query', { body: SessionListQueryResponseV1Schema.parse({
-        sessions: [createPlainSessionCurrentProjectionRecordFixture({ id: 'source', viewer: createSessionViewerFixture() })],
+        sessions: [{ ...createPlainSessionCurrentProjectionRecordFixture({ id: 'source' }), viewer: createSessionViewerFixture() }],
         hasNext: false, nextCursor: null, attentionHasNext: false, attentionNextCursor: null,
     }) });
     const definition = { v: 1, enabled: true, filter: normalizeSessionListFilterV1({ show: 'sessions', homeServerIds: [serverId],
@@ -57,6 +60,28 @@ it('resolves rule Session followers through the captured own-Account census and 
         { target: { serverId, sessionId: 'direct-receiver' }, result: { ok: true } },
         { target: { serverId, sessionId: 'rule-receiver' }, result: { ok: true } },
     ] } });
+    const context = { surface: 'ui' as const, serverId, defaultSessionId: 'source', expectedAccountId: 'alice' };
+    expect(await executor.previewSessionTargets({ selector: 'followers' }, context)).toMatchObject({
+        coverage: 'complete', addresses: [{ serverId, sessionId: 'direct-receiver' }, { serverId, sessionId: 'rule-receiver' }],
+    });
+    const followingRequest = resolveSessionFollowActionRequest('follow.list', {
+        direction: 'following', receiver: { kind: 'session', sessionId: 'source' },
+    });
+    homes.answer(serverId, followingRequest.path, { body: ListSessionFollowSourcesResponseSchema.parse({ sources: [{
+        sourceSessionId: 'upstream', destinationSessionId: 'source', relation: 'follower',
+        policy: { preset: 'quiet' }, deliveryState: 'eligible', hasPendingUpdates: false,
+    }] }) });
+    expect(await executor.previewSessionTargets({ selector: 'following' }, context)).toMatchObject({
+        coverage: 'complete', addresses: [{ serverId, sessionId: 'upstream' }],
+    });
+    homes.answer(serverId, '/v1/discussions/review/participants', { body: DiscussionParticipantsListResponseV1Schema.parse({
+        discussionId: 'review', ownerAccountId: 'alice', access: 'owner', grants: [], participants: [{
+            participant: { kind: 'session', sessionId: 'reviewer' }, answerPolicy: 'when_addressed', createdAt: 1,
+        }],
+    }) });
+    expect(await executor.previewSessionTargets({ selector: 'discussion', discussionId: 'review' }, context)).toMatchObject({
+        coverage: 'complete', addresses: [{ serverId, sessionId: 'reviewer' }],
+    });
     homes.answer(serverId, '/v2/sessions/rule-receiver', { status: 404, body: { error: 'session_not_found' } });
     const receiverReadsBeforeDenial = homes.requests.filter(request => request.path.split('?')[0] === '/v2/sessions/rule-receiver').length;
     const directEffectsBeforeDenial = homes.requests.filter(request => request.path.split('?')[0] === '/v2/sessions/direct-receiver').length;
@@ -72,4 +97,43 @@ it('resolves rule Session followers through the captured own-Account census and 
     homes.answer(serverId, '/v2/account/session-follow-rules', { status: 403, body: { error: 'credential_scope_denied' } });
     expect(await executor.execute('session.status.get', { sessionId: { selector: 'followers', of: 'source' } },
         { surface: 'ui', serverId, expectedAccountId: 'alice' })).toMatchObject({ ok: false, errorCode: 'session_target_unavailable' });
+});
+
+it('previews unloaded manager and worker targets without executing an Action, and refuses incomplete readers', async () => {
+    const serverUrl = 'https://picker-targets.test';
+    const serverId = await homes.addHome({ name: 'Picker', serverUrl, accountId: 'alice', currentAccount: true });
+    restored = await restoreServerAccountForTest({ serverUrl, accountId: 'alice',
+        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: homes.request });
+    await vi.waitFor(() => expect(getStorage().getState().isDataReady).toBe(true));
+    getStorage().setState({ sessions: {}, sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {} });
+    const source = createSessionFixture({ id: 'source', serverId, encryptionMode: 'plain',
+        manager: { sessionId: 'unloaded-manager' }, access: createSessionAccessFixture('view') });
+    homes.answer(serverId, '/v2/sessions/source', { body: createPlainSessionByIdResponseFixture(source) });
+    const worker = { ...createPlainSessionCurrentProjectionRecordFixture({ id: 'unloaded-worker',
+        manager: { sessionId: 'source' } }), viewer: createSessionViewerFixture() };
+    homes.answer(serverId, '/v2/sessions/query', { body: SessionListQueryResponseV1Schema.parse({
+        sessions: [worker], hasNext: false, nextCursor: null, attentionHasNext: false, attentionNextCursor: null,
+    }) });
+    const executor = createDefaultActionExecutor();
+    const context = { surface: 'ui' as const, serverId, defaultSessionId: 'source', expectedAccountId: 'alice' };
+    const requestsBefore = homes.requests.length;
+    expect(await executor.previewSessionTargets({ selector: 'manager' }, context)).toMatchObject({
+        coverage: 'complete', addresses: [{ serverId, sessionId: 'unloaded-manager' }], error: null,
+    });
+    expect(await executor.previewSessionTargets({ selector: 'workers' }, context)).toMatchObject({
+        coverage: 'complete', addresses: [{ serverId, sessionId: 'unloaded-worker' }], error: null,
+    });
+    // A missing continuation cannot be advertised as either all workers or no workers.
+    homes.answer(serverId, '/v2/sessions/query', { body: SessionListQueryResponseV1Schema.parse({
+        sessions: [worker], hasNext: true, nextCursor: null, attentionHasNext: false, attentionNextCursor: null,
+    }) });
+    expect(await executor.previewSessionTargets({ selector: 'workers' }, context)).toMatchObject({
+        coverage: 'unavailable', addresses: [], error: 'session_target_unavailable',
+    });
+    homes.answer(serverId, '/v2/sessions/source', { status: 503, body: { error: 'unavailable' } });
+    expect(await executor.previewSessionTargets({ selector: 'manager' }, context)).toMatchObject({
+        coverage: 'unavailable', addresses: [], error: 'session_target_unavailable',
+    });
+    expect(homes.requests.slice(requestsBefore).filter(request => request.input !== null
+        && request.path.split('?')[0] !== '/v2/sessions/query').map(request => request.path)).toEqual([]);
 });

@@ -28,7 +28,7 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import type { WorkflowRunListPage } from '@/sync/domains/workflows/workflowRunListActions';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { useSessionManagedWorkflowRuns, type SessionManagedWorkflowRunsState } from '@/components/sessions/workState/useSessionManagedWorkflowRuns';
+import { useSessionManagedWorkflowRuns, type SessionManagedWorkflowRunsState } from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import { projectWork, resolveWorkReadPresentation } from '@/components/sessions/work/workProjection';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createAccountNoticeArtifactFixture, createUsageNoticeArtifactFixture, usageNoticeFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';

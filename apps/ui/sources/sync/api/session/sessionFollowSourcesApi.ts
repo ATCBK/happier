@@ -1,4 +1,5 @@
 import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import type { FollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
@@ -24,26 +25,27 @@ export async function listSessionFollowSources(destination: SessionAddress) {
         : result;
 }
 
-export function setSessionFollowSource(input: Readonly<{
+/** A Session source by its id, or any other source kind (Discussion, Execution Run, Workflow Run) by its exact ref. */
+type SessionFollowSourcePair = Readonly<{
     serverId: string;
     destinationSessionId: string;
-    sourceSessionId: string;
-    policy: FollowPolicyV1;
-}>) {
+}> & (Readonly<{ sourceSessionId: string }> | Readonly<{ source: FollowSourceRefV1 }>);
+
+function readSourceRef(input: SessionFollowSourcePair): FollowSourceRefV1 {
+    return 'source' in input ? input.source : { kind: 'session', sessionId: input.sourceSessionId };
+}
+
+export function setSessionFollowSource(input: SessionFollowSourcePair & Readonly<{ policy: FollowPolicyV1 }>) {
     return executeSessionFollowAction('follow.set', {
         receiver: { kind: 'session', sessionId: input.destinationSessionId },
-        source: { kind: 'session', sessionId: input.sourceSessionId },
+        source: readSourceRef(input),
         policy: input.policy,
     }, input.serverId);
 }
 
-export function removeSessionFollowSource(input: Readonly<{
-    serverId: string;
-    destinationSessionId: string;
-    sourceSessionId: string;
-}>) {
+export function removeSessionFollowSource(input: SessionFollowSourcePair) {
     return executeSessionFollowAction('follow.remove', {
         receiver: { kind: 'session', sessionId: input.destinationSessionId },
-        source: { kind: 'session', sessionId: input.sourceSessionId },
+        source: readSourceRef(input),
     }, input.serverId);
 }

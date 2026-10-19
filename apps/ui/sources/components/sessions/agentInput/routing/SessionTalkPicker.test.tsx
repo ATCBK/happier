@@ -1,9 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { findTestInstanceByTypeContainingText, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createPlainSessionByIdResponseFixture, createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 vi.mock('react-native', async () =>
   (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(),
@@ -18,6 +20,9 @@ vi.mock('@/text', async () =>
   (await import('@/dev/testkit/mocks/text')).createTextModuleMock(),
 );
 
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
 const { getStorage } = await import('@/sync/domains/state/storage');
 const { SessionTalkPicker } = await import('./SessionTalkPicker');
 const { resolveSessionTalkChipLabel } =
@@ -25,8 +30,19 @@ const { resolveSessionTalkChipLabel } =
 type Intent = React.ComponentProps<typeof SessionTalkPicker>['intent'];
 
 const previous = getStorage().getState();
-afterEach(() => {
+let serverId: string;
+let restored: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+beforeEach(async () => {
+  await homes.reset();
+  const serverUrl = 'https://picker-composition.test';
+  serverId = await homes.addHome({ name: 'Picker', serverUrl, accountId: 'alice', currentAccount: true });
+  restored = await restoreServerAccountForTest({ serverUrl, accountId: 'alice',
+    credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: homes.request });
+  await vi.waitFor(() => expect(getStorage().getState().isDataReady).toBe(true));
+});
+afterEach(async () => {
   standardCleanup();
+  await restored?.dispose(); restored = undefined;
   getStorage().setState(previous, true);
 });
 
@@ -34,17 +50,26 @@ function seedRelations() {
   const session = (id: string, name: string, lead: string | null) =>
     createSessionFixture({
       id,
-      serverId: 'home-a',
+      serverId,
+      encryptionMode: 'plain',
+      access: createSessionAccessFixture('view'),
       metadata: { path: '/repo', host: 'host', name },
       manager: lead ? { sessionId: lead } : null,
     });
-  getStorage().setState({
-    sessions: {
+  const sessions = {
       lead: session('lead', 'Payments v2 rollout', null),
       api: session('api', 'Idempotent retries', 'lead'),
       ui: session('ui', 'Checkout UI retry states', 'lead'),
-    },
+  };
+  getStorage().setState({ sessions });
+  for (const value of Object.values(sessions)) homes.answer(serverId, `/v2/sessions/${value.id}`, {
+    body: createPlainSessionByIdResponseFixture(value),
   });
+  homes.answer(serverId, '/v2/sessions/query', { body: {
+    sessions: Object.values(sessions).map(value => ({ ...createPlainSessionCurrentProjectionRecordFixture({
+      id: value.id, metadata: value.metadata, ...(value.manager ? { manager: value.manager } : {}),
+    }), viewer: createSessionViewerFixture() })), hasNext: false, nextCursor: null, attentionHasNext: false, attentionNextCursor: null,
+  } });
 }
 
 /** The person's picks go through the same intent writer the composer's submit branch reads. */
@@ -56,7 +81,7 @@ async function renderPicker(initial: Intent = null) {
     return (
       <SessionTalkPicker
         sessionId="api"
-        serverId="home-a"
+        serverId={serverId}
         intent={intent}
         onIntentChange={(next) => {
           writes.push(next);
@@ -68,6 +93,11 @@ async function renderPicker(initial: Intent = null) {
     );
   }
   const screen = await renderScreen(<Host />);
+  await vi.waitFor(() => {
+    expect(screen.findByTestId('session-talk-target:manager')).not.toBeNull();
+    expect(screen.findByTestId('session-talk-target:manager')?.props.disabled).not.toBe(true);
+    expect(screen.findByTestId('session-talk-target:siblings')?.props.disabled).not.toBe(true);
+  });
   return { screen, writes, closes };
 }
 
@@ -116,6 +146,38 @@ describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
     });
     await act(async () => screen.pressByTestId('session-talk-target:self'));
     expect(writes).toEqual([null]);
+  });
+
+  it('offers every selector and never reads a relation it could not check as empty', async () => {
+    seedRelations();
+    // The reverse Follow read is not answered here: Followers stays unknown, never "None right now".
+    const { screen, writes } = await renderPicker();
+    for (const selector of ['followers', 'following', 'discussion']) {
+      expect(screen.findByTestId(`session-talk-target:${selector}`)).not.toBeNull();
+    }
+    await vi.waitFor(() => {
+      const row = screen.findByTestId('session-talk-target:followers');
+      if (!row) throw new Error('Followers row is not rendered');
+      expect(findTestInstanceByTypeContainingText(row, 'Text', 'session.participants.talk.unavailable')).toBeDefined();
+      expect(findTestInstanceByTypeContainingText(row, 'Text', 'session.participants.talk.noneNow')).toBeUndefined();
+    });
+    // Item disables the native control; invoking its handler directly bypasses that boundary.
+    expect(screen.findByTestId('session-talk-target:followers')?.props.disabled).toBe(true);
+    expect(writes).toEqual([]);
+  });
+
+  it('asks which Discussion before the Discussion selector can be chosen, and Back returns to the list', async () => {
+    seedRelations();
+    const { screen, writes } = await renderPicker();
+    const discussion = screen.findByTestId('session-talk-target:discussion');
+    if (!discussion) throw new Error('Discussion row is not rendered');
+    expect(findTestInstanceByTypeContainingText(discussion, 'Text', 'session.participants.talk.chooseDiscussion')).toBeDefined();
+    await act(async () => screen.pressByTestId('session-talk-target:discussion'));
+    expect(screen.findByTestId('session-talk-discussion-back')).not.toBeNull();
+    expect(screen.findByTestId('session-talk-target:manager')).toBeNull();
+    await act(async () => screen.pressByTestId('session-talk-discussion-back'));
+    expect(screen.findByTestId('session-talk-target:manager')).not.toBeNull();
+    expect(writes).toEqual([]);
   });
 
   it('says the whole sentence on the chip', () => {

@@ -55,6 +55,7 @@ export function readOpenUsageNoticeArtifactHeader(
 ): UsageNoticeArtifactHeaderV1 | null {
     const header = readAccountNoticeArtifactHeader(artifact, accountId);
     return header && isOpenAccountNotice(header) && header.source.kind === 'host' && header.notice
+        && header.notice.topic !== 'follow_update'
         ? { v: 1, kind: 'usage_notice.v1', title: header.title, status: header.status, notice: header.notice,
             ...(header.excerpt === undefined ? {} : { excerpt: header.excerpt }) } : null;
 }
