@@ -247,7 +247,8 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
         throw new SystemTaskExecutionError('invalid_cli_response', 'Remote enrollment protocol line was too large.');
       }
       let response: unknown;
-      try { response = JSON.parse(result.stdout); } catch {
+      let parsed = false;
+      try { response = JSON.parse(result.stdout); parsed = true; } catch {
         if (result.status === 0) throw new SystemTaskExecutionError('invalid_cli_response', 'Remote enrollment returned invalid JSON.');
       }
       if (result.status !== 0 || (isRecord(response) && response.ok === false)) {
@@ -261,8 +262,20 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
         }
         if (args[1] === 'wait' && fields.length === 1) {
           // Native termination/startup can prevent the CLI envelope entirely.
-          // Name the missing evidence, never infer expiry or reveal stderr.
-          fields.push('code AUTH_WAIT_DIAGNOSTIC_UNAVAILABLE');
+          // The process failure is known; its authentication cause is not.
+          // Distinguish absent output from an unreadable envelope without
+          // revealing native stdout/stderr (which may contain credentials).
+          fields.push('code AUTH_WAIT_PROCESS_FAILED');
+          fields.push(`diagnostic ${result.stdout.trim() ? 'invalid' : 'absent'}`);
+          if (result.stdout.trim()) {
+            // Only the failed check name crosses the boundary. Never include
+            // rejected values, output fragments or parser error messages.
+            const check = !parsed ? 'parse'
+              : !isRecord(response) || response.v !== 1 ? 'v'
+              : response.ok !== false ? 'ok'
+              : response.kind !== `auth_${args[1]}` ? 'kind' : 'code';
+            fields.push(`check ${check}`);
+          }
         }
         if (diagnostic && ['http_error', 'auth_error'].includes(String(diagnostic.category))) {
           fields.push(`category ${diagnostic.category}`);

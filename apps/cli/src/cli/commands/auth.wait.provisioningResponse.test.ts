@@ -1,8 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { inspect } from 'node:util';
 import axios from 'axios';
 import fastify from 'fastify';
 import tweetnacl from 'tweetnacl';
@@ -38,6 +37,9 @@ describe('auth wait provisioning response', () => {
 
   let localHomeDir = '';
   let envScope = createEnvKeyScope(envKeys);
+
+  // Transform the real command graph outside the first contract's deadline.
+  beforeAll(async () => { await import('./auth/wait'); });
 
   beforeEach(async () => {
     envScope = createEnvKeyScope(envKeys);
@@ -128,7 +130,7 @@ describe('auth wait provisioning response', () => {
     try {
       await expect(
         handleAuthWait(['--public-key', Buffer.from(keypair.publicKey).toString('base64'), '--json']),
-      ).rejects.toThrow('Invalid auth state (pairingRequirement)');
+      ).rejects.toMatchObject({ code: 'AUTH_WAIT_INVALID_STATE' });
       expect(getSpy).not.toHaveBeenCalled();
     } finally {
       getSpy.mockRestore();
@@ -152,7 +154,7 @@ describe('auth wait provisioning response', () => {
     try {
       await expect(
         handleAuthWait(['--public-key', Buffer.from(keypair.publicKey).toString('base64'), '--json']),
-      ).rejects.toThrow('Invalid auth state (pairingRequirement)');
+      ).rejects.toMatchObject({ code: 'AUTH_WAIT_INVALID_STATE' });
       expect(getSpy).not.toHaveBeenCalled();
     } finally {
       getSpy.mockRestore();
@@ -345,18 +347,12 @@ describe('auth wait provisioning response', () => {
     });
     await app.ready();
     const restoreAxios = installAxiosFastifyAdapter({ app, origin: 'https://happier-auth.test' });
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: string | number | null | undefined): never => {
-      throw new Error(`process.exit:${String(code ?? '')}`);
-    });
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
     try {
       vi.resetModules();
       const { handleAuthWait } = await import('./auth/wait');
       await expect(
         handleAuthWait(['--public-key', Buffer.from(keypair.publicKey).toString('base64'), '--json']),
-      ).rejects.toThrow('process.exit:1');
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('different Home identity'));
+      ).rejects.toMatchObject({ code: 'AUTH_RESPONSE_HOME_MISMATCH' });
       await expect(readFile(statePath, 'utf8')).resolves.toContain(serverIdentityId);
 
       const configMod = await import('@/configuration');
@@ -364,8 +360,6 @@ describe('auth wait provisioning response', () => {
       await expect(readFile(join(configMod.configuration.activeServerDir, 'access.key'), 'utf8'))
         .resolves.toBe(JSON.stringify({ token: 'existing-token' }, null, 2));
     } finally {
-      errorSpy.mockRestore();
-      exitSpy.mockRestore();
       restoreAxios();
       await app.close().catch(() => {});
     }
@@ -381,21 +375,13 @@ describe('auth wait provisioning response', () => {
     const app = authServerApp({ responseB64: 'A'.repeat(8192) });
     await app.ready();
     const restoreAxios = installAxiosFastifyAdapter({ app, origin: 'https://happier-auth.test' });
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: string | number | null | undefined): never => {
-      throw new Error(`process.exit:${String(code ?? '')}`);
-    });
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
     try {
       vi.resetModules();
       const { handleAuthWait } = await import('./auth/wait');
       await expect(
         handleAuthWait(['--public-key', Buffer.from(keypair.publicKey).toString('base64'), '--json']),
-      ).rejects.toThrow('process.exit:1');
-      expect(errorSpy).toHaveBeenCalledWith('Unexpected response from server.');
+      ).rejects.toMatchObject({ code: 'AUTH_RESPONSE_INVALID' });
     } finally {
-      errorSpy.mockRestore();
-      exitSpy.mockRestore();
       restoreAxios();
       await app.close().catch(() => {});
     }
@@ -418,7 +404,7 @@ describe('auth wait provisioning response', () => {
       const { handleAuthWait } = await import('./auth/wait');
       await expect(
         handleAuthWait(['--public-key', Buffer.from(keypair.publicKey).toString('base64'), '--json']),
-      ).rejects.toThrow('Invalid auth state (pairingSecret)');
+      ).rejects.toMatchObject({ code: 'AUTH_WAIT_INVALID_STATE' });
       expect(getSpy).not.toHaveBeenCalled();
     } finally {
       getSpy.mockRestore();
@@ -454,6 +440,7 @@ describe('auth wait provisioning response', () => {
       throw new Error(`process.exit:${String(code ?? '')}`);
     });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const output = captureStdoutJsonOutput();
 
     const previousAuthorization = axios.defaults.headers.common.Authorization;
     axios.defaults.headers.common.Authorization = authorizationSentinel;
@@ -470,17 +457,7 @@ describe('auth wait provisioning response', () => {
         }),
       ).rejects.toThrow('process.exit:1');
 
-      // Mirror what a terminal would print: inspect every captured argument
-      // without truncation so any leaked nested value would be visible.
-      const printed = errorSpy.mock.calls
-        .flat()
-        .map((arg) => inspect(arg, {
-          depth: Number.POSITIVE_INFINITY,
-          maxArrayLength: Number.POSITIVE_INFINITY,
-          maxStringLength: Number.POSITIVE_INFINITY,
-          breakLength: Number.POSITIVE_INFINITY,
-        }))
-        .join('\n');
+      const printed = JSON.stringify({ stdout: output.chunks, stderr: errorSpy.mock.calls });
 
       // Request/response enrollment material must never reach diagnostics.
       for (const sentinel of [claimSecret, tokenSentinel, ciphertextSentinel, machineKeySentinel, authorizationSentinel]) {
@@ -490,11 +467,11 @@ describe('auth wait provisioning response', () => {
       expect(printed).not.toContain(Buffer.from(keypair.secretKey).toString('base64'));
       expect(printed).not.toContain(Buffer.from(pairingSecret).toString('base64url'));
 
-      // Useful non-sensitive identity survives: message, HTTP status, and code.
-      expect(printed).toContain('Request failed with status code 500');
-      expect(printed).toContain('500');
-      expect(printed).toContain('ERR_BAD_RESPONSE');
+      expect(output.json()).toEqual({ v: 1, ok: false, kind: 'auth_wait', error: {
+        code: 'AUTH_WAIT_HOME_UNAVAILABLE', category: 'http_error', status: 500,
+      } });
     } finally {
+      output.restore();
       axios.defaults.headers.common.Authorization = previousAuthorization;
       errorSpy.mockRestore();
       exitSpy.mockRestore();

@@ -30,11 +30,28 @@ import { terminateProcessTreeByPid } from '../../../../../../../packages/tests/s
 describe('remote managed enrollment through real CLI processes and Home', () => {
     let harness: LightSqliteHarness;
     const requests: Array<{ path: string; status: number }> = [];
+    let claimUnavailable = false;
+    let claimReset = false;
+    let registrationUnavailable = false;
     const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
     beforeAll(async () => {
         harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-qb73-', initAuth: true, initEncrypt: true,
             env: { HAPPIER_SERVER_IDENTITY_ID: 'srv_qb73_home', TERMINAL_AUTH_REQUEST_TTL_SECONDS: '60' } });
         app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
+        // Inject Home unavailability at its HTTP boundary; keep claim, approval,
+        // registration and both real CLI processes unchanged beneath it.
+        app.addHook('onRequest', async (request, reply) => {
+            if (registrationUnavailable && request.method === 'POST' && request.url === '/v1/machines') {
+                return reply.code(503).send({ error: 'unavailable' });
+            }
+            if (claimReset && request.url === '/v1/auth/request/claim') {
+                request.raw.socket.destroy();
+                return reply;
+            }
+            if (claimUnavailable && request.url === '/v1/auth/request/claim') {
+                return reply.code(503).send({ error: 'unavailable' });
+            }
+        });
         app.addHook('onResponse', async (request, reply) => { requests.push({ path: request.url.split('?')[0]!, status: reply.statusCode }); });
         enableAuthentication(app);
         authRoutes(app); machinesRoutes(app); registerAccountEncryptionRoutes(app); registerAccountProfileRoute(app);
@@ -43,10 +60,13 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
     }, 120_000);
     afterAll(async () => { await app.close(); if (harness) await harness.close(); });
 
-    it.each(['current', 'current-e2ee', 'retired', 'misbound-approval', 'expired-consent'] as const)('enrolls only the current exact admission (%s)', async admission => {
+    it.each(['current', 'current-e2ee', 'retired', 'misbound-approval', 'expired-consent', 'claim-unavailable', 'claim-reset', 'wait-process-killed', 'registration-unavailable'] as const)('enrolls only the current exact admission (%s)', async admission => {
         const succeeds = admission === 'current' || admission === 'current-e2ee';
+        claimUnavailable = admission === 'claim-unavailable';
+        claimReset = admission === 'claim-reset';
+        registrationUnavailable = admission === 'registration-unavailable';
         requests.length = 0;
-        const beforeRequests = await db.terminalAuthRequest.count();
+        const beforeRequestIds = new Set((await db.terminalAuthRequest.findMany({ select: { id: true } })).map(request => request.id));
         const address = app.server.address();
         if (!address || typeof address === 'string') throw new Error('missing test listener');
         const endpoint = `http://127.0.0.1:${address.port}`;
@@ -126,31 +146,55 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
             child.on('close', status => resolveResult({ status: status ?? 1, stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') }));
             child.stdin.end(JSON.stringify({ descriptor, guestHome, guestEntrypoint: process.env.HAPPIER_TEST_REMOTE_ENROLLMENT_ENTRYPOINT,
                 guestExecutable: process.env.HAPPIER_TEST_REMOTE_ENROLLMENT_EXECUTABLE,
+                killWaitProcess: admission === 'wait-process-killed',
+                observeWaitDiagnostic: admission === 'registration-unavailable',
                 // The server's supported minimum policy is the old effective
                 // cutoff in this fixture. Use real wall time and CLI processes.
                 ...(admission === 'expired-consent' ? { approvalDelayMs: 61_000 } : {}),
                 misbind: admission === 'misbound-approval', correlation: { homeId: descriptor!.homeServerIdentityId,
                 managedId: row.id, requestId: row.admittedActionRequestId, expectedIntentRevision: row.intentRevision, controller, resource } }));
         });
-        expect(result.stdout, JSON.stringify(requests)).toContain(succeeds ? '"ok":true' : admission === 'retired' ? 'auth wait' : admission === 'expired-consent' ? 'auth_request_expired' : 'approval_wiring_failed');
+        expect(result.stdout, JSON.stringify(requests)).toContain(succeeds ? '"ok":true' : ['retired', 'claim-unavailable', 'claim-reset', 'wait-process-killed', 'registration-unavailable'].includes(admission) ? 'auth wait' : admission === 'expired-consent' ? 'auth_request_expired' : 'approval_wiring_failed');
         expect(result.status, result.stdout).toBe(succeeds ? 0 : 1);
         if (admission !== 'misbound-approval') {
             const outcome = JSON.parse(result.stdout);
             expect(outcome.task.ok).toBe(succeeds);
             expect(outcome.operation.state).toBe(succeeds ? 'succeeded' : 'failed');
             if (admission === 'retired') expect(outcome.operation.error.error).toMatch(/auth wait \(exit 1; code ERR_BAD_REQUEST; category http_error; HTTP 409\)/u);
+            if (admission === 'claim-unavailable') {
+                expect(outcome.operation.error.error).toMatch(/code AUTH_WAIT_HOME_UNAVAILABLE; category http_error; HTTP 503/u);
+                expect(requests).toContainEqual({ path: '/v1/auth/request/claim', status: 503 });
+            }
+            if (admission === 'registration-unavailable') {
+                expect(outcome.waitDiagnostic).toEqual({ v: 1, ok: false, kind: 'auth_wait', code: 'AUTH_WAIT_HOME_UNAVAILABLE', status: 503 });
+                expect(requests).toContainEqual({ path: '/v1/auth/request/claim', status: 200 });
+                expect(requests).toContainEqual({ path: '/v1/machines', status: 503 });
+                expect(outcome.operation.error.error).toContain('code AUTH_WAIT_HOME_UNAVAILABLE; category http_error; HTTP 503');
+                expect(outcome.operation.error.error).not.toMatch(/diagnostic invalid|AUTH_WAIT_PROCESS_FAILED/);
+            }
+            if (admission === 'wait-process-killed') {
+                expect(outcome.operation.error.error).toContain('code AUTH_WAIT_PROCESS_FAILED');
+                expect(outcome.operation.error.error).not.toContain('DIAGNOSTIC_UNAVAILABLE');
+            }
+            if (admission === 'claim-reset') {
+                expect(outcome.operation.error.error).toContain('code AUTH_WAIT_HOME_UNAVAILABLE');
+                expect(outcome.operation.error.error).not.toContain('DIAGNOSTIC_UNAVAILABLE');
+            }
             if (admission === 'expired-consent') {
                 expect(outcome.operation.error.error).toContain('Retry');
                 expect(outcome.lateConsent).toEqual({ rejected: true, waitStatus: 1, waitCode: 'AUTH_REQUEST_EXPIRED' });
             }
         }
         const pending = await db.terminalAuthRequest.findMany();
-        expect(pending).toHaveLength(beforeRequests + 1);
+        // Creating a fresh request may prune expired earlier scenarios. Count
+        // this invocation's new row without depending on global retention.
+        expect(pending.filter(request => !beforeRequestIds.has(request.id))).toHaveLength(1);
         const ownPending = pending.find(request => request.responseAccountId === account.id);
         if (admission === 'misbound-approval' || admission === 'expired-consent') expect(ownPending).toBeUndefined();
         else {
             expect(ownPending).toBeDefined();
-            expect(ownPending?.claimedAt).not.toBeNull();
+            if (admission === 'claim-unavailable' || admission === 'claim-reset' || admission === 'wait-process-killed') expect(ownPending?.claimedAt).toBeNull();
+            else expect(ownPending?.claimedAt).not.toBeNull();
         }
         expect(await db.machine.count({ where: { accountId: account.id } })).toBe(succeeds ? 2 : 1);
         const retained = await db.managedMachine.findUniqueOrThrow({ where: { id: row.id } });

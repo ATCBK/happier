@@ -116,7 +116,12 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
     expect(JSON.stringify(failure)).not.toMatch(/private-|UNTRUSTED_CODE|http_error|409/);
   });
 
-  it('names missing wait diagnostics without inventing an auth cause or exposing native output', async () => {
+  it.each([
+    '',
+    'private-malformed-output',
+    'private-warning\n' + JSON.stringify({ v: 1, ok: false, kind: 'auth_wait', error: { code: 'AUTH_WAIT_FAILED' } }),
+    JSON.stringify({ v: 1, ok: false, kind: 'auth_wait', error: { code: 'AUTH_WAIT_FAILED' } }) + '\n{}',
+  ])('classifies a wait process failure with absent or invalid diagnostics (%s)', async stdout => {
     const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
       publicKey: PUBLIC_KEY, homeServerIdentityId: descriptor.homeServerIdentityId,
       pairing, supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'remote-home-profile' };
@@ -125,12 +130,54 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
       executor: { runHappierJson: async () => { throw new Error('not used'); },
         runHappierText: async args => args[1] === 'request'
           ? { status: 0, stdout: JSON.stringify(request), stderr: '' }
-          : { status: 1, stdout: '', stderr: 'private-native-error' } },
+          : { status: 1, stdout, stderr: 'private-native-error' } },
       approvePairingRequest: async () => {}, timeoutMs: 5_000,
     }).catch((error: unknown) => error);
     expect(failure).toMatchObject({ code: 'remote_command_failed',
-      message: 'Remote Home enrollment failed during auth wait (exit 1; code AUTH_WAIT_DIAGNOSTIC_UNAVAILABLE).' });
-    expect(JSON.stringify(failure)).not.toContain('private-native-error');
+      message: `Remote Home enrollment failed during auth wait (exit 1; code AUTH_WAIT_PROCESS_FAILED; diagnostic ${stdout ? 'invalid; check parse' : 'absent'}).` });
+    expect(String(failure)).not.toMatch(/private-native-error|private-malformed-output|private-warning/);
+  });
+
+  it.each([
+    { response: { v: 2, ok: false, kind: 'auth_wait', error: { code: 'PRIVATE_CODE' } }, check: 'v' },
+    { response: { v: 1, ok: true, kind: 'auth_wait', error: { code: 'PRIVATE_CODE' } }, check: 'ok' },
+    { response: { v: 1, ok: false, kind: 'auth_request', error: { code: 'PRIVATE_CODE' } }, check: 'kind' },
+    { response: { v: 1, ok: false, kind: 'auth_wait', error: { code: 'private/secret' } }, check: 'code' },
+    { response: { v: 1, ok: false, kind: 'auth_wait' }, check: 'code' },
+    { response: null, check: 'v' },
+  ])('identifies the failed diagnostic check without copying rejected fields ($check)', async ({ response, check }) => {
+    const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
+      publicKey: PUBLIC_KEY, homeServerIdentityId: descriptor.homeServerIdentityId,
+      pairing, supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'remote-home-profile' };
+    const failure = await runRemoteHomeEnrollmentRecipe({ processIO: 'buffered',
+      homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
+      executor: { runHappierJson: async () => { throw new Error('not used'); },
+        runHappierText: async args => args[1] === 'request'
+          ? { status: 0, stdout: JSON.stringify(request), stderr: '' }
+          : { status: 1, stdout: JSON.stringify(response), stderr: 'private-native-error' } },
+      approvePairingRequest: async () => {}, timeoutMs: 5_000,
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: 'remote_command_failed',
+      message: `Remote Home enrollment failed during auth wait (exit 1; code AUTH_WAIT_PROCESS_FAILED; diagnostic invalid; check ${check}).` });
+    expect(String(failure)).not.toMatch(/PRIVATE_CODE|private\/secret|private-native-error/);
+  });
+
+  it('reports an unfamiliar uppercase diagnostic code as data', async () => {
+    const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
+      publicKey: PUBLIC_KEY, homeServerIdentityId: descriptor.homeServerIdentityId,
+      pairing, supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'remote-home-profile' };
+    const failure = await runRemoteHomeEnrollmentRecipe({ processIO: 'buffered',
+      homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
+      executor: { runHappierJson: async () => { throw new Error('not used'); },
+        runHappierText: async args => args[1] === 'request'
+          ? { status: 0, stdout: JSON.stringify(request), stderr: '' }
+          : { status: 1, stdout: JSON.stringify({ v: 1, ok: false, kind: 'auth_wait',
+            error: { code: 'AUTH_FUTURE_POST_CLAIM_FAILURE', message: 'private-message' } }), stderr: '' } },
+      approvePairingRequest: async () => {}, timeoutMs: 5_000,
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: 'remote_command_failed',
+      message: 'Remote Home enrollment failed during auth wait (exit 1; code AUTH_FUTURE_POST_CLAIM_FAILURE).' });
+    expect(String(failure)).not.toContain('private-message');
   });
 
   it('requires a remote CLI update for released ordinary auth request stdout without disclosing it', async () => {
