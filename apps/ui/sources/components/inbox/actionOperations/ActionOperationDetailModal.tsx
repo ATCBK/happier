@@ -27,6 +27,7 @@ import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGen
 import { useSessionAudienceContext } from '@/hooks/teams/useSessionAudienceContext';
 import { useSessionListHomeObservations } from '@/sync/store/hooks';
 import { useManagedMachineName } from '@/components/approvals/approvalReferenceReading';
+import { TechnicalDetailsDisclosure } from '@/components/ui/lists/TechnicalDetailsDisclosure';
 
 import {
     describeActionOperationStatusLabel,
@@ -383,19 +384,21 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
                 </ItemGroup>
             ) : null}
 
-            {detail.errorSummary.length > 0 ? (
+            {detail.failure ? (
                 <ItemGroup title={t('common.error')}>
-                    {detail.errorSummary.map((row) => (
-                        <Item
-                            key={row.label}
-                            testID={`action-operation-error.${row.label}`}
-                            mode="info"
-                            title={row.label}
-                            subtitle={row.value}
-                            subtitleLines={0}
-                            destructive={true}
+                    <Item
+                        testID="action-operation-failure"
+                        mode="info"
+                        title={detail.failure.reason}
+                        titleLines={0}
+                    />
+                    {detail.failure.technicalLines.length > 0 ? (
+                        <TechnicalDetailsDisclosure
+                            testID="action-operation-technical-details"
+                            title={t('approvals.technicalDetails')}
+                            lines={detail.failure.technicalLines}
                         />
-                    ))}
+                    ) : null}
                 </ItemGroup>
             ) : null}
 

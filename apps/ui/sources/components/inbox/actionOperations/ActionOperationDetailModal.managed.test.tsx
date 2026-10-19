@@ -5,6 +5,7 @@ import {
   createHomeGovernanceHarness,
   installHomeGovernanceBoundaries,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { act } from 'react-test-renderer';
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -200,4 +201,38 @@ describe('Action details for a managed power operation', () => {
     );
     await failed.unmount();
   });
+
+  it.each([
+    ['database_transaction_conflict_exhausted', 'database_transaction_conflict_exhausted', 'approvals.transientFailure'],
+    ['database_connection_unavailable', 'database_connection_unavailable', 'approvals.transientFailure'],
+    ['managed_power_refused', 'The guest could not be reached over SSH.', 'The guest could not be reached over SSH.'],
+    ['managed_power_refused', 'managed_power_refused', 'inbox.actionOperations.failureGeneric'],
+  ])('presents the failure %s as readable words once, with the code behind Technical details', async (errorCode, error, reason) => {
+    const home = await seedManagedPowerOperation({
+      state: 'failed',
+      settledAt: 2_000,
+      error: { errorCode, error },
+    });
+    const screen = await renderScreen(
+      <ActionOperationDetailModal
+        serverId={home}
+        operationId="power-operation"
+        onClose={vi.fn()}
+        setChrome={vi.fn()}
+      />,
+    );
+    await flushHookEffects({ cycles: 25 });
+    const text = screen.getTextContent();
+    expect(text.split(reason)).toHaveLength(2);
+    // Raw keys neither label nor fill the section; the code waits behind the disclosure.
+    expect(text).not.toContain(errorCode);
+    expect(text).not.toMatch(/\bmessage\b/);
+    const disclosure = screen.findAllByTestId('action-operation-technical-details')
+      .find((node) => typeof node.props.onExpandedChange === 'function');
+    expect(disclosure).toBeTruthy();
+    await act(async () => { disclosure?.props.onExpandedChange(true); });
+    expect(screen.getTextContent()).toContain(errorCode);
+    await screen.unmount();
+  });
+
 });
