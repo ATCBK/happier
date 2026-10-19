@@ -5,6 +5,7 @@ import {
 } from '@happier-dev/agents';
 import type { ExternalSessionStatusGetResponse } from '@happier-dev/protocol';
 import { AppState, Platform } from 'react-native';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
@@ -107,7 +108,8 @@ function useRuntimeActive(enabled: boolean): boolean {
 }
 
 export function useExternalSessionRuntime(params: UseExternalSessionRuntimeParams): UseExternalSessionRuntimeResult {
-    const runtimeEnabled = params.enabled !== false && !isDemoModeActive();
+    const presentationActive = useLayoutPresentationActive();
+    const runtimeEnabled = params.enabled !== false && presentationActive && !isDemoModeActive();
     const normalizedSessionId = React.useMemo(() => normalizeSessionId(params.sessionId), [params.sessionId]);
     const externalSessionLink = React.useMemo(
         () => readExternalSessionLink(params.metadata),
@@ -133,6 +135,7 @@ export function useExternalSessionRuntime(params: UseExternalSessionRuntimeParam
     const [status, setStatus] = React.useState<ExternalSessionRuntimeStatus | null>(null);
     const statusRef = React.useRef<ExternalSessionRuntimeStatus | null>(null);
     const inFlightRefreshRef = React.useRef<Promise<ExternalSessionRuntimeStatus | null> | null>(null);
+    const refreshControllerRef = React.useRef<AbortController | null>(null);
     const currentLeaseIdRef = React.useRef<string | null>(null);
     const acceptedTailCursor = React.useSyncExternalStore(
         React.useCallback(
@@ -168,6 +171,12 @@ export function useExternalSessionRuntime(params: UseExternalSessionRuntimeParam
         runtimeEnabled,
     );
     const sessionServerId = preferredSessionServerId;
+    React.useEffect(() => () => {
+        generationRef.current += 1;
+        refreshControllerRef.current?.abort();
+        refreshControllerRef.current = null;
+        inFlightRefreshRef.current = null;
+    }, [externalSessionTargetKey, normalizedSessionId, runtimeActive, runtimeEnabled, sessionServerId]);
     const statusDemandViewportId = React.useId();
     const statusDemandEntry = React.useMemo(() => {
         const linkGeneration = externalSessionLink?.linkedAtMs;
@@ -286,6 +295,9 @@ export function useExternalSessionRuntime(params: UseExternalSessionRuntimeParam
         // Account A's credentials. A switch to Account B mid-read must not
         // publish or return Account A's runtime state into Account B's scope.
         const accountCurrentness = captureActiveServerAccountScopeCurrentness();
+        const controller = new AbortController();
+        refreshControllerRef.current = controller;
+        const retirement = accountCurrentness.onRetire(() => controller.abort());
         let refreshPromise: Promise<ExternalSessionRuntimeStatus | null> | null = null;
         refreshPromise = (async () => {
             if (!accountCurrentness.isCurrent()) {
@@ -297,7 +309,7 @@ export function useExternalSessionRuntime(params: UseExternalSessionRuntimeParam
                 agentId: externalSessionTarget.agentId,
                 remoteSessionId: externalSessionTarget.remoteSessionId,
                 source: externalSessionTarget.source,
-            }, { serverId: sessionServerId ?? undefined })
+            }, { serverId: sessionServerId ?? undefined, signal: controller.signal })
                 .then((response) => ({ ok: true as const, response }))
                 .catch((error: unknown) => ({ ok: false as const, error }));
             if (!statusResult.ok) {
@@ -322,6 +334,8 @@ export function useExternalSessionRuntime(params: UseExternalSessionRuntimeParam
             setStatus(response);
             return response;
         })().finally(() => {
+            retirement.dispose();
+            if (refreshControllerRef.current === controller) refreshControllerRef.current = null;
             if (inFlightRefreshRef.current === refreshPromise) {
                 inFlightRefreshRef.current = null;
             }
@@ -345,14 +359,20 @@ export function useExternalSessionRuntime(params: UseExternalSessionRuntimeParam
         // machine. Once that Account retires, this viewer must stop emitting: the
         // lease is reclaimed by its TTL rather than released under Account B.
         const accountCurrentness = captureActiveServerAccountScopeCurrentness();
+        const controller = new AbortController();
+        const retirement = accountCurrentness.onRetire(() => controller.abort());
 
         const detachLease = (leaseId: string) => {
             if (!accountCurrentness.isCurrent()) return;
+            // Lease release outlives the mounted viewer, but only within its Account.
+            const release = new AbortController();
+            const releaseRetirement = accountCurrentness.onRetire(() => release.abort());
             void machineExternalSessionDetach({
                 machineId: externalSessionTarget.machineId,
                 sessionId: normalizedSessionId,
                 leaseId,
-            }, { serverId: sessionServerId ?? undefined }).catch(() => {});
+            }, { serverId: sessionServerId ?? undefined, signal: release.signal })
+                .catch(() => {}).finally(() => releaseRetirement.dispose());
         };
 
         const clearRenewTimeout = () => {
@@ -399,7 +419,7 @@ export function useExternalSessionRuntime(params: UseExternalSessionRuntimeParam
                                 ? { acceptedTailCursor: requestedTailCursor }
                                 : {}),
                             ttlMs: readAttachLeaseTtlMsFromEnv(),
-                        }, { serverId: sessionServerId ?? undefined });
+                        }, { serverId: sessionServerId ?? undefined, signal: controller.signal });
                         if (cancelled) {
                             // The lease outlived its viewer: nothing will renew
                             // or release it, so it would idle until its TTL.
@@ -456,6 +476,8 @@ export function useExternalSessionRuntime(params: UseExternalSessionRuntimeParam
 
         return () => {
             cancelled = true;
+            controller.abort();
+            retirement.dispose();
             requestLeaseEnsureRef.current = null;
             clearRenewTimeout();
             const leaseId = currentLeaseIdRef.current;
