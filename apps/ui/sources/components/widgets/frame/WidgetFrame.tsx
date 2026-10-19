@@ -251,20 +251,26 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     // least the rows a grown cell keeps. Never the band's: a frame stretched by a taller partner column, or by a
     // partner that grows while it refreshes, leaves that space empty instead of handing it to a chart (lab wgusage-CD).
     const declaredBodyHeight = bodyHeight === 'grow' ? props.viewportHeight ?? rows * rowHeight : 0;
+    // A content-height body's own box is only what its content already draws, so a chart sized from it can never
+    // draw taller than its first frame (it settles at its floor). Its room is what its footprint declares, at
+    // least: nothing is stretched to it (no minHeight), a chart simply reads how tall its cell is meant to be.
+    // A phone stacks content with no cell to declare.
+    const declaredRoomHeight = bodyHeight === 'content' && !phone && props.widgetPresentation
+        ? props.viewportHeight ?? rows * rowHeight : declaredBodyHeight;
     const onBodyBoxLayout = React.useCallback((event: HappierLayoutChangeEvent) => {
         const { width, height } = event.nativeEvent.layout;
         if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
-        const room = Math.max(height, declaredBodyHeight);
+        const room = Math.max(height, declaredRoomHeight);
         setGeometry(previous => previous?.width === width && previous.height === room ? previous : { width, height: room });
-    }, [declaredBodyHeight]);
+    }, [declaredRoomHeight]);
     React.useLayoutEffect(() => {
         if (Platform.OS !== 'web' || geometry !== undefined) return;
         // A fixed body's viewport is the scroll area that holds its content row; a sizing body's room is its own box.
         const content = viewportContentRef.current as unknown as Element | null;
         const room = readViewportRoom(bodyHeight !== 'fixed' && props.widgetPresentation ? content
             : content?.closest?.(`[data-testid="${props.testID}.viewport"]`) ?? null);
-        if (room) setGeometry(bodyHeight !== 'fixed' ? { ...room, height: Math.max(room.height, declaredBodyHeight) } : room);
-    }, [geometry, props.testID, props.widgetPresentation, bodyHeight, declaredBodyHeight]);
+        if (room) setGeometry(bodyHeight !== 'fixed' ? { ...room, height: Math.max(room.height, declaredRoomHeight) } : room);
+    }, [geometry, props.testID, props.widgetPresentation, bodyHeight, declaredRoomHeight]);
     // A fixed body whose rows run past it fades at the cut edge, so no line reads as cut off mid-height.
     const bodyFades = useScrollEdgeFades({ enabledEdges: FIXED_BODY_FADE_EDGES });
     const onFixedViewportLayout = React.useCallback((event: HappierLayoutChangeEvent) => {
