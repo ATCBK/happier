@@ -306,7 +306,7 @@ describe('MessageView Account attribution', () => {
         // The quote's header is the attribution: no second "From …" label above it.
         expect(screen.findHostByTestId('transcript-provenance-attribution:returned-answer')).toBeNull();
         // The exact request read mounts only when the person opens it.
-        expect(screen.findHostByTestId('transcript-returned-answer-question-state')).toBeNull();
+        expect(screen.findHostByTestId('transcript-returned-answer:returned-answer.questionState')).toBeNull();
     });
 
     it('renders a single trusted human byline before the bubble while preserving recovered-history status', async () => {

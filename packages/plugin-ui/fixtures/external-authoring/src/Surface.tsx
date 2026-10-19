@@ -1,6 +1,8 @@
 import React from 'react';
 import { ThreadExample } from './threadSurface.js';
 import { ReplyQuoteExample } from './replyQuoteSurface.js';
+import { ReturnedAnswerQuoteExample } from './returnedAnswerQuoteSurface.js';
+import { ExecutableParticipantPickerExample } from './executableParticipantPickerSurface.js';
 import {
   Card,
   CollectionToolbar,
@@ -64,6 +66,8 @@ function Summary() {
       <NeutralMeasurements />
       <ThreadExample />
       <ReplyQuoteExample />
+      <ReturnedAnswerQuoteExample />
+      <ExecutableParticipantPickerExample multiple />
     </Card>
   );
 }
