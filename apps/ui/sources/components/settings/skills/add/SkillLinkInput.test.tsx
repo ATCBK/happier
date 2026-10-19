@@ -122,7 +122,7 @@ describe('SkillLinkInput outside references', () => {
       ...PREVIEW,
       outsideReferences: ['../../shared/checklist.md', '../lint.sh'],
     });
-    const note = screen.findByTestId('link.item.grill-me.outsideReferences');
+    const note = screen.findHostByTestId('link.item.grill-me.outsideReferences');
     expect(note).not.toBeNull();
     expect(screen.getTextContent()).toContain('2 files');
     expect(screen.findByTestId('link.add')?.props.disabled).not.toBe(true);
@@ -130,6 +130,6 @@ describe('SkillLinkInput outside references', () => {
 
   it('draws nothing for a skill whose references are all in its folder', async () => {
     const screen = await renderFound({ ...PREVIEW });
-    expect(screen.findByTestId('link.item.grill-me.outsideReferences')).toBeNull();
+    expect(screen.findHostByTestId('link.item.grill-me.outsideReferences')).toBeNull();
   });
 });
