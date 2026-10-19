@@ -560,7 +560,6 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
                             <SessionRetainedPane
                                 tabId="collaboration"
                                 isActive={activeTab === 'collaboration'}
-                                suspendWhenHidden={false}
                                 mode="absolute-overlay"
                                 testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-rightpanel-surface-collaboration')}
                             >
@@ -640,7 +639,6 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
                             <SessionRetainedPane
                                 tabId="services"
                                 isActive={activeTab === 'services'}
-                                suspendWhenHidden={false}
                                 mode="absolute-overlay"
                                 testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-rightpanel-surface-services')}
                             >

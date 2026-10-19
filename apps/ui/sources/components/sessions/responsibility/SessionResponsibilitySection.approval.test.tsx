@@ -179,7 +179,7 @@ async function renderAssignment(serverId: string) {
             available: controller.availability === 'editable' || controller.availability === 'read_only',
         });
         return <>
-            <RetainedPanelSurface isActive={!pickerHost.compactStepOpen} suspendWhenHidden={false} testID="responsibility-main">
+            <RetainedPanelSurface isActive={!pickerHost.compactStepOpen} testID="responsibility-main">
                 <SessionResponsibilitySection controller={controller} pickerHost={pickerHost} />
             </RetainedPanelSurface>
             {pickerHost.compactStep}

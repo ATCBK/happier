@@ -19,7 +19,7 @@ export const RetainedPanelSurface = React.memo((props: Readonly<{
     isActive: boolean;
     testID?: string;
     mode?: RetainedPanelSurfaceMode;
-    /** Opt out only for a retained workflow whose background result handling requires React commits. */
+    /** Opt in only for bodies proven safe to suspend, including their layout-effect lifetimes. */
     suspendWhenHidden?: boolean;
     children: React.ReactNode;
 }>) => {
@@ -36,8 +36,8 @@ export const RetainedPanelSurface = React.memo((props: Readonly<{
     }, [active]);
 
     // Commit presentation=false once so demand/focus owners withdraw before suspending renders.
-    // Keep passive effects connected: retained approvals and dirty-editor guards outlive visibility.
-    // Activity disconnects those lifetimes; Freeze preserves them and catches up on reveal.
+    // Freeze preserves passive effects but disconnects layout effects. Generic
+    // retained content (including external plugin renderers) must stay connected.
     React.useEffect(() => {
         setFrozen(!active);
     }, [active]);
@@ -48,7 +48,7 @@ export const RetainedPanelSurface = React.memo((props: Readonly<{
 
     const content = (
         <PluginSurfaceFocusEligibilityProvider active={active}>
-            <Freeze freeze={props.suspendWhenHidden !== false && !active && frozen}>{props.children}</Freeze>
+            <Freeze freeze={props.suspendWhenHidden === true && !active && frozen}>{props.children}</Freeze>
         </PluginSurfaceFocusEligibilityProvider>
     );
 

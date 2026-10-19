@@ -301,7 +301,6 @@ function SessionCollaborationAccountContent(props: Readonly<{ scope: ServerAccou
               */}
             <RetainedPanelSurface
                 isActive={!responsibilityPickerHost.compactStepOpen}
-                suspendWhenHidden={false}
                 testID="session-collaboration-main-panel"
             >
                 {availability === 'available'

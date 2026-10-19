@@ -21,7 +21,7 @@ it('retains the same editable draft lifetime while hidden but rejects callbacks 
         });
         return null;
     }
-    const frame = (active: boolean) => <RetainedPanelSurface isActive={active}><DocumentProbe /></RetainedPanelSurface>;
+    const frame = (active: boolean) => <RetainedPanelSurface isActive={active} suspendWhenHidden><DocumentProbe /></RetainedPanelSurface>;
     const screen = await renderScreen(frame(true));
     const document = holder.current!;
     const ref = document.ref;

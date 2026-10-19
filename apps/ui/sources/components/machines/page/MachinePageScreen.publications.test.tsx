@@ -85,7 +85,7 @@ afterEach(() => {
     probe.commits = {};
 });
 
-it('attributes publications through the real page and leaves retained hidden tabs and Ask quiet until reveal', async () => {
+it('attributes real page publications, suspends plugin-free hidden bodies, and reveals their current retained data', async () => {
     const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
     const { HappierStorageSummaryV1Schema } = await import('@happier-dev/protocol/storage/storageV1');
     const { MachineProcessesAnswerV1Schema } = await import('@happier-dev/protocol/machines/processes/machineProcessesV1');
@@ -192,14 +192,13 @@ it('attributes publications through the real page and leaves retained hidden tab
         }
         rows[family] = { ...probe.commits, ...modelCounts };
     }
-    console.info('FX89 real Machine page committed subtree counts / three separate publications per family', rows);
+    console.info('FX95b real Machine page committed subtree counts / three separate publications per family', rows);
     expect(rows.vitals?.['Vitals overview']).toBeGreaterThan(0);
-    // A hidden subtree must do zero committed work even when its real store publishes different data.
+    // Only plugin-free bodies suspend. Ask may host external plugin renderers,
+    // whose layout-effect lifetime must remain connected even while hidden.
     for (const row of Object.values(rows)) for (const id of ['processes', 'storage', 'guard']) {
         expect(row[`machine-page-tab-body.${id}`] ?? 0, `${id}: ${JSON.stringify(rows)}`).toBe(0);
     }
-    for (const row of Object.values(rows)) expect(row['machine-page-tab-footer'] ?? 0).toBe(0);
-    for (const row of Object.values(rows)) expect(row['Ask model hidden invocations'] ?? 0).toBe(0);
     expect(screen.findHostByTestId('machine-page-tab-body.overview')!.findByType(NewSessionEmbeddedHostProvider).props.host).toBe(overviewComposerHost);
     await selectTab('processes');
     expect(screen.findHostByTestId('machine-page-tab-body.processes')).toBe(processHost);
@@ -215,6 +214,19 @@ it('attributes publications through the real page and leaves retained hidden tab
     expect(cacheRow).not.toBeNull();
     expect(renderedText(cacheRow!)).toContain(formatMachineBytes(storageBytes, 'storage'));
     expect(screen.findHostByTestId('machine-page-tab-footer')!.findByType(NewSessionEmbeddedHostProvider).props.host).toBe(footerComposerHost);
+    // Measure the other Ask placement while hidden too. This is a diagnostic
+    // number, not a zero-work contract for plugin-bearing retained roots.
+    probe.commits = {};
+    modelCounts = {};
+    for (let index = 0; index < 3; index++) {
+        at += 2_000;
+        await machineResourceStore.read(vitalsKey);
+        await settle();
+    }
+    console.info('FX95b unsuspended Ask hidden commits / three vitals publications', {
+        overview: probe.commits['machine-page-tab-body.overview'] ?? 0,
+        footerByFamily: Object.fromEntries(Object.entries(rows).map(([family, row]) => [family, row['machine-page-tab-footer'] ?? 0])),
+    });
     await selectTab('overview');
     expect(screen.findHostByTestId('machine-page-tab-body.overview')!.findByType(NewSessionEmbeddedHostProvider).props.host).toBe(overviewComposerHost);
     globalThis.IS_REACT_ACT_ENVIRONMENT = wasActEnvironment;

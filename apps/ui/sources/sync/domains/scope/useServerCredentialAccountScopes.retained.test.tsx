@@ -27,7 +27,7 @@ it('keeps a hidden mounted credential binding current, then retires it on real u
         latest = binding;
         return React.createElement('ScopeProbe', { testID: 'scope-probe', current: binding?.isCurrent() === true });
     }
-    const frame = (active: boolean) => <RetainedPanelSurface isActive={active}><ScopeProbe /></RetainedPanelSurface>;
+    const frame = (active: boolean) => <RetainedPanelSurface isActive={active} suspendWhenHidden><ScopeProbe /></RetainedPanelSurface>;
     const screen = await renderScreen(frame(true));
     await vi.waitFor(() => expect(screen.findByTestId('scope-probe')?.props.current).toBe(true));
     const binding = latest!;
@@ -55,7 +55,7 @@ it('retires a replaced credential while hidden and reveals only the new Account 
         latest = binding;
         return React.createElement('ScopeProbe', { testID: 'scope-probe', accountId: binding?.isCurrent() ? binding.accountId : null });
     }
-    const frame = (active: boolean) => <RetainedPanelSurface isActive={active}><ScopeProbe /></RetainedPanelSurface>;
+    const frame = (active: boolean) => <RetainedPanelSurface isActive={active} suspendWhenHidden><ScopeProbe /></RetainedPanelSurface>;
     const screen = await renderScreen(frame(true));
     await vi.waitFor(() => expect(latest?.isCurrent()).toBe(true));
     const original = latest!;

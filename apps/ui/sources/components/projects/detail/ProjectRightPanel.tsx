@@ -461,7 +461,7 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
                         </RetainedPanelSurface>
                     ) : null}
                     {availableTabIds.has('services') ? (
-                        <RetainedPanelSurface isActive={activeTab === 'services'} suspendWhenHidden={false} testID="project-rightpanel-surface-services">
+                        <RetainedPanelSurface isActive={activeTab === 'services'} testID="project-rightpanel-surface-services">
                             <React.Suspense fallback={<PaneLoadingFallback />}>
                                 <ProjectRightPanelServicesView
                                     machineId={props.workspaceRef.machineId}
