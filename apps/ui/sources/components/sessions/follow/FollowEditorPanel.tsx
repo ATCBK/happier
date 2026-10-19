@@ -9,6 +9,7 @@ import { ModalCardHeader } from '@/modal/components/card';
 
 /** The Follow panel's width (lab P2-A); a narrower window gets the room the Popover found. */
 const FOLLOW_PANEL_WIDTH_PX = 420;
+const FOLLOW_PANEL_EDGE_PADDING = { vertical: 12, horizontal: 12 } as const;
 
 /**
  * The one anchored Follow panel (lab P2-A, P2-S): a header naming who hears about what, the level editor
@@ -37,6 +38,8 @@ export function FollowEditorPanel(
       placement="bottom"
       maxWidthCap={FOLLOW_PANEL_WIDTH_PX}
       autoFocusOnOpen
+      // Clear of the window's edges, so the panel reads as floating even when it fills the room.
+      edgePadding={FOLLOW_PANEL_EDGE_PADDING}
       focusReturnRef={props.focusReturnRef}
       onRequestClose={props.onRequestClose}
       // Right-aligned under its trigger, growing toward the transcript.

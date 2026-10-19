@@ -13,6 +13,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { useListPresentation } from '@/components/ui/lists/listPresentation';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
@@ -120,6 +121,10 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
     const onceRow = props.notifyOnce && state.projection && !props.archived
         ? <NotifyOnceRow once={state.projection.follow?.once ?? null} disabled={disabled} {...props.notifyOnce} />
         : null;
+    const onPage = useListPresentation() === 'page';
+    const policyEditor = policyModel
+        ? <FollowPolicyEditorBinding testID="session-follow-policy" model={policyModel} disabled={disabled} onEditPolicy={props.onEditPolicy} />
+        : null;
     const also = props.alsoFollowing;
     const alsoCount = also ? also.people + also.sessions : 0;
 
@@ -142,11 +147,11 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
             <Item testID="session-follow-archived" title={t('session.follow.archived')} mode="info" titleLines={0} showChevron={false} />
         </ItemGroup> : null}
         {following && policyModel ? <>
-            {/* The scope sits outside the bare section, so the public sections take the column's own inset once. */}
+            {/* On a page the scope sits outside the bare section, so the public sections take the column's own
+                inset once. A popover has no column edge: there the public sections draw their own inset, level
+                with the Voice sheet and the footer, and a bare section around them would inset them twice. */}
             <CoreCollectionScope>
-                <ItemGroup surface="none">
-                    <FollowPolicyEditorBinding testID="session-follow-policy" model={policyModel} disabled={disabled} onEditPolicy={props.onEditPolicy} />
-                </ItemGroup>
+                {onPage ? <ItemGroup surface="none">{policyEditor}</ItemGroup> : policyEditor}
             </CoreCollectionScope>
             <ItemGroup>
                 <Item
