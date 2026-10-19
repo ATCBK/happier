@@ -38,7 +38,12 @@ export const emailPlugin = definePlugin({
   connectedAccountDescriptors: { [IMAP_SMTP_CONNECTED_ACCOUNT_ID]: imapSmtpConnectedAccountDescriptor },
   actions: {
     ...imapSmtpActions,
-    [ids.setup]: { ...providerAction('Set up Email Channels', providers.operations.setup.declaration, EMAIL_SETUP_INPUT_SCHEMA.jsonSchema, setupEmailChannels), inputHints: EMAIL_SETUP_INPUT_HINTS },
+    [ids.setup]: {
+      ...providerAction('Set up Email Channels', providers.operations.setup.declaration, EMAIL_SETUP_INPUT_SCHEMA.jsonSchema, setupEmailChannels),
+      inputHints: EMAIL_SETUP_INPUT_HINTS,
+      hostAccess: [IMAP_SMTP_CREDENTIAL_PURPOSE],
+      connectedAccountPurposeBindings: [{ path: 'credentialRef', purpose: IMAP_SMTP_CREDENTIAL_PURPOSE }],
+    },
     [ids.connectionTest]: providerAction('Test email connection', providers.operations.connectionTest.declaration, providers.operations.connectionTest.declaration.input.schema.jsonSchema, testEmailConnection),
     [ids.endpointResolve]: providerAction('Resolve mailbox destination', providers.operations.endpointResolve.declaration, providers.operations.endpointResolve.declaration.input.schema.jsonSchema, resolveEmailEndpoint),
     [ids.principalResolve]: providerAction('Resolve email principal', providers.operations.principalResolve.declaration, providers.operations.principalResolve.declaration.input.schema.jsonSchema, resolveEmailPrincipal),

@@ -744,14 +744,14 @@ function createChannelsPlugin() {
       },
       [CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPollRetry]: {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionPollRetry,
-        title: 'Retry blocked conversation poll',
-        description: 'Clears blocked poll state so the conversation connection can retry.',
+        title: 'Retry conversation poll',
+        description: 'Clears failed poll state so the conversation connection can retry.',
         surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
-          title: 'Retry this blocked conversation poll?',
-          body: 'This clears the saved blocked poll state so the current connection can retry it.',
+          title: 'Retry this conversation poll?',
+          body: 'This clears the saved failed poll state, including automatic backoff, so the current connection can retry it.',
           confirmLabel: 'Retry poll',
         },
         hostAccess: ['account-storage'],

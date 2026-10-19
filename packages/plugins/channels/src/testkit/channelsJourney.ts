@@ -10,6 +10,7 @@ import { runConversationOutwardDeliveryCycle } from '../outwardDeliverySuperviso
 import { channelsTargetedContributionServices } from './operationOnlyTargetedContributionsFixture.js';
 import { MemoryCollection } from './memoryCollection.js';
 import type { ComposerAttachmentResolveRequestV1 } from '@happier-dev/plugin-sdk';
+import { PluginMachineExecutionOriginV1Schema, type PluginMachineExecutionOriginV1 } from '@happier-dev/plugin-sdk/actions';
 
 /**
  * Public-SDK composition of the actual Channels activation and cycle owners.
@@ -24,6 +25,8 @@ export async function createChannelsJourneyFixture(input: Readonly<{
   sessions: PluginServices['sessions'];
   actions: PluginServices['actions'];
   resolveCurrentPluginMaterializationRef?: Parameters<typeof createPluginTestkit>[0]['resolveCurrentPluginMaterializationRef'];
+  /** Current provider identity supplied by the host fixture, independently of saved connection state. */
+  resolveCurrentProviderExecutionOrigin?: () => PluginMachineExecutionOriginV1 | null;
   omitAttachmentRegistration?: boolean;
 }>) {
   const state = new MemoryCollection();
@@ -76,16 +79,15 @@ export async function createChannelsJourneyFixture(input: Readonly<{
         if (!handler) throw new Error('The activated provider ingress handler is absent');
         const entry = kit.readTargetedContributionFixture(CHANNELS_PROVIDER_POINT_REF).contributions[0];
         if (!entry) throw new Error('The activated provider contribution is absent');
-        const connection = input.connection as { payload: { transportOrigin: { materializationRef: {
-          pluginId: string; machineId: string; materializationId: string;
-        } } } };
+        const executionOrigin = PluginMachineExecutionOriginV1Schema.parse(input.resolveCurrentProviderExecutionOrigin?.());
         // The test host stamps a caller from the actual provider occurrence,
         // source custody and materialization. No provider-supplied ingress
         // field can assert these facts, matching the production host boundary.
         await handler(request, { ...context, caller: { kind: 'plugin', pluginId: entry.contributor.pluginId,
           contribution: { id: 'poll', qualifiedId: `${entry.contributor.pluginId}/actions/poll` },
           occurrenceId: entry.contributor.occurrenceId, sourceCustody: entry.contributor.sourceCustody,
-          materialization: connection.payload.transportOrigin.materializationRef } });
+          ...('materializationRef' in executionOrigin ? { materialization: executionOrigin.materializationRef } : {}),
+          executionOrigin } });
         return null;
       } },
   } });

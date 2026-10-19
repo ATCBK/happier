@@ -1,6 +1,4 @@
-import { simpleParser, type HeaderValue } from 'mailparser';
-
-import { shapeEmailBody } from './shape.js';
+import type { HeaderValue } from 'mailparser';
 
 export interface EmailContentOptions {
   quotedHistory?: 'stripKnown' | 'always' | 'never';
@@ -35,6 +33,10 @@ function singleAddress(value: HeaderValue | undefined) {
 }
 
 export async function parseEmail(raw: Uint8Array, options: EmailContentOptions = {}): Promise<ParsedEmail> {
+  const [{ simpleParser }, { shapeEmailBody }] = await Promise.all([
+    import('mailparser'),
+    import('./shape.js'),
+  ]);
   const mail = await simpleParser(Buffer.from(raw), { skipImageLinks: true, skipHtmlToText: true, skipTextToHtml: true });
   const headers = new Map<string, string[]>();
   for (const { key, line } of mail.headerLines) {

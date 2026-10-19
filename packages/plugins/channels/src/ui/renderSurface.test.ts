@@ -2,7 +2,7 @@
 
 import { cloneElement, type ReactElement } from 'react';
 import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
-import type { PluginUiHostApi, PluginUiResourceReference, RenderContext, ResourceContent, ResourceSubscriptionEvent, SelectActionInputResult } from '@happier-dev/plugin-sdk/ui';
+import type { PluginUiHostApi, PluginUiResourceReference, RenderContext, ResourceContent, ResourceSubscriptionEvent, SelectActionInputResult, SessionStateV1 } from '@happier-dev/plugin-sdk/ui';
 import {
   CONVERSATION_MANAGEMENT_ACTION_IDS_V1,
   CONVERSATION_PROVIDERS_CONTRIBUTION_POINT_ID_V1,
@@ -46,6 +46,7 @@ import {
 } from '../testkit/currentConnectionFixture.js';
 import { renderSurface } from './renderSurface.js';
 import { PLUGIN_MANIFEST } from '../manifest.js';
+import { createSessionCandidatePageFixture } from '../testkit/sessionCandidatePageFixture.js';
 
 import { assertChannelsTestCollectionQueryLimit } from '../testkit/collectionQueryBound.js';
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -724,6 +725,26 @@ async function pressButtonWithAccessibleLabelFragment(fragment: string): Promise
   ));
   expect(element, `Expected mounted button whose accessible label includes ${JSON.stringify(fragment)}`).not.toBeNull();
   await act(async () => { element?.click(); });
+}
+
+/** Choose one option of a field Select through the shared menu it opens. */
+async function chooseFieldOption(fieldLabel: string, optionLabel: string): Promise<void> {
+  await pressButtonWithAccessibleLabelFragment(fieldLabel);
+  const option = await vi.waitFor(() => {
+    const candidate = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
+      .find((item) => item.textContent?.includes(optionLabel));
+    expect(candidate, `Expected a ${JSON.stringify(optionLabel)} option in the ${fieldLabel} menu`).toBeDefined();
+    return candidate!;
+  });
+  await act(async () => { option.click(); });
+}
+
+/** The current value a closed field Select states on its trigger. */
+function expectFieldValue(fieldLabel: string, optionLabel: string): void {
+  const trigger = Array.from(document.querySelectorAll<HTMLElement>('[role="button"]')).find((candidate) => (
+    candidate.getAttribute('aria-label')?.includes(fieldLabel)
+  ));
+  expect(trigger?.textContent ?? trigger?.getAttribute('aria-label')).toContain(optionLabel);
 }
 
 /** Exercise the mounted RNW field through its real browser input event. */
@@ -2225,6 +2246,20 @@ describe('Channels mounted ingress attention recovery', () => {
               },
             },
           },
+          ...(['actorUnattributable', 'actorNotAllowed', 'botSenderDisabled'] as const).map((reason, index) => {
+            const id = String(index).repeat(43);
+            return { rowId: id, revision: 1, value: {
+              id, 'record-kind': 'ingress-obligation', v: 1,
+              'connection-id': 'connection-1', 'binding-id': 'binding-1',
+              terminal: true, attention: true, 'created-at': 10, 'updated-at': 22,
+              payload: {
+                occurrenceIds: ['private-occurrence'], censusId: 'B'.repeat(43), target: null,
+                sourceAuthority: { connectionAuthorityEpoch: 1, bindingRevision: 2, bindingAuthorityEpoch: 3 },
+                lifecycle: { phase: 'terminal', attemptCount: 0, dueAt: null }, disposition: 'rejected',
+                nonAdmission: { reason, senderFeedbackEligible: false },
+              },
+            } };
+          }),
         ],
         nextCursor: undefined,
         changeCursor: 0,
@@ -2272,7 +2307,11 @@ describe('Channels mounted ingress attention recovery', () => {
 
     try {
       await expect(fixture.findByRole('button', { name: 'Retry saved input' })).resolves.toBeDefined();
+      await expect(fixture.getByText('Dropped because the sender could not be verified.')).resolves.toBeDefined();
+      await expect(fixture.getByText('Dropped because the sender is not allowed.')).resolves.toBeDefined();
+      await expect(fixture.getByText('Dropped because automated senders are not allowed.')).resolves.toBeDefined();
       await expect(fixture.getByText('An incoming message was not accepted.')).resolves.toBeDefined();
+      expect(document.body.textContent).not.toContain('private-occurrence');
       await expect(fixture.getByText(
         'An incoming message is waiting for its connection or target to be reachable again.',
       )).resolves.toBeDefined();
@@ -2331,7 +2370,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
     });
@@ -2385,7 +2424,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
     });
@@ -2437,7 +2476,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
     });
@@ -2556,6 +2595,8 @@ describe('Channels mounted binding creation', () => {
       expect(endpointHeading).toBeDefined();
       expect(document.activeElement).toBe(endpointHeading);
       expect(focusTarget).toHaveBeenCalledTimes(1);
+      // The opener has done its job: an open journey does not repeat it beside its own first step.
+      expect(document.querySelector('[data-testid="channels-binding-create-open"]')).toBeNull();
 
       await enterTextByTestId('channels-binding-create-endpoint-query', bindingEndpointSelection.query);
       await fixture.press(await fixture.getByRole('button', { name: 'Search endpoints' }));
@@ -2646,15 +2687,13 @@ describe('Channels mounted binding creation', () => {
         return { kind: 'principalCandidates', candidates: principalCandidates };
       }
       if (action === 'session.list') {
-        return {
+        return createSessionCandidatePageFixture({
           sessions: [{
             id: 'session-1',
             title: 'Project review',
-            // The mounted create flow must never render or request previews.
-            lastMessagePreview: { role: 'user', text: 'private preview' },
           }],
           nextCursor: null,
-        };
+        });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingCreate) {
         return { kind: 'created', binding: createdBinding };
@@ -2730,7 +2769,7 @@ describe('Channels mounted binding creation', () => {
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       expect(document.body.textContent).not.toContain('private preview');
@@ -2776,7 +2815,7 @@ describe('Channels mounted binding creation', () => {
       expect(summary?.textContent).toContain('Durable push');
       expect(summary?.textContent).toContain('Uses this connection’s host-verified webhook endpoint.');
 
-      await fixture.press(await fixture.getByRole('button', { name: 'Create binding' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Link conversation' }));
 
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
@@ -2817,7 +2856,7 @@ describe('Channels mounted binding creation', () => {
       expect(createInput).not.toHaveProperty('inboundDebounceMs');
       await expect(fixture.getByText('Binding created')).resolves.toBeDefined();
       await expect(fixture.getByRole('button', {
-        name: 'Create binding',
+        name: 'Link conversation',
         state: { disabled: true },
       })).resolves.toBeDefined();
       await expect(fixture.getByRole('button', {
@@ -2906,15 +2945,13 @@ describe('Channels mounted binding creation', () => {
         return { kind: 'principalCandidates', candidates: principalCandidates };
       }
       if (action === 'session.list') {
-        return {
+        return createSessionCandidatePageFixture({
           sessions: [{
             id: 'session-1',
             title: 'Project review',
-            // The mounted create flow must never render or request previews.
-            lastMessagePreview: { role: 'user', text: 'private preview' },
           }],
           nextCursor: null,
-        };
+        });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingCreate) {
         return { kind: 'created', binding: createdBinding };
@@ -2990,7 +3027,7 @@ describe('Channels mounted binding creation', () => {
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       expect(document.body.textContent).not.toContain('private preview');
@@ -3015,7 +3052,7 @@ describe('Channels mounted binding creation', () => {
       const summary = document.querySelector<HTMLElement>('[data-testid="channels-binding-create-summary"]');
       expect(summary?.textContent).toContain('senders (2)');
       expect(summary?.textContent).toContain('No routes yet');
-      await fixture.press(await fixture.getByRole('button', { name: 'Create binding' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Link conversation' }));
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingCreate,
@@ -3077,12 +3114,12 @@ describe('Channels mounted binding creation', () => {
       await fixture.press(await fixture.getByRole('button', { name: 'Reload Sessions' }));
       await vi.waitFor(() => { expect(sessionReads).toBe(2); });
       await act(async () => {
-        finishUnexpectedRead?.({ sessions: [{ id: 'recovered-session', title: 'Recovered Session' }], nextCursor: null });
+        finishUnexpectedRead?.(createSessionCandidatePageFixture({ sessions: [{ id: 'recovered-session', title: 'Recovered Session' }], nextCursor: null }));
       });
       await expect(fixture.getByRole('button', { name: 'Recovered Session' })).resolves.toBeDefined();
     } finally {
       await fixture.dispose();
-      finishUnexpectedRead?.({ sessions: [], nextCursor: null });
+      finishUnexpectedRead?.(createSessionCandidatePageFixture({ sessions: [], nextCursor: null }));
     }
   });
 
@@ -3113,7 +3150,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
         return {
@@ -3276,10 +3313,10 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
       }
       if (action === 'session.list') {
-        return {
+        return createSessionCandidatePageFixture({
           sessions: [{ id: 'session-pairing', title: 'Pairing Session' }],
           nextCursor: null,
-        };
+        });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
         return {
@@ -3373,7 +3410,7 @@ describe('Channels mounted binding creation', () => {
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       expect(executeAction.mock.calls.map(([request]) => request.action)).not.toContain(
@@ -3524,7 +3561,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
         sentPairingRequestId = (input as Readonly<{ pairingRequestId?: string }>).pairingRequestId;
@@ -3624,7 +3661,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
         sentPairingRequestId = (input as Readonly<{ pairingRequestId?: string }>).pairingRequestId;
@@ -3726,7 +3763,7 @@ describe('Channels mounted binding creation', () => {
             : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
         }
         if (action === 'session.list') {
-          return { sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null };
+          return createSessionCandidatePageFixture({ sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null });
         }
         if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
           return {
@@ -3843,7 +3880,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
     });
@@ -3866,7 +3903,7 @@ describe('Channels mounted binding creation', () => {
       await fixture.press(await fixture.getByRole('button', { name: 'Project review' }));
 
       const newSession = await fixture.getByRole('switch', {
-        name: 'Configure a new Session',
+        name: 'Allow /new',
         state: { checked: false },
       });
       await fixture.press(newSession);
@@ -3879,7 +3916,7 @@ describe('Channels mounted binding creation', () => {
         }));
       });
       await expect(fixture.getByRole('switch', {
-        name: 'Configure a new Session',
+        name: 'Allow /new',
         state: { checked: false },
       })).resolves.toBeDefined();
       expect(executeAction.mock.calls.map(([request]) => request.action)).not.toContain('session.spawn_new');
@@ -3899,7 +3936,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       if (action === 'automation.conversation.targets.list') {
         if ((input as Readonly<{ cursor?: unknown }>).cursor === undefined) {
@@ -3951,7 +3988,7 @@ describe('Channels mounted binding creation', () => {
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       await fixture.press(await fixture.getByRole('button', { name: 'Show Automations' }));
@@ -3992,7 +4029,7 @@ describe('Channels mounted binding creation', () => {
         'The Automation runs unattended with the permissions, tools, and outward effects its own definition grants.',
       );
 
-      await fixture.press(await fixture.getByRole('button', { name: 'Create binding' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Link conversation' }));
 
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
@@ -4033,24 +4070,24 @@ describe('Channels mounted binding creation', () => {
       if (action === 'session.list') {
         const cursor = (input as Readonly<{ cursor?: unknown }>).cursor;
         if (cursor === undefined) {
-          return {
+          return createSessionCandidatePageFixture({
             sessions: Array.from({ length: 100 }, (_unused, index) => ({
               id: `session-p1-${index}`,
               title: `Session 1-${index}`,
             })),
             nextCursor: 'session-page-2',
-          };
+          });
         }
         if (cursor === 'session-page-2') {
-          return {
+          return createSessionCandidatePageFixture({
             sessions: Array.from({ length: 100 }, (_unused, index) => ({
               id: `session-p2-${index}`,
               title: `Session 2-${index}`,
             })),
             nextCursor: null,
-          };
+          });
         }
-        return { sessions: [], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [], nextCursor: null });
       }
       if (action === 'automation.conversation.targets.list') {
         const cursor = (input as Readonly<{ cursor?: unknown }>).cursor;
@@ -4089,14 +4126,14 @@ describe('Channels mounted binding creation', () => {
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       await fixture.press(await fixture.getByRole('button', { name: 'Show more Sessions' }));
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false, cursor: 'session-page-2' },
+          input: { view: 'awareness', limit: 100, cursor: 'session-page-2' },
         }));
       });
       await enterTextByTestId('channels-binding-target-search', 'Session 2-99');
@@ -4180,7 +4217,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'ready', revision: 2, binding: savedBinding };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       if (action === 'automation.conversation.targets.list') {
         return {
@@ -4213,8 +4250,12 @@ describe('Channels mounted binding creation', () => {
     });
 
     try {
+      await expect(fixture.getByRole('button', { name: 'Pause' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
+      // Editing is a focused state of the page: the bot and the stop operations leave while it lasts.
+      await expect(fixture.queryByRole('button', { name: 'Pause' })).resolves.toBeUndefined();
+      await expect(fixture.queryByRole('button', { name: 'Manage bot' })).resolves.toBeUndefined();
       await expect(fixture.getByRole('radio', {
         name: 'No external result',
         state: { checked: true },
@@ -4227,7 +4268,7 @@ describe('Channels mounted binding creation', () => {
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       await fixture.press(await fixture.getByRole('button', { name: 'Show Automations' }));
@@ -4317,7 +4358,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'ready', revision: 2, binding: savedBinding };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate) {
         updateInputs.push(input);
@@ -4341,7 +4382,7 @@ describe('Channels mounted binding creation', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Change target' }));
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
@@ -4383,7 +4424,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingCreate) {
         throw new PluginError({ code: 'timeout', message: 'The binding create request timed out.' });
@@ -4414,11 +4455,12 @@ describe('Channels mounted binding creation', () => {
       await selectPrincipalAndOpenTarget(fixture);
       await fixture.press(await fixture.getByRole('button', { name: 'Project review' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Review binding' }));
-      await fixture.press(await fixture.getByRole('button', { name: 'Create binding' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Link conversation' }));
 
       await expect(fixture.getByText('Could not confirm binding creation')).resolves.toBeDefined();
+      // The open journey carries the lock: its confirm stays disabled and no second opener appears.
       await expect(fixture.findByRole('button', {
-        name: 'Add binding',
+        name: 'Link conversation',
         state: { disabled: true },
       })).resolves.toBeDefined();
       expect(executeAction.mock.calls.filter(([request]) => (
@@ -4430,8 +4472,9 @@ describe('Channels mounted binding creation', () => {
         expect(bindingsReadCount).toBe(2);
         expect(resolveBindingsRefresh).toBeTypeOf('function');
       });
+      // The open journey carries the lock: its confirm stays disabled and no second opener appears.
       await expect(fixture.findByRole('button', {
-        name: 'Add binding',
+        name: 'Link conversation',
         state: { disabled: true },
       })).resolves.toBeDefined();
 
@@ -4568,7 +4611,7 @@ describe('Channels mounted binding editor', () => {
           input: { bindingId: 'binding-1' },
         }));
       });
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await expect(fixture.getByText('provider-principal-private-4')).resolves.toBeDefined();
       await expect(fixture.getByRole('switch', {
         name: 'Allow bot senders',
@@ -4729,7 +4772,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', {
         name: 'Re-resolve conversation and allowed senders',
       }));
@@ -4891,7 +4934,7 @@ describe('Channels mounted binding editor', () => {
           : { kind: 'principalCandidates', candidates: [externalPrincipal] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-current-8', title: 'Current session' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-current-8', title: 'Current session' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate) {
         updateInputs.push(input);
@@ -4907,7 +4950,7 @@ describe('Channels mounted binding editor', () => {
       surface: renderSurface,
       surfaceContext: createChannelsPageSurfaceContext(),
       subPath: 'binding-1',
-      adapter: createChannelsSemanticAdapter(),
+      adapter: createChannelsSemanticAdapter(emptyDataClient, undefined, { overlays: true }),
       handlers: {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
@@ -4935,14 +4978,14 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
 
       // Target first: re-resolving the audience afterwards must not discard it.
       await fixture.press(await fixture.getByRole('button', { name: 'Change target' }));
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       await fixture.press(await fixture.getByRole('button', { name: 'Current session' }));
@@ -4951,14 +4994,13 @@ describe('Channels mounted binding editor', () => {
         name: 'Mirror Session',
         state: { checked: false },
       }));
-      await fixture.press(await fixture.getByRole('radio', {
-        name: 'All allowed messages',
-        state: { checked: false },
-      }));
-      await fixture.press(await fixture.getByRole('radio', {
-        name: '0.75 seconds',
-        state: { checked: false },
-      }));
+      await chooseFieldOption('Incoming messages', 'All allowed messages');
+      // Seven durations are a field that opens the shared menu.
+      await pressButtonWithAccessibleLabelFragment('Message grouping delay');
+      const delayOption = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
+        .find((candidate) => candidate.textContent?.includes('0.75 seconds'));
+      expect(delayOption).toBeDefined();
+      await act(async () => { delayOption?.click(); });
       await fixture.press(await fixture.getByRole('radio', {
         name: 'Provider default',
         state: { checked: false },
@@ -5088,7 +5130,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
 
       // The scope selector only exists once the owner turns approvals on, so
       // its absence here proves the toggle is the control, not decoration.
@@ -5186,7 +5228,7 @@ describe('Channels mounted binding editor', () => {
           : { kind: 'ready', revision: 2, binding: savedBinding };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-current-8', title: 'Current session' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-current-8', title: 'Current session' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate) {
         updateInputs.push(input);
@@ -5210,7 +5252,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Change target' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Current session' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Review changes' }));
@@ -5299,7 +5341,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Review changes' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
 
@@ -5398,7 +5440,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('switch', {
         name: 'Enable this binding',
         state: { checked: true },
@@ -5498,7 +5540,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Review changes' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
 
@@ -5599,8 +5641,9 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
+      // The editing state announces itself by its page title.
       const heading = Array.from(document.querySelectorAll<HTMLElement>('[role="heading"]')).find((node) => (
-        node.textContent === 'Edit binding'
+        node.textContent === 'Edit conversation'
       ));
       expect(heading).toBeDefined();
       expect(document.activeElement).toBe(heading);
@@ -5634,7 +5677,12 @@ describe('Channels thread router conversation', () => {
         {
           id: 'route-intake',
           when: { group: 'sales', forwarded: true as const },
-          recipe: { agentId: 'claude', directory: '/srv/wilson/intake', unlistedTools: 'deny', allowedTools: ['mcp__wilson-intake__*'] },
+          recipe: {
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.claude', localId: 'claude' } },
+            directory: { kind: 'path', path: '/srv/wilson/intake' },
+            unlistedTools: 'deny',
+            allowedTools: ['mcp__wilson-intake__*'],
+          },
           policy: {
             deliveryMode: 'repliesOnly' as const,
             permissionCeiling: 'read-only',
@@ -5645,7 +5693,10 @@ describe('Channels thread router conversation', () => {
         {
           id: 'route-conversation',
           when: { group: 'any', forwarded: 'any' as const },
-          recipe: { agentId: 'claude', directory: '/srv/wilson/conversation' },
+          recipe: {
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.claude', localId: 'claude' } },
+            directory: { kind: 'path', path: '/srv/wilson/conversation' },
+          },
           policy: {
             deliveryMode: 'repliesOnly' as const,
             permissionCeiling: 'read-only',
@@ -5691,17 +5742,52 @@ describe('Channels thread router conversation', () => {
       approval: { kind: 'off' },
       enabled: true,
       deletionState: 'none',
+    }, {
+      // A thread started before providers sent a label: its Session title names it.
+      bindingId: 'thread-2',
+      parentBindingId: 'router-1',
+      revision: 1,
+      connectionId: 'connection-1',
+      endpoint: { audience: 'shared' },
+      target: { kind: 'session', summary: 'session-thread-2' },
+      inputMode: 'allAllowedMessages',
+      deliveryMode: 'repliesOnly',
+      approval: { kind: 'off' },
+      enabled: true,
+      deletionState: 'none',
     }],
   }, 'b');
+  const routerThreadSessions: Readonly<Record<string, SessionStateV1>> = {
+    'session-thread-2': {
+      sessionId: 'session-thread-2', title: 'Rendez-vous showroom Morges',
+      lifecycle: 'active', runtime: 'working', operational: 'working', pendingPermissions: [],
+      workStatus: { bucket: 'needs_you', tone: 'attention', word: 'Needs you' },
+    },
+  };
 
   it('shows the routes and started threads, and saves a reordered route list through the guarded update', async () => {
     const readReply = ConversationBindingReadResultV1Schema.parse({
       kind: 'ready', revision: 1, binding: routerBinding,
     });
+    // Each started thread's own detail names the person who wrote in.
+    const threadReply = (id: string, sender: string) => ConversationBindingReadResultV1Schema.parse({
+      kind: 'ready',
+      revision: 1,
+      binding: {
+        ...routerBinding,
+        id,
+        endpoint: { kind: 'thread' as const, audience: 'shared' as const, id: `${id}@batiplus.ch` },
+        target: { kind: 'session' as const, sessionId: `session-${id}`, policy: routerBinding.target.routes[0]!.policy },
+        allowedPrincipalIds: [sender],
+      },
+    });
     const updateInputs: unknown[] = [];
     let readCount = 0;
     const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead) {
+        const bindingId = (input as Readonly<{ bindingId: string }>).bindingId;
+        if (bindingId === 'thread-1') return threadReply('thread-1', 'anna@batiplus.ch');
+        if (bindingId === 'thread-2') return threadReply('thread-2', 'leeroy@batiplus.ch');
         expect(input).toEqual({ bindingId: 'router-1' });
         readCount += 1;
         return { ...readReply, revision: readCount > 2 ? 2 : 1 };
@@ -5723,6 +5809,7 @@ describe('Channels thread router conversation', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: bindingResourceReader(() => routerBindingsResource),
+        readSession: ({ sessionId }) => routerThreadSessions[sessionId] ?? null,
       },
     });
 
@@ -5730,9 +5817,26 @@ describe('Channels thread router conversation', () => {
       await vi.waitFor(async () => {
         await expect(fixture.getByText('1. People in sales, forwarded mail')).resolves.toBeDefined();
       });
-      await expect(fixture.getByText('claude · intake · only 1 listed tools')).resolves.toBeDefined();
+      // The recipe is read in the Session spawn shape, not as raw ids.
+      expect(document.body.textContent).toContain('intake · Only 1 tool');
+      expect(document.body.textContent).not.toContain('listed tools');
       await expect(fixture.getByText('Devis chantier Lausanne')).resolves.toBeDefined();
+      // An unlabeled thread is named by its Session and shows its work state.
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('Rendez-vous showroom Morges')).resolves.toBeDefined();
+      });
+      await expect(fixture.getByText('Needs you')).resolves.toBeDefined();
+      await expect(fixture.queryByText('External conversation')).resolves.toBeUndefined();
       await expect(fixture.queryByText('threadRouter')).resolves.toBeUndefined();
+      // Threads tell apart by who wrote in and by which sender group; the
+      // header says who can reach the router instead of "Only you".
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('anna@batiplus.ch · sales')).resolves.toBeDefined();
+        await expect(fixture.getByText('leeroy@batiplus.ch · brief')).resolves.toBeDefined();
+      });
+      expect(document.body.textContent).toContain('Senders in sales and brief');
+      expect(document.body.textContent).toContain('2 threads');
+      expect(document.body.textContent).not.toContain('Only you');
 
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
       await expect(fixture.findByRole('heading', { name: 'Routes' })).resolves.toBeDefined();
@@ -5765,9 +5869,9 @@ describe('Channels thread router conversation', () => {
       if (action === 'session.list') {
         sessionListInputs.push(input);
         const cursor = (input as Readonly<{ cursor?: string }>).cursor;
-        return cursor === undefined
+        return createSessionCandidatePageFixture(cursor === undefined
           ? { sessions: [{ id: 'session-recent', title: 'Brief du matin' }], nextCursor: 'page-2' }
-          : { sessions: [{ id: 'session-older', title: 'Wilson questions' }] };
+          : { sessions: [{ id: 'session-older', title: 'Wilson questions' }] });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart) {
         startInputs.push(input);
@@ -5858,7 +5962,7 @@ describe('Channels thread router conversation', () => {
       handlers: {
         executeAction: async ({ action }) => {
           if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead) return ConversationBindingReadResultV1Schema.parse({ kind: 'ready', revision: 1, binding: routerBinding });
-          if (action === 'session.list') return { sessions: [{ id: 'session-recent', title: 'Brief du matin' }] };
+          if (action === 'session.list') return createSessionCandidatePageFixture({ sessions: [{ id: 'session-recent', title: 'Brief du matin' }] });
           if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart) throw new PluginError({
             code: 'channels_conversation_start_invalid', message, details: { reason: 'invalidRow' },
           });
@@ -7720,7 +7824,7 @@ describe('Channels offline Account-local binding policy', () => {
       surface: renderSurface,
       surfaceContext: createChannelsPageSurfaceContext(),
       subPath: 'binding-1',
-      adapter: createChannelsSemanticAdapter(account.dataClient),
+      adapter: createChannelsSemanticAdapter(account.dataClient, undefined, { overlays: true }),
       handlers: {
         confirm: async request => {
           decisions.push(request);
@@ -7735,10 +7839,7 @@ describe('Channels offline Account-local binding policy', () => {
       // before any assertion about what the surface offers to edit.
       await expect(fixture.getByRole('button', { name: 'Turn on' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await fixture.press(await fixture.getByRole('radio', {
-        name: 'Direct mentions only',
-        state: { checked: false },
-      }));
+      await chooseFieldOption('Incoming messages', 'Direct mentions only');
       await fixture.press(await fixture.getByRole('radio', {
         name: 'Eligible refusals',
         state: { checked: false },
@@ -8011,7 +8112,7 @@ describe('Channels offline Account-local binding policy', () => {
       surface: renderSurface,
       surfaceContext: createChannelsPageSurfaceContext(),
       subPath: 'binding-1',
-      adapter: createChannelsSemanticAdapter(account.dataClient),
+      adapter: createChannelsSemanticAdapter(account.dataClient, undefined, { overlays: true }),
       handlers: {
         confirm: async () => true,
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
@@ -8024,10 +8125,7 @@ describe('Channels offline Account-local binding policy', () => {
         code: 'plugin_collection_cancelled',
         message: 'The binding policy write was cancelled after it crossed the mutation boundary.',
       });
-      await fixture.press(await fixture.getByRole('radio', {
-        name: 'Direct mentions only',
-        state: { checked: false },
-      }));
+      await chooseFieldOption('Incoming messages', 'Direct mentions only');
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
 
       await vi.waitFor(() => {
@@ -8045,10 +8143,7 @@ describe('Channels offline Account-local binding policy', () => {
       });
       // The draft survives the reconciling reread, exactly as the daemon-backed
       // editor promises, and the next write is admitted against the reread row.
-      await expect(fixture.getByRole('radio', {
-        name: 'Direct mentions only',
-        state: { checked: true },
-      })).resolves.toBeDefined();
+      expectFieldValue('Incoming messages', 'Direct mentions only');
 
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
       await vi.waitFor(() => {
@@ -8071,7 +8166,7 @@ describe('Channels offline Account-local binding policy', () => {
       surface: renderSurface,
       surfaceContext: createChannelsPageSurfaceContext(),
       subPath: 'binding-1',
-      adapter: createChannelsSemanticAdapter(account.dataClient),
+      adapter: createChannelsSemanticAdapter(account.dataClient, undefined, { overlays: true }),
       handlers: {
         confirm: async () => true,
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
@@ -8084,10 +8179,7 @@ describe('Channels offline Account-local binding policy', () => {
         code: 'plugin_collection_cancelled',
         message: 'The binding policy write was cancelled after it crossed the mutation boundary.',
       });
-      await fixture.press(await fixture.getByRole('radio', {
-        name: 'Direct mentions only',
-        state: { checked: false },
-      }));
+      await chooseFieldOption('Incoming messages', 'Direct mentions only');
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
 
       await vi.waitFor(() => {
@@ -8125,10 +8217,7 @@ describe('Channels offline Account-local binding policy', () => {
         expect(document.querySelector('[data-testid="channels-account-local-binding-outcome-unknown"]'))
           .toBeNull();
       });
-      await expect(fixture.getByRole('radio', {
-        name: 'Direct mentions only',
-        state: { checked: true },
-      })).resolves.toBeDefined();
+      expectFieldValue('Incoming messages', 'Direct mentions only');
     } finally {
       await fixture.dispose();
     }

@@ -979,8 +979,8 @@
                   "x-happier-max-utf8-bytes": 512
                 },
                 "recommendedMaximumObservationAgeMs": {
-                  "maximum": 2592000000,
-                  "minimum": 60000,
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 "recommendedTransport": {
@@ -1362,7 +1362,7 @@
                   ]
                 },
                 "retryAfterMs": {
-                  "maximum": 86400000,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 }
@@ -1840,7 +1840,7 @@
                   ]
                 },
                 "retryAfterMs": {
-                  "maximum": 86400000,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 }
@@ -2386,7 +2386,7 @@
                   ]
                 },
                 "retryAfterMs": {
-                  "maximum": 86400000,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 }
@@ -2716,7 +2716,7 @@
                   ]
                 },
                 "retryAfterMs": {
-                  "maximum": 86400000,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 }
@@ -3230,7 +3230,7 @@
                   ]
                 },
                 "retryAfterMs": {
-                  "maximum": 86400000,
+                  "maximum": 9007199254740991,
                   "minimum": 0,
                   "type": "integer"
                 }
@@ -3305,6 +3305,17 @@
     "dragSources": [],
     "dropTargets": [],
     "events": [
+      {
+        "id": "connections-invalidated-v1",
+        "kind": "subscription",
+        "target": {
+          "event": {
+            "localId": "connections-invalidated-v1",
+            "pluginId": "happier.channels"
+          },
+          "kind": "plugin"
+        }
+      },
       {
         "automation": {
           "eligible": true,
@@ -3477,6 +3488,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [
       {
@@ -3716,6 +3728,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "description": "Connects Discord conversations to Happier Channels.",

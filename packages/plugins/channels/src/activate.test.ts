@@ -6,8 +6,9 @@ import {
   type PluginInvocationContext,
   type PluginServices,
 } from '@happier-dev/plugin-sdk';
-import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/plugin-sdk/actions';
+import { PluginMachineExecutionRoutingV1Schema } from '@happier-dev/plugin-sdk/actions';
 import { QualifiedConnectedAccountRefSchema } from '@happier-dev/plugin-sdk/connected-accounts';
+import { PLUGIN_COLLECTION_REVISION_MAX } from '@happier-dev/plugin-sdk/collections';
 import {
   compilePluginJsonSchema,
   isValidPluginJsonSchemaValue,
@@ -45,7 +46,7 @@ import {
   PLUGIN_MANIFEST,
 } from './manifest.js';
 import { createConversationOutwardDeliveryCollectionStore } from './outwardDelivery.js';
-import { declaredResourceMaxBytes, resourceText } from './testkit/resourceContract.js';
+import { resourceText } from './testkit/resourceContract.js';
 import { channelsTargetedContributionServices } from './testkit/operationOnlyTargetedContributionsFixture.js';
 import { isChannelStateJsonRecord } from './accountLocalBindingPolicy.js';
 
@@ -309,7 +310,7 @@ function reconciliationConnectionAuthority(
     providerSetupInput: { fixture: 'discord-reconciliation' },
     credentialRef: null,
     transportOrigin: {
-      serverIdentityId: 'srv_account_one',
+      serverIdentityId: 'srv_plugin_testkit',
       materializationRef: {
         machineId: 'plugin-testkit-machine',
         materializationId: `plugin-testkit-${PROVIDER_RECONCILIATION_TEST_MANIFEST.id}`,
@@ -327,6 +328,7 @@ function reconciliationConnectionAuthority(
 function reconciliationConnection(connectionId: string) {
   return createCurrentConversationConnectionFixture({
     connectionId,
+    configurationRevision: 4,
     authority: reconciliationConnectionAuthority(connectionId),
     transport: { kind: 'socket' },
     overlapSafety: 'safe',
@@ -340,6 +342,7 @@ function socketConnectionForProvider(input: Readonly<{
   connectionId: string;
   providerPluginId: string;
   materializationId?: string;
+  machineId?: string;
   providerContributionSelection?: PersistedConversationProviderContributionSelection;
 }>) {
   const authority = {
@@ -352,7 +355,7 @@ function socketConnectionForProvider(input: Readonly<{
     transportOrigin: {
       serverIdentityId: 'srv_plugin_testkit',
       materializationRef: {
-        machineId: 'plugin-testkit-machine',
+        machineId: input.machineId ?? 'plugin-testkit-machine',
         materializationId: input.materializationId ?? `plugin-testkit-${input.providerPluginId}`,
         pluginId: input.providerPluginId,
       },
@@ -361,6 +364,7 @@ function socketConnectionForProvider(input: Readonly<{
   return createCurrentConversationConnectionFixture({
     connectionId: input.connectionId,
     authority,
+    configurationRevision: 4,
     transport: { kind: 'socket' },
     overlapSafety: 'safe',
     replayContinuity: 'none',
@@ -371,6 +375,7 @@ function socketConnectionForProvider(input: Readonly<{
 
 function connectionWithPendingTransfer(input: Readonly<{
   connectionId: string;
+  configurationRevision?: number;
   acceptedPossibleLoss: boolean;
   authorityEpoch: number;
   stopAuthorityEpoch: number;
@@ -383,6 +388,7 @@ function connectionWithPendingTransfer(input: Readonly<{
   return createCurrentConversationConnectionFixture({
     connectionId: input.connectionId,
     authority: replacementAuthority,
+    configurationRevision: input.configurationRevision ?? 4,
     transport: { kind: 'checkpointedPull' },
     overlapSafety: 'safe',
     replayContinuity: 'checkpointed',
@@ -717,6 +723,15 @@ describe('Channels core activation', () => {
         routerBindingId: 'router-start', audienceGroupId: 'brief', subject: 'Brief', content, sessionId: 'session-brief',
         recipients: ['external@example.com'],
       })).rejects.toBeDefined();
+      expect(deliveries.rows.size).toBe(1);
+      const router = state.rows.get('router-start')!;
+      state.rows.set(router.rowId, { ...router, value: { ...router.value,
+        payload: { ...router.value.payload as Record<string, JsonValue>, enabled: false },
+      } });
+      await expect(core.invokeAction('conversation/start-v1', {
+        routerBindingId: 'router-start', audienceGroupId: 'brief', subject: 'Brief', content, sessionId: 'session-brief',
+      })).rejects.toMatchObject({ code: 'channels_conversation_start_suppressed',
+        message: expect.stringContaining('bindingDisabled'), details: { reason: 'bindingDisabled' } });
       expect(deliveries.rows.size).toBe(1);
     } finally { await core.dispose(); }
   });
@@ -1520,6 +1535,7 @@ describe('Channels core activation', () => {
       expect(observationAgeExpansionFloorOccurredAt).toEqual(expect.any(Number));
       expect(updated?.value.payload).toEqual({
         ...initialPayload,
+        configurationRevision: 5,
         authorityEpoch: 5,
         enabled: false,
         historyGap: initialPayload.historyGap,
@@ -1591,7 +1607,7 @@ describe('Channels core activation', () => {
         connectionId,
         expectedRevision: 5,
         enabled: false,
-        maximumObservationAgeMs: 30 * 86_400_000 + 1,
+        maximumObservationAgeMs: -1,
       })).rejects.toMatchObject({ code: 'plugin_action_input_schema_invalid' });
       expect(updatedBatches).toHaveLength(writeCountAfterSuccess);
       expect(collection.rows.get(connectionId)?.revision).toBe(5);
@@ -1621,6 +1637,19 @@ describe('Channels core activation', () => {
       expect(updatedBatches).toHaveLength(writeCountAfterSuccess);
       expect(collection.rows.get(connectionId)?.revision).toBe(6);
 
+      // Freshness is owner-configured, with no former 30-day policy ceiling.
+      const olderObservationAgeMs = 31 * 86_400_000;
+      await expect(core.invokeAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionUpdate, {
+        connectionId,
+        expectedRevision: 5,
+        enabled: false,
+        maximumObservationAgeMs: olderObservationAgeMs,
+      })).resolves.toMatchObject({ kind: 'updated', revision: 6, authorityEpoch: 5 });
+      expect(collection.rows.get(connectionId)?.value.payload).toMatchObject({
+        maximumObservationAgeMs: olderObservationAgeMs,
+      });
+      const writeCountAfterOlderUpdate = updatedBatches.length;
+
       retireDuringConnectionGet = true;
       await expect(core.invokeAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionUpdate, {
         connectionId,
@@ -1629,15 +1658,15 @@ describe('Channels core activation', () => {
         maximumObservationAgeMs: 120_000,
       })).rejects.toMatchObject({ code: 'plugin_action_generation_retired' });
       retireDuringConnectionGet = false;
-      expect(updatedBatches).toHaveLength(writeCountAfterSuccess);
-      expect(collection.rows.get(connectionId)?.revision).toBe(6);
+      expect(updatedBatches).toHaveLength(writeCountAfterOlderUpdate);
+      expect(collection.rows.get(connectionId)?.revision).toBe(7);
     } finally {
       await reconciler.dispose();
       await core.dispose();
     }
   });
 
-  it('uses the generic exact-origin precondition before stopping an old transport and settles only its returned proof', async () => {
+  it('uses the generic routing precondition before stopping an old transport and settles only its returned proof', async () => {
     const exactConnectionId = 'connection-delete-exact-origin';
     const mismatchConnectionId = 'connection-delete-mismatch-origin';
     const collection = createMutableChannelStateCollection();
@@ -1683,6 +1712,7 @@ describe('Channels core activation', () => {
       connectionId: mismatchConnectionId,
       providerPluginId: PROVIDER_SOCKET_SETUP_TEST_MANIFEST.id,
       materializationId: 'old-transport-materialization',
+      machineId: 'old-transport-machine',
       providerContributionSelection,
     });
     collection.rows.set(exactConnectionId, { rowId: exactConnectionId, revision: 4, value: exact });
@@ -2273,6 +2303,7 @@ describe('Channels core activation', () => {
     const collection = createMutableChannelStateCollection();
     const immediate = connectionWithPendingTransfer({
       connectionId: 'connection-transfer-stale-r-plus-two',
+      configurationRevision: 6,
       acceptedPossibleLoss: true,
       authorityEpoch: 5,
       stopAuthorityEpoch: 4,
@@ -2281,6 +2312,7 @@ describe('Channels core activation', () => {
 
     const malformed = connectionWithPendingTransfer({
       connectionId: 'connection-transfer-stale-malformed',
+      configurationRevision: 5,
       acceptedPossibleLoss: true,
       authorityEpoch: 4,
       stopAuthorityEpoch: 4,
@@ -2289,12 +2321,13 @@ describe('Channels core activation', () => {
 
     const differentBase = connectionWithPendingTransfer({
       connectionId: 'connection-transfer-stale-different',
+      configurationRevision: 5,
       acceptedPossibleLoss: true,
       authorityEpoch: 5,
       stopAuthorityEpoch: 4,
     });
     const differentBaseStop = differentBase.payload.pendingOldTransportStop;
-    if (differentBaseStop === null) {
+    if (differentBaseStop === null || 'kind' in differentBaseStop) {
       throw new Error('Expected the pending-transfer fixture to carry an accepted stop marker.');
     }
     const different = {
@@ -2317,6 +2350,7 @@ describe('Channels core activation', () => {
       ...deletingBase,
       payload: {
         ...deletingBase.payload,
+        configurationRevision: 5,
         authorityEpoch: 5,
         enabled: false,
         deletionState: 'finalizingDelete' as const,
@@ -2435,7 +2469,7 @@ describe('Channels core activation', () => {
     }
   });
 
-  it('settles a retained old-stop slot only from the exact host-stamped transport reporter', async () => {
+  it('settles a retained old-stop slot only from the selected host-stamped transport route', async () => {
     const connectionId = 'connection-delete-reported-stop';
     const collection = createMutableChannelStateCollection();
     const current = socketConnectionForProvider({
@@ -2488,14 +2522,15 @@ describe('Channels core activation', () => {
       module: { activate },
       services: { storage },
     });
-    let materializationId = 'replacement-materialization';
+    const materializationId = 'replacement-materialization';
+    let machineId = 'wrong-machine';
     const reporter = await createPluginTestkit({
       manifest: PROVIDER_TRANSPORT_REPORT_TEST_MANIFEST,
       actionTargets: [core],
       resolveCurrentPluginMaterializationRef() {
         return {
           pluginId: PROVIDER_TRANSPORT_REPORT_TEST_MANIFEST.id,
-          machineId: 'plugin-testkit-machine',
+          machineId,
           materializationId,
         };
       },
@@ -2524,7 +2559,7 @@ describe('Channels core activation', () => {
         value: { payload: { deletionState: 'pendingStopReconciliation' } },
       });
 
-      materializationId = `plugin-testkit-${PROVIDER_TRANSPORT_REPORT_TEST_MANIFEST.id}`;
+      machineId = 'plugin-testkit-machine';
       await expect(reporter.invokeAction('report-stop', report)).resolves.toEqual({ kind: 'deleteFinalizing' });
       expect(collection.rows.get(connectionId)).toMatchObject({
         revision: 5,
@@ -2545,7 +2580,7 @@ describe('Channels core activation', () => {
   it('authenticates a transfer stop report against the frozen old origin after replacement commits', async () => {
     const connectionId = 'connection-transfer-reported-old-stop';
     const oldMaterializationId = 'transfer-old-materialization';
-    const newMaterializationId = 'transfer-new-materialization';
+    const newMachineId = 'transfer-new-machine';
     const collection = createMutableChannelStateCollection();
     const old = socketConnectionForProvider({
       connectionId,
@@ -2571,10 +2606,7 @@ describe('Channels core activation', () => {
           ...old.payload,
           transportOrigin: {
             ...old.payload.transportOrigin,
-            materializationRef: {
-              ...old.payload.transportOrigin.materializationRef,
-              materializationId: newMaterializationId,
-            },
+            machineId: newMachineId,
           },
           providerConfig: { applicationId: 'application-after-transfer' },
           authorityEpoch: 5,
@@ -2637,7 +2669,7 @@ describe('Channels core activation', () => {
         value: {
           payload: {
             transportOrigin: {
-              materializationRef: { materializationId: newMaterializationId },
+              machineId: newMachineId,
             },
             providerConfig: { applicationId: 'application-after-transfer' },
             authorityEpoch: 5,
@@ -2758,6 +2790,7 @@ describe('Channels core activation', () => {
       ...old,
       payload: {
         ...old.payload,
+        configurationRevision: 5,
         authorityEpoch: 5,
         pendingOldTransportStop: {
           predecessorCheckpointedPollInvocation: {
@@ -3111,6 +3144,7 @@ describe('Channels core activation', () => {
       ...reconciliationConnection('connection-principal-labeled'),
       payload: {
         ...reconciliationConnection('connection-principal-labeled').payload,
+        configurationRevision: 1,
         providerConfig: { label: 'provider-label-must-not-be-projected' },
         credentialRef: {
           service: {
@@ -3130,6 +3164,7 @@ describe('Channels core activation', () => {
       ...reconciliationConnection('connection-principal-unlabeled'),
       payload: {
         ...reconciliationConnection('connection-principal-unlabeled').payload,
+        configurationRevision: 2,
         providerConfig: { label: 'provider-label-must-not-be-projected' },
         integrationPrincipal: { id: 'principal-id-unlabeled-must-not-be-projected' },
       },
@@ -3210,7 +3245,7 @@ describe('Channels core activation', () => {
     }
   });
 
-  it('keeps a schema-valid 32-row JSON-serialized projection at every canonical maximum within the declared connections Resource byte bound', async () => {
+  it('accepts a large schema-valid connections Resource projection without a lower plugin byte cap and withholds private fields', async () => {
     const collection = createMutableChannelStateCollection();
     const maximumEscapedString = String.fromCharCode(0).repeat(256);
     const maximumMachineId = maximumEscapedString;
@@ -3230,6 +3265,7 @@ describe('Channels core activation', () => {
         payload: {
           ...connection.payload,
           providerPluginId: maximumPluginId,
+          configurationRevision: PLUGIN_COLLECTION_REVISION_MAX,
           credentialRef: {
             service: {
               pluginId: maximumPluginId,
@@ -3239,11 +3275,7 @@ describe('Channels core activation', () => {
           },
           transportOrigin: {
             serverIdentityId: 'srv_account_one',
-            materializationRef: {
-              machineId: maximumMachineId,
-              materializationId: 'materialization-resource-bound',
-              pluginId: maximumPluginId,
-            },
+            machineId: maximumMachineId,
           },
           transport: { kind: 'checkpointedPull' as const },
           replayContinuity: 'checkpointed' as const,
@@ -3270,8 +3302,8 @@ describe('Channels core activation', () => {
     expect(connections.every((connection) => (
       ConversationConnectionIdV1Schema.safeParse(connection.id).success
     ))).toBe(true);
-    expect(PluginMachineExecutionOriginV1Schema.safeParse(
-      connections[0]!.payload.transportOrigin,
+    expect(PluginMachineExecutionRoutingV1Schema.safeParse(
+      { ...connections[0]!.payload.transportOrigin, pluginId: maximumPluginId },
     ).success).toBe(true);
     expect(QualifiedConnectedAccountRefSchema.safeParse(
       connections[0]!.payload.credentialRef,
@@ -3282,7 +3314,7 @@ describe('Channels core activation', () => {
     for (const connection of connections) {
       collection.rows.set(connection.id, {
         rowId: connection.id,
-        revision: Number.MAX_SAFE_INTEGER,
+        revision: PLUGIN_COLLECTION_REVISION_MAX,
         value: connection,
       });
     }
@@ -3304,7 +3336,7 @@ describe('Channels core activation', () => {
       expect(JSON.parse(serialized)).toEqual({
         connections: connectionsInResourceOrder.map((connection) => ({
           connectionId: connection.id,
-          revision: Number.MAX_SAFE_INTEGER,
+          revision: PLUGIN_COLLECTION_REVISION_MAX,
           providerPluginId: maximumPluginId,
           selectedMachineId: maximumMachineId,
           selectedTransport: 'checkpointedPull',
@@ -3334,7 +3366,9 @@ describe('Channels core activation', () => {
       expect(serialized).not.toContain(hiddenProviderConnectionKey);
       expect(serialized).not.toContain(hiddenProviderConfigMarker);
       const serializedBytes = new TextEncoder().encode(serialized).byteLength;
-      expect(serializedBytes).toBeLessThanOrEqual(declaredResourceMaxBytes('connections-v1'));
+      expect(serializedBytes).toBeGreaterThan(64 * 1024);
+      expect(PLUGIN_MANIFEST.contributes?.resources?.find((resource) => resource.id === 'connections-v1'))
+        .not.toHaveProperty('maxBytes');
     } finally {
       await core.dispose();
     }
@@ -3353,7 +3387,7 @@ describe('Channels core activation', () => {
         accountId: 'account-1',
       },
       transportOrigin: {
-        serverIdentityId: 'server-account-one',
+        serverIdentityId: 'srv_account_one',
         materializationRef: {
           machineId: 'machine-1',
           materializationId: 'discord-install-1',
@@ -3373,7 +3407,7 @@ describe('Channels core activation', () => {
       overlapSafety: 'safe',
       replayContinuity: 'none',
     });
-    const samePluginDifferentMaterialization = {
+    const samePluginDifferentMachine = {
       ...exactConnection,
       id: 'connection-2',
       'connection-id': 'connection-2',
@@ -3382,10 +3416,7 @@ describe('Channels core activation', () => {
         providerConnectionKey: 'discord:connection-2',
         transportOrigin: {
           ...exactConnection.payload.transportOrigin,
-          materializationRef: {
-            ...exactConnection.payload.transportOrigin.materializationRef,
-            materializationId: 'discord-install-2',
-          },
+          machineId: 'machine-2',
         },
       },
     };
@@ -3420,7 +3451,7 @@ describe('Channels core activation', () => {
         deletionState: 'none',
       },
     };
-    const stateRows = [exactConnection, samePluginDifferentMaterialization, sharedBinding];
+    const stateRows = [exactConnection, samePluginDifferentMachine, sharedBinding];
     const querySignals: AbortSignal[] = [];
     let connectionQueryCount = 0;
     let bindingQueryCount = 0;
@@ -3467,7 +3498,8 @@ describe('Channels core activation', () => {
         },
         occurrenceId: 'channels-activate-fixture-occurrence',
         sourceCustody: { kind: 'development', registeredRootId: 'channels-activate-fixture-root' },
-        materialization: exactConnection.payload.transportOrigin.materializationRef,
+        materialization: discordAuthority.transportOrigin.materializationRef,
+        executionOrigin: discordAuthority.transportOrigin,
       },
       signal: new AbortController().signal,
       services: { storage } as unknown as PluginServices,
@@ -3503,7 +3535,7 @@ describe('Channels core activation', () => {
       };
       expect(await list({}, context)).toEqual(expected);
       expect(await read({ connectionId: exactConnection.id }, context)).toEqual(expected);
-      expect(await read({ connectionId: samePluginDifferentMaterialization.id }, context)).toEqual({});
+      expect(await read({ connectionId: samePluginDifferentMachine.id }, context)).toEqual({});
       expect(connectionQueryCount).toBe(3);
       expect(bindingQueryCount).toBe(3);
       expect(querySignals).toHaveLength(6);
@@ -3625,7 +3657,7 @@ describe('Channels core activation', () => {
       providerSetupInput: { source: 'reconciliation' },
       credentialRef: null,
       transportOrigin: {
-        serverIdentityId: 'server-account-one',
+        serverIdentityId: 'srv_plugin_testkit',
         materializationRef: {
           machineId: 'plugin-testkit-machine',
           materializationId: `plugin-testkit-${PROVIDER_RECONCILIATION_TEST_MANIFEST.id}`,

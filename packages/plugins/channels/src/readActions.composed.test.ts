@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PluginServices } from '@happier-dev/plugin-sdk';
+import type { JsonValue, PluginServices } from '@happier-dev/plugin-sdk';
 import { CHANNELS_PLUGIN, PLUGIN_MANIFEST } from './manifest.js';
 import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION } from './collections.js';
 import { MemoryCollection } from './testkit/memoryCollection.js';
@@ -23,8 +23,8 @@ function connection(connectionId: string) {
 
 async function readerKit() {
   const { createPluginTestkit } = await import('@happier-dev/plugin-sdk/testing');
-  const state = new MemoryCollection();
-  const deliveries = new MemoryCollection();
+  const state = new MemoryCollection<Record<string, JsonValue>>();
+  const deliveries = new MemoryCollection<Record<string, JsonValue>>();
   await state.put(connection('connection-1'), { expectedRevision: 'absent' });
   // Account Collections are the persistence boundary; all projection,
   // registration, input admission and strict result validation remain real.

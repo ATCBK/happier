@@ -14,6 +14,7 @@ import { isChannelStateJsonRecord, readConversationConnectionUpdateRow } from '.
 import { requireChannelsAccountStorage } from './requiredAccountStorage.js';
 import { readCurrentProviderContributionForPersistedSelection } from './providerContributions.js';
 import { ChannelFileValueV1Schema, type ChannelFileValueV1 } from './channelAttachment.js';
+import { getConversationConnectionExecutionRouting } from './connectionLifecycle.js';
 
 async function readAttachmentConnection(value: ChannelFileValueV1, context: PluginInvocationContext) {
   const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
@@ -79,7 +80,7 @@ async function fetchChannelFiles(values: readonly ChannelFileValueV1[], connecti
     messageId: value.messageId, attachmentIds: [...new Set(values.map(file => file.descriptor.attachmentId))],
   });
   const fetched = ConversationAttachmentFetchResultV1Schema.parse((await context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
-    operation, fetchInput, { signal: context.signal, expectedExecutionOrigin: connection.transportOrigin },
+    operation, fetchInput, { signal: context.signal, expectedExecutionRouting: getConversationConnectionExecutionRouting(connection.transportOrigin, connection.providerPluginId) },
   )).result);
   if (fetched.kind !== 'fetched') throw new PluginError({
     code: 'channels_attachment_fetch_unavailable', message: 'The channel attachment is unavailable',
@@ -125,7 +126,7 @@ export async function prepareChannelFileSessionInput(input: Readonly<{
     const mime = attachmentMime(value.descriptor.mediaType);
     if (!mime.startsWith('text/') && mime !== 'application/pdf') continue;
     const connection = await readAttachmentConnection(value, context);
-    if (summary?.machineId === connection.transportOrigin.materializationRef.machineId) continue;
+    if (summary?.machineId === connection.transportOrigin.machineId) continue;
     const text = await inlineText(await fetch(value, connection), value.descriptor.mediaType);
     await readAttachmentConnection(value, context);
     context.signal.throwIfAborted();
@@ -151,7 +152,7 @@ async function resolveChannelFiles(
       const session = await context.services.sessions.get(request.sessionId, { signal: context.signal });
       if (!session) throw new PluginError({ code: 'channels_attachment_session_unavailable', message: 'The Session is unavailable', retryable: true });
       const summary = await session.summary({ signal: context.signal });
-      const sameMachine = summary.machineId === connection.transportOrigin.materializationRef.machineId;
+      const sameMachine = summary.machineId === connection.transportOrigin.machineId;
       let file: Awaited<ReturnType<SessionHandle['materializeAttachment']>> | undefined;
       let text: string | undefined;
       if (sameMachine) {

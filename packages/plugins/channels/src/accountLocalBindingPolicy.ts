@@ -4,6 +4,7 @@ import {
 } from '@happier-dev/plugin-sdk';
 import {
   PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
+  PLUGIN_COLLECTION_REVISION_MAX,
   type PluginAccountCollectionForDefinition,
 } from '@happier-dev/plugin-sdk/collections';
 import {
@@ -21,7 +22,7 @@ import {
   type ConversationBindingV1,
   type ConversationProviderConnectionStopInputV1,
 } from '@happier-dev/channels-protocol/v1';
-import { createProtocolStoredReadSchema } from '@happier-dev/plugin-sdk/protocol';
+import { createProtocolStoredReadSchema, pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
 
 import {
   CHANNEL_STATE_COLLECTION,
@@ -33,6 +34,9 @@ import {
 } from './collections.js';
 import {
   freezeConversationPendingOldTransportStop,
+  ConversationConnectionTransportOriginV1Schema,
+  readConversationPendingEndpointRetargetIntent,
+  isConversationPendingEndpointRetarget,
   owesOnlyConversationEndpointRetarget,
   transitionConversationConnection,
   type ConversationCheckpointedPollInvocationBasisV1,
@@ -62,6 +66,9 @@ const MANAGEMENT_SUMMARY_MAX_CODE_POINTS = 28;
 const storedBindingSchema = createProtocolStoredReadSchema(ConversationBindingV1Schema);
 
 export type ChannelStateJsonRecord = Readonly<Record<string, JsonValue>>;
+type ConversationConnectionWriteValue = ChannelStateJsonRecord & Readonly<{
+  payload: ChannelStateJsonRecord & Readonly<{ configurationRevision: number }>;
+}>;
 export type ChannelStateRow = Readonly<{
   rowId: string;
   revision: number;
@@ -73,6 +80,7 @@ export type ChannelStateBindingCollection = Pick<
 >;
 
 export type ConversationConnectionUpdateRow = Readonly<{
+  configurationRevision: number;
   payload: ChannelStateJsonRecord;
   lifecycle: ConversationConnectionLifecycleStateV1;
   providerPluginId: string;
@@ -205,6 +213,8 @@ export type ConversationIngressTerminalAttentionRow = Readonly<{
   updatedAt: number;
   /** Closed presentation category projected from the frozen nonAdmission fact. */
   category: 'informational' | 'recoverable';
+  /** Existing content-free refusal, omitted when no refusal fact was retained. */
+  reason?: ConversationNonAdmissionReason;
 }>;
 
 export type ConversationIngressOccurrenceConflictAttentionRow = Readonly<{
@@ -272,31 +282,11 @@ function assertCurrent(input: Readonly<{
 }
 
 function readPersistedTransportOrigin(value: JsonValue | undefined): ConversationConnectionTransportOriginV1 {
-  if (!isChannelStateJsonRecord(value)) {
+  const parsed = ConversationConnectionTransportOriginV1Schema.safeParse(value);
+  if (!parsed.success) {
     throw policyError('channels_connection_update_corrupt', 'Connection update target has an invalid persisted transport origin.');
   }
-  const materializationRef = ownChannelStateValue(value, 'materializationRef');
-  const serverIdentityId = ownChannelStateValue(value, 'serverIdentityId');
-  const pluginId = isChannelStateJsonRecord(materializationRef)
-    ? ownChannelStateValue(materializationRef, 'pluginId')
-    : undefined;
-  const machineId = isChannelStateJsonRecord(materializationRef)
-    ? ownChannelStateValue(materializationRef, 'machineId')
-    : undefined;
-  const materializationId = isChannelStateJsonRecord(materializationRef)
-    ? ownChannelStateValue(materializationRef, 'materializationId')
-    : undefined;
-  if (typeof serverIdentityId !== 'string'
-    || !isChannelStateJsonRecord(materializationRef)
-    || typeof pluginId !== 'string'
-    || typeof machineId !== 'string'
-    || typeof materializationId !== 'string') {
-    throw policyError('channels_connection_update_corrupt', 'Connection update target has an invalid persisted transport origin.');
-  }
-  return {
-    serverIdentityId,
-    materializationRef: { pluginId, machineId, materializationId },
-  };
+  return parsed.data;
 }
 
 /**
@@ -360,6 +350,12 @@ function readPersistedPendingOldTransportStop(
   if (!isChannelStateJsonRecord(value)) {
     throw policyError('channels_connection_update_corrupt', 'Connection update target has an invalid old-stop custody slot.');
   }
+  if (value.kind === 'endpointRetarget') {
+    try { return readConversationPendingEndpointRetargetIntent(value); }
+    catch (cause) {
+      throw new PluginError({ code: 'channels_connection_update_corrupt', message: 'Connection update target has an invalid endpoint-retarget intent.' }, { cause });
+    }
+  }
   const transportOrigin = readPersistedTransportOrigin(ownChannelStateValue(value, 'transportOrigin'));
   const providerContributionSelection = readPersistedProviderContributionSelection(
     ownChannelStateValue(value, 'providerContributionSelection'),
@@ -380,10 +376,7 @@ function readPersistedPendingOldTransportStop(
     || (predecessorTransportKind !== 'checkpointedPull'
       && predecessorTransportKind !== 'socket'
       && predecessorTransportKind !== 'durablePush')
-    || (endpointRetarget !== 'notRequired' && endpointRetarget !== 'pending')
-    // A committed endpoint retarget can only be owed by a retired durable-push
-    // transport; anything else is an incoherent slot rather than live custody.
-    || (endpointRetarget === 'pending' && predecessorTransportKind !== 'durablePush')) {
+    || endpointRetarget !== 'notRequired') {
     throw policyError('channels_connection_update_corrupt', 'Connection update target has an incomplete old-stop custody slot.');
   }
   let parsedStopRequest: ConversationProviderConnectionStopInputV1;
@@ -436,6 +429,7 @@ export function readConversationConnectionUpdateRow(input: Readonly<{
   }
 
   const authorityEpoch = ownChannelStateValue(payload, 'authorityEpoch');
+  const configurationRevision = ownChannelStateValue(payload, 'configurationRevision');
   const enabled = ownChannelStateValue(payload, 'enabled');
   const deletionState = ownChannelStateValue(payload, 'deletionState');
   const overlapSafety = ownChannelStateValue(payload, 'overlapSafety');
@@ -461,7 +455,11 @@ export function readConversationConnectionUpdateRow(input: Readonly<{
     payload,
     'observationAgeExpansionFloorOccurredAt',
   );
-  if (typeof authorityEpoch !== 'number'
+  if (typeof configurationRevision !== 'number'
+    || !Number.isSafeInteger(configurationRevision)
+    || configurationRevision < 1
+    || configurationRevision > PLUGIN_COLLECTION_REVISION_MAX
+    || typeof authorityEpoch !== 'number'
     || !Number.isSafeInteger(authorityEpoch)
     || authorityEpoch < 1
     || typeof enabled !== 'boolean'
@@ -489,6 +487,7 @@ export function readConversationConnectionUpdateRow(input: Readonly<{
     throw policyError('channels_connection_update_corrupt', 'Connection update target has an invalid lifecycle payload.');
   }
   return {
+    configurationRevision,
     payload,
     providerPluginId,
     providerContributionSelection,
@@ -512,16 +511,41 @@ export function readConversationConnectionUpdateRow(input: Readonly<{
   };
 }
 
+/**
+ * One revision owner for every connection writer. Poll/readiness observations
+ * retain the approved configuration subject; configuration and recovery-custody
+ * changes advance it. The physical Collection revision remains the write CAS.
+ */
+export function withConversationConnectionPayload(input: Readonly<{
+  row: ChannelStateRow;
+  payload: ChannelStateJsonRecord;
+  updatedAt?: number;
+}>): ConversationConnectionWriteValue {
+  const current = readConversationConnectionUpdateRow({ row: input.row, connectionId: input.row.rowId });
+  const subject = (payload: ChannelStateJsonRecord) => Object.fromEntries(Object.entries(payload).filter(
+    ([key]) => key !== 'configurationRevision' && key !== 'providerReadiness' && key !== 'pollFailure',
+  ));
+  const changed = !pluginJsonValuesEqual(subject(current.payload), subject(input.payload));
+  if (changed && current.configurationRevision >= PLUGIN_COLLECTION_REVISION_MAX) {
+    throw policyError('channels_connection_configuration_revision_exhausted', 'Connection configuration cannot advance further.');
+  }
+  return {
+    ...input.row.value,
+    [CHANNEL_STATE_FIELD.updatedAt]: input.updatedAt ?? Date.now(),
+    payload: { ...input.payload, configurationRevision: current.configurationRevision + (changed ? 1 : 0) },
+  };
+}
+
 /** Rebuilds the one retained connection row from the shared lifecycle state. */
 export function withConversationConnectionLifecycle(input: Readonly<{
   row: ChannelStateRow;
   current: ConversationConnectionUpdateRow;
   lifecycle: ConversationConnectionLifecycleStateV1;
   updatedAt?: number;
-}>): ChannelStateJsonRecord {
-  return {
-    ...input.row.value,
-    [CHANNEL_STATE_FIELD.updatedAt]: input.updatedAt ?? Date.now(),
+}>): ConversationConnectionWriteValue {
+  return withConversationConnectionPayload({
+    row: input.row,
+    updatedAt: input.updatedAt,
     payload: {
       ...input.current.payload,
       authorityEpoch: input.lifecycle.authorityEpoch,
@@ -537,7 +561,7 @@ export function withConversationConnectionLifecycle(input: Readonly<{
         ? {}
         : { observationAgeExpansionFloorOccurredAt: input.lifecycle.observationAgeExpansionFloorOccurredAt }),
     },
-  } satisfies ChannelStateJsonRecord;
+  });
 }
 
 /**
@@ -657,9 +681,9 @@ function projectConversationConnectionManagementRow(
     };
   return {
     connectionId: row.rowId,
-    revision: row.revision,
+    revision: current.configurationRevision,
     providerPluginId: current.providerPluginId,
-    selectedMachineId: current.transportOrigin.materializationRef.machineId,
+    selectedMachineId: current.transportOrigin.machineId,
     selectedTransport,
     ...(integrationPrincipalLabel === undefined ? {} : { integrationPrincipalLabel }),
     ...(sharedEndpointInputModes === undefined ? {} : { sharedEndpointInputModes }),
@@ -678,7 +702,9 @@ function projectConversationConnectionManagementRow(
       endpointRetargetOwed: owesOnlyConversationEndpointRetarget(
         current.lifecycle.pendingOldTransportStop,
       ),
-      acceptedPossibleLoss: current.lifecycle.pendingOldTransportStop?.acceptedPossibleLoss === true,
+      acceptedPossibleLoss: current.lifecycle.pendingOldTransportStop !== null
+        && !isConversationPendingEndpointRetarget(current.lifecycle.pendingOldTransportStop)
+        && current.lifecycle.pendingOldTransportStop.acceptedPossibleLoss,
     },
   };
 }
@@ -1264,7 +1290,7 @@ export async function readConversationIngressAttentionPage(input: Readonly<{
       && sourceBindingRevision === null
       && sourceBindingAuthorityEpoch === null
       && (target === null || (isChannelStateJsonRecord(target) && ownChannelStateValue(target, 'kind') === 'event'));
-    const readTerminalAttentionCategory = (): 'informational' | 'recoverable' => {
+    const readTerminalAttentionPresentation = (): Pick<ConversationIngressTerminalAttentionRow, 'category' | 'reason'> => {
       // terminalIngressObligationValue pairs attention with a frozen
       // nonAdmission fact, so an attention row without one is informational
       // history by construction, while a non-null value must be exactly the
@@ -1272,7 +1298,7 @@ export async function readConversationIngressAttentionPage(input: Readonly<{
       const nonAdmission = isChannelStateJsonRecord(payload)
         ? ownChannelStateValue(payload, 'nonAdmission')
         : undefined;
-      if (nonAdmission === undefined || nonAdmission === null) return 'informational';
+      if (nonAdmission === undefined || nonAdmission === null) return { category: 'informational' };
       if (!isChannelStateJsonRecord(nonAdmission)
         || Object.keys(nonAdmission).length !== 2) {
         throw policyError(
@@ -1295,9 +1321,11 @@ export async function readConversationIngressAttentionPage(input: Readonly<{
           'The Channels ingress attention index returned a non-canonical nonAdmission feedback fact.',
         );
       }
-      return projectConversationNonAdmissionPresentationCategory(
-        reason as ConversationNonAdmissionReason,
-      );
+      const refusalReason = reason as ConversationNonAdmissionReason;
+      return {
+        category: projectConversationNonAdmissionPresentationCategory(refusalReason),
+        reason: refusalReason,
+      };
     };
     if (typeof id !== 'string'
       || id !== row.rowId
@@ -1323,7 +1351,7 @@ export async function readConversationIngressAttentionPage(input: Readonly<{
         connectionId,
         ...(bindingId === undefined ? {} : { bindingId }),
         updatedAt,
-        category: readTerminalAttentionCategory(),
+        ...readTerminalAttentionPresentation(),
       };
     }
     return {
@@ -1370,7 +1398,8 @@ export async function mutateConversationConnectionLifecycleInAccountCollection(i
   if (row === null) {
     throw policyError(`${input.operation}_not_found`, 'Connection lifecycle target does not exist.');
   }
-  if (row.revision !== input.expectedRevision) {
+  const current = readConversationConnectionUpdateRow({ row, connectionId: input.connectionId });
+  if (current.configurationRevision !== input.expectedRevision) {
     throw policyError(
       `${input.operation}_conflict`,
       'Connection lifecycle mutation requires the current retained row revision.',
@@ -1378,7 +1407,6 @@ export async function mutateConversationConnectionLifecycleInAccountCollection(i
     );
   }
 
-  const current = readConversationConnectionUpdateRow({ row, connectionId: input.connectionId });
   const updatedAt = now();
   const transition = input.transition(current.lifecycle, updatedAt);
   if (transition.kind === 'rejected') {
@@ -1404,20 +1432,16 @@ export async function mutateConversationConnectionLifecycleInAccountCollection(i
     return {
       kind: 'unchanged',
       connectionId: input.connectionId,
-      revision: row.revision,
+      revision: current.configurationRevision,
       authorityEpoch: transition.connection.authorityEpoch,
     };
   }
 
+  const value = withConversationConnectionLifecycle({ row, current, lifecycle: transition.connection, updatedAt });
   const result = await input.collection.batch([
     {
       kind: 'put',
-      value: withConversationConnectionLifecycle({
-        row,
-        current,
-        lifecycle: transition.connection,
-        updatedAt,
-      }),
+      value,
       expectedRevision: row.revision,
     },
   ], input.signal === undefined ? undefined : { signal: input.signal });
@@ -1442,7 +1466,7 @@ export async function mutateConversationConnectionLifecycleInAccountCollection(i
   return {
     kind: 'updated',
     connectionId: input.connectionId,
-    revision: persisted.revision,
+    revision: value.payload.configurationRevision,
     authorityEpoch: transition.connection.authorityEpoch,
   };
 }

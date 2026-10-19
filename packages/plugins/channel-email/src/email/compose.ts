@@ -1,8 +1,5 @@
 import { createHash } from 'node:crypto';
 
-import { marked } from 'marked';
-import { createTransport } from 'nodemailer';
-
 import { normalizeEmailAddress } from './address.js';
 
 function assertHeaderValue(value: string, name: string): void {
@@ -52,13 +49,18 @@ export async function composeEmail(input: {
   const messageId = emailDeliveryMessageId(input.deliveryKey, from);
   const envelope = { from, to };
   let text = input.content.text;
-  let html = input.content.html ?? await marked.parse(input.content.text);
+  let html = input.content.html;
+  if (html === undefined) {
+    const { marked } = await import('marked');
+    html = await marked.parse(input.content.text);
+  }
   if (input.reply) {
     const quotedText = input.reply.text.split(/\r\n|\n|\r/).map((line) => `> ${line}`).join('\n');
     text += `\n\n${quotedText}`;
     html += `<blockquote>${escapeHtml(input.reply.text).replace(/\r\n|\n|\r/g, '<br>')}</blockquote>`;
   }
 
+  const { createTransport } = await import('nodemailer');
   const transporter = createTransport({ streamTransport: true, buffer: true, newline: 'windows' });
   const result = await transporter.sendMail({
     from: { address: from, name: '' },

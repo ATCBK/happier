@@ -3,6 +3,7 @@ import type {
   ConversationDeliveryResultV1,
   ConversationResolvedEndpointV1,
 } from '@happier-dev/channels-protocol/v1';
+import { ConversationDeliveryInputV1Schema } from '@happier-dev/channels-protocol/v1';
 import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import {
   compilePluginJsonSchema,
@@ -14,11 +15,12 @@ import type {
   TargetedContributionSnapshot,
   TargetedContributionsService,
 } from '@happier-dev/plugin-sdk';
-import type { PluginMachineExecutionOriginV1 } from '@happier-dev/plugin-sdk/actions';
+import { arePluginMachineExecutionRoutingsEqual, getPluginMachineExecutionRouting, type PluginMachineExecutionRoutingV1 } from '@happier-dev/plugin-sdk/actions';
 import { MAX_PLUGIN_TRANSCRIPT_ACTIVITIES_PER_RESOURCE_V1 } from '@happier-dev/plugin-sdk/resources';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CHANNEL_DELIVERIES_COLLECTION } from './collections.js';
+import { startConversationDeliveryAttempt } from './deliveryCustody.js';
 import { collectionMigrations } from './manifest.js';
 import {
   acceptConversationOutwardDeliveryReady,
@@ -26,9 +28,11 @@ import {
   createConversationOutwardDeliveryCollectionScanner,
   createConversationOutwardDeliveryCollectionStore,
   deliverConversationOutwardDelivery,
+  hasRetainedConversationOutwardDeliveryContent,
   isConversationPermissionMediationSourceCurrent,
   readConversationOutwardDeliveryConnectionAttention,
   readConversationOutwardDeliveryResolutionPage,
+  redriveConversationOutwardDelivery,
   reconcileConversationOutwardDeliveryAttempt,
   readConversationOutwardDeliveryTranscriptActivities,
   prepareConversationOutwardDeliveryReady,
@@ -88,7 +92,7 @@ const providerDeliveryAction = admittedProviderOperation('messageDeliver');
 const providerDeliveryReconcileAction = admittedProviderOperation('deliveryReconcile');
 
 /** The generic host has already admitted this provider contribution. */
-function targetedProviderDeliveryContributions(): TargetedContributionsService {
+function targetedProviderDeliveryContributions(availability: 'current' | 'unavailable' | 'missing' = 'current'): TargetedContributionsService {
   return Object.freeze({
     observeForSelf<TContribution>(
       _point: TargetedContributionPointRef<TContribution>,
@@ -97,10 +101,11 @@ function targetedProviderDeliveryContributions(): TargetedContributionsService {
       return Object.freeze({
         dispose() {},
         async readCurrent(): Promise<TargetedContributionSnapshot<TContribution>> {
+          if (availability === 'unavailable') throw new Error('Provider snapshot transport disconnected');
           return {
             occurrenceId: 'channels-test-occurrence',
             sourceCustody: { kind: 'development', registeredRootId: 'channels-test-root' },
-            contributions: [{
+            contributions: (availability === 'missing' ? [] : [{
               contributor: {
                 pluginId: providerTransportOrigin.materializationRef.pluginId,
                 contributionId: 'delivery-test-provider',
@@ -112,7 +117,7 @@ function targetedProviderDeliveryContributions(): TargetedContributionsService {
                 messageDeliver: providerDeliveryAction,
                 deliveryReconcile: providerDeliveryReconcileAction,
               },
-            }] as unknown as readonly TContribution[],
+            }]) as unknown as readonly TContribution[],
           };
         },
       });
@@ -401,6 +406,107 @@ function currentAuthority() {
 }
 
 describe('Channels control-response outward custody', () => {
+  it.each(['unavailable', 'missing'] as const)('distinguishes a %s provider snapshot from transient Account reads', async availability => {
+    const state = new MemoryAccountCollection();
+    const deliveries = new MemoryAccountCollection();
+    await state.put(providerConnectionRow(), { expectedRevision: 'absent' });
+    await state.put({ id: 'binding-1', 'record-kind': 'binding', 'connection-id': 'connection-1', 'binding-id': 'binding-1',
+      payload: { authorityEpoch: 7, enabled: true, deletionState: 'none', endpoint, target: sessionTarget, linkPreviewPolicy: 'suppress' },
+    }, { expectedRevision: 'absent' });
+    const signal = new AbortController().signal;
+    const store = createConversationOutwardDeliveryCollectionStore({
+      stateCollection: state as never, deliveriesCollection: deliveries as never, signal, now: () => 100,
+    });
+    const request = sessionProjectionRecord().obligation;
+    if (!hasRetainedConversationOutwardDeliveryContent(request)) throw new Error('Expected retained fixture content');
+    const created = await store.ensure(request);
+    if (created.kind !== 'created') throw new Error('Expected ready custody');
+    const executeAdmittedTargetedOperationWithExecutionOrigin = vi.fn();
+    await expect(redriveConversationOutwardDeliveryThroughProviderAction({
+      stateCollection: state as never, targetedContributions: targetedProviderDeliveryContributions(availability),
+      actions: { executeAdmittedTargetedOperationWithExecutionOrigin } as never, store, record: created.record,
+      attemptId: 'provider-snapshot', now: () => 100, signal,
+    })).resolves.toMatchObject(availability === 'unavailable'
+      ? { kind: 'settled', custody: { state: 'retryDue', retryNotBefore: 1_100 } }
+      : { kind: 'suppressed', custody: { state: 'suppressed' } });
+    expect(executeAdmittedTargetedOperationWithExecutionOrigin).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['collection', 'connection'], ['collection', 'binding'],
+    ['providerAction', 'connection'], ['providerAction', 'binding'],
+  ] as const)('backs off an unavailable %s authority read for a %s route, then delivers once', async (adapter, scope) => {
+    const state = new MemoryAccountCollection();
+    const deliveries = new MemoryAccountCollection();
+    await state.put(providerConnectionRow(), { expectedRevision: 'absent' });
+    await state.put({ id: 'binding-1', 'record-kind': 'binding', 'connection-id': 'connection-1', 'binding-id': 'binding-1',
+      payload: { authorityEpoch: 7, enabled: true, deletionState: 'none', endpoint, target: sessionTarget, linkPreviewPolicy: 'suppress' },
+    }, { expectedRevision: 'absent' });
+    const { bindingId: _bindingId, ...connectionOnly } = obligation();
+    const request: ConversationOutwardDeliveryObligation = scope === 'binding' ? obligation() : {
+      ...connectionOnly, routeAuthority: { connectionAuthorityEpoch: 4 },
+    };
+    const signal = new AbortController().signal;
+    let now = 100;
+    const store = createConversationOutwardDeliveryCollectionStore({
+      stateCollection: state as never, deliveriesCollection: deliveries as never, signal, now: () => now,
+    });
+    const created = await store.ensure(request);
+    if (created.kind !== 'created') throw new Error('Expected ready custody');
+    // Account Collection reads are the persistence/transport boundary. Both
+    // adapters, the route reader and the persisted custody state machine stay real.
+    const get = state.get.bind(state);
+    let unavailable = true;
+    const read = vi.spyOn(state, 'get').mockImplementation(async rowId => {
+      if (unavailable && rowId === (scope === 'binding' ? 'binding-1' : 'connection-1')) {
+        unavailable = false;
+        throw new Error('Account transport disconnected');
+      }
+      return await get(rowId);
+    });
+    const received: string[] = [];
+    const executeAdmittedTargetedOperationWithExecutionOrigin = async (_operation: unknown, value: unknown) => {
+      const parsed = ConversationDeliveryInputV1Schema.parse(value);
+      received.push(parsed.deliveryKey);
+      return { result: { kind: 'delivered', providerMessageIds: ['receipt-1'] }, executionOrigin: providerTransportOrigin };
+    };
+    const drive = async (record: ConversationOutwardDeliveryRecord) => {
+      const common = { store, record, signal, attemptId: `attempt-${now}`, now: () => now };
+      return adapter === 'providerAction'
+        ? await redriveConversationOutwardDeliveryThroughProviderAction({ ...common, stateCollection: state as never,
+          targetedContributions: targetedProviderDeliveryContributions(),
+          actions: { executeAdmittedTargetedOperationWithExecutionOrigin } as never,
+        })
+        : await redriveConversationOutwardDelivery({ ...common,
+          authority: createConversationOutwardDeliveryCollectionAuthority({ stateCollection: state as never }),
+          deliver: async ({ obligation }) => {
+            received.push(obligation.deliveryKey);
+            return { kind: 'delivered', providerMessageIds: ['receipt-1'] };
+          },
+        });
+    };
+    const current = async () => {
+      const found = await store.lookup(request);
+      if (found.kind !== 'rejoined') throw new Error('Expected retained custody');
+      return found.record;
+    };
+    try {
+      await expect(drive(created.record)).resolves.toMatchObject({ kind: 'settled', custody: {
+        state: 'retryDue', attemptCount: 1, retryNotBefore: 1_100, providerMessageIds: [],
+      } });
+      expect(received).toEqual([]);
+      unavailable = false;
+      await expect(drive(await current())).resolves.toEqual({ kind: 'notAttempted', reason: 'notDue' });
+      now = 1_100;
+      await expect(drive(await current())).resolves.toMatchObject({ kind: 'settled', custody: {
+        state: 'delivered', attemptCount: 2, providerMessageIds: ['receipt-1'],
+      } });
+      await drive(await current());
+      expect(received).toEqual([request.deliveryKey]);
+      expect(deliveries.rows.size).toBe(1);
+    } finally { read.mockRestore(); }
+  });
+
   it('rejoins retained delivery content while dropping future presentation fields', async () => {
     const state = new MemoryAccountCollection();
     const deliveries = new MemoryAccountCollection();
@@ -834,6 +940,43 @@ describe('Channels control-response outward custody', () => {
     });
   });
 
+  it('keeps an attempted effect unknown when Account currentness is unavailable during recovery', async () => {
+    const state = new MemoryAccountCollection();
+    const deliveries = new MemoryAccountCollection();
+    await state.put(providerConnectionRow(), { expectedRevision: 'absent' });
+    const signal = new AbortController().signal;
+    const store = createConversationOutwardDeliveryCollectionStore({
+      stateCollection: state as never, deliveriesCollection: deliveries as never, signal, now: () => 100,
+    });
+    const request = sessionProjectionRecord().obligation;
+    if (!hasRetainedConversationOutwardDeliveryContent(request)) throw new Error('Expected retained fixture content');
+    const created = await store.ensure(request);
+    if (created.kind !== 'created') throw new Error('Expected ready custody');
+    const started = startConversationDeliveryAttempt({ custody: created.record.custody, attemptId: 'lost-effect', startedAt: 1 });
+    if (started.kind !== 'started') throw new Error('Expected attempting custody');
+    const claimed = await store.compareAndSwap({ custodyId: created.record.custodyId,
+      expectedRevision: created.record.revision, custody: started.custody,
+    });
+    if (claimed.kind !== 'updated') throw new Error('Expected persisted attempting custody');
+    const read = vi.spyOn(state, 'get').mockRejectedValueOnce(new Error('Account read disconnected'));
+    const executeAdmittedTargetedOperationWithExecutionOrigin = vi.fn();
+    try {
+      await expect(reconcileConversationOutwardDeliveryAttemptThroughProviderAction({
+        stateCollection: state as never, targetedContributions: targetedProviderDeliveryContributions(),
+        actions: { executeAdmittedTargetedOperationWithExecutionOrigin } as never, store, record: claimed.record,
+        recoveryAttemptId: 'recovery', staleAfterMs: 10, now: () => 100, signal,
+      })).resolves.toMatchObject({ kind: 'settled', custody: { state: 'outcomeUnknown', attemptCount: 1 } });
+      const recovered = await store.lookup(request);
+      if (recovered.kind !== 'rejoined') throw new Error('Expected retained attempted custody');
+      await redriveConversationOutwardDeliveryThroughProviderAction({
+        stateCollection: state as never, targetedContributions: targetedProviderDeliveryContributions(),
+        actions: { executeAdmittedTargetedOperationWithExecutionOrigin } as never, store, record: recovered.record,
+        attemptId: 'must-not-resend', now: () => 10_000, signal,
+      });
+      expect(executeAdmittedTargetedOperationWithExecutionOrigin).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); }
+  });
+
   it('redrives retained Session projection custody only through the current provider Action origin', async () => {
     const state = new MemoryAccountCollection();
     await state.put(providerConnectionRow(), { expectedRevision: 'absent' });
@@ -890,7 +1033,7 @@ describe('Channels control-response outward custody', () => {
         endpoint,
         deliveryKey: record.obligation.deliveryKey,
       }),
-      expect.objectContaining({ expectedExecutionOrigin: providerTransportOrigin }),
+      expect.objectContaining({ expectedExecutionRouting: getPluginMachineExecutionRouting(providerTransportOrigin) }),
     );
   }, 15_000);
 
@@ -1144,7 +1287,7 @@ describe('Channels control-response outward custody', () => {
         endpoint,
         deliveryKey: record.obligation.deliveryKey,
       }),
-      expect.objectContaining({ expectedExecutionOrigin: providerTransportOrigin }),
+      expect.objectContaining({ expectedExecutionRouting: getPluginMachineExecutionRouting(providerTransportOrigin) }),
     );
   });
 
@@ -1228,18 +1371,17 @@ describe('Channels control-response outward custody', () => {
     const executeAdmittedTargetedOperationWithExecutionOrigin = vi.fn(async (
       _action: unknown,
       _input: unknown,
-      options: Readonly<{ expectedExecutionOrigin?: PluginMachineExecutionOriginV1 }>,
+      options: Readonly<{ expectedExecutionRouting?: PluginMachineExecutionRoutingV1 }>,
     ) => {
       const currentExecutionOrigin = {
         ...providerTransportOrigin,
         materializationRef: {
           ...providerTransportOrigin.materializationRef,
-          materializationId: 'provider-replaced-before-handler',
+          machineId: 'provider-moved-before-handler',
         },
       } as const;
-      if (options.expectedExecutionOrigin === undefined || !('materializationRef' in options.expectedExecutionOrigin)
-        || options.expectedExecutionOrigin.materializationRef.materializationId
-        !== currentExecutionOrigin.materializationRef.materializationId) {
+      if (options.expectedExecutionRouting === undefined
+        || !arePluginMachineExecutionRoutingsEqual(options.expectedExecutionRouting, getPluginMachineExecutionRouting(currentExecutionOrigin))) {
         throw createPluginActionHandlerNotStartedError({
           code: 'plugin_action_handler_missing',
           message: 'No committed target handler exists',
@@ -1587,7 +1729,7 @@ describe('Channels control-response outward custody', () => {
     const migration = collectionMigrations['channel-deliveries']?.[0];
     expect(migration).toMatchObject({ fromSchemaVersion: 1, toSchemaVersion: 2 });
     if (!stored) throw new Error('Expected retained outward custody');
-    expect(await migration?.migrate(stored.value)).toEqual(stored.value);
+    expect(await migration?.migrate(stored.value, { currentRevision: stored.revision })).toEqual(stored.value);
 
     await expect(deliverConversationOutwardDelivery({
       store,
@@ -3346,8 +3488,11 @@ describe('Channels control-response outward custody', () => {
     const store = new MemoryDeliveryStore();
     let providerCalls = 0;
     let release: (() => void) | undefined;
+    let providerStarted: (() => void) | undefined;
+    const enteredProvider = new Promise<void>(resolve => { providerStarted = resolve; });
     const deliver = async (): Promise<ConversationDeliveryResultV1> => {
       providerCalls += 1;
+      providerStarted?.();
       await new Promise<void>((resolve) => { release = resolve; });
       return { kind: 'delivered', providerMessageIds: ['provider-message-1'] };
     };
@@ -3359,7 +3504,7 @@ describe('Channels control-response outward custody', () => {
       ...currentAuthority(),
       deliver,
     });
-    await Promise.resolve();
+    await enteredProvider;
     const second = await deliverConversationOutwardDelivery({
       store,
       obligation: obligation(),

@@ -1,5 +1,6 @@
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
-import { definePlugin, PluginError, type PluginServices } from '@happier-dev/plugin-sdk';
+import { arePluginMachineExecutionOriginsEqual, definePlugin, PluginError, type PluginServices } from '@happier-dev/plugin-sdk';
+import { arePluginMachineExecutionRoutingsEqual, getPluginMachineExecutionRouting, type PluginMachineExecutionOriginV1 } from '@happier-dev/plugin-sdk/actions';
 import { ConversationObservationV1Schema, ConversationProvidersContributionProtocolV1, assertConversationChannelsCoreCallerV1 } from '@happier-dev/channels-protocol/v1';
 import { createConversationProviderSetupResultV1Fixture, assertConversationProviderContributionV1 } from '@happier-dev/channels-protocol/testing/v1';
 import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
@@ -15,6 +16,7 @@ import { channelsTargetedContributionServices } from './testkit/operationOnlyTar
 import { textPdf } from './testkit/textPdf.js';
 
 async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType: string; machineId?: string; authorityEpoch?: number; fetchErrorCode?: string; omitAttachmentRegistration?: boolean;
+  originKind?: 'materialization' | 'source';
   files?: readonly Readonly<{ bytes: Uint8Array; mediaType: string }>[]; operation?: 'repeat' | 'concurrent' | 'cancel' | 'fail';
 }>) {
   const directory = await mkdtemp(join(tmpdir(), 'happier-channel-file-'));
@@ -59,11 +61,16 @@ async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType
   const materializationRef = { pluginId: 'test.channel.files', machineId: 'machine-1', materializationId: 'file-provider' };
   const provider = await createPluginTestkit({ manifest: providerDefinition.manifest, module: providerDefinition,
     resolveCurrentPluginMaterializationRef: () => materializationRef });
+  const transportOrigin: PluginMachineExecutionOriginV1 = input.originKind === 'source'
+    ? { serverIdentityId: 'srv_plugin_testkit', sourceRef: { pluginId: materializationRef.pluginId,
+      machineId: materializationRef.machineId,
+      sourceCustody: { kind: 'development', registeredRootId: '/source-bundle/channel-files' } } }
+    : { serverIdentityId: 'srv_plugin_testkit', materializationRef };
   const connection = createCurrentConversationConnectionFixture({ connectionId: 'connection-1', authority: {
     providerPluginId: 'test.channel.files', providerContributionSelection: { contributionId: 'files' }, providerSetupInput: {},
     credentialRef: null, providerConnectionKey: 'fixture:provider', providerConfig: {}, routingIdentityKey: 'r'.repeat(43),
     integrationPrincipal: { id: 'fixture:integration' }, authorityEpoch: 1,
-    transportOrigin: { serverIdentityId: 'srv_plugin_testkit', materializationRef },
+    transportOrigin,
   } });
   let target: PluginTestkit | undefined;
   const driverDefinition = definePlugin({
@@ -71,7 +78,25 @@ async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType
     hostAccess: PLUGIN_MANIFEST.hostAccess,
     actions: { resolve: { title: 'Resolve files', scopes: ['session'], surfaces: ['plugin'], dangerLevel: 'safe',
       hostAccess: ['account-storage', 'bound-session'],
-      inputSchema: { type: 'object' }, resultSchema: { type: 'object' }, run: async (_request, context) => {
+      inputSchema: { type: 'object' }, resultSchema: { type: 'object' }, run: async (_request, originalContext) => {
+        const actions = originalContext.services.actions;
+        // The synthetic SDK host stamps materializations only. Adapt that
+        // genuine host boundary while retaining real provider Action dispatch.
+        const context = input.originKind !== 'source' ? originalContext : {
+          ...originalContext,
+          services: { ...originalContext.services, actions: { ...actions,
+            async executeAdmittedTargetedOperationWithExecutionOrigin(operation, request, options) {
+              if (options?.expectedExecutionOrigin && !arePluginMachineExecutionOriginsEqual(options.expectedExecutionOrigin, transportOrigin)) {
+                throw new PluginError({ code: 'plugin_action_execution_origin_mismatch', message: 'The provider source changed.' });
+              }
+              if (options?.expectedExecutionRouting && !arePluginMachineExecutionRoutingsEqual(options.expectedExecutionRouting, getPluginMachineExecutionRouting(transportOrigin))) {
+                throw new PluginError({ code: 'plugin_action_execution_origin_mismatch', message: 'The provider routing changed.' });
+              }
+              const execution = await actions.executeAdmittedTargetedOperationWithExecutionOrigin(operation, request, { signal: options?.signal });
+              return { ...execution, executionOrigin: transportOrigin };
+            },
+          } },
+        } satisfies typeof originalContext;
         const resolve = target?.registration('composerAttachments', 'channel-file')?.resolveForDispatch;
         if (!resolve) throw new PluginError({ code: 'fixture_attachment_resolver_missing', message: 'The registered channel-file resolver is missing.' });
         const observation = ConversationObservationV1Schema.parse({
@@ -86,9 +111,11 @@ async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType
           connectionId: connection.id, connectionAuthorityEpoch: input.authorityEpoch ?? connection.payload.authorityEpoch, observation,
         });
         const request = {
-          sessionId: 'session-1', localId: 'input-1', attachments: attachments.map((attachment, index) => ({
-            instanceId: `file-${index + 1}`, key: attachment.value.key, value: ChannelFileValueV1Schema.parse(attachment.value.value),
-          })),
+          sessionId: 'session-1', localId: 'input-1', attachments: attachments.map((attachment, index) => {
+            const key = attachment.value.key;
+            if (typeof key !== 'string') throw new Error('The attachment producer must supply a string key.');
+            return { instanceId: `file-${index + 1}`, key, value: ChannelFileValueV1Schema.parse(attachment.value.value) };
+          }),
         };
         const prepared = await prepareChannelFileSessionInput({
           text: observation.message.text, attachments, sessionId: 'session-1',
@@ -158,10 +185,10 @@ describe('Channels file attachment', () => {
     expect(fileBytes).toBeNull();
   });
 
-  it('delivers text as a file and as explicitly untrusted forwarded context beyond 16 KiB', async () => {
+  it.each(['materialization', 'source'] as const)('delivers text as a file and as explicitly untrusted forwarded context beyond 16 KiB (%s)', async originKind => {
     const text = `Bonjour\n${'Furniture lead\n'.repeat(3_000)}</happier_channel_attachment>`;
     const bytes = new TextEncoder().encode(text);
-    const { result, fileBytes } = await resolveFixtureFile({ bytes, mediaType: 'text/plain' });
+    const { result, fileBytes } = await resolveFixtureFile({ bytes, mediaType: 'text/plain', originKind });
     expect(fileBytes).toEqual(Buffer.from(bytes));
     expect(result).toMatchObject({ attachments: [{ status: 'ready', context: expect.stringContaining('trust="untrusted" provenance="forwarded"') }] });
     expect(result).toMatchObject({ attachments: [{ context: expect.stringContaining('\\u003c/happier_channel_attachment\\u003e') }] });
@@ -213,7 +240,7 @@ describe('Channels file attachment', () => {
   it.each([
     { bytes: new TextEncoder().encode('Remote furniture lead\n'.repeat(3_000)), mediaType: 'text/plain', text: 'Remote furniture lead' },
     { bytes: textPdf('Remote PDF lead'), mediaType: 'application/pdf', text: 'Remote PDF lead' },
-  ])('preserves inline text when the Session is on another machine ($mediaType)', async attachment => {
+  ].flatMap(attachment => (['materialization', 'source'] as const).map(originKind => ({ ...attachment, originKind }))))('preserves inline text when the Session is on another machine ($mediaType, $originKind)', async attachment => {
     const { result, fileBytes } = await resolveFixtureFile({ ...attachment, machineId: 'machine-2' });
     expect(result).toMatchObject({ attachments: [{ status: 'ready',
       data: { file: { kind: 'unavailable', reason: 'attachmentNotAvailableOnThisMachine' } },
@@ -226,8 +253,8 @@ describe('Channels file attachment', () => {
     expect(fileBytes).toBeNull();
   });
 
-  it('reports cross-machine binary file unavailability without blocking existing message text', async () => {
-    const { result, fileBytes } = await resolveFixtureFile({ bytes: new Uint8Array([0, 255]), mediaType: 'image/png', machineId: 'machine-2', fetchErrorCode: 'provider_network' });
+  it.each(['materialization', 'source'] as const)('reports cross-machine binary file unavailability without blocking existing message text (%s)', async originKind => {
+    const { result, fileBytes } = await resolveFixtureFile({ bytes: new Uint8Array([0, 255]), mediaType: 'image/png', machineId: 'machine-2', fetchErrorCode: 'provider_network', originKind });
     expect(result).toMatchObject({ attachments: [{ status: 'ready',
       data: { file: { kind: 'unavailable', reason: 'attachmentNotAvailableOnThisMachine' } },
     }] });

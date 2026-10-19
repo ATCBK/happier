@@ -15,6 +15,7 @@ import { EmailTransportsContributionProtocolV1 as protocol, EmailTransportFetchR
   EmailTransportSubmitRawInputV1Schema, EmailTransportFindSentInputV1Schema,
   type EmailTransportSubmitRawInputV1 } from './transports.js';
 import { ConversationAttachmentFetchResultV1Schema, ConversationPollResultV1Schema,
+  MAX_CONVERSATION_ENDPOINT_DISPLAY_LABEL_CODE_POINTS,
   ConversationPrincipalResolveResultV1Schema,
   ConversationTransportFactReportInputV1Schema, type ConversationTransportFactReportInputV1 } from '@happier-dev/channels-protocol/v1';
 
@@ -175,14 +176,23 @@ describe('email core with an external contributed raw transport', () => {
     } finally { await f.dispose(); }
   });
 
-  it('receives a trusted thread and strips only history already held by a binding', async () => {
+  it.each([
+    { name: 'ordinary subject', subject: 'Re: Question', label: 'Re: Question' },
+    { name: 'empty subject', subject: '', label: undefined },
+    { name: 'long subject', subject: 'A'.repeat(MAX_CONVERSATION_ENDPOINT_DISPLAY_LABEL_CODE_POINTS + 1),
+      label: 'A'.repeat(MAX_CONVERSATION_ENDPOINT_DISPLAY_LABEL_CODE_POINTS) },
+  ])('receives a trusted thread with $name and strips only history already held by a binding', async ({ subject, label }) => {
     const f = await fixture();
     try {
+      f.replaceFetched(Buffer.from(incoming.toString().replace('Subject: Re: Question', `Subject: ${subject}`)));
       const poll = { ...connection, checkpoint: null, limit: 10, waitMs: 0 };
-      await expect(f.invoke(ids.observationsPoll, poll)).resolves.toMatchObject({ kind: 'batch', observations: [{ observation: {
+      const first = ConversationPollResultV1Schema.parse(await f.invoke(ids.observationsPoll, poll));
+      expect(first).toMatchObject({ kind: 'batch', observations: [{ observation: {
         kind: 'fullText', observation: { endpoint: thread, actor: { principalId: 'alice@example.com', kind: 'human' },
           message: { id: '<incoming@example.com>', text: expect.stringContaining('HISTORY') } },
       } }] });
+      if (first.kind !== 'batch' || first.observations[0]?.observation.kind !== 'fullText') throw new Error('Expected a full email observation');
+      expect(first.observations[0].observation.observation.endpoint.label).toBe(label);
       await expect(f.invoke(ids.observationsPoll, { ...poll, bindings: [{ endpoint: thread }] })).resolves.toMatchObject({
         observations: [{ observation: { observation: { message: { text: 'ANSWER' } } } }], checkpointAfterBatch: { position: 1 },
       });

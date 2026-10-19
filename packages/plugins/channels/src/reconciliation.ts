@@ -1,10 +1,10 @@
 import {
-  arePluginMachineMaterializationRefsEqual,
   PluginError,
   type JsonValue,
   type PluginInvocationCaller,
   type PluginInvocationContext,
 } from '@happier-dev/plugin-sdk';
+import { arePluginMachineExecutionRoutingsEqual, getPluginMachineExecutionRouting } from '@happier-dev/plugin-sdk/actions';
 import { PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 } from '@happier-dev/plugin-sdk/collections';
 import type {
   ConversationEndpointAudienceV1,
@@ -29,7 +29,10 @@ import {
 import { requireChannelsAccountStorage } from './requiredAccountStorage.js';
 import {
   hasUnsettledDestructiveOldTransportStop,
-  isSelfStampedPluginCaller,
+  getSelfStampedPluginCallerExecutionOrigin,
+  getConversationConnectionExecutionRouting,
+  type ConversationConnectionTransportOriginV1,
+  type ConversationPendingOldTransportStopV1,
 } from './connectionLifecycle.js';
 
 /*
@@ -50,8 +53,6 @@ function reconciliationSnapshotChangedError(): PluginError {
     retryable: true,
   });
 }
-
-type PluginCaller = Extract<PluginInvocationCaller, Readonly<{ kind: 'plugin' }>>;
 
 type WithoutConnectionIdentity<T> = T extends unknown
   ? Omit<T, 'connectionId' | 'v'>
@@ -88,18 +89,9 @@ export type ConversationReconciliationConnectionStateV1 =
     providerPluginId: string;
     overlapSafety: 'safe' | 'providerExclusive' | 'destructive';
     transport: Readonly<{ kind: ConversationTransportKindV1 }>;
-    transportOrigin: Readonly<{
-      materializationRef: PluginCaller['materialization'];
-    }>;
+    transportOrigin: ConversationConnectionTransportOriginV1;
     historyGap: JsonValue | null;
-    pendingOldTransportStop: Readonly<{
-      overlapSafety: 'safe' | 'providerExclusive' | 'destructive';
-      acceptedPossibleLoss: boolean;
-      stopRequest: Readonly<{
-        reason: 'transfer' | 'delete';
-        authorityEpoch: number;
-      }>;
-    }> | null;
+    pendingOldTransportStop: ConversationPendingOldTransportStopV1 | null;
   }>;
 
 /**
@@ -115,10 +107,9 @@ export type ConversationReconciliationBindingPolicyStateV1 = Readonly<{
 }>;
 
 /**
- * The one caller-proven materialization predicate shared by reconciliation
- * projections and provider transport facts. It deliberately checks only the
- * provenance that a host-stamped plugin caller can carry; execution-origin
- * equality for outbound Action dispatch remains the generic SDK owner.
+ * The one host-stamped routing predicate shared by reconciliation projections
+ * and provider transport facts. The daemon caller producer supplies the full
+ * origin or refuses dispatch; an unstamped materialization has no Home proof.
  */
 export function hasCurrentConversationTransportCaller(input: Readonly<{
   caller: PluginInvocationCaller | undefined;
@@ -126,15 +117,12 @@ export function hasCurrentConversationTransportCaller(input: Readonly<{
   transportOrigin: ConversationReconciliationConnectionStateV1['transportOrigin'];
 }>): boolean {
   const caller = input.caller;
-  if (!isSelfStampedPluginCaller(caller)) return false;
-  const materialization = caller.materialization;
-  const transportMaterialization = input.transportOrigin.materializationRef;
-  if (!materialization || !transportMaterialization) return false;
-  return caller.pluginId === input.providerPluginId
-    && arePluginMachineMaterializationRefsEqual(
-        materialization,
-        transportMaterialization,
-      );
+  if (caller?.kind !== 'plugin' || caller.pluginId !== input.providerPluginId) return false;
+  const origin = getSelfStampedPluginCallerExecutionOrigin(caller);
+  return origin !== undefined && arePluginMachineExecutionRoutingsEqual(
+    getPluginMachineExecutionRouting(origin),
+    getConversationConnectionExecutionRouting(input.transportOrigin, input.providerPluginId),
+  );
 }
 
 /**
@@ -215,13 +203,13 @@ function requiresFullSharedMessageContent(
 
 /**
  * The sole list/read projection gate. The persisted current row and the
- * immediate host-stamped caller must carry the exact same materialization;
+ * immediate host-stamped caller must carry the same Home/Machine/plugin route;
  * output deliberately retains neither transport nor provenance authority.
  *
  * Eligibility does not depend on the connection's persisted transport kind:
  * every truthful kind (checkpointedPull, socket, durablePush) is listable so
  * providers such as Telegram observe their own checkpointed-pull connection
- * through source setup. Caller materialization, history-gap custody, and
+ * through source setup. Caller currentness, history-gap custody, and
  * destructive-replacement exclusions remain the authority gates.
  */
 function projectReconciliationSnapshotForCaller(

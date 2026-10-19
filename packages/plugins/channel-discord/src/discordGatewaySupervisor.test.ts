@@ -57,7 +57,6 @@ function backgroundContext(
     actions: Partial<PluginInvocationContext['services']['actions']>;
     connectedAccounts: Partial<PluginInvocationContext['services']['connectedAccounts']>;
     http: Partial<PluginInvocationContext['services']['http']>;
-    events?: Partial<PluginInvocationContext['services']['events']>;
   }>,
   signal: AbortSignal = new AbortController().signal,
 ): BackgroundServiceContext {
@@ -76,7 +75,6 @@ function backgroundContext(
     // fixture supplies one rather than letting an absent boundary look like
     // supervisor behavior.
     services: {
-      events: { plugin: { subscribe: () => ({ dispose() {} }) } },
       ...services,
       logger: {
         debug: vi.fn(),
@@ -354,7 +352,7 @@ describe('Discord Gateway supervisor', () => {
     vi.useFakeTimers();
     const generation = new AbortController();
     const supervisor = createDiscordGatewaySupervisor();
-    let invalidate: (() => void) | undefined;
+    const invalidate = () => supervisor.invalidateConnections();
     let current = snapshot({ enabled: false });
     const listedEpochs: number[] = [];
     const actions = {
@@ -372,19 +370,10 @@ describe('Discord Gateway supervisor', () => {
     const disposeWatch = vi.fn();
     const background = backgroundContext({
       actions,
-      connectedAccounts: { watch: () => ({ dispose() {} }) },
+      connectedAccounts: { watch: () => ({ dispose: disposeWatch }) },
       http: {},
-      events: { plugin: {
-        emit: vi.fn(),
-        subscribe: (_ref, listener) => {
-          invalidate = () => { void listener({
-            ref: { pluginId: 'happier.channels', localId: 'connections-invalidated-v1' },
-            payload: {}, sequence: 1,
-          }); };
-          return { dispose: disposeWatch };
-        },
-      } },
     }, generation.signal);
+    expect(invalidate).not.toThrow();
     const running = supervisor.run(background);
     try {
       await vi.advanceTimersByTimeAsync(0);
@@ -406,6 +395,7 @@ describe('Discord Gateway supervisor', () => {
       vi.useRealTimers();
     }
     expect(disposeWatch).toHaveBeenCalledOnce();
+    expect(invalidate).not.toThrow();
   });
 
   it('re-reads each listed connection before starting its worker, so stale list evidence cannot select a Gateway generation', async () => {

@@ -10,6 +10,7 @@ type SessionCandidatePage = Readonly<{
 function parseSessionCandidatePage(value: unknown): SessionCandidatePage | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const page = value as Record<string, unknown>;
+  if (page.view !== 'awareness' || page.projectionVersion !== 1) return undefined;
   if (!Array.isArray(page.sessions)) return undefined;
   const nonEmpty = (entry: unknown): entry is string => typeof entry === 'string' && entry.trim().length > 0;
   if (page.nextCursor !== undefined && page.nextCursor !== null && !nonEmpty(page.nextCursor)) return undefined;
@@ -18,10 +19,10 @@ function parseSessionCandidatePage(value: unknown): SessionCandidatePage | undef
   for (const value of page.sessions) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) continue;
     const entry = value as Record<string, unknown>;
-    if (!nonEmpty(entry.id) || seen.has(entry.id)) continue;
-    seen.add(entry.id);
+    if (!nonEmpty(entry.sessionId) || seen.has(entry.sessionId)) continue;
+    seen.add(entry.sessionId);
     // Titles are sufficient for picking a Session; transcript previews stay private.
-    candidates.push({ id: entry.id, label: nonEmpty(entry.title) ? entry.title : 'Session' });
+    candidates.push({ id: entry.sessionId, label: nonEmpty(entry.title) ? entry.title : 'Session' });
   }
   return {
     candidates,
@@ -62,8 +63,8 @@ export function useSessionCandidatePages(options: Readonly<{
     current.onStarted?.();
     try {
       const settled = await execute({
+        view: 'awareness',
         limit: 100,
-        includeLastMessagePreview: false,
         ...(cursor === undefined ? {} : { cursor }),
       });
       if (!mountedRef.current || current.signal?.aborted) return;

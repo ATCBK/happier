@@ -327,6 +327,7 @@ describe('Channels first-party provider composition', () => {
 
     function telegramSetupComposition(input: Readonly<{
       connectionMaterializationId: string;
+      connectionMachineId?: string;
     }>) {
       const telegramCredential = {
         service: { pluginId: 'happier.channel.telegram', localId: 'telegram-bot' },
@@ -353,7 +354,7 @@ describe('Channels first-party provider composition', () => {
           serverIdentityId: 'srv_plugin_testkit',
           materializationRef: {
             pluginId: 'happier.channel.telegram',
-            machineId: 'machine-composed',
+            machineId: input.connectionMachineId ?? 'machine-composed',
             materializationId: input.connectionMaterializationId,
           },
         },
@@ -459,9 +460,10 @@ describe('Channels first-party provider composition', () => {
       }
     });
 
-    it('keeps a checkpointedPull connection owned by another provider materialization excluded', async () => {
+    it('keeps a checkpointedPull connection owned by another provider Machine excluded', async () => {
       const composition = telegramSetupComposition({
         connectionMaterializationId: 'telegram-install-other',
+        connectionMachineId: 'machine-other',
       });
       const { core, telegram } = await createTelegramSetupTestkit({
         storage: composition.storage,

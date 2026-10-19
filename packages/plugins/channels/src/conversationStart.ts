@@ -3,7 +3,7 @@ import {
   type ConversationStartResultV1,
   type ConversationSessionBindingTargetV1,
 } from '@happier-dev/channels-protocol/v1';
-import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { PluginError, projectPluginFailureText, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 
 import { asChannelStateRow, readConversationBindingUpdateRow, readConversationConnectionUpdateRow } from './accountLocalBindingPolicy.js';
 import { CHANNEL_DELIVERIES_COLLECTION, CHANNEL_STATE_COLLECTION } from './collections.js';
@@ -56,7 +56,10 @@ export async function startConversationForInvocation(input: unknown, context: Pl
   const retained = await store.lookup(obligation);
   if (retained.kind === 'rejoined') return { kind: 'accepted', custodyId: retained.record.custodyId };
   if (retained.kind !== 'absent') throw new PluginError({ code: `channels_conversation_start_${retained.kind}`,
-    message: 'The existing conversation delivery custody is unavailable.', retryable: retained.kind === 'unavailable' });
+    message: projectPluginFailureText(new Error(`The existing conversation delivery custody is unavailable.${'reason' in retained ? ` (${retained.reason})` : ''}`)),
+    retryable: retained.kind === 'unavailable',
+    ...('reason' in retained ? { details: { reason: retained.reason } } : {}),
+  });
   const session = await context.services.sessions.get(request.sessionId, { signal: context.signal }).catch(() => null);
   if (session === null) throw new PluginError({ code: 'channels_conversation_start_session_unavailable',
     message: 'The reply Session is unavailable.', retryable: true });
@@ -79,8 +82,9 @@ export async function startConversationForInvocation(input: unknown, context: Pl
   });
   if (accepted.kind !== 'accepted') throw new PluginError({
     code: `channels_conversation_start_${accepted.kind}`,
-    message: 'The conversation start could not enter delivery custody.',
+    message: projectPluginFailureText(new Error(`The conversation start could not enter delivery custody.${'reason' in accepted ? ` (${accepted.reason})` : ''}`)),
     retryable: accepted.kind === 'unavailable',
+    ...('reason' in accepted ? { details: { reason: accepted.reason } } : {}),
   });
   return { kind: 'accepted', custodyId: accepted.custodyId };
 }

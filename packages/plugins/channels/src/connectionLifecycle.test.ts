@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/plugin-sdk/actions';
 import {
   MAX_CONVERSATION_OBSERVATION_AGE_MS,
   MIN_CONVERSATION_OBSERVATION_AGE_MS,
@@ -9,6 +10,7 @@ import {
   confirmConversationConnectionStop,
   finalizeConversationConnectionDeleteWithoutProviderStop,
   finalizeConversationConnectionTransferWithoutProviderStop,
+  freezeConversationConnectionTransportOrigin,
   recordConversationConnectionHistoryGap,
   recordConversationConnectionProviderReadiness,
   startConversationConnectionDelete,
@@ -36,14 +38,19 @@ function connection(
 }
 
 describe('Conversation connection lifecycle', () => {
+  it('retains only Home and Machine placement across compatible source replacements', () => {
+    const origin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_lifecycle', sourceRef: {
+      pluginId: 'happier.channel.lifecycle', machineId: 'machine-1',
+      sourceCustody: { kind: 'development', registeredRootId: '/runtime-1/provider' },
+    } });
+    const frozen = freezeConversationConnectionTransportOrigin({ serverIdentityId: origin.serverIdentityId, machineId: 'machine-1' });
+    expect(frozen).toEqual({ serverIdentityId: 'srv_lifecycle', machineId: 'machine-1' });
+    expect(Object.isFrozen(frozen)).toBe(true);
+  });
   it('finalizes an already-fenced durable-push delete without fabricating provider stop proof', () => {
     const transportOrigin = {
       serverIdentityId: 'srv_connection_lifecycle',
-      materializationRef: {
-        pluginId: 'happier.channel.lifecycle',
-        machineId: 'machine-lifecycle',
-        materializationId: 'materialization-lifecycle',
-      },
+      machineId: 'machine-lifecycle',
     } as const;
     const deleting = startConversationConnectionDelete({
       current: connection(),
@@ -89,11 +96,7 @@ describe('Conversation connection lifecycle', () => {
   it('settles durable-push transfer without claiming a provider stop', () => {
     const transportOrigin = {
       serverIdentityId: 'srv_connection_lifecycle',
-      materializationRef: {
-        pluginId: 'happier.channel.lifecycle',
-        machineId: 'machine-lifecycle',
-        materializationId: 'materialization-lifecycle',
-      },
+      machineId: 'machine-lifecycle',
     } as const;
     const started = startConversationConnectionTransfer({
       current: connection(),
@@ -139,11 +142,7 @@ describe('Conversation connection lifecycle', () => {
   it('commits one frozen old-stop request before delete without orphaning an in-progress baseline fence', () => {
     const transportOrigin = {
       serverIdentityId: 'srv_connection_lifecycle',
-      materializationRef: {
-        pluginId: 'happier.channel.lifecycle',
-        machineId: 'machine-lifecycle',
-        materializationId: 'materialization-lifecycle',
-      },
+      machineId: 'machine-lifecycle',
     } as const;
     const stopRequest = {
       v: 1,
@@ -206,7 +205,7 @@ describe('Conversation connection lifecycle', () => {
 
     if (deleting.kind !== 'deletePending') throw new Error('Expected pending delete state');
     expect(deleting.connection.pendingOldTransportStop).not.toBeNull();
-    if (deleting.connection.pendingOldTransportStop === null) throw new Error('Expected frozen stop custody');
+    if (deleting.connection.pendingOldTransportStop === null || 'kind' in deleting.connection.pendingOldTransportStop) throw new Error('Expected frozen provider-stop custody');
     expect(deleting.connection.pendingOldTransportStop.providerContributionSelection)
       .not.toBe(providerContributionSelection);
     expect(deleting.connection.pendingOldTransportStop.stopRequest).not.toBe(stopRequest);
@@ -248,22 +247,14 @@ describe('Conversation connection lifecycle', () => {
       pendingOldTransportStop: {
         transportOrigin: {
           serverIdentityId: 'srv_connection_lifecycle',
-          materializationRef: {
-            pluginId: 'happier.channel.lifecycle',
-            machineId: 'machine-lifecycle',
-            materializationId: 'materialization-lifecycle',
-          },
+          machineId: 'machine-lifecycle',
         },
         predecessorCheckpointedPollInvocation: {
           connectionRevision: 1,
           authorityEpoch: 7,
           transportOrigin: {
             serverIdentityId: 'srv_connection_lifecycle',
-            materializationRef: {
-              pluginId: 'happier.channel.lifecycle',
-              machineId: 'machine-lifecycle',
-              materializationId: 'materialization-lifecycle',
-            },
+            machineId: 'machine-lifecycle',
           },
         },
         // C2 persists replacement B. This sole frozen slot retains incumbent A
@@ -318,6 +309,7 @@ describe('Conversation connection lifecycle', () => {
       },
     });
     if (transferring.kind !== 'transferPendingOldStop') throw new Error('Expected pending transfer state');
+    if (transferring.connection.pendingOldTransportStop === null || 'kind' in transferring.connection.pendingOldTransportStop) throw new Error('Expected frozen provider-stop custody');
     expect(Object.isFrozen(transferring.connection.pendingOldTransportStop)).toBe(true);
     expect(Object.isFrozen(
       transferring.connection.pendingOldTransportStop?.predecessorCheckpointedPollInvocation,
@@ -348,20 +340,12 @@ describe('Conversation connection lifecycle', () => {
           authorityEpoch: 7,
           transportOrigin: {
             serverIdentityId: 'srv_connection_lifecycle',
-            materializationRef: {
-              pluginId: 'happier.channel.lifecycle',
-              machineId: 'machine-lifecycle',
-              materializationId: 'materialization-lifecycle',
-            },
+            machineId: 'machine-lifecycle',
           },
         },
         transportOrigin: {
           serverIdentityId: 'srv_connection_lifecycle',
-          materializationRef: {
-            pluginId: 'happier.channel.lifecycle',
-            machineId: 'machine-lifecycle',
-            materializationId: 'materialization-lifecycle',
-          },
+          machineId: 'machine-lifecycle',
         },
         providerContributionSelection: {
           contributionId: 'incumbent-contribution',
@@ -410,7 +394,7 @@ describe('Conversation connection lifecycle', () => {
     });
 
     const acceptedStop = transfer.connection.pendingOldTransportStop;
-    if (acceptedStop === null || acceptedStop === undefined
+    if (acceptedStop === null || acceptedStop === undefined || 'kind' in acceptedStop
       || acceptedStop.stopRequest.reason !== 'transfer') {
       throw new Error('Expected the accepted transfer to retain a transfer stop marker.');
     }
@@ -458,11 +442,7 @@ describe('Conversation connection lifecycle', () => {
   it('keeps an accepted transfer marker admissible across ordinary policy epochs', () => {
     const oldTransportOrigin = {
       serverIdentityId: 'srv_old_transport',
-      materializationRef: {
-        pluginId: 'happier.channel.lifecycle',
-        machineId: 'machine-old',
-        materializationId: 'materialization-old',
-      },
+      machineId: 'machine-old',
     } as const;
     const unresolved = connection({
       authorityEpoch: 8,
@@ -492,6 +472,7 @@ describe('Conversation connection lifecycle', () => {
         acceptedPossibleLoss: false,
       },
     });
+    if (unresolved.pendingOldTransportStop === null || 'kind' in unresolved.pendingOldTransportStop) throw new Error('Expected frozen provider-stop custody');
     const deleteStop = {
       predecessorCheckpointedPollInvocation: {
         connectionRevision: 2,
@@ -644,20 +625,12 @@ describe('Conversation connection lifecycle', () => {
           authorityEpoch: 6,
           transportOrigin: {
             serverIdentityId: 'srv_old_transport',
-            materializationRef: {
-              pluginId: 'happier.channel.lifecycle',
-              machineId: 'machine-old',
-              materializationId: 'materialization-old',
-            },
+            machineId: 'machine-old',
           },
         },
         transportOrigin: {
           serverIdentityId: 'srv_old_transport',
-          materializationRef: {
-            pluginId: 'happier.channel.lifecycle',
-            machineId: 'machine-old',
-            materializationId: 'materialization-old',
-          },
+          machineId: 'machine-old',
         },
         stopRequest: {
           v: 1,
@@ -674,6 +647,7 @@ describe('Conversation connection lifecycle', () => {
       },
     });
     expect(abandonConversationConnectionStop({ current: malformed })).toEqual({ kind: 'staleAuthority' });
+    if (malformed.pendingOldTransportStop === null || 'kind' in malformed.pendingOldTransportStop) throw new Error('Expected malformed provider-stop fixture');
     expect(startConversationConnectionDelete({
       current: malformed,
       // @ts-expect-error - deliberately omits providerContributionSelection: these cases prove the lifecycle owner rejects an incomplete retained stop marker.
@@ -700,20 +674,12 @@ describe('Conversation connection lifecycle', () => {
           authorityEpoch: 4,
           transportOrigin: {
             serverIdentityId: 'srv_old_transport',
-            materializationRef: {
-              pluginId: 'happier.channel.lifecycle',
-              machineId: 'machine-old',
-              materializationId: 'materialization-old',
-            },
+            machineId: 'machine-old',
           },
         },
         transportOrigin: {
           serverIdentityId: 'srv_old_transport',
-          materializationRef: {
-            pluginId: 'happier.channel.lifecycle',
-            machineId: 'machine-old',
-            materializationId: 'materialization-old',
-          },
+          machineId: 'machine-old',
         },
         stopRequest: {
           v: 1,
@@ -731,6 +697,7 @@ describe('Conversation connection lifecycle', () => {
         acceptedPossibleLoss: true,
       },
     });
+    if (malformed.pendingOldTransportStop === null || 'kind' in malformed.pendingOldTransportStop) throw new Error('Expected malformed provider-stop fixture');
     const nextStop = {
       predecessorCheckpointedPollInvocation:
         malformed.pendingOldTransportStop!.predecessorCheckpointedPollInvocation,
@@ -768,11 +735,7 @@ describe('Conversation connection lifecycle', () => {
       pendingOldTransportStop: {
         transportOrigin: {
           serverIdentityId: 'srv_connection_lifecycle',
-          materializationRef: {
-            pluginId: 'happier.channel.lifecycle',
-            machineId: 'machine-lifecycle',
-            materializationId: 'materialization-lifecycle',
-          },
+          machineId: 'machine-lifecycle',
         },
         stopRequest: {
           v: 1,
@@ -1073,11 +1036,7 @@ describe('Conversation connection lifecycle', () => {
 describe('Conversation connection transfer predecessor custody', () => {
   const transportOrigin = {
     serverIdentityId: 'srv_connection_lifecycle',
-    materializationRef: {
-      pluginId: 'happier.channel.lifecycle',
-      machineId: 'machine-lifecycle',
-      materializationId: 'materialization-lifecycle',
-    },
+    machineId: 'machine-lifecycle',
   } as const;
 
   function transferStopRequest() {
@@ -1101,7 +1060,13 @@ describe('Conversation connection transfer predecessor custody', () => {
     const current = input.current ?? connection();
     return startConversationConnectionTransfer({
       current,
-      pendingOldTransportStop: {
+      pendingOldTransportStop: input.predecessorTransportKind === 'durablePush' && input.endpointRetarget === 'pending' ? {
+        kind: 'endpointRetarget', webhookEndpointId: 'wh_ep_AAECAwQFBgcICQoLDA0ODw',
+        webhookContributionRef: { pluginId: 'happier.channel.lifecycle', localId: 'webhook' },
+        webhookSourceInstanceId: 'connection-transfer-custody',
+        targetMaterialization: { pluginId: 'happier.channel.lifecycle', machineId: 'machine-lifecycle', materializationId: 'materialization-next' },
+        transferAuthorityEpoch: current.authorityEpoch + 1,
+      } : {
         predecessorCheckpointedPollInvocation: {
           connectionRevision: 1,
           authorityEpoch: current.authorityEpoch,
@@ -1171,8 +1136,8 @@ describe('Conversation connection transfer predecessor custody', () => {
     const started = startTransfer({ predecessorTransportKind: 'durablePush', endpointRetarget: 'pending' });
     if (started.kind !== 'transferPendingOldStop') throw new Error('Expected transfer state.');
     expect(started.connection.pendingOldTransportStop).toMatchObject({
-      predecessorTransportKind: 'durablePush',
-      endpointRetarget: 'pending',
+      kind: 'endpointRetarget',
+      transferAuthorityEpoch: 8,
     });
     expect(finalizeConversationConnectionTransferWithoutProviderStop({
       current: started.connection,

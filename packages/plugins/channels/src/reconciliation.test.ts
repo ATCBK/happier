@@ -1,4 +1,5 @@
 import type { PluginInvocationCaller, PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/plugin-sdk/actions';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ConversationProviderConnectionsSnapshotV1Schema,
@@ -10,6 +11,26 @@ import {
   readConversationProviderConnectionForCaller,
   type ConversationReconciliationConnectionStateV1,
 } from './reconciliation.js';
+import { createCurrentConversationPendingOldTransportStopFixture } from './testkit/currentConnectionFixture.js';
+
+function pendingTransferStop(input: Readonly<{
+  overlapSafety: 'safe' | 'providerExclusive' | 'destructive';
+  acceptedPossibleLoss: boolean;
+  stopRequest: Readonly<{ reason: 'transfer'; authorityEpoch: number }>;
+}>) {
+  return createCurrentConversationPendingOldTransportStopFixture({
+    connectionId: 'connection-1',
+    authority: { providerPluginId: 'happier.channel.discord', providerContributionSelection: { contributionId: 'discord-provider' },
+      providerSetupInput: {}, credentialRef: null, transportOrigin: { serverIdentityId: 'srv_reconciliation', machineId: 'machine-1' },
+      providerConnectionKey: 'discord:application-1', providerConfig: { applicationId: 'application-1' }, routingIdentityKey: 'r'.repeat(43),
+      integrationPrincipal: { id: 'discord:application-1' }, authorityEpoch: 3 },
+    predecessorCheckpointedPollInvocation: { connectionRevision: 1, authorityEpoch: 3,
+      transportOrigin: { serverIdentityId: 'srv_reconciliation', machineId: 'machine-1' } },
+    authorityEpoch: input.stopRequest.authorityEpoch,
+    reason: input.stopRequest.reason, predecessorTransportKind: 'socket', overlapSafety: input.overlapSafety,
+    acceptedPossibleLoss: input.acceptedPossibleLoss,
+  });
+}
 
 type PluginCaller = Extract<PluginInvocationCaller, Readonly<{ kind: 'plugin' }>>;
 
@@ -30,6 +51,10 @@ function caller(input: Readonly<{
       machineId: 'machine-1',
       materializationId: input.materializationId,
       pluginId: input.pluginId,
+    },
+    executionOrigin: {
+      serverIdentityId: 'srv_reconciliation',
+      materializationRef: { machineId: 'machine-1', materializationId: input.materializationId, pluginId: input.pluginId },
     },
   };
 }
@@ -72,16 +97,59 @@ function reconciliationConnectionStateBase() {
     pendingOldTransportStop: null,
     historyGap: null,
     transportOrigin: {
-      materializationRef: {
-        machineId: 'machine-1',
-        materializationId: 'discord-install-1',
-        pluginId: 'happier.channel.discord',
-      },
+      serverIdentityId: 'srv_reconciliation',
+      machineId: 'machine-1',
     },
   } as const;
 }
 
 describe('Conversation provider reconciliation', () => {
+  it('follows current host-stamped source custody at the same route and refuses another Home, Machine or plugin', () => {
+    const sourceCustody = { kind: 'development', registeredRootId: '/runtime-1/discord' } as const;
+    const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_reconciliation', sourceRef: {
+      pluginId: 'happier.channel.discord', machineId: 'machine-1', sourceCustody,
+    } });
+    // Source invocations retain the host's auxiliary release-less materialization.
+    const base = caller({ pluginId: 'happier.channel.discord', materializationId: 'auxiliary' });
+    const currentCaller = { ...base, sourceCustody, executionOrigin };
+    const connection = reconciliationConnectionState();
+    const snapshot = listConversationProviderConnectionsForCaller({ caller: currentCaller, connections: [connection], bindingPolicies: [] });
+    expect(Object.keys(snapshot)).toEqual(['connection-1']);
+    expect(ConversationProviderConnectionsSnapshotV1Schema.safeParse(snapshot).success).toBe(true);
+    expect(snapshot['connection-1']).not.toHaveProperty('transportOrigin');
+    const changedOrigins = [
+      { ...executionOrigin, serverIdentityId: 'srv_other' },
+      { serverIdentityId: 'srv_reconciliation', sourceRef: { pluginId: 'happier.channel.discord', machineId: 'machine-2', sourceCustody } },
+    ];
+    for (const origin of changedOrigins) {
+      const changedOrigin = PluginMachineExecutionOriginV1Schema.parse(origin);
+      expect(listConversationProviderConnectionsForCaller({
+        caller: { ...currentCaller, executionOrigin: changedOrigin,
+          sourceCustody: 'sourceRef' in changedOrigin ? changedOrigin.sourceRef.sourceCustody : sourceCustody },
+        connections: [connection], bindingPolicies: [],
+      })).toEqual({});
+    }
+    const replacementCustody = { kind: 'development', registeredRootId: '/runtime-2/discord' } as const;
+    expect(Object.keys(listConversationProviderConnectionsForCaller({
+      caller: { ...currentCaller, sourceCustody: replacementCustody, executionOrigin: {
+        serverIdentityId: 'srv_reconciliation', sourceRef: { pluginId: 'happier.channel.discord', machineId: 'machine-1', sourceCustody: replacementCustody },
+      } }, connections: [connection], bindingPolicies: [],
+    }))).toEqual(['connection-1']);
+    expect(listConversationProviderConnectionsForCaller({ caller: { ...currentCaller, pluginId: 'happier.channel.other' }, connections: [connection], bindingPolicies: [] })).toEqual({});
+    expect(listConversationProviderConnectionsForCaller({ caller: { ...currentCaller, sourceCustody: { kind: 'development', registeredRootId: '/different-root' } }, connections: [connection], bindingPolicies: [] })).toEqual({});
+  });
+
+  it('uses a stamped materialized origin including Home identity and refuses malformed stamps without legacy fallback', () => {
+    const legacyCaller = caller({ pluginId: 'happier.channel.discord', materializationId: 'discord-install-1' });
+    const connection = reconciliationConnectionState();
+    const executionOrigin = PluginMachineExecutionOriginV1Schema.parse(legacyCaller.executionOrigin);
+    expect(Object.keys(listConversationProviderConnectionsForCaller({ caller: { ...legacyCaller, executionOrigin }, connections: [connection], bindingPolicies: [] }))).toEqual(['connection-1']);
+    expect(listConversationProviderConnectionsForCaller({ caller: { ...legacyCaller, executionOrigin: { ...executionOrigin, serverIdentityId: 'srv_other' } }, connections: [connection], bindingPolicies: [] })).toEqual({});
+    // Direct JavaScript callers can supply malformed data despite the SDK type.
+    const malformed = JSON.parse(JSON.stringify({ ...legacyCaller, executionOrigin: { ...executionOrigin, claimedAuthority: true } }));
+    expect(listConversationProviderConnectionsForCaller({ caller: malformed, connections: [connection], bindingPolicies: [] })).toEqual({});
+  });
+
   it('retains deleting-state enabled:false correlation and rejects enabled deleting snapshots', () => {
     const assertDeletingState = (state: ConversationReconciliationConnectionStateV1): void => {
       if (state.deletionState === 'pendingStopReconciliation') {
@@ -110,27 +178,21 @@ describe('Conversation provider reconciliation', () => {
     }).success).toBe(false);
   });
 
-  it('returns only connections for the exact host-stamped caller materialization across truthful transport kinds', () => {
+  it('returns only the caller route across truthful transport kinds while following installation replacement', () => {
     const exact = reconciliationConnectionState();
     const samePluginDifferentMaterialization = reconciliationConnectionState({
       connectionId: 'connection-other-install',
       transportOrigin: {
-        materializationRef: {
-          machineId: 'machine-1',
-          materializationId: 'discord-install-2',
-          pluginId: 'happier.channel.discord',
-        },
+        serverIdentityId: 'srv_reconciliation',
+        machineId: 'machine-1',
       },
     });
     const otherMaterialization = reconciliationConnectionState({
       connectionId: 'connection-telegram',
       providerPluginId: 'happier.channel.telegram',
       transportOrigin: {
-        materializationRef: {
-          machineId: 'machine-1',
-          materializationId: 'telegram-install-1',
-          pluginId: 'happier.channel.telegram',
-        },
+        serverIdentityId: 'srv_reconciliation',
+        machineId: 'machine-1',
       },
     });
     const telegramCheckpointedPull = reconciliationConnectionState({
@@ -140,11 +202,8 @@ describe('Conversation provider reconciliation', () => {
       providerConnectionKey: 'telegram-bot:123',
       providerConfig: { botUsername: 'HappierBot', canReadAllGroupMessages: false },
       transportOrigin: {
-        materializationRef: {
-          machineId: 'machine-1',
-          materializationId: 'telegram-install-1',
-          pluginId: 'happier.channel.telegram',
-        },
+        serverIdentityId: 'srv_reconciliation',
+        machineId: 'machine-1',
       },
     });
     const expectedSnapshot = {
@@ -169,7 +228,8 @@ describe('Conversation provider reconciliation', () => {
       bindingPolicies: [],
     });
 
-    expect(result).toEqual({ [exact.connectionId]: expectedSnapshot });
+    expect(result).toEqual({ [exact.connectionId]: expectedSnapshot,
+      [samePluginDifferentMaterialization.connectionId]: { ...expectedSnapshot, connectionId: samePluginDifferentMaterialization.connectionId } });
     expect(ConversationProviderConnectionsSnapshotV1Schema.parse(result)).toEqual(result);
     expect(Object.keys(result[exact.connectionId]).sort()).toEqual([
       'authorityEpoch',
@@ -210,49 +270,49 @@ describe('Conversation provider reconciliation', () => {
     const unacceptedDestructive = reconciliationConnectionState({
       connectionId: 'destructive-transfer-pending',
       overlapSafety: 'safe',
-      pendingOldTransportStop: {
+pendingOldTransportStop: pendingTransferStop({
         overlapSafety: 'destructive',
         acceptedPossibleLoss: false,
         stopRequest: { reason: 'transfer', authorityEpoch: 4 },
-      },
+      }),
     });
     const safeTransfer = reconciliationConnectionState({
       connectionId: 'safe-transfer-pending',
       overlapSafety: 'destructive',
-      pendingOldTransportStop: {
+pendingOldTransportStop: pendingTransferStop({
         overlapSafety: 'safe',
         acceptedPossibleLoss: false,
         stopRequest: { reason: 'transfer', authorityEpoch: 4 },
-      },
+      }),
     });
     const providerExclusiveTransfer = reconciliationConnectionState({
       connectionId: 'exclusive-transfer-pending',
       overlapSafety: 'safe',
-      pendingOldTransportStop: {
+pendingOldTransportStop: pendingTransferStop({
         overlapSafety: 'providerExclusive',
         acceptedPossibleLoss: false,
         stopRequest: { reason: 'transfer', authorityEpoch: 4 },
-      },
+      }),
     });
     const acceptedDestructive = reconciliationConnectionState({
       connectionId: 'destructive-transfer-accepted',
       overlapSafety: 'safe',
-      pendingOldTransportStop: {
+pendingOldTransportStop: pendingTransferStop({
         overlapSafety: 'destructive',
         acceptedPossibleLoss: true,
         stopRequest: { reason: 'transfer', authorityEpoch: 3 },
-      },
+      }),
     });
     const incoherentAcceptedTransfer = reconciliationConnectionState({
       connectionId: 'destructive-transfer-incoherent-accepted',
       overlapSafety: 'safe',
-      pendingOldTransportStop: {
+pendingOldTransportStop: pendingTransferStop({
         overlapSafety: 'destructive',
         acceptedPossibleLoss: true,
         // A settled marker must be past the frozen stop epoch. This one never
         // completed the authority-advancing abandon transition.
         stopRequest: { reason: 'transfer', authorityEpoch: 4 },
-      },
+      }),
     });
     const stoppedDestructive = reconciliationConnectionState({
       connectionId: 'destructive-transfer-stopped',
@@ -287,22 +347,35 @@ describe('Conversation provider reconciliation', () => {
     })).toEqual({});
   });
 
+  it('projects endpoint-retarget custody without treating it as an old physical transport stop', () => {
+    const connection = reconciliationConnectionState({ pendingOldTransportStop: {
+      kind: 'endpointRetarget', webhookEndpointId: 'endpoint-1',
+      webhookContributionRef: { pluginId: 'happier.channel.discord', localId: 'observations' },
+      webhookSourceInstanceId: 'source-1', transferAuthorityEpoch: 4,
+      targetMaterialization: { pluginId: 'happier.channel.discord', machineId: 'machine-1', materializationId: 'discord-install-2' },
+    } });
+    expect(Object.keys(listConversationProviderConnectionsForCaller({
+      caller: caller({ pluginId: 'happier.channel.discord', materializationId: 'discord-install-2' }),
+      connections: [connection], bindingPolicies: [],
+    }))).toEqual(['connection-1']);
+  });
+
   it('withholds a history-gapped replacement from ordinary reconciliation', () => {
     const historyGapFreeReplacement = reconciliationConnectionState({
       connectionId: 'history-gap-free-transfer',
-      pendingOldTransportStop: {
+pendingOldTransportStop: pendingTransferStop({
         overlapSafety: 'safe',
         acceptedPossibleLoss: false,
         stopRequest: { reason: 'transfer', authorityEpoch: 4 },
-      },
+      }),
     });
     const incompatibleReplacement = reconciliationConnectionState({
       connectionId: 'history-gapped-transfer',
-      pendingOldTransportStop: {
+pendingOldTransportStop: pendingTransferStop({
         overlapSafety: 'safe',
         acceptedPossibleLoss: false,
         stopRequest: { reason: 'transfer', authorityEpoch: 4 },
-      },
+      }),
       historyGap: {
         reportedAt: 1_725_000_000_000,
         reason: 'providerHistoryUnavailable',
@@ -397,7 +470,7 @@ describe('Conversation provider reconciliation', () => {
 
     expect(readConversationProviderConnectionForCaller({
       caller: caller({
-        pluginId: 'happier.channel.discord',
+        pluginId: 'happier.channel.other',
         materializationId: 'discord-install-2',
       }),
       connections: [state],
@@ -412,7 +485,7 @@ describe('Conversation provider reconciliation', () => {
     })).toEqual({});
   });
 
-  it('fails closed when an older host has not stamped materialization provenance', () => {
+  it('fails closed when a caller has no complete host-stamped Home routing provenance', () => {
     const legacyCaller = {
       kind: 'plugin',
       pluginId: 'happier.channel.discord',
@@ -427,6 +500,11 @@ describe('Conversation provider reconciliation', () => {
       connections: [reconciliationConnectionState()],
       bindingPolicies: [],
     })).toEqual({});
+    const { executionOrigin: _missingHomeProof, ...materializedCaller } = caller({
+      pluginId: 'happier.channel.discord', materializationId: 'discord-install-1',
+    });
+    expect(listConversationProviderConnectionsForCaller({ caller: materializedCaller,
+      connections: [reconciliationConnectionState()], bindingPolicies: [] })).toEqual({});
   });
 
   it('admits the 33rd exact-keyed reconciliation snapshot and still rejects duplicate child IDs', () => {

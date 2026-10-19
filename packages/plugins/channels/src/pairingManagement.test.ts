@@ -58,7 +58,7 @@ const pairingConnectionAuthority = {
   },
   providerSetupInput: { source: 'pairing-test' },
   credentialRef: null,
-  transportOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+  transportOrigin: { serverIdentityId: 'srv_pairing_test', materializationRef: materialization },
   providerConnectionKey: 'connection-key-1',
   providerConfig: {},
   routingIdentityKey: 'r'.repeat(43),
@@ -264,7 +264,7 @@ function endpointResolutionExecutor(
     }
     return {
       result: { kind: 'resolved' as const, candidates: [...candidates] },
-      executionOrigin: pairingConnectionAuthority.transportOrigin,
+      executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin),
     };
   });
 }
@@ -379,6 +379,7 @@ function createCollection(initial: readonly StateRow[]) {
 function connectionRow(): StateRow {
   const connection = createCurrentConversationConnectionFixture({
     connectionId: 'connection-1',
+    configurationRevision: 4,
     authority: pairingConnectionAuthority,
     createdAt: 1_000,
     updatedAt: 1_000,
@@ -398,6 +399,7 @@ function connectionRow(): StateRow {
 function checkpointedPullConnectionRow(): StateRow {
   const connection = createCurrentConversationConnectionFixture({
     connectionId: 'connection-1',
+    configurationRevision: 4,
     authority: checkpointedPollConnectionAuthority,
     createdAt: 1_000,
     updatedAt: 1_000,
@@ -478,7 +480,7 @@ describe('Channels pairing management writer', () => {
     if (!('manualToken' in challenge)) throw new Error('Expected a verified pairing challenge.');
     const proposal = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin),
       endpoint: { kind: 'direct', audience: 'direct', id: 'chat-1', label: 'Alice' },
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -565,7 +567,7 @@ describe('Channels pairing management writer', () => {
     }, context)).resolves.toEqual({
       kind: 'retryScheduled',
       connectionId: 'connection-1',
-      revision: 5,
+      revision: 4,
       authorityEpoch: 1,
     });
 
@@ -578,7 +580,13 @@ describe('Channels pairing management writer', () => {
       connectionId: 'connection-1',
       expectedRevision: 4,
       authorityEpoch: 1,
-    }, context)).rejects.toMatchObject({ code: 'channels_connection_poll_retry_conflict', retryable: true });
+    }, context)).resolves.toMatchObject({ kind: 'retryScheduled', revision: 4 });
+    expect(collection.batches).toHaveLength(1);
+    await management.updateConversationConnectionForInvocation({
+      connectionId: 'connection-1', expectedRevision: 4, enabled: true, maximumObservationAgeMs: 120_000,
+    }, context);
+    await expect(retry({ connectionId: 'connection-1', expectedRevision: 4, authorityEpoch: 1 }, context))
+      .rejects.toMatchObject({ code: 'channels_connection_poll_retry_conflict', retryable: true });
   });
 
   it('refuses a poll retry when its otherwise-current authority epoch is stale', async () => {
@@ -652,7 +660,7 @@ describe('Channels pairing management writer', () => {
     if (challenge.kind !== 'created') throw new Error('Expected a created pairing challenge.');
     const proposal = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin),
       endpoint: { kind: 'direct', audience: 'direct', id: 'chat-1', label: 'Alice' },
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -749,7 +757,7 @@ describe('Channels pairing management writer', () => {
     if (challenge.kind !== 'created') throw new Error('Expected a created pairing challenge.');
     const proposal = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin),
       endpoint: { kind: 'direct', audience: 'direct', id: 'chat-1', label: 'Alice' },
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -792,7 +800,7 @@ describe('Channels pairing management writer', () => {
         ? await resolveEndpoint(operation, input, executionOptions)
         : {
           result: { kind: 'checkpointOnly', checkpointAfterBatch: { offset: '43' } },
-          executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+          executionOrigin: pairingConnectionAuthority.transportOrigin,
         }
     ));
     const context = pairingManagementContext({
@@ -847,7 +855,7 @@ describe('Channels pairing management writer', () => {
     });
   });
 
-  it('binds the selected shared destination while proving the human through a private message', async () => {
+  it.each(['none', 'bookkeeping', 'configuration'] as const)('guards the selected shared destination with poll bookkeeping during pairing frontier read: %s', async change => {
     const createHandlers = Reflect.get(management, 'createConversationPairingManagementHandlers');
     expect(createHandlers).toEqual(expect.any(Function));
     if (typeof createHandlers !== 'function') return;
@@ -857,7 +865,17 @@ describe('Channels pairing management writer', () => {
       collection,
       endpointCandidates: [directDestinationEndpoint, sharedDestinationEndpoint],
       actions: {
-        execute: vi.fn(async () => ({
+        execute: vi.fn(async () => {
+          if (change !== 'none') {
+            const current = collection.rows.get('connection-1')!;
+            collection.rows.set('connection-1', { ...current, revision: current.revision + 1,
+              value: { ...current.value, payload: { ...current.value.payload,
+                ...(change === 'configuration'
+                  ? { configurationRevision: 5, maximumObservationAgeMs: 120_000 }
+                  : { providerReadiness: { code: 'providerCredentialInvalid' } }),
+              } } });
+          }
+          return {
           ok: true,
           projection: 'externalShareableV1' as const,
           sessionId: 'session-1',
@@ -865,7 +883,7 @@ describe('Channels pairing management writer', () => {
           nextCursor: 'cursor-12',
           hasMore: false,
           items: [],
-        })),
+        }; }),
       },
     });
     const manager = createConversationPairingManager({
@@ -889,7 +907,7 @@ describe('Channels pairing management writer', () => {
     expect(manager.preparePreBindingMessage({
       censusId: 'shared-proof-census',
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin),
       endpoint: sharedDestinationEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -898,7 +916,7 @@ describe('Channels pairing management writer', () => {
 
     const proposal = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin),
       endpoint: directDestinationEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -911,13 +929,20 @@ describe('Channels pairing management writer', () => {
       expect.objectContaining({ endpointLabel: 'Alice' }),
     ]);
 
-    await expect(handlers.finalize({
+    const result = await handlers.finalize({
       generationId: challenge.generationId,
       proposalId: proposal.proposalId,
       connectionId: 'connection-1',
       expectedConnectionRevision: 4,
       finalizeIdempotencyKey: 'finalize-1',
-    }, context)).resolves.toMatchObject({
+    }, context);
+    if (change === 'configuration') {
+      expect(result).toEqual({ kind: 'staleConnectionRevision' });
+      expect(collection.rows.has('binding-1')).toBe(false);
+      expect(collection.rows.has('projection-frontier:binding-1')).toBe(false);
+      return;
+    }
+    expect(result).toMatchObject({
       kind: 'created',
       binding: {
         endpoint: sharedDestinationEndpoint,
@@ -967,7 +992,7 @@ describe('Channels pairing management writer', () => {
     if (challenge.kind !== 'created') throw new Error('Expected a created pairing challenge.');
     const proposal = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin),
       endpoint: { kind: 'direct', audience: 'direct', id: 'chat-1', label: 'Alice' },
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -1058,7 +1083,7 @@ describe('Channels pairing management writer', () => {
     if (!('manualToken' in challenge)) throw new Error('Expected a verified pairing challenge.');
     const proposal = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin),
       endpoint: { kind: 'direct', audience: 'direct', id: 'chat-1', label: 'Alice' },
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -1123,7 +1148,7 @@ describe('Channels pairing management writer', () => {
     if (!('manualToken' in challenge)) throw new Error('Expected a verified pairing challenge.');
     const proposal = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin),
       endpoint: { kind: 'direct', audience: 'direct', id: 'chat-1', label: 'Alice' },
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -1156,3 +1181,4 @@ describe('Channels pairing management writer', () => {
     });
   });
 });
+import { getPluginMachineExecutionRouting } from "@happier-dev/plugin-sdk/actions";

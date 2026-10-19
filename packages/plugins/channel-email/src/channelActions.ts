@@ -4,6 +4,7 @@ import {
   assertConversationChannelsCoreCallerV1, rethrowConversationProviderLifecycleFailureV1,
   hasCurrentConversationProviderConnectionV1,
   CONVERSATION_CORE_PLUGIN_ID_V1, CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1,
+  MAX_CONVERSATION_ENDPOINT_DISPLAY_LABEL_CODE_POINTS,
   ConversationConnectionTestInputV1Schema, ConversationDeliveryInputV1Schema,
   ConversationAttachmentFetchInputV1Schema,
   ConversationDeliveryReconcileInputV1Schema, ConversationEndpointResolveInputV1Schema,
@@ -171,9 +172,11 @@ export async function pollEmailObservations(input: unknown, context: PluginInvoc
     const identity = mail.messageId ?? ref;
     const idHash = createHash('sha256').update(identity).digest('hex');
     const timestamp = mail.receivedAtMs !== null && mail.receivedAtMs >= 0 ? mail.receivedAtMs : raw.receivedAtMs;
+    const label = Array.from(mail.subject.trim()).slice(0, MAX_CONVERSATION_ENDPOINT_DISPLAY_LABEL_CODE_POINTS).join('');
     const envelope = {
       v: 1, occurrenceId: `email:${idHash}`, occurredAt: timestamp, transport: { kind: 'poll' },
-      endpoint: { kind: 'thread', audience: 'direct', id: emailThreadKey(mail) ?? `email-invalid:${idHash}`, parentId: config.mailbox }, actor,
+      endpoint: { kind: 'thread', audience: 'direct', id: emailThreadKey(mail) ?? `email-invalid:${idHash}`, parentId: config.mailbox,
+        ...(label ? { label } : {}) }, actor,
       message: { id: identity, providerTimestamp: timestamp, contentProvenance: mail.forwarded ? 'forwarded' : 'original',
         addressingEvidence: 'none', ...(mail.inReplyTo === null ? {} : { replyToMessageId: mail.inReplyTo }) },
     };

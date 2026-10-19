@@ -6,32 +6,28 @@ import { describe, expect, it } from 'vitest';
 import { PLUGIN_MANIFEST } from './manifest.js';
 
 /**
- * The packaged artifact, not the source module.
+ * The tracked declaration consumed by clean-checkout bundled-plugin discovery.
  *
- * A host installs `.happier-plugin/plugin.json`; `src/manifest.ts` being right
- * proves nothing about those bytes. `yarn test:migration:bundled-plugin-projections`
- * owns the repository verdict for every bundled plugin, but it regenerates the
- * whole bundled projection and runs neither in this package's suite nor in
- * seconds — so an author changing the manifest, or moving the package onto a
- * different author path, learns nothing here until CI.
+ * The canonical bundled publisher owns this projection. The ignored
+ * `.happier-plugin/plugin.json` is an on-demand package output and may be stale
+ * on an AUTO worker; distribution packaging verifies that artifact separately.
  */
-function readPackagedManifest(): unknown {
+function readBundledManifest(): unknown {
     return JSON.parse(
-        readFileSync(new URL('../.happier-plugin/plugin.json', import.meta.url), 'utf8'),
+        readFileSync(new URL('../../../../apps/cli/assets/bundled-plugin-manifests/channels.json', import.meta.url), 'utf8'),
     ) as unknown;
 }
 
-describe('packaged Conversation Channels manifest', () => {
-    it('ships exactly what the source manifest projects, fact for fact', () => {
+describe('bundled Conversation Channels declaration', () => {
+    it('matches the source manifest projection, fact for fact', () => {
         // Deliberately the whole artifact rather than a hand-picked fact: this
         // fails for any fact the source projection adds, drops or renames,
-        // which is what makes it evidence that an author-path migration changed
-        // nothing the host installs.
+        // so a source/consumer seam mismatch cannot be hidden by cherry-picking.
         const projected = parsePluginManifest(PLUGIN_MANIFEST);
         if (!projected.ok) {
             throw new Error(projected.diagnostics.map((diagnostic) => diagnostic.message).join('; '));
         }
 
-        expect(projected.manifest).toEqual(readPackagedManifest());
+        expect(projected.manifest).toEqual(readBundledManifest());
     });
 });

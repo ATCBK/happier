@@ -2,6 +2,7 @@ import {
   CONVERSATION_PROVIDER_FAILURE_REASONS_V1,
   type ConversationProviderFailureReasonV1,
 } from '@happier-dev/channels-protocol/v1';
+import { projectPluginFailureText } from '@happier-dev/plugin-sdk';
 
 import type { ConversationConnectionPollFailureV1 } from './connectionLifecycle.js';
 import {
@@ -11,13 +12,12 @@ import {
 type JsonRecord = Readonly<Record<string, unknown>>;
 
 /**
- * The safe Resource/UI representation of a persisted poll failure. It omits
- * provider diagnostics and Action messages, which are retained only in the
- * connection lifecycle record.
+ * The safe Resource/UI representation of a persisted poll failure. Provider
+ * diagnostics stay private; known Action sentences use the canonical redactor.
  */
 type ConversationConnectionPollFailureAttentionEvidenceV1 =
   | Readonly<{ kind: 'provider'; reason: ConversationProviderFailureReasonV1 }>
-  | Readonly<{ kind: 'action'; code: string }>;
+  | Readonly<{ kind: 'action'; code: string; message?: string }>;
 
 export type ConversationConnectionPollFailureAttentionV1 =
   | Readonly<{
@@ -46,9 +46,16 @@ export function projectConversationConnectionPollFailureAttention(
   value: ConversationConnectionPollFailureV1 | null,
 ): ConversationConnectionPollFailureAttentionV1 | null {
   if (value === null) return null;
+  const message = value.evidence.kind === 'action'
+    && value.evidence.message.trim() !== value.evidence.code
+    ? value.evidence.message.trim() : '';
   const evidence: ConversationConnectionPollFailureAttentionEvidenceV1 = value.evidence.kind === 'provider'
     ? { kind: 'provider', reason: value.evidence.reason }
-    : { kind: 'action', code: value.evidence.code };
+    : { kind: 'action', code: value.evidence.code,
+      // Retained rows may predate write-time redaction. Never trust stored text
+      // as already safe for public management or mounted attention.
+      ...(message ? { message: projectPluginFailureText(new Error(message)) } : {}),
+    };
   return value.phase === 'retryDue'
     ? {
       phase: 'retryDue',
@@ -75,7 +82,7 @@ function isProviderFailureReason(value: unknown): value is ConversationProviderF
 
 /**
  * Parses the distinct redacted Resource projection. It deliberately cannot
- * receive raw diagnostics or Action messages, but keeps phase/count/due
+ * receive raw diagnostics, but preserves redacted Action sentences and keeps phase/count/due
  * interpretation centralized with the persisted-value codec.
  */
 export function readConversationConnectionPollFailureAttention(
@@ -94,7 +101,10 @@ export function readConversationConnectionPollFailureAttention(
     : evidenceKind === 'action'
       ? (() => {
         const code = own(evidence, 'code');
-        return typeof code === 'string' && code.length > 0 ? { kind: 'action' as const, code } : undefined;
+        const message = own(evidence, 'message');
+        if (typeof code !== 'string' || code.length === 0
+          || (message !== undefined && (typeof message !== 'string' || message.trim().length === 0))) return undefined;
+        return { kind: 'action' as const, code, ...(message === undefined ? {} : { message }) };
       })()
       : undefined;
   if (parsedEvidence === undefined) return undefined;

@@ -45,7 +45,7 @@ const authority = {
   providerSetupInput: { source: 'pairing-resource-test' },
   credentialRef: null,
   transportOrigin: {
-    serverIdentityId: 'server-1',
+    serverIdentityId: 'srv_pairing_test',
     materializationRef: materialization,
   },
   providerConnectionKey: 'provider-connection',
@@ -136,7 +136,7 @@ describe('Channels pairing Resource', () => {
       connectionId: 'connection-a',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-a',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(authority.transportOrigin),
       destinationLabel: 'Account A bot',
       endpoint,
       target,
@@ -145,7 +145,7 @@ describe('Channels pairing Resource', () => {
       connectionId: 'connection-b',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-b',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(authority.transportOrigin),
       destinationLabel: 'Account B bot',
       endpoint,
       target,
@@ -153,7 +153,7 @@ describe('Channels pairing Resource', () => {
     const prepared = pairing.preparePreBindingMessage({
       censusId: 'pairing-resource-census-a',
       connectionId: 'connection-a',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(authority.transportOrigin),
       endpoint: { kind: 'direct', audience: 'direct', id: 'endpoint-a', label: 'Ada' },
       actor: { principalId: 'principal-a', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -208,7 +208,7 @@ describe('Channels pairing Resource', () => {
       connectionId: 'connection-a',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-a',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(authority.transportOrigin),
       destinationLabel: 'Account A bot',
       endpoint,
       target,
@@ -228,7 +228,7 @@ describe('Channels pairing Resource', () => {
       connectionId: 'connection-b',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-b',
-      materialization,
+      executionOrigin: getPluginMachineExecutionRouting(authority.transportOrigin),
       destinationLabel: 'Account B bot',
       endpoint,
       target,
@@ -237,3 +237,4 @@ describe('Channels pairing Resource', () => {
     expect(connectionDispose).toHaveBeenCalledOnce();
   });
 });
+import { getPluginMachineExecutionRouting } from "@happier-dev/plugin-sdk/actions";

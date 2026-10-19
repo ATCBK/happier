@@ -9,6 +9,7 @@ import type {
   TargetedContributionsService,
 } from '@happier-dev/plugin-sdk';
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
+import { getPluginMachineExecutionRouting } from '@happier-dev/plugin-sdk/actions';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -1643,6 +1644,39 @@ describe('Channels outward-delivery supervisor', () => {
     ]);
   });
 
+  it('renders an above-cap question request as a full-form link without inline answers', async () => {
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    await state.put(connectionRow(), { expectedRevision: 'absent' });
+    await state.put(bindingRow(), { expectedRevision: 'absent' });
+    const url = 'https://app.example.test/session/session-1?serverId=home-one';
+    const execute = vi.fn(async (action: string) => {
+      if (action === 'session.permission.remote.pending.list') return {
+        requests: [{
+          kind: 'user_action', requestId: 'question-five', turnId: 'turn-five', createdAtMs: 100,
+          agentRequestSummary: { kind: 'user_action', questions: [], fullForm: { questionCount: 5, url } },
+        }],
+        truncated: false, nextCursor: null,
+      };
+      if (action === 'session.transcript.get') return {
+        ok: true, projection: 'externalShareableV1', sessionId: 'session-1',
+        scannedThroughSeq: 0, hasMore: false, items: [],
+      };
+      throw new Error(`Unexpected Action ${action}`);
+    });
+    const context = backgroundContext({
+      state, deliveries, execute,
+      executeAdmittedTargetedOperationWithExecutionOrigin: vi.fn(),
+    });
+    await runConversationOutwardDeliveryCycle({ context, now: () => 100 });
+    expect([...deliveries.rows.values()]).toEqual([
+      expect.objectContaining({ value: expect.objectContaining({ payload: expect.objectContaining({
+        source: { kind: 'permissionWait', sessionId: 'session-1', requestId: 'question-five', turnId: 'turn-five' },
+        content: { text: `Answer all 5 in Happier\n${url}` },
+      }) }) }),
+    ]);
+  });
+
   it('renders every bounded AskUserQuestion semantic fact and one atomic answer syntax', async () => {
     const state = new MemoryCollection();
     const deliveries = new MemoryCollection();
@@ -3161,7 +3195,7 @@ describe('Channels outward-delivery supervisor', () => {
     expect(executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledWith(
       providerDeliveryAction,
       expect.objectContaining({ deliveryKey: expect.stringMatching(/^channels:delivery:v1:/u) }),
-      expect.objectContaining({ expectedExecutionOrigin: providerTransportOrigin }),
+      expect.objectContaining({ expectedExecutionRouting: getPluginMachineExecutionRouting(providerTransportOrigin) }),
     );
     expect(state.rows.get('projection-frontier:binding-1')?.value.payload).toMatchObject({
       transcriptCursor: '1',
@@ -3453,7 +3487,7 @@ describe('Channels outward-delivery supervisor', () => {
     expect(executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledWith(
       providerDeliveryReconcileAction,
       expect.objectContaining({ deliveryKey: 'channels:delivery:v1:stale-custody' }),
-      expect.objectContaining({ expectedExecutionOrigin: providerTransportOrigin }),
+      expect.objectContaining({ expectedExecutionRouting: getPluginMachineExecutionRouting(providerTransportOrigin) }),
     );
     expect([...deliveries.rows.values()][0]?.value.payload).toMatchObject({
       state: 'retryDue',
@@ -3510,7 +3544,7 @@ describe('Channels outward-delivery supervisor', () => {
     expect(executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledWith(
       providerDeliveryAction,
       expect.objectContaining({ deliveryKey: 'channels:delivery:v1:stale-custody' }),
-      expect.objectContaining({ expectedExecutionOrigin: providerTransportOrigin }),
+      expect.objectContaining({ expectedExecutionRouting: getPluginMachineExecutionRouting(providerTransportOrigin) }),
     );
     expect([...deliveries.rows.values()][0]?.value.payload).toMatchObject({
       state: 'delivered',

@@ -110,6 +110,8 @@ export type DiscordGatewaySupervisorOptions = Readonly<{
 
 export type DiscordGatewaySupervisor = Readonly<{
   run(context: BackgroundServiceContext): Promise<void>;
+  /** Content-free manifest event hint; the current run owns the census read. */
+  invalidateConnections(): void;
   reconcile(context: BackgroundServiceContext): Promise<void>;
   /** One host target-Action owns each worker attempt's exact Account binding. */
   runWorkerAttempt(
@@ -840,13 +842,9 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
     };
     invalidateSupervisor = wake;
     controller.signal.addEventListener('abort', wake, { once: true });
-    // Hints carry no state. Subscribe before the authoritative read and retain
-    // invalidations during it, so a configuration change cannot be lost at the
-    // read-to-wait boundary.
-    const connectionsChanged = context.services.events.plugin.subscribe(
-      { pluginId: CHANNELS_CORE_PLUGIN_ID, localId: 'connections-invalidated-v1' },
-      wake,
-    );
+    // The manifest handler forwards content-free hints to this run's wake.
+    // Initial admission reads unconditionally, and invalidations during a read
+    // remain set until the next census, including at the read-to-wait boundary.
     // The selected Connected Account is a separate authority whose credential
     // material can change without changing any fact in the core reconciliation
     // snapshot. This resync is the only signal that tells the supervisor a
@@ -889,7 +887,6 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
       } finally {
         invalidateSupervisor = () => {};
         controller.signal.removeEventListener('abort', wake);
-        await connectionsChanged.dispose();
         await credentialResync.dispose();
         context.signal.removeEventListener('abort', abortFromContext);
         stopAllWorkers('generationRetired');
@@ -934,5 +931,8 @@ export function createDiscordGatewaySupervisor(options: DiscordGatewaySupervisor
     await identifyConcurrency.waitForCommittedWindows();
   };
 
-  return Object.freeze({ run, reconcile, runWorkerAttempt, stop, dispose });
+  return Object.freeze({
+    run, reconcile, runWorkerAttempt, stop, dispose,
+    invalidateConnections() { invalidateSupervisor(); },
+  });
 }

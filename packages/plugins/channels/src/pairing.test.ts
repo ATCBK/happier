@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { getPluginMachineExecutionRouting, type PluginMachineExecutionOriginV1, type PluginMachineExecutionRoutingV1 } from '@happier-dev/plugin-sdk/actions';
 import {
   type ConversationBindingTargetV1,
 } from '@happier-dev/channels-protocol/v1';
@@ -11,11 +12,20 @@ import {
   type ConversationPairingBindingWriter,
 } from './pairing.js';
 
-const materialization = {
+const executionOrigin = {
+  serverIdentityId: 'server-1',
   machineId: 'machine-1',
-  materializationId: 'materialization-1',
   pluginId: 'channel.telegram',
-} as const;
+} as const satisfies PluginMachineExecutionRoutingV1;
+
+const sourceExecutionOrigin = {
+  serverIdentityId: 'server-1',
+  sourceRef: {
+    machineId: 'machine-1',
+    pluginId: 'channel.telegram',
+    sourceCustody: { kind: 'development', registeredRootId: '/plugins/channel-telegram' },
+  },
+} as const satisfies PluginMachineExecutionOriginV1;
 
 const directEndpoint = {
   kind: 'direct',
@@ -91,14 +101,14 @@ function createMatchedProposal(manager: ReturnType<typeof createConversationPair
     connectionId: 'connection-1',
     expectedConnectionRevision: 1,
     pairingRequestId: 'pairing-request-1',
-    materialization,
+    executionOrigin,
     destinationLabel: 'Telegram bot',
     endpoint: directEndpoint,
     target: sessionTarget,
   });
   const proposal = completePreBindingMessage(manager, {
     connectionId: 'connection-1',
-    materialization,
+    executionOrigin,
     endpoint: directEndpoint,
     actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
     contentProvenance: 'original',
@@ -118,6 +128,72 @@ function createMatchedProposal(manager: ReturnType<typeof createConversationPair
 }
 
 describe('Channels pre-binding pairing', () => {
+  it.each([
+    sourceExecutionOrigin,
+    {
+      ...sourceExecutionOrigin,
+      sourceRef: {
+        ...sourceExecutionOrigin.sourceRef,
+        sourceCustody: {
+          kind: 'bundled_first_party',
+          packagedRuntime: { kind: 'cli_version_root', versionRootId: 'cli-root-1' },
+        },
+      },
+    },
+  ] satisfies PluginMachineExecutionOriginV1[])('keeps pairing valid across same-route source updates (%j)', async (origin) => {
+    const manager = createManager({ value: 1_000 });
+    const challengeInput = {
+      connectionId: 'connection-1',
+      expectedConnectionRevision: 1,
+      pairingRequestId: 'pairing-request-1',
+      executionOrigin: getPluginMachineExecutionRouting(origin),
+      destinationLabel: 'Telegram bot',
+      endpoint: directEndpoint,
+      target: sessionTarget,
+    };
+    const challenge = manager.createChallenge(challengeInput);
+    const changedOrigin = {
+      ...origin,
+      sourceRef: {
+        ...origin.sourceRef,
+        sourceCustody: origin.sourceRef.sourceCustody.kind === 'development'
+          ? { kind: 'development', registeredRootId: '/plugins/reloaded/channel-telegram' }
+          : {
+            kind: 'bundled_first_party',
+            packagedRuntime: { kind: 'cli_version_root', versionRootId: 'cli-root-2' },
+          },
+      },
+    } satisfies PluginMachineExecutionOriginV1;
+    expect(manager.createChallenge({
+      ...challengeInput,
+      executionOrigin: getPluginMachineExecutionRouting(changedOrigin),
+    })).toEqual(challenge);
+
+    const redeem = (from: PluginMachineExecutionOriginV1) => completePreBindingMessage(manager, {
+      connectionId: 'connection-1',
+      executionOrigin: getPluginMachineExecutionRouting(from),
+      endpoint: directEndpoint,
+      actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
+      contentProvenance: 'original',
+      command: classifyConversationCommand(`/pair ${challenge.manualToken}`),
+    });
+    const proposal = redeem(changedOrigin);
+    expect(proposal).toMatchObject({ kind: 'matched' });
+    if (proposal.kind !== 'matched') throw new Error('Expected routed pairing proposal.');
+    let written: Parameters<ConversationPairingBindingWriter>[0] | undefined;
+    await expect(manager.finalize({
+      generationId: challenge.generationId,
+      proposalId: proposal.proposalId,
+      connectionId: 'connection-1',
+      expectedConnectionRevision: 1,
+      finalizeIdempotencyKey: 'finalize-1',
+    }, async (input) => {
+      written = input;
+      return { kind: 'created', binding: pairingBinding(input.bindingId) };
+    })).resolves.toMatchObject({ kind: 'created' });
+    expect(written).toMatchObject({ executionOrigin });
+  });
+
   it('keeps a valid pairing challenge intact until its exact census is durable, then rejoins that census', () => {
     const now = { value: 1_000 };
     const manager = createManager(now);
@@ -125,7 +201,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -133,7 +209,7 @@ describe('Channels pre-binding pairing', () => {
     const input = {
       censusId: 'census-1',
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human' as const, isIntegrationSelf: false },
       contentProvenance: 'original' as const,
@@ -167,7 +243,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       pairingDeepLinkTemplate: 'https://t.me/happier_bot?start={{token}}',
@@ -194,7 +270,7 @@ describe('Channels pre-binding pairing', () => {
 
     const proposal = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -227,7 +303,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       pairingDeepLinkTemplate: 'https://t.me/happier_bot?start={{token}}',
@@ -247,7 +323,7 @@ describe('Channels pre-binding pairing', () => {
 
     expect(completePreBindingMessage(manager, {
       connectionId: 'connection-2',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-on-wrong-connection', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -256,7 +332,7 @@ describe('Channels pre-binding pairing', () => {
 
     const matched = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -270,7 +346,7 @@ describe('Channels pre-binding pairing', () => {
 
     expect(completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -308,7 +384,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: `pairing-request-${terminalChallengeReasonProbe += 1}`,
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -322,7 +398,7 @@ describe('Channels pre-binding pairing', () => {
 
     const probe = (token: string, principalId: string) => completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId, kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -346,7 +422,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -354,7 +430,7 @@ describe('Channels pre-binding pairing', () => {
 
     const attempt = (principalId: string, text: string) => completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId, kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -387,7 +463,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -395,7 +471,7 @@ describe('Channels pre-binding pairing', () => {
     const typo = {
       censusId: 'census-redelivered-1',
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human' as const, isIntegrationSelf: false },
       contentProvenance: 'original' as const,
@@ -422,7 +498,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -431,7 +507,7 @@ describe('Channels pre-binding pairing', () => {
     for (let index = 0; index < 5; index += 1) {
       expect(completePreBindingMessage(manager, {
         connectionId: 'connection-2',
-        materialization,
+        executionOrigin,
         endpoint: directEndpoint,
         actor: { principalId: 'provider-local-person-1', kind: 'human', isIntegrationSelf: false },
         contentProvenance: 'original',
@@ -441,7 +517,7 @@ describe('Channels pre-binding pairing', () => {
 
     expect(completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'provider-local-person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -456,7 +532,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -470,7 +546,7 @@ describe('Channels pre-binding pairing', () => {
     ]) {
       expect(completePreBindingMessage(manager, {
         connectionId: 'connection-1',
-        materialization,
+        executionOrigin,
         command: classifyConversationCommand('/pair 00000001'),
         ...rejected,
       })).toEqual({ kind: 'silent', ownerReason: 'ineligibleCaller' });
@@ -478,7 +554,7 @@ describe('Channels pre-binding pairing', () => {
 
     expect(completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -486,14 +562,14 @@ describe('Channels pre-binding pairing', () => {
     })).toMatchObject({ kind: 'matched' });
   });
 
-  it('refuses a valid token redeemed from any materialization the challenge did not name', () => {
+  it('refuses a valid token redeemed from any execution origin the challenge did not name', () => {
     const now = { value: 1_000 };
     const manager = createManager(now);
     const challenge = manager.createChallenge({
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -501,10 +577,10 @@ describe('Channels pre-binding pairing', () => {
     // Each field is varied independently below, so the parameter is the
     // structural ref rather than the exact literal fixture.
     const redeem = (
-      from: Readonly<{ machineId: string; materializationId: string; pluginId: string }>,
+      from: PluginMachineExecutionRoutingV1,
     ) => completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization: from,
+      executionOrigin: from,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human' as const, isIntegrationSelf: false },
       contentProvenance: 'original' as const,
@@ -513,9 +589,9 @@ describe('Channels pre-binding pairing', () => {
 
     // Each field of the ref is load-bearing on its own.
     for (const wrong of [
-      { ...materialization, materializationId: 'materialization-2' },
-      { ...materialization, machineId: 'machine-2' },
-      { ...materialization, pluginId: 'channel.discord' },
+      { ...executionOrigin, machineId: 'machine-2' },
+      { ...executionOrigin, pluginId: 'channel.discord' },
+      { ...executionOrigin, serverIdentityId: 'server-2' },
     ]) {
       expect(redeem(wrong)).toMatchObject({ kind: 'silent', ownerReason: 'tokenMismatch' });
     }
@@ -524,7 +600,7 @@ describe('Channels pre-binding pairing', () => {
       challengeId: challenge.challengeId,
     })).toMatchObject({ kind: 'active' });
 
-    expect(redeem(materialization)).toMatchObject({ kind: 'matched' });
+    expect(redeem(executionOrigin)).toMatchObject({ kind: 'matched' });
   });
 
   it('types expiry and restart for the authenticated owner while external callers stay non-oracular', () => {
@@ -534,7 +610,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -551,7 +627,7 @@ describe('Channels pre-binding pairing', () => {
     })).toEqual({ kind: 'restarted' });
     expect(completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -567,14 +643,14 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target,
     });
     const match = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -605,14 +681,14 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
     });
     const match = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -689,7 +765,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -729,14 +805,14 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
     });
     const match = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -782,14 +858,14 @@ describe('Channels pre-binding pairing', () => {
         connectionId: 'connection-1',
         expectedConnectionRevision,
         pairingRequestId: `pairing-request-r${expectedConnectionRevision}`,
-        materialization,
+        executionOrigin,
         destinationLabel: 'Telegram bot',
         endpoint: directEndpoint,
         target: sessionTarget,
       });
       const match = completePreBindingMessage(manager, {
         connectionId: 'connection-1',
-        materialization,
+        executionOrigin,
         endpoint: directEndpoint,
         actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
         contentProvenance: 'original',
@@ -847,7 +923,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -878,7 +954,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId,
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -928,7 +1004,7 @@ describe('Channels pre-binding pairing', () => {
         connectionId: 'connection-1',
         expectedConnectionRevision: 1,
         pairingRequestId,
-        materialization,
+        executionOrigin,
         destinationLabel: 'Telegram bot',
         endpoint: directEndpoint,
         target,
@@ -979,7 +1055,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: accountAConnection(index),
       expectedConnectionRevision: 1,
       pairingRequestId: `pairing-request-a-${index}`,
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -994,7 +1070,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'account-b-connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'pairing-request-b-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -1008,14 +1084,14 @@ describe('Channels pre-binding pairing', () => {
         connectionId: accountAConnection(connectionIndex),
         expectedConnectionRevision: 1,
         pairingRequestId: `pairing-request-a-proposal-${index}`,
-        materialization,
+        executionOrigin,
         destinationLabel: 'Telegram bot',
         endpoint: directEndpoint,
         target: sessionTarget,
       });
       expect(completePreBindingMessage(manager, {
         connectionId: accountAConnection(connectionIndex),
-        materialization,
+        executionOrigin,
         endpoint: directEndpoint,
         actor: { principalId: 'person-a', kind: 'human', isIntegrationSelf: false },
         contentProvenance: 'original',
@@ -1028,7 +1104,7 @@ describe('Channels pre-binding pairing', () => {
     // in-memory challenge or proposal count.
     expect(completePreBindingMessage(manager, {
       connectionId: 'account-b-connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-b', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -1050,7 +1126,7 @@ describe('Channels pre-binding pairing', () => {
       manager.preparePreBindingMessage({
         censusId,
         connectionId: 'connection-1',
-        materialization,
+        executionOrigin,
         endpoint: directEndpoint,
         actor: { principalId, kind: 'human', isIntegrationSelf: false },
         contentProvenance: 'original',
@@ -1060,7 +1136,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId,
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -1124,7 +1200,7 @@ describe('Channels pre-binding pairing', () => {
     // Budget bookkeeping never touches matching.
     expect(completePreBindingMessage(manager, {
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
@@ -1139,7 +1215,7 @@ describe('Channels pre-binding pairing', () => {
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
       pairingRequestId: 'request-1',
-      materialization,
+      executionOrigin,
       destinationLabel: 'Telegram bot',
       endpoint: directEndpoint,
       target: sessionTarget,
@@ -1149,7 +1225,7 @@ describe('Channels pre-binding pairing', () => {
       expect(manager.preparePreBindingMessage({
         censusId: `census-${index}`,
         connectionId: 'connection-1',
-        materialization,
+        executionOrigin,
         endpoint: directEndpoint,
         actor: { principalId: `stranger-${index}`, kind: 'human', isIntegrationSelf: false },
         contentProvenance: 'original',
@@ -1160,7 +1236,7 @@ describe('Channels pre-binding pairing', () => {
     expect(manager.preparePreBindingMessage({
       censusId: 'census-over-capacity',
       connectionId: 'connection-1',
-      materialization,
+      executionOrigin,
       endpoint: directEndpoint,
       actor: { principalId: 'stranger-over-capacity', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',

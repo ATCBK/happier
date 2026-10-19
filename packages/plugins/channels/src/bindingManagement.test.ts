@@ -4,6 +4,7 @@ import { PluginError, type JsonValue, type PluginInvocationContext } from '@happ
 
 import * as management from './management.js';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { ConversationBindingUpdateInputV1Schema } from '@happier-dev/channels-protocol/v1';
 import { CHANNELS_PLUGIN, PLUGIN_MANIFEST } from './manifest.js';
 import {
   createCurrentConversationConnectionFixture,
@@ -50,6 +51,64 @@ const routerTarget = {
 } as const;
 
 describe('thread router management', () => {
+  it('creates and updates a multi-query router through the contributed Actions with provider-verified identities', async () => {
+    const executionOrigin = { serverIdentityId: 'srv_account_one', materializationRef: materialization };
+    const collection = createCollection([connectionRow({ transportOrigin: { serverIdentityId: executionOrigin.serverIdentityId, machineId: materialization.machineId } })]);
+    const invocation = context(collection, vi.fn(), async (action, input) => {
+      const query = typeof input === 'object' && input !== null && 'query' in input ? input.query : undefined;
+      return {
+        result: { kind: 'resolved', candidates: action === endpointResolveAction ? [bindingResolutionEndpoint]
+          : query === 'Person one' ? [bindingResolutionPrincipal]
+            : query === 'Person two' ? [{ id: 'person-2', kind: 'human' }]
+              : query === 'Person three' ? [{ id: 'person-3', kind: 'human' }] : [] },
+        executionOrigin,
+      };
+    });
+    const kit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: CHANNELS_PLUGIN, services: invocation.services });
+    const selected = [
+      { id: 'person-1', kind: 'human' },
+      { id: 'person-2', kind: 'human', query: 'Person two' },
+    ];
+    const target = { ...routerTarget, principalGroups: [
+      { id: 'sales', principalIds: ['person-2'] },
+      { id: 'questions', principalIds: ['person-1', 'person-2'] },
+    ] };
+    try {
+      const created = await kit.invokeAction('binding/create-v1', bindingCreateInput(target, selected), { surface: 'agent', sessionId: 'session-1' });
+      expect(created).toMatchObject({ kind: 'created', binding: { target, allowedPrincipalIds: ['person-2', 'person-1'] } });
+      const row = [...collection.rows.values()].find((row) => row.value['record-kind'] === 'binding')!;
+      const updatedTarget = { ...target, principalGroups: [...target.principalGroups, { id: 'brief', principalIds: ['person-3'] }] };
+      expect(await kit.invokeAction('binding/update-v1', ConversationBindingUpdateInputV1Schema.parse({
+        bindingId: row.rowId, expectedRevision: row.revision, target: updatedTarget,
+        audienceSelection: {
+          expectedConnectionRevision: 4,
+          endpointSelection: bindingCreateInput(target).endpointSelection,
+          principalSelection: { query: 'Person one', selected: [...selected, { id: 'person-3', kind: 'human', query: 'Person three' }] },
+        },
+      }), { surface: 'agent', sessionId: 'session-1' })).toMatchObject({ kind: 'updated' });
+      expect(collection.rows.get(row.rowId)?.value.payload).toMatchObject({ target: updatedTarget, allowedPrincipalIds: ['person-2', 'person-1', 'person-3'] });
+      // A valid query cannot confer authority on a different id or principal kind.
+      for (const invalid of [{ id: 'person-3', kind: 'human' }, { id: 'person-2', kind: 'bot' }]) {
+        await expect(kit.invokeAction('binding/create-v1', {
+          ...bindingCreateInput(target, [{ ...invalid, query: 'Person two' }]), allowBotSenders: true,
+        }, { surface: 'agent', sessionId: 'session-1' })).resolves.toEqual({ kind: 'stale' });
+      }
+      await expect(kit.invokeAction('binding/create-v1', bindingCreateInput(updatedTarget, selected),
+        { surface: 'agent', sessionId: 'session-1' })).rejects.toMatchObject({ code: 'channels_router_principal_not_resolved' });
+      const currentRow = collection.rows.get(row.rowId)!;
+      await expect(kit.invokeAction('binding/update-v1', ConversationBindingUpdateInputV1Schema.parse({
+        bindingId: row.rowId, expectedRevision: currentRow.revision,
+        audienceSelection: {
+          expectedConnectionRevision: 4,
+          endpointSelection: bindingCreateInput(target).endpointSelection,
+          principalSelection: { query: 'Person one', selected },
+        },
+      }), { surface: 'agent', sessionId: 'session-1' })).rejects.toMatchObject({ code: 'channels_router_principal_not_resolved' });
+      expect(collection.rows.get(row.rowId)?.revision).toBe(currentRow.revision);
+      expect([...collection.rows.values()].filter((row) => row.value['record-kind'] === 'binding')).toHaveLength(1);
+    } finally { await kit.dispose(); }
+  });
+
   it('rejects a route referencing an absent principal group before writing', async () => {
     const collection = createCollection([connectionRow()]);
     await expect(management.createConversationBindingForInvocation(bindingCreateInput({
@@ -185,7 +244,7 @@ const bindingResolutionPrincipal = Object.freeze({
 
 function bindingCreateInput(
   target: JsonValue,
-  selected: readonly Readonly<{ id: string; kind: string }>[] = [{ id: 'person-1', kind: 'human' }],
+  selected: readonly Readonly<{ id: string; kind: string; query?: string }>[] = [{ id: 'person-1', kind: 'human' }],
 ) {
   return {
     connectionId: 'connection-1',
@@ -303,7 +362,7 @@ function connectionRow(payloadOverrides: Readonly<Record<string, JsonValue>> = {
     },
     providerSetupInput: { source: 'test' },
     credentialRef: null,
-    transportOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+    transportOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
     providerConnectionKey: 'connection-key-1',
     providerConfig: {},
     routingIdentityKey: 'r'.repeat(43),
@@ -312,6 +371,7 @@ function connectionRow(payloadOverrides: Readonly<Record<string, JsonValue>> = {
   } as const satisfies ConversationConnectionFixtureAuthority;
   const connection = createCurrentConversationConnectionFixture({
     connectionId: 'connection-1',
+    configurationRevision: 4,
     authority,
     createdAt: 1_000,
     updatedAt: 1_000,
@@ -370,12 +430,12 @@ function bindingRow(
 function context(
   collection: ReturnType<typeof createCollection>,
   execute: ReturnType<typeof vi.fn>,
-  executeAdmittedTargetedOperationWithExecutionOrigin: (action: unknown) => Promise<unknown> = vi.fn(async (action: unknown) => {
+  executeAdmittedTargetedOperationWithExecutionOrigin: (action: unknown, input?: unknown) => Promise<unknown> = vi.fn(async (action: unknown) => {
     if (action === endpointResolveAction) {
       return {
         result: { kind: 'resolved' as const, candidates: [bindingResolutionEndpoint] },
         executionOrigin: {
-          serverIdentityId: 'server-1',
+          serverIdentityId: 'srv_account_one',
           materializationRef: materialization,
         },
       };
@@ -384,7 +444,7 @@ function context(
       return {
         result: { kind: 'resolved' as const, candidates: [bindingResolutionPrincipal] },
         executionOrigin: {
-          serverIdentityId: 'server-1',
+          serverIdentityId: 'srv_account_one',
           materializationRef: materialization,
         },
       };
@@ -499,7 +559,7 @@ describe('Channels target-persisting binding management', () => {
     const input = { ...bindingCreateInput({ ...automationTarget, policy: { resultDelivery: 'none' }, scopedTrigger }), endpointSelection: { query: '#7', selected: { kind: 'githubPullRequest', audience: 'shared', id: 'pr-7' } } };
     const invocation = context(collection, vi.fn(async () => ({ kind: 'verified' })), async (action) => ({
       result: { kind: 'resolved', candidates: action === endpointResolveAction ? [{ kind: 'githubPullRequest', audience: 'shared', id: 'pr-7', pullRequest: scopedTrigger.pullRequest }] : [bindingResolutionPrincipal] },
-      executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+      executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
     }));
     const first = await management.createConversationBindingForInvocation(input, invocation);
     expect(first).toMatchObject({ kind: 'created', binding: { target: { scopedTrigger } } });
@@ -570,7 +630,7 @@ describe('Channels target-persisting binding management', () => {
     expect(corrupt.batches).toEqual([]);
   });
 
-  it('resolves an arbitrary admitted provider audience and atomically persists its endpoint, allowlist, clamp, target, and frontier', async () => {
+  it.each([false, true])('resolves an admitted audience and persists its frontier with poll bookkeeping during transcript read: %s', async bookkeeping => {
     const update = Reflect.get(management, 'updateConversationBindingForInvocation');
     expect(update).toEqual(expect.any(Function));
     if (typeof update !== 'function') return;
@@ -590,13 +650,13 @@ describe('Channels target-persisting binding management', () => {
       if (action === endpointResolveAction) {
         return {
           result: { kind: 'resolved' as const, candidates: [resolvedEndpoint] },
-          executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+          executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
         };
       }
       if (action === principalResolveAction) {
         return {
           result: { kind: 'resolved' as const, candidates: [resolvedPrincipal] },
-          executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+          executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
         };
       }
       throw new Error('Unexpected external provider resolver.');
@@ -604,6 +664,11 @@ describe('Channels target-persisting binding management', () => {
     const execute = vi.fn(async (action: string, request: unknown) => {
       expect(action).toBe('session.transcript.get');
       expect(request).toMatchObject({ sessionId: 'session-2', projection: 'externalShareableV1' });
+      if (bookkeeping) {
+        const current = collection.rows.get('connection-1')!;
+        collection.rows.set('connection-1', { ...current, revision: current.revision + 1,
+          value: { ...current.value, payload: { ...current.value.payload, providerReadiness: { code: 'providerCredentialInvalid' } } } });
+      }
       return {
         ok: true,
         projection: 'externalShareableV1',
@@ -647,7 +712,7 @@ describe('Channels target-persisting binding management', () => {
     expect(resolve).toHaveBeenCalledTimes(2);
     expect(collection.batches).toHaveLength(1);
     expect(collection.batches[0]).toEqual([
-      { kind: 'assert', rowId: 'connection-1', expectedRevision: 4 },
+      { kind: 'assert', rowId: 'connection-1', expectedRevision: bookkeeping ? 5 : 4 },
       expect.objectContaining({
         kind: 'put',
         expectedRevision: 5,
@@ -692,7 +757,7 @@ describe('Channels target-persisting binding management', () => {
           kind: 'resolved' as const,
           candidates: [{ kind: 'direct' as const, audience: 'direct' as const, id: 'different-endpoint' }],
         },
-        executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+        executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
       };
     });
 
@@ -769,7 +834,7 @@ describe('Channels target-persisting binding management', () => {
           kind: 'resolved' as const,
           candidates: [{ kind: 'direct' as const, audience: 'direct' as const, id: 'chat-1', label: 'Alice' }],
         },
-        executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+        executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
       };
     });
 
@@ -803,13 +868,13 @@ describe('Channels target-persisting binding management', () => {
       if (action === endpointResolveAction) {
         return {
           result: { kind: 'resolved' as const, candidates: [bindingResolutionEndpoint] },
-          executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+          executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
         };
       }
       if (action === principalResolveAction) {
         return {
           result: { kind: 'resolved' as const, candidates: [bindingResolutionPrincipal] },
-          executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+          executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
         };
       }
       throw new Error('Unexpected provider resolver.');
@@ -818,7 +883,8 @@ describe('Channels target-persisting binding management', () => {
       expect(action).toBe('automation.conversation.target.verify');
       const current = collection.rows.get('connection-1');
       if (current === undefined) throw new Error('Expected current connection row.');
-      collection.rows.set('connection-1', { ...current, revision: current.revision + 1 });
+      collection.rows.set('connection-1', { ...current, revision: current.revision + 1,
+        value: { ...current.value, payload: { ...current.value.payload, configurationRevision: 5, maximumObservationAgeMs: 120_000 } } });
       return { kind: 'verified' as const };
     });
 
@@ -970,7 +1036,7 @@ describe('Channels target-persisting binding management', () => {
       result: action === endpointResolveAction
         ? { kind: 'resolved' as const, candidates: [sharedEndpoint] }
         : { kind: 'resolved' as const, candidates: [bindingResolutionPrincipal] },
-      executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+      executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
     }));
 
     await expect(create({
@@ -1018,7 +1084,7 @@ describe('Channels target-persisting binding management', () => {
       result: action === endpointResolveAction
         ? { kind: 'resolved' as const, candidates: [sharedEndpoint] }
         : { kind: 'resolved' as const, candidates: [bindingResolutionPrincipal] },
-      executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+      executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
     }));
 
     await expect(create({
@@ -1131,7 +1197,7 @@ describe('Channels target-persisting binding management', () => {
 
   it.each([
     {
-      name: 'the connection revision changes',
+      name: 'the connection configuration revision changes',
       expected: { kind: 'stale' },
       changeCurrentness(input: Readonly<{
         collection: ReturnType<typeof createCollection>;
@@ -1139,7 +1205,8 @@ describe('Channels target-persisting binding management', () => {
       }>) {
         const current = input.collection.rows.get('connection-1');
         if (current === undefined) throw new Error('Expected current connection row.');
-        input.collection.rows.set('connection-1', { ...current, revision: current.revision + 1 });
+        input.collection.rows.set('connection-1', { ...current, revision: current.revision + 1,
+          value: { ...current.value, payload: { ...current.value.payload, configurationRevision: 5, maximumObservationAgeMs: 120_000 } } });
       },
     },
     {
@@ -1185,13 +1252,13 @@ describe('Channels target-persisting binding management', () => {
       if (action === original.endpointResolve) {
         return {
           result: { kind: 'resolved' as const, candidates: [bindingResolutionEndpoint] },
-          executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+          executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
         };
       }
       if (action === original.principalResolve) {
         return {
           result: { kind: 'resolved' as const, candidates: [bindingResolutionPrincipal] },
-          executionOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+          executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef: materialization },
         };
       }
       throw new Error('Unexpected provider resolution Action.');
@@ -1524,7 +1591,7 @@ describe('Channels target-persisting binding management', () => {
     expect(collection.rows.get('binding-1')?.value.payload).toMatchObject({ enabled: false });
   });
 
-  it('does not persist an Automation update when the connection changes during verification', async () => {
+  it.each(['bookkeeping', 'configuration'] as const)('guards an Automation update when %s changes during verification', async change => {
     const update = Reflect.get(management, 'updateConversationBindingForInvocation');
     expect(update).toEqual(expect.any(Function));
     if (typeof update !== 'function') return;
@@ -1533,20 +1600,32 @@ describe('Channels target-persisting binding management', () => {
     const execute = vi.fn(async () => {
       const current = collection.rows.get('connection-1');
       if (current === undefined) throw new Error('Expected current connection row.');
-      collection.rows.set('connection-1', { ...current, revision: current.revision + 1 });
+      collection.rows.set('connection-1', {
+        ...current,
+        revision: current.revision + 1,
+        value: { ...current.value, payload: { ...current.value.payload,
+          ...(change === 'configuration'
+            ? { configurationRevision: 5, maximumObservationAgeMs: 120_000 }
+            : { providerReadiness: { code: 'providerCredentialInvalid' } }),
+        } },
+      });
       return { kind: 'verified' as const };
     });
-    await expect(update({
+    const result = update({
       bindingId: 'binding-1',
       expectedRevision: 5,
       target: automationTarget,
-    }, context(collection, execute))).rejects.toMatchObject({
-      code: 'channels_binding_update_conflict',
-      retryable: true,
-    });
-
-    expect(collection.batches).toHaveLength(1);
-    expect(collection.rows.get('binding-1')?.value.payload).toMatchObject({ target: sessionTarget });
+    }, context(collection, execute));
+    if (change === 'configuration') {
+      await expect(result).rejects.toMatchObject({
+        code: 'channels_binding_update_conflict',
+        retryable: true,
+      });
+      expect(collection.rows.get('binding-1')?.value.payload).toMatchObject({ target: sessionTarget });
+    } else {
+      await expect(result).resolves.toMatchObject({ kind: 'updated' });
+      expect(collection.rows.get('binding-1')?.value.payload).toMatchObject({ target: automationTarget });
+    }
   });
 
   it('leaves a target-bearing update entirely unwritten when the verifier rejects it', async () => {
@@ -1793,6 +1872,7 @@ describe('Channels target-persisting binding management', () => {
         bindingId: 'binding-1',
         updatedAt: 21,
         category: 'informational',
+        reason: 'messageTooLarge',
       }],
     });
   });
@@ -1843,6 +1923,7 @@ describe('Channels target-persisting binding management', () => {
         bindingId: 'binding-1',
         updatedAt: 22,
         category: 'recoverable',
+        reason: 'targetUnavailable',
       }],
     });
   });
@@ -2079,7 +2160,7 @@ describe('Channels target-persisting binding management', () => {
     ]]);
   });
 
-  it('keeps the observation-age semantic bound at the lifecycle writer', async () => {
+  it('accepts observation ages beyond the former 30-day cap and rejects unsafe intervals', async () => {
     const update = Reflect.get(management, 'updateConversationConnectionForInvocation');
     expect(update).toEqual(expect.any(Function));
     if (typeof update !== 'function') return;
@@ -2089,11 +2170,19 @@ describe('Channels target-persisting binding management', () => {
       connectionId: 'connection-1',
       expectedRevision: 4,
       enabled: false,
-      maximumObservationAgeMs: 30 * 86_400_000 + 1,
+      maximumObservationAgeMs: Number.MAX_SAFE_INTEGER + 1,
     }, context(collection, vi.fn()))).rejects.toMatchObject({
       code: 'channels_connection_update_maximum_observation_age_invalid',
     });
     expect(collection.batches).toEqual([]);
+    const maximumObservationAgeMs = 30 * 86_400_000 + 1;
+    await expect(update({
+      connectionId: 'connection-1',
+      expectedRevision: 4,
+      enabled: false,
+      maximumObservationAgeMs,
+    }, context(collection, vi.fn()))).resolves.toMatchObject({ kind: 'updated', revision: 5 });
+    expect(collection.rows.get('connection-1')?.value.payload).toMatchObject({ maximumObservationAgeMs });
   });
 
   it('cannot bypass frozen transfer-stop custody through the Account-local connection policy writer', async () => {
@@ -2107,9 +2196,9 @@ describe('Channels target-persisting binding management', () => {
         predecessorCheckpointedPollInvocation: {
           connectionRevision: 3,
           authorityEpoch: 1,
-          transportOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+          transportOrigin: { serverIdentityId: 'srv_account_one', machineId: materialization.machineId },
         },
-        transportOrigin: { serverIdentityId: 'server-1', materializationRef: materialization },
+        transportOrigin: { serverIdentityId: 'srv_account_one', machineId: materialization.machineId },
         providerContributionSelection: {
           contributionId: 'test-provider',
         },

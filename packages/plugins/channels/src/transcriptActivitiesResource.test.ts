@@ -168,7 +168,7 @@ describe('Channels transcript Activities Resource', () => {
       providerSetupInput: { source: 'transcript-resource-test' },
       credentialRef: null,
       transportOrigin: {
-        serverIdentityId: 'server-1',
+        serverIdentityId: 'srv_account_one',
         materializationRef: {
           pluginId: 'example.channel.provider',
           machineId: 'machine-1',

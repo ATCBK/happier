@@ -13,6 +13,8 @@ import type { ActionHandler, SessionTranscriptGetExternalShareableResultV1 } fro
 // These fixtures implement the external Session host boundary, which validates
 // the canonical host schemas including the public plugin surface binding.
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { ComposerAttachmentKeyV1Schema } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
+import { PluginSessionInputSourceV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
 
@@ -139,7 +141,8 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
               const storage = { account: { collection: () => journey.state } } as unknown as PluginServices['storage'];
               return await handler(schema.parse(value), { ...context, caller: { kind: 'plugin', pluginId: emailPlugin.manifest.id,
                 contribution: context.contribution, occurrenceId: source.contributor.occurrenceId, sourceCustody: source.contributor.sourceCustody,
-                materialization: providerMaterialization }, services: { ...context.services, storage } });
+                materialization: providerMaterialization,
+                executionOrigin: { serverIdentityId: 'srv_plugin_testkit', materializationRef: providerMaterialization } }, services: { ...context.services, storage } });
             };
             const invocation = { ...context, services: { ...context.services, targetedContributions: fixtureCatalog,
               actions: { ...context.services.actions, execute: executeCore as PluginServices['actions']['execute'] } } };
@@ -198,9 +201,10 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
         sendSchema.parse({ sessionId, message: text, ...fields });
         admitted.push(request);
         const localId = `email-local-${admitted.length}`;
+        const source = PluginSessionInputSourceV1Schema.parse(request.source);
         transcript.push({ kind: 'userText', sessionId, seq: transcript.length + 1, itemId: localId, localId, text,
           origin: { v: 1, producer: 'pluginSession', actor: 'collaborator', sourceAuthority: {
-            mediatorPluginId: 'happier.channels', sourceRef: request.source!.sourceRef!, sourceRevisionOrEpoch: request.source!.sourceRevisionOrEpoch!,
+            mediatorPluginId: 'happier.channels', sourceRef: source.sourceRef, sourceRevisionOrEpoch: source.sourceRevisionOrEpoch,
           } } });
         const resultSchema = sendSpec.surfaceBindings?.plugin?.outputSchema ?? sendSpec.outputSchema;
         if (!resultSchema) throw new Error('Missing Session send result schema');
@@ -331,7 +335,7 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
         const attachments = admitted[2]!.attachments!;
         expect(attachments).toHaveLength(3);
         const dispatch = { sessionId, localId: 'email-local-3', attachments: attachments.map((attachment, index) => ({
-          instanceId: `pdf-${index}`, key: attachment.value.key, value: ChannelFileValueV1Schema.parse(attachment.value.value),
+          instanceId: `pdf-${index}`, key: ComposerAttachmentKeyV1Schema.parse(attachment.value.key), value: ChannelFileValueV1Schema.parse(attachment.value.value),
         })) };
         fetchOne.mockClear();
         const resolved = await journey.resolveAttachments(dispatch);
@@ -344,6 +348,25 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
         expect(fetchOne.mock.calls.filter(call => call[1].source)).toHaveLength(1);
         for (const path of stagedPaths) await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
       } finally { fetchOne.mockRestore(); }
+      // Replacing a fixture server can reuse its epoch as well as low UIDs.
+      // Exercise the same provider registration and durable core attention
+      // owner as a real UIDVALIDITY change, without resetting its checkpoint.
+      const priorValidity = imap.control.getMailbox('INBOX').uidvalidity;
+      await imap.stop();
+      imap = imapkit({ secureConnection: true,
+        users: { [mailbox]: { password: 'testpass' } },
+        storage: { INBOX: { uidvalidity: priorValidity } },
+      });
+      const replacementPort = await imap.start(0, '127.0.0.1');
+      setDefaultCACertificates([...getCACertificates('default'), imap.getCredentials().cert.toString()]);
+      account = { ...account, imapPort: replacementPort };
+      imap.control.addMessage('INBOX', { raw: incoming('replacement', 'sales@example.com', [trusted]) });
+      await journey.poll();
+      expect(polls.at(-1)).toEqual({ kind: 'historyGap', reason: 'providerHistoryUnavailable' });
+      expect((await journey.state.get(connection.id))?.value.payload).toMatchObject({
+        historyGap: { reason: 'providerHistoryUnavailable' },
+      });
+      expect(admitted).toHaveLength(3);
     } finally { await journey.dispose(); }
     // This composed protocol journey opens real TLS connections for baseline,
     // ingress, SMTP, replay and UIDVALIDITY recovery; it exceeds Vitest's 5s unit
@@ -428,9 +451,10 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
         (spec.surfaceBindings?.plugin?.inputSchema ?? spec.inputSchema).parse({ sessionId, message: text, ...fields });
         admitted.push(request);
         const localId = `email-replay-local-${admitted.length}`;
+        const source = PluginSessionInputSourceV1Schema.parse(request.source);
         transcript.push({ kind: 'userText', sessionId, seq: transcript.length + 1, itemId: localId, localId, text,
           origin: { v: 1, producer: 'pluginSession', actor: 'collaborator', sourceAuthority: {
-            mediatorPluginId: 'happier.channels', sourceRef: request.source!.sourceRef!, sourceRevisionOrEpoch: request.source!.sourceRevisionOrEpoch!,
+            mediatorPluginId: 'happier.channels', sourceRef: source.sourceRef, sourceRevisionOrEpoch: source.sourceRevisionOrEpoch,
           } } });
         return { status: 'accepted', localId };
       } } as unknown as SessionHandle;
@@ -729,7 +753,7 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
 
   it('invokes the declared transport connection Action with exact Connected Account materialization and rejects other callers', async () => {
     setDefaultCACertificates(originalCertificates);
-    const configuredAccount = { ...account, tlsCaPem: imap.getCredentials().cert.toString() };
+    let configuredAccount = { ...account, tlsCaPem: imap.getCredentials().cert.toString() };
     const test = imapSmtpActions['transport/imap-smtp/connection-test-v1'].run;
     const credentialRef = { service: { pluginId: 'happier.channel.email', localId: 'email-imap-smtp' }, accountId: mailbox };
     const input = { credentialRef, config: {} };
@@ -748,6 +772,19 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
     const fetched = await imapSmtpActions['transport/imap-smtp/fetch-raw-v1'].run({ ...input, ref: '<action-contract@example.com>' }, context);
     expect(EmailTransportFetchRawResultV1Schema.parse(fetched)).toEqual({ kind: 'raw', mimeBase64: raw('action-contract').toString('base64'),
       receivedAtMs: receivedAt.getTime() });
+    // Replacing configuration keeps the Account identity and re-materializes
+    // its current endpoint for Test and the next poll, with no retained client.
+    await imap.stop();
+    imap = imapkit({
+      secureConnection: true, plugins: ['IDLE', 'SPECIAL-USE', 'UIDPLUS', 'SASL-IR'],
+      users: { [mailbox]: { password: 'testpass' } },
+      storage: { INBOX: {}, '': { folders: { Sent: { 'special-use': '\\Sent' } } } },
+    });
+    const replacementPort = await imap.start(0, '127.0.0.1');
+    configuredAccount = { ...configuredAccount, imapPort: replacementPort, tlsCaPem: configuredAccount.tlsCaPem + '\n' + imap.getCredentials().cert.toString() };
+    expect(await test(input, context)).toEqual({ kind: 'ready', mailbox });
+    const polled = await imapSmtpActions['transport/imap-smtp/list-since-v1'].run({ ...input, checkpoint: null, waitMs: 0, limit: 1 }, context);
+    expect(polled).toMatchObject({ kind: 'batch', refs: [] });
     if (context.caller?.kind !== 'plugin') throw new Error('Missing plugin caller fixture');
     await expect(test(input, { ...context, caller: { ...context.caller, pluginId: 'other.plugin' } })).rejects.toThrow();
     expect(await test({ ...input, credentialRef: null }, context)).toMatchObject({ kind: 'notReady', reason: 'credentialInvalid' });

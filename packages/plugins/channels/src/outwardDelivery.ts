@@ -40,7 +40,7 @@ import {
 } from '@happier-dev/plugin-sdk';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { createProtocolStoredReadSchema, pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
-import type { PluginMachineExecutionOriginV1 } from '@happier-dev/plugin-sdk/actions';
+import type { ConversationConnectionTransportOriginV1 } from './connectionLifecycle.js';
 import {
   PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
   type PluginAccountCollectionForDefinition,
@@ -2320,7 +2320,7 @@ type ConversationOutwardDeliveryConnectionFacts = Readonly<{
   enabled: boolean;
   deletionState: 'none' | 'pendingStopReconciliation' | 'finalizingDelete';
   credentialRef: JsonValue | null;
-  transportOrigin: PluginMachineExecutionOriginV1;
+  transportOrigin: ConversationConnectionTransportOriginV1;
   routingIdentityKey: string;
   outboundTextLimit?: ConversationOutboundTextLimit;
   providerAction: Readonly<{
@@ -2383,8 +2383,7 @@ export function readConnectionFacts(input: Readonly<{
     providerConfig: payload.providerConfig,
     credentialRef: payload.credentialRef,
   });
-  if (!providerConnection.success
-    || connection.providerPluginId !== connection.transportOrigin.materializationRef.pluginId) return null;
+  if (!providerConnection.success) return null;
   return {
     revision: input.row.revision,
     authorityEpoch: connection.lifecycle.authorityEpoch,
@@ -2869,6 +2868,9 @@ function renderConversationPendingPermissionRequest(
       + `Reply /allow ${request.requestId} or /deny ${request.requestId}.`;
   }
 
+  const fullForm = request.agentRequestSummary.fullForm;
+  if (fullForm) return `Answer all ${fullForm.questionCount} in Happier\n${fullForm.url}`;
+
   const questions = request.agentRequestSummary.questions.map((question, index) => {
     const selection = question.selection === 'text'
       ? 'write text'
@@ -3126,6 +3128,7 @@ const CONVERSATION_OUTWARD_DELIVERY_SUPPRESSION_REASON_SET =
 
 export type ConversationOutwardDeliveryCurrentnessResult =
   | Readonly<{ kind: 'current' }>
+  | Readonly<{ kind: 'unavailable'; reason: 'stateUnavailable' }>
   | Readonly<{
     kind: 'suppressed';
     reason: ConversationOutwardDeliverySuppressionReason;
@@ -3143,8 +3146,8 @@ export interface ConversationOutwardDeliveryAuthority {
 }
 
 /**
- * Re-reads the canonical Account rows immediately before provider I/O. This
- * is the sole binding/connection currentness adapter for all outward sources.
+ * Re-reads canonical Account rows immediately before provider I/O. Collection
+ * callers and the provider Action boundary share the same reader/classification.
  */
 export function createConversationOutwardDeliveryCollectionAuthority(input: Readonly<{
   stateCollection: ChannelStateCollection;
@@ -3160,20 +3163,20 @@ export function createConversationOutwardDeliveryCollectionAuthority(input: Read
         obligation: check.record.obligation,
         requireBindingRevision: false,
       });
-      if (result.kind === 'current') return { kind: 'current' };
-      if (result.kind === 'suppressed') return result;
-      return {
-        kind: 'suppressed',
-        reason: result.reason === 'cancelled' ? 'cancelled' : 'currentnessUnavailable',
-      };
+      return normalizeConversationOutwardDeliveryCurrentnessResult(result);
     },
   };
 }
 
-function normalizeCurrentnessResult(value: unknown): ConversationOutwardDeliveryCurrentnessResult {
+/** Both Account adapters preserve transient reads; malformed authority stays terminal. */
+export function normalizeConversationOutwardDeliveryCurrentnessResult(value: unknown): ConversationOutwardDeliveryCurrentnessResult {
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
     const record = value as Readonly<Record<string, unknown>>;
     if (record.kind === 'current') return { kind: 'current' };
+    if (record.kind === 'unavailable') {
+      if (record.reason === 'stateUnavailable') return { kind: 'unavailable', reason: 'stateUnavailable' };
+      if (record.reason === 'cancelled') return { kind: 'suppressed', reason: 'cancelled' };
+    }
     if (record.kind === 'suppressed'
       && typeof record.reason === 'string'
       && CONVERSATION_OUTWARD_DELIVERY_SUPPRESSION_REASON_SET.has(record.reason)) {
@@ -3184,6 +3187,25 @@ function normalizeCurrentnessResult(value: unknown): ConversationOutwardDelivery
     }
   }
   return { kind: 'suppressed', reason: 'currentnessUnavailable' };
+}
+
+/** Cancellation and reader failures have one classification for send and recovery. */
+async function readConversationOutwardDeliveryCurrentness(input: Readonly<{
+  authority: ConversationOutwardDeliveryAuthority;
+  record: ConversationOutwardDeliveryRecord;
+  signal: AbortSignal;
+}>): Promise<ConversationOutwardDeliveryCurrentnessResult> {
+  if (input.signal.aborted) return { kind: 'suppressed', reason: 'cancelled' };
+  let currentness: ConversationOutwardDeliveryCurrentnessResult;
+  try {
+    currentness = normalizeConversationOutwardDeliveryCurrentnessResult(await input.authority.checkCurrentness({
+      record: input.record,
+      signal: input.signal,
+    }));
+  } catch {
+    currentness = { kind: 'unavailable', reason: 'stateUnavailable' };
+  }
+  return currentness;
 }
 
 /** External-effect evidence cannot bind a returned thread to a different mailbox. */
@@ -3390,24 +3412,11 @@ export async function deliverConversationOutwardDelivery(input: Readonly<{
     return { kind: 'notAttempted', reason: 'invalidRow' };
   }
 
-  let currentness: ConversationOutwardDeliveryCurrentnessResult;
-  if (input.signal.aborted) {
-    currentness = { kind: 'suppressed', reason: 'cancelled' };
-  } else {
-    try {
-      currentness = normalizeCurrentnessResult(await input.authority.checkCurrentness({
-        record: claimed.record,
-        signal: input.signal,
-      }));
-    } catch {
-      currentness = {
-        kind: 'suppressed',
-        reason: input.signal.aborted ? 'cancelled' : 'currentnessUnavailable',
-      };
-    }
-    // Cancellation may win after the read but before the provider boundary.
-    if (input.signal.aborted) currentness = { kind: 'suppressed', reason: 'cancelled' };
-  }
+  let currentness = await readConversationOutwardDeliveryCurrentness({
+    authority: input.authority, record: claimed.record, signal: input.signal,
+  });
+  // Check in this continuation: cancellation can win as the reader resolves.
+  if (input.signal.aborted) currentness = { kind: 'suppressed', reason: 'cancelled' };
 
   if (currentness.kind === 'suppressed') {
     return await persistConversationOutwardDeliverySuppression({
@@ -3419,22 +3428,28 @@ export async function deliverConversationOutwardDelivery(input: Readonly<{
   }
 
   let providerResult: ConversationDeliveryResultV1;
-  try {
-    const invocation = await input.deliver({
-      obligation: claimed.record.obligation,
-      signal: input.signal,
-    });
-    if (isConversationOutwardDeliveryPreEffectSuppression(invocation)) {
-      return await persistConversationOutwardDeliverySuppression({
-        store: input.store,
-        record: claimed.record,
-        attemptId: input.attemptId,
-        reason: invocation.reason,
+  if (currentness.kind === 'unavailable') {
+    // Nothing crossed the provider boundary. The existing custody owner retains
+    // content and schedules growing backoff, then rechecks authority next time.
+    providerResult = { kind: 'notDelivered', retry: 'safe' };
+  } else {
+    try {
+      const invocation = await input.deliver({
+        obligation: claimed.record.obligation,
+        signal: input.signal,
       });
+      if (isConversationOutwardDeliveryPreEffectSuppression(invocation)) {
+        return await persistConversationOutwardDeliverySuppression({
+          store: input.store,
+          record: claimed.record,
+          attemptId: input.attemptId,
+          reason: invocation.reason,
+        });
+      }
+      providerResult = invocation;
+    } catch {
+      providerResult = { kind: 'outcomeUnknown' };
     }
-    providerResult = invocation;
-  } catch {
-    providerResult = { kind: 'outcomeUnknown' };
   }
   const settled = settleConversationDeliveryAttempt({
     custody: claimed.record.custody,
@@ -3560,23 +3575,10 @@ export async function reconcileConversationOutwardDeliveryAttempt(input: Readonl
     return { kind: 'notAttempted', reason: 'invalidRow' };
   }
 
-  let currentness: ConversationOutwardDeliveryCurrentnessResult;
-  if (input.signal.aborted) {
-    currentness = { kind: 'suppressed', reason: 'cancelled' };
-  } else {
-    try {
-      currentness = normalizeCurrentnessResult(await input.authority.checkCurrentness({
-        record: claimed.record,
-        signal: input.signal,
-      }));
-    } catch {
-      currentness = {
-        kind: 'suppressed',
-        reason: input.signal.aborted ? 'cancelled' : 'currentnessUnavailable',
-      };
-    }
-    if (input.signal.aborted) currentness = { kind: 'suppressed', reason: 'cancelled' };
-  }
+  let currentness = await readConversationOutwardDeliveryCurrentness({
+    authority: input.authority, record: claimed.record, signal: input.signal,
+  });
+  if (input.signal.aborted) currentness = { kind: 'suppressed', reason: 'cancelled' };
 
   let providerResult: ConversationDeliveryResultV1 = { kind: 'outcomeUnknown' };
   if (currentness.kind === 'current' && input.reconcile !== undefined) {

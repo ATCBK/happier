@@ -6,10 +6,11 @@ import {
   type TargetedContributionSnapshot,
   type TargetedContributionsService,
 } from '@happier-dev/plugin-sdk';
-import type { ActionsService } from '@happier-dev/plugin-sdk/actions';
+import type { ActionsService, PluginMachineExecutionOriginV1 } from '@happier-dev/plugin-sdk/actions';
 import type { PluginTargetedContributionSelectionV1 } from '@happier-dev/plugin-sdk/contributions';
 import { ConversationEndpointResolveInputV1Schema, ConversationProviderSetupResultV1Schema } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
+import { getConversationConnectionTransportOrigin, getConversationConnectionExecutionRouting } from './connectionLifecycle.js';
 
 import {
   CHANNEL_STATE_FIELD,
@@ -286,7 +287,7 @@ function collectionQuotaError(): PluginError {
 
 function readyConnectionCreateActionExecutor() {
   const executionOrigin = {
-    serverIdentityId: 'srv-example',
+    serverIdentityId: 'srv_example',
     materializationRef: {
       pluginId: providerSelection.contributor.pluginId,
       machineId: 'machine-example',
@@ -369,7 +370,7 @@ describe('native SCM session PR binding owner', () => {
     const roles = ['setup', 'connectionTest', 'observationsPoll', 'endpointResolve', 'principalResolve'] as const;
     const operations = Object.fromEntries(roles.map((role) => [role, admittedProviderOperation({ contributor, role })]));
     const credentialRef = { service: { pluginId: contributor.pluginId, localId: 'github' }, accountId: 'native-account' };
-    const origin = { serverIdentityId: 'srv-example', materializationRef: { pluginId: contributor.pluginId, machineId: 'machine-example', materializationId: 'materialization-example' } };
+    const origin = { serverIdentityId: 'srv_example', materializationRef: { pluginId: contributor.pluginId, machineId: 'machine-example', materializationId: 'materialization-example' } };
     const setup = { v: 1, credentialRef, providerConnectionKey: 'github:repository:77', providerConfigVersion: 1, providerConfig: { repository: 'acme/widgets' }, integrationPrincipal: { id: '99', label: 'native-user' }, supportedTransports: ['checkpointedPull'], recommendedTransport: 'checkpointedPull', overlapSafety: 'safe', replayContinuity: 'checkpointed', outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints' }, sharedEndpointInputModes: ['allAllowedMessages'] };
     const actions = {
       execute: async (actionId: string, input: JsonValue) => {
@@ -430,7 +431,7 @@ function durablePushCreateActionExecutor(input: Readonly<{
   const connectionTestInputs: unknown[] = [];
   const contributorPluginId = input.contributorPluginId ?? providerSelection.contributor.pluginId;
   const executionOrigin = {
-    serverIdentityId: 'srv-example',
+    serverIdentityId: 'srv_example',
     materializationRef: {
       pluginId: contributorPluginId,
       machineId: 'machine-example',
@@ -569,7 +570,7 @@ describe('prepareConversationConnectionForInvocation targeted provider selection
           },
         },
         executionOrigin: {
-          serverIdentityId: 'srv-example',
+          serverIdentityId: 'srv_example',
           materializationRef: {
             pluginId: providerSelection.contributor.pluginId,
             machineId: 'machine-example',
@@ -622,7 +623,7 @@ describe('prepareConversationConnectionForInvocation targeted provider selection
         webhookContributionRef: { pluginId: providerSelection.contributor.pluginId, localId: 'webhook' },
       },
       executionOrigin: {
-        serverIdentityId: 'srv-example',
+        serverIdentityId: 'srv_example',
         materializationRef: {
           pluginId: providerSelection.contributor.pluginId,
           machineId: 'machine-example',
@@ -665,7 +666,7 @@ describe('prepareConversationConnectionForInvocation targeted provider selection
         webhookContributionRef: { pluginId: providerSelection.contributor.pluginId, localId: 'webhook' },
       },
       executionOrigin: {
-        serverIdentityId: 'srv-example',
+        serverIdentityId: 'srv_example',
         materializationRef: {
           pluginId: providerSelection.contributor.pluginId,
           machineId: 'machine-example',
@@ -699,7 +700,7 @@ describe('prepareConversationConnectionForInvocation targeted provider selection
       return {
         result: { kind: 'requiresRemediation' },
         executionOrigin: {
-          serverIdentityId: 'srv-example',
+          serverIdentityId: 'srv_example',
           materializationRef: {
             pluginId: providerSelection.contributor.pluginId,
             machineId: 'machine-example',
@@ -773,7 +774,7 @@ describe('prepareConversationConnectionForInvocation targeted provider selection
         ...overrides,
       },
       executionOrigin: {
-        serverIdentityId: 'srv-example',
+        serverIdentityId: 'srv_example',
         materializationRef: {
           pluginId: providerSelection.contributor.pluginId,
           machineId: 'machine-example',
@@ -858,7 +859,7 @@ describe('checkpointed poll source custody', () => {
     providerSetupInput: {},
     credentialRef: null,
     transportOrigin: {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-example',
@@ -872,13 +873,14 @@ describe('checkpointed poll source custody', () => {
     authorityEpoch: 4,
   } as const satisfies ConversationConnectionFixtureAuthority;
 
-  it.each(['historyGap', 'replacement'] as const)('returns stale authority for source-backed %s settlement', async (settlement) => {
+  it.each(['historyGap', 'replacement'] as const)('accepts current-route source custody for %s settlement and refuses another Machine', async (settlement) => {
     const connectionId = 'connection-source-poll';
     const collection = createMutableConnectionStateCollection();
     collection.rows.set(connectionId, {
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority,
         transport: { kind: 'checkpointedPull' },
@@ -899,22 +901,30 @@ describe('checkpointed poll source custody', () => {
       },
     };
     const context = invocationContext({ stateCollection: collection,
-      // Source-origin settlement must refuse before crossing the host Action boundary.
       actions: { async executeAdmittedTargetedOperationWithExecutionOrigin() {
-        throw new Error('Stale source custody must not execute a provider operation.');
+        throw new Error('Settlement does not invoke another provider operation.');
       } } as unknown as ActionsService,
       targetedContributions: targetedContributionsFixture({ contributorImmutableGenerationId: providerSelection.contributor.sourceCustody.immutableGenerationId }),
     });
     if (settlement === 'historyGap') {
+      await expect(recordConversationCheckpointedPollHistoryGapForInvocation({ ...input,
+        executionOrigin: { ...input.executionOrigin, sourceRef: { ...input.executionOrigin.sourceRef, machineId: 'another-machine' } },
+        fact: { reason: 'providerHistoryUnavailable' },
+      }, context)).resolves.toBe('staleAuthority');
+      expect(collection.batch).not.toHaveBeenCalled();
       await expect(recordConversationCheckpointedPollHistoryGapForInvocation({
         ...input,
         fact: { reason: 'providerHistoryUnavailable' },
-      }, context)).resolves.toBe('staleAuthority');
+      }, context)).resolves.toBe('recorded');
+      expect(collection.batch).toHaveBeenCalled();
     } else {
+      await expect(settleConversationProviderExclusiveCheckpointedPollReplacementForInvocation({ ...input,
+        executionOrigin: { ...input.executionOrigin, sourceRef: { ...input.executionOrigin.sourceRef, machineId: 'another-machine' } },
+      }, context)).resolves.toEqual({ kind: 'staleAuthority' });
       await expect(settleConversationProviderExclusiveCheckpointedPollReplacementForInvocation(input, context))
-        .resolves.toEqual({ kind: 'staleAuthority' });
+        .resolves.toEqual({ kind: 'notApplicable' });
+      expect(collection.batch).not.toHaveBeenCalled();
     }
-    expect(collection.batch).not.toHaveBeenCalled();
   });
 });
 
@@ -930,7 +940,7 @@ describe('deleteConversationConnectionForInvocation transport ownership', () => 
       providerSetupInput: { source: 'saved' },
       credentialRef: null,
       transportOrigin: {
-        serverIdentityId: 'srv-example',
+        serverIdentityId: 'srv_example',
         materializationRef: {
           pluginId: providerSelection.contributor.pluginId,
           machineId: 'machine-example',
@@ -947,6 +957,7 @@ describe('deleteConversationConnectionForInvocation transport ownership', () => 
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority,
         transport: {
@@ -992,12 +1003,20 @@ describe('deleteConversationConnectionForInvocation transport ownership', () => 
 });
 
 describe('createConversationConnectionForInvocation targeted provider selection', () => {
-  it.each([true, false])('reruns the exact setup and test handles, then rejoins after a committed Account write loses its response (native limit: %s)', async (hasNativeLimit) => {
+  it.each(['materialized', 'source'] as const)('reruns exact setup/test and rejoins response loss with %s custody', async (originKind) => {
+    const hasNativeLimit = originKind === 'materialized';
     const collection = createMutableConnectionStateCollection();
     seedConnectionIdentityKey(collection);
     const controller = new AbortController();
-    const executionOrigin = {
-      serverIdentityId: 'srv-example',
+    const executionOrigin: PluginMachineExecutionOriginV1 = originKind === 'source' ? {
+      serverIdentityId: 'srv_example',
+      sourceRef: {
+        pluginId: providerSelection.contributor.pluginId,
+        machineId: 'machine-example',
+        sourceCustody: { kind: 'development', registeredRootId: '/runtime/source-a/provider' },
+      },
+    } : {
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-example',
@@ -1178,7 +1197,7 @@ describe('createConversationConnectionForInvocation targeted provider selection'
     seedConnectionIdentityKey(collection);
     const controller = new AbortController();
     const executionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-example',
@@ -1264,7 +1283,7 @@ describe('createConversationConnectionForInvocation targeted provider selection'
     const collection = createMutableConnectionStateCollection();
     seedConnectionIdentityKey(collection);
     const executionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-example',
@@ -1316,11 +1335,11 @@ describe('createConversationConnectionForInvocation targeted provider selection'
     expect(collection.batch).not.toHaveBeenCalled();
   });
 
-  it.each(['setup', 'connectionTest'] as const)('declines source custody from %s without retaining transport authority', async (sourceOperation) => {
+  it.each(['setup', 'connectionTest'] as const)('rejects mixed source/materialized custody from %s before persistence', async (sourceOperation) => {
     const collection = createMutableConnectionStateCollection();
     seedConnectionIdentityKey(collection);
     const materializedOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-example',
@@ -1328,7 +1347,7 @@ describe('createConversationConnectionForInvocation targeted provider selection'
       },
     };
     const sourceOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       sourceRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-example',
@@ -1379,12 +1398,12 @@ describe('createConversationConnectionForInvocation targeted provider selection'
       credentialRef: null,
       selectedTransport: 'socket',
       maximumObservationAgeMs: 60_000,
-    }, context)).resolves.toEqual({ kind: 'notReady', reason: 'unsupported' });
+    }, context)).rejects.toMatchObject({ code: 'channels_connection_execution_origin_mismatch' });
     expect(collection.rows.size).toBe(1);
     expect(collection.batch).not.toHaveBeenCalled();
     if (sourceOperation === 'setup') {
       expect(executeAdmittedTargetedOperationWithExecutionOrigin.mock.calls.map(([action]) => action))
-        .toEqual([setupAction]);
+        .toEqual([setupAction, connectionTestAction]);
       await expect(prepareConversationConnectionForInvocation({
         providerSelection,
         providerSetupInput: { source: 'prepare' },
@@ -1397,7 +1416,7 @@ describe('createConversationConnectionForInvocation targeted provider selection'
     const collection = createMutableConnectionStateCollection();
     seedConnectionIdentityKey(collection);
     const setupExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-example',
@@ -1469,7 +1488,7 @@ describe('createConversationConnectionForInvocation targeted provider selection'
     const collection = createMutableConnectionStateCollection();
     seedConnectionIdentityKey(collection);
     const executionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-example',
@@ -1526,7 +1545,7 @@ describe('createConversationConnectionForInvocation targeted provider selection'
     const collection = createMutableConnectionStateCollection();
     seedConnectionIdentityKey(collection);
     const executionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-example',
@@ -1601,7 +1620,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
   it('conflicts a narrow transfer when a concurrent enable changes the binding demand after its scan', async () => {
     const connectionId = 'connection-transfer-concurrent-enable';
     const executionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-old',
@@ -1609,7 +1628,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       },
     } as const;
     const replacementExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-replacement',
@@ -1635,6 +1654,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority,
         transport: { kind: 'socket' },
@@ -1764,7 +1784,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
     // `allAllowedMessages` binding apparently intact and permanently silent.
     const connectionId = 'connection-transfer-narrowed-capability';
     const executionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-old',
@@ -1772,7 +1792,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       },
     } as const;
     const replacementExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-replacement',
@@ -1798,6 +1818,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority,
         transport: { kind: 'socket' },
@@ -1896,24 +1917,33 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
     });
   });
 
-  it.each([true, false])('re-runs setup/test, then stops the frozen old socket transport through its exact retired origin (native limit: %s)', async (hasNativeLimit) => {
+  it.each(['materialized', 'source'] as const)('moves a %s provider to another Machine through frozen predecessor custody', async (originKind) => {
+    const hasNativeLimit = originKind === 'materialized';
     const connectionId = 'connection-transfer-same-config-new-origin';
-    const oldExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+    const oldExecutionOrigin: PluginMachineExecutionOriginV1 = originKind === 'source' ? {
+      serverIdentityId: 'srv_example',
+      sourceRef: { pluginId: providerSelection.contributor.pluginId, machineId: 'machine-old',
+        sourceCustody: { kind: 'development', registeredRootId: '/runtime/source-old/provider' } },
+    } : {
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-old',
         materializationId: 'materialization-old',
       },
-    } as const;
-    const replacementExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+    };
+    const replacementExecutionOrigin: PluginMachineExecutionOriginV1 = originKind === 'source' ? {
+      serverIdentityId: 'srv_example',
+      sourceRef: { pluginId: providerSelection.contributor.pluginId, machineId: 'machine-replacement',
+        sourceCustody: { kind: 'development', registeredRootId: '/runtime/source-reloaded/provider' } },
+    } : {
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-replacement',
         materializationId: 'materialization-replacement',
       },
-    } as const;
+    };
     const collection = createMutableConnectionStateCollection();
     const authority = {
       providerPluginId: providerSelection.contributor.pluginId,
@@ -1922,7 +1952,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       },
       providerSetupInput: { source: 'same' },
       credentialRef: null,
-      transportOrigin: oldExecutionOrigin,
+      transportOrigin: getConversationConnectionTransportOrigin(oldExecutionOrigin),
       providerConnectionKey: 'example:connection',
       providerConfig: { source: 'same' },
       routingIdentityKey: 'r'.repeat(43),
@@ -1933,6 +1963,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority,
         transport: { kind: 'socket' },
@@ -2024,13 +2055,13 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
         authorityEpoch: 5,
         reason: 'transfer',
       },
-      options: expect.objectContaining({ expectedExecutionOrigin: oldExecutionOrigin }),
+      options: expect.objectContaining({ expectedExecutionRouting: getConversationConnectionExecutionRouting(getConversationConnectionTransportOrigin(oldExecutionOrigin), providerSelection.contributor.pluginId) }),
     }]);
     expect(collection.rows.get(connectionId)).toMatchObject({
       revision: 6,
       value: {
         payload: {
-          transportOrigin: replacementExecutionOrigin,
+          transportOrigin: getConversationConnectionTransportOrigin(replacementExecutionOrigin),
           authorityEpoch: 5,
           pendingOldTransportStop: null,
         },
@@ -2038,24 +2069,32 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
     });
   });
 
-  it('keeps a socket transfer disclosed as pending custody when the frozen old stop is not proven', async () => {
+  it.each(['materialized', 'source'] as const)('keeps %s replacement pending when the exact retired origin cannot prove stop', async (originKind) => {
     const connectionId = 'connection-transfer-unproven-old-stop';
-    const oldExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+    const oldExecutionOrigin: PluginMachineExecutionOriginV1 = originKind === 'source' ? {
+      serverIdentityId: 'srv_example',
+      sourceRef: { pluginId: providerSelection.contributor.pluginId, machineId: 'machine-old',
+        sourceCustody: { kind: 'development', registeredRootId: '/runtime/source-old/provider' } },
+    } : {
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-old',
         materializationId: 'materialization-old',
       },
-    } as const;
-    const replacementExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+    };
+    const replacementExecutionOrigin: PluginMachineExecutionOriginV1 = originKind === 'source' ? {
+      serverIdentityId: 'srv_example',
+      sourceRef: { pluginId: providerSelection.contributor.pluginId, machineId: 'machine-replacement',
+        sourceCustody: { kind: 'development', registeredRootId: '/runtime/source-new/provider' } },
+    } : {
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-replacement',
         materializationId: 'materialization-replacement',
       },
-    } as const;
+    };
     const collection = createMutableConnectionStateCollection();
     const authority = {
       providerPluginId: providerSelection.contributor.pluginId,
@@ -2064,7 +2103,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       },
       providerSetupInput: { source: 'same' },
       credentialRef: null,
-      transportOrigin: oldExecutionOrigin,
+      transportOrigin: getConversationConnectionTransportOrigin(oldExecutionOrigin),
       providerConnectionKey: 'example:connection',
       providerConfig: { source: 'same' },
       routingIdentityKey: 'r'.repeat(43),
@@ -2075,6 +2114,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority,
         transport: { kind: 'socket' },
@@ -2151,7 +2191,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       value: {
         payload: {
           pendingOldTransportStop: {
-            transportOrigin: oldExecutionOrigin,
+            transportOrigin: getConversationConnectionTransportOrigin(oldExecutionOrigin),
             providerContributionSelection: authority.providerContributionSelection,
             stopRequest: {
               connectionId,
@@ -2168,7 +2208,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
   it('rejoins a lost committed transfer by replaying only the idempotent frozen old stop', async () => {
     const connectionId = 'connection-transfer-targeted';
     const oldExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-old',
@@ -2176,7 +2216,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       },
     } as const;
     const replacementExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: replacementProviderSelection.contributor.pluginId,
         machineId: 'machine-replacement',
@@ -2200,7 +2240,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       },
       providerSetupInput: { source: 'old' },
       credentialRef: null,
-      transportOrigin: oldExecutionOrigin,
+      transportOrigin: getConversationConnectionTransportOrigin(oldExecutionOrigin),
       providerConnectionKey: 'example:connection',
       providerConfig: { source: 'old' },
       routingIdentityKey: 'r'.repeat(43),
@@ -2211,6 +2251,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority: oldAuthority,
         transport: { kind: 'socket' },
@@ -2320,7 +2361,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
             contributionId: replacementProviderSelection.contributor.contributionId,
           },
           providerSetupInput: { source: 'replacement' },
-          transportOrigin: replacementExecutionOrigin,
+          transportOrigin: getConversationConnectionTransportOrigin(replacementExecutionOrigin),
           transport: { kind: 'socket' },
           overlapSafety: 'providerExclusive',
           replayContinuity: 'none',
@@ -2331,9 +2372,9 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
             predecessorCheckpointedPollInvocation: {
               connectionRevision: 4,
               authorityEpoch: 4,
-              transportOrigin: oldExecutionOrigin,
+              transportOrigin: getConversationConnectionTransportOrigin(oldExecutionOrigin),
             },
-            transportOrigin: oldExecutionOrigin,
+            transportOrigin: getConversationConnectionTransportOrigin(oldExecutionOrigin),
             providerContributionSelection: {
               contributionId: providerSelection.contributor.contributionId,
             },
@@ -2374,7 +2415,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
   it('rejects an exact-revision equal-origin rejoin when Account authority changes during provider setup/test', async () => {
     const connectionId = 'connection-transfer-equal-origin-stale-after-test';
     const executionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-current',
@@ -2397,6 +2438,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       authorityEpoch: 4,
     } as const satisfies ConversationConnectionFixtureAuthority;
     const connectionValue = createCurrentConversationConnectionFixture({
+      configurationRevision: 4,
       connectionId,
       authority,
       transport: { kind: 'socket' },
@@ -2432,7 +2474,10 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
         collection.rows.set(connectionId, {
           rowId: connectionId,
           revision: 5,
-          value: connectionValue,
+          value: {
+            ...connectionValue,
+            payload: { ...connectionValue.payload, configurationRevision: 5, maximumObservationAgeMs: 120_000 },
+          },
         });
         return {
           result: {
@@ -2475,7 +2520,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
   it('rejects a changed-origin transfer before a stale CAS when Account policy changes during provider setup/test', async () => {
     const connectionId = 'connection-transfer-changed-origin-stale-after-test';
     const oldExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-current',
@@ -2483,7 +2528,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       },
     } as const;
     const replacementExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-replacement',
@@ -2498,7 +2543,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       },
       providerSetupInput: { source: 'old' },
       credentialRef: null,
-      transportOrigin: oldExecutionOrigin,
+      transportOrigin: getConversationConnectionTransportOrigin(oldExecutionOrigin),
       providerConnectionKey: 'example:connection',
       providerConfig: { source: 'old' },
       routingIdentityKey: 'r'.repeat(43),
@@ -2506,6 +2551,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       authorityEpoch: 4,
     } as const satisfies ConversationConnectionFixtureAuthority;
     const connectionValue = createCurrentConversationConnectionFixture({
+      configurationRevision: 4,
       connectionId,
       authority,
       transport: { kind: 'socket' },
@@ -2545,6 +2591,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
             ...connectionValue,
             payload: {
               ...connectionValue.payload,
+              configurationRevision: 5,
               enabled: false,
               authorityEpoch: 5,
               maximumObservationAgeMs: 120_000,
@@ -2594,7 +2641,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
           enabled: false,
           authorityEpoch: 5,
           maximumObservationAgeMs: 120_000,
-          transportOrigin: oldExecutionOrigin,
+          transportOrigin: getConversationConnectionTransportOrigin(oldExecutionOrigin),
         },
       },
     });
@@ -2604,7 +2651,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
   it('converts checkpointed pull to durable push only after generic endpoint correspondence', async () => {
     const connectionId = 'connection-transfer-pull-to-push';
     const oldExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-old',
@@ -2616,6 +2663,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority: {
           providerPluginId: providerSelection.contributor.pluginId,
@@ -2624,7 +2672,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
           },
           providerSetupInput: { source: 'same' },
           credentialRef: null,
-          transportOrigin: oldExecutionOrigin,
+          transportOrigin: getConversationConnectionTransportOrigin(oldExecutionOrigin),
           providerConnectionKey: 'example:connection',
           providerConfig: { opaque: true },
           routingIdentityKey: 'r'.repeat(43),
@@ -2702,7 +2750,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
   it('resumes unresolved durable-push retarget custody from the current policy-edited row', async () => {
     const connectionId = 'connection-transfer-push-retarget-policy-edit';
     const oldExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-old',
@@ -2710,7 +2758,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       },
     } as const;
     const replacementExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-example',
@@ -2722,6 +2770,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority: {
           providerPluginId: providerSelection.contributor.pluginId,
@@ -2730,7 +2779,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
           },
           providerSetupInput: { source: 'same' },
           credentialRef: null,
-          transportOrigin: oldExecutionOrigin,
+          transportOrigin: getConversationConnectionTransportOrigin(oldExecutionOrigin),
           providerConnectionKey: 'example:connection',
           providerConfig: { opaque: true },
           routingIdentityKey: 'r'.repeat(43),
@@ -2893,7 +2942,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
           maximumObservationAgeMs: 120_000,
           authorityEpoch: 5,
           pendingOldTransportStop: null,
-          transportOrigin: replacementExecutionOrigin,
+          transportOrigin: getConversationConnectionTransportOrigin(replacementExecutionOrigin),
           transport: { webhookEndpointId: DURABLE_PUSH_WEBHOOK_ENDPOINT_ID },
         },
       },
@@ -2903,7 +2952,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
   it('converts durable push to checkpointed pull without a provider stop or webhook mutation', async () => {
     const connectionId = 'connection-transfer-push-to-pull';
     const oldExecutionOrigin = {
-      serverIdentityId: 'srv-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-old',
@@ -2915,6 +2964,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority: {
           providerPluginId: providerSelection.contributor.pluginId,
@@ -2923,7 +2973,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
           },
           providerSetupInput: { source: 'same' },
           credentialRef: null,
-          transportOrigin: oldExecutionOrigin,
+          transportOrigin: getConversationConnectionTransportOrigin(oldExecutionOrigin),
           providerConnectionKey: 'example:connection',
           providerConfig: { opaque: true },
           routingIdentityKey: 'r'.repeat(43),
@@ -3005,7 +3055,7 @@ describe('updateConversationConnectionForInvocation targeted provider stop', () 
       providerSetupInput: { source: 'persisted' },
       credentialRef: null,
       transportOrigin: {
-        serverIdentityId: 'server-example',
+        serverIdentityId: 'srv_example',
         materializationRef: {
           pluginId: providerSelection.contributor.pluginId,
           machineId: 'machine-example',
@@ -3022,6 +3072,7 @@ describe('updateConversationConnectionForInvocation targeted provider stop', () 
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority: persistedAuthority,
         transport: { kind: 'socket' },
@@ -3097,7 +3148,7 @@ describe('updateConversationConnectionForInvocation targeted provider stop', () 
       providerSetupInput: { source: 'persisted' },
       credentialRef: null,
       transportOrigin: {
-        serverIdentityId: 'server-example',
+        serverIdentityId: 'srv_example',
         materializationRef: {
           pluginId: providerSelection.contributor.pluginId,
           machineId: 'machine-example',
@@ -3114,6 +3165,7 @@ describe('updateConversationConnectionForInvocation targeted provider stop', () 
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority: persistedAuthority,
         transport: { kind: 'socket' },
@@ -3195,7 +3247,7 @@ describe('updateConversationConnectionForInvocation targeted provider stop', () 
       providerSetupInput: { source: 'persisted' },
       credentialRef: null,
       transportOrigin: {
-        serverIdentityId: 'server-example',
+        serverIdentityId: 'srv_example',
         materializationRef: {
           pluginId: providerSelection.contributor.pluginId,
           machineId: 'machine-example',
@@ -3212,6 +3264,7 @@ describe('updateConversationConnectionForInvocation targeted provider stop', () 
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority: persistedAuthority,
         transport: { kind: 'socket' },
@@ -3298,7 +3351,7 @@ describe('updateConversationConnectionForInvocation targeted provider stop', () 
       reason: 'disable',
     });
     expect(stopOptions).toMatchObject({
-      expectedExecutionOrigin: row.value.payload.transportOrigin,
+      expectedExecutionRouting: getConversationConnectionExecutionRouting(row.value.payload.transportOrigin, providerSelection.contributor.pluginId),
     });
   });
 });
@@ -3312,7 +3365,7 @@ describe('retestConversationConnectionForInvocation', () => {
     providerSetupInput: { source: 'persisted' },
     credentialRef: selectedCredentialRef,
     transportOrigin: {
-      serverIdentityId: 'server-example',
+      serverIdentityId: 'srv_example',
       materializationRef: {
         pluginId: providerSelection.contributor.pluginId,
         machineId: 'machine-example',
@@ -3345,6 +3398,7 @@ describe('retestConversationConnectionForInvocation', () => {
     const collection = createMutableConnectionStateCollection();
     const connectionId = 'legacy-native-limit';
     const initial = createCurrentConversationConnectionFixture({
+      configurationRevision: 4,
       connectionId, authority: retestPersistedAuthority,
       transport: { kind: 'socket' }, maximumObservationAgeMs: 60_000,
       providerReadiness: null,
@@ -3431,6 +3485,7 @@ describe('retestConversationConnectionForInvocation', () => {
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority: retestPersistedAuthority,
         transport: { kind: 'socket' },
@@ -3507,7 +3562,7 @@ describe('retestConversationConnectionForInvocation', () => {
     ) => {
       if (action === setupAction) {
         expect(actionInput).toEqual(retestPersistedAuthority.providerSetupInput);
-        expect(options).toMatchObject({ expectedExecutionOrigin: retestPersistedAuthority.transportOrigin,
+        expect(options).toMatchObject({ expectedExecutionRouting: getConversationConnectionExecutionRouting(getConversationConnectionTransportOrigin(retestPersistedAuthority.transportOrigin), providerSelection.contributor.pluginId),
           expectedSelectedConnectedAccountRef: selectedCredentialRef });
         return retestSetupExecution();
       }
@@ -3524,7 +3579,7 @@ describe('retestConversationConnectionForInvocation', () => {
         selectedTransport: 'socket',
       });
       expect(options).toMatchObject({
-        expectedExecutionOrigin: retestPersistedAuthority.transportOrigin,
+        expectedExecutionRouting: getConversationConnectionExecutionRouting(getConversationConnectionTransportOrigin(retestPersistedAuthority.transportOrigin), providerSelection.contributor.pluginId),
       });
       return {
         result: {
@@ -3623,7 +3678,15 @@ describe('retestConversationConnectionForInvocation', () => {
       async get() {
         readCount += 1;
         const current = fixture.readRow();
-        return readCount === 1 ? current : { ...current, revision: current.revision + 1 };
+        return readCount === 1 ? current : {
+          ...current,
+          revision: current.revision + 1,
+          value: { ...current.value, payload: {
+            ...current.value.payload,
+            configurationRevision: current.value.payload.configurationRevision + 1,
+            maximumObservationAgeMs: 120_000,
+          } },
+        };
       },
     };
     const connectionTest = admittedProviderOperation({ role: 'connectionTest' });
@@ -4299,7 +4362,7 @@ describe('durablePush connection create endpoint continuation', () => {
  */
 describe('transferConversationConnectionForInvocation predecessor custody recovery', () => {
   const OLD_ORIGIN = {
-    serverIdentityId: 'srv-example',
+    serverIdentityId: 'srv_example',
     materializationRef: {
       pluginId: providerSelection.contributor.pluginId,
       machineId: 'machine-old',
@@ -4477,7 +4540,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
               : {}),
           },
           executionOrigin: {
-            serverIdentityId: 'srv-example',
+            serverIdentityId: 'srv_example',
             materializationRef: replacementMaterialization,
           },
         };
@@ -4490,15 +4553,15 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
             providerConnectionKey: 'example:connection',
           },
           executionOrigin: {
-            serverIdentityId: 'srv-example',
+            serverIdentityId: 'srv_example',
             materializationRef: replacementMaterialization,
           },
         };
       }
       if (action === connectionStopAction) {
         input.stopInputs.push(actionInput);
-        input.stopOrigins.push((options as Readonly<{ expectedExecutionOrigin?: unknown }> | undefined)
-          ?.expectedExecutionOrigin);
+        input.stopOrigins.push((options as Readonly<{ expectedExecutionRouting?: unknown }> | undefined)
+          ?.expectedExecutionRouting);
         return {
           result: { kind: 'stopped' },
           executionOrigin: OLD_ORIGIN,
@@ -4541,6 +4604,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority: transferAuthority(),
         transport: {
@@ -4600,16 +4664,16 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
       value: {
         payload: {
           authorityEpoch: 5,
-          transportOrigin: { materializationRef: REPLACEMENT_MATERIALIZATION },
+          transportOrigin: { machineId: REPLACEMENT_MATERIALIZATION.machineId },
           transport: {
             kind: 'durablePush',
             webhookEndpointId: DURABLE_PUSH_WEBHOOK_ENDPOINT_ID,
           },
           pendingOldTransportStop: {
-            predecessorTransportKind: 'durablePush',
-            endpointRetarget: 'pending',
-            transportOrigin: OLD_ORIGIN,
-            stopRequest: { reason: 'transfer', authorityEpoch: 5 },
+            kind: 'endpointRetarget',
+            webhookEndpointId: DURABLE_PUSH_WEBHOOK_ENDPOINT_ID,
+            targetMaterialization: REPLACEMENT_MATERIALIZATION,
+            transferAuthorityEpoch: 5,
           },
         },
       },
@@ -4739,8 +4803,8 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
               webhookEndpointId: DURABLE_PUSH_WEBHOOK_ENDPOINT_ID,
             },
             pendingOldTransportStop: {
-              endpointRetarget: 'pending',
-              acceptedPossibleLoss: false,
+              kind: 'endpointRetarget',
+              transferAuthorityEpoch: 5,
             },
           },
         },
@@ -4808,7 +4872,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
     expect(endpoint.state.revision).toBe(5);
     expect(collection.rows.get(connectionId)).toMatchObject({
       revision: 5,
-      value: { payload: { pendingOldTransportStop: { endpointRetarget: 'pending' } } },
+      value: { payload: { pendingOldTransportStop: { kind: 'endpointRetarget', transferAuthorityEpoch: 5 } } },
     });
 
     const providerCallsBeforeRetry = provider.mock.calls.length;
@@ -4846,6 +4910,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
       rowId: input.connectionId,
       revision: input.revision,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: input.revision,
         connectionId: input.connectionId,
         authority: input.authority,
         transport: {
@@ -4947,7 +5012,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
       value: {
         payload: {
           authorityEpoch: 6,
-          transportOrigin: { materializationRef: SECOND_REPLACEMENT_MATERIALIZATION },
+          transportOrigin: { machineId: SECOND_REPLACEMENT_MATERIALIZATION.machineId },
           pendingOldTransportStop: null,
         },
       },
@@ -5033,7 +5098,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
       value: {
         payload: {
           authorityEpoch: 6,
-          transportOrigin: { materializationRef: SECOND_REPLACEMENT_MATERIALIZATION },
+          transportOrigin: { machineId: SECOND_REPLACEMENT_MATERIALIZATION.machineId },
           pendingOldTransportStop: null,
         },
       },
@@ -5119,7 +5184,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
       value: {
         payload: {
           authorityEpoch: 6,
-          transportOrigin: { materializationRef: SECOND_REPLACEMENT_MATERIALIZATION },
+          transportOrigin: { machineId: SECOND_REPLACEMENT_MATERIALIZATION.machineId },
           pendingOldTransportStop: null,
         },
       },
@@ -5132,7 +5197,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
     const acceptedAuthority = {
       ...transferAuthority(),
       transportOrigin: {
-        serverIdentityId: 'srv-example',
+        serverIdentityId: 'srv_example',
         materializationRef: REPLACEMENT_MATERIALIZATION,
       },
       authorityEpoch: 5,
@@ -5149,7 +5214,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
         predecessorCheckpointedPollInvocation: {
           connectionRevision: 2,
           authorityEpoch: 3,
-          transportOrigin: OLD_ORIGIN,
+          transportOrigin: getConversationConnectionTransportOrigin(OLD_ORIGIN),
         },
         authorityEpoch: 4,
         reason: 'transfer',
@@ -5304,8 +5369,8 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
       value: {
         payload: {
           pendingOldTransportStop: {
-            endpointRetarget: 'pending',
-            acceptedPossibleLoss: false,
+            kind: 'endpointRetarget',
+            transferAuthorityEpoch: 5,
           },
         },
       },
@@ -5335,6 +5400,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority: transferAuthority(),
         transport: { kind: 'socket' },
@@ -5391,7 +5457,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
       reason: 'transfer',
       authorityEpoch: 5,
     })]);
-    expect(stopOrigins).toEqual([OLD_ORIGIN]);
+    expect(stopOrigins).toEqual([getConversationConnectionExecutionRouting(getConversationConnectionTransportOrigin(OLD_ORIGIN), providerSelection.contributor.pluginId)]);
     expect(collection.rows.get(connectionId)).toMatchObject({
       revision: 6,
       value: { payload: { authorityEpoch: 5, pendingOldTransportStop: null } },
@@ -5405,6 +5471,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
       rowId: connectionId,
       revision: 4,
       value: createCurrentConversationConnectionFixture({
+        configurationRevision: 4,
         connectionId,
         authority: transferAuthority(),
         transport: { kind: 'checkpointedPull' },
@@ -5518,7 +5585,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
     });
     expect(collection.rows.get(connectionId)).toMatchObject({
       revision: 5,
-      value: { payload: { authorityEpoch: 5, transportOrigin: OLD_ORIGIN } },
+      value: { payload: { authorityEpoch: 5, transportOrigin: getConversationConnectionTransportOrigin(OLD_ORIGIN) } },
     });
     expect(endpoint.state.target).toEqual(OLD_ORIGIN.materializationRef);
   });
@@ -5560,7 +5627,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
     });
     expect(collection.rows.get(connectionId)).toMatchObject({
       revision: 6,
-      value: { payload: { authorityEpoch: 5, transportOrigin: OLD_ORIGIN } },
+      value: { payload: { authorityEpoch: 5, transportOrigin: getConversationConnectionTransportOrigin(OLD_ORIGIN) } },
     });
     expect(endpoint.state.target).toEqual(OLD_ORIGIN.materializationRef);
   });
@@ -5623,7 +5690,7 @@ describe('transferConversationConnectionForInvocation predecessor custody recove
         payload: {
           authorityEpoch: 5,
           transport: { kind: 'checkpointedPull' },
-          transportOrigin: { materializationRef: REPLACEMENT_MATERIALIZATION },
+          transportOrigin: { machineId: REPLACEMENT_MATERIALIZATION.machineId },
           pendingOldTransportStop: null,
         },
       },
