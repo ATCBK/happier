@@ -1,7 +1,5 @@
-import { Typography } from '@/constants/Typography';
 import * as React from 'react';
-import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { useUnistyles } from 'react-native-unistyles';
 
 import type { ToolCallMessage } from "@happier-dev/session-core/messages";
 import type { Metadata } from '@happier-dev/session-core/state';
@@ -18,11 +16,10 @@ import {
     type ToolViewDetailLevelSetting,
 } from '@/components/tools/normalization/policy/resolveToolViewDetailDefaultsForChromeMode';
 import { resolveToolErrorSummary } from '@/components/tools/shell/presentation/resolveToolErrorSummary';
+import { ToolOutcomeStatus } from '@/components/tools/shell/presentation/ToolOutcomeStatus';
 import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
-import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { resolveToolPermissionTerminalErrorMessage } from '@/components/tools/shell/permissions/resolveToolPermissionTerminalErrorMessage';
-import { Icon } from '@/components/ui/icons/Icon';
 import { useOptionalSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { readTranscriptProjectCommandCall } from '@/components/sessions/transcript/references/transcriptProjectCommandReference';
 import { ProjectCommandToolTimelineRowHeader } from './ProjectCommandToolTimelineRowHeader';
@@ -121,26 +118,16 @@ export const ToolTimelinePreviewRow = React.memo(function ToolTimelinePreviewRow
                     }) ?? t('errors.permissionDenied')
                 )
                 : null;
-    const rightElement =
-        terminalStatusSummary ? (
-            <View
-                testID={statusKind === 'permission_blocked'
-                    ? 'tool-timeline-preview-row-permission-blocked'
-                    : 'tool-timeline-preview-row-error'}
-                accessible={true}
-                accessibilityLabel={terminalStatusSummary}
-                style={styles.terminalStatusContainer}
-            >
-                <Icon
-                    name={statusKind === 'permission_blocked' || isRefusal ? 'minus-circle' : 'warning-circle'}
-                    size={16}
-                    color={isRefusal ? theme.colors.text.secondary : theme.colors.state.danger.foreground}
-                />
-                <Text style={[styles.terminalStatusText, isRefusal ? styles.terminalStatusTextQuiet : null]} numberOfLines={1}>
-                    {terminalStatusSummary}
-                </Text>
-            </View>
-        ) : null;
+    const terminalStatus = terminalStatusSummary ? (
+        <ToolOutcomeStatus
+            testID={statusKind === 'permission_blocked'
+                ? 'tool-timeline-preview-row-permission-blocked'
+                : 'tool-timeline-preview-row-error'}
+            label={terminalStatusSummary}
+            glyph={statusKind === 'permission_blocked' || isRefusal ? 'minus-circle' : 'warning-circle'}
+            tone={isRefusal ? 'quiet' : 'danger'}
+        />
+    ) : null;
 
     const header: React.ComponentProps<typeof ToolTimelineRowHeader> = {
         density,
@@ -152,7 +139,7 @@ export const ToolTimelinePreviewRow = React.memo(function ToolTimelinePreviewRow
         onPress: props.onPress ?? null,
         canOpen: false,
         onOpen: null,
-        rightElement,
+        terminalStatus,
     };
     // The collapsed group's last lines read an agent's Project command the same way its full rows do.
     return projectCommandCall ? (
@@ -164,19 +151,3 @@ export const ToolTimelinePreviewRow = React.memo(function ToolTimelinePreviewRow
         />
     ) : <ToolTimelineRowHeader {...header} />;
 });
-
-const styles = StyleSheet.create((theme) => ({
-    terminalStatusContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: theme.space.s6,
-        maxWidth: 220,
-    },
-    terminalStatusText: {
-        ...Typography.variant('meta', 'semiBold'),
-        color: theme.colors.state.danger.foreground,
-    },
-    terminalStatusTextQuiet: {
-        color: theme.colors.text.secondary,
-    },
-}));

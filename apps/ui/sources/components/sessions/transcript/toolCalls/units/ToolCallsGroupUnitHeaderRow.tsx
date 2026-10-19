@@ -12,7 +12,7 @@ import {
 
 import {
     resolveToolCallsGroupChromeVariant,
-    resolveToolCallsGroupStatus,
+    resolveToolCallsGroupSummary,
     toolCallsGroupChromeModeForVariant,
     ToolCallsGroupHeaderChrome,
     ToolCallsGroupUnitRowFrame,
@@ -49,7 +49,7 @@ export const ToolCallsGroupUnitHeaderRowWithSessionCommon = React.memo(function 
     const { setExpanded } = props;
     const onToggleExpanded = React.useCallback(() => setExpanded(!props.expanded), [props.expanded, setExpanded]);
 
-    const status = resolveToolCallsGroupStatus({
+    const summary = resolveToolCallsGroupSummary({
         showToolCalls: props.toolChromeCommon.showToolCalls,
         toolMessages: props.toolMessages,
         permissionDisabledReason: props.interaction.permissionDisabledReason,
@@ -70,7 +70,8 @@ export const ToolCallsGroupUnitHeaderRowWithSessionCommon = React.memo(function 
                 >
                     <ToolCallsGroupHeaderChrome
                         chromeMode={chromeMode}
-                        status={status}
+                        status={summary.status}
+                        outcomes={summary}
                         count={props.toolMessages.length}
                         expanded={props.expanded}
                         onToggleExpanded={onToggleExpanded}

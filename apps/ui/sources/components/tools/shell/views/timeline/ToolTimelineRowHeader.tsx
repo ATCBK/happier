@@ -47,6 +47,11 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
     onOpen?: (() => void) | null;
     rightElement?: React.ReactNode | null;
     /**
+     * How the call ended (failed, refused, blocked). It closes the row after the reveal slots, so every
+     * row's outcome sits in one column that lines up with the group header's own status.
+     */
+    terminalStatus?: React.ReactNode | null;
+    /**
      * Hover-revealed row action (the pin). It owns its own reveal slot so a
      * pinned row can keep the pin visible without dragging the open-details
      * icon into view; both slots still follow this header's single hover state.
@@ -198,6 +203,16 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
                     ) : null}
                 </View>
             ) : null}
+            {props.terminalStatus ? (
+                <Pressable
+                    testID="tool-timeline-row-status-slot"
+                    onPress={props.onPress ?? undefined}
+                    disabled={!props.onPress}
+                    style={styles.terminalStatusSlot}
+                >
+                    {props.terminalStatus}
+                </Pressable>
+            ) : null}
         </View>
         {props.causeText ? (
             <Text testID="tool-timeline-row-cause" style={styles.cause}>{props.causeText}</Text>
@@ -211,6 +226,11 @@ const styles = StyleSheet.create((theme, _runtime) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s6,
+    },
+    terminalStatusSlot: {
+        flexShrink: 0,
+        alignItems: 'flex-end',
+        justifyContent: 'center',
     },
     cause: {
         ...Typography.variant('meta'),

@@ -14,7 +14,7 @@ import { TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX } from '@/compo
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
 import { resolveInactiveSessionToolCallFailure } from '@/components/tools/shell/permissions/resolveInactiveSessionToolCallFailure';
-import { resolveToolCallsGroupStatus } from '@/components/sessions/transcript/toolCalls/units/toolCallsGroupChrome';
+import { resolveToolCallsGroupSummary } from '@/components/sessions/transcript/toolCalls/units/toolCallsGroupChrome';
 import {
     type TranscriptSessionCommonProps,
     useTranscriptSessionCommon,
@@ -87,7 +87,7 @@ export const ToolCallsGroupRowWithSessionCommon = React.memo(function ToolCallsG
         });
     }, [props.interaction.permissionDisabledReason, toolMessages]);
 
-    const status = resolveToolCallsGroupStatus({
+    const summary = resolveToolCallsGroupSummary({
         showToolCalls: props.toolChromeCommon.showToolCalls,
         toolMessages: toolMessagesForSession,
     });
@@ -115,7 +115,8 @@ export const ToolCallsGroupRowWithSessionCommon = React.memo(function ToolCallsG
                     <View style={centeredContentStyle}>
                         <ToolCallsGroupViewWithSessionCommon
                             id={props.toolCallsGroupId}
-                            status={status}
+                            status={summary.status}
+                            outcomes={summary}
                             toolMessages={toolMessagesForSession}
                             metadata={props.metadata}
                             sessionId={props.sessionId}
