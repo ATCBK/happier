@@ -443,8 +443,9 @@ describe('PluginInstallationReviewDialog', () => {
         expect(rendered).not.toContain('\\"targets\\"');
         expect(rendered).not.toContain('\\"kind\\"');
         // Declared keys and discriminators read as words; a target led by its kind reads as one line.
-        expect(rendered).toContain('Targets:');
-        expect(rendered).toContain('Fixed origin · https://review.example.test');
+        expect(rendered).toContain('settingsPlugins.installReviewSections.networkAccessAnyMethod');
+        expect(rendered).toContain('https://review.example.test');
+        expect(rendered).not.toContain('Fixed origin');
         expect(rendered).toContain('Workspace · read');
         expect(rendered).not.toContain('fixedOrigin');
         expect(rendered).toContain('settingsPlugins.installReviewSections.credentialRequestHeaders');

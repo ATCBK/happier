@@ -28,6 +28,10 @@ export const installReviewSections = {
     compatibility: 'Compatibility and updates',
     none: 'None declared',
     scope: ({ scope }: { scope: string }) => `Scope: ${scope}`,
+    networkAccess: ({ methods, targets }: { methods: string; targets: string }) => `Can send ${methods} requests to ${targets}`,
+    networkAccessAnyMethod: ({ targets }: { targets: string }) => `Can send requests to ${targets}`,
+    networkTargetHostSuffix: ({ suffix }: { suffix: string }) => `any host under ${suffix}`,
+    networkPrivate: ({ line }: { line: string }) => `${line} (private networks included)`,
     developmentPath: ({ locator }: { locator: string }) => `${locator} · development`,
     publisherUnverified: ({ displayName, id }: { displayName: string; id: string }) => `${displayName} · ${id} · unverified`,
     integrityBasis: {

@@ -60,12 +60,14 @@ it.each([1440, 390])('keeps every catalog row clear of the dialog edges, whateve
                 <CapabilityAddModalBody config={config} onClose={() => {}} setChrome={() => {}} />
             </View>,
         ));
-        const layout = await measureWebLayout(host, { viewport: { width, height: 800 }, texts: ['Added'], settle: (replay) => act(replay) });
+        const layout = await measureWebLayout(host, { viewport: { width, height: 800 }, texts: ['Added', 'docx'], settle: (replay) => act(replay) });
         const added = layout.textRects('Added')[0]!;
         const button = layout.rect('add-button:docx');
         // The row's trailing edge is one edge: a status at the title's end and a button end on the same line, inset.
         expect.soft(Math.abs(added.right - button.right)).toBeLessThanOrEqual(1);
         expect.soft(width - added.right).toBeGreaterThanOrEqual(16);
+        // The rows start on the tools band's edge: the first tab sits a segmented-bar padding inside it.
+        expect.soft(Math.abs(layout.textRects('docx')[0]!.left - layout.rect('add:mode:browse').left)).toBeLessThanOrEqual(3);
     } finally {
         await act(async () => root.unmount());
         host.remove();

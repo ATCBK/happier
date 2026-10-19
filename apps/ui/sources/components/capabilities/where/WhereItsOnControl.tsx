@@ -776,16 +776,14 @@ export const WhereItsOnControl = React.memo(function WhereItsOnControl(
     </>
   );
 
-  return props.presentation === 'section' ? (
+  // A section of its page in both forms: the compact add-flow form carries the same title, on the same edge as the
+  // sections around it, and leaves the description to the detail's own copy.
+  return (
     <ItemGroup
       testID={props.testID}
       title={t('capabilities.control.title')}
-      description={t('capabilities.control.description')}
+      {...(props.presentation === 'section' ? { description: t('capabilities.control.description') } : {})}
     >
-      {sheet}
-    </ItemGroup>
-  ) : (
-    <ItemGroup testID={props.testID} header="none">
       {sheet}
     </ItemGroup>
   );
