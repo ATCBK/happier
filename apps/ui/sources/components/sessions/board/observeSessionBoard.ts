@@ -46,7 +46,12 @@ export function observeSessionBoard(options: SessionBoardObservationOptions): ()
     let previous: SessionBoardSnapshot | undefined;
     let currentJob: object | null = null;
     const emit = (binding: SessionBoardBinding) => { if (!stopped) options.onChange(binding); };
-    const unavailable = (reason: SessionBoardBindingUnavailableReason) => emit({ status: 'unavailable', reason });
+    const unavailable = (reason: SessionBoardBindingUnavailableReason) => {
+        // A pending renewal may still finish after a record read revokes
+        // access. Its next projection must not republish the denied content.
+        if (reason === 'forbidden' || reason === 'not_found' || reason === 'board_feature_disabled') previous = undefined;
+        emit({ status: 'unavailable', reason });
+    };
     const initialCapabilities = options.readCapabilities();
     if (options.session.serverId !== options.repository.scope.serverId || !initialCapabilities?.readTranscript || !options.isCurrent()) {
         unavailable('forbidden');
@@ -134,6 +139,7 @@ export function observeSessionBoard(options: SessionBoardObservationOptions): ()
                         capabilities: currentCapabilities,
                         canEdit: currentCapabilities.editSessionRecords,
                         freshness: 'stale',
+                        loading: 'refreshing',
                     },
                 });
                 const renewal = authorityRenewal ??= options.renewAuthority();

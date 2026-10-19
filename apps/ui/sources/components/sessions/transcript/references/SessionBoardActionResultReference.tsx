@@ -175,6 +175,7 @@ function MountedSessionBoardReference(props: Readonly<{
     const currentness = resolveSessionBoardExecutableCurrentness({
         capabilities: { readTranscript: true, editSessionRecords: false },
         reachability: binding.reachability, freshness: binding.freshness,
+        loading: binding.loading,
         itemsById: new Map([[itemId, item]]),
     }, item, pluginRuntime);
 
