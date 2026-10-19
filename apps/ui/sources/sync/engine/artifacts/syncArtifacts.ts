@@ -1,4 +1,6 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { areCredentialsEqual } from '@/auth/storage/tokenStorage';
+import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import { encodeBase64 } from '@/encryption/base64';
 import { log } from '@/log';
@@ -611,6 +613,32 @@ export async function decryptArtifactWithBody(params: {
     }
 }
 
+// Only the ambient inventory producer supplies a scope. Keep its current
+// attempt's completion, never its result or crypto, for qualified readers.
+let pendingArtifactInventory: Readonly<{
+    scope: ServerAccountScope;
+    credentials: AuthCredentials;
+    completion: Promise<void>;
+}> | null = null;
+
+export function awaitPendingArtifactInventory(params: Readonly<{
+    scope: ServerAccountScope;
+    credentials: AuthCredentials;
+    signal?: AbortSignal;
+}>): Promise<void> | null {
+    params.signal?.throwIfAborted();
+    const pending = pendingArtifactInventory;
+    if (!pending || !areServerAccountScopesEqual(pending.scope, params.scope)
+        || !areCredentialsEqual(pending.credentials, params.credentials)) return null;
+    const signal = params.signal;
+    if (!signal) return pending.completion;
+    return new Promise<void>((resolve, reject) => {
+        const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason); };
+        signal.addEventListener('abort', abort, { once: true });
+        void pending.completion.then(() => { signal.removeEventListener('abort', abort); resolve(); });
+    });
+}
+
 export async function fetchAndApplyArtifactsList(params: {
     credentials: AuthCredentials | null | undefined;
     request?: ArtifactApiOptions['request'];
@@ -619,6 +647,8 @@ export async function fetchAndApplyArtifactsList(params: {
     artifactDataKeys: ArtifactDataKeyCache;
     applyArtifacts: (artifacts: DecryptedArtifact[], source?: 'inventory') => void;
     shouldContinue?: () => boolean;
+    /** Supplied only by the scoped ambient inventory writer. */
+    inventoryScope?: ServerAccountScope | null;
     /** The open Artifact browser consumes attribution; background indexes do not. */
     includeProvenance?: boolean;
 }): Promise<void> {
@@ -631,6 +661,18 @@ export async function fetchAndApplyArtifactsList(params: {
         return;
     }
     if (!shouldContinue()) return;
+
+    let finishInventory = () => {};
+    if (params.inventoryScope) {
+        let complete!: () => void;
+        const completion = new Promise<void>(resolve => { complete = resolve; });
+        const pending = { scope: params.inventoryScope, credentials, completion };
+        pendingArtifactInventory = pending;
+        finishInventory = () => {
+            if (pendingArtifactInventory === pending) pendingArtifactInventory = null;
+            complete();
+        };
+    }
 
     try {
         log.log('📦 fetchArtifactsList: Fetching artifacts from server');
@@ -656,6 +698,8 @@ export async function fetchAndApplyArtifactsList(params: {
         if (!shouldContinue()) return;
         const decryptedArtifacts = complete.items.map(item => item.artifact);
         applyArtifacts(decryptedArtifacts, 'inventory');
+        // Membership is usable before independent actionable-body hydration.
+        finishInventory();
         log.log(`📦 fetchArtifactsList: Applied ${decryptedArtifacts.length} artifact headers`);
 
         // The always-mounted Inbox badge consumes strict open approval bodies and
@@ -676,6 +720,9 @@ export async function fetchAndApplyArtifactsList(params: {
         // Home-unreachable state). It is never a console error, which dev builds surface as a toast.
         log.log(`📦 fetchArtifactsList: Error fetching artifacts: ${error}`);
         throw error;
+    } finally {
+        // Failed or retired attempts wake readers too; they must recheck coverage.
+        finishInventory();
     }
 }
 

@@ -6,13 +6,25 @@ import type { PromptArtifactRefV1 } from '@happier-dev/protocol/prompts/library/
 import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
 import type { WorkflowDefinitionArtifactOperations } from '@happier-dev/protocol/actions';
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { withActionAccountRequestSignal } from '@/sync/ops/actions/actionAccountContext';
+import { awaitPendingArtifactInventory } from '@/sync/engine/artifacts/syncArtifacts';
 import type { ArtifactFolderActionPortV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import { randomUUID } from '@/platform/randomUUID';
 import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
-import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+
+function readCompleteAccountArtifactInventory(scope: ServerAccountScope) {
+  const state = readRegisteredStorageState();
+  if (!state?.artifactsLoaded
+    || !areServerAccountScopesEqual(getActiveServerAccountScope(), scope)
+    || !areServerAccountScopesEqual(state.settingsScope, scope)) return null;
+  const rows = Object.values(state.artifacts);
+  // Loaded membership can still contain a refused header observation.
+  return rows.every(artifact => artifact.isDecrypted && artifact.rawHeader && artifact.access !== undefined) ? rows : null;
+}
 
 /** Keep reads and the writes they derive in one exact Home/Account lifetime. */
 export async function withUiPromptLibraryArtifactStore<T>(
@@ -239,15 +251,19 @@ export function createUiPromptLibraryArtifactStore(
     list: async (options) => {
       throwIfAborted(options?.signal);
       account?.assertCurrent();
-      const state = readRegisteredStorageState();
       const scope = account?.accountLifetime.scope;
-      const rows = state?.artifactsLoaded ? Object.values(state.artifacts) : null;
-      if (account && scope && state?.artifactsLoaded
+      let rows = scope ? readCompleteAccountArtifactInventory(scope) : null;
+      if (!rows && account && scope
         && areServerAccountScopesEqual(getActiveServerAccountScope(), scope)
-        && areServerAccountScopesEqual(state.settingsScope, scope)
-        // Loaded membership can still contain a failed header observation.
-        // Only complete readable coverage can answer another read without HTTP.
-        && rows?.every(artifact => artifact.isDecrypted && artifact.rawHeader && artifact.access !== undefined)) {
+        && areServerAccountScopesEqual(readRegisteredStorageState()?.settingsScope, scope)) {
+        await withActionAccountRequestSignal(account, options?.signal, async signal => {
+          await awaitPendingArtifactInventory({ scope, credentials: account.credentials, signal });
+        });
+        account.assertCurrent();
+        throwIfAborted(options?.signal);
+        rows = readCompleteAccountArtifactInventory(scope);
+      }
+      if (account && rows) {
         // Select pages with the existing header selector/cursor owner. An empty
         // search requests local selection over this already complete inventory.
         const page = await listArtifactHeadersV1({

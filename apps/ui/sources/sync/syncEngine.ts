@@ -8571,9 +8571,11 @@ class Sync {
     public fetchArtifactsList = async (): Promise<void> => {
         if (!this.credentials) return;
         const shouldContinue = this.createServerScopeGuard();
+        const inventoryScope = getActiveServerAccountScope();
         const inventoryReadStartedWith = storage.getState().artifacts;
         await this.withArtifactReadAuthority(undefined, params => fetchAndApplyArtifactsList({
             ...params,
+            inventoryScope,
             includeProvenance: this.artifactProvenanceConsumers > 0,
             shouldContinue: () => shouldContinue() && !params.signal?.aborted,
             applyArtifacts: (artifacts, source) => storage.getState().applyArtifacts(artifacts,
