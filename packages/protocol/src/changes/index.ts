@@ -28,6 +28,7 @@ export const ChangeKindSchema = lazyZodSchema(() => z.enum([
   'account',
   'automation',
   'artifact',
+  'discussion',
   'feed',
   'friends',
   'friend_request',

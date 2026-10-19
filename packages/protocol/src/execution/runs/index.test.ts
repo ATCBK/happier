@@ -581,8 +581,8 @@ describe('executionRuns protocol', () => {
     }).success).toBe(false);
 
     const discussionOrigin = {
-      kind: 'session_discussion',
-      sessionId: 'session_initiator',
+      kind: 'discussion',
+      serverId: 'home_1',
       discussionId: 'discussion_1',
       messageIds: ['message_1', 'message_2'],
       draftCorrelationId: 'draft_1',
@@ -652,15 +652,15 @@ describe('executionRuns protocol', () => {
     expect(ExecutionRunPublicStateSchema.parse({
       ...parsed,
       launchOrigin: {
-        kind: 'session_discussion',
-        sessionId: 'session_1',
+        kind: 'discussion',
+        serverId: 'home_1',
         discussionId: 'discussion_1',
         messageIds: ['message_1'],
         draftCorrelationId: 'draft_1',
       },
     }).launchOrigin).toEqual({
-      kind: 'session_discussion',
-      sessionId: 'session_1',
+      kind: 'discussion',
+      serverId: 'home_1',
       discussionId: 'discussion_1',
       messageIds: ['message_1'],
       draftCorrelationId: 'draft_1',

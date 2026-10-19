@@ -52,6 +52,18 @@ describe('Session creation Agent preconditions', () => {
     expect(SessionSpawnNewResultV1Schema.safeParse({ ...result, code: 'spawn_failed' }).success).toBe(false);
     expect(SessionSpawnNewResultV1Schema.safeParse({ ...result, retryable: true }).success).toBe(false);
   });
+
+  it('accepts signed-out recovery detail without changing the precondition or accepting another cause', () => {
+    const result = { type: 'error', code: 'agent_signed_out', agentId: 'custom-agent', retryable: false,
+      launchError: { kind: 'launch_error', code: 'agent_signed_out', message: 'Choose your sign-in method.' } };
+    expect(SessionSpawnNewResultV1Schema.safeParse(result)).toMatchObject({ success: true, data: result });
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      launchError: { ...result.launchError, code: 'SPAWN_FAILED' },
+    }).success).toBe(false);
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      launchError: { ...result.launchError, auth: 'private' },
+    }).success).toBe(false);
+  });
 });
 
 describe('Session creation Provider recovery', () => {

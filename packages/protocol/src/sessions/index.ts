@@ -23,7 +23,6 @@ export * from './runtime/index.js';
 export * from './external/index.js';
 export * from './organization/index.js';
 export * from './follow/index.js';
-export * from './discussions/index.js';
 export * from './personal/index.js';
 export * from './readState/index.js';
 export * from './listing/query.js';

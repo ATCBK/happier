@@ -20,6 +20,20 @@ const input = {
 } as const;
 
 describe('SessionSpawnNewInputV2Schema', () => {
+  it('reserves a Discussion participant without admitting a prompt, trigger or source continuation', () => {
+    const selected = { ...input, discussionParticipant: { discussionId: 'discussion-1', participantSlotId: 'slot-1' } };
+    expect(SessionSpawnNewInputV2Schema.parse(selected)).toEqual(selected);
+    expect(sessionSpawnInput.SessionServerStartSpawnDraftV1Schema.parse(selected)).toEqual(selected);
+    expect(SessionSpawnNewInputV2Schema.safeParse({ ...selected, initialInput: { text: 'start now' } }).success).toBe(false);
+    expect(SessionSpawnNewInputV2Schema.safeParse({ ...selected, sourceContext: {
+      v: 1, kind: 'session_replay', sourceSessionId: 'source', forkPoint: { type: 'latest' },
+    } }).success).toBe(false);
+    expect(SessionSpawnNewInputV2Schema.safeParse({ ...selected, initialTriggers: [{
+      target: { kind: 'workflow', ref: 'builtin:review-and-converge' },
+      trigger: { kind: 'sessionLifecycle', enabled: true, events: ['sessionStarted'], policy: { kind: 'firstMatch' } },
+    }] }).success).toBe(false);
+    expect(SessionSpawnNewInputV2Schema.parse({ ...selected, initialTriggers: [] })).toMatchObject(selected);
+  });
   it('retains a session tool allowlist and closed unlisted policy at ordinary and browser-safe spawn', () => {
     const policy = { allowedTools: ['mcp__wilson-intake__*', 'Read(/workspace/attachments/**)'], unlistedTools: 'deny' };
     expect(SessionSpawnNewInputV2Schema.parse({ ...input, ...policy })).toMatchObject(policy);
@@ -115,13 +129,13 @@ describe('SessionSpawnNewInputV2Schema', () => {
     }).success).toBe(false);
   });
   it('carries the strict lead relation in ordinary and browser-safe creation without implying access', () => {
-    const reportsTo = { sessionId: 'lead' };
-    expect(SessionSpawnNewInputV2Schema.parse({ ...input, reportsTo }).reportsTo).toEqual(reportsTo);
-    expect(sessionSpawnInput.SessionServerStartSpawnDraftV1Schema.parse({ ...input, reportsTo }).reportsTo)
-      .toEqual(reportsTo);
-    expect(SessionSpawnNewInputV2Schema.parse(input)).not.toHaveProperty('reportsTo');
+    const manager = { sessionId: 'lead' };
+    expect(SessionSpawnNewInputV2Schema.parse({ ...input, manager }).manager).toEqual(manager);
+    expect(sessionSpawnInput.SessionServerStartSpawnDraftV1Schema.parse({ ...input, manager }).manager)
+      .toEqual(manager);
+    expect(SessionSpawnNewInputV2Schema.parse(input)).not.toHaveProperty('manager');
     expect(SessionSpawnNewInputV2Schema.safeParse({
-      ...input, reportsTo: { ...reportsTo, accessLevel: 'edit' },
+      ...input, manager: { ...manager, accessLevel: 'edit' },
     }).success).toBe(false);
   });
 

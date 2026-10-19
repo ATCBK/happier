@@ -149,8 +149,11 @@ export const SessionSpawnNewResultV1Schema = lazyZodSchema(() => z.union([
     if (value.incompatibleTarget && (value.code !== 'incompatible_target' || value.retryable)) {
       context.addIssue({ code: 'custom', path: ['incompatibleTarget'], message: 'Incompatibility predicates require a non-retryable incompatible target.' });
     }
-    if (value.launchError && value.code !== 'spawn_failed') {
-      context.addIssue({ code: "custom", path: ['launchError'], message: 'Launch causes accompany spawn failures only.' });
+    if (value.launchError && value.code !== 'spawn_failed' && value.code !== 'agent_signed_out') {
+      context.addIssue({ code: "custom", path: ['launchError'], message: 'Launch causes accompany spawn failures or signed-out Agent recovery only.' });
+    }
+    if (value.launchError && value.code === 'agent_signed_out' && value.launchError.code !== value.code) {
+      context.addIssue({ code: 'custom', path: ['launchError'], message: 'Agent recovery must match the signed-out refusal.' });
     }
     if (value.terminalHostError && (value.code !== 'incompatible_target' || value.retryable)) {
       context.addIssue({ code: "custom", path: ['terminalHostError'], message: 'Terminal host setup failures require a non-retryable incompatible target.' });
