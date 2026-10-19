@@ -5546,6 +5546,206 @@
                   "minimum": -9007199254740991,
                   "type": "integer"
                 },
+                "taskFields": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "assigneeIds": {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "type": "string",
+                        "x-happier-max-utf8-bytes": 128
+                      },
+                      "type": "array"
+                    },
+                    "blockedBy": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "collisionScope": {
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                            "type": "string",
+                            "x-happier-max-utf8-bytes": 192
+                          },
+                          "entryId": {
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                            "type": "string",
+                            "x-happier-max-utf8-bytes": 128
+                          },
+                          "kindId": {
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                            "type": "string",
+                            "x-happier-max-utf8-bytes": 128
+                          },
+                          "source": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "localId": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                "type": "string"
+                              },
+                              "pluginId": {
+                                "maxLength": 256,
+                                "minLength": 3,
+                                "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "pluginId",
+                              "localId"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "kindId",
+                          "collisionScope",
+                          "entryId"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "dueDate": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "estimate": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "labelIds": {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "type": "string",
+                        "x-happier-max-utf8-bytes": 128
+                      },
+                      "type": "array"
+                    },
+                    "parent": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "collisionScope": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 192
+                            },
+                            "entryId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 128
+                            },
+                            "kindId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 128
+                            },
+                            "source": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "pluginId": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "source",
+                            "kindId",
+                            "collisionScope",
+                            "entryId"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "priority": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "minLength": 1,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                          "type": "string",
+                          "x-happier-max-utf8-bytes": 128
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "projectId": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                          "type": "string",
+                          "x-happier-max-utf8-bytes": 128
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "scopeId": {
+                      "minLength": 1,
+                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                      "type": "string"
+                    },
+                    "title": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
                 "viewer": {
                   "additionalProperties": false,
                   "properties": {
@@ -29288,6 +29488,24 @@
                               {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "capturedAt": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "kind": {
+                                    "const": "none"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "capturedAt"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
                                   "afterContext": {
                                     "items": {
                                       "type": "string"
@@ -30187,6 +30405,24 @@
                           },
                           "snapshot": {
                             "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "capturedAt": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "kind": {
+                                    "const": "none"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "capturedAt"
+                                ],
+                                "type": "object"
+                              },
                               {
                                 "additionalProperties": false,
                                 "properties": {
@@ -34026,6 +34262,24 @@
                           {
                             "additionalProperties": false,
                             "properties": {
+                              "capturedAt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "none"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "capturedAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
                               "afterContext": {
                                 "items": {
                                   "type": "string"
@@ -37832,6 +38086,24 @@
                       },
                       "snapshot": {
                         "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "capturedAt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "none"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "capturedAt"
+                            ],
+                            "type": "object"
+                          },
                           {
                             "additionalProperties": false,
                             "properties": {
@@ -41643,6 +41915,24 @@
                       },
                       "snapshot": {
                         "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "capturedAt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "none"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "capturedAt"
+                            ],
+                            "type": "object"
+                          },
                           {
                             "additionalProperties": false,
                             "properties": {
