@@ -671,6 +671,10 @@ export const DiscussionInviteButton = React.memo(
     const [open, setOpen] = React.useState(false);
     const anchorRef = React.useRef<View>(null);
     const close = React.useCallback(() => setOpen(false), []);
+    const inviteComposition = React.useMemo(
+      () => ({ notes: [t('session.collaboration.discussion.participants.mentionNote')] }),
+      [],
+    );
     return (
       <>
         <View ref={anchorRef} collapsable={false}>
@@ -741,6 +745,8 @@ export const DiscussionInviteButton = React.memo(
                   management={props.management ?? null}
                   discussionId={props.discussionId}
                   discussionTitle={props.discussionTitle}
+                  // The header already says who can read it; Details adds only the mention rule.
+                  composition={inviteComposition}
                   onChanged={props.onChanged}
                   onRequestClose={close}
                 />

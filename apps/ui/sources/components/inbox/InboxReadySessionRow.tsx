@@ -11,6 +11,8 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { t } from '@/text';
+import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import {
     SessionListIdentity,
@@ -21,6 +23,7 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
 import type { WorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 
 const MARK_READ_ACCESSIBILITY_ACTION = 'markRead';
+const NO_SESSION_ADDRESSES: readonly SessionAddress[] = [];
 const NO_ACCESSIBILITY_ACTIONS: readonly { name: string; label?: string }[] = [];
 
 /**
@@ -60,6 +63,9 @@ export const InboxReadySessionRow = React.memo(function InboxReadySessionRow(pro
     const swipeableRef = React.useRef<Swipeable | null>(null);
     const isWeb = Platform.OS === 'web';
     const testIdPrefix = `inbox.ready_session.${props.serverId ?? 'local'}.${props.sessionId}`;
+    // The row shows the Session by name, so it demands its content like a visible list row: an undecided one is not "locked".
+    const demanded = normalizeSessionAddress(props.serverId, props.sessionId);
+    useSessionContentDemand(demanded ? [demanded] : NO_SESSION_ADDRESSES, { tag: 'inbox.hydrateReadySessionRow', hydrate: 'unsettled' });
 
     const markRead = React.useCallback(() => {
         if (props.pending) return;

@@ -9,6 +9,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { readDiscussionMentionedParticipantIdsV1 } from '@happier-dev/protocol/discussions/content';
 import { readableSessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
 import { useSessionDisplayNameProjections } from '@/sync/domains/state/storage';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 
 const emptySnapshot = () => null;
 const emptySubscribe = () => () => {};
@@ -31,6 +32,8 @@ export function useInboxDiscussionSource(serverId: string | null) {
             ? [...readDiscussionMentionedParticipantIdsV1(message.content).mentionedSessionIds,
                 ...(message.producerV1 ? [message.producerV1.sessionId] : [])] : [])))]
         .map(sessionId => ({ serverId: binding.scope.serverId, sessionId })) : [], [binding, attention?.discussions]);
+    // A Discussion message names the Sessions it mentions from encrypted content: demanded like visible list rows.
+    useSessionContentDemand(sessionAddresses, { tag: 'inbox.hydrateDiscussionSessions', hydrate: 'unsettled' });
     const sessionTitles = useSessionDisplayNameProjections(sessionAddresses, readableSessionDisplayTitle);
     const sessionDisplayNames = React.useMemo(() => new Map(sessionAddresses.map((address, index) =>
         [address.sessionId, sessionTitles[index] ?? null] as const)), [sessionAddresses, sessionTitles]);

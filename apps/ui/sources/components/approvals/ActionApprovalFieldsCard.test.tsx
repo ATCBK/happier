@@ -258,7 +258,7 @@ it('presents a plugin install approval through the install review facts, keeping
                     requiredHostAccess: [{
                     id: 'network', capability: 'network', reason: 'Call the service.',
                     authorizationClass: 'cooperativeDisclosure',
-                    normalizedScope: { targets: [{ kind: 'fixedOrigin', origin: 'https://example.test' }] },
+                    normalizedScope: { methods: ['POST'], targets: [{ kind: 'fixedOrigin', origin: 'http://127.0.0.1:5199' }] },
                 }] }),
             },
         },
@@ -272,9 +272,12 @@ it('presents a plugin install approval through the install review facts, keeping
         for (const value of [t('settingsPlugins.installReviewSections.requiredAccess'),
             t('settingsPlugins.installReviewSections.authorizationClass.cooperativeDisclosure'),
             t('settingsPlugins.installReviewSections.uiArtifactStatus.none'),
-            t('settingsPlugins.installReviewSections.trustedCodeTitle'), 'network', 'https://example.test']) {
+            t('settingsPlugins.installReviewSections.trustedCodeTitle'), 'network']) {
             expect(text).toContain(value);
         }
+        // The declared host scope reads as one sentence; its raw structure waits behind Technical details.
+        expect(text).toContain(t('settingsPlugins.installReviewSections.networkAccess', { methods: 'POST', targets: 'http://127.0.0.1:5199' }));
+        for (const raw of ['Fixed origin', 'Methods:', 'Targets:']) expect(text).not.toContain(raw);
         // The local path is said once, in the Identity section, with its development flag; the install's
         // own arguments for it wait behind Technical details.
         expect(text.split(locator)).toHaveLength(2);

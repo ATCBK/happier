@@ -2662,9 +2662,9 @@ describe('ApprovalDetailScreen', () => {
 
     expect(readRenderedText(screen)).not.toContain('Private cached title');
     expect(readRenderedText(screen)).not.toContain('secret-project');
-    expect(readRenderedText(screen)).toContain(
-      'detailPages.approval.sessionOnHome',
-    );
+    // The fixture's request is the person's own (UI origin): the locked Session is context, never the requester.
+    expect(readRenderedText(screen)).toContain('detailPages.approval.requesterYou');
+    expect(readRenderedText(screen)).not.toContain('detailPages.approval.sessionOnHome');
     expect(screen.findByTestId('approvals.approve')?.props.disabled).toBe(
       false,
     );

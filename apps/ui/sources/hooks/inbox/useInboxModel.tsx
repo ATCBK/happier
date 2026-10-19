@@ -53,6 +53,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { resolveApprovalHomeServerId } from '@/components/approvals/approvalHomeServerId';
 import { readableSessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 
 import { useInboxFriendRequests } from './useInboxFriendRequests';
 import { useInboxDiscussionSource } from './useInboxDiscussionSource';
@@ -230,6 +231,8 @@ function useCreateInboxModel(): InboxModel {
         const sessionId = typeof artifact.header?.sessionId === 'string' ? artifact.header.sessionId.trim() : '';
         return serverId && sessionId ? [{ serverId, sessionId, artifactId: artifact.id }] : [];
     }), [openApprovals]);
+    // An approval names its source Session from encrypted content: the Inbox demands it like a visible list row.
+    useSessionContentDemand(approvalSourceAddresses, { tag: 'inbox.hydrateApprovalSources', hydrate: 'unsettled' });
     const approvalSourceTitles = useSessionDisplayNameProjections(approvalSourceAddresses, readableSessionDisplayTitle);
     const approvalSourceDisplayNames = React.useMemo(() => new Map(approvalSourceAddresses.map((address, index) =>
         [address.artifactId, approvalSourceTitles[index] ?? null] as const)), [approvalSourceAddresses, approvalSourceTitles]);

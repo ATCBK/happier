@@ -55,6 +55,8 @@ export function SharePrincipalVisual(props: Readonly<{ principal: SharePrincipal
 /** One help block: the level legend, then the domain rules and members-only link explanation. */
 export function ShareHelp<TRow extends ShareGrantRowModel>(props: Readonly<{
     adapter: ShareSheetAdapter<TRow>; testID: string;
+    /** Inside the Details disclosure the row already carries the info mark; the note does not repeat it. */
+    markNote?: boolean;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const host = useSharePresentationHost();
@@ -63,7 +65,7 @@ export function ShareHelp<TRow extends ShareGrantRowModel>(props: Readonly<{
         return presentation?.help ? [{ label: presentation.label, text: presentation.help }] : [];
     });
     return <HappierShareHelp host={host} testID={props.testID} levels={lines}
-        noteIcon={<Icon name="info" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />}
+        noteIcon={props.markNote === false ? undefined : <Icon name="info" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />}
         note={[...(props.adapter.notes ?? []), ...(props.adapter.linkPath ? [t('shareSheet.membersOnlyLink')] : [])].join(' ')} />;
 }
 
@@ -240,7 +242,7 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
         sections.push({ kind: 'static', id: 'help', options: [{ id: 'access-help', testID: `${idPrefix}${ns}-help`, label: t('common.details'),
             icon: () => <ShareHelpIcon />,
             onSelect: () => input.onExpand('access-help'), expandedContentInset: 'none',
-            expandedContent: () => <ShareHelp adapter={adapter} testID={`${idPrefix}${ns}-help-content`} /> }] });
+            expandedContent: () => <ShareHelp adapter={adapter} markNote={false} testID={`${idPrefix}${ns}-help-content`} /> }] });
     }
 
     const handoffs: SelectionListOption[] = [];
