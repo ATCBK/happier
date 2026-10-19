@@ -354,6 +354,18 @@ export function startSocket(app: Fastify) {
             decrementWebSocketConnection(connection.connectionType);
             if (connection.connectionType === 'session-scoped') {
                 void sessionPublisherPresence.forgetDisconnectedPublisher({ socket }).then(async (result) => {
+                    if (result.status === 'stopped') {
+                        await publishSessionPublisherLifecycleUpdate({
+                            sessionId: connection.sessionId,
+                            participantCursors: result.participantCursors,
+                            active: false,
+                            activeAt: result.activeAt.getTime(),
+                            ...(result.projection ? { projection: result.projection } : {}),
+                            ...(result.turnProjection ?? {}),
+                            badgeAttentionChanged: result.badgeAttentionChanged,
+                        });
+                        return;
+                    }
                     if (result.status !== 'applied') return;
                     await publishSessionPublisherLifecycleUpdate({
                         sessionId: connection.sessionId,
@@ -362,8 +374,8 @@ export function startSocket(app: Fastify) {
                     });
                 }).catch((error) => {
                     log(
-                        { module: 'session-publisher-presence', sessionId: connection.sessionId, error },
-                        'Failed to publish disconnected session publisher Activity',
+                        { module: 'session-publisher-presence', level: 'warn', sessionId: connection.sessionId, error },
+                        'Failed to settle or publish disconnected session publisher lifecycle',
                     );
                 });
             }

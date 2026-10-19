@@ -229,6 +229,24 @@ function readExplicitMachineStopRequest(method: string, value: unknown): Readonl
     return { machineId, sessionId: trimmedSessionId };
 }
 
+function isSessionStopRequestMethod(method: string): boolean {
+    return method.endsWith(`:${RPC_METHODS.KILL_SESSION}`);
+}
+
+/**
+ * Whether a runner accepted a session-scoped `killSession`. Session RPC results are end-to-end
+ * encrypted unless the session is plaintext, so the relay can only read plaintext results; an opaque
+ * ciphertext acknowledgement is treated as accepted because the released runner handler always
+ * answers `{ status: 'requested' }` and only transport-level failures (timeouts, missing targets)
+ * are visible here as rejections.
+ */
+function isAcceptedSessionStopAcknowledgement(result: unknown): boolean {
+    if (typeof result === "string") return result.length > 0;
+    if (!result || typeof result !== "object" || Array.isArray(result)) return false;
+    const candidate = result as { status?: unknown; success?: unknown };
+    return candidate.status === "requested" || candidate.status === "stopped" || candidate.success === true;
+}
+
 function buildForbiddenRpcResponse() {
     return {
         ok: false,
@@ -247,7 +265,7 @@ export function rpcHandler(
         redisRegistry: RpcRedisRegistryConfig;
         sessionPublisherPresence?: Pick<
             ReturnType<typeof createSessionPublisherPresence>,
-            "captureExplicitMachineStop" | "finalizeExplicitMachineStop"
+            "captureExplicitMachineStop" | "finalizeExplicitMachineStop" | "markPublisherStopRequested"
         >;
     },
 ) {
@@ -453,12 +471,23 @@ export function rpcHandler(
             };
             // Explicit machine-stop lifecycle work is independent from whether the caller
             // supplied an acknowledgement callback, so every successful forward runs it.
-            const forwardTargetResponse = async (targetResponse: unknown) => {
+            // `localTargetSocket` is the in-process target that answered; a target relayed to another
+            // instance has no local Socket and keeps its released timeout-only settlement.
+            const forwardTargetResponse = async (targetResponse: unknown, localTargetSocket: Socket | null) => {
                 const envelope = explicitMachineStopRequest
                     ? SocketRpcTransportResponseEnvelopeV1Schema.safeParse(targetResponse)
                     : null;
                 const targetResult = envelope?.success ? envelope.data.result : targetResponse;
                 const forwarded = forwardedRpcTargetResponse({ method, targetResponse: targetResult });
+                if (
+                    localTargetSocket
+                    && forwarded.ok
+                    && isSessionStopRequestMethod(method)
+                    && isAcceptedSessionStopAcknowledgement(forwarded.result)
+                ) {
+                    // A runner cannot report its own exit; its next disconnect closes its publisher.
+                    ctx.sessionPublisherPresence?.markPublisherStopRequested({ socket: localTargetSocket });
+                }
                 if (!explicitMachineStopRequest || explicitMachineStopCapture?.status !== "captured") {
                     return forwarded;
                 }
@@ -624,7 +653,7 @@ export function rpcHandler(
                         // Evaluated before the optional call: `callback?.(await ...)` would
                         // short-circuit its argument and skip the stop lifecycle entirely
                         // when the caller emitted without an acknowledgement.
-                        const forwardedResponse = await forwardTargetResponse(response);
+                        const forwardedResponse = await forwardTargetResponse(response, fallbackSocket);
                         callback?.(forwardedResponse);
                         return;
                     }
@@ -722,7 +751,10 @@ export function rpcHandler(
                     }
                     const response = Array.isArray(responses) ? responses[0] : responses;
 
-                    const forwardedResponse = await forwardTargetResponse(response);
+                    // Cross-instance target: its publisher registration and disconnect handler live
+                    // on the owning instance, so an accepted killSession here cannot mark it. That
+                    // runner's exit still settles through the presence timeout.
+                    const forwardedResponse = await forwardTargetResponse(response, null);
                     callback?.(forwardedResponse);
                     return;
                 }
@@ -796,7 +828,7 @@ export function rpcHandler(
                     ),
                 });
 
-                const forwardedResponse = await forwardTargetResponse(response);
+                const forwardedResponse = await forwardTargetResponse(response, activeTargetSocket);
                 callback?.(forwardedResponse);
 
             } catch (error) {
