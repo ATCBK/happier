@@ -19,6 +19,7 @@ import type {
   HostSessionPresentationStatefulResult,
 } from '@/agent/runtime/state/currentSessionUiTypes';
 import type { HostRuntimeLimitMeasurementRecorder } from '@/agent/runtime/state/runtimeLimitMeasurement';
+import { AsyncLock } from '@/utils/lock';
 import {
   delayUnrefAbortable,
   exponentialBackoffDelay,
@@ -271,6 +272,7 @@ export function createCurrentSessionPresentationService(params: Readonly<{
   const ackTimeoutMs = params.ackTimeoutMs ?? 15_000;
   let revision = 0;
   let boundClient: BoundClient | null = null;
+  const bindingLock = new AsyncLock();
   const pendingCommands = new Map<string, PendingCommand>();
   // This is a host-lifetime-only retirement intent. It prevents a stale
   // invocation from reappearing while the bounded persistence retry is still
@@ -398,7 +400,7 @@ export function createCurrentSessionPresentationService(params: Readonly<{
 
   params.session.rpcHandlerManager.registerHandler(
     CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD,
-    async (raw, context) => {
+    async (raw, context) => await bindingLock.inLock(async () => {
       const parsed = CurrentSessionPresentationBindV1Schema.safeParse(raw);
       const origin = context?.authorization;
       if (
@@ -470,7 +472,7 @@ export function createCurrentSessionPresentationService(params: Readonly<{
         hostNonce,
         revision: snapshot.revision,
       });
-    },
+    }),
   );
 
   params.session.rpcHandlerManager.registerHandler(

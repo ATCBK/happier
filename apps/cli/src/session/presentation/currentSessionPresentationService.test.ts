@@ -367,14 +367,18 @@ describe('current-session presentation service', () => {
       vi.useRealTimers();
     }
   });
-  it('keeps the same binding and metadata revision when its identical bind repeats', async () => {
+  it('keeps the same binding and metadata revision when its identical bind repeats concurrently', async () => {
     const harness = createHarness();
     const bind = { clientId: 'client-a', focused: true, draftRevision: 3 } as const;
-    const first = await harness.handlers.get(CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD)?.(
-      bind, presentationContext('connection-a'),
-    );
+    const initial = await Promise.all(Array.from({ length: 3 }, () =>
+      harness.handlers.get(CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD)?.(
+        bind, presentationContext('connection-a'),
+      )));
+    const first = initial[0];
+    expect(initial).toEqual([first, first, first]);
     const state = harness.readState();
     const attempts = harness.readStateWriteAttemptCount();
+    expect(attempts).toBe(1);
 
     const repeated = await harness.handlers.get(CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD)?.(
       bind, presentationContext('connection-a'),
