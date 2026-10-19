@@ -574,6 +574,8 @@ function addRunTriggerCauseCorrespondenceIssue(
 const AutomationV3WorkerClaimedAutomationRunBaseSchema = lazyZodSchema(() => z.strictObject({
   id: IDENTIFIER_SCHEMA,
   automationId: IDENTIFIER_SCHEMA,
+  /** Exact server-granted expiry, retained unchanged by claim receipt replay. */
+  leaseExpiresAt: TIMESTAMP_SCHEMA,
   attempt: z.number().check(z.int(), z.positive(), z.int()),
   /** Exact post-claim parent CAS revision for workflow snapshot finalization. */
   revision: z.number().check(z.int(), z.nonnegative(), z.int()),
@@ -638,6 +640,8 @@ const AutomationV3WorkerClaimedAutomationRunSchema = lazyZodSchema(() => Automat
 const AutomationV3WorkerClaimedDirectWorkflowRunSchema = lazyZodSchema(() => z.strictObject({
   id: IDENTIFIER_SCHEMA,
   automationId: z.null(),
+  /** Exact server-granted expiry, retained unchanged by claim receipt replay. */
+  leaseExpiresAt: TIMESTAMP_SCHEMA,
   attempt: z.number().check(z.int(), z.positive(), z.int()),
   revision: z.number().check(z.int(), z.nonnegative(), z.int()),
   /** Boundary Resume request consumed by this claim; absent on unrelated claims. */

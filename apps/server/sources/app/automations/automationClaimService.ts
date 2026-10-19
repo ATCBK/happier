@@ -126,6 +126,7 @@ function projectAutomationV3ClaimReceiptResult(
             run: AutomationV3WorkerClaimedRunSchema.parse({
                 id: result.run.id,
                 automationId: null,
+                leaseExpiresAt: result.run.leaseExpiresAt?.getTime(),
                 attempt: result.run.attempt,
                 revision: result.run.revision,
                 ...(result.run.workflowResumeRequestedRevision === null ? {} : {
@@ -150,6 +151,7 @@ function projectAutomationV3ClaimReceiptResult(
         run: AutomationV3WorkerClaimedRunSchema.parse({
             id: result.run.id,
             automationId: result.run.automationId,
+            leaseExpiresAt: result.run.leaseExpiresAt?.getTime(),
             triggerId: result.run.triggerId,
             triggerRetired: result.run.triggerRetired ?? false,
             attempt: result.run.attempt,

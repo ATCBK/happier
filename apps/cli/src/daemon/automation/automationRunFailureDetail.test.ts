@@ -47,7 +47,7 @@ describe('Automation Run failure detail sealing', () => {
       coordinateWorkflowRun: coordinate, resolveAutomationAccountEncryption: async () => currentEncryption,
       claimed: { protocol: 'v3', accountCurrentness: witness,
         automation: { id: 'automation-1', name: 'Private refusal', enabled: true },
-        run: { id: 'run-private-failure', automationId: 'automation-1', revision: 0, attempt: 1,
+        run: { id: 'run-private-failure', automationId: 'automation-1', revision: 0, attempt: 1, leaseExpiresAt: Date.now() + 120_000,
           recipeKind: 'workflow-v2', triggerId: null, cause: { kind: 'manual', invokedAt: 1 }, causeWorkDepth: 0,
           executionInputEnvelope: JSON.stringify({ t: 'plain', v: null }), resultDelivery: { kind: 'none' } } },
     });

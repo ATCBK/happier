@@ -225,10 +225,9 @@ export async function executeClaimedRun(params: {
         abortExecution(WORKFLOW_CANCEL_REQUESTED_ABORT_REASON);
       }
     };
-    // The successful claim grants the existing lease duration. Its first
-    // renewal uses the same lifecycle as every later one; an extra preflight
-    // heartbeat would reintroduce abort-on-first-transport-error here.
-    const leaseExpiresAtMs = Date.now() + leaseDurationMs;
+    // Claim delivery and receipt replay consume the server-granted lease.
+    // The same heartbeat owner handles every renewal, including the first.
+    const leaseExpiresAtMs = claimed.run.leaseExpiresAt;
     heartbeat = startAutomationLeaseHeartbeat({
       heartbeatMs, leaseExpiresAtMs, onHeartbeat: renewLease, onRenewed: checkCurrentness,
       onTransientError: (error) => logAutomationWarn('Lease heartbeat failed; retaining the confirmed lease', error, {

@@ -9,6 +9,7 @@ import type {
 export type AutomationV3ClaimedRun = Readonly<{
   id: string;
   automationId: string;
+  leaseExpiresAt: number;
   attempt: number;
   revision: number;
   workflowResumeRequestedRevision?: number;
@@ -31,6 +32,7 @@ export type AutomationV3ClaimedRun = Readonly<{
 export type DirectWorkflowV3ClaimedRun = Readonly<{
   id: string;
   automationId: null;
+  leaseExpiresAt: number;
   attempt: number;
   revision: number;
   workflowResumeRequestedRevision?: number;

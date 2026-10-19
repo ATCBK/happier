@@ -242,7 +242,7 @@ it.each(['kilo', 'acp', 'acp-failure', 'external', 'foreign'] as const)('carries
     if (path.endsWith('/runs/claim')) {
       if (claimed) return { data: { run: null, automation: null, accountCurrentness: null } };
       claimed = true;
-      return { data: AutomationV3WorkerClaimResponseSchema.parse({ run: { id: runId, automationId: 'automation-project', attempt: 1, revision: 0,
+      return { data: AutomationV3WorkerClaimResponseSchema.parse({ run: { id: runId, automationId: 'automation-project', attempt: 1, leaseExpiresAt: Date.now() + 120_000, revision: 0,
         recipeKind: 'workflow-v2', triggerId: null, triggerRetired: false, cause: { kind: 'manual', invokedAt: Date.now() },
         executionInputEnvelope: '{}', automationEvidenceEnvelope: null, workflowAcceptedSnapshotEnvelope: envelope },
         automation: { id: 'automation-project', name: 'Judge', enabled: true }, accountCurrentness: currentness }) };

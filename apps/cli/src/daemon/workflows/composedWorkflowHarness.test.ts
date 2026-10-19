@@ -633,7 +633,7 @@ it.each(['ordinary', 'claim-lost-during-startup'] as const)('delivers a saved th
         claimClient: createAutomationClaimClient({ token: 'token', createPublisherHeader: async () => null }),
         coordinateWorkflowRun: coordinate,
         claimed: { protocol: 'v3', automation: null, accountCurrentness: currentness,
-          run: { id: runId, automationId: null, attempt: 0, revision: kit.run().revision,
+          run: { id: runId, automationId: null, attempt: 0, leaseExpiresAt: Date.now() + 120_000, revision: kit.run().revision,
             origin: { kind: 'direct' }, triggerId: null, workflowAcceptedSnapshotEnvelope: kit.acceptedEnvelope()! } } });
       expect(await operations.handlers.getV2({ operationId: 'retained-startup', waitForTerminal: true }))
         .toMatchObject({ kind: 'found', operation: { state: 'succeeded', result: { sessionId: childId } } });
@@ -820,7 +820,7 @@ it.each(['success', 'failure', 'already-stopped', 'foreign-session', 'success-du
     if (!url.endsWith('/v3/automations/runs/claim')) return await writeSessionReadiness(url, body);
     if (claimed) return { data: { run: null, automation: null, accountCurrentness: null } };
     claimed = true;
-    return { data: AutomationV3WorkerClaimResponseSchema.parse({ run: { id: runId, automationId: null, attempt: 1, revision: 0,
+    return { data: AutomationV3WorkerClaimResponseSchema.parse({ run: { id: runId, automationId: null, attempt: 1, leaseExpiresAt: Date.now() + 120_000, revision: 0,
       recipeKind: 'workflow-v2', triggerRetired: false,
       origin: { kind: 'direct' }, triggerId: null,
       workflowAcceptedSnapshotEnvelope: acceptedEnvelope }, automation: null, accountCurrentness: currentness }) };
@@ -1577,7 +1577,7 @@ describe('composed Workflow front door and claimed execution', () => {
         }, failRun: async () => { throw new Error('An admitted direct Run cannot be failed through Automation settlement'); } },
         coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory }),
         claimed: { protocol: 'v3', automation: null, accountCurrentness: currentness,
-          run: { id: runId, automationId: null, attempt: 0, revision: kit.run().revision, origin: { kind: 'direct' },
+          run: { id: runId, automationId: null, attempt: 0, leaseExpiresAt: Date.now() + 30_000, revision: kit.run().revision, origin: { kind: 'direct' },
             workflowAcceptedSnapshotEnvelope: kit.acceptedEnvelope()!, triggerId: null } },
       });
       await started;
@@ -1633,7 +1633,7 @@ describe('composed Workflow front door and claimed execution', () => {
         coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory }) as never,
         claimed: {
           protocol: 'v3', automation: null, accountCurrentness: currentness,
-          run: { id: runId, automationId: null, attempt: 0, revision: kit.run().revision, origin: { kind: 'direct' }, workflowAcceptedSnapshotEnvelope: kit.acceptedEnvelope()!, triggerId: null },
+          run: { id: runId, automationId: null, attempt: 0, leaseExpiresAt: Date.now() + 120_000, revision: kit.run().revision, origin: { kind: 'direct' }, workflowAcceptedSnapshotEnvelope: kit.acceptedEnvelope()!, triggerId: null },
         } as never,
       });
       await started;
@@ -1732,7 +1732,7 @@ describe('composed Workflow front door and claimed execution', () => {
         automation: null,
         accountCurrentness: currentness,
         run: {
-          id: runId, automationId: null, attempt: 0, revision: kit.run().revision, origin: { kind: 'direct' },
+          id: runId, automationId: null, attempt: 0, leaseExpiresAt: Date.now() + 120_000, revision: kit.run().revision, origin: { kind: 'direct' },
           workflowAcceptedSnapshotEnvelope: acceptedEnvelope!, triggerId: null,
         },
       } as never;
@@ -1814,7 +1814,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
         evidence: { v: 1, kind: 'schedule', scheduledFor: 60_001 } }) });
     const row = stored;
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => url.endsWith('/v3/automations/runs/claim')
-      ? { status: 200, data: { run: { id: runId, automationId: row.id, attempt: 1, revision: 0,
+      ? { status: 200, data: { run: { id: runId, automationId: row.id, attempt: 1, leaseExpiresAt: Date.now() + 120_000, revision: 0,
         recipeKind: 'workflow-v2', triggerId: added.triggerId, triggerRetired: false, cause: occurrence, causeWorkDepth: 0,
         executionInputEnvelope: JSON.stringify(recipe.workflow), automationEvidenceEnvelope: null },
         automation: { id: row.id, name: row.name, enabled: true, scopeSessionId: null }, accountCurrentness: currentness } }
@@ -1876,7 +1876,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
       if (claimed) return { data: { run: null, automation: null, accountCurrentness: null } };
       claimed = true;
       return { data: {
-        run: { id: habitRunId, automationId: 'habit', attempt: claim.attempt, revision: 0, recipeKind: 'workflow-v2',
+        run: { id: habitRunId, automationId: 'habit', attempt: claim.attempt, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'workflow-v2',
           triggerId: null, triggerRetired: false, cause: claim.automationCause, causeWorkDepth: 0,
           executionInputEnvelope: claim.definitionEnvelope, automationEvidenceEnvelope: null },
         automation: { id: 'habit', name: 'Quiet habit', enabled: false, scopeSessionId: sessionId },
@@ -1999,7 +1999,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
       coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory, conversationSessionId: retainedSessionId }),
       claimed: { protocol: 'v3', accountCurrentness: currentness,
         automation: { id: 'automation-old', name: 'Changed', enabled: true, workflowDefinitionId: 'must-not-read', scopeSessionId: 'must-not-use' },
-        run: { id: runId, automationId: 'automation-old', attempt: 2, revision: 0, recipeKind: 'legacy', triggerId: null, cause: { kind: 'manual', invokedAt: 1 },
+        run: { id: runId, automationId: 'automation-old', attempt: 2, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'legacy', triggerId: null, cause: { kind: 'manual', invokedAt: 1 },
           causeWorkDepth: 0, resultDelivery: { kind: 'none' }, executionInputEnvelope: frozen } },
     });
     expect(kit.run()).toMatchObject({ state: 'succeeded' });
@@ -2036,7 +2036,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
       coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory }),
       claimed: { protocol: 'v3', accountCurrentness: currentness,
         automation: { id: 'automation-old', name: 'Already saved as plain', enabled: true },
-        run: { id: runId, automationId: 'automation-old', attempt: 1, revision: 0, recipeKind: 'legacy', triggerId: null,
+        run: { id: runId, automationId: 'automation-old', attempt: 1, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'legacy', triggerId: null,
           cause: { kind: 'manual', invokedAt: 1 }, causeWorkDepth: 0, resultDelivery: { kind: 'none' }, executionInputEnvelope: frozen } },
     });
     expect(kit.acceptedEnvelope()).toBeNull();
@@ -2099,7 +2099,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
       coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory, conversationSessionId: retainedSessionId }),
       claimed: { protocol: 'v3', accountCurrentness: currentness,
         automation: { id: row.id, name: row.name, enabled: true, workflowDefinitionId: null, scopeSessionId: null },
-        run: { id: runId, automationId: row.id, attempt: 1, revision: 0, recipeKind: 'workflow-v2', triggerId: null,
+        run: { id: runId, automationId: row.id, attempt: 1, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'workflow-v2', triggerId: null,
           cause: { kind: 'manual', invokedAt: 1 }, causeWorkDepth: 0, resultDelivery: { kind: 'none' },
           executionInputEnvelope: JSON.stringify(saved.workflow), automationEvidenceEnvelope: null } },
     });
@@ -2145,7 +2145,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
         run: {
           id: runId,
           automationId: 'automation-1',
-          attempt: 0,
+          attempt: 0, leaseExpiresAt: Date.now() + 120_000,
           revision: 0,
           causeWorkDepth: 0,
           origin: { kind: 'automation', automationId: 'automation-1' },
@@ -2250,7 +2250,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
         : { t: 'plain', v: payload });
       let parentAttempt = 1;
       readClaimResponse = () => ({
-        run: { id: runId, attempt: parentAttempt, revision: kit.run().revision, automationId: 'automation-1',
+        run: { id: runId, attempt: parentAttempt, leaseExpiresAt: Date.now() + 120_000, revision: kit.run().revision, automationId: 'automation-1',
           recipeKind: 'workflow-v2', executionInputEnvelope: definitionEnvelope,
           ...(kit.acceptedEnvelope() === null ? {} : { workflowAcceptedSnapshotEnvelope: kit.acceptedEnvelope() }),
           causeWorkDepth: 0, cause, automationEvidenceEnvelope: null, triggerId: cause.triggerId, triggerRetired: false },
@@ -2355,7 +2355,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
         run: {
           id: runId,
           automationId: 'automation-1',
-          attempt: 0,
+          attempt: 0, leaseExpiresAt: Date.now() + 120_000,
           revision: 0,
           causeWorkDepth: 0,
           origin: { kind: 'automation', automationId: 'automation-1' },

@@ -682,7 +682,7 @@ describe('production workflow coordinator', () => {
     const claimed = { protocol: 'v3' as const,
       accountCurrentness: { mode: 'plain' as const, version: 1, contentKeyFingerprint: null },
       automation: { id: 'automation-1', name: 'Notify me', enabled: true },
-      run: { id: runId, automationId: 'automation-1', attempt: 0, revision: 0, recipeKind: 'workflow-v2' as const,
+      run: { id: runId, automationId: 'automation-1', attempt: 0, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'workflow-v2' as const,
         triggerId: AutomationTriggerIdSchema.parse('source-trigger'), cause,
         causeWorkDepth: 0, resultDelivery: { kind: 'none' as const }, executionInputEnvelope: definitionEnvelope },
     };
@@ -2466,7 +2466,7 @@ describe('production workflow coordinator', () => {
         resolveAutomationAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
         claimed: { protocol: 'v3', accountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null },
           automation: { id: 'automation-1', name: 'missing source', enabled: true, workflowDefinitionId: runId },
-          run: { id: runId, automationId: 'automation-1', attempt: 0, revision: 0, recipeKind: 'workflow-v2',
+          run: { id: runId, automationId: 'automation-1', attempt: 0, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'workflow-v2',
             triggerId: null, cause: { kind: 'manual', invokedAt: 1 }, causeWorkDepth: 0,
             resultDelivery: { kind: 'none' }, executionInputEnvelope: JSON.stringify({ t: 'plain', v: {
               workspace: { directory: '/repo' }, executionTarget: { kind: 'session' },
@@ -2722,7 +2722,7 @@ describe('production workflow coordinator', () => {
       resolveAutomationAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
       claimed: { protocol: 'v3', accountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null },
         automation: { id: 'automation-1', name: 'invalid input', enabled: true },
-        run: { id: runId, automationId: 'automation-1', attempt: 0, revision: 0, recipeKind: 'workflow-v2',
+        run: { id: runId, automationId: 'automation-1', attempt: 0, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'workflow-v2',
           triggerId: null, cause: { kind: 'manual', invokedAt: 1 }, causeWorkDepth: 0,
           resultDelivery: { kind: 'none' }, executionInputEnvelope: definitionEnvelope,
         },
@@ -3031,7 +3031,7 @@ describe('production workflow coordinator', () => {
         protocol: 'v3', accountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null },
         automation: { id: 'automation-1' },
         run: {
-          id: runId, automationId: 'automation-1', attempt: 0, revision: 0,
+          id: runId, automationId: 'automation-1', attempt: 0, leaseExpiresAt: Date.now() + 120_000, revision: 0,
           origin: { kind: 'automation', automationId: 'automation-1' }, recipeKind: 'workflow-v2',
           executionInputEnvelope: definitionEnvelope, automationEvidenceEnvelope,
           causeWorkDepth: 0,

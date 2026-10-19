@@ -90,7 +90,7 @@ describe('durable review coordinator', () => {
       const execution = executeClaimedRun({ machineId: 'machine', heartbeatMs: 1_000, leaseDurationMs: 10_000,
         claimClient: { heartbeatRun: async (request: { leaseDurationMs: number }) => Date.now() + request.leaseDurationMs, failRun: async () => { throw new Error('Must not settle unknown custody'); } },
         coordinateWorkflowRun: coordinate, claimed: { protocol: 'v3', automation: null, accountCurrentness: encryption.witness,
-          run: { id: runId, automationId: null, attempt: 0, revision: 0, triggerId: null,
+          run: { id: runId, automationId: null, attempt: 0, leaseExpiresAt: Date.now() + 10_000, revision: 0, triggerId: null,
             origin: { kind: 'direct' }, workflowAcceptedSnapshotEnvelope: acceptedEnvelope } },
       });
       await initialized;

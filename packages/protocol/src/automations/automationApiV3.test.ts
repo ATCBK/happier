@@ -586,7 +586,7 @@ describe('Automation versioned API schemas', () => {
     };
     const claim = {
       run: {
-        id: 'run-1', automationId: 'automation-1', attempt: 1, revision: 7,
+        id: 'run-1', automationId: 'automation-1', attempt: 1, revision: 7, leaseExpiresAt: timestamp + 30_000,
         recipeKind: 'legacy' as const,
         executionInputEnvelope: JSON.stringify(input), triggerId: null, triggerRetired: false, cause,
       },
@@ -608,6 +608,9 @@ describe('Automation versioned API schemas', () => {
     expect(Api.AutomationRunExecutionInputV1Schema.safeParse({ ...input, cause }).success)
       .toBe(false);
     expect(Api.AutomationV3WorkerClaimResponseSchema.parse(claim)).toEqual(claim);
+    const { leaseExpiresAt: _expiry, ...withoutExpiry } = claim.run;
+    expect(Api.AutomationV3WorkerClaimResponseSchema.safeParse({ ...claim, run: withoutExpiry }).success).toBe(false);
+    expect(Api.AutomationV3WorkerClaimResponseSchema.safeParse({ ...claim, run: { ...claim.run, leaseExpiresAt: null } }).success).toBe(false);
     const resumedWorkflow = { ...claim, run: { ...claim.run, recipeKind: 'workflow-v2',
       automationEvidenceEnvelope: null, workflowAcceptedSnapshotEnvelope: '{"t":"encrypted","c":"accepted"}' } };
     expect(Api.AutomationV3WorkerClaimResponseSchema.parse(resumedWorkflow)).toEqual(resumedWorkflow);
@@ -644,6 +647,7 @@ describe('Automation versioned API schemas', () => {
       run: {
         id: 'run-direct',
         automationId: null,
+        leaseExpiresAt: timestamp + 30_000,
         attempt: 1,
         revision: 2,
         recipeKind: 'workflow-v2' as const,
@@ -656,6 +660,8 @@ describe('Automation versioned API schemas', () => {
       accountCurrentness: { mode: 'e2ee' as const, version: 3, contentKeyFingerprint: 'fingerprint' },
     };
     expect(Api.AutomationV3WorkerClaimResponseSchema.parse(claim)).toEqual(claim);
+    const { leaseExpiresAt: _expiry, ...withoutExpiry } = claim.run;
+    expect(Api.AutomationV3WorkerClaimResponseSchema.safeParse({ ...claim, run: withoutExpiry }).success).toBe(false);
     expect(Api.AutomationV3WorkerClaimResponseSchema.safeParse({
       ...claim,
       automation: { id: 'fake', name: 'Fake', enabled: true },

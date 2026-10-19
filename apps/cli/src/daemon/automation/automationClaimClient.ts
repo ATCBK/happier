@@ -73,6 +73,7 @@ function toWorkerClaimResponse(response: AutomationV3WorkerClaimResponse): Autom
       run: {
         id: response.run.id,
         automationId: null,
+        leaseExpiresAt: response.run.leaseExpiresAt,
         attempt: response.run.attempt,
         revision: response.run.revision,
         ...(response.run.workflowResumeRequestedRevision === undefined ? {} : {
@@ -94,6 +95,7 @@ function toWorkerClaimResponse(response: AutomationV3WorkerClaimResponse): Autom
       run: {
         id: response.run.id,
         automationId: response.run.automationId,
+        leaseExpiresAt: response.run.leaseExpiresAt,
         attempt: response.run.attempt,
         revision: response.run.revision,
         ...(response.run.workflowResumeRequestedRevision === undefined ? {} : {

@@ -1725,6 +1725,14 @@ Current Automation transports use V3 directly; there is no V2 route, API-epoch p
 representability adapter or older-component update-required fallback. This does not
 remove the canonical Automation feature gate or Account authorization.
 
+The closed V3 worker claim and signed-claim receipt Run projections require
+`leaseExpiresAt`, the server-granted expiry captured by the claim transaction.
+Both direct and Automation-origin workers initialize the existing heartbeat
+from that expiry; response delivery and receipt replay never grant a fresh
+lease duration. Successful heartbeats advance the confirmed expiry, while
+transient renewal failures retain only the last confirmed lease. This is an
+undeployed 0.3 direct cut: its server producer and daemon reader update together.
+
 The development V3 Run list also serves Account-wide attention at
 `GET /v3/automations/runs?attention=required`; the definition-scoped list accepts
 the same filter. It includes ordinary failed, dispatch-failed and uncertain Runs,

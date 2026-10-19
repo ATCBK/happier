@@ -24,22 +24,24 @@ const rootId = 'recovered-root';
 const encryption = { witness: { mode: 'plain' as const, version: 1, contentKeyFingerprint: null },
   runCrypto: { mode: 'plain' as const } };
 
-async function interruptedRoot(lifecycle: 'pending' | 'running' | 'needs_attention') {
+async function interruptedRoot(lifecycle: 'pending' | 'running' | 'needs_attention', claimOrigin: 'direct' | 'automation' = 'direct') {
+  const origin = claimOrigin === 'direct' ? { kind: 'direct' as const }
+    : { kind: 'automation' as const, automationId: 'automation-1' };
   const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], blocks: [
     { kind: 'wait', id: 'check', document: { text: 'Review if needed', references: [], attachments: [] },
       onlyWhen: { kind: 'compare', operator: 'eq', left: { kind: 'literal', value: true },
         right: { kind: 'literal', value: false } } },
   ] });
   const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition,
-    context: { source: { kind: 'inline' }, inputs: {}, machineId, executionTarget: { kind: 'detached_run' },
+    context: { source: origin.kind === 'direct' ? { kind: 'inline' } : origin, inputs: {}, machineId, executionTarget: { kind: 'detached_run' },
       workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo' } },
-      origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } } },
+      ...(origin.kind === 'direct' ? { origin } : {}), authorization: { principal: { kind: 'host' } } },
     admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
   if (!accepted.ok) throw new Error(accepted.error.code);
   const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
     mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: accepted.snapshot,
   }));
-  const storage = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+  const storage = createWorkflowRunStorageTestkit({ runId, machineId, origin, acceptedEnvelope });
   const checkpoint = { kind: 'happier.workflow-checkpoint.v1' as const, rootRecordId: rootId,
     nextSequence: '1', frontier: { nextBlockOrdinal: 0, paused: false } };
   await storage.execute({ operation: 'initialize', runId, expectedRevision: 0,
@@ -81,8 +83,8 @@ function recoveredCoordinator(storage: ReturnType<typeof createWorkflowRunStorag
   });
 }
 
-async function heldHeartbeatRun(options: { holdAfterOpen?: boolean } = {}) {
-  const h = await interruptedRoot('pending');
+async function heldHeartbeatRun(options: { holdAfterOpen?: boolean; delayedClaimOrigin?: 'direct' | 'automation' } = {}) {
+  const h = await interruptedRoot('pending', options.delayedClaimOrigin);
   let releaseRead = () => {};
   let readStarted = () => {};
   const reading = new Promise<void>(resolve => { readStarted = resolve; });
@@ -108,11 +110,31 @@ async function heldHeartbeatRun(options: { holdAfterOpen?: boolean } = {}) {
     return authorizationCurrent;
   });
   const claimClient = createAutomationClaimClient({ token: 'test-token', createPublisherHeader: async () => null });
+  const run = { id: runId, attempt: options.delayedClaimOrigin ? 1 : 0, revision: h.storage.run().revision,
+    leaseExpiresAt: Date.now() + 30_000, workflowAcceptedSnapshotEnvelope: h.acceptedEnvelope, triggerId: null };
+  let claimed: Parameters<typeof executeClaimedRun>[0]['claimed'] = {
+    protocol: 'v3', automation: null, accountCurrentness: encryption.witness,
+    run: { ...run, automationId: null, origin: { kind: 'direct' } },
+  };
+  if (options.delayedClaimOrigin) {
+    const automation = options.delayedClaimOrigin === 'automation' ? { id: 'automation-1', name: 'Recovery', enabled: true } : null;
+    // Only the HTTP delivery and clock are faked. The strict claim parser,
+    // private projection, executor and Workflow coordinator remain real.
+    vi.spyOn(axios, 'post').mockImplementationOnce(async () => {
+      vi.setSystemTime(Date.now() + 10_000);
+      return { data: { accountCurrentness: encryption.witness, automation,
+        run: { ...run, recipeKind: 'workflow-v2', triggerRetired: false,
+          ...(automation ? { automationId: automation.id, executionInputEnvelope: '{}', automationEvidenceEnvelope: null,
+            cause: { kind: 'manual', invokedAt: 0 } } : { automationId: null, origin: { kind: 'direct' } }),
+        } } };
+    });
+    const response = await claimClient.claimRun({ machineId, leaseDurationMs: 30_000, scope: 'workflow' });
+    if (!response.run) throw new Error('Expected the delayed successful claim');
+    claimed = response;
+  }
   const execution = executeClaimedRun({ machineId, heartbeatMs: 5_000, leaseDurationMs: 30_000,
     coordinateWorkflowRun: coordinate, claimClient, signal: worker.signal,
-    claimed: { protocol: 'v3', automation: null, accountCurrentness: encryption.witness,
-      run: { id: runId, automationId: null, attempt: 0, revision: h.storage.run().revision,
-        origin: { kind: 'direct' }, triggerId: null, workflowAcceptedSnapshotEnvelope: h.acceptedEnvelope } },
+    claimed,
   });
   await Promise.race([reading, execution]);
   return { ...h, execution, releaseRead, worker, signal: () => signal,
@@ -127,6 +149,40 @@ function heartbeatHttpFailure(status?: number) {
 }
 
 describe('Workflow root recovery', () => {
+  it.each(['direct', 'automation'] as const)('preserves the server expiry after a delayed %s claim and failed, pending or successful renewal', async origin => {
+    for (const mode of ['failed', 'pending', 'renewed'] as const) {
+      vi.useFakeTimers(); vi.setSystemTime(0);
+      let finishHeartbeat = () => {};
+      const pendingHeartbeat = new Promise<{ data: { ok: true; leaseExpiresAt: number } }>(resolve => {
+        finishHeartbeat = () => resolve({ data: { ok: true, leaseExpiresAt: 60_000 } });
+      });
+      const post = vi.spyOn(axios, 'post').mockRejectedValue(heartbeatHttpFailure());
+      let h: Awaited<ReturnType<typeof heldHeartbeatRun>> | undefined;
+      try {
+        h = await heldHeartbeatRun({ delayedClaimOrigin: origin });
+        expect(Date.now()).toBe(10_000);
+        if (mode === 'pending') post.mockReturnValue(pendingHeartbeat);
+        if (mode === 'renewed') post.mockResolvedValueOnce({ data: { ok: true, leaseExpiresAt: 45_000 } });
+        await vi.advanceTimersByTimeAsync(19_999);
+        expect(h.signal()?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(h.signal()?.aborted).toBe(mode !== 'renewed');
+        if (mode === 'renewed') {
+          await vi.advanceTimersByTimeAsync(14_999);
+          expect(h.signal()?.aborted).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+          expect(h.signal()?.aborted).toBe(true);
+        }
+        finishHeartbeat(); await vi.advanceTimersByTimeAsync(0);
+        expect(h.signal()?.aborted).toBe(true);
+        expect(h.storage.run().state).not.toBe('succeeded');
+      } finally {
+        finishHeartbeat(); h?.worker.abort(); h?.releaseRead(); await h?.execution;
+        post.mockRestore(); vi.useRealTimers();
+      }
+    }
+  });
+
   it('lease heartbeat tolerates a transient failure on the first renewal after a successful claim', async () => {
     vi.useFakeTimers();
     const post = vi.spyOn(axios, 'post').mockImplementation(async () => ({ data: { ok: true, leaseExpiresAt: Date.now() + 30_000 } }))
@@ -289,7 +345,7 @@ describe('Workflow root recovery', () => {
       coordinateWorkflowRun: coordinate,
       claimClient: { heartbeatRun, failRun: async () => { throw new Error('unexpected_direct_failure'); } },
       claimed: { protocol: 'v3', automation: null, accountCurrentness: encryption.witness,
-        run: { id: runId, automationId: null, attempt, revision: h.storage.run().revision,
+        run: { id: runId, automationId: null, attempt, leaseExpiresAt: Date.now() + 30_000, revision: h.storage.run().revision,
           origin: { kind: 'direct' }, triggerId: null, workflowAcceptedSnapshotEnvelope: h.acceptedEnvelope } },
     });
     vi.useFakeTimers();

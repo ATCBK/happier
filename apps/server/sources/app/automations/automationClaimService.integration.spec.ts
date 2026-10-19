@@ -511,6 +511,8 @@ describe("automationClaimService (integration)", () => {
             },
             automation: null,
         });
+        const initialLease = await db.automationRun.findUniqueOrThrow({ where: { id: runId }, select: { leaseExpiresAt: true } });
+        expect(claimed.run).toHaveProperty("leaseExpiresAt", initialLease.leaseExpiresAt!.getTime());
 
         // A daemon/storage interruption keeps the same direct Run available
         // to the existing lease owner, even with no Automation assignment row.
@@ -535,6 +537,8 @@ describe("automationClaimService (integration)", () => {
             },
             automation: null,
         });
+        const reclaimedLease = await db.automationRun.findUniqueOrThrow({ where: { id: runId }, select: { leaseExpiresAt: true } });
+        expect(reclaimed.run).toHaveProperty("leaseExpiresAt", reclaimedLease.leaseExpiresAt!.getTime());
     });
 
     async function createLeasedRetirementRun(params: Readonly<{
@@ -955,6 +959,7 @@ describe("automationClaimService (integration)", () => {
             where: { id: claimedRunId },
             select: { attempt: true, revision: true, leaseExpiresAt: true },
         });
+        expect(firstResponse.run).toHaveProperty("leaseExpiresAt", claimedBeforeReplay!.leaseExpiresAt!.getTime());
         const responseLossReplay = await claimAutomationRun({
             accountId,
             machineId,
@@ -967,12 +972,14 @@ describe("automationClaimService (integration)", () => {
         expect(toAutomationV3WorkerClaimResponse(responseLossReplay).run).toMatchObject({
             id: claimedRunId,
             attempt: claimedBeforeReplay!.attempt,
+            leaseExpiresAt: claimedBeforeReplay!.leaseExpiresAt!.getTime(),
         });
         await db.automationRun.update({
             where: { id: claimedRunId },
             data: {
                 state: "running",
                 startedAt: new Date(),
+                leaseExpiresAt: new Date(claimedBeforeReplay!.leaseExpiresAt!.getTime() + 30_000),
                 revision: { increment: 1 },
             },
         });
@@ -992,6 +999,7 @@ describe("automationClaimService (integration)", () => {
             select: { attempt: true, revision: true, leaseExpiresAt: true },
         })).resolves.toEqual({
             ...claimedBeforeReplay,
+            leaseExpiresAt: new Date(claimedBeforeReplay!.leaseExpiresAt!.getTime() + 30_000),
             revision: claimedBeforeReplay!.revision + 1,
         });
         expect([firstRun.id, secondRun.id]).toContain(claimedRunId);
