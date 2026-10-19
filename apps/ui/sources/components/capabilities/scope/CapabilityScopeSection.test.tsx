@@ -23,13 +23,13 @@ const { ScopeSheet } = await import('./CapabilityScopeSection');
 
 afterEach(() => standardCleanup());
 
-function renderUnavailableSheet(offline: boolean, retry = vi.fn()) {
+function renderUnavailableSheet(offline: boolean, retry = vi.fn(), state: 'unavailable' | 'loading' = 'unavailable') {
   return renderScreen(
     <ScopeSheet
       testID="scope.skills"
       kind="skill"
       title="Skills"
-      list={{ state: 'unavailable', total: 0, rows: [], retry }}
+      list={{ state, total: 0, rows: [], retry }}
       place={{ place: { t: 'machine', machineId: 'guest' }, label: 'studio' }}
       data={{ machines: [], names: {} as never, open: () => {} }}
       offline={offline}
@@ -58,6 +58,14 @@ describe('capability scope sheet when its list could not be read', () => {
       t('capabilities.scopeSection.loadFailed'),
     );
     expect(screen.getTextContent()).toContain(t('common.retry'));
+    await screen.unmount();
+  });
+
+  it('never holds a skeleton for a list its unreachable machine has not answered', async () => {
+    const screen = await renderUnavailableSheet(true, vi.fn(), 'loading');
+    expect(screen.getTextContent()).toContain(
+      t('capabilities.scopeSection.whenRunning', { machine: 'studio' }),
+    );
     await screen.unmount();
   });
 });

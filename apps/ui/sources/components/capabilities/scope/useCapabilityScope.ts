@@ -23,7 +23,7 @@ import {
   mcpSignInGrantView,
 } from '@/components/settings/mcpServers/signIn/mcpSignInGrantView';
 import { useMcpSignInGrantDiagnostics } from '@/components/settings/mcpServers/signIn/useMcpSignInGrantDiagnostics';
-import { mcpServerStatus } from '@/components/settings/mcpServers/status/mcpServerStatus';
+import { mcpServerAttentionStatus } from '@/components/settings/mcpServers/status/mcpServerStatus';
 import { useMcpServersSettings } from '@/components/settings/mcpServers/useMcpServersSettings';
 import {
   SKILLS_FOUND_ROUTE,
@@ -76,6 +76,8 @@ export type CapabilityScopeData = Readonly<{
   machines: readonly ScopeMachine[];
   /** Covered machines that cannot be reached right now, by name. */
   offlineNames: readonly string[];
+  /** A covered machine cannot be reached now (its checkout banner may already say so): its lists wait for it. */
+  unreachable: boolean;
   names: WhereItsOnNames;
   skills: ScopeListData;
   mcp: ScopeListData;
@@ -199,6 +201,8 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
     [announcedMachineId, coveredMachines, names],
   );
 
+  const unreachable = coveredMachines.some((machine) => machine.offline === true);
+
   const open = React.useCallback(
     (href: string) => {
       const result = runGuardedNavigation(() => router.push(href as never));
@@ -283,33 +287,19 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
     const catalog = settings.servers.map((server): ScopeRowData => {
       const rules = bindingsOf(server.id);
       const openServer = () => open(mcpServerRoute(server.id));
-      const status = needsPerson(
-        pickMostBlockingCapabilityStatus(
-          mcpServerStatus({
-            entry: server,
-            signIn: mcpSignInFact(
-              mcpSignInGrantView(
-                server,
-                findMcpSignInGrant(grants, server.id),
-                anyOnline,
-                diagnostics[server.id],
-              ),
-            ),
-            tests: {},
-            machines: [],
-            savedSecretCatalog,
-            fixes: {
-              signIn: openServer,
-              reconnect: openServer,
-              grantAccess: openServer,
-              addKey: openServer,
-              howToFix: openServer,
-              tryAgain: openServer,
-            },
-          }),
-          'row',
+      const status = mcpServerAttentionStatus({
+        entry: server,
+        signIn: mcpSignInFact(
+          mcpSignInGrantView(
+            server,
+            findMcpSignInGrant(grants, server.id),
+            anyOnline,
+            diagnostics[server.id],
+          ),
         ),
-      );
+        savedSecretCatalog,
+        open: openServer,
+      });
       return {
         id: server.id,
         kind: 'mcp_server',
@@ -406,13 +396,14 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
     () => ({
       machines,
       offlineNames,
+      unreachable,
       names,
       skills,
       mcp,
       migrated: { names: migratedNames, dismiss },
       open,
     }),
-    [dismiss, machines, mcp, migratedNames, names, offlineNames, open, skills],
+    [dismiss, machines, mcp, migratedNames, names, offlineNames, open, skills, unreachable],
   );
 }
 

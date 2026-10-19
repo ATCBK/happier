@@ -190,7 +190,7 @@ export const ScopeSheet = React.memo(function ScopeSheet(
         {list.total > 0 ? <Text variant="meta" style={styles.count}>{String(list.total)}</Text> : null}
       </View>
       {/* A read that failed while its machine is offline is not an error: the list comes when the machine runs. */}
-      {list.state === 'unavailable' && props.offline ? (
+      {list.state !== 'ready' && props.offline ? (
         <Item
           testID={`${props.testID}.offline`}
           mode="info"
@@ -206,7 +206,7 @@ export const ScopeSheet = React.memo(function ScopeSheet(
           onPress={list.retry}
         />
       ) : null}
-      {list.state === 'loading' ? (
+      {list.state === 'loading' && !props.offline ? (
         <CollectionSkeletonRows count={SCOPE_ROW_LIMIT} />
       ) : null}
       {list.state === 'ready' && list.total === 0 ? (
@@ -323,7 +323,7 @@ export const CapabilityScopeSection = React.memo(
       [data.machines, data.names, data.open],
     );
     const migratedNames = data.migrated.names;
-    const placeOffline = props.place.t === 'machine' && data.offlineNames.length > 0;
+    const placeOffline = data.unreachable;
     const offlineNote = describeOfflineMachines(data.offlineNames);
     return (
       <ItemGroup

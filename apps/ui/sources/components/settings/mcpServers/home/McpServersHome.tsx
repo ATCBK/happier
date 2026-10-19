@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { formatCapabilityCount } from '@/components/capabilities/facts/formatCapabilityCount';
 import { Image, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -7,7 +8,7 @@ import { HomeOrbitMap } from '@/components/atmosphere/orbit/HomeOrbitMap';
 import { layoutHomeOrbitRing } from '@/components/atmosphere/orbit/homeOrbitScene';
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
 import { CapabilityStatusChip } from '@/components/capabilities/status/CapabilityStatusChip';
-import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { presentCapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
@@ -37,9 +38,9 @@ import { setPreviewedMcpServer, usePreviewedMcpServer } from './mcpServerPreview
 import { useMcpHome } from './useMcpHome';
 import { useOpenMcpAddModal } from '../add/useOpenMcpAddModal';
 
-/** The tether map beside its legend (lab hm-A §12: 300 × 268, ring radius 104 around a 36 px planet). */
+/** The tether map beside its legend (lab hm-A §12: ring radius 104 around a 36 px planet; the box is the ring and its marks, so the legend keeps the room). */
 const MAP_BOX = {
-  width: 300,
+  width: 264,
   height: 268,
   planetRadius: 36,
   ring: 104,
@@ -47,9 +48,9 @@ const MAP_BOX = {
 /** Phone hero: the map alone across the column, a little smaller (lab hm-A2p). */
 const PHONE_MAP = { height: 244, planetRadius: 32, ring: 92 } as const;
 const RING_MARK_PX = 22;
-/** The legend's narrowest useful column; under it the legend moves beneath the map. */
-const LEGEND_MIN_PX = 360;
-const REACH_GAP_PX = 32;
+/** The legend's narrowest useful column (lab hm-A2 holds map and legend side by side at 1440); under it the legend moves beneath the map. */
+const LEGEND_MIN_PX = 320;
+const REACH_GAP_PX = 24;
 const SIDE_BY_SIDE_MIN_PX = MAP_BOX.width + REACH_GAP_PX + LEGEND_MIN_PX;
 
 function useGo() {
@@ -469,24 +470,8 @@ function Legend(
   );
 }
 
-function problemStatus(
-  server: McpHomeServer,
-  fix: () => void,
-): CapabilityStatus | null {
-  switch (server.problem) {
-    case 'expired':
-      return { kind: 'expired', fix: { kind: 'reconnect', onPress: fix } };
-    case 'signin':
-      return { kind: 'signin', fix: { kind: 'sign_in', onPress: fix } };
-    case 'key':
-      return { kind: 'key', fix: { kind: 'add_key', onPress: fix } };
-    default:
-      return null;
-  }
-}
-
 function legendFact(server: McpHomeServer): string | undefined {
-  if (server.problem) return undefined;
+  if (server.status) return undefined;
   if (server.group === 'machine') return server.server.stdio?.command;
   if (server.server.remote?.auth?.kind === 'oauth') {
     return server.identity
@@ -511,32 +496,28 @@ const LegendRow = React.memo(function LegendRow(
   const { server, onPreview, onOpen } = props;
   // Each fix lives on the server's page (its Sign-in section, its key row): the homepage leads there.
   const fix = React.useCallback(() => onOpen(server.id), [onOpen, server.id]);
-  const status = problemStatus(server, fix);
-  const fixLabel =
-    server.problem === 'expired'
-      ? t('capabilities.mcpHome.reconnect')
-      : server.problem === 'signin'
-        ? t('capabilities.mcpHome.signIn')
-        : t('capabilities.mcpHome.addKey');
+  const { status } = server;
+  const fixLabel = status ? presentCapabilityStatus(status, 'row').fixLabel : undefined;
+  // Healthy and untested is quiet: only a known tool count speaks. A problem keeps its chip and its one fix.
   const action = status ? (
     <View style={styles.fix}>
       <CapabilityStatusChip
         status={status}
         testID={`mcp.home.legend.${server.id}:status`}
       />
-      <RoundButton
-        testID={`mcp.home.legend.${server.id}.fix`}
-        size="small"
-        display="secondary"
-        title={fixLabel}
-        onPress={fix}
-      />
+      {fixLabel ? (
+        <RoundButton
+          testID={`mcp.home.legend.${server.id}.fix`}
+          size="small"
+          display="secondary"
+          title={fixLabel}
+          onPress={fix}
+        />
+      ) : null}
     </View>
-  ) : (
+  ) : server.toolCount === null ? undefined : (
     <Text variant="meta" style={styles.tools}>
-      {server.toolCount === null
-        ? t('capabilities.mcpHome.notTested')
-        : t('capabilities.mcpHome.tools', { count: server.toolCount })}
+      {t('capabilities.mcpHome.tools', { count: server.toolCount })}
     </Text>
   );
   const fact = legendFact(server);
@@ -546,7 +527,7 @@ const LegendRow = React.memo(function LegendRow(
       title={server.title}
       {...(fact ? { whereSummary: fact } : {})}
       mark={<McpServerMark transport={server.server.transport} size={16} />}
-      action={action}
+      {...(action ? { action } : {})}
       density="rail"
       divider={false}
       // A problem's fix is the row's one button (a pressable row cannot hold a button); a healthy row opens its page.
@@ -555,12 +536,6 @@ const LegendRow = React.memo(function LegendRow(
     />
   );
 });
-
-function formatTokens(tokens: number): string {
-  return tokens >= 1000
-    ? `${(tokens / 1000).toFixed(1).replace(/\.0$/, '')}k`
-    : String(tokens);
-}
 
 /** One line of the present; while a server is previewed, the line says how that one reaches you. */
 function PresentLine(props: Readonly<{ home: McpHome }>) {
@@ -581,7 +556,7 @@ function PresentLine(props: Readonly<{ home: McpHome }>) {
     text = t('capabilities.mcpHome.present', {
       servers: home.present.servers,
       tools: home.present.tools,
-      tokens: formatTokens(home.present.tokens),
+      tokens: formatCapabilityCount(home.present.tokens),
     });
   return (
     <Text
@@ -613,12 +588,12 @@ function PresentLine(props: Readonly<{ home: McpHome }>) {
 
 function previewLine(server: McpHomeServer): string {
   if (server.off) return t('capabilities.mcpHome.previewOff');
-  if (server.problem === 'expired')
-    return t('capabilities.mcpHome.previewExpired');
-  if (server.problem === 'signin')
-    return t('capabilities.mcpHome.previewSignIn');
-  if (server.problem === 'key')
+  if (server.status?.kind === 'key')
     return t('capabilities.mcpHome.previewNeedsKey');
+  if (server.status?.kind === 'signin')
+    return t('capabilities.mcpHome.previewSignIn');
+  if (server.status)
+    return t('capabilities.mcpHome.previewExpired');
   const tools =
     server.toolCount === null
       ? ''
