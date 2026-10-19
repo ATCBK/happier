@@ -9,7 +9,7 @@ import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/se
 import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1, SessionMetadataOwnerPatchV1Schema, SessionMetadataVersionConflictV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 // Home HTTP, device credentials and the disconnected socket are boundaries;
@@ -23,9 +23,10 @@ const { useSessionInstructionsDetail } = await import('@/components/sessions/wor
 const { SessionContextSection } = await import('@/components/sessions/work/context/SessionContextSection');
 const { SessionMemorySection } = await import('@/components/sessions/work/memory/SessionMemorySection');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+let mountedAccount: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 const { ItemRowActions } = await import('@/components/ui/lists/ItemRowActions');
 beforeEach(async () => { await homes.reset(); await loadSyncSingletonForTests(); });
-afterEach(async () => { await homes.reset(); });
+afterEach(async () => { await mountedAccount?.dispose(); mountedAccount = undefined; await homes.reset(); });
 
 describe('reviewed Session context through the default UI Action host', () => {
     it.each(['memory', 'context'] as const)('does not carry a pending %s choice or late refusal into another Session', async field => {
@@ -86,7 +87,8 @@ describe('reviewed Session context through the default UI Action host', () => {
 
     it.each(['memory', 'context', 'instructions', 'voice'] as const)(
         'rebases the %s Action over active-runtime metadata, and refuses a competing field edit', async (field) => {
-            const serverId = await homes.addHome({ name: 'Active Context Home', serverUrl: 'https://active-context-owner.test', accountId: 'context-owner' });
+            const serverUrl = 'https://active-context-owner.test';
+            const serverId = await homes.addHome({ name: 'Active Context Home', serverUrl, accountId: 'context-owner', currentAccount: true });
             const sessionId = 'c123456789012345678901234';
             const ref = { kind: 'doc', artifactId: 'memory', serverId } as const;
             const initialWork = { memoryEnabled: false, voicePreference: {
@@ -142,6 +144,9 @@ describe('reviewed Session context through the default UI Action host', () => {
                     : field === 'instructions' ? { promptStack: [] } : {}) } } });
             if (field === 'voice' && row.ownerMetadata?.t === 'plain') expect(row.ownerMetadata.v.work).not.toHaveProperty('voicePreference');
             row = { ...row, ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, work: initialWork }), metadataVersion: row.metadataVersion + 1 };
+            mountedAccount = await restoreServerAccountForTest({ serverUrl, accountId: 'context-owner',
+                credentials: { token: createAccountTokenForTests('context-owner', { currentAccount: true }) }, request: homes.request });
+            expect(mountedAccount.serverId).toBe(serverId);
             const { getStorage } = await import('@/sync/domains/state/storageStore');
             getStorage().setState({ sessions: { [sessionId]: createSessionFixture({ id: sessionId, serverId,
                 metadataLayoutVersion: 1, metadataVersion: row.metadataVersion,
