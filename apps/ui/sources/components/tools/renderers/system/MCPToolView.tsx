@@ -15,7 +15,8 @@ import { readTranscriptMachineResourcesCall } from '@/components/sessions/transc
 import { MachineResourcesToolBody } from './MachineResourcesToolBody';
 import { ResolvedMcpToolIdentityV1Schema, type ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import { getActionSpec } from '@happier-dev/protocol/actions';
-import { readHappierActionCallId } from '@/components/sessions/transcript/references/happierActionToolResult';
+import { readHappierActionCallId, readHappierActionCallInput } from '@/components/sessions/transcript/references/happierActionToolResult';
+import { presentActionApproval } from '@/components/approvals/actionApprovalPresentation';
 import { resolveActionTitle } from '@/text/actionTitles';
 import { Typography } from '@/constants/Typography';
 import { resolveToolActionFailure, type ToolActionFailurePresentation } from '@/components/tools/shell/presentation/resolveToolActionFailure';
@@ -81,11 +82,28 @@ function stringifyShort(value: unknown): string {
     }
 }
 
+function readDisplaySubtitle(inputObj: UnknownRecord): string | null {
+    const display = asRecord(asRecord(inputObj._mcp)?.display);
+    return typeof display?.subtitle === 'string' && display.subtitle.trim() ? display.subtitle.trim() : null;
+}
+
+/**
+ * The row's one line under its title. A Happier Action says what it does through the Action's own
+ * presentation (the one confirmation and Inbox read), never as its raw `actionId=… input={…}`; when that
+ * only repeats the title, the row has no second line.
+ */
+export function formatMCPToolSubtitle(toolName: string, input: unknown): string {
+    const actionId = readHappierActionCallId(toolName, input);
+    if (!actionId) return formatMCPSubtitle(input);
+    return readDisplaySubtitle(asRecord(maybeParseJson(input)) ?? {})
+        ?? presentActionApproval({ actionId, actionArgs: readHappierActionCallInput(toolName, input) }).summary
+        ?? '';
+}
+
 export function formatMCPSubtitle(input: unknown): string {
     const inputObj = asRecord(maybeParseJson(input)) ?? {};
-    const mcp = asRecord(inputObj._mcp);
-    const display = asRecord(mcp?.display);
-    if (typeof display?.subtitle === 'string' && display.subtitle.trim()) return display.subtitle.trim();
+    const displaySubtitle = readDisplaySubtitle(inputObj);
+    if (displaySubtitle) return displaySubtitle;
 
     const titleCandidate = typeof inputObj.title === 'string' ? inputObj.title : null;
     if (typeof titleCandidate === 'string' && titleCandidate.trim()) return truncate(titleCandidate.trim(), 140);
@@ -126,7 +144,7 @@ function getResultText(result: unknown): string | null {
 function getMCPDisplay(tool: ToolViewProps['tool']) {
     return {
         title: formatMCPTitle(tool.name, undefined, tool.input),
-        subtitle: formatMCPSubtitle(tool.input),
+        subtitle: formatMCPToolSubtitle(tool.name, tool.input),
         input: JSON.stringify(maybeParseJson(tool.input), null, 2) ?? '',
         output: JSON.stringify(maybeParseJson(tool.result), null, 2) ?? '',
         resultText: getResultText(tool.result),

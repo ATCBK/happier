@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { PopoverScrollSourceProvider } from '@/components/ui/popover/PopoverScrollSource';
 import {
     Platform,
     View,
@@ -239,9 +240,18 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
         }
     }, [arrowCfg?.placement]);
 
+    // The overlay's own scroller is the scroll source of what it holds: a list or menu inside it follows and drives
+    // this scroller, never the page behind the overlay.
+    const scrollerRef = React.useRef<ScrollView | null>(null);
+    const setScroller = React.useCallback((node: ScrollView | null) => {
+        scrollerRef.current = node;
+        if (typeof scrollViewRef === 'function') scrollViewRef(node);
+        else if (scrollViewRef) (scrollViewRef as React.MutableRefObject<ScrollView | null>).current = node;
+    }, [scrollViewRef]);
     const content = scrollEnabled ? (
+        <PopoverScrollSourceProvider scrollSourceRef={scrollerRef}>
         <Animated.ScrollView
-            ref={scrollViewRef}
+            ref={setScroller}
             style={[{ maxHeight, flexShrink: 1 }, scrollViewStyle]}
             keyboardShouldPersistTaps={keyboardShouldPersistTaps}
             showsVerticalScrollIndicator={showScrollIndicator}
@@ -265,6 +275,7 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
         >
             {children}
         </Animated.ScrollView>
+        </PopoverScrollSourceProvider>
     ) : (
         <Animated.View style={[{ maxHeight }, scrollViewStyle]}>
             {children}

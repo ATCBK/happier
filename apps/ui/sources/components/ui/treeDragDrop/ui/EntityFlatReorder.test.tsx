@@ -10,6 +10,7 @@ import type { TestGestureChain } from '@/dev/testkit/mocks/gestureHandler';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { useEntityDragDropRuntime } from '../entityDragDropHooks';
 import type { EntityDragDropRuntime } from '../entityDragDropTypes';
+import { PopoverScrollSourceProvider } from '@/components/ui/popover/PopoverScrollSource';
 import { EntityFlatReorderList, EntityFlatReorderRow, settleEntityReorderWrite, type EntityFlatReorderBinding } from './EntityFlatReorder';
 import { EntityDragGripTrigger, EntityStagedMoveDock, StagedMoveDockSlotContext, type StagedMoveDockSlot } from './EntityReleasePreview';
 import { TreeDropIndicatorLine } from './TreeDropIndicatorLine';
@@ -343,6 +344,26 @@ describe('shared flat reorder UI binding', () => {
         }
         expect(await settleEntityReorderWrite(async () => { throw new Error('unclassified transport'); }))
             .toMatchObject({ status: 'unknown' });
+    });
+
+    it('autoscrolls the scroller of the overlay it sits in when no scrollRef is passed (Home Sections popover, L77)', async () => {
+        const scrollNode = document.createElement('div');
+        Object.defineProperty(scrollNode, 'scrollHeight', { value: 1000 });
+        scrollNode.getBoundingClientRect = () => new DOMRect(0, 0, 300, 100);
+        scrollNode.scrollTop = 100;
+        const overlayScroller = { current: {
+            getScrollableNode: () => scrollNode,
+            measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 100),
+        } };
+        const base = fixture();
+        const f = { model: base.model, render: () => <PopoverScrollSourceProvider scrollSourceRef={overlayScroller}>{base.render()}</PopoverScrollSourceProvider> };
+        const screen = await mount(f);
+        const pan = gesture(screen, 'a');
+        await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: 10 }); });
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
+        expect(runtime.getSnapshot().admission?.status).toBe('allowed');
+        await screen.update(f.render());
+        expect(scrollNode.scrollTop).toBeGreaterThan(100);
     });
 
     it('autoscrolls the RN Web viewport only for this list\'s admitted target and stops on exit, refusal, cancel and unmount', async () => {

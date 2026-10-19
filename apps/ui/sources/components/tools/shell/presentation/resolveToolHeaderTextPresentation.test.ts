@@ -19,7 +19,7 @@ vi.mock('@/components/tools/normalization/policy/toolNameInference', () => ({
 
 vi.mock('@/components/tools/renderers/system/MCPToolView', () => ({
     formatMCPTitle: (name: string) => `MCP:${name}`,
-    formatMCPSubtitle: (input: any) => `sub:${String(input?.x ?? '')}`,
+    formatMCPToolSubtitle: (_name: string, input: any) => `sub:${String(input?.x ?? '')}`,
 }));
 
 function makeToolCall(overrides: Partial<ToolCall> = {}): ToolCall {

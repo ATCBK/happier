@@ -108,6 +108,23 @@ describe('MCPToolView', () => {
         expect(formatMCPTitle('mcp__linear__create_issue', undefined, input)).toBe('MCP: Linear Create Issue');
     });
 
+    it('says what a Happier Action call does, never its raw actionId and input', async () => {
+        const { formatMCPToolSubtitle } = await import('./MCPToolView');
+        const unarchive = { actionId: 'session.unarchive', input: { sessionId: 'cmvfqvl9c00qomc8of6kuw4lz' } };
+        for (const subtitle of [
+            formatMCPToolSubtitle('mcp__happier__action_execute', unarchive),
+            formatMCPToolSubtitle('mcp__happier__session_unarchive', unarchive.input),
+            formatMCPToolSubtitle('mcp__happier__action_execute', {
+                actionId: 'workspace.sync.relationship.terminate', input: { relationshipId: 'relationship_1' },
+            }),
+        ]) {
+            expect(subtitle).not.toBe('');
+            expect(subtitle).not.toMatch(/actionId|input=|relationship_1|cmvfqvl9c00qomc8of6kuw4lz|[{}]/);
+        }
+        // Other MCP servers keep their key=value fallback.
+        expect(formatMCPToolSubtitle('mcp__linear__create_issue', unarchive)).toContain('actionId=session.unarchive');
+    });
+
     it('renders nothing in title mode', async () => {
         const screen = await renderView(makeMcpTool(), 'title');
         expect(screen.findAllByType('Text' as any)).toHaveLength(0);

@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { ListPresentationProvider, useListPresentation } from '@/components/ui/lists/listPresentation';
+import { usePopoverScrollSourceRef } from '@/components/ui/popover/PopoverScrollSource';
 
 (
     globalThis as typeof globalThis & {
@@ -115,5 +116,23 @@ describe('FloatingOverlay list presentation (I1)', () => {
         const probes = screen.findAllByType('Probe' as never).map((node) => node.props.presentation);
         // The page content outside the overlay stays page; the overlay content is grouped.
         expect(probes).toEqual(['page', 'grouped']);
+    });
+});
+
+// L77: a list inside an overlay (Home's Sections popover) autoscrolls the overlay's own scroller, never the page behind it.
+describe('FloatingOverlay scroll source', () => {
+    it('registers its scroller as the scroll source of its content, and still hands the same node to scrollViewRef', async () => {
+        const { FloatingOverlay } = await import('./FloatingOverlay');
+        const scroller = { scroller: true };
+        let seen: React.RefObject<unknown> | null = null;
+        function SourceProbe() { seen = usePopoverScrollSourceRef(); return null; }
+        const external = React.createRef<unknown>();
+        await renderScreen(
+            React.createElement(FloatingOverlay, { maxHeight: 200, scrollViewRef: external as never, children: React.createElement(SourceProbe) }),
+            { createNodeMock: (element) => (element.type === 'AnimatedScrollView' ? scroller : null) },
+        );
+        expect(seen).not.toBeNull();
+        expect(seen!.current).toBe(scroller);
+        expect(external.current).toBe(scroller);
     });
 });
