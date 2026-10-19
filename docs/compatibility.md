@@ -730,7 +730,7 @@ remain closed. The shared summary strip and full Memory tile use the same
 localized provenance wording; samples and this value projection are not
 published in `daemonState.resources`. This refines an unreleased 0.3 read
 projection without changing its V1 epoch or package version. The inspected
-0.2 predecessor at `1ad2f24eaa24a217d631dbdb5691ead73407f7da` has no resource
+0.2 predecessor at `b3e25a20bd6b8969e5a8b20b149c30d9705b591e` has no resource
 summary or vitals module in the corresponding Protocol paths; no predecessor
 writer or reverse compatibility adapter is introduced.
 
