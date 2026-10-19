@@ -143,6 +143,12 @@ function normalizeReleasedExternalSessionRequest(
   return normalized;
 }
 
+// Match the existing identity normalizer without erasing the schema's public
+// input carrier to unknown. Parsing still owns all semantic validation.
+type ExternalSessionRequestInput<TCanonical extends { agentId: ExternalSessionsAgentId }> =
+  | (TCanonical & { providerId?: never })
+  | (Omit<TCanonical, 'agentId'> & { providerId: TCanonical['agentId']; agentId?: never });
+
 const ExternalSessionsCandidatesListCanonicalRequestSchema = lazyZodSchema(() => z.strictObject({
   machineId: z.string().check(z.minLength(1)),
   agentId: ExternalSessionsAgentIdSchema,
@@ -161,7 +167,9 @@ const ExternalSessionsCandidatesListCanonicalRequestSchema = lazyZodSchema(() =>
   includeThreads: z.optional(z.boolean()),
 }));
 
-export const ExternalSessionsCandidatesListRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionsCandidatesListCanonicalRequestSchema));
+type ExternalSessionsCandidatesListInput = ExternalSessionRequestInput<z.input<typeof ExternalSessionsCandidatesListCanonicalRequestSchema>>;
+
+export const ExternalSessionsCandidatesListRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform<ExternalSessionsCandidatesListInput, unknown>((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionsCandidatesListCanonicalRequestSchema));
 export type ExternalSessionsCandidatesListRequest = z.infer<typeof ExternalSessionsCandidatesListRequestSchema>;
 
 export const ExternalSessionsCandidatePreparationSchema = lazyZodSchema(() => z.strictObject({
@@ -252,13 +260,15 @@ const ExternalSessionCandidateDeleteCanonicalRequestSchema = lazyZodSchema(() =>
   remoteSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2000)),
 }));
 
+type ExternalSessionCandidateDeleteInput = ExternalSessionRequestInput<z.input<typeof ExternalSessionCandidateDeleteCanonicalRequestSchema>>;
+
 /**
  * Released `daemon.directSessions.candidate.delete` callers name the Agent
  * `providerId`; they reach this same canonical reader through the one shared
  * released-identity normalization its siblings use. Normalization touches
  * request identity only — `remoteSessionId` stays byte-exact.
  */
-export const ExternalSessionCandidateDeleteRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionCandidateDeleteCanonicalRequestSchema));
+export const ExternalSessionCandidateDeleteRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform<ExternalSessionCandidateDeleteInput, unknown>((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionCandidateDeleteCanonicalRequestSchema));
 export type ExternalSessionCandidateDeleteRequest = z.infer<
   typeof ExternalSessionCandidateDeleteRequestSchema
 >;
@@ -288,7 +298,18 @@ const ExternalSessionLinkEnsureCanonicalRequestSchema = lazyZodSchema(() => z.st
   source: ExternalSessionsSourceSchema,
 }));
 
-export const ExternalSessionLinkEnsureRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeReleasedExternalSessionRequest(value, {
+type ExternalSessionLinkEnsureCanonicalInput = z.input<typeof ExternalSessionLinkEnsureCanonicalRequestSchema>;
+type ExternalSessionLinkEnsureInput = (
+  | (ExternalSessionLinkEnsureCanonicalInput & { providerId?: never; runtimeDescriptor?: never })
+  | (Omit<ExternalSessionLinkEnsureCanonicalInput, 'agentId' | 'runtimeDescriptorV1'> & {
+    providerId: ExternalSessionLinkEnsureCanonicalInput['agentId'];
+    agentId?: never;
+    runtimeDescriptor?: z.input<typeof RuntimeDescriptorV1Schema>;
+    runtimeDescriptorV1?: never;
+  })
+) & { codexBackendMode?: string };
+
+export const ExternalSessionLinkEnsureRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform<ExternalSessionLinkEnsureInput, unknown>((value) => normalizeReleasedExternalSessionRequest(value, {
     runtimeDescriptor: true,
     codexBackendMode: true,
   })), ExternalSessionLinkEnsureCanonicalRequestSchema));
@@ -354,7 +375,7 @@ const ExternalSessionStatusGetCanonicalRequestSchema = lazyZodSchema(() => z.str
   source: ExternalSessionsSourceSchema,
 }));
 
-export const ExternalSessionStatusGetRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionStatusGetCanonicalRequestSchema));
+export const ExternalSessionStatusGetRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform<ExternalSessionRequestInput<z.input<typeof ExternalSessionStatusGetCanonicalRequestSchema>>, unknown>((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionStatusGetCanonicalRequestSchema));
 export type ExternalSessionStatusGetRequest = z.infer<typeof ExternalSessionStatusGetRequestSchema>;
 
 const ExternalSessionAttachCanonicalRequestSchema = lazyZodSchema(() => z.strictObject({
@@ -368,7 +389,7 @@ const ExternalSessionAttachCanonicalRequestSchema = lazyZodSchema(() => z.strict
   acceptedTailCursor: z.optional(ExternalSessionRefreshCursorV1Schema),
 }));
 
-export const ExternalSessionAttachRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionAttachCanonicalRequestSchema));
+export const ExternalSessionAttachRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform<ExternalSessionRequestInput<z.input<typeof ExternalSessionAttachCanonicalRequestSchema>>, unknown>((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionAttachCanonicalRequestSchema));
 export type ExternalSessionAttachRequest = z.infer<typeof ExternalSessionAttachRequestSchema>;
 
 export const ExternalSessionAttachResponseSchema = lazyZodSchema(() => z.union([
@@ -422,7 +443,7 @@ const ExternalSessionFollowPolicySetCanonicalRequestSchema = lazyZodSchema(() =>
   enabled: z.boolean(),
 }));
 
-export const ExternalSessionFollowPolicySetRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionFollowPolicySetCanonicalRequestSchema));
+export const ExternalSessionFollowPolicySetRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform<ExternalSessionRequestInput<z.input<typeof ExternalSessionFollowPolicySetCanonicalRequestSchema>>, unknown>((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionFollowPolicySetCanonicalRequestSchema));
 export type ExternalSessionFollowPolicySetRequest = z.infer<typeof ExternalSessionFollowPolicySetRequestSchema>;
 
 export const ExternalSessionFollowPolicySetResponseSchema = lazyZodSchema(() => z.union([
@@ -573,7 +594,7 @@ const ExternalSessionTranscriptPageCanonicalRequestSchema = lazyZodSchema(() => 
   maxItems: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(5000))),
 }));
 
-export const ExternalSessionTranscriptPageRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionTranscriptPageCanonicalRequestSchema));
+export const ExternalSessionTranscriptPageRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform<ExternalSessionRequestInput<z.input<typeof ExternalSessionTranscriptPageCanonicalRequestSchema>>, unknown>((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionTranscriptPageCanonicalRequestSchema));
 export type ExternalSessionTranscriptPageRequest = z.infer<typeof ExternalSessionTranscriptPageRequestSchema>;
 
 export const ExternalSessionTranscriptPageResponseSchema = lazyZodSchema(() => z.union([
@@ -603,7 +624,7 @@ const ExternalSessionTranscriptReadAfterCanonicalRequestSchema = lazyZodSchema((
   maxItems: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(5000))),
 }));
 
-export const ExternalSessionTranscriptReadAfterRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionTranscriptReadAfterCanonicalRequestSchema));
+export const ExternalSessionTranscriptReadAfterRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform<ExternalSessionRequestInput<z.input<typeof ExternalSessionTranscriptReadAfterCanonicalRequestSchema>>, unknown>((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionTranscriptReadAfterCanonicalRequestSchema));
 export type ExternalSessionTranscriptReadAfterRequest = z.infer<typeof ExternalSessionTranscriptReadAfterRequestSchema>;
 
 export const ExternalSessionTranscriptReadAfterResponseSchema = lazyZodSchema(() => z.union([
