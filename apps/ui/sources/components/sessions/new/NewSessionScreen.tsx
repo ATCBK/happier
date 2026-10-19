@@ -1,4 +1,5 @@
 import React from 'react';
+import { Platform } from 'react-native';
 import { AtmosphereSurfaceFrame } from '@/components/atmosphere/AtmosphereSurfaceFrame';
 import { LookChip, type LookTarget } from '@/components/atmosphere/look/LookChip';
 import { useNewSessionFloatingComposer } from '@/components/sessions/new/navigation/useNewSessionFloatingComposer';
@@ -11,6 +12,7 @@ import { useShouldBlockNewSessionWithGettingStartedGuidance } from '@/components
 import { NewSessionSimplePanel } from '@/components/sessions/new/components/NewSessionSimplePanel';
 import { NewSessionComposerCard } from '@/components/sessions/new/components/NewSessionComposerCard';
 import { NewSessionWizard } from '@/components/sessions/new/components/NewSessionWizard';
+import { NewSessionWizardWebDismissal } from '@/components/sessions/new/components/NewSessionWizardWebDismissal';
 import { NewBotDraftHeader } from '@/components/sessions/bots/NewBotDraftHeader';
 import type { NewSessionBotCreationModel } from '@/components/sessions/new/hooks/newSessionScreenModelTypes';
 import { NewSessionLaunchSurface } from '@/components/sessions/new/components/NewSessionLaunchSurface';
@@ -120,6 +122,12 @@ function NewSessionScreenInner(props: Readonly<{
     }
 
     const { layout, profiles, agent, machine, footer } = model.wizardProps;
+    // The web route card has no header, so the wizard brings its own way out (a Home embed never shows the wizard).
+    const wizardWithDismissal = (wizard: React.ReactElement) => (
+        Platform.OS === 'web' && props.presentation === 'screen'
+            ? <NewSessionWizardWebDismissal>{wizard}</NewSessionWizardWebDismissal>
+            : wizard
+    );
 
     return (
         <NewSessionLaunchSurface
@@ -131,14 +139,16 @@ function NewSessionScreenInner(props: Readonly<{
             focusReturnRef={model.overlayFocusReturnRef}
             overlayAccessibilityLabel={model.overlayAccessibilityLabel}
         >
-            <NewSessionWizard
-                popoverBoundaryRef={model.popoverBoundaryRef}
-                layout={layout}
-                profiles={profiles}
-                agent={agent}
-                machine={machine}
-                footer={footer}
-            />
+            {wizardWithDismissal(
+                <NewSessionWizard
+                    popoverBoundaryRef={model.popoverBoundaryRef}
+                    layout={layout}
+                    profiles={profiles}
+                    agent={agent}
+                    machine={machine}
+                    footer={footer}
+                />,
+            )}
         </NewSessionLaunchSurface>
     );
 }

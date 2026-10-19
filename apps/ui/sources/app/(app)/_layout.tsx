@@ -27,6 +27,7 @@ import { useSetting } from '@/sync/domains/state/storage';
 import {
     isNewSessionFloatingComposerPresentation,
     resolveNewSessionRoutePresentation,
+    resolveNewSessionWebModalStyle,
 } from '@/components/sessions/new/navigation/newSessionPresentation';
 import { RootLayoutNavigationEffects } from '@/components/navigation/root/RootLayoutNavigationEffects';
 import { renderRootLayoutRedirectGate } from '@/components/navigation/root/RootLayoutRedirectGate';
@@ -202,6 +203,11 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
             // Swipe-to-dismiss is not consistently available across platforms; always provide a close button.
             headerBackVisible: false,
             headerLeft: () => null,
+            webModalStyle: resolveNewSessionWebModalStyle({
+                mode: newSessionPresentationMode,
+                variant: newSessionVariant,
+                platformOs: Platform.OS,
+            }),
         };
     }, [newSessionPresentationMode, newSessionRendersFloatingComposer, newSessionVariant, preferredLanguage]);
     const externalSessionBrowseScreenOptions = React.useMemo<StackScreenOptions>(() => ({
@@ -394,6 +400,7 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
                 <Stack.Screen name="projects/[workspaceRefId]/scripts" options={rootStackRouteOptions['projects/[workspaceRefId]/scripts']} />
                 <Stack.Screen name="projects/[workspaceRefId]/services" options={rootStackRouteOptions['projects/[workspaceRefId]/services']} />
                 <Stack.Screen name="projects/[workspaceRefId]/context" options={rootStackRouteOptions['projects/[workspaceRefId]/context']} />
+                <Stack.Screen name="projects/[workspaceRefId]/memory" options={rootStackRouteOptions['projects/[workspaceRefId]/memory']} />
                 {/*
                   * `session/[id]` has its own `_layout` (a Slot), so this is the stack's only screen for
                   * every Session route (no `session/[id]/…` entry here would name a stack child). The

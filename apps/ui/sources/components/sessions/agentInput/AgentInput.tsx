@@ -257,7 +257,7 @@ import {
     shouldReserveAgentInputExpansionToggleSpace,
 } from './inputExpansionToggleVisibility';
 import { AgentInputCommandMenu } from './commandMenu/AgentInputCommandMenu';
-import { AgentInputDocumentPanelContext, AgentInputPopoverClearanceContext } from './selection/useAgentInputPopoverLayout';
+import { AgentInputDocumentPanelContext, AgentInputPopoverClearanceContext, AgentInputPopoverColumnContext } from './selection/useAgentInputPopoverLayout';
 import { AgentInputFieldAccessories, resolveAgentInputFieldAccessoryGeometry } from './components/AgentInputFieldAccessories';
 import { AgentInputPromptPicker } from './commandMenu/AgentInputPromptPicker';
 import { usePromptPickerController } from './commandMenu/usePromptPickerController';
@@ -3425,6 +3425,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     return (
         <SessionModelSourceBrowseHandoffContext.Provider value={modelSourceBrowseHandoff}>
         <AgentInputPopoverClearanceContext.Provider value={documentPanel ? undefined : stageSpotlightRef}>
+        <AgentInputPopoverColumnContext.Provider value={overlayAnchorRef}>
         <AgentInputDocumentPanelContext.Provider value={documentPanel}>
         <SyncPerformanceReactProfiler id="sessions.agentInput">
             <View
@@ -4034,6 +4035,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             </View>
         </SyncPerformanceReactProfiler>
         </AgentInputDocumentPanelContext.Provider>
+        </AgentInputPopoverColumnContext.Provider>
         </AgentInputPopoverClearanceContext.Provider>
         </SessionModelSourceBrowseHandoffContext.Provider>
     );

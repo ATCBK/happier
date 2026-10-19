@@ -44,6 +44,22 @@ export function resolveNewSessionRoutePresentation(params: Readonly<{
 }
 
 /**
+ * The route card's own height on the web. A route modal sizes to its content there, which suits the
+ * composer; the wizard is a scrolling form above its composer, so in a content-sized card the form
+ * collapses to nothing. It takes the route-modal cap (`--happier-route-modal-max-height`).
+ */
+export function resolveNewSessionWebModalStyle(params: Readonly<{
+    mode: NewSessionPresentationModeV1 | null | undefined;
+    variant: NewSessionScreenVariant;
+    platformOs: PlatformOs;
+}>): Readonly<{ height: string }> | undefined {
+    if (params.platformOs !== 'web' || params.variant !== 'wizard') return undefined;
+    return resolveNewSessionRoutePresentation(params) === 'modal'
+        ? { height: 'var(--happier-route-modal-max-height)' }
+        : undefined;
+}
+
+/**
  * Whether `/new` renders the bare keyboard-docked composer over a backdrop the app paints itself,
  * rather than a sheet with navigator chrome.
  *

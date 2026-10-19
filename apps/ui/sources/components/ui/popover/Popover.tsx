@@ -203,6 +203,12 @@ type PopoverCommonProps = Readonly<{
      */
     clearanceRef?: React.RefObject<any>;
     /**
+     * A view whose width the popover stays within, while `boundaryRef` (or the window) still sets its
+     * vertical room: a picker opened from a chip near the end of a composer slides back inside the
+     * composer's width instead of running past it.
+     */
+    horizontalBoundaryRef?: React.RefObject<any>;
+    /**
      * Web-only: scroll container to subscribe to for anchor-tracking recomputes.
      *
      * This is intentionally separate from `boundaryRef` so we can keep popovers clamped to the
@@ -1078,12 +1084,33 @@ function AnchoredPopover(props: PopoverProps) {
 
             // Shrink the usable boundary so the popover doesn't sit flush to the container edges.
             // (This also makes maxHeight/maxWidth clamping respect the margin.)
-            const effectiveBoundaryRect: WindowRect = {
+            let effectiveBoundaryRect: WindowRect = {
                 x: boundaryRect.x + edgeInsets.horizontal,
                 y: boundaryRect.y + edgeInsets.top,
                 width: Math.max(0, boundaryRect.width - edgeInsets.horizontal * 2),
                 height: Math.max(0, boundaryRect.height - edgeInsets.top - edgeInsets.bottom),
             };
+
+            const horizontalBoundaryNode = props.horizontalBoundaryRef?.current ?? null;
+            if (horizontalBoundaryNode) {
+                // Same carry as the clearance below: window-space rects, moved into the anchor's space.
+                const [horizontalWindowRect, anchorWindowRect] = await Promise.all([
+                    measureInWindow(horizontalBoundaryNode),
+                    resolvedAnchorMode === 'rect' ? Promise.resolve(anchorRectFromProp) : measureInWindow(anchorNode),
+                ]);
+                if (!isMountedRef.current) return false;
+                if (horizontalWindowRect && anchorWindowRect) {
+                    const left = Math.max(effectiveBoundaryRect.x, horizontalWindowRect.x + (anchorRect.x - anchorWindowRect.x));
+                    const right = Math.min(
+                        effectiveBoundaryRect.x + effectiveBoundaryRect.width,
+                        horizontalWindowRect.x + horizontalWindowRect.width + (anchorRect.x - anchorWindowRect.x),
+                    );
+                    // A view the anchor does not sit inside gives no usable width: the window keeps it.
+                    if (right - left >= 1 && anchorRect.x >= left && anchorRect.x <= right) {
+                        effectiveBoundaryRect = { ...effectiveBoundaryRect, x: left, width: right - left };
+                    }
+                }
+            }
 
             const clearanceNode = props.clearanceRef?.current ?? null;
             if (clearanceNode) {
@@ -1234,7 +1261,7 @@ function AnchoredPopover(props: PopoverProps) {
         scheduleFrame(() => {
             void measureWithRetries(0);
         });
-    }, [anchorAlignVerticalOnPortal, anchorRef, anchorRectFromProp, boundaryRef, edgeInsets.horizontal, edgeInsets.top, edgeInsets.bottom, gap, keyboardBottomInsetProp, maxHeightCap, maxWidthCap, open, preferredRoom, placement, props.clearanceRef, props.fit, props.flip, props.placementMinSpace, resolvedAnchorMode, shouldPortalNative, shouldPortalWeb, topBottomLayoutOnPortal, sizesToAnchorExplicitly, windowHeight, windowWidth, portalTarget]);
+    }, [anchorAlignVerticalOnPortal, anchorRef, anchorRectFromProp, boundaryRef, edgeInsets.horizontal, edgeInsets.top, edgeInsets.bottom, gap, keyboardBottomInsetProp, maxHeightCap, maxWidthCap, open, preferredRoom, placement, props.clearanceRef, props.horizontalBoundaryRef, props.fit, props.flip, props.placementMinSpace, resolvedAnchorMode, shouldPortalNative, shouldPortalWeb, topBottomLayoutOnPortal, sizesToAnchorExplicitly, windowHeight, windowWidth, portalTarget]);
 
     React.useLayoutEffect(() => {
         if (!open) return;
@@ -1271,10 +1298,11 @@ function AnchoredPopover(props: PopoverProps) {
         // The clearance view sets the vertical extent, so its reflow (an ancestor settling after a
         // window resize moves it without resizing it) re-places the popover like the anchor's does.
         const clearanceEl = getDomElementFromNode(props.clearanceRef?.current ?? null);
-        const anchorLayoutObserver = (anchorEl || clearanceEl) && typeof ResizeObserver === 'function'
+        const horizontalBoundaryEl = getDomElementFromNode(props.horizontalBoundaryRef?.current ?? null);
+        const anchorLayoutObserver = (anchorEl || clearanceEl || horizontalBoundaryEl) && typeof ResizeObserver === 'function'
             ? new ResizeObserver(schedule)
             : null;
-        for (const start of [anchorEl, clearanceEl]) {
+        for (const start of [anchorEl, clearanceEl, horizontalBoundaryEl]) {
             for (let element: HTMLElement | null = start; element && anchorLayoutObserver; element = element.parentElement) {
                 anchorLayoutObserver.observe(element);
             }
@@ -1330,7 +1358,7 @@ function AnchoredPopover(props: PopoverProps) {
                 legacyBoundaryScrollEl.removeEventListener('scroll', schedule as any);
             }
         };
-    }, [anchorRef, getContentDomElement, getDomElementFromNode, getBoundaryDomElement, getScrollSourceDomElement, open, portalTargetOnWeb, props.clearanceRef, recompute, resolvedAnchorMode, shouldPortalWeb]);
+    }, [anchorRef, getContentDomElement, getDomElementFromNode, getBoundaryDomElement, getScrollSourceDomElement, open, portalTargetOnWeb, props.clearanceRef, props.horizontalBoundaryRef, recompute, resolvedAnchorMode, shouldPortalWeb]);
 
     React.useEffect(() => {
         if (!open) return;

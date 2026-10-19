@@ -56,6 +56,7 @@ function OpenAgentInputSelectionPopover(props: AgentInputSelectionPopoverProps) 
             maxWidthCap={props.maxWidthCap}
             placementMinSpace={popoverLayout.placementMinSpace}
             flip={popoverLayout.flip}
+            horizontalBoundaryRef={popoverLayout.horizontalBoundaryRef}
             phonePresentation={props.phonePresentation}
             sheetHeader={props.sheetHeader}
             sheetSubtitle={props.sheetSubtitle}
