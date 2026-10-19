@@ -876,7 +876,8 @@ describe('SessionBoardSurface', () => {
         const textOf = (node: unknown): string => typeof node === 'string' ? node
             : Array.isArray(node) ? node.map(textOf).join('')
             : node && typeof node === 'object' && 'props' in node ? textOf((node as { props: { children?: unknown } }).props.children) : '';
-        expect(textOf(screen.findByTestId('session-board-line.subtitle')?.props.children)).toBe(
+        // The line keeps its separators as no-break spaces; they read as spaces.
+        expect(textOf(screen.findByTestId('session-board-line.subtitle')?.props.children).replaceAll('\u00A0', ' ')).toBe(
             `${t('sessionBoard.sidebar.sharedWithEveryone')} · ${t('sessionBoard.sidebar.widgetCount', { count: 1 })}`,
         );
     });

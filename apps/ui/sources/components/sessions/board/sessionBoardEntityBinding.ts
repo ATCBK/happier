@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionBoardLayoutUpdateInputV1Schema } from '@happier-dev/protocol/sessions/board';
 import type { EntityDropEffectV1, EntityDropOutcomeV1 } from '@happier-dev/protocol/plugins/ui';
 import type { SessionBoardController } from './useSessionBoardController';
@@ -6,10 +6,10 @@ import { t } from '@/text';
 import { WidgetInstanceActionInputSchemasV1 } from '@happier-dev/protocol/widgets';
 import { executeWidgetEntityMovement } from '@/sync/ops/actions/widgetEntityMovement';
 
-export const SessionSurfaceAnchorSchema = z.object({ side: z.enum(['before', 'after']), itemId: z.string().min(1) }).strict();
-export const SessionBoardDestinationSchema = SessionSurfaceAnchorSchema.extend({ viewId: z.string().min(1) });
-export const SessionBoardViewDestinationSchema = z.object({ viewId: z.string().min(1) }).strict();
-export const SessionCompanionDestinationSchema = z.object({ side: z.enum(['before', 'after']), itemKey: z.string().min(1) }).strict();
+export const SessionSurfaceAnchorSchema = z.strictObject({ side: z.enum(['before', 'after']), itemId: z.string().check(z.minLength(1)) });
+export const SessionBoardDestinationSchema = z.extend(SessionSurfaceAnchorSchema, { viewId: z.string().check(z.minLength(1)) });
+export const SessionBoardViewDestinationSchema = z.strictObject({ viewId: z.string().check(z.minLength(1)) });
+export const SessionCompanionDestinationSchema = z.strictObject({ side: z.enum(['before', 'after']), itemKey: z.string().check(z.minLength(1)) });
 
 /** Await the existing controller's Action/approval/recovery owner, including unknown acknowledgements. */
 export async function executeSessionBoardEntityDrop(controller: SessionBoardController, effect: EntityDropEffectV1): Promise<EntityDropOutcomeV1> {

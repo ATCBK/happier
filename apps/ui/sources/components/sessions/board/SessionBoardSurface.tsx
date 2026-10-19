@@ -130,6 +130,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingBottom: theme.space.s6,
         minWidth: 0,
     },
+    headerActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
     viewsActions: {
         paddingHorizontal: theme.space.s4,
         paddingBottom: theme.space.s4,
@@ -773,6 +777,7 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
     const inlineLine = props.host === 'details' || props.host === 'focusedDetails' ? boardLine : null;
     // The views strip draws itself only for several views or a lone view being renamed; the line takes its place otherwise.
     const stripVisible = (snapshot?.views.length ?? 0) > 1 || renamingViewId !== null;
+    const viewActionsInHeader = props.host === 'mobileCockpit' && (snapshot?.views.length ?? 0) <= 1;
     const onOpenBoardDetails = props.onOpenBoardDetails;
     const addRequest = continuity?.controller.addRequest[1];
     // The read-only sidebar cannot add; it opens the Board in Details with its Add gallery open.
@@ -800,10 +805,19 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
             ) : null;
         }
         if (props.host === 'mobileCockpit' && mutationControls && snapshotPresent) {
-            return <AddControls controller={controller} testID={testID} variant="header" {...addSource} />;
+            return (
+                <View style={styles.headerActions}>
+                    {/* A lone view has no strip to sit beside, so its actions join Add here rather than own a row. */}
+                    {viewActionsInHeader ? (
+                        <ViewActions controller={controller} testID={testID} onBeginRename={setRenamingViewId}
+                            onFocusTargetChange={props.onViewActionsFocusTargetChange} />
+                    ) : null}
+                    <AddControls controller={controller} testID={testID} variant="header" {...addSource} />
+                </View>
+            );
         }
         return null;
-    }, [addSource, controller, mutationControls, onOpenBoardDetails, props.host, snapshotPresent, testID]);
+    }, [addSource, controller, mutationControls, onOpenBoardDetails, props.host, props.onViewActionsFocusTargetChange, snapshotPresent, testID, viewActionsInHeader]);
     usePaneHeaderSlotContent(React.useMemo(() => ({ line: headerLine, action: headerAction }), [headerAction, headerLine]));
 
     if (!snapshot) {
@@ -1249,7 +1263,7 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                     />
                 </View>
                 {inlineAdd ? <AddControls controller={controller} testID={testID} {...addSource} /> : null}
-                {mutationControls ? (
+                {mutationControls && !viewActionsInHeader ? (
                     <ViewActions
                         controller={controller}
                         testID={testID}

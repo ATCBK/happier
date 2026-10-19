@@ -38,7 +38,6 @@ import {
     type SessionBoardController,
     type SessionBoardControllerInput,
 } from './useSessionBoardController';
-import { useSessionBoardRemovalConfirmationRequired } from './useSessionBoardRemovalConfirmation';
 import { showSessionBoardViewRemovalDisposition } from './showSessionBoardViewRemovalDisposition';
 import {
     selectCurrentSessionWidgetCandidates,
@@ -255,7 +254,6 @@ function SessionBoardControllerRuntimeOwner(props: React.PropsWithChildren<Reado
         props.address.sessionId,
         pluginRuntime,
     );
-    const confirmationRequired = useSessionBoardRemovalConfirmationRequired();
     const viewFocusTargetsRef = React.useRef(new Map<string, FocusReturnTarget>());
     const viewActionsFocusTargetRef = React.useRef<FocusReturnTarget>(null);
     const onViewFocusTargetChange = React.useCallback((viewId: string, target: FocusReturnTarget) => {
@@ -270,22 +268,6 @@ function SessionBoardControllerRuntimeOwner(props: React.PropsWithChildren<Reado
             return viewFocusTargetsRef.current.get(viewId) ?? viewActionsFocusTargetRef.current;
         },
     }), []);
-    const confirmDestructive = React.useCallback(async (request: Readonly<{
-        title: string;
-        message: string;
-        confirmText: string;
-        focusReturnViewId?: string;
-    }>): Promise<boolean> => {
-        if (!confirmationRequired) return true;
-        return await Modal.confirm(request.title, request.message, {
-            confirmText: request.confirmText,
-            cancelText: t('common.cancel'),
-            destructive: true,
-            ...(request.focusReturnViewId
-                ? { focusReturnRef: focusReturnRefForView(request.focusReturnViewId) }
-                : {}),
-        });
-    }, [confirmationRequired, focusReturnRefForView]);
     const promptViewTitle = React.useCallback(async (request: Readonly<{
         title: string;
         defaultValue?: string;
@@ -376,7 +358,6 @@ function SessionBoardControllerRuntimeOwner(props: React.PropsWithChildren<Reado
                         approvalPending: approval.pending,
                         requestApprovalContinuation: approval.request,
                         resolveSourceAvailability,
-                        confirmDestructive,
                         chooseViewRemovalDisposition,
                         promptViewTitle,
                         onManagePlugin: managePluginForItem,

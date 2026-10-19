@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
@@ -320,16 +321,27 @@ describe('SessionBoardViewStrip', () => {
             <SessionBoardViewStrip views={VIEWS} activeViewId="research" onSelectView={() => undefined} {...A11Y_IDS} />,
         );
 
-        const tab = screen.findByTestId('session-board-views-view-ship');
-        const focused = flattenTestStyle(
-            (tab?.props.style as ((state: { pressed: boolean; focused: boolean }) => unknown))?.({
-                pressed: false,
-                focused: true,
-            }),
-        );
+        // RN Web's focused flag also follows pointer/script focus. The shared
+        // focus owner needs the browser's keyboard modality and focused element.
+        const focusTarget = document.createElement('button');
+        document.body.appendChild(focusTarget);
+        try {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+            focusTarget.focus();
+            const tab = screen.findByTestId('session-board-views-view-ship');
+            const focused = flattenTestStyle(
+                (tab?.props.style as ((state: { pressed: boolean; focused: boolean }) => unknown))?.({
+                    pressed: false,
+                    focused: true,
+                }),
+            );
 
-        expect(Number(focused.outlineWidth ?? 0)).toBeGreaterThanOrEqual(2);
-        expect(focused.outlineColor).toBeTruthy();
+            expect(Number(focused.outlineWidth ?? 0)).toBeGreaterThanOrEqual(2);
+            expect(focused.outlineColor).toBeTruthy();
+        } finally {
+            focusTarget.remove();
+            document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+        }
     });
 
     it('keeps only the selected view in the tab order so the strip is one tab stop', async () => {

@@ -21,7 +21,6 @@ import {
     type SessionBoardItemUpsertInput,
     type SessionBoardLayoutUpdateInput,
     type SessionBoardMutationResult,
-    type SessionBoardRemovalApprovalDecision,
     type SessionBoardSnapshot,
 } from '@/sync/domains/session/board';
 import type { SessionBoardBinding } from './observeSessionBoard';
@@ -141,7 +140,6 @@ type RecordedCall =
     | Readonly<{
         kind: 'remove';
         input: SessionBoardItemRemoveInput;
-        approval: SessionBoardRemovalApprovalDecision | undefined;
     }>
     | Readonly<{ kind: 'layout'; input: SessionBoardLayoutUpdateInput }>;
 
@@ -162,7 +160,7 @@ function recordingActions(
         calls,
         port: {
             upsertItem: async (input) => { calls.push({ kind: 'upsert', input }); return outcome; },
-            removeItem: async (input, approval) => { calls.push({ kind: 'remove', input, approval }); return outcome; },
+            removeItem: async (input) => { calls.push({ kind: 'remove', input }); return outcome; },
             updateLayout: async (input) => { calls.push({ kind: 'layout', input }); return outcome; },
         },
     };
@@ -205,7 +203,6 @@ async function mountController(input: Readonly<{
     sessionId?: string;
     actions?: SessionBoardActionsPort | null;
     askAgent?: (() => void) | undefined;
-    confirm?: (() => Promise<boolean>) | undefined;
     promptTitle?: (() => Promise<string | null>) | undefined;
     chooseViewRemovalDisposition?: ((request: SessionBoardViewRemovalChoiceRequest) => Promise<SessionBoardViewRemovalDisposition | null>) | undefined;
     beforeReplaceDraft?: ((replace: () => void | Promise<void>) => true | Promise<boolean>) | undefined;
@@ -220,7 +217,6 @@ async function mountController(input: Readonly<{
         binding: binding(input.snapshot, input.refresh),
         actions: input.actions === undefined ? recordingActions().port : input.actions,
         ...(input.askAgent ? { onAskAgent: input.askAgent } : {}),
-        ...(input.confirm ? { confirmDestructive: input.confirm } : {}),
         ...(input.promptTitle ? { promptViewTitle: input.promptTitle } : {}),
         ...(input.chooseViewRemovalDisposition
             ? { chooseViewRemovalDisposition: input.chooseViewRemovalDisposition }
@@ -1283,7 +1279,6 @@ describe('useSessionBoardController', () => {
                 serverId: 'home-1',
                 binding: binding(props.snapshot),
                 actions: actions.port,
-                confirmDestructive: async () => true,
             }),
             { initialProps: { snapshot: initial } },
         );
@@ -1304,27 +1299,23 @@ describe('useSessionBoardController', () => {
         expect(hook.getCurrent().mutationRecovery).toBeNull();
     });
 
-    it('requires an explicit confirmation before removing a shared item', async () => {
+    it('delegates removal confirmation to the Action instead of consulting a caller floor', async () => {
         const actions = recordingActions();
-        const confirm = vi.fn(async () => false);
         const hook = await mountController({
             snapshot: readySnapshot({
                 layout: LAYOUT_TWO_VIEWS,
                 items: [{ itemId: 'note-1', item: note('Plan', 'body') }],
             }),
             actions: actions.port,
-            confirm,
         });
 
         await hook.getCurrent().run({ kind: 'item.remove', itemId: 'note-1' });
-        expect(confirm).toHaveBeenCalledTimes(1);
-        expect(actions.calls).toEqual([]);
+        expect(actions.calls).toEqual([expect.objectContaining({ kind: 'remove' })]);
     });
 
     it('guards the active note draft before removing the note being edited', async () => {
         const actions = recordingActions();
         const beforeReplaceDraft = vi.fn(async () => false);
-        const confirm = vi.fn(async () => true);
         const hook = await mountController({
             snapshot: readySnapshot({
                 layout: LAYOUT_TWO_VIEWS,
@@ -1332,7 +1323,6 @@ describe('useSessionBoardController', () => {
             }),
             actions: actions.port,
             beforeReplaceDraft,
-            confirm,
         });
 
         await hook.getCurrent().run({ kind: 'item.edit', itemId: 'note-1' });
@@ -1341,7 +1331,6 @@ describe('useSessionBoardController', () => {
         await hook.rerender();
 
         expect(beforeReplaceDraft).toHaveBeenCalledTimes(1);
-        expect(confirm).not.toHaveBeenCalled();
         expect(actions.calls).toEqual([]);
         expect(hook.getCurrent().noteDraft?.itemId).toBe('note-1');
     });
@@ -1369,7 +1358,6 @@ describe('useSessionBoardController', () => {
             }),
             actions: actions.port,
             beforeReplaceDraft,
-            confirm: async () => true,
         });
 
         await hook.getCurrent().run({ kind: 'item.edit', itemId: 'note-1' });
@@ -1379,7 +1367,6 @@ describe('useSessionBoardController', () => {
         expect(beforeReplaceDraft).not.toHaveBeenCalled();
         expect(actions.calls).toEqual([{
             kind: 'remove',
-            approval: { approvalDecisionApplied: true },
             input: {
                 sessionId: 'session-1',
                 itemId: 'note-2',
@@ -1401,7 +1388,6 @@ describe('useSessionBoardController', () => {
     it('guards the hosted-HTML draft before removing the interactive view being edited', async () => {
         const actions = recordingActions();
         const beforeReplaceDraft = vi.fn(async () => false);
-        const confirm = vi.fn(async () => true);
         const hook = await mountController({
             snapshot: readySnapshot({
                 layout: LAYOUT_TWO_VIEWS,
@@ -1409,7 +1395,6 @@ describe('useSessionBoardController', () => {
             }),
             actions: actions.port,
             beforeReplaceDraft,
-            confirm,
             callerHostedHtmlAvailable: true,
         });
 
@@ -1420,7 +1405,6 @@ describe('useSessionBoardController', () => {
 
         // Keep Editing: no destructive confirmation, no write, editor retained.
         expect(beforeReplaceDraft).toHaveBeenCalledTimes(1);
-        expect(confirm).not.toHaveBeenCalled();
         expect(actions.calls).toEqual([]);
         expect(hook.getCurrent().hostedHtmlDraft?.itemId).toBe('note-1');
     });
@@ -1448,7 +1432,6 @@ describe('useSessionBoardController', () => {
             }),
             actions: actions.port,
             beforeReplaceDraft,
-            confirm: async () => true,
             callerHostedHtmlAvailable: true,
         });
 
@@ -1477,7 +1460,6 @@ describe('useSessionBoardController', () => {
             }),
             actions: actions.port,
             beforeReplaceDraft,
-            confirm: async () => { order.push('confirm'); return true; },
             callerHostedHtmlAvailable: true,
         });
 
@@ -1486,11 +1468,10 @@ describe('useSessionBoardController', () => {
         await hook.getCurrent().run({ kind: 'item.remove', itemId: 'note-1' });
         await hook.rerender();
 
-        // The editor's own decision runs BEFORE destructive confirmation.
-        expect(order).toEqual(['guard', 'confirm']);
+        // The editor's draft decision still runs before Action admission.
+        expect(order).toEqual(['guard']);
         expect(actions.calls).toEqual([{
             kind: 'remove',
-            approval: { approvalDecisionApplied: true },
             input: {
                 sessionId: 'session-1',
                 itemId: 'note-1',
@@ -1521,7 +1502,6 @@ describe('useSessionBoardController', () => {
             }),
             actions: actions.port,
             beforeReplaceDraft,
-            confirm: async () => true,
             callerHostedHtmlAvailable: true,
         });
 
@@ -1572,7 +1552,6 @@ describe('useSessionBoardController', () => {
             }),
             actions: actions.port,
             beforeReplaceDraft,
-            confirm: async () => true,
             callerHostedHtmlAvailable: true,
         });
 
@@ -1601,7 +1580,6 @@ describe('useSessionBoardController', () => {
                     items: [{ itemId: 'note-1', item: hostedHtml('Dashboard', '<main>Before</main>') }],
                 })),
                 actions: actions.port,
-                confirmDestructive: async () => true,
                 beforeReplaceNoteDraft: beforeReplaceDraft,
                 callerHostedHtmlAvailable: true,
             }),
@@ -1634,7 +1612,6 @@ describe('useSessionBoardController', () => {
                     items: [{ itemId: 'note-1', item: note('Plan', 'body') }],
                 })),
                 actions: actions.port,
-                confirmDestructive: async () => true,
                 beforeReplaceNoteDraft: async (replace: () => void | Promise<void>) => {
                     await replace();
                     return true;
@@ -1702,7 +1679,6 @@ describe('useSessionBoardController', () => {
                     items: [{ itemId: 'note-1', item: note('Plan', 'body') }],
                 })),
                 actions,
-                confirmDestructive: async () => true,
                 beforeReplaceNoteDraft: async (replace: () => void | Promise<void>) => {
                     saveDuringGuard();
                     await replace();
@@ -1788,7 +1764,6 @@ describe('useSessionBoardController', () => {
                     items: [{ itemId: 'note-1', item: hostedHtml('Dashboard', '<main>Before</main>') }],
                 })),
                 actions,
-                confirmDestructive: async () => true,
                 beforeReplaceNoteDraft: async (replace: () => void | Promise<void>) => {
                     saveDuringGuard();
                     await replace();
@@ -1839,13 +1814,11 @@ describe('useSessionBoardController', () => {
                 items: [{ itemId: 'note-1', item: note('Plan', 'body') }],
             }),
             actions: actions.port,
-            confirm: async () => true,
         });
 
         await hook.getCurrent().run({ kind: 'item.remove', itemId: 'note-1' });
         expect(actions.calls).toEqual([{
             kind: 'remove',
-            approval: { approvalDecisionApplied: true },
             input: {
                 sessionId: 'session-1',
                 itemId: 'note-1',
@@ -1869,7 +1842,6 @@ describe('useSessionBoardController', () => {
 
         expect(actions.calls).toEqual([{
             kind: 'remove',
-            approval: undefined,
             input: {
                 sessionId: 'session-1',
                 itemId: 'note-1',
@@ -1887,7 +1859,6 @@ describe('useSessionBoardController', () => {
                 items: [{ itemId: 'orphan-1', item: note('Recovered', 'body') }],
             }),
             actions: actions.port,
-            confirm: async () => true,
         });
 
         expect(hook.getCurrent().recoveredItemIds).toEqual(['orphan-1']);
@@ -2021,7 +1992,6 @@ describe('useSessionBoardController', () => {
                 serverId: 'home-1',
                 binding: binding(props.snapshot),
                 actions: actions.port,
-                confirmDestructive: async () => true,
             }),
             { initialProps: { snapshot: readySnapshot({ layout: initialLayout }) } },
         );
@@ -2089,7 +2059,6 @@ describe('useSessionBoardController', () => {
         const hook = await mountController({
             snapshot: readySnapshot({ layout: LAYOUT_TWO_VIEWS }),
             actions: actions.port,
-            confirm: async () => true,
         });
         await hook.getCurrent().run({ kind: 'view.select', viewId: 'research' });
         await hook.rerender();
@@ -2110,7 +2079,6 @@ describe('useSessionBoardController', () => {
         const hook = await mountController({
             snapshot: readySnapshot({ layout: LAYOUT_TWO_VIEWS }),
             actions: actions.port,
-            confirm: async () => true,
         });
         await hook.getCurrent().run({ kind: 'view.select', viewId: 'research' });
         await hook.rerender();
@@ -2136,7 +2104,6 @@ describe('useSessionBoardController', () => {
         const hook = await mountController({
             snapshot: readySnapshot({ layout: LAYOUT_TWO_VIEWS }),
             actions: actions.port,
-            confirm: async () => true,
             requestApprovalContinuation: (request) => { continuation.current = request; },
         });
         await hook.getCurrent().run({ kind: 'view.select', viewId: 'research' });
@@ -2175,7 +2142,6 @@ describe('useSessionBoardController', () => {
             }),
             actions: actions.port,
             chooseViewRemovalDisposition,
-            confirm: async () => true,
         });
 
         await hook.getCurrent().run({ kind: 'view.remove', viewId: 'research' });
@@ -2216,7 +2182,6 @@ describe('useSessionBoardController', () => {
             }),
             actions: actions.port,
             chooseViewRemovalDisposition: async () => ({ kind: 'unpin' }),
-            confirm: async () => true,
         });
 
         await hook.getCurrent().run({ kind: 'view.remove', viewId: 'research' });
@@ -2246,7 +2211,6 @@ describe('useSessionBoardController', () => {
             }),
             actions: actions.port,
             ...(chooser ? { chooseViewRemovalDisposition: chooser } : {}),
-            confirm: async () => true,
         });
 
         await hook.getCurrent().run({ kind: 'view.remove', viewId: 'research' });
