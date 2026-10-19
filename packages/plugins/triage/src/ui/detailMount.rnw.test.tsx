@@ -79,6 +79,7 @@ import {
 import { TRIAGE_SHELL_FILL_TEST_ID_V1, TRIAGE_SHELL_DETAIL_REGION_TEST_ID_V1 } from './shell/root.js';
 import { refreshTriageListWindow } from './window/mountedWindow.js';
 import { renderSurface as renderShellSurface } from './surface.js';
+import { MAX_TRIAGE_LIST_WINDOW_ROWS_V1 } from '../projection/listWindow.js';
 import { createTriageEphemeralSharedScopeFixture } from './window/ephemeralSharedScope.test-support.js';
 
 /**
@@ -470,6 +471,7 @@ function createHarness(options: Readonly<{
     secondInstance?: boolean;
     secondInstanceObservesEntry?: boolean;
     otherSourceEntry?: boolean;
+    deferLinkedEntry?: boolean;
 }> = {}) {
     const { collections, control } = createTestkitCorpusCollections({ accountEncryptionMode: 'e2ee' });
     control.sourceInstances.seed(toCorpusStoredValue(instanceRow()));
@@ -515,7 +517,23 @@ function createHarness(options: Readonly<{
         surfaces: { detail: {} },
     } as unknown as TriageAdmittedSourceV1] : [])];
 
-    const executeScan: TriageAdmittedOperationExecutorV1 = async (operation, input) => ({
+    const executeScan: TriageAdmittedOperationExecutorV1 = async (operation, input) => {
+        if (options.deferLinkedEntry && input.page.kind === 'initial') {
+            return {
+                kind: 'page',
+                observations: Array.from({ length: MAX_TRIAGE_LIST_WINDOW_ROWS_V1 }, (_, index) => ({
+                    kind: 'present' as const,
+                    localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: `preceding-${index}` },
+                    locator: testkitLocator(),
+                    snapshot: testkitSnapshot({ title: `Earlier change ${index}` }),
+                    viewer: testkitViewer(),
+                    sourceUpdatedAtMs: observationRevision.current,
+                })),
+                evidence: { kind: 'partial', reason: 'more-pages' },
+                continuation: { v: 1, token: 'linked-entry' },
+            } satisfies TriageScanResultV1;
+        }
+        return {
         kind: 'complete',
         observations: observes.current
             && (options.secondInstanceObservesEntry !== false
@@ -549,7 +567,8 @@ function createHarness(options: Readonly<{
             sourceUpdatedAtMs: 2_000,
         }] : [],
         evidence: { kind: 'walkFinished' },
-    } satisfies TriageScanResultV1);
+        } satisfies TriageScanResultV1;
+    };
 
     async function executeAction(request: Readonly<{ action: unknown; input: unknown }>) {
         const action = String(request.action);
@@ -756,6 +775,7 @@ async function mountShell(
         secondInstance?: boolean;
         secondInstanceObservesEntry?: boolean;
         otherSourceEntry?: boolean;
+        deferLinkedEntry?: boolean;
         linkedSessionCount?: number;
         sessionTitle?: string;
         hostedDetail?: boolean;
@@ -784,6 +804,7 @@ async function mountShell(
             ? {}
             : { secondInstanceObservesEntry: options.secondInstanceObservesEntry }),
         ...(options.otherSourceEntry === undefined ? {} : { otherSourceEntry: options.otherSourceEntry }),
+        ...(options.deferLinkedEntry === undefined ? {} : { deferLinkedEntry: options.deferLinkedEntry }),
     });
     currentHarness = harness;
     if (options.linkedSessionCount !== undefined) {
@@ -1686,6 +1707,25 @@ describe('opening a row into the source detail', () => {
             .resolves.toBeUndefined();
         await expect(shell.getByText('Reading this entry')).resolves.toBeDefined();
         releaseOther();
+    });
+
+    it('opens a deep-linked entry beyond the first source window through the existing continuation', async () => {
+        const subPath = buildTriageRouteSubPathV1({
+            ...TRIAGE_ROUTE_DEFAULT_LENS_V1,
+            selection: {
+                source: SOURCE,
+                kindId: 'pull-request',
+                collisionScope: 'example/repository',
+                entryId: '17',
+            },
+        });
+        const shell = await mountShell({ subPath, deferLinkedEntry: true, activeSurface: true });
+        await act(async () => {
+            await vi.waitFor(async () => {
+                await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined();
+            });
+        });
+        expect(currentHarness?.readDetailInstanceIds).toContain(INSTANCE);
     });
 
     it('keeps one source detail mount while the open shell crosses split and stacked layouts', async () => {

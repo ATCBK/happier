@@ -1691,6 +1691,8 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     // showed "this entry is no longer in the list" over a page whose sources could
     // not be reached at all.
     windowSettled: state.kind === 'window' || state.kind === 'configureSources',
+    continueWindow: surfaceActivity.active && window.snapshot.pending === 'idle'
+      && window.snapshot.loadMore?.kind === 'available' ? window.loadMore : undefined,
     applyLensEdit,
     dispatch,
     readerChangedLens,
@@ -2673,6 +2675,8 @@ function useTriageSettledLocation(input: Readonly<{
    * second is a launch this window will never materialize.
    */
   windowSettled: boolean;
+  /** A pending copied link consumes the existing window continuation, never a separate source read. */
+  continueWindow: (() => Promise<void>) | undefined;
   /** The shell's one preflighted lens-edit path; see `applyLensEdit`. */
   applyLensEdit: (action: TriageSurfaceActionV1, refusal: 'selection' | 'lens') => void;
   dispatch: React.Dispatch<TriageSurfaceActionV1>;
@@ -2692,6 +2696,7 @@ function useTriageSettledLocation(input: Readonly<{
     subPath,
     surface,
     windowSettled,
+    continueWindow,
     onRouteWriteFailure,
   } = input;
   const selection = surface.selection;
@@ -2797,14 +2802,21 @@ function useTriageSettledLocation(input: Readonly<{
       return;
     }
 
-    // No row on this page names the entry. A LOCATION can only wait — it names
-    // no connection, so there is nothing to select with. A LAUNCH carries its
+    // A copied link may name an entry beyond the first bounded window. Ask the
+    // same acquisition owner to continue while it has an actionable frontier;
+    // failure, exhaustion and an inactive mount stop that demand at the owner.
+    // No connection or provider locator is reconstructed from the route.
+    if (pendingLaunch === null) {
+      if (windowSettled) void continueWindow?.();
+      return;
+    }
+    // A LAUNCH carries its
     // own qualified connection, already checked against the entry's source by
     // the one launch-input parser, so once a pass has answered it selects and
     // the header says the window does not hold the entry. Until one has, the
     // launch waits, so a page still reading keeps taking the row's own
     // qualification when its pass does list the entry.
-    if (pendingLaunch === null || !windowSettled) return;
+    if (!windowSettled) return;
     applyLensEdit({
       kind: 'rowActivated',
       sectionId: null,
@@ -2822,6 +2834,7 @@ function useTriageSettledLocation(input: Readonly<{
     settledRoute,
     subPath,
     windowSettled,
+    continueWindow,
     onRouteWriteFailure,
   ]);
 }

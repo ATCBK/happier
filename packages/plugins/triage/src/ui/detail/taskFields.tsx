@@ -145,7 +145,8 @@ export function TriageEditTaskFields(props: Readonly<{
   const address = { v: 1, entryRef: props.row.entryRef, sourceInstanceId: selected.sourceInstanceId, lastKnownLocator: selected.observation.locator };
   const disabled = props.disabled || write.busy || write.result?.kind === 'uncertain';
   return <Stack gap="small">
-    {!editing ? <Button title={text('plugins.triage.tasks.edit', 'Edit task')} variant="plain" disabled={disabled || !canEdit}
+    {/* A source without the edit role never gets a greyed "Edit task": a control that cannot succeed is not drawn. */}
+    {!canEdit && !editing ? null : !editing ? <Button title={text('plugins.triage.tasks.edit', 'Edit task')} variant="plain" disabled={disabled}
       onPress={() => { setDraft({ title: snapshot.title }); setEditing(true); }} /> : <Form
       value={draft} onChange={setDraft} disabled={disabled || !canEdit} busy={write.busy}
       hints={{ submitLabel: text('plugins.triage.tasks.save', 'Save changes'), fields: [
