@@ -142,15 +142,18 @@ export function createWorkflowInvocationRecoveryFactWriter(params: Readonly<{
     const root = await readInvocation(opened.content.rootRecordId);
     if (!root || root.progress.blockKind !== 'root'
       || ['completed', 'failed', 'cancelled', 'skipped', 'superseded', 'outcome_uncertain'].includes(root.index.lifecycle)) return;
+    const currentRun = WorkflowRunSummaryV1Schema.parse(body.run);
     // Reuse the executing owner's exact current-slot selection and publisher;
     // reattach never acquires a coordinator claim or changes root lifecycle.
     const store = await DurableWorkflowCoordinatorStore.load({ accountId: params.accountId, runId: params.run.id,
       parentAttempt: params.parentAttempt ?? 0,
-      ...(params.expectedRevision === undefined ? {} : { projectionExpectedRevision: params.expectedRevision }),
-      revision: WorkflowRunSummaryV1Schema.parse(body.run).revision,
+      ...(currentRun.state === 'interrupted' ? { projectionExpectedRevision: currentRun.revision } : {}),
+      revision: currentRun.revision,
       encryption: params.encryption, rootRecordId: opened.content.rootRecordId, checkpoint: opened.content,
       authoredDefinition: accepted.authoredDefinition,
       definition: accepted.definition,
+      frozenChildren: accepted.frozenChildren,
+      destinations: root.progress.stepProgress?.destinations,
       storage: { execute: async (operation, options) => await params.storage.execute(operation,
         { ...options, ...(params.signal ? { signal: params.signal } : {}) }) },
     });
@@ -344,7 +347,7 @@ export function createWorkflowInvocationRecoveryFactWriter(params: Readonly<{
     return { id: exactIndex.id, expectedLifecycle: lifecycle, lifecycle,
       ...(fresh?.index.lifecycle === lifecycle ? { expectedContentRevision: fresh.index.contentRevision } : {}) };
   };
-  return { readInvocation, commitFact, commitObservation, resolveFrozenActionContract };
+  return { readInvocation, commitFact, commitObservation, resolveFrozenActionContract, refreshRootStepProgress };
 }
 
 async function recoverInvocationCustody(params: Readonly<{
@@ -372,7 +375,7 @@ async function recoverInvocationCustody(params: Readonly<{
   const reconciled: ReconciledInvocationTransition[] = [];
   let allResolved = true;
   let cancellationRequested = false;
-  const { readInvocation, commitObservation, commitFact, resolveFrozenActionContract } = createWorkflowInvocationRecoveryFactWriter(params);
+  const { readInvocation, commitObservation, commitFact, resolveFrozenActionContract, refreshRootStepProgress } = createWorkflowInvocationRecoveryFactWriter(params);
   let cursor: string | undefined;
   do {
     const pageBody = record(await params.storage.execute({
@@ -461,6 +464,10 @@ async function recoverInvocationCustody(params: Readonly<{
     }
     cursor = typeof pageBody.nextCursor === 'string' ? pageBody.nextCursor : undefined;
   } while (cursor && !params.signal?.aborted);
+  // A child fact and its root projection are separate row writes. A prior
+  // publication failure leaves the terminal child outside the recovery index;
+  // rebuild from current slots even when this pass observed no active leaf.
+  if (!params.signal?.aborted) await refreshRootStepProgress();
   if (allResolved && !params.signal?.aborted && !cancellationRequested && !TERMINAL_RUN_STATES.has(params.run.state)) {
     // An earlier pass may have settled the cancelled root before its child
     // reached terminal. That durable root fact is no longer in the active index.

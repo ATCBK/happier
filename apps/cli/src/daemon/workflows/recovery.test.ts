@@ -8,6 +8,7 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import {
   createAccountScopedCryptoMaterialSnapshotV1,
+  createWorkflowAccountRunActionOwner,
   prepareWorkflowRunDataKeyV1,
   convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1,
   openWorkflowProgressStoredEnvelopeV1,
@@ -40,6 +41,7 @@ import { WORKFLOW_STEP_INPUT_EVENT_MESSAGE } from '@/session/shared/sessionTurnL
 import { parseStoredSessionTurn } from '../../../../server/sources/app/session/turns/parseSessionTurnState';
 import { SessionCreationCorrespondenceV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import { deriveWorkflowSessionCreationTag } from './workflowSessionStartup';
+import { WorkflowActionOutputSchemasV1 } from '@happier-dev/protocol/workflows/actionsV1';
 
 const accountId = 'account-1';
 const machineId = 'machine-1';
@@ -529,7 +531,7 @@ describe.each(['plain', 'e2ee'] as const)('frozen result recovery (%s)', (mode) 
 });
 
 describe('workflow Run startup/reconnect recovery', () => {
-  it.each(['already_completed', 'late_completion', 'wrong_birth'] as const)(
+  it.each(['already_completed', 'late_completion', 'aggregate_publication_lost', 'wrong_birth'] as const)(
     'reconciles an uncertain startup with its exact Session input (%s)', async scenario => {
       const rootId = '33333333-3333-4333-8333-333333333333';
       const childId = '44444444-4444-4444-8444-444444444444';
@@ -555,7 +557,9 @@ describe('workflow Run startup/reconnect recovery', () => {
           sequence: root ? '0' : '1', parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0' },
         progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'step',
           invocationPath: { blockId: root ? '$root' : 'step', scope: [] }, attempt: '0', logicalInvocationRecordId: id,
-          ...(root ? {} : { workspace: { descriptor: { machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+          ...(root ? { stepProgress: { completed: 0, total: 1, destinations: [
+            { sourceKey: '$root', blockId: 'step', ordinal: 1, name: 'Original step', sessionIds: [] },
+          ] } } : { workspace: { descriptor: { machineId, directory: '/repo', checkoutRootPath: '/repo' } },
             execution: { kind: 'action' as const, actionId: operation.actionId, actionRequestId: creationKey, localInputId: creationKey,
               input: { creationKey }, output: { operation }, awaitedOperations: [{ key: 'startup', serverId: 'home', machineId, operationId: operation.operationId }] } }) },
       }));
@@ -603,14 +607,25 @@ describe('workflow Run startup/reconnect recovery', () => {
           nativeActionOperations: { get: async () => ({ kind: 'found', operation }),
             cancel: async () => { throw new Error('Startup is terminal'); }, wait: async () => { throw new Error('Startup is terminal'); } },
         });
+        let rejectRootPublication = scenario === 'aggregate_publication_lost';
         const recover = createWorkflowRunRecoveryReader({ accountId, machineId,
-          storage: { execute: async (request, options) => request.operation === 'recovery.list'
-            ? { candidates: [{ run: kit.run(), parentAttempt: 0 }] } : kit.execute(request, options) },
+          storage: { execute: async (request, options) => {
+            if (rejectRootPublication && request.operation === 'invocations.fact' && request.invocationId === rootId) {
+              rejectRootPublication = false;
+              throw new Error('root_publication_transport_unavailable');
+            }
+            return request.operation === 'recovery.list'
+              ? { candidates: [{ run: kit.run(), parentAttempt: 0 }] } : kit.execute(request, options);
+          } },
           resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
           reconcileInvocation: observe,
         });
         await runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, async () => {
-          await recover('startup', controller.signal);
+          if (scenario === 'aggregate_publication_lost') {
+            await expect(recover('startup', controller.signal)).rejects.toThrow('root_publication_transport_unavailable');
+            expect(kit.rowById(childId)?.index.lifecycle).toBe('completed');
+            await recover('reconnect', controller.signal);
+          } else await recover('startup', controller.signal);
           if (scenario === 'wrong_birth') {
             expect(inputReads).toBe(0);
             expect(kit.rowById(childId)?.index.lifecycle).toBe('outcome_uncertain');
@@ -626,6 +641,23 @@ describe('workflow Run startup/reconnect recovery', () => {
             encryption: { witness: { mode: 'plain', version: 1, contentKeyFingerprint: null }, runCrypto: { mode: 'plain' } } });
           expect((await writer.readInvocation(childId))?.progress).toMatchObject({ result: 'exact result',
             execution: { kind: 'session', sessionId, localInputId: localId } });
+          const reader = createWorkflowAccountRunActionOwner({ resolveAccountId: async () => accountId, storage: kit,
+            definitions: { get: async () => { throw new Error('unexpected_definition_read'); } },
+            resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+            normalizeAbsolutePath: directory => directory.startsWith('/') ? directory : null,
+            randomBytes: () => { throw new Error('plain_account_does_not_need_keys'); },
+          });
+          await vi.waitFor(async () => {
+            const output = WorkflowActionOutputSchemasV1['workflow.run.get'].parse(await reader.execute({
+              actionId: 'workflow.run.get', input: { runId }, context: {},
+            }));
+            expect(output.run.stepProgress).toMatchObject({ completed: 1, total: 1, destinations: [
+              { blockId: 'step', name: 'Original step', sessionIds: [],
+                observation: { recordId: childId, lifecycle: 'completed', contentRevision: kit.rowById(childId)?.index.contentRevision } },
+            ] });
+          });
+          expect(kit.calls.filter(call => call.operation === 'invocations.fact' && call.invocationId === rootId).at(-1))
+            .toMatchObject({ resolution: 'root_list_progress', expectedRevision: kit.run().revision });
           expect(kit.run().state).toBe('interrupted');
           expect(kit.rows()).toHaveLength(2);
         });
