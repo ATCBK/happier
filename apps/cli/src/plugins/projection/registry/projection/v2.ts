@@ -39,6 +39,7 @@ import {
     pluginUiProjectionFamily,
     type PluginUiProjectionHostRuntimeContext,
 } from '../ui/projection';
+import { collectResolvedGeneratedReactNativeClientContributionArtifactOwners } from '../ui/generatedUiArtifactOwners';
 import { pluginBrowserProjectionFamily } from '../browser';
 import { providerProjectionFamily } from '../providers';
 import { connectedAccountProjectionFamily } from '../connectedAccounts';
@@ -51,6 +52,7 @@ import { registrySourcesProjectionFamily } from '../registrySources';
 import { skillsProjectionFamily } from '../skills';
 import { machineProvisionersProjectionFamily } from '../machineProvisioners';
 import { dragSourcesProjectionFamily, dropTargetsProjectionFamily } from '../entityDragDrop';
+import { workItemsProjectionFamily } from '../workItems';
 import {
     composerAttachmentsProjectionFamily,
     composerControlsProjectionFamily,
@@ -974,6 +976,7 @@ export function buildPluginProjectionV2(params: Readonly<{
         skillsProjectionFamily,
         machineProvisionersProjectionFamily,
         dragSourcesProjectionFamily,
+        workItemsProjectionFamily,
         dropTargetsProjectionFamily,
         voiceProviderProjectionFamily,
         accountCollectionsProjectionFamily,
@@ -1022,6 +1025,7 @@ export function buildPluginProjectionV2(params: Readonly<{
     // do not revalidate artifacts or retain a separate plugin health snapshot.
     const pluginUi = familiesById.pluginUi;
     if (pluginUi?.family === 'pluginUi') {
+        const clientArtifactOwners = collectResolvedGeneratedReactNativeClientContributionArtifactOwners(params.registry);
         for (const entry of Object.values(pluginUi.entriesById)) {
             if (!('contributionKind' in entry)
                 || (entry.contributionKind !== 'reactNativeBundle' && entry.contributionKind !== 'hostedWeb')) continue;
@@ -1037,6 +1041,8 @@ export function buildPluginProjectionV2(params: Readonly<{
             // Partial catalog-free projections can omit attribution metadata.
             // Keep their renderer result without inventing a plugin version/source.
             if (!plugin) continue;
+            const contribution = clientArtifactOwners.find(owner => owner.pluginId === pluginId && owner.contributionId === localId)
+                ?.contributionIdentity ?? createPluginContributionIdentity({ pluginId, localId });
             for (const code of new Set(codes)) {
                 if (typeof code !== 'string' || !code) continue;
                 diagnostics.push(enrichPluginDiagnosticRecord({
@@ -1045,7 +1051,7 @@ export function buildPluginProjectionV2(params: Readonly<{
                     message: 'This plugin UI contribution is unavailable.',
                 }, {
                     ordinal: diagnostics.length, plugin,
-                    contribution: createPluginContributionIdentity({ pluginId, localId }),
+                    contribution,
                     stage: 'ui', occurrenceId: params.registry.occurrenceIdsByPluginId?.[pluginId],
                     host: 'daemon', platform: process.platform, occurredAtMs: Date.now(),
                 }));

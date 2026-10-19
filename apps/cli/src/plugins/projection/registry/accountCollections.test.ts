@@ -6,6 +6,7 @@ import {
 
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 
 import { createResolvedContributionRegistry } from './createResolvedContributionRegistry';
 import { buildPluginProjectionV2 } from './projection/v2';
@@ -77,13 +78,13 @@ function loadedAccountCollectionsPlugin(): LoadedPlugin {
 
 describe('account collection contribution projection', () => {
   it('normalizes static collection UI-query descriptors before projecting them to the UI', () => {
-    const registry = createResolvedContributionRegistry(projectLoadedPluginContributes({
+    const registry = createResolvedContributionRegistry({ ...projectLoadedPluginContributes({
       loadResult: {
         loadedPlugins: [loadedAccountCollectionsPlugin()],
         diagnosticsByPluginId: {},
       },
       provenance: 'external',
-    }));
+    }), occurrenceIdsByPluginId: { [PLUGIN_ID]: createPluginRuntimeOccurrenceId(PLUGIN_ID) } });
 
     const projection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({
       registry,
@@ -93,6 +94,7 @@ describe('account collection contribution projection', () => {
 
     expect(entry).toEqual({
       pluginId: PLUGIN_ID,
+      occurrenceId: registry.occurrenceIdsByPluginId?.[PLUGIN_ID],
       collectionId: 'tasks',
       schemaVersion: 1,
       contractDigest: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),

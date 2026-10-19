@@ -12,10 +12,12 @@ import * as codexDefinition from '../../../../packages/plugins/codex/src/agent/d
 import * as claudeDefinition from '../../../../packages/plugins/claude/src/agent/definition';
 import * as ohMyPiDefinition from '../../../../packages/plugins/ohmypi/src/agent/definition';
 import { AGENT_DEFINITION as CUSTOM_ACP_DEFINITION } from '../../../../packages/plugins/custom-acp/src/agent/definition';
+import { KIRO_UI_DESCRIPTOR } from '../../../../packages/plugins/kiro/src/ui/descriptor';
 import { PLUGIN_MANIFEST as CUSTOM_ACP_MANIFEST } from '../../../../packages/plugins/custom-acp/src/manifest';
 import { collectBundledFirstPartyVoiceProjectionSources, collectBundledPluginUiTranslations, reconcileBundledPluginInstalledRuntime, readExternalSessionSourceDeclaration, renderRetainedCliBundledPluginImplementationEntriesTs, resolveGeneratorPackagedRuntimePreparation, selectCanonicalRuntimeWorkspacePackageRoots, publishBundledPluginSemanticProjection, readInheritedBundledPluginFailures } from './generateBundledPluginEntries.ts';
 import { renderBundledAgentDefinitionsTs } from './bundledPlugins/agentFacts.ts';
-import { renderBundledPluginTranslationsTs } from './bundledPlugins/agentUi.ts';
+import { renderBundledPluginTranslationsTs, renderUiBundledPluginEntriesTs } from './bundledPlugins/agentUi.ts';
+import { prepareAcpCatalogTransferV2, type AcpCatalogTransferAgentDeclarationV2 } from '@happier-dev/protocol/acp/catalog/transferAcpCatalogV2';
 import { renderBundledVoiceEntriesTs, renderBundledVoiceRuntimeEntriesTs } from './bundledPlugins/voice.ts';
 import { readBundledAgentNativeHomeEnvironmentKeys } from '../../../stack/scripts/utils/env/scrub_env.mjs';
 import { readAgentNativeHomeEnvironmentKeys } from '../../src/plugins/authoring/agentNativeHomeEnvironmentKeys';
@@ -72,6 +74,39 @@ describe('bundled Agent skill delivery coverage', () => {
           .toMatch(/\brunAgentSkillDeliveryContract\s*\(/u);
       }
     }
+  });
+});
+
+describe('bundled Agent ACP declarations', () => {
+  it('transfers predecessor stderr behavior from the real no-execute manifest projection and fails closed when absent', () => {
+    const authored = authoredAgentManifests.find(entry => entry.metadata.pluginPackageId === 'kiro');
+    if (!authored) throw new Error('The bundled Kiro declaration must be available');
+    const ingestion = ingestPluginManifestV2(authored.authored.PLUGIN_MANIFEST);
+    if (!ingestion.ok) throw new Error(JSON.stringify(ingestion.diagnostics));
+    const rendered = renderUiBundledPluginEntriesTs({
+      packageNames: [authored.metadata.packageName],
+      pluginPackages: [{
+        pluginPackageId: 'kiro', pluginId: ingestion.manifest.id, packageName: authored.metadata.packageName,
+        packageVersion: authored.metadata.packageVersion, manifest: ingestion.manifest, agentId: 'kiro',
+        agentUiDescriptor: KIRO_UI_DESCRIPTOR,
+      }],
+    });
+    const declarations = sourceBetween('export type BundledAgentDeclaration', 'export const BUNDLED_ACCOUNT_PROVIDER_DECLARATIONS', rendered);
+    const exports: Record<string, unknown> = {};
+    runInNewContext(transpileModule(declarations, { compilerOptions: { module: ModuleKind.CommonJS } }).outputText, { exports });
+    // This is the generated module's runtime boundary, not another declaration producer.
+    const projected = exports.BUNDLED_CANONICAL_AGENT_DECLARATIONS as Record<string, AcpCatalogTransferAgentDeclarationV2>;
+    const rawSettings = { acpCatalogSettingsV1: { v: 2, backends: [{
+      id: 'retained-kiro', name: 'retained-kiro', title: 'Retained Kiro', command: 'custom-kiro-cli',
+      transportProfile: 'kiro', createdAt: 1, updatedAt: 1,
+    }] } };
+    const prepared = prepareAcpCatalogTransferV2({ rawSettings, sourceSettingsVersion: 1,
+      agentDeclarations: Object.values(projected) });
+    const agent = ingestion.manifest.contributes.agents?.[0];
+    if (!agent || agent.runtime.kind !== 'acp') throw new Error('Kiro must declare its ACP runtime');
+    expect(prepared).toMatchObject({ status: 'ready', record: { definitions: [{ runtime: { stderrRules: agent.runtime.definition?.stderrRules } }] } });
+    expect(prepareAcpCatalogTransferV2({ rawSettings, sourceSettingsVersion: 1, agentDeclarations: [] }))
+      .toMatchObject({ status: 'unavailable', reason: 'transport-contribution-unavailable' });
   });
 });
 
@@ -942,6 +977,105 @@ describe('bundled plugin UI translation aggregation', () => {
 });
 
 describe('CLI bundled plugin registry projection', () => {
+  function writeRetainedCatalogAgent(repoRoot: string, happyCliDir: string) {
+    // A declarative ACP Agent supplies a real retained identity without a
+    // custom runtime/factory graph unrelated to semantic publication.
+    const manifest = {
+      schemaVersion: 2, id: 'happier.fixture-acp', version: '0.0.0', displayName: 'Fixture ACP',
+      runtime: { apiVersion: 1 }, contributes: { agents: [{
+        ...CUSTOM_ACP_MANIFEST.contributes.agents![0]!, id: 'fixture-acp',
+        runtime: { kind: 'acp', transport: { kind: 'webSocket', url: 'ws://localhost/fixture' } },
+      }] },
+    };
+    const ingestion = ingestPluginManifestV2(manifest);
+    if (!ingestion.ok) throw new Error(JSON.stringify(ingestion.diagnostics));
+    const packageRoot = writeWorkspacePackageFixture({
+      repoRoot, workspacePath: 'packages/plugins/fixture-acp', packageName: '@happier-dev/plugins-fixture-acp',
+    });
+    writeBundledPluginSourceInputs({ repoRoot, pluginId: 'fixture-acp', writePackageJson: false });
+    writeFileSync(join(packageRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify(manifest)};`);
+    writeFileSync(join(packageRoot, 'src/index.ts'), `export { PLUGIN_MANIFEST as manifest } from './manifest.js'; export function activate() {}`);
+    mkdirSync(join(packageRoot, 'src/agent'), { recursive: true });
+    writeFileSync(join(packageRoot, 'src/agent/definition.ts'), `export const AGENT_DEFINITION = ${JSON.stringify({
+      ...CUSTOM_ACP_DEFINITION, id: 'fixture-acp', core: {
+        ...CUSTOM_ACP_DEFINITION.core, id: 'fixture-acp', cliSubcommand: 'fixture-acp', detectKey: 'fixture-acp',
+      },
+    })};`);
+    mkdirSync(join(packageRoot, '.happier-plugin'), { recursive: true });
+    writeFileSync(join(packageRoot, '.happier-plugin/plugin.json'), JSON.stringify(manifest));
+    const bindingsPath = join(happyCliDir, 'src/plugins/projection/registry/sources/generatedBundledPlugins.ts');
+    mkdirSync(dirname(bindingsPath), { recursive: true });
+    writeFileSync(bindingsPath, renderCliBundledAgentRegistrationBindingsTs([{
+      pluginId: manifest.id, localId: 'fixture-acp',
+      implementationOwnerId: 'fixture-acp', registrationFamily: 'agents',
+    }]));
+  }
+
+  it('scoped ordinary publication projects authored declarations despite stale package artifacts', async () => {
+    const { repoRoot, happyCliDir, cleanup } = createPackageLayoutSandbox('happier-authored-projection-');
+    const packages = ['inspector', 'neighbor'];
+    for (const id of packages) {
+      const packageRoot = writeWorkspacePackageFixture({
+        repoRoot, workspacePath: `packages/plugins/${id}`, packageName: `@happier-dev/plugins-${id}`,
+      });
+      writeBundledPluginSourceInputs({ repoRoot, pluginId: id, writePackageJson: false });
+      writeFileSync(join(packageRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify({
+        schemaVersion: 2, id: `happier.${id}`, version: '0.0.0', displayName: `Authored ${id}`,
+        engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
+        hostAccess: { required: [], optional: [] }, contributes: {},
+      })};`);
+      mkdirSync(join(packageRoot, '.happier-plugin'), { recursive: true });
+      writeFileSync(join(packageRoot, '.happier-plugin/plugin.json'), '{"schemaVersion":0}');
+    }
+    writeRetainedCatalogAgent(repoRoot, happyCliDir);
+    writeCliBundledHostPackage({ happyCliDir, bundledDependencies: [...packages, 'fixture-acp'].map(id => `@happier-dev/plugins-${id}`) });
+    try {
+      await main(['--root', repoRoot, '--mode', 'write', '--workspace', 'plugins-inspector']);
+      for (const id of packages) {
+        expect(JSON.parse(readFileSync(join(happyCliDir, `assets/bundled-plugin-manifests/${id}.json`), 'utf8')))
+          .toMatchObject({ id: `happier.${id}`, displayName: `Authored ${id}` });
+        expect(readFileSync(join(repoRoot, `packages/plugins/${id}/.happier-plugin/plugin.json`), 'utf8'))
+          .toBe('{"schemaVersion":0}');
+      }
+    } finally { cleanup(); }
+  });
+
+  it.each([
+    ['full', []],
+    ['scoped', ['--workspace', 'plugins-inspector']],
+    ['aggregate', ['--aggregate']],
+  ] as const)('%s publication rejects an invalid declaration without replacing usable membership', async (_label, selector) => {
+    const { repoRoot, happyCliDir, cleanup } = createPackageLayoutSandbox('happier-invalid-projection-');
+    const packageRoot = writeWorkspacePackageFixture({
+      repoRoot, workspacePath: 'packages/plugins/inspector', packageName: '@happier-dev/plugins-inspector',
+    });
+    writeBundledPluginSourceInputs({ repoRoot, pluginId: 'inspector', writePackageJson: false });
+    const neighborRoot = writeWorkspacePackageFixture({
+      repoRoot, workspacePath: 'packages/plugins/neighbor', packageName: '@happier-dev/plugins-neighbor',
+    });
+    writeBundledPluginSourceInputs({ repoRoot, pluginId: 'neighbor', writePackageJson: false });
+    const neighborManifest = {
+      schemaVersion: 2, id: 'happier.neighbor', version: '0.0.0', displayName: 'Neighbor',
+      runtime: { apiVersion: 1 }, contributes: {},
+    };
+    writeFileSync(join(neighborRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify(neighborManifest)};`);
+    mkdirSync(join(neighborRoot, '.happier-plugin'), { recursive: true });
+    writeFileSync(join(neighborRoot, '.happier-plugin/plugin.json'), JSON.stringify(neighborManifest));
+    writeRetainedCatalogAgent(repoRoot, happyCliDir);
+    writeCliBundledHostPackage({ happyCliDir, bundledDependencies: ['@happier-dev/plugins-inspector', '@happier-dev/plugins-neighbor', '@happier-dev/plugins-fixture-acp'] });
+    const outPath = join(happyCliDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts');
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, 'previous usable membership');
+    writeFileSync(join(packageRoot, 'src/manifest.ts'), 'throw new Error("Invalid current Inspector declaration");');
+    mkdirSync(join(packageRoot, '.happier-plugin'), { recursive: true });
+    writeFileSync(join(packageRoot, '.happier-plugin/plugin.json'), JSON.stringify({ id: 'happier.inspector', schemaVersion: 0 }));
+    try {
+      await expect(main(['--root', repoRoot, '--mode', 'write', ...selector]))
+        .rejects.toThrow(/plugins-inspector/u);
+      expect(readFileSync(outPath, 'utf8')).toBe('previous usable membership');
+    } finally { cleanup(); }
+  });
+
   it('does not publish a duplicate packaged-byte currentness authority', () => {
     expect(generatorSource).not.toContain('assignBundledImmutableArtifactGenerationIds');
     expect(generatorSource).not.toContain('renderCliBundledPluginArtifactRecordsTs');
@@ -1084,7 +1218,7 @@ describe('CLI bundled plugin registry projection', () => {
         writeFileSync(join(packageRoot, '.happier-plugin/plugin.json'), JSON.stringify({
           ...CUSTOM_ACP_MANIFEST, contributes: { ...CUSTOM_ACP_MANIFEST.contributes, agents },
         }));
-        await expect(publish()).rejects.toThrow(/Missing bundled manifest.*custom-acp/u);
+        await expect(publish()).rejects.toThrow(/custom-acp/u);
         expect(readFileSync(manifestPath, 'utf8')).toBe('previous manifest publication');
         expect(readFileSync(bindingsPath, 'utf8')).toBe(bindings);
       }
@@ -1277,21 +1411,29 @@ describe('CLI bundled plugin registry projection', () => {
     } finally { cleanup(); }
   });
 
-  it('keeps required Voice presentation failures fatal through the publication policy owner', async () => {
+  it('records required-package Voice presentation failure without discarding its semantic membership', async () => {
     const { repoRoot, cleanup } = createPackageLayoutSandbox('happier-required-voice-presentation-');
     try {
       writeWorkspacePackageFixture({
         repoRoot, workspacePath: 'packages/plugins/codex', packageName: '@happier-dev/plugins-codex',
         files: { 'src/ui/voice/entries.ts': 'export const VOICE_PROVIDER_PRESENTATIONS = null;\n' },
       });
-      await expect(collectBundledFirstPartyVoiceProjectionSources(repoRoot, [{
+      const { sources, failures } = await collectBundledFirstPartyVoiceProjectionSources(repoRoot, [{
         packageName: '@happier-dev/plugins-codex', packageVersion: '0.0.0', pluginPackageId: 'codex',
         pluginId: 'happier.agent.codex',
         manifest: {
           schemaVersion: 2, id: 'happier.agent.codex', version: '0.0.0', displayName: 'Codex',
           runtime: { apiVersion: 1 }, contributes: {},
         },
-      }])).rejects.toThrow(/plugins-codex.*required by host code/u);
+      }]);
+      expect(failures).toMatchObject([{
+        packageName: '@happier-dev/plugins-codex',
+        diagnostic: { code: 'plugin_ui_artifact_invalid' },
+      }]);
+      expect(sources).toMatchObject([{
+        pluginId: 'happier.agent.codex', presentations: [],
+        manifest: { id: 'happier.agent.codex' },
+      }]);
     } finally { cleanup(); }
   });
 

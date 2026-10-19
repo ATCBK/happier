@@ -1,3 +1,4 @@
+import type { PluginWorkItemsContributionV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
 import type {
     BackendCatalogDefinition,
     BackendDefinitionContractV1,
@@ -136,6 +137,7 @@ export type ResolvedClientExecutableContribution<T> = ResolvedTargetUiContributi
     generatedUiArtifactsManifest?: PluginUiArtifactsManifestV2;
 }>;
 export type ResolvedDragSourceContribution = ResolvedClientExecutableContribution<PluginDragSourceContributionV1>;
+export type ResolvedWorkItemsContribution = ResolvedClientExecutableContribution<PluginWorkItemsContributionV1>;
 export type ResolvedDropTargetContribution = ResolvedClientExecutableContribution<PluginDropTargetContributionV1>;
 export type ResolvedSearchProviderContribution = ResolvedTargetUiContribution<
     PluginSearchProviderContributionV1
@@ -869,6 +871,7 @@ export type ResolvedContributionInputs = Readonly<{
     skills?: readonly ResolvedSkillContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];
+    workItems?: readonly ResolvedWorkItemsContribution[];
     dropTargets?: readonly ResolvedDropTargetContribution[];
     mcpServers?: readonly ResolvedMcpServerContribution[];
     mcpDiscoverySources?: readonly ResolvedMcpDiscoverySourceContribution[];
@@ -934,6 +937,7 @@ export type ResolvedContributionRegistry = Readonly<{
     skills?: readonly ResolvedSkillContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];
+    workItems?: readonly ResolvedWorkItemsContribution[];
     dropTargets?: readonly ResolvedDropTargetContribution[];
     mcpServers?: readonly ResolvedMcpServerContribution[];
     mcpDiscoverySources?: readonly ResolvedMcpDiscoverySourceContribution[];

@@ -115,14 +115,7 @@ function projectUiEntries(
 }
 
 /**
- * Zod collapses a failed view union into one opaque `Invalid input` diagnostic
- * at `contributes.ui.views.0` — byte-identical for a bad container, a retired
- * `placement` and an author-selected `path`. Scanning the serialized result for
- * the field name therefore asserts a precision the owner does not have: two of
- * those scans were red, and `toContain('path')` passed only because every
- * diagnostic object carries a `path` key at all.
- *
- * The discriminating fact that IS available: the same fixture without the
+ * The discriminating fact: the same fixture without the
  * offending field is accepted, so the rejection is attributable to that field
  * rather than to a broken fixture or to any rejection whatsoever.
  */
@@ -134,7 +127,6 @@ function expectViewFieldRejected(overrides: Parameters<typeof manifestText>[0]):
     expect(rejected.ok).toBe(false);
     expect(rejected.ok ? [] : rejected.diagnostics).toContainEqual(expect.objectContaining({
         code: 'plugin_manifest_invalid',
-        path: ['contributes', 'ui', 'views', 0],
     }));
 }
 

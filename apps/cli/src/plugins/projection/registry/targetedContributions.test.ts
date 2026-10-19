@@ -26,6 +26,14 @@ import {
     type PluginRuntimeOccurrenceId,
 } from '@/plugins/runtime/runtimeSlots';
 import { createResolvedContributionRegistry } from './createResolvedContributionRegistry';
+import { buildPluginContributionRegistry } from './normalize/package';
+import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
+import { emailPlugin } from '../../../../../../packages/plugins/channel-email/src/plugin';
+import { createAdmittedTargetedOperationExecutionHandle, createPluginInvocationActionsService } from '@/plugins/runtime/invocation/services/actions';
+import { createPluginActionCallerMaterializationFixture } from '@/plugins/runtime/invocation/services/actionCaller.testkit';
+import { createManagedPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import type {
     ResolvedActionContribution,
     ResolvedActionDefinition,
@@ -173,7 +181,7 @@ function action(params: Readonly<{
     localId?: string;
     surfaces?: readonly PluginActionSurfaceV2[];
     dangerLevel?: PluginActionDangerLevelV2;
-    hasInputSchema?: boolean;
+    hasUsableInputSchema?: boolean;
     hasOutputSchema?: boolean;
     inputHints?: ResolvedActionDefinition['inputHints'];
     outputSchema?: NonNullable<ResolvedActionDefinition['outputSchema']>;
@@ -229,9 +237,9 @@ function action(params: Readonly<{
             safety: 'danger',
             dangerLevel,
         };
-    const resolvedDefinition = params.hasInputSchema === false
+    const resolvedDefinition = params.hasUsableInputSchema === false
         // Deliberately malformed registry-boundary fixture for the invalid-schema admission case.
-        ? { ...definition, inputSchema: undefined } as unknown as ResolvedActionDefinition
+        ? { ...definition, inputSchema: null } as unknown as ResolvedActionDefinition
         : definition;
     return {
         provenance: 'external',
@@ -309,7 +317,7 @@ function registry(params: Readonly<{
             [targetPluginId]: targetOccurrenceId,
             [contributorPluginId]: contributorOccurrenceId,
         },
-    } as Parameters<typeof createResolvedContributionRegistry>[0]);
+    });
 }
 
 function targetedDiagnosticCodes(catalog: ReturnType<typeof registry>): readonly string[] {
@@ -320,14 +328,102 @@ function targetedDiagnosticCodes(catalog: ReturnType<typeof registry>): readonly
 }
 
 describe('targeted contribution cold admission', () => {
+    it('runs retained Email transport Account input from the normalized declaration without UI form hints', async () => {
+        const manifest = readCanonicalPluginManifest(emailPlugin.manifest);
+        if (!manifest) throw new Error('Email manifest did not normalize');
+        const loaded = {
+            pluginId: manifest.id, pluginRootPath: '/plugins/email',
+            manifestPath: '/plugins/email/plugin.json', daemonEntryPath: '/plugins/email/daemon.js',
+            devDaemonEntryPath: null,
+            sourceSpec: { kind: 'path', locator: '/plugins/email', trustPolicy: 'local_trusted', installPolicy: 'link' },
+            manifest,
+        } satisfies LoadedPlugin;
+        const projected = buildPluginContributionRegistry({ loadedPlugins: [loaded] });
+        const occurrenceId = createPluginRuntimeOccurrenceId(manifest.id);
+        const catalog = createResolvedContributionRegistry({
+            actions: projected.actions.map(entry => ({ ...entry, provenance: 'external', source: { kind: 'path' } })),
+            pluginContributionPoints: projected.pluginContributionPoints.map(entry => ({ ...entry, provenance: 'external', source: { kind: 'path' }, identity: createPluginContributionIdentity({ pluginId: entry.pluginId, localId: entry.definition.id }) })),
+            targetedPluginContributions: projected.targetedPluginContributions.map(entry => ({ ...entry, provenance: 'external', source: { kind: 'path' }, identity: createPluginContributionIdentity({ pluginId: entry.pluginId, localId: entry.definition.id }) })),
+            occurrenceIdsByPluginId: { [manifest.id]: occurrenceId },
+        });
+        const snapshot = catalog.readAdmittedTargetedContributions?.({ targetPluginId: manifest.id, pointId: 'transports', protocol: { id: emailPlugin.contributionPoints.transports.protocol.id, version: 1 } });
+        const operation = snapshot?.contributions[0]?.operations.find(entry => entry.role === 'connectionTest');
+        const pollOperation = snapshot?.contributions[0]?.operations.find(entry => entry.role === 'listSince');
+        if (!operation || !pollOperation) throw new Error('Missing admitted Email transport');
+        const account = { service: { pluginId: manifest.id, localId: 'email-imap-smtp' }, accountId: 'retained-mailbox' };
+        const caller = createPluginActionCallerMaterializationFixture(manifest.id);
+        const sourceCustody = createManagedPluginSourceCustody('email-retained');
+        let materializations = 0;
+        let dispatchedAction = operation.action;
+        const driver = definePlugin({ id: manifest.id, version: manifest.version, actions: {
+            'fixture-dispatch': { title: 'Dispatch through the host', surfaces: ['plugin'],
+                inputSchema: { type: 'object' }, resultSchema: { type: 'object' },
+                run: (input, context) => context.services.actions.execute(dispatchedAction, input),
+            },
+        } });
+        const emailActions = emailPlugin.manifest.contributes.actions;
+        const driverActions = driver.manifest.contributes.actions;
+        if (!emailActions || !driverActions) throw new Error('Expected Email and host-dispatch Action declarations');
+        const transport = await createPluginTestkit({ manifest: { ...emailPlugin.manifest,
+            contributes: { ...emailPlugin.manifest.contributes, actions: [...emailActions, ...driverActions] } },
+            module: { async activate(api) { await emailPlugin.activate(api); await driver.activate(api); } },
+            services: { connectedAccounts: { ...createUnavailablePluginServices().connectedAccounts, async materialize(_purpose, _request, options) {
+                materializations += 1;
+                expect(options?.expectedAccount).toEqual(account);
+                // The credential store is the external boundary. Absence keeps
+                // real Email parsing/classification active without opening TCP.
+                return { kind: 'environment', env: {} };
+            } } },
+        });
+        const actions = createPluginInvocationActionsService({
+            seed: { plugin: { id: manifest.id, version: manifest.version }, contribution: { id: 'retest', qualifiedId: `${manifest.id}/actions/retest` }, occurrenceId, surface: 'plugin', sourceCustody,
+                resolveCurrentPluginMaterializationRef: caller.resolveCurrentPluginMaterializationRef,
+                signal: new AbortController().signal, isOccurrenceCurrent: () => true },
+            actionExecutor: { execute: vi.fn() },
+            // Cross-host dispatch is a system boundary; declaration admission,
+            // reconstruction and the actual registered Action parser stay real.
+            invokeContributedAction: async request => {
+                if (request.input === undefined) throw new Error('Expected a JSON Action input');
+                return { status: 'executed', value: await transport.invokeAction('fixture-dispatch', request.input, { surface: 'plugin' }) };
+            },
+        });
+        try {
+            for (const selected of [operation, pollOperation]) {
+                dispatchedAction = selected.action;
+                const admitted = createAdmittedTargetedOperationExecutionHandle({ action: selected.action, selectedActionInput: selected.selectedActionInput,
+                    targetProtocol: selected.targetProtocol, targetOccurrenceId: occurrenceId,
+                    identity: { target: { pluginId: manifest.id }, point: { pointId: 'transports', protocol: { id: emailPlugin.contributionPoints.transports.protocol.id, version: 1 } },
+                        contributor: { pluginId: manifest.id, contributionId: 'imap-smtp', occurrenceId, sourceCustody }, role: selected.role } });
+                const fields: Record<string, Parameters<typeof actions.executeAdmittedTargetedOperation>[1]> = selected.role === 'listSince'
+                    ? { config: {}, checkpoint: null, waitMs: 0, limit: 1 }
+                    : { config: {} };
+                // Test/poll each restore stripped input and accept a retained
+                // matching reference, but cannot switch to another Account.
+                for (const input of [{ credentialRef: account, ...fields }, fields]) {
+                    await expect(actions.executeAdmittedTargetedOperation(admitted, input, { expectedSelectedConnectedAccountRef: account }))
+                        .resolves.toEqual({ kind: 'notReady', reason: 'credentialInvalid' });
+                }
+                await expect(actions.executeAdmittedTargetedOperation(admitted, { credentialRef: { ...account, accountId: 'different-mailbox' }, ...fields }, { expectedSelectedConnectedAccountRef: account }))
+                    .rejects.toMatchObject({ code: 'plugin_selected_action_input_invalid', actionHandlerInvocation: 'notStarted' });
+            }
+            expect(materializations).toBe(4);
+        } finally { await transport.dispose(); }
+    });
     it('retains the exact admitted Action selection shape instead of trusting a later UI carrier field path', () => {
-        const selectionFor = (inputHints: ResolvedActionDefinition['inputHints']) => {
-            const catalog = registry({ actions: [action({ inputHints })] });
+        const selectionFor = (inputHints: ResolvedActionDefinition['inputHints'], bindingPaths: readonly string[] = []) => {
+            const selected = action({ inputHints });
+            const catalog = registry({ actions: [{ ...selected, definition: { ...selected.definition,
+                connectedAccountPurposeBindings: bindingPaths.map((path, index) => ({ path, purpose: `purpose-${index}` })),
+            } }] });
             return catalog.readAdmittedTargetedContributions?.({ targetPluginId, pointId, protocol })
                 ?.contributions[0]?.operations[0]?.selectedActionInput;
         };
 
         expect(selectionFor(null)).toEqual({ kind: 'none' });
+        expect(selectionFor(null, ['auth.account'])).toEqual({ kind: 'connectedAccount', fieldPath: 'auth.account' });
+        expect(selectionFor(null, ['auth.account', 'auth.other'])).toEqual({ kind: 'unavailable' });
+        expect(selectionFor({ fields: [{ path: 'account', title: 'Account', widget: 'select', connectedAccountOptions: true }] }, ['auth.account']))
+            .toEqual({ kind: 'unavailable' });
         expect(selectionFor({
             fields: [{
                 path: 'credentialRef',
@@ -1207,7 +1303,7 @@ describe('targeted contribution cold admission', () => {
             },
             {
                 name: 'Action without a usable schema',
-                input: { actions: [action({ hasInputSchema: false })] },
+                input: { actions: [action({ hasUsableInputSchema: false })] },
                 code: 'action_schema_invalid',
             },
             {

@@ -21,8 +21,10 @@ import type {
     ResolvedInputTypeContribution,
     ResolvedAtmospherePictureContribution,
     ResolvedRegistrySourceContribution,
+    ResolvedSkillContribution,
     ResolvedMachineProvisionerContribution,
     ResolvedDragSourceContribution,
+    ResolvedWorkItemsContribution,
     ResolvedDropTargetContribution,
     ResolvedEventContribution,
     ResolvedInstallableContribution,
@@ -314,8 +316,10 @@ export function projectLoadedPluginContributes(
     const inputTypeCandidates: ResolvedInputTypeContribution[] = [];
     const atmospherePictureCandidates: ResolvedAtmospherePictureContribution[] = [];
     const registrySourceCandidates: ResolvedRegistrySourceContribution[] = [];
+    const skillCandidates: ResolvedSkillContribution[] = [];
     const machineProvisionerCandidates: ResolvedMachineProvisionerContribution[] = [];
     const dragSourceCandidates: ResolvedDragSourceContribution[] = [];
+    const workItemCandidates: ResolvedWorkItemsContribution[] = [];
     const dropTargetCandidates: ResolvedDropTargetContribution[] = [];
     const voiceProviderCandidates: ResolvedVoiceProviderContribution[] = [];
     const accountCollectionCandidates: ResolvedAccountCollectionContribution[] = [];
@@ -864,6 +868,7 @@ export function projectLoadedPluginContributes(
             provenance: params.provenance,
             source: { kind: contribution.sourceSpec.kind },
             pluginId: contribution.pluginId,
+            displayName: contribution.displayName,
             pluginVersion: contribution.pluginVersion,
             identity: contribution.identity!,
             manifestPath: contribution.manifestPath,
@@ -893,6 +898,13 @@ export function projectLoadedPluginContributes(
             pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
             manifestPath: contribution.manifestPath, definition: contribution.definition });
     }
+    for (const contribution of pluginRegistry.skills) {
+        const pluginName = params.loadResult.loadedPlugins.find(plugin => plugin.manifest.id === contribution.pluginId)?.manifest.displayName;
+        skillCandidates.push({ provenance: params.provenance, source: { kind: contribution.sourceSpec.kind },
+            pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
+            pluginRootPath: contribution.pluginRootPath, manifestPath: contribution.manifestPath,
+            ...(typeof pluginName === 'string' ? { pluginName } : {}), definition: contribution.definition });
+    }
     for (const contribution of pluginRegistry.atmospherePictures) {
         atmospherePictureCandidates.push({ provenance: params.provenance, source: { kind: contribution.sourceSpec.kind },
             pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
@@ -908,6 +920,12 @@ export function projectLoadedPluginContributes(
         });
     }
 
+    for (const contribution of pluginRegistry.workItems) {
+        workItemCandidates.push({ provenance: params.provenance, source: { kind: contribution.sourceSpec.kind },
+            pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
+            manifestPath: contribution.manifestPath, pluginRootPath: contribution.pluginRootPath, definition: contribution.definition,
+            ...(contribution.generatedUiArtifactsManifest ? { generatedUiArtifactsManifest: contribution.generatedUiArtifactsManifest } : {}) });
+    }
     for (const contribution of pluginRegistry.dragSources) {
         dragSourceCandidates.push({ provenance: params.provenance, source: { kind: contribution.sourceSpec.kind },
             pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
@@ -1024,8 +1042,10 @@ export function projectLoadedPluginContributes(
         inputTypes: Object.freeze(inputTypeCandidates),
         atmospherePictures: Object.freeze(atmospherePictureCandidates),
         registrySources: Object.freeze(registrySourceCandidates),
+        skills: Object.freeze(skillCandidates),
         machineProvisioners: Object.freeze(machineProvisionerCandidates),
         dragSources: Object.freeze(dragSourceCandidates),
+        workItems: Object.freeze(workItemCandidates),
         dropTargets: Object.freeze(dropTargetCandidates),
         voiceProviders: Object.freeze(voiceProviderCandidates),
         accountCollections: Object.freeze(accountCollectionCandidates),

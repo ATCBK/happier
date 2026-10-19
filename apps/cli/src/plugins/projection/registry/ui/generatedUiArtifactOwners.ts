@@ -1,6 +1,7 @@
 import { PluginActionExecutionV2Schema } from '@happier-dev/protocol/plugins/actions/v2';
 import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui/uiArtifactsManifest';
 import type { PluginUiArtifactsManifestEntryV2, PluginUiArtifactsManifestV2 } from '@happier-dev/protocol/plugins/ui';
+import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 
 import type { ResolvedContributionRegistry, ResolvedContributionSource } from '../types';
 
@@ -33,6 +34,7 @@ export type ResolvedGeneratedReactNativeClientContributionArtifactOwner = Readon
   pluginSource: ResolvedContributionSource;
   pluginVersion?: string;
   contributionId: string;
+  contributionIdentity: PluginContributionIdentityV1;
   artifactId: string;
   pluginRootPath?: string;
   manifestPath: string;
@@ -160,6 +162,7 @@ export function findResolvedGeneratedReactNativeClientContributionArtifactOwner(
     pluginSource: Object.freeze({ ...action.source }),
     ...(action.pluginVersion ? { pluginVersion: action.pluginVersion } : {}),
     contributionId: input.action.localId,
+    contributionIdentity: input.action,
     artifactId: execution.client.artifactId,
     ...(action.pluginRootPath ? { pluginRootPath: action.pluginRootPath } : {}),
     manifestPath,
@@ -187,6 +190,7 @@ export function collectResolvedGeneratedReactNativeClientContributionArtifactOwn
   });
   for (const [family, contributions] of [
     ['dragSources', registry.dragSources ?? []],
+    ['workItems', registry.workItems ?? []],
     ['dropTargets', registry.dropTargets ?? []],
   ] as const) {
     for (const contribution of contributions) {
@@ -201,6 +205,7 @@ export function collectResolvedGeneratedReactNativeClientContributionArtifactOwn
         ...(contribution.pluginVersion ? { pluginVersion: contribution.pluginVersion } : {}),
         // Family namespaces preserve two client leaves with the same local id.
         contributionId: `${family}/${contribution.identity.localId}`,
+        contributionIdentity: contribution.identity,
         artifactId: contribution.definition.client.artifactId,
         pluginRootPath: contribution.pluginRootPath,
         manifestPath,

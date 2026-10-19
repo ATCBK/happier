@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import { PluginProjectionV2Schema, type PluginProjectedFamilyV2 } from '@happier-dev/protocol';
+import { buildPluginProjectionFamilyV2, type PluginProjectionFamilyDescriptorV2 } from '@/plugins/projection/families';
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { projectLoadedPluginContributes } from './resolvePluginContributions';
 import { createResolvedContributionRegistry } from './createResolvedContributionRegistry';
 import { buildPluginProjectionV2 } from './projection/v2';
+import { skillsProjectionFamily } from './skills';
 
 describe('plugin input type projection', () => {
   it('keeps identical local ids qualified and withdraws a retired occurrence', () => {
@@ -23,6 +25,12 @@ describe('plugin input type projection', () => {
     const registry = createResolvedContributionRegistry({ ...inputs,
       occurrenceIdsByPluginId: Object.fromEntries(ids.map((id) => [id, createPluginRuntimeOccurrenceId(id)])),
     });
+    const skillsFamily = buildPluginProjectionFamilyV2({ registry, generation: 1 }, skillsProjectionFamily);
+    expectTypeOf(skillsFamily).toMatchTypeOf<Extract<PluginProjectedFamilyV2, { family: 'skills' }>>();
+    expectTypeOf(skillsFamily).not.toMatchTypeOf<Extract<PluginProjectedFamilyV2, { family: 'providers' }>>();
+    const dynamicFamily: PluginProjectionFamilyDescriptorV2 = skillsProjectionFamily;
+    expectTypeOf(buildPluginProjectionFamilyV2({ registry, generation: 1 }, dynamicFamily))
+      .toMatchTypeOf<PluginProjectedFamilyV2>();
     const origin = { serverIdentityId: 'srv_inputs', materializationRef: {
       machineId: 'input-machine', materializationId: 'input-materialization', pluginId: ids[0]!,
     } };

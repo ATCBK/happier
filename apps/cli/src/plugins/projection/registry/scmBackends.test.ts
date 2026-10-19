@@ -12,6 +12,7 @@ import { createResolvedContributionRegistry } from './createResolvedContribution
 import type { ResolvedContributionRegistry } from './types';
 import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 
 const sourceSpec = {
     kind: 'path' as const,
@@ -86,6 +87,9 @@ describe('SCM backend plugin contributions', () => {
     it('keeps same-local-id backends from distinct plugin namespaces addressable', () => {
         const registry = createResolvedContributionRegistry({
             agents: [],
+            occurrenceIdsByPluginId: Object.fromEntries(['acme.scm.one', 'acme.scm.two'].map((pluginId) => [
+                pluginId, createPluginRuntimeOccurrenceId(pluginId),
+            ])),
                         scmBackends: [
                 {
                     id: 'git',
@@ -137,6 +141,9 @@ describe('SCM backend plugin contributions', () => {
     it('projects only backends backed by the current authoritative runtime lease when runtime facts are supplied', () => {
         const registry = createResolvedContributionRegistry({
             agents: [],
+            occurrenceIdsByPluginId: Object.fromEntries(['acme.scm.active', 'acme.scm.stale'].map((pluginId) => [
+                pluginId, createPluginRuntimeOccurrenceId(pluginId),
+            ])),
                         scmBackends: [
                 {
                     id: 'active',

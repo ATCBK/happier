@@ -8,6 +8,7 @@ import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { projectAgentCliAuthCatalogEntry } from './agentCatalogEntryHooks';
 import { createNativeAgentCliAuthSpec } from './agentCliMetadata';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -36,14 +37,15 @@ process.stdout.write(JSON.stringify({ loggedIn })); process.exitCode = loggedIn 
           ? `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`
           : `#!/bin/sh\nexec ${runtime} '${script.replace(/'/g, `'\\''`)}' "$@"\n`,
       });
-      const cli = PLUGIN_MANIFEST.contributes.agents[0]?.cli;
+      const manifest = normalizePluginManifestV2(PLUGIN_MANIFEST);
+      const cli = manifest.contributes.agents?.[0]?.cli;
       if (!cli) throw new Error('Claude CLI metadata is required');
       const cliAuth = activation.registration('agents', 'claude')?.cliAuth;
       const spec = cliAuth
         ? await projectAgentCliAuthCatalogEntry({
           agentId: 'claude', pluginId: PLUGIN_MANIFEST.id, cli, cliAuth, isCurrent: () => true,
           systemTools: [{ id: 'claude-cli', title: 'Claude fixture', executableNames: [tool] }],
-          hostAccess: PLUGIN_MANIFEST.hostAccess,
+          hostAccess: manifest.hostAccess,
         }).getCliAuthSpec?.()
         : createNativeAgentCliAuthSpec(cli);
       const processEnv = { ...process.env, HOME: nativeHome, USERPROFILE: nativeHome,

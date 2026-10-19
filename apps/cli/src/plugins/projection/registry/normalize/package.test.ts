@@ -148,6 +148,8 @@ describe('target package contribution projection', () => {
         surfaces: ['cli'],
         execution: { target: 'daemon' },
         operation: { version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'detail' } },
+        inputSchema: { type: 'object', properties: { sessionId: { type: 'string' } }, additionalProperties: false },
+        sessionTarget: { field: 'sessionId', cardinality: 'many' },
         placementBindings: ['primary'],
         resultSchema,
         dangerLevel: 'writesRemote',
@@ -163,6 +165,7 @@ describe('target package contribution projection', () => {
     expect(registry.commands[0]?.definition.actionId).toBe('com.acme.plugin/run');
     expect(registry.actions[0]?.definition).toMatchObject({
       outputSchema: resultSchema,
+      sessionTarget: { field: 'sessionId', cardinality: 'many' },
       operation: { version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'detail' } },
       dangerLevel: 'writesRemote',
       confirmation: {

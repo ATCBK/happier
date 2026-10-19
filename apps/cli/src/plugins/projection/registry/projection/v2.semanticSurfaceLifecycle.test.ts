@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import type { PluginApi } from '@happier-dev/plugin-sdk';
 
@@ -13,6 +16,11 @@ import { buildTargetActionInvocationRegistry } from '@/plugins/runtime/invocatio
 import { createUnavailablePluginServicesFactory } from '@/plugins/runtime/invocation/services/factory';
 import { activatePluginRuntimeRegistry } from '@/plugins/runtime/lifecycle/manager';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
+import { seedCurrentLocalPathPluginFixture } from '@/plugins/store/registry/currentState.testkit';
+import { readCurrentCommittedPluginGenerations } from '@/plugins/store/registry/generationStore';
+import { resolvePluginStorePaths } from '@/plugins/store/paths';
+import { bindPluginRuntimeSourceAuthority } from '@/plugins/runtime/sourceAuthority';
 
 import { buildPluginProjectionV2 } from './v2';
 
@@ -102,36 +110,61 @@ function loadedPlugin(manifestText: string): LoadedPlugin {
 }
 
 function resolveRegistry(loadedPlugins: readonly LoadedPlugin[]): ResolvedContributionRegistry {
-    return createResolvedContributionRegistry(projectLoadedPluginContributes({
-        loadResult: { loadedPlugins, diagnosticsByPluginId: {} },
-        provenance: 'external',
-    }));
+    return createResolvedContributionRegistry({
+        ...projectLoadedPluginContributes({
+            loadResult: { loadedPlugins, diagnosticsByPluginId: {} },
+            provenance: 'external',
+        }),
+        occurrenceIdsByPluginId: Object.fromEntries(loadedPlugins.map((plugin) => [
+            plugin.pluginId, createPluginRuntimeOccurrenceId(plugin.pluginId),
+        ])),
+    });
 }
-
-let activationSourceSeq = 0;
 
 async function activateWith(params: Readonly<{
     registry: ResolvedContributionRegistry;
     generation: number;
     activate: (api: PluginApi) => void | (() => void);
 }>) {
-    // A distinct module id per activation. `loadPluginModule` caches the loaded
-    // module NAMESPACE by module id, which is correct in production (a real
-    // daemon module exports one stable `activate`, re-invoked per activation).
-    // Here each activation supplies a different `activate` closure inside its
-    // own namespace, so sharing one module id would silently re-run the first
-    // closure.
-    activationSourceSeq += 1;
-    const moduleId = `@happier-dev/plugins-acme-preview/daemon#${activationSourceSeq}`;
-    return activatePluginRuntimeRegistry({
-        contributes: params.registry,
-        generation: params.generation,
-        resolveActivationSource: () => ({
-            kind: 'bundled',
-            moduleId,
-            load: async () => ({ activate: params.activate }),
-        }),
-    });
+    const directory = await mkdtemp(join(tmpdir(), 'happier-semantic-surface-'));
+    const pluginRoot = join(directory, 'plugin');
+    const happyHomeDir = join(directory, 'home');
+    try {
+        await mkdir(join(pluginRoot, '.happier-plugin'), { recursive: true });
+        const manifest = params.registry.activationTargets.find((target) => target.pluginId === PLUGIN_ID)!.manifest;
+        await writeFile(join(pluginRoot, '.happier-plugin/plugin.json'), JSON.stringify(manifest));
+        await writeFile(join(pluginRoot, 'daemon.mjs'), 'export function activate() {}');
+        await seedCurrentLocalPathPluginFixture({
+            happyHomeDir, pluginRoot, pluginId: PLUGIN_ID, manifestVersion: manifest.version,
+        });
+        const committed = await readCurrentCommittedPluginGenerations(resolvePluginStorePaths({ happyHomeDir }));
+        const generation = committed?.generations.get(PLUGIN_ID);
+        const custody = generation?.record.sourceCustody;
+        if (!generation || !custody) throw new Error('Semantic fixture source was not admitted');
+        const activated = await activatePluginRuntimeRegistry({
+            contributes: params.registry,
+            generation: params.generation,
+            resolveActivationSource: () => ({
+                kind: 'prepared',
+                module: { activate: params.activate },
+                committedAuthorization: { pluginId: PLUGIN_ID, immutableGenerationId: generation.immutableGenerationId },
+                sourceAuthority: bindPluginRuntimeSourceAuthority({ custody, resolvedRoot: generation.rootPath }),
+            }),
+        });
+        return {
+            ...activated,
+            async dispose() {
+                try {
+                    await activated.dispose();
+                } finally {
+                    await rm(directory, { recursive: true, force: true });
+                }
+            },
+        };
+    } catch (error) {
+        await rm(directory, { recursive: true, force: true });
+        throw error;
+    }
 }
 
 function executableRegistry(params: Readonly<{
@@ -151,6 +184,8 @@ function executableRegistry(params: Readonly<{
         agentRuntimesByAgentId: params.activated.agentRuntimesByAgentId,
         scmHostingProvidersById: params.activated.scmHostingProvidersById,
         activateContributionsOnDemand: params.activated.activateContributionsOnDemand,
+        readPluginOccurrenceId: params.activated.readPluginOccurrenceId,
+        readPluginSourceCustody: params.activated.readPluginSourceCustody,
         targetActionInvocations: buildTargetActionInvocationRegistry({
             contributes: params.registry,
             targetRegistrations: params.targetRegistrations ?? params.activated.targetRegistrations,
@@ -382,7 +417,7 @@ describe('EU-5c/EU-5d semantic host-extension chain', () => {
                 registry,
                 activated: current,
                 targetRegistrations: superseded.targetRegistrations,
-            })).toThrowError(/is not backed by an active generation fact/);
+            })).toThrowError(/lacks host-stamped occurrence or source custody/);
             // The same call with the matching registrations is admitted, so the
             // refusal above is the generation mismatch and nothing else.
             expect(() => executableRegistry({ registry, activated: current })).not.toThrow();

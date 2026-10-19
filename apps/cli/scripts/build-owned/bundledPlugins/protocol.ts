@@ -184,7 +184,7 @@ export function renderProtocolAgentProviderIdsV1Ts(agentIds: readonly string[]):
   lines.push(' * because that would create a package dependency cycle.');
   lines.push(' */');
   lines.push('');
-  lines.push('import { z } from \'zod\';');
+  lines.push('import { z } from \'zod/mini\';');
   lines.push('');
   lines.push('export const AGENT_PROVIDER_IDS_V1 = Object.freeze([');
   for (const agentId of agentIds) {

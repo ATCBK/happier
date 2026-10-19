@@ -118,6 +118,9 @@ describe('resolveMergedContributionRegistry', () => {
         console.info(JSON.stringify({ repeatedReadUs, rebuildUs }));
         expect(repeatedReadUs).toBeLessThan(rebuildUs);
         for (const registry of reads) {
+            if (!registry.providers || !builtIn.providers || !registry.accountCollections || !builtIn.accountCollections) {
+                throw new Error('Expected canonical provider and Account collection projections');
+            }
             expect(registry.agents[0]).toBe(builtIn.agents[0]);
             expect(registry.providers[0]).toBe(builtIn.providers[0]);
             expect(registry.accountCollections[0]).toBe(builtIn.accountCollections[0]);

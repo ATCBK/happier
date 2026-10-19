@@ -27,10 +27,11 @@ function loaded(pluginId: string): LoadedPlugin {
         sourceSpec: { kind: 'path', locator: `/plugins/${pluginId}`, trustPolicy: 'local_trusted', installPolicy: 'link' },
         manifest: normalizePluginManifestV2({ schemaVersion: 2, id: pluginId, version: '1.0.0', displayName: 'Carry',
             runtime: { apiVersion: 1 }, contributes: {
+                workItems: [{ id: 'work-items', client: { artifactId: 'carry', exportName: 'activateSource' }, platforms: ['web', 'ios', 'android'] }],
                 dragSources: [{ id: 'item', title: 'Item', referenceSchema: { type: 'string' },
                     client: { artifactId: 'carry', exportName: 'activateSource' }, platforms: ['web', 'ios', 'android'] }],
                 dropTargets: [{ id: 'item', title: 'Destination', acceptedKinds: ['session', `plugin:${pluginId}/item`],
-                    actions: [{ kind: 'host', actionId: 'session.reports_to.set' }],
+                    actions: [{ kind: 'host', actionId: 'session.manager.set' }],
                     client: { artifactId: 'carry', exportName: 'activateTarget' }, platforms: ['web', 'ios', 'android'] }],
             },
         }),
@@ -49,9 +50,11 @@ describe('plugin entity drag projection', () => {
         });
         try {
             expect(registry.contributes.dragSources).toHaveLength(1);
+            expect(registry.contributes.workItems).toHaveLength(1);
             expect(registry.contributes.dropTargets).toHaveLength(1);
             registry.fencePluginConsumers?.([pluginId]);
             expect(registry.contributes.dragSources).toEqual([]);
+            expect(registry.contributes.workItems).toEqual([]);
             expect(registry.contributes.dropTargets).toEqual([]);
             const projection = buildPluginProjectionV2({ registry: registry.contributes, generation: 2 });
             expect(projection.familiesById.dragSources?.entriesById).toEqual({});
@@ -75,6 +78,13 @@ describe('plugin entity drag projection', () => {
             reactNativeBundles: { hostRuntime: { hostUiApiVersion: '1.0.0', platform: 'web' } },
         } });
         expect(PluginProjectionV2Schema.safeParse(projection).success).toBe(true);
+        expect(Object.keys(projection.familiesById.workItems?.entriesById ?? {})).toEqual(ids.map(id => `${id}/work-items`));
+        expect(projection.familiesById.workItems?.entriesById[`${ids[0]}/work-items`]).toMatchObject({
+            pluginId: ids[0], occurrenceId: occurrenceIdsByPluginId[ids[0]!], definition: { id: 'work-items' },
+        });
+        expect(projection.familiesById.pluginUi?.entriesById[`reactNativeBundle:${ids[0]}:workItems/work-items`]).toMatchObject({
+            generatedOwnerKind: 'clientContribution', entry: { exportName: 'activateSource' }, runtime: { state: 'loadable' },
+        });
         for (const family of ['dragSources', 'dropTargets'] as const) {
             expect(Object.keys(projection.familiesById[family]?.entriesById ?? {})).toEqual(ids.map(id => `${id}/item`));
             expect(projection.familiesById[family]?.entriesById[`${ids[0]}/item`]).toMatchObject({
@@ -88,6 +98,7 @@ describe('plugin entity drag projection', () => {
         }
         const retired = buildPluginProjectionV2({ registry: createResolvedContributionRegistry({ ...inputs, occurrenceIdsByPluginId: {} }), generation: 2 });
         expect(retired.familiesById.dragSources?.entriesById).toEqual({});
+        expect(retired.familiesById.workItems?.entriesById).toEqual({});
         expect(retired.familiesById.dropTargets?.entriesById).toEqual({});
         expect(retired.familiesById.pluginUi?.entriesById).toEqual({});
     });

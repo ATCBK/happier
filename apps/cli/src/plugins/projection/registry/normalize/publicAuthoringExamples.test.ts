@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
 import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 
 import { createResolvedContributionRegistry } from '../createResolvedContributionRegistry';
 import { buildPluginProjectionV2 } from '../projection/v2';
@@ -99,11 +100,12 @@ async function loadCodeDefinedChannels(): Promise<LoadedPlugin> {
 describe('plugin SDK public installable examples', () => {
   it('projects public-authored inline HTML identically for built-in and external provenance without an Artifact', async () => {
     const publicAuthoring = await loadCodeDefinedPublicAuthoring();
+    const occurrenceId = createPluginRuntimeOccurrenceId(publicAuthoring.pluginId);
     const project = (provenance: 'first_party' | 'external') => {
-      const registry = createResolvedContributionRegistry(projectLoadedPluginContributes({
+      const registry = createResolvedContributionRegistry({ ...projectLoadedPluginContributes({
         loadResult: { loadedPlugins: [publicAuthoring], diagnosticsByPluginId: {} },
         provenance,
-      }));
+      }), occurrenceIdsByPluginId: { [publicAuthoring.pluginId]: occurrenceId } });
       return buildPluginProjectionV2({ registry, generation: 11 }).familiesById.pluginUi?.entriesById ?? {};
     };
 
@@ -152,10 +154,10 @@ describe('plugin SDK public installable examples', () => {
     const external = await loadCodeDefinedPublicAuthoring();
     const builtIn = await loadCodeDefinedChannels();
     const project = (plugin: LoadedPlugin, provenance: 'first_party' | 'external') => {
-      const registry = createResolvedContributionRegistry(projectLoadedPluginContributes({
+      const registry = createResolvedContributionRegistry({ ...projectLoadedPluginContributes({
         loadResult: { loadedPlugins: [plugin], diagnosticsByPluginId: {} },
         provenance,
-      }));
+      }), occurrenceIdsByPluginId: { [plugin.pluginId]: createPluginRuntimeOccurrenceId(plugin.pluginId) } });
       return buildPluginProjectionV2({ registry, generation: 12 }).familiesById.pluginUi?.entriesById ?? {};
     };
     const externalWidget = project(external, 'external')[

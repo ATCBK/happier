@@ -483,7 +483,7 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
   lines.push(' */');
   lines.push('');
   lines.push('import type { AgentCoreConfig, CanonicalAgentId } from \'./registryCore\';');
-  lines.push('import type { PluginAgentCliMetadata, PluginAgentContributionV2, PluginContributionIdentityV1 } from \'@happier-dev/protocol\';');
+  lines.push('import type { PluginAgentAcpDefinitionV2, PluginAgentCliMetadata, PluginAgentContributionV2, PluginContributionIdentityV1 } from \'@happier-dev/protocol\';');
   lines.push('import type { PluginSettingsContributionV2 } from \'@happier-dev/protocol/plugins/contributions/settings\';');
   lines.push('import type { ProviderContributionV1 } from \'@happier-dev/protocol/providers/contributions\';');
   lines.push('import type { MachineProvisionerContributionV1 } from \'@happier-dev/protocol/plugins/contributions/machineProvisioners\';');
@@ -554,6 +554,7 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
   lines.push('/** Admitted bundled declarations only; no installed version, runtime generation or activation authority. */');
   lines.push('export type BundledAgentDeclaration = Readonly<{');
   lines.push('    identity: PluginContributionIdentityV1;');
+  lines.push('    acpStderrRules: PluginAgentAcpDefinitionV2[\'stderrRules\'] | null;');
   lines.push('    cli: PluginAgentCliMetadata | null;');
   lines.push('    acpRegistryIds?: readonly string[];');
   lines.push('    connectedAccounts: NonNullable<PluginAgentContributionV2[\'connectedAccounts\']>;');
@@ -571,6 +572,7 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
       .filter((definition) => definition.scope === 'account');
     const declaration = {
       identity,
+      acpStderrRules: agent.runtime.kind === 'acp' ? agent.runtime.definition?.stderrRules ?? null : null,
       cli: agent.cli ?? null,
       acpRegistryIds: agent.catalog?.acpRegistryIds ?? [],
       connectedAccounts: agent.connectedAccounts ?? [],

@@ -22,21 +22,7 @@ import type {
 } from './types';
 
 function emptyRegistry(): ResolvedContributionRegistry {
-    return {
-        agents: [],
-        actions: [],
-        tools: [],
-        commands: [],
-        resources: [],
-        activationTargets: [],
-        actionsById: new Map(),
-        toolsById: new Map(),
-        commandsById: new Map(),
-        resourcesById: new Map(),
-        catalogEntriesById: {},
-        agentDefinitionsById: new Map(),
-        pluginDiagnosticsByPluginId: {},
-    };
+    return createResolvedContributionRegistry({});
 }
 
 function loadedComposerPlugin(): LoadedPlugin {

@@ -31,23 +31,7 @@ import { parseDaemonContributionRegistryProjectionDescribeResponse } from '../..
 import { PluginUiArtifactsManifestV2Schema } from '@happier-dev/protocol/plugins/ui';
 
 function createEmptyResolvedContributionRegistry(): ResolvedContributionRegistry {
-    return {
-        agents: [],
-                providers: [],
-        actions: [],
-        tools: [],
-        commands: [],
-        resources: [],
-        activationTargets: [],
-        actionsById: new Map(),
-        toolsById: new Map(),
-        commandsById: new Map(),
-        resourcesById: new Map(),
-                catalogEntriesById: {},
-        agentDefinitionsById: new Map(),
-                providersByContributionKey: new Map(),
-        pluginDiagnosticsByPluginId: {},
-    };
+    return createResolvedContributionRegistry({});
 }
 
 function admitPluginRuntime(
@@ -104,7 +88,8 @@ describe('buildPluginProjectionV2', () => {
         const installedPackages: readonly PluginCatalogEntry[] = [{
             pluginId, desiredGeneration: null, appliedGeneration: null, admittedIntegrity: null,
             title: 'Reviews', description: null, version: '0.1.0', enabled: true,
-            source: loaded.sourceSpec, install: { mode: 'link', manifestVersion: '0.1.0' },
+            source: { ...loaded.sourceSpec, resolvedPath: loaded.pluginRootPath, manifestPath: loaded.manifestPath },
+            install: { mode: 'link', manifestVersion: '0.1.0' },
             compatibility: { status: 'compatible', diagnostics: [] },
             manifestPath: loaded.manifestPath, manifest: loaded.manifest, diagnostics: [],
             contributionIntrospection: projectPluginCatalogEntryIntrospection({
@@ -1773,7 +1758,7 @@ describe('buildPluginProjectionV2', () => {
     });
 
     it("projects built-in contributes as bundled sources so first-party plugins don't look like external installs", () => {
-        const registry: ResolvedContributionRegistry = {
+        const registry = createResolvedContributionRegistry({
             agents: [{
                 id: 'happier.bundled',
                 identity: { pluginId: 'happier.bundled', localId: 'happier.bundled' },
@@ -1788,19 +1773,7 @@ describe('buildPluginProjectionV2', () => {
                 // be projected as if they were installed from a path/archive.
                 pluginId: 'happier.bundled',
             }],
-                        actions: [],
-            tools: [],
-            commands: [],
-            resources: [],
-            activationTargets: [],
-            actionsById: new Map(),
-            toolsById: new Map(),
-            commandsById: new Map(),
-            resourcesById: new Map(),
-                        catalogEntriesById: {},
-            agentDefinitionsById: new Map(),
-                        pluginDiagnosticsByPluginId: {},
-        };
+        });
 
         const projection = buildPluginProjectionV2({
             registry,

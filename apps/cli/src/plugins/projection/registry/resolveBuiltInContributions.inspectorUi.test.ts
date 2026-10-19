@@ -7,6 +7,15 @@ import { resolveBuiltInContributions } from './resolveBuiltInContributions';
 const INSPECTOR_PLUGIN_ID = 'happier.inspector';
 
 describe('bundled Inspector canonical UI graph', () => {
+    it('carries the appPage description from the generated bundled manifest', () => {
+        const page = resolveBuiltInContributions().uiViewsV2?.find(
+            (entry) => entry.pluginId === INSPECTOR_PLUGIN_ID && entry.definition.container === 'appPage',
+        );
+        expect(page?.definition).toMatchObject({
+            description: { key: 'plugins.inspector.description', fallback: 'Inspect installed plugins, diagnostics, and reload state.' },
+        });
+    });
+
     it('resolves manifest semantics and the generated physical graph without a handwritten UI map', () => {
         const contributions = resolveBuiltInContributions();
         const inspectorRenderer = contributions.uiRenderersV2?.find(

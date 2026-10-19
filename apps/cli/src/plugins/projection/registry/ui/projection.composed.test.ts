@@ -71,6 +71,7 @@ it('mounts an installed manifest-root page through the physical static decoder w
             runtime: { apiVersion: 1 }, contributes: { ui: {
                 renderers: [{ id: 'page', kind: 'declarative', root: { kind: 'text', text: 'Installed page' } }],
                 views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, renderer: 'page', title: 'Page',
+                    description: { key: 'page.purpose', fallback: 'Review incoming work.' },
                     widgetAreas: [{ name: 'pinned', contextSchema: { type: 'object', additionalProperties: false } }],
                 }],
             } },
@@ -83,9 +84,11 @@ it('mounts an installed manifest-root page through the physical static decoder w
     const placement = selectPluginAppPagePlacements(model)[0];
     expect(placement).toBeDefined();
     if (!placement) throw new Error('Expected installed page placement');
+    expect(placement).toHaveProperty('display.description', { key: 'page.purpose', fallback: 'Review incoming work.' });
     expect(placement).toHaveProperty('widgetAreas', [{ name: 'pinned', contextSchema: { type: 'object', additionalProperties: false } }]);
     const liveRegistry = { ...registry, occurrenceIdsByPluginId: { [plugin.pluginId]: admittedOccurrenceForPlugin(plugin.pluginId) } };
     const liveModel = normalizePluginUiProjection(buildPluginProjectionV2({ registry: liveRegistry, generation: 1 }), 'web');
+    expect(selectPluginAppPagePlacements(liveModel)[0]).toHaveProperty('display.description', { key: 'page.purpose', fallback: 'Review incoming work.' });
     expect(selectPluginAppPagePlacements(liveModel)[0]).toHaveProperty('widgetAreas', [{ name: 'pinned', contextSchema: { type: 'object', additionalProperties: false } }]);
     expect(readPluginSurfaceMountBinding({ descriptor: placement, renderer: placement.renderer })).toMatchObject({ kind: 'destination' });
     const admitted = admitDeclarativeStaticModel({ model: placement.renderer.model, expectedPluginId: plugin.pluginId });

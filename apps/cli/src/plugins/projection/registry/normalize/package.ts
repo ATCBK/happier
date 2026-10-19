@@ -1,3 +1,4 @@
+import type { PluginWorkItemsContributionV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
 import type {
   ActionDefinitionV1,
   PluginAgentContributionV2,
@@ -181,6 +182,7 @@ export type PluginContributionRegistry = Readonly<{
   skills: readonly PluginOwnedContribution<PluginSkillContributionV1>[];
   machineProvisioners: readonly PluginOwnedContribution<MachineProvisionerContributionV1>[];
   dragSources: readonly PluginOwnedClientExecutableContribution<PluginDragSourceContributionV1>[];
+  workItems: readonly PluginOwnedClientExecutableContribution<PluginWorkItemsContributionV1>[];
   dropTargets: readonly PluginOwnedClientExecutableContribution<PluginDropTargetContributionV1>[];
   mcpServers: readonly PluginOwnedContribution<PluginMcpServerContributionV1>[];
   mcpDiscoverySources: readonly PluginOwnedContribution<PluginMcpDiscoverySourceContributionV1>[];
@@ -289,6 +291,7 @@ function toActionDefinition(definition: PluginActionContributionV2): ResolvedAct
     }),
     ...(definition.inputSchema === undefined ? {} : { inputSchema: definition.inputSchema }),
     ...(definition.contextualDefaults ? { contextualDefaults: definition.contextualDefaults } : {}),
+    ...(definition.sessionTarget ? { sessionTarget: definition.sessionTarget } : {}),
     ...(definition.confirmationWhen === undefined ? {} : { confirmationWhen: definition.confirmationWhen }),
     ...(definition.resultSchema ? { outputSchema: definition.resultSchema } : {}),
     ...(definition.operation ? { operation: definition.operation } : {}),
@@ -436,6 +439,7 @@ export function buildPluginContributionRegistry(params: Readonly<{
   const skills: PluginOwnedContribution<PluginSkillContributionV1>[] = [];
   const machineProvisioners: PluginOwnedContribution<MachineProvisionerContributionV1>[] = [];
   const dragSources: PluginOwnedClientExecutableContribution<PluginDragSourceContributionV1>[] = [];
+  const workItems: PluginOwnedClientExecutableContribution<PluginWorkItemsContributionV1>[] = [];
   const dropTargets: PluginOwnedClientExecutableContribution<PluginDropTargetContributionV1>[] = [];
   const mcpServers: PluginOwnedContribution<PluginMcpServerContributionV1>[] = [];
   const mcpDiscoverySources: PluginOwnedContribution<PluginMcpDiscoverySourceContributionV1>[] = [];
@@ -1126,6 +1130,16 @@ export function buildPluginContributionRegistry(params: Readonly<{
       });
     }
 
+    for (const definition of readSemanticDefinitions<PluginWorkItemsContributionV1>('workItems')) {
+      workItems.push({
+        pluginId: plugin.pluginId, pluginVersion: plugin.manifest.version,
+        identity: createPluginContributionIdentity({ pluginId: plugin.pluginId, localId: definition.id }),
+        pluginRootPath: plugin.pluginRootPath, manifestPath: plugin.manifestPath,
+        daemonEntryPath: plugin.daemonEntryPath, devDaemonEntryPath: plugin.devDaemonEntryPath,
+        sourceSpec: plugin.sourceSpec, definition,
+        ...(plugin.generatedUiArtifactsManifest ? { generatedUiArtifactsManifest: plugin.generatedUiArtifactsManifest } : {}),
+      });
+    }
     for (const definition of readSemanticDefinitions<PluginDragSourceContributionV1>('dragSources')) {
       dragSources.push({
         pluginId: plugin.pluginId, pluginVersion: plugin.manifest.version,
@@ -1220,6 +1234,7 @@ export function buildPluginContributionRegistry(params: Readonly<{
     skills: Object.freeze(skills),
     machineProvisioners: Object.freeze(machineProvisioners),
     dragSources: Object.freeze(dragSources),
+    workItems: Object.freeze(workItems),
     dropTargets: Object.freeze(dropTargets),
     mcpServers: Object.freeze(mcpServers),
     mcpDiscoverySources: Object.freeze(mcpDiscoverySources),

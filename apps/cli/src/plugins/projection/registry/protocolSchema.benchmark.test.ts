@@ -176,7 +176,7 @@ describe.runIf(process.env.HAPPIER_RUN_PROTOCOL_SCHEMA_BENCHMARK === '1')(
                 // Keep every normalization input a distinct object. The
                 // canonical normalizer intentionally recognizes already
                 // normalized schema identities, so reusing one object would
-                // benchmark the WeakSet fast path instead of normalization.
+                // benchmark the identity fast path instead of normalization.
                 const normalizationSources = Array.from(
                     { length: WARMUP_SAMPLES + MEASURED_SAMPLES },
                     () => cloneStrictPluginJsonValue(
@@ -190,12 +190,17 @@ describe.runIf(process.env.HAPPIER_RUN_PROTOCOL_SCHEMA_BENCHMARK === '1')(
                     strictInput,
                     parsedData: parsed.data,
                     normalizationSources,
+                    compilationSchemas: Array.from(
+                        { length: WARMUP_SAMPLES + MEASURED_SAMPLES },
+                        () => normalizePluginJsonSchema({ ...benchmarkCase.schema.jsonSchema }),
+                    ),
                     validation: compilePluginJsonSchema(benchmarkCase.schema.jsonSchema),
                 };
             });
 
             const measurements = preparedCases.map((preparedCase) => {
                 let normalizationIndex = 0;
+                let compilationIndex = 0;
                 return {
                     case: preparedCase.benchmarkCase.name,
                     protocolSchemaConstructionAndProjection: preparedCase.benchmarkCase.createSchema
@@ -224,11 +229,10 @@ describe.runIf(process.env.HAPPIER_RUN_PROTOCOL_SCHEMA_BENCHMARK === '1')(
                     jsonSchemaProjectionNormalization: measure(() => normalizePluginJsonSchema(
                         preparedCase.normalizationSources[normalizationIndex++]!,
                     )),
-                    // compilePluginJsonSchema is the canonical AJV owner. It
-                    // performs an identity normalization lookup before each
-                    // compile; no second compiler or cache is introduced here.
+                    // Fresh admitted identities preserve cold compilation as a
+                    // separate phase from the canonical compiler's warm reuse.
                     ajvCompilation: measure(() => compilePluginJsonSchema(
-                        preparedCase.benchmarkCase.schema.jsonSchema,
+                        preparedCase.compilationSchemas[compilationIndex++]!,
                     )),
                     ajvValidation: measure(() => {
                         if (!preparedCase.validation(preparedCase.strictInput)) {
@@ -255,7 +259,7 @@ describe.runIf(process.env.HAPPIER_RUN_PROTOCOL_SCHEMA_BENCHMARK === '1')(
                     strictClone: 'cloneStrictPluginJsonValue(input): immutable strict ordinary-JSON input copy.',
                     executableParse: 'ProtocolComposableSchema.safeParse(strictInput): strict input clone, executable parser, output clone, and retained projection validation; no parser-only public API exists.',
                     jsonSchemaProjectionNormalization: 'normalizePluginJsonSchema(fresh projected schema): canonical normalization only. Public constructor composition materializes projection before the schema is returned, and exposes no projection-only API.',
-                    ajvCompilation: 'compilePluginJsonSchema(schema.jsonSchema): canonical AJV compilation with an identity normalization lookup; no global cache.',
+                    ajvCompilation: 'compilePluginJsonSchema(fresh admitted schema identity): canonical cold AJV compilation; normalization is prepared outside the timed sample.',
                     ajvValidation: 'Retained canonical AJV validator on bounded input.',
                     outputCloneAndFreeze: 'cloneStrictPluginJsonValue(parsed.data): immutable strict ordinary-JSON output copy.',
                 },

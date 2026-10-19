@@ -43,7 +43,9 @@ describe('Triage configured-run client placement', () => {
         .toMatchObject({ outcome: 'unavailable', code: 'plugin_action_generation_not_applied' });
       const get = await executor.execute('action.spec.get', { id }, { surface: 'cli' });
       expect(get).toMatchObject({ ok: true, result: { actionSpec: { id } } });
-      if (get.ok) getActionSpec('action.spec.get').outputSchema.parse(get.result);
+      const getOutputSchema = getActionSpec('action.spec.get').outputSchema;
+      if (!getOutputSchema) throw new Error('Expected Action detail output schema');
+      if (get.ok) getOutputSchema.parse(get.result);
       expect(fixture.registry.activatedPluginIds.has(pluginId)).toBe(false);
       expect(await executor.execute('action.invoke', { action: { pluginId, localId: 'read' }, input: {} }, { surface: 'cli' }))
         .toMatchObject({ ok: true, result: { active: true } });
@@ -91,10 +93,14 @@ describe('Triage configured-run client placement', () => {
       const id = formatQualifiedPluginActionId(request.action);
       const search = await executor.execute('action.spec.search', { query: id }, { surface });
       expect(search).toMatchObject({ ok: true, result: { actionSpecs: expect.arrayContaining([expect.objectContaining({ id })]) } });
-      if (search.ok) getActionSpec('action.spec.search').outputSchema.parse(search.result);
+      const searchOutputSchema = getActionSpec('action.spec.search').outputSchema;
+      if (!searchOutputSchema) throw new Error('Expected Action search output schema');
+      if (search.ok) searchOutputSchema.parse(search.result);
       const get = await executor.execute('action.spec.get', { id }, { surface });
       expect(get).toMatchObject({ ok: true, result: { actionSpec: { id } } });
-      if (get.ok) getActionSpec('action.spec.get').outputSchema.parse(get.result);
+      const getOutputSchema = getActionSpec('action.spec.get').outputSchema;
+      if (!getOutputSchema) throw new Error('Expected Action detail output schema');
+      if (get.ok) getOutputSchema.parse(get.result);
       expect(fixture.registry.activatedPluginIds.has(fixturePluginId)).toBe(false);
       // Client placement delegates present-user approval to the answering
       // client's canonical dispatcher; it must not ask independently here.

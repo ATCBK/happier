@@ -29,7 +29,7 @@ export function createLoadedMachineProvisionerFixture(pluginId: string): LoadedP
     return {
         pluginId, pluginRootPath, manifestPath: `${pluginRootPath}/plugin.json`,
         daemonEntryPath: `${pluginRootPath}/daemon.mjs`, devDaemonEntryPath: null,
-        sourceSpec: { kind: 'package', locator: pluginId, trustPolicy: 'bundled_trusted', installPolicy: 'copy' },
+        sourceSpec: { kind: 'package', locator: pluginId, trustPolicy: 'local_trusted', installPolicy: 'copy' },
         manifest: normalizePluginManifestV2({
             schemaVersion: 2, id: pluginId, version: '1.0.0', displayName: 'Machine provisioner',
             runtime: { apiVersion: 1 }, entrypoints: { daemon: './daemon.mjs' },
