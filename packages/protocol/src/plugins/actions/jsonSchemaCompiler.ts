@@ -1,7 +1,7 @@
 /** Shared executable JSON Schema semantics; dialect admission belongs to each contract owner. */
-import Ajv from 'ajv';
-import Ajv2020 from 'ajv/dist/2020.js';
-import addFormats, { type FormatName } from 'ajv-formats';
+import { Ajv } from 'ajv';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import formatsImport, { type FormatName, type FormatsPlugin } from 'ajv-formats';
 
 import { containsEquivalentPluginJsonValue, hasUniquePluginJsonValues, pluginJsonValuesEqual, scalarPluginJsonValueKey } from '../contributions/jsonSchemaValues.js';
 import { assertStrictPluginJsonValue, measurePluginJsonUtf8Bytes, measureSerializedValidatedStrictPluginJsonUtf8Bytes } from '../contributions/strictJsonValue.js';
@@ -25,6 +25,14 @@ const SUPPORTED_PLUGIN_JSON_SCHEMA_FORMATS = Object.freeze([
   'json-pointer',
   'relative-json-pointer',
 ] satisfies readonly FormatName[]);
+
+// ajv-formats publishes a callable CommonJS export with an identical .default.
+// NodeNext describes the namespace while bundlers describe the callable value.
+function resolveFormatsPlugin(imported: FormatsPlugin | Readonly<{ default: FormatsPlugin }>): FormatsPlugin {
+  return typeof imported === 'function' ? imported : imported.default;
+}
+
+const addFormats = resolveFormatsPlugin(formatsImport);
 
 function createPluginJsonEnumValidator(allowed: readonly unknown[]): PluginJsonSchemaValidator {
   const allowedScalars = new Set<string>();
