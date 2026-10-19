@@ -12,6 +12,7 @@ import type { discoverNativeUsageSourceMetadata as DiscoverNativeUsageSourceMeta
 import type { createExternalSessionObservationDaemonProjection } from '@/api/session/external/leases/createExternalSessionObservationDaemonProjection';
 import { EXTERNAL_SESSIONS_INVOCATION_POLICY } from '@/session/external/agentExternalSessionsInvocation';
 import { externalMemoryStorageId, type MemoryExternalSourceReader } from './externalTranscriptIndex';
+import { logger } from '@/ui/logger';
 
 export type MemoryExternalObservation = Pick<ReturnType<typeof createExternalSessionObservationDaemonProjection>, 'registerAccountingSource'>;
 
@@ -19,6 +20,16 @@ type MemoryExternalTranscriptCandidate = Readonly<{
   source: MemoryExternalTranscriptSourceV1;
   native: MemoryExternalSourceReader;
 }>;
+
+type NativeInventory = {
+  native: MemoryExternalSourceReader;
+  candidates: Map<string, MemoryExternalTranscriptCandidate>;
+  pending: Map<string, MemoryExternalTranscriptCandidate> | null;
+  cursor?: string;
+  seen: Set<string>;
+  needsInventory: boolean;
+  failed: boolean;
+};
 
 /** The incumbent source inventory owns its one in-memory traversal position. */
 export function createMemoryExternalTranscriptTraversal() {
@@ -96,13 +107,25 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
 }>) {
   let observation: MemoryExternalObservation | null = null;
   let records: ReadonlyArray<MemoryExternalSourceReader & { demand: Disposable | null }> = [];
-  let dirty = true;
   const traversal = createMemoryExternalTranscriptTraversal();
+  const inventories = new Map<string, NativeInventory>();
+  let inventoryChanged = false;
   let configuredSourceKeys = new Set<string>();
-  let completeSources = new Set<string>();
+  const completeSources = new Set<string>();
   let stopped = false;
   let unsubscribeRegistry: (() => void) | null = null;
   const lifetime = new AbortController();
+
+  const invalidateInventory = (agentId?: string, sourceKey?: string, changed = true) => {
+    for (const [key, state] of inventories) {
+      if ((agentId === undefined || state.native.agentId === agentId)
+        && (sourceKey === undefined || state.native.sourceKey === sourceKey)
+        && (changed || state.pending === null)) {
+        state.needsInventory = true;
+        completeSources.delete(key);
+      }
+    }
+  };
 
   const acquire = async (agentId: string): Promise<NativeUsageSourceBoundary | null> => {
     const [{ readRegistryCatalogHook }, { acquireAuthoritativePluginRuntimeRegistryLease }] = await Promise.all([
@@ -125,13 +148,15 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
       traversal.replace([]);
       configuredSourceKeys.clear();
       completeSources.clear();
+      inventories.clear();
+      inventoryChanged = false;
       await Promise.all(prior.map(record => record.demand?.dispose()));
       return;
     }
     const operationSignal = AbortSignal.any([signal, lifetime.signal]);
     if (!unsubscribeRegistry) {
       const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
-      unsubscribeRegistry = pluginReloadController.subscribe(() => { dirty = true; traversal.invalidate(); input.onChange(); });
+      unsubscribeRegistry = pluginReloadController.subscribe(() => { invalidateInventory(); traversal.invalidate(); input.onChange(); });
     }
     const [{ acquireAuthoritativePluginRuntimeRegistryLease }, { configuredExternalSessionSourcesUseConnectedProfiles },
       { resolveNativeUsageSourceMetadata }] = await Promise.all([
@@ -167,7 +192,11 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
             retirementSignal: AbortSignal.any([lifetime.signal, boundary.retirementSignal]) },
           source: resolved.descriptor.source, changeObservation: sourceObservation.changeObservation,
           ...(sourceObservation.watchFileChanges ? { watchFileChanges: sourceObservation.watchFileChanges } : {}),
-          onChange: () => { dirty = true; traversal.invalidate(agentId, descriptor.configuredSourceKey ?? descriptor.sourceKey); input.onChange(); },
+          onChange: () => {
+            invalidateInventory(agentId, descriptor.configuredSourceKey ?? descriptor.sourceKey);
+            traversal.invalidate(agentId, descriptor.configuredSourceKey ?? descriptor.sourceKey);
+            input.onChange();
+          },
         }) : null;
         next.push({ agentId, sourceKey: descriptor.configuredSourceKey ?? descriptor.sourceKey, source: resolved.descriptor.source,
           reader: boundary.externalSessions, demand });
@@ -177,80 +206,124 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     const prior = records;
     records = next;
     configuredSourceKeys = nextConfiguredSourceKeys;
-    traversal.invalidate();
+    const retainedKeys = new Set<string>();
+    for (const native of records) {
+      const key = JSON.stringify([native.agentId, native.sourceKey]);
+      retainedKeys.add(key);
+      const previous = inventories.get(key);
+      // Refreshing observation demand must not restart an in-progress crawl.
+      // A replaced reader or physical source does require fresh absence proof.
+      if (previous?.native.reader === native.reader
+        && JSON.stringify(previous.native.source) === JSON.stringify(native.source)) continue;
+      inventories.set(key, { native, candidates: new Map(), pending: null, seen: new Set(), needsInventory: true, failed: false });
+      inventoryChanged = true;
+      completeSources.delete(key);
+    }
+    for (const key of inventories.keys()) if (!retainedKeys.has(key)) {
+      inventories.delete(key);
+      completeSources.delete(key);
+      inventoryChanged = true;
+    }
     await Promise.all(prior.map(record => record.demand?.dispose()));
-    dirty = true;
   };
 
   const inventory = async (signal: AbortSignal) => {
-    if (!observation || !dirty) return null;
-    // A change observed during inventory remains pending for the next pass.
-    dirty = false;
-    completeSources.clear();
-    try {
-    // A failed or retired source never supplies absence evidence.
-    const next: MemoryExternalTranscriptCandidate[] = [];
-    const current = new Set<string>();
-    const nextCompleteSources = new Set<string>();
+    if (!observation) return null;
+    let changed = inventoryChanged;
+    inventoryChanged = false;
     for (const native of records) {
-      let sourceComplete = true;
-      let cursor: string | undefined;
-      const seen = new Set<string>();
-      for (;;) {
+      const key = JSON.stringify([native.agentId, native.sourceKey]);
+      const state = inventories.get(key)!;
+      if (state.needsInventory && state.pending === null) {
+        state.pending = new Map();
+        state.cursor = undefined;
+        state.seen.clear();
+        state.needsInventory = false;
+        completeSources.delete(key);
+      }
+      if (state.pending === null) continue;
+      changed = true;
+      try {
+        // Consume one existing bounded native page per source, then let the
+        // worker ingest it. A large sibling cannot hold all transcript work
+        // behind its whole-corpus inventory. Continuations live here, in the
+        // incumbent inventory owner, across ticks and observation refreshes.
         const page = await native.reader.listCandidates({ source: native.source,
           maxItems: EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxItems,
           maxSerializedBytes: EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxSerializedBytes,
-          ...(cursor ? { cursor } : {}), signal });
+          ...(state.cursor ? { cursor: state.cursor } : {}), signal });
         signal.throwIfAborted();
-        if (!page.ok) { sourceComplete = false; break; }
+        if (!page.ok) throw new Error(page.code);
+        state.failed = false;
         for (const candidate of page.value.candidates) {
-          current.add(externalMemoryStorageId({ type: 'external_transcript', agentId: native.agentId,
-            sourceKey: native.sourceKey, nativeSessionId: candidate.remoteSessionId }));
           const identity = await native.reader.resolveLinkIdentity({ source: native.source,
             remoteSessionId: candidate.remoteSessionId, ...(candidate.linkData ? { linkData: candidate.linkData } : {}), signal });
           signal.throwIfAborted();
-          if (!identity.ok) { sourceComplete = false; continue; }
-          next.push({ native: { ...native, source: identity.value.source }, source: { type: 'external_transcript',
-            agentId: native.agentId, sourceKey: native.sourceKey, nativeSessionId: identity.value.remoteSessionId } });
+          if (!identity.ok) { state.needsInventory = true; continue; }
+          const source = { type: 'external_transcript' as const,
+            agentId: native.agentId, sourceKey: native.sourceKey, nativeSessionId: identity.value.remoteSessionId };
+          state.pending.set(externalMemoryStorageId(source), { native: { ...native, source: identity.value.source }, source });
         }
-        if (!page.value.nextCursor) {
-          if (sourceComplete && !page.value.searchIncomplete && !page.value.preparation) nextCompleteSources.add(JSON.stringify([native.agentId, native.sourceKey]));
-          break;
+        if (page.value.nextCursor) {
+          if (state.seen.has(page.value.nextCursor)) throw new Error('memory_external_inventory_cursor_stalled');
+          state.cursor = page.value.nextCursor;
+          state.seen.add(state.cursor);
+        } else {
+          // Preparation describes the native inventory chunk, including its
+          // terminal page. Its exhausted cursor establishes inventory completion.
+          if (!state.needsInventory && !page.value.searchIncomplete) {
+            state.candidates = state.pending;
+            completeSources.add(key);
+          } else {
+            // Changes during a crawl or an incomplete page cannot prove absence.
+            state.candidates = new Map([...state.candidates, ...state.pending]);
+            state.needsInventory = true;
+          }
+          state.pending = null;
         }
-        if (seen.has(page.value.nextCursor)) throw new Error('memory_external_inventory_cursor_stalled');
-        cursor = page.value.nextCursor;
-        seen.add(cursor);
+      } catch (error) {
+        signal.throwIfAborted();
+        state.candidates = new Map([...state.candidates, ...(state.pending ?? [])]);
+        state.pending = null;
+        state.needsInventory = true;
+        state.failed = true;
+        completeSources.delete(key);
+        logger.debug('[memoryWorker] Native inventory failed; retaining incomplete coverage', {
+          agentId: native.agentId, sourceKey: native.sourceKey, message: error instanceof Error ? error.message : String(error),
+        });
       }
     }
-    for (const candidate of next) current.add(externalMemoryStorageId(candidate.source));
-    traversal.replace(next);
-    completeSources = nextCompleteSources;
-    return { current, completeSources, configuredSourceKeys };
-    } catch (error) { dirty = true; throw error; }
+    if (!changed) return null;
+    const candidates = new Map([...inventories.values()].flatMap(state => [...state.candidates, ...(state.pending ?? [])]));
+    traversal.replace([...candidates.values()]);
+    return { current: new Set(candidates.keys()), completeSources, configuredSourceKeys };
   };
 
   return {
     refresh,
     inventory,
-    invalidate() { dirty = true; },
+    // A periodic inventory request does not invalidate an unfinished crawl.
+    invalidate() { invalidateInventory(undefined, undefined, false); },
     noteSyncResult(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error') {
-      if (!dirty) traversal.noteSyncResult(source, state);
+      traversal.noteSyncResult(source, state);
     },
     getIndexSources(db: DeepIndexDbHandle | null): MemoryIndexSourceStatusV1[] {
       const groups = new Map(traversal.getIndexSources(db).map(row =>
         [JSON.stringify([row.source.type === 'external_transcript' ? row.source.agentId : '', row.source.type === 'external_transcript' ? row.source.sourceKey : '']), row]));
       return [...configuredSourceKeys].map(key => {
         const [agentId, sourceKey] = JSON.parse(key) as [string, string];
+        const inventory = inventories.get(key);
         return { source: { type: 'external_transcript', agentId, sourceKey },
-          state: !db || dirty || !completeSources.has(key) ? 'indexing' : groups.get(key)?.state ?? 'ready' };
+          state: !db ? 'indexing' : inventory?.failed ? 'error'
+            : !completeSources.has(key) ? 'indexing' : groups.get(key)?.state ?? 'ready' };
       });
     },
     getReadySourceCount: traversal.size,
     attach(next: MemoryExternalObservation) {
       observation = next;
-      dirty = true;
+      invalidateInventory();
       input.onChange();
-      return () => { if (observation === next) { observation = null; dirty = true; input.onChange(); } };
+      return () => { if (observation === next) { observation = null; invalidateInventory(); input.onChange(); } };
     },
     take: traversal.take,
     async readPage(request: Readonly<{ source: MemoryExternalTranscriptSourceV1; cursor?: string }>, settings: MemorySettingsV1, signal: AbortSignal) {
