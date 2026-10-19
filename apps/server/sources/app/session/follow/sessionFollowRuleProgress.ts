@@ -6,6 +6,7 @@ import { isApiTokenGrantRestrictedV1 } from '@happier-dev/protocol/auth/apiToken
 import type { SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 
 import { mutateReservedAccountScopedKvRowInTx } from '@/app/kv/reservedAccountScopedKvRow';
+import { UserKvMutationConflictError } from '@/app/kv/kvMutate';
 import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { assertSessionFollowSourceReadInTx, evaluateCurrentSessionContextPairInTx, mayInjectSessionContextInTx, type SessionFollowRuntimePrincipalV1 } from '@/app/session/access/sessionContextInjection';
 import { readCurrentCommittedSessionInputMachineTargetInTx, readStoredSessionInputAdmissionReceipt } from '@/app/session/messages/sessionInputAdmission';
@@ -61,8 +62,9 @@ export async function writeSessionFollowRuleProgressInTx(tx: Tx, admission: Sess
     if (admission.encountered && isSessionFollowFrontierEqualV1(admission.delivered, delivered)) return true;
     const sources = (admission.envelope.sources ?? []).filter(source => source.sourceSessionId !== admission.sourceSessionId);
     sources.push({ sourceSessionId: admission.sourceSessionId, delivered });
+    const physicalKey = buildSessionFollowRulePhysicalKeyV1(admission.rule.ruleId);
     const result = await mutateReservedAccountScopedKvRowInTx(tx, {
-        accountId: admission.accountId, physicalKey: buildSessionFollowRulePhysicalKeyV1(admission.rule.ruleId),
+        accountId: admission.accountId, physicalKey,
         expectedRevision: admission.revision, envelope: { ...admission.envelope, sources }, domain: accountFollowRuleRowDomain,
         // Progress wakes the existing destination reconciler, never the rule-configuration cache.
         markChanged: async ({ tx: changedTx }) => {
@@ -76,8 +78,14 @@ export async function writeSessionFollowRuleProgressInTx(tx: Tx, admission: Sess
             if (!change) throw new Error('Follow progress publication requires its receiver Account');
             return change;
         },
+    }).catch((error: unknown) => {
+        // This existing-row CAS refused before any mutation/publication. Keep
+        // the established false contract; callers own rollback and replay.
+        if (error instanceof UserKvMutationConflictError
+            && error.accountId === admission.accountId && error.key === physicalKey) return null;
+        throw error;
     });
-    return result.status === 'updated';
+    return result?.status === 'updated';
 }
 
 type RuleOccurrenceAuthority =
