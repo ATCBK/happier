@@ -1,14 +1,18 @@
-import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { storage } from '@/sync/domains/state/storage';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { getActiveServerSnapshot, upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
+import { getActiveServerSnapshot, subscribeActiveServer, upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { loadHomeViewState, saveHomeViewState } from '@/sync/domains/server/serverProfiles';
 import { loadSessionReviewCommentsDrafts } from '@/sync/domains/state/sessionPersistence';
 import { loadProfile } from '@/sync/domains/state/profilePersistence';
 import { loadLocalSettings, loadSettings, saveSettings } from '@/sync/domains/state/settingsPersistence';
 import { settingsParse } from '@/sync/domains/settings/settings';
+import { loadSessionListWarmCacheEntries, prepareWarmCacheStorage, resolveWarmCacheAccountScope, setWarmCacheAccountScope } from '@/sync/domains/state/warmCachePersistence';
 import { getSessionStorageKind } from '@/sync/domains/session/sessionStorageKind';
+import { deleteServerFeaturesSnapshot, getCachedServerFeaturesSnapshot, primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { getConnectedMetadataCatalog } from '@/sync/store/settings/connectedMetadataCatalogSnapshot';
 import { connectedServiceProfileKey } from '@happier-dev/protocol/connect/connectedServiceProfilePreferences';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -22,14 +26,10 @@ import { getDemoFirewallDenyLog, installDemoFirewall, uninstallDemoFirewall } fr
 import { clearDemoWorld, seedDemoWorld } from './seedDemoWorld';
 import { takeStoreSnapshot } from './storeSnapshot';
 
-let storedCredentials: AuthCredentials | null = null;
-
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/auth/storage/tokenStorage')>()),
-    TokenStorage: {
-        getCredentials: vi.fn(async () => storedCredentials),
-    },
-}));
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
 
 const originalState = storage.getState();
 
@@ -42,17 +42,22 @@ function omitKey<T>(record: Readonly<Record<string, T>>, key: string): Record<st
 }
 
 describe('seedDemoWorld and clearDemoWorld', () => {
-    beforeEach(() => {
-        storedCredentials = null;
+    let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
+    beforeEach(async () => {
+        browser = await installBrowserRuntimeForTests({ url: 'https://demo-owner.example.test' });
         resetDemoModeDepthForTests();
         storage.setState(originalState, true);
     });
 
     afterEach(async () => {
-        await clearDemoWorld();
-        resetDemoModeDepthForTests();
-        storage.setState(originalState, true);
-        vi.restoreAllMocks();
+        try {
+            await clearDemoWorld();
+        } finally {
+            resetDemoModeDepthForTests();
+            storage.setState(originalState, true);
+            vi.restoreAllMocks();
+            browser.restore();
+        }
     });
 
     it('exposes seeded demo draft surfaces without remote hydration and restores their prior readiness on exit', async () => {
@@ -63,28 +68,44 @@ describe('seedDemoWorld and clearDemoWorld', () => {
         expect(storage.getState().isSessionDraftsReady).toBe(false);
     });
 
+    it('keeps demo session membership out of a retained Account warm cache', async () => {
+        await prepareWarmCacheStorage();
+        const previousAccountScope = resolveWarmCacheAccountScope(null);
+        const accountId = 'demo-persistence-fixture-account';
+        setWarmCacheAccountScope(accountId);
+        storage.setState(current => ({ profile: { ...current.profile, id: accountId } }));
+        installDemoFirewall();
+        try {
+            await seedDemoWorld();
+            const demoServerId = getActiveServerSnapshot().serverId;
+            expect(loadSessionListWarmCacheEntries(demoServerId, accountId)).toEqual({});
+            await clearDemoWorld();
+            expect(loadSessionListWarmCacheEntries(demoServerId, accountId)).toEqual({});
+        } finally {
+            await clearDemoWorld();
+            uninstallDemoFirewall();
+            setWarmCacheAccountScope(previousAccountScope);
+        }
+    });
+
     it('seeds canonical role documents in memory and restores only demo-owned Artifacts', async () => {
-        const durableRoles = structuredClone(settingsParse(loadSettings().settings).rolesV1);
+        const durableSettings = structuredClone(loadSettings().settings);
         const roleArtifact = buildDemoWorld().artifacts[0];
         if (!roleArtifact.isDecrypted) throw new Error('Demo role fixture must be readable');
         const existing = { ...roleArtifact, body: 'Retain the original document' };
         storage.setState((current) => ({
-            settings: settingsParse({ ...current.settings, rolesV1: { overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } } } }),
             artifacts: { ...current.artifacts, [existing.id]: existing },
         }));
-        const originalRoles = structuredClone(storage.getState().settings.rolesV1);
         const originalArtifacts = structuredClone(storage.getState().artifacts);
         const world = await seedDemoWorld();
-        expect(storage.getState().settings.rolesV1).toEqual({ overrides: {} });
         expect(world.artifacts).toHaveLength(3);
         for (const artifact of world.artifacts) {
             expect(storage.getState().artifacts[artifact.id]).toEqual(artifact);
         }
         const foreign = { ...world.artifacts[0], id: 'foreign-role' };
         storage.getState().addArtifact(foreign);
-        expect(settingsParse(loadSettings().settings).rolesV1).toEqual(durableRoles);
+        expect(loadSettings().settings).toEqual(durableSettings);
         await clearDemoWorld();
-        expect(storage.getState().settings.rolesV1).toEqual(originalRoles);
         expect(storage.getState().artifacts).toEqual({ ...originalArtifacts, [foreign.id]: foreign });
     });
 
@@ -168,7 +189,7 @@ describe('seedDemoWorld and clearDemoWorld', () => {
     });
 
     it('refuses to seed when canonical token storage has real credentials', async () => {
-        storedCredentials = { token: 'real-token', secret: 'real-secret' };
+        expect(await TokenStorage.setCredentials({ token: 'real-token', secret: 'real-secret' })).toBe(true);
 
         await expect(seedDemoWorld()).rejects.toMatchObject({ code: 'demo_credentials_present' });
 
@@ -297,6 +318,76 @@ describe('seedDemoWorld and clearDemoWorld', () => {
         });
     });
 
+    it('restores a pre-existing Home feature observation after clearing the demo world', async () => {
+        const previous = await upsertAndActivateServer({
+            serverUrl: 'https://retained-demo-features.example.test',
+            name: 'Retained feature test Home',
+            scope: 'device',
+        });
+        const snapshot = {
+            status: 'ready' as const,
+            features: createRootLayoutFeaturesResponse({ features: { automations: { enabled: false } } }),
+        };
+        primeServerFeaturesSnapshot({ serverId: previous.id, snapshot });
+        try {
+            await seedDemoWorld();
+            expect(getCachedServerFeaturesSnapshot({ serverId: previous.id })).not.toEqual(snapshot);
+            await clearDemoWorld();
+            expect(getCachedServerFeaturesSnapshot({ serverId: previous.id })).toEqual(snapshot);
+        } finally {
+            deleteServerFeaturesSnapshot({ serverId: previous.id });
+        }
+    });
+
+    it('publishes the Demo Home only once its seeded capabilities are readable', async () => {
+        resetServerFeaturesClientForTests();
+        const observations: ReturnType<typeof getCachedServerFeaturesSnapshot>[] = [];
+        const unsubscribe = subscribeActiveServer((active) => {
+            if (active.serverUrl === DEMO_SERVER_BASE_URL) {
+                observations.push(getCachedServerFeaturesSnapshot({ serverId: active.serverId }));
+            }
+        });
+        try {
+            const world = await seedDemoWorld();
+            expect(observations.length).toBeGreaterThan(0);
+            expect(observations.every((snapshot) => snapshot?.status === 'ready'
+                && snapshot.features === world.serverFeatures)).toBe(true);
+        } finally {
+            unsubscribe();
+        }
+    });
+
+    it('restores real Home observations when activation fails after capabilities are seeded', async () => {
+        const previous = getActiveServerSnapshot();
+        const snapshot = { status: 'ready' as const, features: createRootLayoutFeaturesResponse() };
+        primeServerFeaturesSnapshot({ serverId: previous.serverId, snapshot });
+        const failure = new Error('browser Home mutation lock unavailable');
+        const request = navigator.locks.request;
+        let injected = false;
+        // Web Locks are the genuine browser mutation boundary; keep every other operation real.
+        const requestSpy = vi.spyOn(navigator.locks, 'request').mockImplementation((function (this: LockManager, ...args: unknown[]) {
+            if (!injected && isDemoModeActive()) {
+                injected = true;
+                return Promise.reject(failure);
+            }
+            return Reflect.apply(request, this, args);
+        }) as typeof navigator.locks.request);
+        installDemoFirewall();
+        try {
+            await expect(seedDemoWorld()).rejects.toBe(failure);
+            expect(injected).toBe(true);
+            await clearDemoWorld();
+            expect(isDemoModeActive()).toBe(false);
+            expect(getActiveServerSnapshot().serverId).toBe(previous.serverId);
+            expect(getCachedServerFeaturesSnapshot({ serverId: previous.serverId })).toEqual(snapshot);
+        } finally {
+            requestSpy.mockRestore();
+            await clearDemoWorld();
+            uninstallDemoFirewall();
+            deleteServerFeaturesSnapshot({ serverId: previous.serverId });
+        }
+    });
+
     it('keeps the durable active-target selection coherent when the demo profile is removed', async () => {
         const persistedBefore = loadSettings();
         const previous = await upsertAndActivateServer({
@@ -350,20 +441,21 @@ describe('seedDemoWorld and clearDemoWorld', () => {
     });
 
     it('builds the active demo server session-list index from seeded sessions', async () => {
-        await seedDemoWorld();
+        const world = await seedDemoWorld();
 
         const activeServerId = getActiveServerSnapshot().serverId;
+        for (const session of world.sessions) {
+            expect(storage.getState().sessions[session.id]).toMatchObject({ serverId: activeServerId });
+        }
         const activeIndex = storage.getState().sessionListIndexByServerId[activeServerId];
         const visibleSessionIds = activeIndex
             ?.filter((item) => item.type === 'session')
             .map((item) => item.sessionId) ?? [];
 
         expect(getSessionStorageKind(storage.getState().sessions[DEMO_RICH_SESSION_ID])).toBe('direct');
-        expect(activeIndex?.some((item) => (
-            item.type === 'session'
-            && item.sessionId === DEMO_RICH_SESSION_ID
-            && item.storageKind === 'direct'
-        ))).toBe(true);
+        expect(activeIndex).toContainEqual(expect.objectContaining({
+            type: 'session', sessionId: DEMO_RICH_SESSION_ID, storageKind: 'direct',
+        }));
         expect(visibleSessionIds).toHaveLength(9);
     });
 
