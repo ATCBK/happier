@@ -215,6 +215,13 @@ rule matches do not create enrollment rows. Other Accounts' identities, rules, p
 delivery receipts are never part of that census.
 Revoking source access refuses the read; revoking receiver access withdraws that receiver.
 
+Follow list inspection in 0.3 development accepts an optional `limit` and a source-owned
+`cursor`. With no limit, the owner returns the complete admitted list. A limited read
+returns `continuation` while more source relations remain, and the Action reports partial
+coverage until the last page. Cursors bind the exact Account and inspection direction;
+each page applies current access again and does not freeze membership. Private rules are
+returned with the first Following page, rather than repeated on every source page.
+
 **The direct-share rule.** An explicit `mark-read` / `mark-unread` is admitted for *any* active
 Account holding `readTranscript` — a direct-share recipient with `view` access included — and
 seeds that Account's own read-state row through the single tracking-entry seam
@@ -225,12 +232,11 @@ Session unread is not choosing to follow it. Automatic tracking keeps the older 
 predicate itself is owner-or-active-Follow, resolved through a narrow Follow-fact port, and
 cursor presence is deliberately kept out of it.
 
-Auto-follow runs only from new relationship evidence inside the canonical assignment or access
-transaction. `applySessionAutoFollowForRelationshipChangeInTx` resolves the whole Account set
-through set-oriented owners — preference, existing row, structural `readTranscript`, tracked
-predicate — so a bulk Team or directory change never degrades into a per-Account authorization
-loop, and a genuinely new follower starts at the then-current ceiling rather than replaying the
-interval it was away.
+Relationship attention defaults are normalized into the Account's default Follow rules; assignment and
+access transactions do not enroll per-Session follows. Current rule matching uses the canonical
+filter and delivery policy, without creating an explicit relation or a read-state baseline.
+Explicit Follow remains a separate choice, and an existing opt-out or retained read frontier
+is not replaced when defaults change. Owner tracking remains implicit.
 
 In current development source, a newly committed direct grant and an assignment by another
 Account publish a content-free `session-personal-event` to the named recipient. The shared
@@ -482,8 +488,12 @@ Administration's selected per-plugin execution origin and the daemon's existing
 Composer renderer catalog. They do not infer an execution Machine from the
 Discussion's optional Session anchor. Package and loaded-runtime acceptance
 remain separate from the source contract.
-Task reply routing remains a separate integration with the task source owner; private
-Discussion publication must not become a tracker comment write.
+Development Task anchors and reply targets carry `{ kind: 'task', entry }`, using
+the canonical `TriageEntryRefV1Schema` from Protocol's `tasks/entryRefV1` leaf.
+The reference grants no Task access and selects no configured source connection.
+Task reads and navigation remain with the Tasks source owner; an unavailable source
+does not remove the private Discussion or its authored replies. `discussion.reply`
+publishes only into the Discussion, never into a tracker's provider comments.
 
 ### Second-opinion composition (development integration)
 
@@ -558,6 +568,15 @@ Actions; the latter detaches without archiving. Owned provenance and historical
 messages remain available to reconcile a lost removal response. Discussion
 administration does not grant control of another Account's Session. Readiness
 and start uncertainty are separate from authorization and must remain visible.
+The existing stop owner also confirms an already-stopped Session when the exact
+daemon finds no runtime and a fresh authorized Home read reports it inactive.
+The UI producer preserves that canonical `already_stopped` result alongside its
+legacy presentation fields, so owned removal can continue to ordinary archive.
+Offline appearance alone, a cached inactive row or an uncertain acknowledgement
+does not supply that proof; the Discussion composition adds no liveness reader.
+An archive endpoint refusal remains a failed ordinary Action, not a completed
+owned removal merely because its participant binding was already detached.
+Retry keeps the same owned Session descriptor and re-enters that lifecycle.
 The composed answer, removal, package and loaded-runtime journeys are still
 being integrated; schema presence does not establish completion or release
 availability.

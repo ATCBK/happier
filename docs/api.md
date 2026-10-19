@@ -1238,13 +1238,18 @@ composed flow; missing or disabled support fails closed as `discussions_unavaila
 This is an in-progress 0.3 development contract, not a public release or a claim of completed
 package, database-reconciliation or loaded-runtime validation.
 
-The Discussion owns its access and lifecycle. An optional Session/message anchor grants no
+The Discussion owns its access and lifecycle. An optional Session/message, Doc or Task anchor grants no
 source access and imposes no parent archive or deletion cascade. Each read and mutation resolves
 current Discussion grants in the transaction through the shared resource-grant policy. Human
 invitations use direct grants; Team/Group grants are explicit audience expansion. View may read,
 edit may post, and owner/admin may manage. Mentions confer no access. Self-leave removes only the
 present person's direct grant; inherited access may remain, and an owner must transfer ownership
 or archive. Named-discussion absence and denial do not become an existence oracle.
+
+In development source, Task anchors and reply targets share `{ kind: 'task', entry }`,
+composing `TriageEntryRefV1Schema` from `@happier-dev/protocol/tasks/entryRefV1`.
+Task access, configured-source selection and navigation remain Tasks-owned; a private
+Discussion reply never invokes a provider-comment Action.
 
 Discussion titles and messages use the same strict stored-content envelope family as Session
 content. A Plain Discussion accepts only `{ t: 'plain', v }`; an E2EE Discussion accepts only
@@ -1487,9 +1492,10 @@ policy, publisher and request-snapshot version. Each new Follow input represents
 one original message or request; older development inputs without that proof
 remain unproven, with no invented backfill or encrypted-history scan.
 Destination intake reads original-backed updates from this admitted custody.
-While the host holds queued originals from a source, its optional manager
+While the host holds queued transcript originals from a source, its optional manager
 outcomes wait. They cannot consume the originals' context allowance or advance
-manager progress past their represented prefix.
+manager progress past their represented prefix. Foreground questions retain
+their separate exact waiting-Turn witness rule.
 Legacy manager intake retains Turn-only lifecycle evidence. Exact terminal
 transcript anchors and request-to-waiting-Turn witnesses prevent an admitted
 original from returning as another lifecycle update; later transcript ranges

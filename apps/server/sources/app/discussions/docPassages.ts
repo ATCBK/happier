@@ -14,7 +14,7 @@ export type DiscussionDocSource = DiscussionDocPassageReplyTargetV1['doc'];
 export async function resolveDiscussionDocTargetInTx(tx: Tx, input: Readonly<{
     discussionId: string; replyTarget?: ReturnType<typeof DiscussionReplyTargetV1Schema.parse>;
 }>): Promise<DiscussionResult<DiscussionDocSource | null>> {
-    if (input.replyTarget?.kind !== 'message') return discussionSuccess(input.replyTarget?.doc ?? null);
+    if (input.replyTarget?.kind !== 'message') return discussionSuccess(input.replyTarget?.kind === 'doc_passage' ? input.replyTarget.doc : null);
     const parent = await tx.discussionMessage.findFirst({ where: { discussionId: input.discussionId, id: input.replyTarget.messageId },
         select: { id: true, replyTargetV1: true } });
     if (!parent) return discussionFailure('discussion_invalid_reply_target');
