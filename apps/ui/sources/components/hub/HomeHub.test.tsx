@@ -343,6 +343,24 @@ describe('HomeHub', () => {
         expect(firstRun.getTextContent()).toContain('guidance');
     });
 
+    it('keeps the default composer hidden after an initial layout read failure and retries the Account layout', async () => {
+        settings.layout = { order: ['attention', 'automations', 'start'], hidden: ['setup'] };
+        let failRead = true;
+        const screen = await renderHome(async (input, init) => {
+            if (failRead && new URL(String(input)).pathname === `/v1/artifacts/${artifact.artifactId}`) {
+                return Response.json({ error: 'unavailable' }, { status: 503 });
+            }
+            return artifact.request(input, init);
+        });
+        await vi.waitFor(() => expect(screen.findByTestId('home-hub.layout.error')).not.toBeNull());
+        expect(screen.findByTestId('home-hero')).toBeNull();
+        expect(shownSections(screen.getTextContent())).toEqual([]);
+        failRead = false;
+        await screen.pressByTestIdAsync('home-hub.layout.retry');
+        await vi.waitFor(() => expect(shownSections(screen.getTextContent())).toEqual(['attention', 'automations', 'start']));
+        expect(holdsText(screen.findByTestId('home-hero')!, 'section:start')).toBe(false);
+    });
+
     it('asks an Account with no name on the no-computer Home, through the one Add your name block and its dismissal', async () => {
         settings.guidanceKind = 'connect_machine';
         const screen = await renderHome();

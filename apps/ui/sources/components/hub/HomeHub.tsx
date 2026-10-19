@@ -11,7 +11,7 @@ import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { PAGE_ROW_TOUCH_MIN_HEIGHT_PX } from '@/components/ui/lists/pageRowMetrics';
 import { useWidgetFrameStyle } from '@/components/widgets/frame/useWidgetFrameStyle';
-import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { createNearViewportTracker, type NearViewportTracker } from '@/components/widgets/nearViewport';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { useWidgetFrameRename } from '@/components/widgets/frame/useWidgetFrameRename';
@@ -460,8 +460,8 @@ export const HomeHub = React.memo(function HomeHub() {
         theme: homeTheme, phone, hero: heroFrame.hero };
     const planetOptions = useHomePlanetOptions(planetLook);
     const planetFade = homePlanetFootFade(planetLook);
-    const homeLoading = guidance.kind === 'loading';
     const guidanceIsHome = guidance.kind === 'connect_machine' || guidance.kind === 'start_daemon';
+    const homeLoading = guidance.kind === 'loading' || (!guidanceIsHome && !layout.hasSnapshot && layout.status === 'loading');
     const momentTarget = React.useMemo(() => resolveHomeMomentTarget({
         guidanceKind: guidance.kind, heroActive, planetSource, options: planetOptions, fade: planetFade,
     }), [guidance.kind, heroActive, planetFade, planetOptions, planetSource]);
@@ -523,7 +523,7 @@ export const HomeHub = React.memo(function HomeHub() {
 
     // Until the model knows, the pane holds a quiet page: neither the hub (which could swap to the
     // guidance) nor the guidance's mark draws before the answer, so nothing moves on arrival.
-    if (guidance.kind === 'loading') {
+    if (homeLoading) {
         // A Home that does not answer turns this into "Can't reach {Home}" with Retry, not an endless wait.
         return framed(
             <HomeReachabilityGate variant="pane">
@@ -535,6 +535,16 @@ export const HomeHub = React.memo(function HomeHub() {
         // The guidance is Home here, so Home's own ask for a name sits beneath it.
         return framed(<SessionGettingStartedGuidance variant="primaryPane" accessory={HOME_GUIDANCE_ACCESSORY} />);
     }
+    if (!layout.hasSnapshot) {
+        return framed(<HomeReachabilityGate variant="pane">
+            <ItemList testID="home-hub.layout.unavailable">
+                <SurfaceStateCard testID="home-hub.layout.error" kind="error"
+                    title={t('surfaceState.couldNotOpen', { name: t('common.home') })}
+                    diagnosticCode={layout.errorCode} accessibilitySemantics="alert"
+                    action={{ label: t('common.retry'), onPress: layout.retry, testID: 'home-hub.layout.retry' }} />
+            </ItemList>
+        </HomeReachabilityGate>);
+    }
 
     // Under the atmosphere the composer's suggestions step back so it stays the one hero (quiet links over
     // Horizon, glass pills over a Wallpaper and Rise), wherever the composer sits; tiles only on the plain page.
@@ -543,11 +553,8 @@ export const HomeHub = React.memo(function HomeHub() {
     const composerSuggestions = heroActive ? atmosphereSuggestions : 'tiles' as const;
     const slotProps = { layout, topLevelIds, onCustomize: openCustomize, placeholder: greeting.subtitle, composerSuggestions, tracker, widgetDrag,
         customizing: customizeOpen, showGrips: customizeOpen, groupOperations, movementSourceItem: movement.sourceItem, homeSurface: surface };
-    // Under the atmosphere the composer leads Home unless the person moved it lower. While the layout is
-    // still loading the hero keeps the composer's room (the default places it first), so the status line
-    // and everything under it do not drop ~170 px when the layout arrives.
-    const heroComposer = heroActive && (layout.status === 'loading'
-        || layout.sections.find(section => !section.hidden)?.id === HOME_HUB_COMPOSER_SECTION_ID);
+    // Only the acknowledged Account layout can place the composer in the hero.
+    const heroComposer = heroActive && layout.sections.find(section => !section.hidden)?.id === HOME_HUB_COMPOSER_SECTION_ID;
     const headerActions = (
         <View style={styles.headerActions}>
             {!heroActive ? <LookChip target={HOME_LOOK_TARGET} /> : null}
@@ -567,15 +574,7 @@ export const HomeHub = React.memo(function HomeHub() {
             {briefOpen ? <VoiceBriefBlock onClose={() => setBriefOpen(false)} /> : null}
             <SessionSurfaceEntityFeedback kind="home-section" scope={accountScope} address={null} testID="home-hub.widget-move" />
             <SessionSurfaceEntityTargetFeedback drag={homeDrop} testID="home-hub.widget-move" />
-            {layout.status === 'loading' ? (
-                <WidgetFrame
-                    testID="home-hub.layout.loading"
-                    title={null}
-                    frameStyle="card"
-                    placement="home"
-                    body={{ kind: 'loading', accessibilityLabel: t('common.loading') }}
-                />
-            ) : <HomeHubSectionList
+            <HomeHubSectionList
                 // Under the atmosphere a composer that leads Home stands in the hero; moved lower, it stays where it was put.
                 sections={heroComposer ? layout.sections.filter(section => section.id !== HOME_HUB_COMPOSER_SECTION_ID) : layout.sections}
                 renderSection={(section, index, placement) => section.kind === 'builtin' ? (
@@ -586,7 +585,7 @@ export const HomeHub = React.memo(function HomeHub() {
                         <HubSectionSlot section={section} index={index} ownsRow={placement.ownsRow} {...slotProps} />
                     </WidgetGroupMembershipArrivalView>
                 )}
-            />}
+            />
             {customizeOpen && widgetDrag && surface ? (
                 <HomeNewRowTarget widgetDrag={widgetDrag} surface={surface} layout={layout} topLevelIds={topLevelIds} sourceItem={movement.sourceItem} />
             ) : null}
