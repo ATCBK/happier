@@ -1,3 +1,5 @@
+import { tokenizeShellWords } from './shellWords.js';
+
 export type HappierToolsShellBridgeCommand =
   | Readonly<{
       kind: 'list';
@@ -49,64 +51,6 @@ function isLikelyHappierCliEntrypointToken(token: string): boolean {
   if (normalized.includes('/@happier-dev/cli/')) return true;
   if (normalized.includes('/apps/cli/')) return true;
   return (base === 'index.mjs' || base === 'index.ts') && normalized.includes('/cli/');
-}
-
-function tokenizeShellWords(command: string): string[] | null {
-  const tokens: string[] = [];
-  let current = '';
-  let inSingle = false;
-  let inDouble = false;
-  let escaped = false;
-
-  const pushCurrent = () => {
-    if (current.length > 0) tokens.push(current);
-    current = '';
-  };
-
-  for (let index = 0; index < command.length; index++) {
-    const ch = command[index] ?? '';
-    const next = command[index + 1] ?? '';
-
-    if (ch === '\n' || ch === '\r') return null;
-
-    if (escaped) {
-      current += ch;
-      escaped = false;
-      continue;
-    }
-
-    if (ch === '\\' && !inSingle) {
-      escaped = true;
-      continue;
-    }
-
-    if (ch === '\'' && !inDouble) {
-      inSingle = !inSingle;
-      continue;
-    }
-
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      continue;
-    }
-
-    if (!inSingle && ch === '`') return null;
-    if (!inSingle && ch === '$' && next === '(') return null;
-    if (!inSingle && !inDouble && (ch === ';' || ch === '&' || ch === '|' || ch === '<' || ch === '>')) {
-      return null;
-    }
-
-    if (!inSingle && !inDouble && /\s/.test(ch)) {
-      pushCurrent();
-      continue;
-    }
-
-    current += ch;
-  }
-
-  if (escaped || inSingle || inDouble) return null;
-  pushCurrent();
-  return tokens;
 }
 
 function stripLeadingEnvAssignmentTokens(tokens: readonly string[]): string[] {

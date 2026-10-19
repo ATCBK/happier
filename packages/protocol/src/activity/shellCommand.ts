@@ -1,5 +1,6 @@
 import { maybeParseJson } from './parseJson.js';
 import { isShellToolNameAlias } from '../tools/v2/aliases.js';
+import { tokenizeShellWords } from '../tools/shellWords.js';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -68,6 +69,13 @@ function unwrapShellWrapper(argv: readonly string[]): string | null {
   return null;
 }
 
+function extractStringCommand(command: string): string {
+  const trimmed = command.trim();
+  const argv = tokenizeShellWords(trimmed);
+  // Decode only a complete literal wrapper; never hide trailing operations or arguments.
+  return (argv?.length === 3 ? unwrapShellWrapper(argv) : null) ?? trimmed;
+}
+
 function stripLeadingEnvAssignments(input: string): string {
   const parts = input.trim().split(/\s+/);
   let i = 0;
@@ -108,7 +116,7 @@ export function extractShellCommand(input: unknown): string | null {
 
   const command = obj.command;
   if (typeof command === 'string' && command.trim()) {
-    return command.trim();
+    return extractStringCommand(command);
   }
 
   const commandArray = extractCommandArrayLike(command);
@@ -118,7 +126,7 @@ export function extractShellCommand(input: unknown): string | null {
 
   const cmd = obj.cmd;
   if (typeof cmd === 'string' && cmd.trim()) {
-    return cmd.trim();
+    return extractStringCommand(cmd);
   }
 
   const cmdArray = extractCommandArrayLike(cmd);
