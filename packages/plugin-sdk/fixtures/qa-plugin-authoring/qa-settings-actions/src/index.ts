@@ -1,5 +1,6 @@
 import { definePlugin, defineUiSurfaceDefinition } from '@happier-dev/plugin-sdk';
-import { defineProtocolLiteral, defineProtocolObject, defineProtocolString, defineProtocolUnion } from '@happier-dev/plugin-sdk/protocol';
+import type { PluginSettingsContribution } from '@happier-dev/plugin-sdk/settings';
+import { defineProtocolLiteral, defineProtocolObject, defineProtocolString, defineProtocolUnion, type PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
 
 const enabledInput = defineProtocolObject({ enabled: defineProtocolUnion([defineProtocolLiteral(true), defineProtocolLiteral(false)]) }, { policy: 'closed' });
 const styleInput = defineProtocolObject({ style: defineProtocolUnion([defineProtocolLiteral('concise'), defineProtocolLiteral('detailed')]) }, { policy: 'closed' });
@@ -8,17 +9,19 @@ const mutationResult = defineProtocolObject({
     revision: defineProtocolString(),
 }, { policy: 'closed' });
 
+export const preferences = {
+        title: 'Review preferences', target: { kind: 'plugin' }, scope: 'account',
+        fields: [
+            { id: 'enabled', title: 'Review reminders', description: 'Receive a reminder when a review is ready.', schema: { type: 'boolean' } satisfies PluginJsonSchema, default: true },
+            { id: 'style', title: 'Summary detail', description: 'Choose how much detail review summaries include.', schema: { type: 'string', enum: ['concise', 'detailed'] } satisfies PluginJsonSchema, default: 'concise' },
+        ],
+    } satisfies Omit<PluginSettingsContribution, 'id'>;
+
 export const { manifest, activate } = definePlugin({
     id: 'qa.settings-actions', version: '0.1.0', displayName: 'QA settings actions',
     description: 'QA-only Account preferences with one Action for each user-changeable setting.',
     entrypoints: { daemon: './dist/index.js' },
-    settings: { preferences: {
-        title: 'Review preferences', target: { kind: 'plugin' }, scope: 'account',
-        fields: [
-            { id: 'enabled', title: 'Review reminders', description: 'Receive a reminder when a review is ready.', schema: { type: 'boolean' }, default: true },
-            { id: 'style', title: 'Summary detail', description: 'Choose how much detail review summaries include.', schema: { type: 'string', enum: ['concise', 'detailed'] }, default: 'concise' },
-        ],
-    } },
+    settings: { preferences },
     actions: {
         'reminders-set': {
             title: 'Set review reminders', execution: { target: 'daemon' }, scopes: ['global'],
@@ -26,7 +29,7 @@ export const { manifest, activate } = definePlugin({
             inputSchema: enabledInput, resultSchema: mutationResult,
             async run(input, context) {
                 context.signal?.throwIfAborted();
-                return context.services.settings.forScope({ kind: 'account' }).set('enabled', input.enabled, { signal: context.signal });
+                return mutationResult.parse(await context.services.settings.forScope({ kind: 'account' }).set('enabled', input.enabled, { signal: context.signal }));
             },
         },
         'summary-style-set': {
@@ -35,7 +38,7 @@ export const { manifest, activate } = definePlugin({
             inputSchema: styleInput, resultSchema: mutationResult,
             async run(input, context) {
                 context.signal?.throwIfAborted();
-                return context.services.settings.forScope({ kind: 'account' }).set('style', input.style, { signal: context.signal });
+                return mutationResult.parse(await context.services.settings.forScope({ kind: 'account' }).set('style', input.style, { signal: context.signal }));
             },
         },
     },

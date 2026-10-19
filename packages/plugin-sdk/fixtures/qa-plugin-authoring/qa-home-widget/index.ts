@@ -1,4 +1,5 @@
 import { definePlugin, PluginError } from '@happier-dev/plugin-sdk';
+import { defineProtocolNumber, defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
 import { PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1 } from '@happier-dev/plugin-sdk/ui/build';
 
 /** QA-only transient data shared by this occurrence's widget and companion page. */
@@ -34,8 +35,9 @@ export function createHomeWidgetPlugin() {
             'set-completed': { title: 'Set completed reviews', execution: { target: 'daemon' }, dangerLevel: 'writesLocal',
                 confirmation: { title: 'Update QA review progress', body: 'Changes only this plugin’s transient review count.', confirmLabel: 'Update progress' },
                 surfaces: ['ui', 'agent', 'mcp', 'cli', 'plugin'],
-                inputSchema: { type: 'object', additionalProperties: false, required: ['completed'],
-                    properties: { completed: { type: 'integer', minimum: 0 } } },
+                inputSchema: defineProtocolObject({
+                    completed: defineProtocolNumber({ integer: true, minimum: 0 }),
+                }, { policy: 'closed' }),
                 run: input => {
                     if (completed !== input.completed) {
                         completed = input.completed;

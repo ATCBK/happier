@@ -1,5 +1,6 @@
 import type {
     ConnectedAccountHealthResult,
+    ConnectedAccountMaterialization,
     ConnectedAccountRuntime,
 } from '@happier-dev/plugin-sdk/connected-accounts';
 
@@ -30,7 +31,7 @@ export const demoRuntime: ConnectedAccountRuntime = {
     async refresh(context) { return readHealth(context.credentials); },
     async status(context) { return readHealth(context.credentials); },
     async revoke() { return { status: 'remoteUnsupported' }; },
-    async materialize(request, context) {
+    async materialize(request, context): Promise<ConnectedAccountMaterialization> {
         const token = await context.credentials.get('token');
         if (token !== DEMO_TOKEN) throw new Error('QA credential is unavailable');
         if (request.kind !== 'httpHeaders' || request.origin !== DEMO_ORIGIN

@@ -63,7 +63,8 @@ export function createCollectionDetailPlugin() {
                 run: () => { rows = [...initialRows]; invalidate(); return { rows }; } },
         },
         ui: {
-            views: [{ id: 'reviews', title: 'QA · Review collection', container: 'appPage', target: { kind: 'app' }, renderer: 'collection-native' }],
+            views: [{ id: 'reviews', title: 'QA · Review collection', container: 'appPage', target: { kind: 'app' }, renderer: 'collection-native',
+                description: { key: 'reviews.purpose', fallback: 'Review sample work and mark it complete. Changes last until this QA plugin reloads.' } }],
             renderers: [{ id: 'collection-native', kind: 'reactNative', artifact: 'collection-native',
                 requiredHostMethods: ['readResource', 'watchResource', 'executeAction'] }],
         },

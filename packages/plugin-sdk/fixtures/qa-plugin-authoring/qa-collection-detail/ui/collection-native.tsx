@@ -26,7 +26,7 @@ function ReviewCollection() {
         header={<Stack gap="small"><PageHeader title="Review collection" description="Review sample work and mark it complete. Changes last until this QA plugin reloads." />
             {resource.error && rows ? <ErrorState layout="line" title="Could not refresh; showing the last reviews" action={retry} /> : null}
             <Action.Execute action="clear" input={{}} title="Clear sample reviews" testID="qa-review-clear" /></Stack>}
-        anatomy={{ title: row => row.title, accessibilityLabel: row => row.title, columnTitles: { title: 'Review' },
+        anatomy={{ glyph: () => null, title: row => row.title, accessibilityLabel: row => row.title, columnTitles: { title: 'Review' },
             byline: row => row.completed ? 'Complete' : 'Ready to review', peek: row => <Text value={row.summary} /> }}
         detailHeader={key => ({ title: rows?.find(row => row.id === key)?.title ?? 'Review' })}
         renderDetail={(key, { headerHosted }) => {
