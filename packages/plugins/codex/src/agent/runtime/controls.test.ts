@@ -34,6 +34,29 @@ function context(activity: 'active' | 'inactive' = 'active'): AgentSessionContro
 }
 
 describe('createCodexNativeSessionControls', () => {
+  it.each(['get', 'set', 'clear'] as const)('reports the native-effect phase when %s has no thread', async operation => {
+    const base = context();
+    const { providerSessionId: _providerSessionId, ...session } = base.session;
+    const goalContext = { ...base, session, goalSource: { publish: vi.fn() } } as AgentSessionGoalControlContext;
+    const goals = createCodexNativeSessionControls().goals;
+    const result = operation === 'set'
+      ? await goals.set({ objective: 'Wait for the native thread' }, goalContext)
+      : await goals[operation](goalContext);
+    expect(result).toMatchObject({ status: 'unavailable',
+      diagnostic: { code: 'codex_goal_thread_unavailable' }, goalControlFailure: { phase: 'native_effect' } });
+    expect(goalContext.goalSource.publish).not.toHaveBeenCalled();
+  });
+  it.each(['native_effect', 'host_publication_rejected'] as const)(
+    'retains content-free Goal settlement evidence for %s', async phase => {
+      if (phase === 'native_effect') clientMocks.request.mockRejectedValueOnce(new Error('never-disclose-vendor-text'));
+      else clientMocks.request.mockResolvedValueOnce({ goal: null });
+      const result = await createCodexNativeSessionControls().goals.set({ objective: 'never-disclose-objective' }, {
+        ...context(), goalSource: { publish: async () => { throw new Error('never-disclose-host-path'); } },
+      } as AgentSessionGoalControlContext);
+      expect(result).toMatchObject({ status: 'unavailable', goalControlFailure: { phase } });
+      expect(JSON.stringify(result)).not.toContain('never-disclose');
+    },
+  );
   it.each([
     ['active', 'active', undefined],
     ['paused', 'paused', undefined],
@@ -121,6 +144,7 @@ describe('createCodexNativeSessionControls', () => {
         severity: 'error',
         message: 'codex_goal_payload_invalid',
       },
+      goalControlFailure: { phase: 'native_effect' },
     });
     expect(publish).not.toHaveBeenCalled();
   });

@@ -4,7 +4,9 @@ import type {
   AgentSessionRuntimeContext,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { describe, expect, it, vi } from 'vitest';
+import { ingestPluginManifestV2 } from '@happier-dev/protocol';
 
+import { PLUGIN_MANIFEST } from '../../manifest.js';
 import { buildCodexAgentRuntimeDescriptorV1 } from '../../protocol/runtimeDescriptorV1.js';
 import { resolveCodexCliSessionExtraOptions } from '../cli/command.js';
 import { createCodexAgentRuntime } from './engine.js';
@@ -76,14 +78,12 @@ describe('createCodexAgentRuntime', () => {
     expect(selected?.startingMode).toBeUndefined();
   });
 
-  it('forces the native read-only sandbox for hands-off even with the default permission mode', async () => {
+  it('keeps shared attach as its only declared local-control path', async () => {
+    const declared = ingestPluginManifestV2(PLUGIN_MANIFEST);
+    if (!declared.ok) throw new Error('Codex manifest must be admitted before runtime creation');
     const runtime = await createCodexAgentRuntime({} as AgentRuntimeFactoryContext);
-    const plan = await runtime.surfaces?.terminal?.resolveLaunch({
-      sessionId: 'hands-off', cwd: '/repo', metadata: {}, modelSelection: null,
-      configuration: { mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
-        permissionIntent: { value: 'default', updatedAtMs: 0 }, options: {}, workspaceWrites: 'deny' },
-    });
-    expect(plan?.argv).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
+    expect(declared.manifest.contributes.agents[0]?.capabilities.surfaces).not.toContain('terminal');
+    expect(runtime.surfaces?.terminal).toBeUndefined();
   });
 
   it('exposes every declared Codex direct session control through the native factory', async () => {
@@ -155,35 +155,6 @@ describe('createCodexAgentRuntime', () => {
     expect(connectedAccounts.getBinding).not.toHaveBeenCalled();
     expect(connectedAccounts.materialize).not.toHaveBeenCalled();
 
-    await expect(Promise.resolve(runtime.surfaces?.terminal?.resolveLaunch({
-      sessionId: 'terminal-1',
-      cwd: '/repo',
-      metadata: {
-        runtimeDescriptorV1: buildCodexAgentRuntimeDescriptorV1({
-          backendMode: 'acp',
-          providerSessionId: 'provider-1',
-        }),
-      },
-      configuration: {
-        mode: { value: null, updatedAtMs: 0 },
-        model: { value: null, updatedAtMs: 0 },
-        permissionIntent: { value: 'read-only', updatedAtMs: 1 },
-        options: {},
-      },
-      modelSelection: null,
-    }))).resolves.toMatchObject({
-      argv: [
-        'resume',
-        'provider-1',
-        '--cd',
-        '/repo',
-        '--ask-for-approval',
-        'never',
-        '--sandbox',
-        'read-only',
-      ],
-      process: { stdio: 'inherit', windowsHide: true },
-    });
   });
 
   it('rejects startup instructions for ACP before launch without touching Connected Accounts', async () => {

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type {
   SessionWorkStateItemV1,
   SessionWorkStateStatusV1,
@@ -20,18 +20,18 @@ export type CodexAppServerWritableGoalStatus = 'active' | 'paused' | 'complete';
 type SessionWorkStateStatusReason = NonNullable<SessionWorkStateItemV1['statusReason']>;
 type DecodedCodexGoal = SessionWorkStateItemV1 & Readonly<{ vendorRef: string }>;
 
-const CodexAppServerGoalSchema = z.object({
+const CodexAppServerGoalSchema = z.looseObject({
   // Codex minted this thread id and it is the vendor reference Happier sends
   // back for goal control, so presence is checked without rewriting its bytes.
-  threadId: z.string().refine((value) => readExactCodexProviderSessionId(value) !== null),
-  objective: z.string().trim().min(1).max(4000),
+  threadId: z.string().check(z.refine((value) => readExactCodexProviderSessionId(value) !== null)),
+  objective: z.string().check(z.trim(), z.minLength(1), z.maxLength(4000)),
   status: z.enum(CODEX_APP_SERVER_GOAL_STATUSES),
-  tokenBudget: z.number().finite().positive().nullable().optional(),
-  tokensUsed: z.number().int().nonnegative().optional(),
-  timeUsedSeconds: z.number().finite().nonnegative().optional(),
-  createdAt: z.union([z.string(), z.number()]).optional(),
+  tokenBudget: z.optional(z.nullable(z.number().check(z.positive()))),
+  tokensUsed: z.optional(z.number().check(z.int(), z.nonnegative())),
+  timeUsedSeconds: z.optional(z.number().check(z.nonnegative())),
+  createdAt: z.optional(z.union([z.string(), z.number()])),
   updatedAt: z.union([z.string(), z.number()]),
-}).passthrough();
+});
 
 export function normalizeCodexGoalTimestampMs(value: unknown): number | null {
   // App-server goal numbers are Unix seconds. ISO strings remain accepted for

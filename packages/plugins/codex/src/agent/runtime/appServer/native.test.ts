@@ -37,7 +37,8 @@ vi.mock('./client.js', async (importOriginal) => ({
   createCodexNativeAppServerClient: clientModuleMocks.createCodexNativeAppServerClient,
 }));
 
-vi.mock('./sharedServer.js', () => ({
+vi.mock('./sharedServer.js', async importOriginal => ({
+  ...await importOriginal<typeof import('./sharedServer.js')>(),
   createCodexSharedAppServer: sharedServerModuleMocks.createCodexSharedAppServer,
 }));
 

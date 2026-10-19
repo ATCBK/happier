@@ -76,32 +76,6 @@ export function buildCodexTerminalChildEnv(params: Readonly<{
   return env;
 }
 
-export function buildCodexTerminalArgs<PermissionMode extends string>(opts: Readonly<{
-  cwd: string;
-  resumeId?: string | null;
-  permissionMode: PermissionMode;
-  codexArgs?: readonly string[];
-  resolvePermissionPolicy: (permissionMode: PermissionMode) => CodexTerminalPermissionPolicy;
-}>): string[] {
-  const args: string[] = [];
-
-  const resumeId = normalizeCodexTerminalSessionId(opts.resumeId);
-  if (resumeId) {
-    args.push('resume', resumeId);
-  }
-
-  args.push('--cd', opts.cwd);
-
-  if (opts.permissionMode !== 'default') {
-    const { approvalPolicy, sandbox } = opts.resolvePermissionPolicy(opts.permissionMode);
-    args.push('--ask-for-approval', approvalPolicy);
-    args.push('--sandbox', sandbox);
-  }
-
-  args.push(...(opts.codexArgs ?? []));
-  return args;
-}
-
 export function normalizeCodexTerminalSessionId(raw: unknown): string | null {
   const next = typeof raw === 'string' ? raw.trim() : '';
   return next.length > 0 ? next : null;

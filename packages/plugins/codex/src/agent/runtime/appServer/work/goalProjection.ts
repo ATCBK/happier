@@ -31,13 +31,13 @@ export function createCodexGoalProjection() {
   return Object.freeze({
     async publish(payload: CodexGoalPayload, goalSource: WorkStatePublisher) {
       if (payload.kind === 'malformed') {
-        return { status: 'unavailable' as const, retryable: false, diagnostic: diagnostic('codex_goal_payload_invalid') };
+        return { status: 'unavailable' as const, retryable: false, diagnostic: diagnostic('codex_goal_payload_invalid'), goalControlFailure: { phase: 'native_effect' as const } };
       }
       const decoded = payload.kind === 'absent'
         ? null
         : decodeCodexAppServerGoal({ backendId: 'codex', goal: payload.goal });
       if (payload.kind === 'present' && decoded === null) {
-        return { status: 'unavailable' as const, retryable: false, diagnostic: diagnostic('codex_goal_payload_invalid') };
+        return { status: 'unavailable' as const, retryable: false, diagnostic: diagnostic('codex_goal_payload_invalid'), goalControlFailure: { phase: 'native_effect' as const } };
       }
       const outcome = await goalSource.publish({
         sourceSequence: ++sourceSequence,
@@ -66,6 +66,7 @@ export function createCodexGoalProjection() {
         status: 'unavailable' as const,
         retryable: true,
         diagnostic: 'diagnostic' in outcome ? outcome.diagnostic : diagnostic('codex_goal_publication_failed'),
+        goalControlFailure: { phase: 'host_publication_rejected' as const },
       };
     },
   });

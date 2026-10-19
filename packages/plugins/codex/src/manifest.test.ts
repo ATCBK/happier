@@ -6,7 +6,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, mkdir, open, rm, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { extractGitHubReleaseAsset } from '../../../cli-common/src/agents/extractGitHubReleaseAsset.js';
@@ -33,6 +33,10 @@ describe('Codex plugin manifest', () => {
     try {
       const source = join(root, 'source');
       await mkdir(join(source, 'bin'), { recursive: true });
+      // rust-v0.162.1 ships this helper outside bin; Codex resolves it from
+      // the package root when the host has no system bubblewrap.
+      await mkdir(join(source, 'codex-resources'), { recursive: true });
+      await writeFile(join(source, 'codex-resources/bwrap'), 'bundled-bubblewrap', { mode: 0o644 });
       const members = [['bin/codex', 292_309_256], ['bin/codex-code-mode-host', 74_068_880], ['voice-host', 65_039_440]] as const;
       for (const [name, size] of members) {
         const file = await open(join(source, name), 'w');
@@ -44,7 +48,7 @@ describe('Codex plugin manifest', () => {
         } finally { await file.close(); }
       }
       const archive = join(root, 'codex-package.tar.gz');
-      const packed = spawnSync('tar', ['-czf', archive, '-C', source, ...members.map(([name]) => name)], { encoding: 'utf8' });
+      const packed = spawnSync('tar', ['-czf', archive, '-C', source, ...members.map(([name]) => name), 'codex-resources/bwrap'], { encoding: 'utf8' });
       if (packed.error) throw packed.error;
       expect(packed.status, packed.stderr).toBe(0);
       const recipe = PLUGIN_MANIFEST.contributes.agents[0]?.cli.install.managed;
@@ -55,6 +59,8 @@ describe('Codex plugin manifest', () => {
         archiveEntries: recipe.archiveEntriesByPlatform?.linux, archiveExtractionLimits: recipe.archiveExtractionLimits });
       expect((await stat(join(outputDir, 'bin/codex'))).size).toBe(members[0][1]);
       expect((await stat(join(outputDir, 'bin/codex-code-mode-host'))).size).toBe(members[1][1]);
+      expect(await readFile(join(outputDir, 'codex-resources/bwrap'), 'utf8')).toBe('bundled-bubblewrap');
+      expect((await stat(join(outputDir, 'codex-resources/bwrap'))).mode & 0o111).not.toBe(0);
       await expect(stat(join(outputDir, 'voice-host'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally { await rm(root, { recursive: true, force: true }); }
   }, 120_000);

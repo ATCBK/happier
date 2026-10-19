@@ -5,6 +5,7 @@ import type { HookHandler } from '@happier-dev/plugin-sdk/hooks';
 
 import { AGENT_DEFINITION, AGENT_STATE_SHARING_DESCRIPTOR } from './agent/definition.js';
 import { CODEX_ACP_MANAGED_DEPENDENCY } from './agent/installables/definition.js';
+import { CODEX_SUPPORTED_RUNTIME_RELEASE_TAG } from './agent/cli/supportedRuntime.js';
 import {
   codexCliSessionCommandConfig,
   resolveCodexCliSessionExtraOptions,
@@ -169,6 +170,7 @@ export const CODEX_PLUGIN = definePlugin({
             managed: {
               kind: 'github_release_binary',
               githubRepo: 'openai/codex',
+              releaseTag: CODEX_SUPPORTED_RUNTIME_RELEASE_TAG,
               binaryName: 'codex',
               assetNameByPlatform: {
                 darwin: {
@@ -184,7 +186,7 @@ export const CODEX_PLUGIN = definePlugin({
                   x64: 'codex-package-x86_64-pc-windows-msvc.tar.gz',
                 },
               },
-              // OpenAI Codex rust-v0.147.0's canonical package layout. Keep this
+              // The pinned OpenAI Codex release's canonical package layout. Keep this
               // an explicit runtime allowlist: package metadata, rg, and other
               // bundled files are not part of Happier's managed installation.
               archiveEntriesByPlatform: {
@@ -195,6 +197,7 @@ export const CODEX_PLUGIN = definePlugin({
                 linux: [
                   { archivePath: 'bin/codex', destinationPath: 'bin/codex' },
                   { archivePath: 'bin/codex-code-mode-host', destinationPath: 'bin/codex-code-mode-host' },
+                  { archivePath: 'codex-resources/bwrap', destinationPath: 'codex-resources/bwrap' },
                 ],
                 win32: [
                   { archivePath: 'bin/codex.exe', destinationPath: 'bin/codex.exe' },

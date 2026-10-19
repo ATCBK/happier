@@ -3,8 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { projectCodexAppServerToolEventsFromNotification } from './toolEvents.js';
 
 describe('projectCodexAppServerToolEventsFromNotification', () => {
+  it('preserves native code-mode input without relabeling an app-server call as terminal control', () => {
+    const input = 'const r = await tools.exec_command({cmd:"pwd"}); text(r);';
+    expect(projectCodexAppServerToolEventsFromNotification({ method: 'rawResponseItem/completed', notificationParams: {
+      item: { type: 'custom_tool_call', call_id: 'call-code-mode', name: 'exec', input },
+    } })).toEqual([{ type: 'tool-call', callId: 'call-code-mode', name: 'exec', input, sidechainId: null }]);
+  });
     it('restores exact SDK MCP wire keys after native key sanitization and collision suffixing', () => {
-        const mcpServerKeys = new Map([['first__team', 'happier__first_team'], ['first_team', 'happier__first_team_2']]);
+        const mcpServerKeys = new Map([['happier', 'happier'], ['first__team', 'happier__first_team'], ['first_team', 'happier__first_team_2']]);
         for (const [wireKey, nativeKey] of mcpServerKeys) {
             const events = projectCodexAppServerToolEventsFromNotification({ method: 'item/started', mcpServerKeys,
                 notificationParams: { item: { id: nativeKey, type: 'mcpToolCall', server: nativeKey, tool: 'tool__with__segments', arguments: {} } } });

@@ -48,35 +48,41 @@ function createGoalControl(goalProjection: CodexGoalProjection): AgentSessionGoa
   return {
     async get(context) {
       const threadId = context.session.providerSessionId;
-      if (!threadId) return { status: 'unavailable', retryable: false, diagnostic: diagnostic('codex_goal_thread_unavailable') };
+      if (!threadId) return { status: 'unavailable', retryable: false, diagnostic: diagnostic('codex_goal_thread_unavailable'), goalControlFailure: { phase: 'native_effect' } };
+      let phase: 'native_effect' | 'host_publication_rejected' = 'native_effect';
       try {
         const response = await withControlClient(context, async (client) => await client.request('thread/goal/get', { threadId }));
+        phase = 'host_publication_rejected';
         return await goalProjection.publish(readCodexGoalPayload(response), context.goalSource);
       } catch {
-        return { status: 'unavailable', retryable: true, diagnostic: diagnostic('codex_goal_read_failed') };
+        return { status: 'unavailable', retryable: true, diagnostic: diagnostic('codex_goal_read_failed'), goalControlFailure: { phase } };
       }
     },
     async set(mutation, context) {
       const threadId = context.session.providerSessionId;
-      if (!threadId) return { status: 'unavailable', retryable: false, diagnostic: diagnostic('codex_goal_thread_unavailable') };
+      if (!threadId) return { status: 'unavailable', retryable: false, diagnostic: diagnostic('codex_goal_thread_unavailable'), goalControlFailure: { phase: 'native_effect' } };
+      let phase: 'native_effect' | 'host_publication_rejected' = 'native_effect';
       try {
         const response = await withControlClient(context, async (client) => await client.request('thread/goal/set', {
           threadId,
           ...mutation,
         }));
+        phase = 'host_publication_rejected';
         return await goalProjection.publish(readCodexGoalPayload(response), context.goalSource);
       } catch {
-        return { status: 'unavailable', retryable: true, diagnostic: diagnostic('codex_goal_write_failed') };
+        return { status: 'unavailable', retryable: true, diagnostic: diagnostic('codex_goal_write_failed'), goalControlFailure: { phase } };
       }
     },
     async clear(context) {
       const threadId = context.session.providerSessionId;
-      if (!threadId) return { status: 'unavailable', retryable: false, diagnostic: diagnostic('codex_goal_thread_unavailable') };
+      if (!threadId) return { status: 'unavailable', retryable: false, diagnostic: diagnostic('codex_goal_thread_unavailable'), goalControlFailure: { phase: 'native_effect' } };
+      let phase: 'native_effect' | 'host_publication_rejected' = 'native_effect';
       try {
         await withControlClient(context, async (client) => await client.request('thread/goal/clear', { threadId }));
+        phase = 'host_publication_rejected';
         return await goalProjection.publish({ kind: 'absent' }, context.goalSource);
       } catch {
-        return { status: 'unavailable', retryable: true, diagnostic: diagnostic('codex_goal_clear_failed') };
+        return { status: 'unavailable', retryable: true, diagnostic: diagnostic('codex_goal_clear_failed'), goalControlFailure: { phase } };
       }
     },
   };

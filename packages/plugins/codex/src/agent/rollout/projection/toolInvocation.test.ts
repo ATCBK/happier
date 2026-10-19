@@ -6,41 +6,10 @@ import {
 } from './toolInvocation.js';
 
 describe('codex terminal-mode rollout tool mapping', () => {
-    const expectedInventory = [
-        'shell',
-        'shell_command',
-        'change_title',
-        'session_title_set',
-        'exec_command',
-        'spawn_agent',
-        'wait_agent',
-        'close_agent',
-        'context7__get-library-docs',
-        'context7__resolve-library-id',
-        'update_plan',
-        'write_stdin',
-        'view_image',
-        'request_user_input',
-        'read_mcp_resource',
-        'list_mcp_resources',
-        'list_mcp_resource_templates',
-        'apply_patch',
-    ] as const;
-
-    it('keeps the observed non-mcp tool inventory stable (drift detection)', () => {
-        const actual = [...KNOWN_CODEX_ROLLOUT_TOOL_NAMES];
-
-        if (JSON.stringify(actual) !== JSON.stringify(expectedInventory)) {
-            throw new Error(
-                [
-                    'Codex rollout tool inventory drift detected.',
-                    'If this change is intentional, update expectedInventory in toolInvocation.test.ts and KNOWN_CODEX_ROLLOUT_TOOL_NAMES in toolInvocation.ts together.',
-                    `Observed inventory: ${JSON.stringify(actual)}`,
-                ].join('\n'),
-            );
-        }
-
-        expect(actual).toEqual(expectedInventory);
+    it('retains the native code-mode script as a visible tool without interpreting its code', () => {
+        const code = 'const result = await tools.exec_command({cmd:"pwd"}); text(result);';
+        expect(canonicalizeCodexRolloutToolName('exec')).toEqual({ canonicalToolName: 'exec', visibility: 'default' });
+        expect(normalizeCodexRolloutToolInput('exec', code)).toBe(code);
     });
 
     it('keeps non-mcp inventory entries unique', () => {

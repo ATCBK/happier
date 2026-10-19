@@ -229,7 +229,7 @@ describe('CODEX_PREFLIGHT_SESSION_CONTROLS', () => {
     });
 
     await expect(CODEX_PREFLIGHT_SESSION_CONTROLS.probeModels(fixture.context))
-      .resolves.toEqual([expect.objectContaining({ id: 'gpt-5.5', name: 'GPT 5.5' })]);
+      .resolves.toEqual([expect.objectContaining({ id: 'gpt-5.5', name: 'GPT-5.5' })]);
     expect(fixture.commands).toEqual([{
       toolId: 'codex-cli',
       args: ['app-server', '--listen', 'stdio://'],

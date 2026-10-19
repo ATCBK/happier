@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildConnectedServiceCredentialRecord, StrictJsonValueSchema } from '@happier-dev/protocol';
 import type { AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/plugin-sdk/agents/runtime';
@@ -6,8 +6,176 @@ import { createCodexNativeAppServerSessionRuntime } from './native.js';
 import { startCodexAppServerRuntime } from './runtime.js';
 import { withCodexNativeAttachFixture as withFixture } from './runtime.nativeAttach.test-support.js';
 import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
+import { PluginError } from '@happier-dev/plugin-sdk';
+
+// The fixture owns TMPDIR. Isolate the OS-user startup lock from live Agents,
+// while retaining the real file-lock and native socket/client behavior.
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, userInfo: () => ({ ...actual.userInfo(), homedir: process.env.TMPDIR || actual.userInfo().homedir }) };
+});
 
 describe('native Codex attachment preparation', () => {
+  it('materializes the fresh native thread before any input even without startup instructions', async () => {
+    await withFixture(async ({ openConfiguredSession, resume, requests }) => {
+      const session = await openConfiguredSession();
+      const events: AgentSessionRuntimeEvent[] = [];
+      const subscription = session.watch(event => events.push(AgentSessionRuntimeEventSchema.parse(event)));
+      try {
+        await expect(resume()).resolves.toMatchObject({ thread: { id: 'fresh-thread', turns: [] } });
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'provider-session-id', providerSessionId: 'fresh-thread' }));
+        expect(requests.some(request => request.method === 'turn/start')).toBe(false);
+      } finally { subscription.dispose(); }
+    }, { startupInstructions: null });
+  });
+  it('projects the c27 code-mode command once under its native command identity', async () => {
+    await withFixture(async ({ runtime, emitNotification }) => {
+      const native = createCodexNativeAppServerSessionRuntime(runtime, 'actual-happier-session');
+      const events: AgentSessionRuntimeEvent[] = [];
+      native.watch(event => events.push(AgentSessionRuntimeEventSchema.parse(event)));
+      try {
+        await native.send({ inputIds: ['pwd'], input: { text: 'Execute pwd' },
+          delivery: { kind: 'newTurn', turnId: 'host-pwd' } });
+        const scope = { threadId: 'fresh-thread', turnId: 'provider-turn-1' };
+        // c27-history-settled.json seq6/7/11/12: outer code execution is
+        // transport plumbing; the nested command has its own native identity.
+        emitNotification('rawResponseItem/completed', { ...scope, item: {
+          type: 'custom_tool_call', call_id: 'call-code', name: 'exec',
+          input: 'const r = await tools.exec_command({cmd:"pwd"}); text(r.output);',
+        } });
+        const command = { type: 'commandExecution', id: 'exec-command', command: '/bin/bash -lc pwd' };
+        emitNotification('item/started', { ...scope, item: command });
+        emitNotification('rawResponseItem/completed', { ...scope, item: {
+          type: 'custom_tool_call_output', call_id: 'call-code', output: 'Script running with cell ID 1',
+        } });
+        emitNotification('item/completed', { ...scope, item: {
+          ...command, status: 'completed', aggregatedOutput: '/workspace\n', exitCode: 0,
+        } });
+        emitNotification('turn/completed', { threadId: 'fresh-thread', turn: { id: scope.turnId, status: 'completed' } });
+        await vi.waitFor(() => expect(events.some(event => event.kind === 'turn-complete')).toBe(true));
+        expect(events.filter(event => event.kind === 'tool-call')).toEqual([
+          expect.objectContaining({ toolCallId: 'exec-command', toolName: 'Bash' }),
+        ]);
+        expect(events.filter(event => event.kind === 'tool-result')).toEqual([
+          expect.objectContaining({ toolCallId: 'exec-command', output: expect.objectContaining({ aggregatedOutput: '/workspace\n', exitCode: 0 }) }),
+        ]);
+        await native.send({ inputIds: ['failed-script'], input: { text: 'Try another command' },
+          delivery: { kind: 'newTurn', turnId: 'host-failed-script' } });
+        const nextScope = { threadId: 'fresh-thread', turnId: 'provider-turn-2' };
+        emitNotification('rawResponseItem/completed', { ...nextScope, item: {
+          type: 'custom_tool_call', call_id: 'call-code', name: 'exec', input: 'await tools.exec_command({cmd:"pwd"});',
+        } });
+        emitNotification('rawResponseItem/completed', { ...nextScope, item: {
+          type: 'custom_tool_call_output', call_id: 'call-code', output: 'Sandbox startup failed before a typed command existed',
+        } });
+        emitNotification('turn/completed', { threadId: 'fresh-thread', turn: { id: nextScope.turnId, status: 'completed' } });
+        await vi.waitFor(() => expect(events.filter(event => event.kind === 'turn-complete')).toHaveLength(2));
+        expect(events.filter(event => event.kind === 'tool-call')).toHaveLength(2);
+        expect(events.filter(event => event.kind === 'tool-result').at(-1)).toMatchObject({
+          toolCallId: 'call-code', output: 'Sandbox startup failed before a typed command existed',
+        });
+      } finally { await native.dispose(); }
+    });
+  });
+  it.skipIf(process.platform === 'win32')('provides a supported runtime and product install remedy without disclosing native failure content', async () => {
+    const sentinel = 'PRIVATE_NATIVE_RUNTIME_SENTINEL';
+    await withFixture(async ({ openConfiguredSession }) => {
+      const failure: unknown = await openConfiguredSession().then(() => null, error => error);
+      expect(failure).toMatchObject({ code: 'codex_tool_restriction_unsupported_runtime' });
+      if (!(failure instanceof Error)) throw new Error('Expected a typed startup refusal');
+      expect(failure.message).toContain('0.162.1');
+      expect(failure.message).toContain('machines.agents.install');
+      expect(failure.message).not.toContain(sentinel);
+    }, {
+      nativeSpawnFailure: new PluginError({ code: 'codex_tool_restriction_unsupported_runtime', message: sentinel }),
+      skills: { pluginRoot: '/fixture', skillsRoot: '/fixture/skills', items: [], nativeDisables: [] },
+    });
+  });
+  it.skipIf(process.platform === 'win32').each([
+    { scope: 'session', mode: 'read-only', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } },
+    { scope: 'run', mode: 'read-only', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } },
+    { scope: 'session', mode: 'yolo', sandbox: 'danger-full-access', sandboxPolicy: undefined },
+  ] as const)('lets host-mediated MCP approval reach the host in a native $scope ($mode)', async ({ scope, mode, sandbox, sandboxPolicy }) => {
+    await withFixture(async ({ openConfiguredSession, openConfiguredRun, requests, emitNotification }) => {
+      const session = scope === 'session' ? await openConfiguredSession() : await openConfiguredRun();
+      const sent = session.send({ inputIds: ['mcp-read'], input: { text: 'Read the selected MCP tool.' },
+        delivery: { kind: 'newTurn', turnId: 'mcp-read-turn' } });
+      const approvalPolicy = { granular: { sandbox_approval: false, rules: false,
+        mcp_elicitations: true, request_permissions: false, skill_approval: false } };
+      // Codex 0.162.1 rejects a prompted MCP tool before sending host input
+      // when the thread uses `never` (including the :read-only profile).
+      try {
+        await vi.waitFor(() => expect(requests.some(request => request.method === 'turn/start')).toBe(true));
+        const thread = requests.find(request => request.method === 'thread/start')?.params;
+        expect(thread).toMatchObject({ approvalPolicy, sandbox });
+        expect(thread).not.toHaveProperty('permissions');
+        const turn = requests.find(request => request.method === 'turn/start')?.params;
+        expect(turn?.approvalPolicy).toEqual(approvalPolicy);
+        expect(turn?.sandboxPolicy).toEqual(sandboxPolicy);
+        expect(turn).not.toHaveProperty('permissions');
+      } finally {
+        emitNotification('turn/completed', { threadId: 'fresh-thread', turn: { id: 'provider-turn-1', status: 'completed' } });
+        await sent;
+      }
+    }, {
+      permissionMode: mode, mcpServers: { docs: { command: 'fixture-bridge' } },
+      mcpToolPolicy: { docs: { unlisted: 'deny', tools: { read: 'ask' } } },
+    });
+  });
+
+  it.skipIf(process.platform === 'win32')('resumes the same persisted thread with a changed MCP launch set', async () => {
+    await withFixture(async ({ openConfiguredSession, requests, nativeLaunches, emitNotification }) => {
+      const initial = await openConfiguredSession();
+      const events: AgentSessionRuntimeEvent[] = [];
+      const subscription = initial.watch(event => events.push(event));
+      try {
+        await initial.send({ inputIds: ['before-restart'], input: { text: 'Remember the conversation.' },
+          delivery: { kind: 'newTurn', turnId: 'host-turn-before' } });
+        emitNotification('turn/completed', { threadId: 'fresh-thread', turn: { id: 'provider-turn-1', status: 'completed' } });
+        await expect.poll(() => events.some(event => event.kind === 'turn-complete')).toBe(true);
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'provider-session-id', providerSessionId: 'fresh-thread' }));
+      } finally { subscription.dispose(); await initial.dispose(); }
+
+      const resumed = await openConfiguredSession('fresh-thread', { wilson: { command: 'fixture-bridge' } });
+      expect(RuntimeDescriptorV1Schema.parse(resumed.runtimeDescriptorV1)).toMatchObject({ agent: { providerSessionId: 'fresh-thread' } });
+      expect(requests.filter(request => request.method === 'thread/start')).toHaveLength(1);
+      expect(requests.filter(request => request.method === 'thread/resume').map(request => request.params.threadId))
+        .toEqual(['fresh-thread']);
+      expect(nativeLaunches).toHaveLength(2);
+      expect(nativeLaunches[0]).not.toContain('mcp_servers.happier__wilson.command="fixture-bridge"');
+      expect(nativeLaunches[1]).toContain('mcp_servers.happier__wilson.command="fixture-bridge"');
+      const resumedEvents: AgentSessionRuntimeEvent[] = [];
+      const resumedSubscription = resumed.watch(event => resumedEvents.push(event));
+      try {
+        await resumed.send({ inputIds: ['after-restart'], input: { text: 'Continue our conversation.' },
+          delivery: { kind: 'newTurn', turnId: 'host-turn-after' } });
+        expect(requests.filter(request => request.method === 'turn/start').map(request => request.params.threadId))
+          .toEqual(['fresh-thread', 'fresh-thread']);
+        emitNotification('turn/completed', { threadId: 'fresh-thread', turn: { id: 'provider-turn-2', status: 'completed' } });
+        await expect.poll(() => resumedEvents.some(event => event.kind === 'turn-complete' && event.turnId === 'host-turn-after')).toBe(true);
+      } finally { resumedSubscription.dispose(); }
+    });
+  });
+
+  it.skipIf(process.platform === 'win32').each(['session', 'run'] as const)('diagnoses a native %s startup failure without exposing native error content', async scope => {
+    const logs: unknown[] = [];
+    const secret = 'PRIVATE_NATIVE_STARTUP_SENTINEL';
+    const failure = Object.assign(new Error(secret, { cause: new Error(secret) }), {
+      code: 'PLUGIN_EXEC_GENERATION_STALE', privatePayload: secret,
+    });
+    await withFixture(async ({ openConfiguredSession, openConfiguredRun }) => {
+      await expect(scope === 'session' ? openConfiguredSession() : openConfiguredRun()).rejects.toMatchObject({
+        code: 'agent_startup_failed',
+      });
+      expect(logs).toContainEqual({ stage: 'skills', errorName: 'Error', errorCode: 'PLUGIN_EXEC_GENERATION_STALE' });
+      expect(JSON.stringify(logs)).not.toContain(secret);
+    }, {
+      nativeSpawnFailure: failure,
+      logger: { debug: (_message, fields) => { logs.push(fields); }, warn() {} },
+      skills: { pluginRoot: '/fixture', skillsRoot: '/fixture/skills', items: [], nativeDisables: [] },
+    });
+  });
+
   it.each(['assistant', 'reasoning'] as const)('clears an existing %s draft with an empty normalized final without manufacturing empty output', async (channel) => {
     await withFixture(async ({ runtime, emitNotification }) => {
       await startCodexAppServerRuntime(runtime);
@@ -181,7 +349,10 @@ describe('native Codex attachment preparation', () => {
   });
   it.skipIf(process.platform === 'win32')('preserves the safe typed tool-policy refusal through native startup sanitization', async () => {
     await withFixture(async ({ openConfiguredSession }) => {
-      await expect(openConfiguredSession()).rejects.toMatchObject({ code: 'codex_tool_restriction_unsupported_model' });
+      await expect(openConfiguredSession()).rejects.toMatchObject({
+        code: 'codex_tool_restriction_unsupported_model',
+        message: expect.stringContaining('codex_tool_restriction_unsupported_model'),
+      });
     }, {
       nativeToolMode: 'direct',
       toolRestriction: { unlistedTools: 'deny', allowedTools: ['mcp__wilson__allowed_echo'] },
@@ -258,14 +429,16 @@ describe('native Codex attachment preparation', () => {
     });
   });
   it.skipIf(process.platform === 'win32')('preserves the typed missing-state reason through native session startup sanitization', async () => {
+    const logs: unknown[] = [];
     await withFixture(async ({ openConfiguredSession, requests, failResume }) => {
       failResume('no rollout found for thread id missing-thread');
       const error = await openConfiguredSession('missing-thread').catch((failure: unknown) => failure);
       expect(error).toMatchObject({ code: 'AGENT_RESUME_PROVIDER_STATE_MISSING' });
+      expect(logs).toContainEqual({ stage: 'native_session', errorName: 'Error', errorCode: 'AGENT_RESUME_PROVIDER_STATE_MISSING' });
       expect(requests.filter((request) => request.method === 'thread/resume').map((request) => request.params.threadId))
         .toEqual(['missing-thread']);
       expect(requests.some((request) => request.method === 'thread/start')).toBe(false);
-    });
+    }, { logger: { debug: (_message, fields) => { logs.push(fields); }, warn() {} } });
   });
   it.skipIf(process.platform === 'win32')('applies initial canonical effort before startup instructions initialize the native attachment thread', async () => {
     await withFixture(async ({ openConfiguredSession, requests }) => {

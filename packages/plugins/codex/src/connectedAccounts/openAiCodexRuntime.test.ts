@@ -67,6 +67,44 @@ function materializationContext(
 }
 
 describe('OpenAI Codex Connected Account', () => {
+  it('materializes native auth within one round of independent credential reads', async () => {
+    const values = new Map([
+      ['accessToken', 'codex-access'], ['idToken', 'codex-id'],
+      ['providerAccountId', 'account-1'], ['lastRefreshAtMs', '2000000000000'],
+      ['refreshToken', 'host-only-refresh'],
+    ]);
+    const context = materializationContext(credentialStore(values).store);
+    vi.useFakeTimers();
+    const materialization = activateConnectedAccountRuntime().materialize({ kind: 'files', fileIds: ['auth.json'] }, {
+      ...context,
+      // Credential transport is external; the real plugin serializer and admission stay intact.
+      credentials: { async get(key, options) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        options?.signal?.throwIfAborted();
+        return values.get(key) ?? null;
+      } },
+    }, { signal: context.signal });
+    try {
+      await vi.advanceTimersByTimeAsync(50);
+      const ready = await Promise.race([materialization, Promise.resolve(null)]);
+      expect(ready).toEqual({ kind: 'files', files: { 'auth.json': expect.any(Uint8Array) } });
+      if (ready?.kind !== 'files') throw new Error('Expected native auth');
+      expect(JSON.parse(new TextDecoder().decode(ready.files['auth.json']))).toMatchObject({
+        auth_mode: 'chatgptAuthTokens',
+        tokens: { access_token: 'codex-access', id_token: 'codex-id', account_id: 'account-1', refresh_token: '' },
+        last_refresh: new Date(2000000000000).toISOString(),
+      });
+      expect(new TextDecoder().decode(ready.files['auth.json'])).not.toContain('host-only-refresh');
+    } finally {
+      try {
+        await vi.runAllTimersAsync();
+        await materialization;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
   it.each([
     { status: 401, headers: {}, code: 'auth_failure', retryAfterMs: null, resetAtMs: null },
     { status: 403, headers: {}, code: 'auth_failure', retryAfterMs: null, resetAtMs: null },

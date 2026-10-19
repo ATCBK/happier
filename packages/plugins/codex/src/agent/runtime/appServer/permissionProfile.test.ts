@@ -8,6 +8,15 @@ import {
 } from './permissionProfile.js';
 
 describe('Codex app-server permission profile params', () => {
+  test('preserves a granular MCP-only approval policy instead of replacing it with a never-approval profile', () => {
+    const approvalPolicy = { granular: { sandbox_approval: false, rules: false,
+      mcp_elicitations: true, request_permissions: false, skill_approval: false } };
+    for (const target of ['thread', 'turn'] as const) {
+      expect(buildCodexAppServerPermissionParams({ policy: { approvalPolicy, sandbox: 'read-only' },
+        support: 'supported', target })).toEqual({ approvalPolicy,
+        ...(target === 'thread' ? { sandbox: 'read-only' } : { sandboxPolicy: { type: 'readOnly' } }) });
+    }
+  });
   test('keeps hands-off read-only on a turn when an older app-server lacks permission profiles', () => {
     expect(buildCodexAppServerPermissionParams({
       policy: { approvalPolicy: 'never', sandbox: 'read-only' }, support: 'legacy', target: 'turn',

@@ -37,8 +37,7 @@ function resolveCodexAppServerPermissionProfileId(
 }
 
 function canUseCodexAppServerPermissionProfile(policy: CodexAppServerPolicy): boolean {
-  const approvalPolicy = readString(policy.approvalPolicy);
-  return !approvalPolicy || approvalPolicy === 'never';
+  return policy.approvalPolicy === undefined || policy.approvalPolicy === null || policy.approvalPolicy === 'never';
 }
 
 export function buildCodexAppServerLegacyPermissionParams(params: Readonly<{

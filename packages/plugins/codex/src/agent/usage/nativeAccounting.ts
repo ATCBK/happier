@@ -6,7 +6,8 @@ import type { AgentExternalSessionAccountingObservation, AgentExternalSessionsRe
 import { homeEntries } from '../rollout/discovery/homeEntries.js';
 import type { CodexExternalSessionSource } from '../surfaces/sessions/external/models.js';
 import { normalizeCodexTokenUsage } from './tokenCountMessage.js';
-import { estimateUsageModelCost, resolveUsageTokenCategories } from '@happier-dev/protocol';
+import { estimateUsageModelCost } from '@happier-dev/protocol/usage/usageCost';
+import { resolveUsageTokenCategories } from '@happier-dev/protocol/usage/usageTokenCategories';
 
 export const CODEX_NATIVE_ACCOUNTING_SOURCE = 'codex-native-accounting';
 

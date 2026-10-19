@@ -9,6 +9,8 @@ import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/e
 
 import { createCodexSharedAppServer } from './sharedServer.js';
 
+type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
+
 describe('createCodexSharedAppServer', () => {
   it.skipIf(process.platform === 'win32').each([
     ['serializes native socket startup until the first real initialize completes', false, false],
@@ -20,6 +22,9 @@ describe('createCodexSharedAppServer', () => {
     const nativeStartupLock = join(userInfo().homedir, '.happier-codex-native-startup.lock');
     const cleanupWasExclusive: boolean[] = [];
     let spawnCount = 0;
+    const nativeLaunch = Object.freeze({}) as AgentNativeLaunchQualifier;
+    const spawnOptions: Parameters<ExecService['spawn']>[1][] = [];
+    const probeOptions: Parameters<ExecService['run']>[1][] = [];
     const result = (stdout = ''): PluginProcessResult => ({
       termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
       stdout: new TextEncoder().encode(stdout), stderr: new Uint8Array(),
@@ -29,9 +34,12 @@ describe('createCodexSharedAppServer', () => {
     // client perform the handshake; no provider orchestration is replaced.
     const exec = {
       systemTools: { resolve: async () => ({ executable: { kind: 'systemTool', id: 'codex-cli' } }) },
-      run: async (request: Parameters<ExecService['run']>[0]) => result(request.args?.includes('--version')
-        ? 'codex-cli 0.162.1' : 'realtime_conversation under development false'),
-      spawn: async (request: Parameters<ExecService['spawn']>[0]) => {
+      run: async (request: Parameters<ExecService['run']>[0], options: Parameters<ExecService['run']>[1]) => {
+        probeOptions.push(options);
+        return result(request.args?.includes('--version') ? 'codex-cli 0.162.1' : 'realtime_conversation under development false');
+      },
+      spawn: async (request: Parameters<ExecService['spawn']>[0], options: Parameters<ExecService['spawn']>[1]) => {
+        spawnOptions.push(options);
         const shouldFailInitialize = firstInitializeFails && spawnCount++ === 0;
         const startupOwner = readFileSync(nativeStartupLock, 'utf8');
         await mkdir(guard);
@@ -83,7 +91,7 @@ describe('createCodexSharedAppServer', () => {
     try {
       const outcomes = await Promise.allSettled([0, 1].map(async index => {
         const server = await createCodexSharedAppServer({
-          exec, processEnv: {}, platform: 'linux',
+          exec, processEnv: {}, platform: 'linux', nativeLaunch,
           dependencies: {
             createRuntimeDirectory: async () => await mkdtemp(join('/tmp', `c-${index}-`)),
             removeRuntimeDirectory: async path => await rm(path, { recursive: true, force: true }),
@@ -102,6 +110,8 @@ describe('createCodexSharedAppServer', () => {
         { status: 'fulfilled', value: { pong: true } },
       ]));
       if (firstInitializeFails) expect(cleanupWasExclusive[0]).toBe(true);
+      expect(spawnOptions).toEqual([{ nativeLaunch }, { nativeLaunch }]);
+      expect(probeOptions.every(options => options === undefined)).toBe(true);
     } finally {
       await Promise.all(clients.map(client => client.dispose()));
       await Promise.all(servers.map(server => server.dispose()));

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AgentSessionProviderBindingV1Schema } from '@happier-dev/plugin-sdk/agents/runtime';
 import {
   normalizeProviderCredentialHeaderName,
@@ -11,16 +11,16 @@ const CODEX_MODEL_REASONING_EFFORT_KEY = 'model_reasoning_effort';
 const CUSTOM_CODEX_PROVIDER_KEY_PATTERN = /^happier_[a-f0-9]{32}$/u;
 const RESERVED_CODEX_PROVIDER_KEYS = new Set(['ollama', 'lmstudio']);
 
-const CodexPublicHeadersV1Schema = ProviderPublicHeadersV1Schema.superRefine((value, ctx) => {
+const CodexPublicHeadersV1Schema = ProviderPublicHeadersV1Schema.check(z.superRefine((value, ctx) => {
   if (Object.keys(value).length === 0) {
     ctx.addIssue({ code: 'custom', message: 'Codex public headers must be omitted when empty' });
   }
-});
+}));
 
 const CodexCredentialEnvHeadersV1Schema = z.record(
-  z.string().min(1),
+  z.string().check(z.minLength(1)),
   z.literal(CODEX_PROVIDER_SECRET_ENV_KEY),
-).superRefine((value, ctx) => {
+).check(z.superRefine((value, ctx) => {
   const names = Object.keys(value);
   if (names.length !== 1) {
     ctx.addIssue({ code: 'custom', message: 'Codex provider auth must reference exactly one credential header' });
@@ -36,18 +36,18 @@ const CodexCredentialEnvHeadersV1Schema = z.record(
       message: error instanceof Error ? error.message : 'Invalid Codex credential header name',
     });
   }
-});
+}));
 
-const CodexProviderInfoV1Schema = z.object({
+const CodexProviderInfoV1Schema = z.strictObject({
   name: z.literal('Happier provider'),
   base_url: ProviderEndpointUrlSyntaxSchema,
   wire_api: z.literal('responses'),
-  env_key: z.literal(CODEX_PROVIDER_SECRET_ENV_KEY).optional(),
-  http_headers: CodexPublicHeadersV1Schema.optional(),
-  env_http_headers: CodexCredentialEnvHeadersV1Schema.optional(),
+  env_key: z.optional(z.literal(CODEX_PROVIDER_SECRET_ENV_KEY)),
+  http_headers: z.optional(CodexPublicHeadersV1Schema),
+  env_http_headers: z.optional(CodexCredentialEnvHeadersV1Schema),
   requires_openai_auth: z.literal(false),
   supports_websockets: z.literal(false),
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (value.env_key && value.env_http_headers) {
     ctx.addIssue({ code: 'custom', message: 'Codex provider auth must use one environment reference mechanism' });
   }
@@ -58,16 +58,31 @@ const CodexProviderInfoV1Schema = z.object({
       ctx.addIssue({ code: 'custom', message: 'Codex public and credential headers must not compete' });
     }
   }
-});
+}));
 
-export const CodexProviderBindingEngineConfigV1Schema = z.object({
+export type CodexProviderBindingEngineConfigV1 = {
+  v: 1;
+  modelProvider: string;
+  config: Record<string, 'none' | {
+    name: 'Happier provider';
+    base_url: string;
+    wire_api: 'responses';
+    env_key?: typeof CODEX_PROVIDER_SECRET_ENV_KEY;
+    http_headers?: Record<string, string>;
+    env_http_headers?: Record<string, typeof CODEX_PROVIDER_SECRET_ENV_KEY>;
+    requires_openai_auth: false;
+    supports_websockets: false;
+  }>;
+};
+
+export const CodexProviderBindingEngineConfigV1Schema: z.ZodMiniType<CodexProviderBindingEngineConfigV1> = z.strictObject({
   v: z.literal(1),
-  modelProvider: z.string().min(1).max(128),
+  modelProvider: z.string().check(z.minLength(1), z.maxLength(128)),
   config: z.record(z.string(), z.union([
     CodexProviderInfoV1Schema,
     z.literal('none'),
   ])),
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   const keys = Object.keys(value.config);
   for (const key of keys) {
     const field = value.config[key];
@@ -94,9 +109,7 @@ export const CodexProviderBindingEngineConfigV1Schema = z.object({
   if (providerKeys.length !== 1 || providerKeys[0] !== expectedKey) {
     ctx.addIssue({ code: 'custom', path: ['config'], message: 'Codex provider config must contain its exact prepared key' });
   }
-});
-
-export type CodexProviderBindingEngineConfigV1 = z.infer<typeof CodexProviderBindingEngineConfigV1Schema>;
+}));
 
 export function parseCodexProviderBindingEngineConfigV1(
   input: unknown,

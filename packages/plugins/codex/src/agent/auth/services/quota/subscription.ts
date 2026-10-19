@@ -1,6 +1,6 @@
 import type { AgentAccountUsageSubscription } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { HttpService } from '@happier-dev/plugin-sdk/http';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const OPENAI_CODEX_DEFAULT_SUBSCRIPTION_URL =
   'https://chatgpt.com/backend-api/subscriptions';
@@ -11,8 +11,8 @@ const SUBSCRIPTION_USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 const subscriptionResponseSchema = z.object({
-  active_until: z.string().datetime({ offset: true }).transform((value) => Date.parse(value)),
-  will_renew: z.unknown().optional(),
+  active_until: z.pipe(z.string().check(z.iso.datetime({ offset: true })), z.transform((value) => Date.parse(value))),
+  will_renew: z.optional(z.unknown()),
 });
 
 type SubscriptionErrorCode = NonNullable<AgentAccountUsageSubscription['lastRefreshError']>['code'];

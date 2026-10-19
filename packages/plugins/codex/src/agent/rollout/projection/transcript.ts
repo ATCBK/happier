@@ -1,6 +1,7 @@
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { AgentRuntimeJsonValueSchema } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { AgentExternalSessionTranscriptItem } from '@happier-dev/plugin-sdk/sessions/external';
+import { createExternalSessionUnsupportedTranscriptItem } from '@happier-dev/plugin-sdk/sessions/file-stores';
 
 import type { CodexRolloutAction } from './actions.js';
 import { projectCodexRolloutActions } from './messages.js';
@@ -35,12 +36,12 @@ function shouldFilterHarnessBlob(text: string): boolean {
   return patterns.some((p) => t.includes(p));
 }
 
-function extractEnvelopeTimestampMs(value: unknown): number {
+export function readCodexRolloutLineTimestampMs(value: unknown): number | null {
   const record = asRecord(value);
   const ts = typeof record?.timestamp === 'string' ? String(record.timestamp) : '';
-  if (!ts.trim()) return 0;
+  if (!ts.trim()) return null;
   const ms = Date.parse(ts);
-  return Number.isFinite(ms) && ms >= 0 ? Math.trunc(ms) : 0;
+  return Number.isFinite(ms) && ms >= 0 ? Math.trunc(ms) : null;
 }
 
 function stableOffsetId(prefix: string, offset: number, actionIndex: number): string {
@@ -54,9 +55,16 @@ export function mapCodexRolloutLineToExternalMessages(params: Readonly<{
   lineStartOffsetBytes: number;
   lineValue: unknown;
   actions: ReadonlyArray<CodexRolloutAction>;
+  unsupportedRecord?: boolean;
+  precedingTimestampMs?: number;
   sidechainId?: string | null;
 }>): CodexRolloutExternalMessageCandidate[] {
-  const createdAtMs = extractEnvelopeTimestampMs(params.lineValue);
+  const createdAtMs = readCodexRolloutLineTimestampMs(params.lineValue)
+    ?? (params.unsupportedRecord ? params.precedingTimestampMs : undefined) ?? 0;
+  if (params.unsupportedRecord) {
+    const id = stableOffsetId(`codex:${params.fileRelPath}`, params.lineStartOffsetBytes, 0);
+    return [createExternalSessionUnsupportedTranscriptItem({ agentId: 'codex', id, localId: id, createdAtMs })];
+  }
   // External transcript rendering should include "debug-only" tool calls (e.g., Codex-internal read/write tools),
   // but must still filter harness/system blobs that Codex sometimes embeds as user messages.
   const projected = projectCodexRolloutActions(

@@ -21,9 +21,14 @@ import {
 import { connectCodexUnixWebSocketJsonRpc } from './client/unixWebSocket.js';
 import { withCodexNativeStartupLock } from './nativeStartupLock.js';
 import { readCodexMcpServerKeysFromConfigToml } from '../../mcp/configServers.js';
+import {
+    CODEX_SUPPORTED_RUNTIME_VERSION,
+    CODEX_TOOL_RESTRICTION_RUNTIME_REMEDY,
+} from '../../cli/supportedRuntime.js';
 export { resolveCodexHome } from '../../mcp/configServers.js';
 
 type CodexAppServerEnv = Readonly<Record<string, string | undefined>>;
+type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
 
 export type CodexAppServerTransport =
     | Readonly<{ kind: 'stdio' }>
@@ -275,7 +280,11 @@ function wrapNativeCodexAppServerClient(
     const notificationSubscription = handle.client.onNotification(async (message) => {
         const handlers = notificationHandlers.get(message.method);
         if (!handlers) return;
-        for (const handler of [...handlers]) await handler(message.params);
+        for (const handler of [...handlers]) {
+            const completion = handler(message.params);
+            // Synchronous observers must finish before the next notification can overtake them.
+            if (completion !== undefined) await completion;
+        }
     });
     void handle.wait().then((result) => {
         settledExit = toNativeExit(result);
@@ -373,6 +382,7 @@ function buildNativeCodexAppServerClientSpec(params: Readonly<{
 
 type CodexNativeAppServerClientParams = Readonly<{
     exec: ExecService;
+    nativeLaunch?: AgentNativeLaunchQualifier;
     processEnv?: CodexAppServerEnv;
     cwd?: string;
     configOverrides?: readonly string[];
@@ -429,8 +439,13 @@ async function createUnlockedCodexNativeAppServerClient(params: CodexNativeAppSe
                 disableUserMcpServers: params.disableUserMcpServers,
                 enableRealtimeConversation,
                 transport: params.transport,
-            }), params.signal ? { signal: params.signal } : undefined) as PluginProtocolClientHandle<'jsonRpc'>;
+            }), params.signal || (params.nativeLaunch && params.transport?.kind !== 'daemonProxy') ? {
+                ...(params.signal ? { signal: params.signal } : {}),
+                ...(params.nativeLaunch && params.transport?.kind !== 'daemonProxy'
+                    ? { nativeLaunch: params.nativeLaunch } : {}),
+            } : undefined) as PluginProtocolClientHandle<'jsonRpc'>;
     } catch (error) {
+        if (error instanceof PluginError) throw error;
         if (params.signal?.aborted || !enableRealtimeConversation) throw error;
         throw createCodexRealtimeEnabledAppServerLaunchUnavailableError();
     }
@@ -451,12 +466,14 @@ async function createUnlockedCodexNativeAppServerClient(params: CodexNativeAppSe
             notify: async (method) => await client.notify(method),
         });
         if (params.toolRestrictionRequired) {
-            // 0.162.1 is the observed native support basis, not an invented minimum.
+            // The managed install's exact qualified release is the support basis.
             // Unknown versions fail closed because older binaries can echo ignored flags.
             const userAgent = initialized && typeof initialized === 'object'
                 ? (initialized as Readonly<{ userAgent?: unknown }>).userAgent : null;
-            if (typeof userAgent !== 'string' || !/\/0\.162\.1(?:\s|$)/u.test(userAgent)) {
-                throw new PluginError({ code: 'codex_tool_restriction_unsupported_runtime', message: 'This Codex native runtime has not established tool-confinement support.' });
+            const version = typeof userAgent === 'string'
+                ? /\/(\d+\.\d+\.\d+)(?:\s|$)/u.exec(userAgent)?.[1] : null;
+            if (version !== CODEX_SUPPORTED_RUNTIME_VERSION) {
+                throw new PluginError({ code: 'codex_tool_restriction_unsupported_runtime', message: CODEX_TOOL_RESTRICTION_RUNTIME_REMEDY });
             }
             const effective = await client.request('config/read', { includeLayers: false, ...(params.cwd ? { cwd: params.cwd } : {}) });
             const config = effective && typeof effective === 'object' ? (effective as { config?: unknown }).config : null;

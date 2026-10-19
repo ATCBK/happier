@@ -13,6 +13,7 @@ import type {
   AgentSessionOpenRequest,
   AgentSessionSkillDelivery,
   AgentSessionRuntime,
+  AgentSessionModelsSnapshot,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { SessionAuthService } from '@happier-dev/plugin-sdk/sessions';
 import {
@@ -119,10 +120,11 @@ import {
 import { createCodexAppServerAssistantReasoningProjector } from './projection/assistantReasoning.js';
 import {
   hasCodexAppServerCollaborationMode,
+  readCodexAppServerSessionControls,
   resolveCodexAppServerCollaborationModeSelection,
 } from './state/controls.js';
 import { createCodexNativeChildObserver, type NativeChildProjectionContext } from './nativeChildren.js';
-import { projectCodexAppServerToolEventsFromNotification } from './projection/toolEvents.js';
+import { createCodexAppServerToolEventProjector } from './projection/toolEvents.js';
 import {
   extractCodexGeneratedMediaCandidate,
   type CodexGeneratedMediaCandidate,
@@ -256,6 +258,7 @@ type PendingTurn = {
     settle: (agentTurnId: string | null) => void;
   }>;
   providerStartAcknowledged: boolean;
+  nativePermissionPolicyKey: string | null;
   deferredTerminalNotification: Readonly<{
     method: 'turn/completed' | 'turn/interrupted';
     params: unknown;
@@ -322,6 +325,7 @@ type CodexAppServerRuntimeParams = CodexAppServerRuntimeTarget & Readonly<{
 
 export type CodexAppServerRuntimeHost = Readonly<{
   baseProcessEnv: Readonly<Record<string, string | undefined>>;
+  models?: AgentSessionRuntimeContext['session']['services']['models'];
   inputFiles?: AgentSessionRuntimeContext['session']['services']['inputFiles'];
   nativeHome?: NonNullable<AgentSessionRuntimeContext['session']['services']['nativeHome']>;
   logger: Readonly<{
@@ -700,7 +704,7 @@ function buildCodexAppServerBackgroundCompletionFailureDiagnostics(
   };
 }
 
-function buildCodexAppServerSafeErrorIdentity(error: unknown): Record<string, unknown> {
+export function buildCodexAppServerSafeErrorIdentity(error: unknown): Record<string, unknown> {
   if (!(error instanceof Error)) {
     return { errorName: typeof error };
   }
@@ -712,9 +716,19 @@ function buildCodexAppServerSafeErrorIdentity(error: unknown): Record<string, un
   const safeCode = rawCode && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u.test(rawCode)
     ? rawCode
     : null;
+  const safeReason = safeCode === 'codex_refresh_free_auth_unsupported'
+    && (errorRecord?.reason === 'refresh_bridge_unavailable'
+      || errorRecord?.reason === 'provider_account_identity_unavailable'
+      || errorRecord?.reason === 'experimental_api_unavailable'
+      || errorRecord?.reason === 'workspace_incompatible'
+      || errorRecord?.reason === 'credential_family_mismatch'
+      || errorRecord?.reason === 'live_hot_auth_failed')
+    ? errorRecord.reason
+    : null;
   return {
     errorName: safeName,
     ...(safeCode ? { errorCode: safeCode } : {}),
+    ...(safeReason ? { errorReason: safeReason } : {}),
   };
 }
 
@@ -799,6 +813,7 @@ function createPendingTurn(
       settle: settleAgentTurnId,
     },
     providerStartAcknowledged: false,
+    nativePermissionPolicyKey: null,
     deferredTerminalNotification: null,
     providerPrompt,
     startUserMessageSeq,
@@ -881,6 +896,7 @@ export function createCodexAppServerRuntime(
   const runtimeTargetId = params.happierSessionId !== undefined
     ? params.happierSessionId
     : params.executionRunId;
+  const nativeAttachmentThreadName = `Happier session ${runtimeTargetId}`;
   const readRuntimeProcessEnv = (): Readonly<Record<string, string | undefined>> =>
     params.processEnv ?? params.host.baseProcessEnv;
   let clientPromise: Promise<DisposableCodexAppServerClient> | null = null;
@@ -909,6 +925,22 @@ export function createCodexAppServerRuntime(
     && Object.keys(normalizeMcpServers(params.mcpServers)).length > 0;
   let currentReasoningEffort: string | null = null;
   let currentServiceTier: string | null = null;
+  let modelsSnapshot: AgentSessionModelsSnapshot = { models: null };
+  const modelListeners = new Set<(snapshot: AgentSessionModelsSnapshot) => void>();
+  // External Provider catalogs retain their existing authorized publisher.
+  // Native discovery belongs only to the plain native route.
+  const modelsBinding = !params.initialProviderBinding ? params.host.models?.bind({
+    read: () => modelsSnapshot,
+    subscribe(listener) {
+      modelListeners.add(listener);
+      return { dispose: () => { modelListeners.delete(listener); } };
+    },
+  }) : undefined;
+  const publishCurrentModel = (modelId: string | null): void => {
+    if (!modelsSnapshot.models || !modelId || modelsSnapshot.currentModelId === modelId) return;
+    modelsSnapshot = { ...modelsSnapshot, currentModelId: modelId };
+    for (const listener of modelListeners) listener(modelsSnapshot);
+  };
   let currentPermissionPolicyOverride: CodexAppServerPolicy | null = null;
   let currentWorkspaceWrites = params.initialWorkspaceWrites;
   let currentPermissionMode = params.initialPermissionMode;
@@ -921,7 +953,8 @@ export function createCodexAppServerRuntime(
   let pendingTurn: PendingTurn | null = null;
   let connectedServiceAuthApplyTail: Promise<void> = Promise.resolve();
   let connectedServiceAuthApplyCount = 0;
-  const terminatedProviderTurnIds = new Set<string>();
+  // Keep the existing terminal fence's original host correlation for late native tool results.
+  const terminatedProviderTurnIds = new Map<string, string>();
   const preAckCancelledTurns = new Set<PendingTurn>();
   let turnCompletionSettling = false;
   let pendingTurnCompletionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -952,8 +985,22 @@ export function createCodexAppServerRuntime(
   let publishedProvisionalProviderAccountUsageRecordId: string | null = null;
   const pendingProviderPrompts = new Set<PendingProviderPrompt>();
   const runtimeSubscribers = new Set<(event: CodexAppServerEvent) => void>();
-  const resolveCurrentPolicy = (): CodexAppServerPolicy | null =>
-    currentPermissionPolicyOverride ?? params.resolveCurrentPolicy?.() ?? null;
+  const resolveCurrentPolicy = (
+    policy: CodexAppServerPolicy | null = currentPermissionPolicyOverride ?? params.resolveCurrentPolicy?.() ?? null,
+  ): CodexAppServerPolicy | null => {
+    if (policy?.approvalPolicy !== 'never' || !Object.entries(params.mcpToolPolicy ?? {}).some(([name, server]) =>
+      mcpServerKeys.has(name)
+      && (server.unlisted !== 'deny' || Object.values(server.tools).some(setting => setting === 'ask' || setting === 'allow')))) {
+      return policy;
+    }
+    // Codex 0.162.1 refuses prompted MCP calls under `never` before the host
+    // can enforce its live tool policy. Admit only MCP approval requests;
+    // retain the native sandbox and denial of every other approval category.
+    return { ...policy, approvalPolicy: { granular: {
+      sandbox_approval: false, rules: false, mcp_elicitations: true,
+      request_permissions: false, skill_approval: false,
+    } } };
+  };
 
   const readHostOwnedAuthTokens = async () => appliedChatGptAccessTokens
     ? { ...appliedChatGptAccessTokens, idToken: null, accountLabel: latestConnectedServiceRuntimeIdentity?.accountLabel ?? null }
@@ -975,7 +1022,7 @@ export function createCodexAppServerRuntime(
       return { status: 'missing' } as const;
     }
   };
-  const publishedToolEventKeys = new Set<string>();
+  const toolEventProjector = createCodexAppServerToolEventProjector();
   const pendingHappierTitleToolNamesByCallId = new Map<string, string>();
   const publishedGeneratedMediaItemIds = new Set<string>();
   const publishedProviderUserMessageIds = new Set<string>();
@@ -1578,7 +1625,9 @@ export function createCodexAppServerRuntime(
 
   const applyThreadNameUpdate = (notificationParams: unknown): void => {
     const title = readThreadNameUpdateTitle(notificationParams);
-    if (!title) return;
+    // Empty-rollout materialization names the native thread for attachment.
+    // Its echoed bookkeeping name must not replace the person's Session title.
+    if (!title || title === nativeAttachmentThreadName) return;
     const notificationThreadId = readThreadId(notificationParams);
     if (threadId && notificationThreadId && notificationThreadId !== threadId) return;
     if (!params.host.setTitle) return;
@@ -1671,32 +1720,30 @@ export function createCodexAppServerRuntime(
 
   const publishToolEventsFromNotification = (method: string, notificationParams: unknown): boolean => {
     const activeTurn = pendingTurn;
-    if (!activeTurn || !notificationMatchesPendingTurn(notificationParams)) return false;
-    // rawResponseItem is an explicitly experimental view of the model/runtime
-    // exchange. Codex emits typed item notifications for user-facing tools;
-    // projecting both surfaces leaks internal wrappers and duplicates results.
-    if (method === 'rawResponseItem/completed') return false;
-    const projected = projectCodexAppServerToolEventsFromNotification({ method, notificationParams,
-      mcpServerKeys });
-    const publishable = projected.filter(
-      (event) => !publishedToolEventKeys.has(`${activeTurn.sessionTurnId}:${event.type}:${event.callId}`),
-    );
+    const activeMatch = activeTurn && notificationMatchesPendingTurn(notificationParams) ? activeTurn : null;
+    const providerTurnId = readProviderEventTurnId(notificationParams);
+    const settledHostTurnId = (method === 'item/completed' || method === 'rawResponseItem/completed')
+      && readThreadId(notificationParams) === threadId && providerTurnId
+      ? terminatedProviderTurnIds.get(providerTurnId)
+      : undefined;
+    const hostTurnId = activeMatch?.sessionTurnId ?? settledHostTurnId;
+    if (!hostTurnId) return false;
+    const publishable = toolEventProjector.project({ method, notificationParams,
+      mcpServerKeys, scopeId: hostTurnId, ...(!activeMatch ? { lateResultOnly: true } : {}) });
     if (publishable.length === 0) return false;
-    flushBufferedTranscriptSegments({ reason: 'tool-call-boundary' });
+    if (activeMatch) flushBufferedTranscriptSegments({ reason: 'tool-call-boundary' });
     let published = false;
     for (const event of publishable) {
-      const key = `${activeTurn.sessionTurnId}:${event.type}:${event.callId}`;
-      publishedToolEventKeys.add(key);
       if (event.type === 'tool-call') {
         if (!event.sidechainId && isChangeTitleToolNameAlias(event.name)) {
           const title = readHappierTitleToolTitle(event.input);
           if (title) {
-            pendingHappierTitleToolNamesByCallId.set(buildTurnToolCallKey(activeTurn.sessionTurnId, event.callId), title);
+            pendingHappierTitleToolNamesByCallId.set(buildTurnToolCallKey(hostTurnId, event.callId), title);
           }
         }
         publishRuntimeEvent({
           kind: 'tool-call',
-          turnId: activeTurn.sessionTurnId,
+          turnId: hostTurnId,
           toolCallId: event.callId,
           toolName: event.name,
           toolInput: event.input,
@@ -1706,18 +1753,18 @@ export function createCodexAppServerRuntime(
         continue;
       }
       const completedTitleName = pendingHappierTitleToolNamesByCallId.get(
-        buildTurnToolCallKey(activeTurn.sessionTurnId, event.callId),
+        buildTurnToolCallKey(hostTurnId, event.callId),
       ) ?? null;
-      pendingHappierTitleToolNamesByCallId.delete(buildTurnToolCallKey(activeTurn.sessionTurnId, event.callId));
-      if (completedTitleName && !event.sidechainId && didHappierTitleToolSucceed(event.output)) {
+      pendingHappierTitleToolNamesByCallId.delete(buildTurnToolCallKey(hostTurnId, event.callId));
+      if (activeMatch && completedTitleName && !event.sidechainId && didHappierTitleToolSucceed(event.output)) {
         const activeClient = client;
         if (activeClient) {
           void activeClient.request('thread/name/set', {
-            threadId: activeTurn.threadId,
+            threadId: activeMatch.threadId,
             name: completedTitleName,
           }).catch((error: unknown) => {
             params.host.logger.debug('Codex app-server failed to sync Happier title to native thread name', {
-              threadId: activeTurn.threadId,
+              threadId: activeMatch.threadId,
               errorName: error instanceof Error ? error.name : typeof error,
             });
           });
@@ -1725,7 +1772,7 @@ export function createCodexAppServerRuntime(
       }
       publishRuntimeEvent({
         kind: 'tool-result',
-        turnId: activeTurn.sessionTurnId,
+        turnId: hostTurnId,
         toolCallId: event.callId,
         output: event.output,
         ...(event.isError === undefined ? {} : { isError: event.isError }),
@@ -1807,7 +1854,8 @@ export function createCodexAppServerRuntime(
         agentTurnId,
       });
     }
-    if (agentTurnId) terminatedProviderTurnIds.add(agentTurnId);
+    if (agentTurnId) terminatedProviderTurnIds.set(agentTurnId, activeTurn.sessionTurnId);
+    publishToolEventsFromNotification('turn/completed', notificationParams);
     settlePendingTurnAgentTurnIdObservation(activeTurn);
     clearPendingTurnCompletionTimer();
     flushAssistantReasoningProjection(
@@ -1985,7 +2033,8 @@ export function createCodexAppServerRuntime(
     const activeTurn = pendingTurn;
     if (!activeTurn || activeTurn.failureSettling) return;
     activeTurn.failureSettling = true;
-    if (activeTurn.agentTurnId) terminatedProviderTurnIds.add(activeTurn.agentTurnId);
+    publishToolEventsFromNotification('turn/interrupted', { threadId: activeTurn.threadId, turnId: activeTurn.agentTurnId });
+    if (activeTurn.agentTurnId) terminatedProviderTurnIds.set(activeTurn.agentTurnId, activeTurn.sessionTurnId);
     clearPendingTurnCompletionTimer();
     flushAssistantReasoningProjection('abort');
     settlePendingTurnAgentTurnIdObservation(activeTurn);
@@ -2220,6 +2269,12 @@ export function createCodexAppServerRuntime(
       nextClient.registerNotificationHandler(method, (notificationParams): void | Promise<void> => {
         const childNotification = nativeChildren.observe(method, notificationParams);
         if (childNotification) return childNotification;
+        const providerTurnId = readProviderEventTurnId(notificationParams);
+        if ((method === 'item/completed' || method === 'rawResponseItem/completed')
+          && providerTurnId && terminatedProviderTurnIds.has(providerTurnId)) {
+          publishToolEventsFromNotification(method, notificationParams);
+          return;
+        }
         if (!adoptProviderTurnFromActivity(notificationParams, {
           allowUnownedAdoption: method === 'item/agentMessage/delta'
             || method === 'turn/diff/updated'
@@ -2583,6 +2638,16 @@ export function createCodexAppServerRuntime(
       assertCodexToolRestrictionModelSupported(await ensureClient(), currentModelId);
     }
     currentServiceTier = readServiceTier(response) ?? (hasServiceTierOverride ? currentServiceTier : null);
+    if (modelsBinding) {
+      const observedModelId = readModelId(response) ?? trimStringValue(commonFields.model);
+      const controls = await readCodexAppServerSessionControls({ client: appServerClient,
+        currentModelId: observedModelId, currentModeId: currentCollaborationModeId,
+        currentReasoningEffort, currentServiceTier });
+      if (!disposed && client === appServerClient && controls.modelsObserved) {
+        modelsSnapshot = { models: controls.availableModels, observedAt: Date.now(), currentModelId: observedModelId ?? controls.currentModelId };
+        for (const listener of modelListeners) listener(modelsSnapshot);
+      }
+    }
     if (requestedThreadId) {
       nativeReadyThreadId = nextThreadId;
       publishThreadIdentity(nextThreadId);
@@ -2628,7 +2693,7 @@ export function createCodexAppServerRuntime(
       const appServerClient = await ensureClient();
       await appServerClient.request('thread/name/set', {
         threadId: attachedThreadId,
-        name: `Happier session ${runtimeTargetId}`,
+        name: nativeAttachmentThreadName,
       });
       // A fresh paginated Codex thread needs metadata and a full read to
       // persist its zero-turn rollout before another client can resume it.
@@ -2727,6 +2792,7 @@ export function createCodexAppServerRuntime(
         // applications that settled while that resolution was awaiting.
         await waitForConnectedServiceAuthApply();
         activeTurn.providerOperationIdentity = latestConnectedServiceRuntimeIdentity;
+        activeTurn.nativePermissionPolicyKey = serializeCodexAppServerPolicy(policy);
         return await appServerClient.request('turn/start', params)
           .then((result) => {
             if (Object.prototype.hasOwnProperty.call(params, 'permissions')) {
@@ -2750,13 +2816,14 @@ export function createCodexAppServerRuntime(
           });
       };
       const response = await requestTurnStart(requestParams);
+      publishCurrentModel(readModelId(response) ?? trimStringValue(requestParams.model));
       const agentTurnId = readTurnId(response);
       nativeReadyThreadId = activeTurn.threadId;
       publishThreadIdentity(activeTurn.threadId);
       activeTurn.providerStartAcknowledged = true;
       if (activeTurn.interruptWhenProviderTurnIdArrives) {
         if (agentTurnId) {
-          terminatedProviderTurnIds.add(agentTurnId);
+          terminatedProviderTurnIds.set(agentTurnId, activeTurn.sessionTurnId);
           await requestCodexTurnInterruptWithStartupRetry({
             client: appServerClient,
             threadId: activeTurn.threadId,
@@ -3032,6 +3099,8 @@ export function createCodexAppServerRuntime(
 
   const resetOrDisposeRuntime = async (): Promise<void> => {
     disposed = true;
+    modelsBinding?.dispose();
+    modelListeners.clear();
     await realtimeConversation.dispose();
     clearAllPendingProviderPrompts(new Error('Codex runtime disposed before provider input acceptance was observed'));
     const activeTurn = pendingTurn;
@@ -3042,7 +3111,7 @@ export function createCodexAppServerRuntime(
     if (activeTurn) clearPendingHappierTitleToolNamesForTurn(activeTurn.sessionTurnId);
     activeTurn?.resolve();
     terminalPendingTurnFailure = null;
-    publishedToolEventKeys.clear();
+    toolEventProjector.clear();
     terminatedProviderTurnIds.clear();
     preAckCancelledTurns.clear();
     pendingHappierTitleToolNamesByCallId.clear();
@@ -3377,20 +3446,27 @@ export function createCodexAppServerRuntime(
       if (nextModelId && requiresConfinedMcp) {
         assertCodexToolRestrictionModelSupported(await ensureClient(), nextModelId);
       }
-      if ((updateRecord?.workspaceWrites === 'allow' || updateRecord?.workspaceWrites === 'deny')
-        && updateRecord.workspaceWrites !== currentWorkspaceWrites
-        && (pendingTurn !== null || realtimeConversation.isActive())) {
-        throw Object.assign(new Error('The active Codex turn retains its admitted sandbox'), { code: 'role_policy_restart_required' });
-      }
       const collaborationModeId = trimStringValue(updateRecord?.collaborationModeId);
-      const nextPermissionMode = trimStringValue(updateRecord?.permissionMode);
-      if (nextPermissionMode) currentPermissionMode = nextPermissionMode;
-      if (updateRecord?.workspaceWrites === 'allow' || updateRecord?.workspaceWrites === 'deny') {
-        currentWorkspaceWrites = updateRecord.workspaceWrites;
+      const nextPermissionMode = trimStringValue(updateRecord?.permissionMode) ?? currentPermissionMode;
+      const nextWorkspaceWrites = updateRecord?.workspaceWrites === 'allow' || updateRecord?.workspaceWrites === 'deny'
+        ? updateRecord.workspaceWrites : currentWorkspaceWrites;
+      const nextPermissionPolicy = nextPermissionMode
+        ? resolveCodexTerminalPermissionPolicy(nextPermissionMode, nextWorkspaceWrites, params.toolRestriction?.unlistedTools)
+        : null;
+      if (nextWorkspaceWrites !== currentWorkspaceWrites && (pendingTurn !== null || realtimeConversation.isActive())) {
+        const nextPolicyKey = serializeCodexAppServerPolicy(resolveCurrentPolicy(nextPermissionPolicy));
+        // A queued permission intent does not describe the active turn's sandbox.
+        // An equivalent admitted policy needs no native change when adding a Role ceiling.
+        if (realtimeConversation.isActive() || !pendingTurn?.nativePermissionPolicyKey
+          || pendingTurn.nativePermissionPolicyKey !== nextPolicyKey) {
+          throw Object.assign(new Error('The active Codex turn retains its admitted sandbox'), { code: 'role_policy_restart_required' });
+        }
       }
-      if (currentPermissionMode) {
-        const nextPolicy = resolveCodexTerminalPermissionPolicy(currentPermissionMode, currentWorkspaceWrites, params.toolRestriction?.unlistedTools);
-        const nextPolicyKey = serializeCodexAppServerPolicy(nextPolicy);
+      if (nextPermissionMode) currentPermissionMode = nextPermissionMode;
+      currentWorkspaceWrites = nextWorkspaceWrites;
+      if (nextPermissionPolicy) {
+        currentPermissionPolicyOverride = nextPermissionPolicy;
+        const nextPolicyKey = serializeCodexAppServerPolicy(resolveCurrentPolicy());
         if (
           threadId
           && publishedThreadId !== threadId
@@ -3406,7 +3482,6 @@ export function createCodexAppServerRuntime(
           startedEmptyThreadPolicyKey = null;
           startedEmptyThreadWithoutExplicitModel = false;
         }
-        currentPermissionPolicyOverride = nextPolicy;
       }
       if (nextModelId) {
         if (
