@@ -45,8 +45,9 @@ describe('apps/ui runVitestShards', () => {
         expect(resolveVitestShardRange({}, 32)).toEqual({ start: 1, end: 32, part: 1, parts: 1 });
     });
 
-    it('bounds each shard independently', () => {
-        expect(resolveVitestShardTimeoutMs({})).toBe(1_200_000);
+    it('uses the containing deadline unless a diagnostic watchdog is explicitly configured', () => {
+        expect(resolveVitestShardTimeoutMs({})).toBeUndefined();
+        expect(resolveVitestShardTimeoutMs({ HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS: 'invalid' })).toBeUndefined();
         expect(resolveVitestShardTimeoutMs({ HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS: '120000' })).toBe(120_000);
         expect(classifyVitestShardTermination({ code: null, signal: 'SIGTERM', timedOut: true })).toEqual({
             outcome: 'failed',
