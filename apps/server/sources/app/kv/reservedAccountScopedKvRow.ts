@@ -13,6 +13,7 @@ import {
 } from "./accountScopedKv";
 import {
     applyUserKvMutationsInTx,
+    readUserKvMutationConflict,
     type KVMutation,
     type UserKvMutationApplication,
 } from "./kvMutate";
@@ -50,6 +51,14 @@ export type ReservedAccountScopedKvRowsMutationResult =
     | Readonly<{ status: "updated"; rows: readonly Readonly<{ physicalKey: string; revision: number; cursor: number }>[] }>
     | Readonly<{ status: "conflict"; physicalKey: string; revision: number }>
     | ReservedAccountScopedKvRowFailure;
+
+/** Public row owners project a late CAS refusal only after their outer inTx rolls back. */
+export async function readReservedAccountScopedKvRowMutationConflict(error: unknown): Promise<
+    Extract<ReservedAccountScopedKvRowMutationResult, { status: "conflict" }> | null
+> {
+    const conflict = await readUserKvMutationConflict(error);
+    return conflict ? { status: "conflict", revision: conflict.version } : null;
+}
 
 type RowMutationSuccess = Extract<ReservedAccountScopedKvRowMutationResult, { status: "updated" }>;
 export type ReservedAccountScopedKvRowMutationInTxResult =

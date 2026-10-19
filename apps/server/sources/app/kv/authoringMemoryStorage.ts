@@ -11,6 +11,7 @@ import {
     listReservedAccountScopedKvRowsInTx,
     mutateReservedAccountScopedKvRowInTx,
     readReservedAccountScopedKvRowInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     type ReservedAccountScopedKvRowDomain,
     type ReservedAccountScopedKvRowFailure,
     type ReservedAccountScopedKvRowReadResult,
@@ -111,5 +112,11 @@ export async function listAuthoringMemory(input: Readonly<{ accountId: string }>
     return await inTx(tx => listAuthoringMemoryInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
 }
 export async function mutateAuthoringMemory(input: Parameters<typeof mutateAuthoringMemoryInTx>[1]): Promise<ReservedAccountScopedKvRowMutationResult> {
-    return await inTx(tx => mutateAuthoringMemoryInTx(tx, input));
+    try {
+        return await inTx(tx => mutateAuthoringMemoryInTx(tx, input));
+    } catch (error) {
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        throw error;
+    }
 }

@@ -12,7 +12,8 @@ import {
 } from "./accountJsonKvStoredContent";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
 import { assertPublicGenericKvKey } from "./accountScopedKv";
-import { getDbProviderFromEnv } from "@/storage/prisma";
+import { getDbProviderFromEnv, isPrismaErrorCode } from "@/storage/prisma";
+import { db } from "@/storage/db";
 import { assertUserKvKeyStorageAdmission } from "./userKvKeyStorage";
 
 export interface KVMutation {
@@ -54,6 +55,36 @@ export type UserKvMutationApplication = Readonly<{
 }>;
 
 type UserKvStoreRow = Awaited<ReturnType<Tx["userKVStore"]["findUnique"]>>;
+
+/** A late CAS refusal must escape inTx so an earlier batch write rolls back. */
+export class UserKvMutationConflictError extends Error {
+    constructor(readonly accountId: string, readonly key: string) {
+        super("UserKVStore mutation lost its expected revision");
+        this.name = "UserKvMutationConflictError";
+    }
+}
+
+/** Resolve only after the failed transaction has rolled back, including P2002. */
+export async function readUserKvMutationConflict(error: unknown): Promise<NonNullable<KVMutateResult["errors"]>[number] | null> {
+    if (!(error instanceof UserKvMutationConflictError)) return null;
+    const current = await db.userKVStore.findUnique({ where: { accountId_key: {
+        accountId: error.accountId, key: error.key,
+    } }, select: { version: true, value: true } });
+    return { key: error.key, error: "version-mismatch", version: current?.version ?? -1,
+        value: current?.value ? privacyKit.encodeBase64(current.value) : null };
+}
+
+/** Domain operations that read before writing an existing KV row share its DB lock. */
+export async function acquireUserKvRowLockInTx(tx: Tx, input: Readonly<{ accountId: string; key: string }>): Promise<boolean> {
+    const provider = getDbProviderFromEnv(process.env, "postgres");
+    if (provider === "sqlite") {
+        return await tx.userKVStore.findUnique({ where: { accountId_key: input }, select: { id: true } }) !== null;
+    }
+    const rows = provider === "postgres"
+        ? await tx.$queryRawUnsafe<Array<{ id: string }>>('SELECT "id" FROM "UserKVStore" WHERE "accountId" = $1 AND "key" = $2 FOR NO KEY UPDATE', input.accountId, input.key)
+        : await tx.$queryRawUnsafe<Array<{ id: string }>>('SELECT `id` FROM `UserKVStore` WHERE `accountId` = ? AND `key` = ? FOR UPDATE', input.accountId, input.key);
+    return rows.length > 0;
+}
 
 /**
  * The single UserKVStore CAS primitive. Domain owners may supply validation
@@ -111,7 +142,12 @@ export async function applyUserKvMutationsInTx(
 
     const results: Array<{ key: string; version: number }> = [];
     const changes: Array<{ key: string; value: string | null; version: number }> = [];
-    for (const mutation of mutations) {
+    // Acquire write locks in one stable key order, preserving request order in
+    // the result below. Independent Accounts/keys remain independent writers.
+    const writeOrder = mutations.map((mutation, index) => ({ mutation, index }))
+        .sort(({ mutation: left }, { mutation: right }) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+    const appliedVersionsByKey = new Map<string, number>();
+    for (const { mutation, index } of writeOrder) {
         if (mutation.version === -1) {
             const result = await tx.userKVStore.create({
                 data: {
@@ -122,20 +158,27 @@ export async function applyUserKvMutationsInTx(
                         : null,
                     version: 0,
                 },
+            }).catch((error: unknown) => {
+                // Repeating an absent key within one batch retains its existing
+                // unique-constraint failure; only a genuine peer is a conflict.
+                if (isPrismaErrorCode(error, "P2002") && !appliedVersionsByKey.has(mutation.key)) {
+                    throw new UserKvMutationConflictError(ctx.uid, mutation.key);
+                }
+                throw error;
             });
-            results.push({ key: mutation.key, version: result.version });
-            changes.push({
+            appliedVersionsByKey.set(mutation.key, result.version);
+            results[index] = { key: mutation.key, version: result.version };
+            changes[index] = {
                 key: mutation.key,
                 value: mutation.value,
                 version: result.version,
-            });
+            };
         } else {
-            const result = await tx.userKVStore.update({
+            const result = await tx.userKVStore.updateMany({
                 where: {
-                    accountId_key: {
-                        accountId: ctx.uid,
-                        key: mutation.key,
-                    },
+                    accountId: ctx.uid,
+                    key: mutation.key,
+                    version: appliedVersionsByKey.get(mutation.key) ?? mutation.version,
                 },
                 data: {
                     value: mutation.value
@@ -144,12 +187,14 @@ export async function applyUserKvMutationsInTx(
                     version: mutation.version + 1,
                 },
             });
-            results.push({ key: mutation.key, version: result.version });
-            changes.push({
+            if (result.count !== 1) throw new UserKvMutationConflictError(ctx.uid, mutation.key);
+            appliedVersionsByKey.set(mutation.key, mutation.version + 1);
+            results[index] = { key: mutation.key, version: mutation.version + 1 };
+            changes[index] = {
                 key: mutation.key,
                 value: mutation.value,
-                version: result.version,
-            });
+                version: mutation.version + 1,
+            };
         }
     }
 
@@ -188,10 +233,9 @@ export async function kvMutate(
     storedContentAdmission: KVMutationStoredContentAdmission =
         LEGACY_STORED_CONTENT_ADMISSION,
 ): Promise<KVMutateResult> {
-    return await inTx(
+    try { return await inTx(
         async (tx) => {
-            // One Account fence protects the read/version/write CAS, including
-            // opaque keys that do not need the encryption-transition fence.
+            // Account admission stabilizes mode; row CAS owns key revisions.
             await acquireAccountChangePublicationLocksInTx(tx, [ctx.uid], { includeSingleAccount: true });
             return await kvMutateInTx(
                 tx,
@@ -200,7 +244,11 @@ export async function kvMutate(
                 storedContentAdmission,
             );
         },
-    );
+    ); } catch (error) {
+        const conflict = await readUserKvMutationConflict(error);
+        if (conflict) return { success: false, errors: [conflict] };
+        throw error;
+    }
 }
 
 export async function kvMutateInTx(
@@ -261,7 +309,7 @@ async function kvMutateWithStoredContentPolicyInTx(
             storedContentPolicy.kind === "regular"
             && mutations.some((mutation) => isAccountJsonKvKey(mutation.key));
         const fence = needsAccountCurrentness
-            ? await acquireAccountEncryptionTransitionFenceInTx(tx, ctx.uid)
+            ? await acquireAccountEncryptionTransitionFenceInTx(tx, ctx.uid, "content")
             : null;
         if (fence !== null && fence.status !== "ready") {
             throw new AccountJsonKvStoredContentModeMismatchError();
@@ -319,7 +367,7 @@ async function kvMutateWithStoredContentPolicyInTx(
         afterTx(tx, async () => {
             eventRouter.emitUpdate({
                 userId: ctx.uid,
-                payload: buildKVBatchUpdateUpdate(application.changes, cursor, randomKeyNaked(12)),
+                payload: buildKVBatchUpdateUpdate(application.changes, cursor.resolveCursor(), randomKeyNaked(12)),
                 recipientFilter: { type: 'user-scoped-only' }
             });
         });

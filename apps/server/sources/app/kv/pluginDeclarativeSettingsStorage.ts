@@ -8,6 +8,7 @@ import { buildPluginDeclarativeSettingsPhysicalKey } from "./accountScopedKv";
 import {
     mutateReservedAccountScopedKvRowInTx,
     readReservedAccountScopedKvRowInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     type ReservedAccountScopedKvRowDomain,
     type ReservedAccountScopedKvRowMutationResult,
     type ReservedAccountScopedKvRowMutationInTxResult,
@@ -108,6 +109,12 @@ export async function mutatePluginDeclarativeSettingsInTx(
 export async function mutatePluginDeclarativeSettings(
     input: PluginDeclarativeSettingsMutation,
 ): Promise<PluginDeclarativeSettingsMutationResult> {
-    return await inTx(async (tx) =>
-        await mutatePluginDeclarativeSettingsInTx(tx, input));
+    try {
+        return await inTx(async (tx) =>
+            await mutatePluginDeclarativeSettingsInTx(tx, input));
+    } catch (error) {
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        throw error;
+    }
 }

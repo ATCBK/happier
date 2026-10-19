@@ -2,12 +2,18 @@ import { signAccountContentKeyBindingV1 } from "@happier-dev/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import tweetnacl from "tweetnacl";
 import { mutatePluginAccountStorage, readPluginAccountStorageInTx } from "./pluginAccountStorage";
+import { mutatePluginDeclarativeSettings } from "./pluginDeclarativeSettingsStorage";
+import { mutateAuthoringMemory } from "./authoringMemoryStorage";
+import { buildAuthoringMemoryPhysicalKey, buildPluginAccountStoragePhysicalKey,
+    buildPluginDeclarativeSettingsPhysicalKey } from "./accountScopedKv";
 
 import { createPrismaTransactionBoundary } from "../api/testkit/txHarness";
 
 const transaction = vi.hoisted(() => vi.fn());
+const readCommittedRow = vi.hoisted(() => vi.fn());
 
-vi.mock("@/storage/db", () => ({ db: { $transaction: transaction } }));
+vi.mock("@/storage/db", () => ({ db: { $transaction: transaction,
+    userKVStore: { findUnique: readCommittedRow } } }));
 
 type StoredRow = Readonly<{
     key: string;
@@ -75,19 +81,19 @@ function createTx(options: Readonly<{
                 rows.set(input.data.key, row);
                 return row;
             }),
-            update: vi.fn(async (input: {
-                where: { accountId_key: { key: string } };
+            updateMany: vi.fn(async (input: {
+                where: { key: string; version: number };
                 data: { value: Uint8Array | null; version: number };
             }) => {
-                const current = rows.get(input.where.accountId_key.key);
-                if (!current) throw new Error("missing UserKVStore row");
+                const current = rows.get(input.where.key);
+                if (!current || current.version !== input.where.version) return { count: 0 };
                 const row = {
                     key: current.key,
                     value: input.data.value,
                     version: input.data.version,
                 };
                 rows.set(current.key, row);
-                return row;
+                return { count: 1 };
             }),
         },
         accountChange: {
@@ -95,6 +101,7 @@ function createTx(options: Readonly<{
         },
     };
     transaction.mockImplementation(createPrismaTransactionBoundary(() => tx));
+    readCommittedRow.mockImplementation(tx.userKVStore.findUnique);
     return { tx, rows };
 }
 
@@ -208,7 +215,7 @@ describe("plugin Account KV storage", () => {
             expectedRevision: 4,
             envelope: plainEnvelope,
         })).resolves.toEqual({ status: "account-mode-mismatch" });
-        expect(tx.userKVStore.update).not.toHaveBeenCalled();
+        expect(tx.userKVStore.updateMany).not.toHaveBeenCalled();
         expect(tx.accountChange.upsert).not.toHaveBeenCalled();
     });
 
@@ -260,7 +267,7 @@ describe("plugin Account KV storage", () => {
             },
         })).resolves.toEqual({ status: "invalid-stored-content" });
         expect(tx.userKVStore.create).not.toHaveBeenCalled();
-        expect(tx.userKVStore.update).not.toHaveBeenCalled();
+        expect(tx.userKVStore.updateMany).not.toHaveBeenCalled();
         expect(tx.accountChange.upsert).not.toHaveBeenCalled();
     });
 
@@ -289,6 +296,34 @@ describe("plugin Account KV storage", () => {
         expect(admissionCallOrder[0]).toBeLessThan(
             tx.userKVStore.findUnique.mock.invocationCallOrder[0],
         );
+    });
+
+    it.each(['account-kv', 'settings', 'authoring-memory'] as const)("returns the committed revision after a late %s CAS refusal leaves the transaction", async domain => {
+        const key = domain === 'account-kv' ? buildPluginAccountStoragePhysicalKey('example.tasks')
+            : domain === 'settings' ? buildPluginDeclarativeSettingsPhysicalKey('example.tasks')
+            : buildAuthoringMemoryPhysicalKey('lastUsedProfile');
+        const { tx, rows } = createTx({ row: { key, value: null, version: 1 } });
+        let transactionFinished = false;
+        transaction.mockImplementationOnce(async (callback: (transactionTx: typeof tx) => Promise<unknown>) => {
+            try { return await callback(tx); }
+            finally { transactionFinished = true; }
+        });
+        // A peer commits its tombstone after admission, so this database CAS loses.
+        tx.userKVStore.updateMany.mockImplementationOnce(async () => {
+            rows.set(key, { key, value: null, version: 2 });
+            return { count: 0 };
+        });
+        readCommittedRow.mockImplementationOnce(async () => {
+            expect(transactionFinished).toBe(true);
+            return rows.get(key);
+        });
+        const input = { accountId: 'account-1', pluginId: 'example.tasks', expectedRevision: 1, envelope: null };
+        const result = domain === 'account-kv' ? mutatePluginAccountStorage(input)
+            : domain === 'settings' ? mutatePluginDeclarativeSettings(input)
+            : mutateAuthoringMemory({ accountId: input.accountId, key: 'lastUsedProfile', expectedRevision: 1, envelope: null });
+        await expect(result).resolves.toEqual({ status: 'conflict', revision: 2 });
+        expect(rows.get(key)).toEqual({ key, value: null, version: 2 });
+        expect(tx.accountChange.upsert).not.toHaveBeenCalled();
     });
 
     it("uses the shared row CAS tombstone primitive and emits one content-free data-KV invalidation", async () => {

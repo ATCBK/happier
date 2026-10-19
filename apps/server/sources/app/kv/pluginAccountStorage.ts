@@ -8,6 +8,7 @@ import { buildPluginAccountStoragePhysicalKey } from "./accountScopedKv";
 import {
     mutateReservedAccountScopedKvRowInTx,
     readReservedAccountScopedKvRowInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     type ReservedAccountScopedKvRowDomain,
     type ReservedAccountScopedKvRowMutationResult,
     type ReservedAccountScopedKvRowMutationInTxResult,
@@ -103,5 +104,11 @@ export async function mutatePluginAccountStorageInTx(
 export async function mutatePluginAccountStorage(
     input: PluginAccountStorageMutation,
 ): Promise<PluginAccountStorageMutationResult> {
-    return await inTx(async (tx) => await mutatePluginAccountStorageInTx(tx, input));
+    try {
+        return await inTx(async (tx) => await mutatePluginAccountStorageInTx(tx, input));
+    } catch (error) {
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        throw error;
+    }
 }

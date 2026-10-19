@@ -72,16 +72,19 @@ function createTx(options: Readonly<{
                 rows.set(data.key, row);
                 return row;
             }),
-            update: vi.fn(async ({ where, data }: any) => {
-                const current = rows.get(where.accountId_key.key);
-                if (!current) throw new Error("missing UserKVStore row");
+            updateMany: vi.fn(async ({ where, data }: {
+                where: { key: string; version: number };
+                data: { value: Uint8Array | null; version: number };
+            }) => {
+                const current = rows.get(where.key);
+                if (!current || current.version !== where.version) return { count: 0 };
                 const row = {
                     key: current.key,
                     value: data.value,
                     version: data.version,
                 };
                 rows.set(current.key, row);
-                return row;
+                return { count: 1 };
             }),
         },
         accountChange: {
@@ -333,7 +336,7 @@ describe("plugin declarative settings storage", () => {
             expectedRevision: 4,
             envelope: { t: "encrypted", c: candidateCiphertext },
         })).resolves.toEqual({ status: "account-mode-mismatch" });
-        expect(tx.userKVStore.update).not.toHaveBeenCalled();
+        expect(tx.userKVStore.updateMany).not.toHaveBeenCalled();
         expect(tx.accountChange.upsert).not.toHaveBeenCalled();
     });
 
