@@ -27,6 +27,7 @@ export async function readAgentScopedPluginSettingsSnapshot(params: Readonly<{
     machineId: string | null | undefined;
     serverId: string | null | undefined;
     accountLifetime?: ActiveServerAccountScopeLifetime | null;
+    signal?: AbortSignal;
     /**
      * Account Settings document, so an Account upgraded from a released build
      * keeps a value it persisted as a flat root instead of falling back to the
@@ -43,6 +44,7 @@ export async function readAgentScopedPluginSettingsSnapshot(params: Readonly<{
         machineId,
         serverId,
         ...(params.accountLifetime ? { accountLifetime: params.accountLifetime } : {}),
+        signal: params.signal,
     });
     if (!projectionInputs) return null;
     const declarations = resolveAgentScopedPluginSettingsDeclarations({
@@ -68,6 +70,7 @@ export async function readAgentScopedPluginSettingsSnapshot(params: Readonly<{
             scope: declaration.scope,
             target,
             fields: projectScopedPluginSettingsFields(declaration.fields),
+            signal: params.signal,
         });
         if (read.status !== 'ready') continue;
         result[scope] = Object.freeze(Object.fromEntries(declaration.fields.map((field) => [

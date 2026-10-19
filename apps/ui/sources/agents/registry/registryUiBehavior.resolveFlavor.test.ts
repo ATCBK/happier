@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { Metadata } from '@happier-dev/session-core/state';
@@ -39,6 +40,16 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe('resolveAgentUiBehaviorFromFlavor', () => {
+    it('keeps the declaring plugin identity in a bundled Agent contributed Details tab', () => {
+        const tab = resolveAgentUiBehavior('claude').sessionSubagents?.createLaunchDetailsTab?.({
+            session: makeSession({ metadata: { ...BASE_METADATA, flavor: 'claude' } }), subagents: [],
+        });
+        expect(tab?.resource).toMatchObject({ pluginInlineSurface: {
+            pluginId: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.claude.pluginId,
+            agentId: 'claude', surfaceId: 'subagent-launch',
+        } });
+    });
+
     it('keeps customAcp out of the canonical UI behavior registry (no active UI behavior special-casing)', () => {
         expect(AGENTS_UI_BEHAVIOR).not.toHaveProperty('customAcp');
         expect(CANONICAL_AGENTS_UI_BEHAVIOR).not.toHaveProperty('customAcp');
@@ -144,6 +155,14 @@ describe('resolveAgentUiBehaviorFromFlavor', () => {
         expect(unknownBehavior).toBe(resolveAgentUiBehavior('customAcp'));
         expect(unknownBehavior.newSession?.getAgentInputExtraActionChips).toBeUndefined();
         expect(unknownBehavior.newSession?.canSelectWithoutDetectedCli).toBeUndefined();
+    });
+
+    it.each(['custom-acp', 'acme.external/assistant'])('FIX75 offers a daemon-owned Goal for %s without native goals', (agentId) => {
+        const session = makeSession({ active: true, agentState: { capabilities: {} } });
+        expect(resolveSessionGoalActionCapabilityProfile({ agentId, session, daemonGoalControlsSupported: true })).toEqual({
+            canEdit: true, canStop: false, canClear: true, canConfigureBudget: true,
+        });
+        expect(resolveSessionGoalActionCapabilityProfile({ agentId, session, daemonGoalControlsSupported: false })).toBeNull();
     });
 
     it('requires both Codex app-server semantics and live goal controls', () => {

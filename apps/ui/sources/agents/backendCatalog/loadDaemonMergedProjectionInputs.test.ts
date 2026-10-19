@@ -209,9 +209,9 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         }
         const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
         const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+        await serverScopedRpcSocketPool.stopAll();
         serverScopedRpcSocketPool.resetForTests();
         resetScopedMachineTransportCacheForTests();
-        await network.dispose();
     });
 
     it('publishes a background Home descriptor under its Account and retires only that Home when its request lifetime retires', async () => {
@@ -327,6 +327,28 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             kind: 'ready',
             inputs: { composerSurfaceCatalog },
         });
+    });
+
+    it('releases an unanswered projection when its final reader leaves and recovers on the next attempt', async () => {
+        const { loadDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
+        const account = createAccountLifetime('account-a');
+        projectionDescribeMock.mockImplementationOnce(() => new Promise(() => {}));
+        projectionDescribeMock.mockResolvedValueOnce({ supported: true, projection: daemonProjection(8) });
+        const firstOwner = new AbortController();
+        const secondOwner = new AbortController();
+        const scope = { ...projectionScope, accountLifetime: account.lifetime };
+        const first = loadDaemonMergedProjectionCacheEntry({ ...scope, signal: firstOwner.signal });
+        const second = loadDaemonMergedProjectionCacheEntry({ ...scope, signal: secondOwner.signal });
+        await vi.waitFor(() => expect(projectionDescribeMock).toHaveBeenCalledTimes(1));
+        firstOwner.abort();
+        await expect(first).resolves.toBeNull();
+        let secondSettled = false;
+        void second.then(() => { secondSettled = true; });
+        expect(secondSettled).toBe(false);
+        secondOwner.abort();
+        await expect(second).resolves.toBeNull();
+        await expect(loadDaemonMergedProjectionCacheEntry(scope)).resolves.toMatchObject({ kind: 'ready' });
+        expect(projectionDescribeMock).toHaveBeenCalledTimes(2);
     });
 
     it('is the one per-machine owner: readers share one describe per projection revision', async () => {

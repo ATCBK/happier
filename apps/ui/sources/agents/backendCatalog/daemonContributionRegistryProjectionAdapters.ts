@@ -159,6 +159,7 @@ export type PluginProjectionAction = Readonly<{
     priority: number | null;
     dangerLevel: PluginProjectedActionV2['dangerLevel'];
     confirmation: PluginActionConfirmationV2 | null;
+    confirmationWhen?: PluginProjectedActionV2['confirmationWhen'];
     /** Daemon-projected canonical action policy facts; never UI-synthesized. */
     authorization?: PluginProjectedActionV2['authorization'];
     available: boolean | null;
@@ -252,6 +253,7 @@ function mapV2Action(action: PluginProjectedActionV2): PluginProjectionAction {
         priority: action.priority ?? null,
         dangerLevel: action.dangerLevel,
         confirmation: action.confirmation ?? null,
+        ...(action.confirmationWhen === undefined ? {} : { confirmationWhen: action.confirmationWhen }),
         ...(action.authorization ? { authorization: action.authorization } : {}),
         available: typeof action.available === 'boolean' ? action.available : null,
     };

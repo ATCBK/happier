@@ -10,6 +10,7 @@ import { resolveQualifiedConnectedAccountLabel } from '@happier-dev/protocol/con
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
 import { parseConnectedServicesBindingsByServiceIdFromAgentOptionState } from '@/sync/domains/connectedServices/connectedServicesAgentOptionStateBindings';
+import { readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { t, tLoose } from '@/text';
 
 import type { AgentTranscriptStorageMode, AgentUiBehavior } from './registryUiBehavior';
@@ -381,9 +382,10 @@ function resolveLockedConnectedServiceSourceOption(params: Readonly<{
     sourceOptions: readonly SourceOptionDescriptor[];
     agentOptionState: Record<string, unknown> | null | undefined;
 }>): SourceOptionDescriptor | null {
+    // Bindings are keyed by the canonical (qualified) service key; a descriptor may name a released scalar id.
     const binding = parseConnectedServicesBindingsByServiceIdFromAgentOptionState({
         agentOptionState: params.agentOptionState,
-    })[params.descriptor.serviceId];
+    })[readBuiltInLegacyConnectedAccountServiceKeyIngress(params.descriptor.serviceId) ?? params.descriptor.serviceId];
     const matchesConnectedSource = (option: SourceOptionDescriptor): boolean => (
         option.source.kind === params.descriptor.source.kind
         && (option.source as Record<string, unknown>)[params.descriptor.serviceIdField] === params.descriptor.serviceId
@@ -520,15 +522,16 @@ function buildConnectedServiceProfileSourceOptions(opts: Readonly<{
             if (!isRecord(profile)) return [];
             const profileId = normalizeOptionalString(profile.profileId);
             if (!profileId) return [];
+            const detail = serviceRef ? resolveQualifiedConnectedAccountLabel({
+                labelsByKey: opts.labelsByKey, service: serviceRef, accountId: profileId,
+            }) : null;
             return [{
                 key: `${descriptor.keyPrefix}:${descriptor.serviceId}:${profileId}`,
                 labelKey: descriptor.labelKey,
                 ...(descriptor.labelParams ? { labelParams: descriptor.labelParams } : {}),
-                detail: (serviceRef ? resolveQualifiedConnectedAccountLabel({
-                    labelsByKey: opts.labelsByKey,
-                    service: serviceRef,
-                    accountId: profileId,
-                }) : null) ?? profileId,
+                // The source-instance owner supplies the canonical account
+                // fallback. A descriptor must not replace it with a routing id.
+                ...(detail ? { detail } : {}),
                 source: {
                     ...descriptor.source,
                     [descriptor.serviceIdField]: descriptor.serviceId,

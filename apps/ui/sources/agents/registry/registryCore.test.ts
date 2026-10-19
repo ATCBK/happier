@@ -32,7 +32,6 @@ import { LEGACY_COMPAT_PRIMARY_AGENT_ID } from '@/agents/backendCatalog/legacyCo
 
 describe('agents/registryCore', () => {
     it('does not invent native CLI setup or login for a definition-qualified Agent', () => {
-        // @ts-expect-error The declared Custom ACP contribution is pending the bundled membership generator.
         const agentId: BundledAgentId = 'custom-acp';
         expect(buildCatalogAgentCliUiConfig(agentId)).toBeNull();
         expect(buildAgentCliInstallBanner(agentId)).toBeNull();
@@ -44,7 +43,7 @@ describe('agents/registryCore', () => {
         expect(AGENT_IDS.length).toBeGreaterThan(0);
         expect([...CANONICAL_AGENT_IDS].sort()).toEqual(Object.keys(CANONICAL_AGENTS_CORE).sort());
         expect(AGENT_IDS).toBe(CANONICAL_AGENT_IDS);
-        expect(SHARED_AGENT_IDS).toEqual(expect.arrayContaining(AGENT_IDS));
+        expect(SHARED_AGENT_IDS).toEqual(expect.arrayContaining([...AGENT_IDS]));
     });
 
     it('exports only agent ids that have a UI core config', () => {
