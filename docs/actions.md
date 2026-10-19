@@ -435,8 +435,17 @@ an effect failure is not replayed by this recovery path. Callers without an admi
 request lifetime retain their existing failure and recovery policy.
 
 The resolved Session transport reads the requester's persisted Account encryption currentness
-under that same signed invocation, without borrowing the daemon's bearer. Session HTTP purposes
-reuse each route's existing Action and Session selector. Every declared Session operand retains
+under that same signed invocation, without borrowing the daemon's bearer.
+
+In 0.3 development, the shared CLI Session transport adapter uses the canonical endpoint-error
+classifier to expose currentness transport/service failures as `server_unreachable` and
+authentication refusals as `not_authenticated`, before generic Action failure normalization.
+Invalid successful responses and Account encryption domain refusals retain their original
+failure evidence, separately from unavailable Session encryption material. A failed preflight
+does not enqueue input or resume the Session. The caller may retry explicitly with the same
+input localId after recovery; this adapter adds no retry policy or effect replay.
+
+Session HTTP purposes reuse each route's existing Action and Session selector. Every declared Session operand retains
 the captured PAT resource ceiling and current Machine access relationship, even after the PAT's
 current grant expands. Operand projection applies to native mutations too; it does not itself admit
 an operation. Session access retains the captured PAT grant unless the signed owner has proved all
