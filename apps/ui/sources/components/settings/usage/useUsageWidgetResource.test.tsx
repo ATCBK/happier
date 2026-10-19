@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderHook, renderScreen, standardCleanup, flushHookEffects, createDeferred } from '@/dev/testkit';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { decodeUsageQueryResource, invalidateUsageQueryResources } from '@/sync/api/account/usageQueryResource';
@@ -21,7 +22,9 @@ function plan(query: UsageQuery): UsageWidgetQueryPlan {
         input: { queries: [query] }, widgets: new Map([['first', row], ['second', row]]) };
 }
 async function mountHome(route: Parameters<typeof serveAccountHomes>[0]['route']) {
-    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-widgets.test', accountId: 'account-a' }], route });
+    const sessionBoundary = createSessionReadBatchHttpBoundary(route);
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-widgets.test', accountId: 'account-a' }],
+        route: sessionBoundary.handle });
     publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     return (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
@@ -39,7 +42,7 @@ describe('Usage widget shared Resource selection', () => {
     it('keeps a settled sibling body and its model work stable through another query progress, while forwarding its own activity and authority loss', async () => {
         const slowAccounting = createDeferred<Response>();
         const slowDetail = createDeferred<Response>();
-        const detailIssued = createDeferred<void>();
+        let detailIssued = false;
         let denied = false;
         const credentials = await mountHome(request => {
             if (request.path === '/v2/usage/query') {
@@ -47,7 +50,7 @@ describe('Usage widget shared Resource selection', () => {
                 const query = UsageAnalyticsQueryRequestSchema.parse(request.body);
                 return query.filters?.sessionIds?.includes('slow-session') ? slowAccounting.promise : Response.json(accounting);
             }
-            if (request.path === '/v2/sessions/slow-session') { detailIssued.resolve(); return slowDetail.promise; }
+            if (request.path === '/v2/sessions/slow-session') { detailIssued = true; return slowDetail.promise; }
             return undefined;
         });
         const first = normalizeUsageQuery({ session: 'settled-session', period: { startMs: 0, endMs: 1000 },
@@ -79,7 +82,8 @@ describe('Usage widget shared Resource selection', () => {
             const withDetail: UsageAnalyticsQueryResponse = { ...accounting, contributions: [{ id: 'fact', observedAtMs: 500,
                 sessionId: 'slow-session', turnId: 'turn', agentId: null, modelId: null, machineId: null, projectKey: null,
                 workspaceId: null, source: null, tokens: accounting.totals.tokens, cost: accounting.totals.cost }] };
-            await act(async () => { slowAccounting.resolve(Response.json(withDetail)); await detailIssued.promise; });
+            await act(async () => { slowAccounting.resolve(Response.json(withDetail)); });
+            await expect.poll(() => detailIssued).toBe(true);
             await expect.poll(() => models.get('second')?.slice?.accounting).toMatchObject(withDetail);
             await flushHookEffects({ cycles: 20 });
             expect(models.get('first')!.slice).toBe(settledSlice);
@@ -205,15 +209,13 @@ describe('Usage widget shared Resource selection', () => {
 
     it('releases accounting activity while slow private detail is still being read', async () => {
         const detail = createDeferred<Response>();
-        const issued = createDeferred<void>();
+        let issued = false;
         const withDetail: UsageAnalyticsQueryResponse = { ...accounting, contributions: [{ id: 'fact', observedAtMs: 500,
             sessionId: 'slow-session', turnId: 'turn', agentId: null, modelId: null, machineId: null, projectKey: null,
             workspaceId: null, source: null, tokens: accounting.totals.tokens, cost: accounting.totals.cost }] };
         const credentials = await mountHome(request => {
             if (request.path === '/v2/usage/query') return Response.json(withDetail);
-            if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
-                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
-            if (request.path === '/v2/sessions/slow-session') { issued.resolve(); return detail.promise; }
+            if (request.path === '/v2/sessions/slow-session') { issued = true; return detail.promise; }
             return undefined;
         });
         const queryPlan = plan(normalizeUsageQuery({ session: 'slow-session', period: { startMs: 0, endMs: 1000 } }));
@@ -226,7 +228,7 @@ describe('Usage widget shared Resource selection', () => {
         const entry = hook.getCurrent().entry!;
         const release = entry.subscribe(() => { if (entry.getSnapshot().pending === 'idle') settled.resolve(); }, false);
         try {
-            await act(async () => { await issued.promise; });
+            await expect.poll(() => issued).toBe(true);
             expect(hook.getCurrent().slice?.accounting).toMatchObject(withDetail);
             expect(hook.getCurrent().pending).toBe(true);
             expect(hook.getCurrent().refreshing).toBe(false);
