@@ -31,7 +31,25 @@ const emptyMessages = {
   ja: ['ここにタスクはありません', '別のタスク表示を試すか、タスクを作成してください。', 'これまでに読み込んだタスクはこの表示に含まれません。ほかの作成元から結果が届く場合があります。'],
 } satisfies Record<keyof typeof messages, TranslatedKeys<typeof emptyKeys>>;
 
+const draftUnavailable = {
+  en: 'This task draft is no longer available. Open it again from the message or action.',
+  de: 'Dieser Aufgabenentwurf ist nicht mehr verfügbar. Öffne ihn erneut über die Nachricht oder Aktion.',
+  ru: 'Этот черновик задачи больше недоступен. Откройте его снова из сообщения или действия.',
+  pl: 'Ten szkic zadania nie jest już dostępny. Otwórz go ponownie z wiadomości lub akcji.',
+  es: 'Este borrador de tarea ya no está disponible. Ábrelo de nuevo desde el mensaje o la acción.',
+  fr: 'Ce brouillon de tâche n’est plus disponible. Ouvrez-le à nouveau depuis le message ou l’action.',
+  it: 'Questa bozza di attività non è più disponibile. Riaprila dal messaggio o dall’azione.',
+  pt: 'Este rascunho de tarefa não está mais disponível. Abra-o novamente pela mensagem ou ação.',
+  ca: 'Aquest esborrany de tasca ja no està disponible. Torna a obrir-lo des del missatge o l’acció.',
+  'zh-Hans': '此任务草稿已不可用。请从消息或操作中重新打开。',
+  'zh-Hant': '此任務草稿已無法使用。請從訊息或操作中重新開啟。',
+  ja: 'このタスクの下書きは利用できなくなりました。メッセージまたはアクションからもう一度開いてください。',
+} satisfies Record<keyof typeof messages, string>;
+
 export const TRIAGE_TASK_UI_TRANSLATIONS = Object.fromEntries(Object.entries(messages).map(([locale, values]) => [locale,
-  { ...Object.fromEntries(keys.map((key, index) => [`plugins.triage.tasks.${key}`, values[index]!])),
-    ...Object.fromEntries(emptyKeys.map((key, index) => [`plugins.triage.tasks.${key}`, emptyMessages[locale as keyof typeof emptyMessages][index]!])) },
+  Object.fromEntries([
+    ...keys.map((key, index) => [`plugins.triage.tasks.${key}`, values[index]!]),
+    ['plugins.triage.tasks.draftUnavailable', draftUnavailable[locale as keyof typeof messages]],
+    ...emptyKeys.map((key, index) => [`plugins.triage.tasks.${key}`, emptyMessages[locale as keyof typeof emptyMessages][index]!]),
+  ]),
 ])) as Readonly<Record<keyof typeof messages, Readonly<Record<string, string>>>>;
