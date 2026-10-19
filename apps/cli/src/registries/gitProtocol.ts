@@ -62,7 +62,7 @@ export function createRegistryGitProtocolV1(input:Readonly<{signal?:AbortSignal;
   async function bytes(cwd:string,commit:string,path:string,size:number):Promise<Uint8Array> {
     const chunks:Uint8Array[]=[];
     // Git's observed blob size owns this read, not SCM's default diagnostic-output budget.
-    const result=await runScmCommand({bin:'git',cwd,args:['show',`${commit}:${admitPath(path)}`],signal:input.signal,maxOutputBytes:Math.max(1,size),stdoutConsumer:chunk=>{chunks.push(new Uint8Array(chunk));}});
+    const result=await runScmCommand({bin:'git',cwd,args:['show',`${commit}:${admitPath(path)}`],signal:input.signal,maxOutputBytes:Math.max(1,size),stdoutConsumer:chunk=>{chunks.push(new Uint8Array(chunk));return 'continue';}});
     if(!result.success)throw new RegistryFetchErrorV1({state:'unreachable'});
     const out=new Uint8Array(chunks.reduce((sum,chunk)=>sum+chunk.length,0));let offset=0;for(const chunk of chunks){out.set(chunk,offset);offset+=chunk.length;}return out;
   }
