@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { MemorySearchQueryV1, MemorySearchResultHitV1, MemorySearchResultV1 } from '@happier-dev/protocol';
 import { createMemorySearchSnippet } from '@happier-dev/protocol/memory/memorySearchText';
+import { resolveMemorySearchCorporaV1 } from '@happier-dev/protocol/memory/memorySearch';
 
 import type { OperationalMemoryEmbeddingsSettings } from './resolveOperationalMemoryEmbeddingsSettings';
 import { openSummaryShardIndexDb } from './summaryShardIndexDb';
@@ -21,16 +22,16 @@ function deepHitKey(hit: Readonly<{ sessionId: string; seqFrom: number; seqTo: n
   return `${hit.sessionId}:${hit.seqFrom}-${hit.seqTo}`;
 }
 
-const PageCursorSchema = z.object({
+const PageCursorSchema = z.strictObject({
   v: z.literal(1), key: z.string(),
-  offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  position: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-}).strict();
+  offset: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  position: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+});
 type PageCursor = z.infer<typeof PageCursorSchema>;
 
 function pageKey(query: MemorySearchQueryV1, policy: unknown): string {
   return createHash('sha256').update(JSON.stringify({
-    query: query.query, scope: query.scope, corpora: [...(query.corpora ?? ['sessions'])].sort(),
+    query: query.query, scope: query.scope, corpora: [...resolveMemorySearchCorporaV1(query)].sort(),
     eligibleSessionIds: query.eligibleSessionIds ? [...query.eligibleSessionIds].sort() : null,
     externalSource: query.externalSource ?? null,
     mode: query.mode, maxResults: query.maxResults ?? 20, minScore: query.minScore ?? 0,
@@ -60,21 +61,34 @@ function searchFailure(error: unknown): MemorySearchResultV1 {
 export function searchTier1Memory(params: Readonly<{
   dbPath: string;
   query: MemorySearchQueryV1;
+  projectScope?: MemoryDocumentSearchScope;
 }>): MemorySearchResultV1 {
-  const documentsRequested = params.query.corpora?.includes('documents') === true;
-  if (params.query.corpora && !params.query.corpora.includes('sessions')) {
-    return { v: 1, ok: true, hits: [], documents: { state: 'unavailable' } };
+  const project = params.query.scope.type === 'project';
+  const admitted = params.projectScope;
+  if (project && (!admitted || (admitted.state !== 'ready' && admitted.state !== 'partial') || !admitted.eligibleSessionIds)) {
+    return { v: 1, ok: true, hits: [], project: { state: 'unavailable' } };
+  }
+  const eligibleSessionIds = project ? intersectSessionEligibility(admitted?.eligibleSessionIds ?? [], params.query.eligibleSessionIds)
+    : params.query.eligibleSessionIds;
+  const corpora = resolveMemorySearchCorporaV1(params.query);
+  const projectCoverage = project ? { state: admitted?.state === 'ready' && !corpora.includes('external_transcripts')
+    ? 'ready' as const : 'partial' as const } : undefined;
+  const documentsRequested = corpora.includes('documents');
+  if (!corpora.includes('sessions')) {
+    return { v: 1, ok: true, hits: [], ...(documentsRequested ? { documents: { state: 'unavailable' as const } } : {}),
+      ...(projectCoverage ? { project: projectCoverage } : {}) };
   }
   const maxResults = params.query.maxResults ?? 20;
   const minScore = params.query.minScore ?? 0;
 
   const db = openSummaryShardIndexDb({ dbPath: params.dbPath });
   try {
+    if (project && admitted && (admitted.state === 'ready' || admitted.state === 'partial')) admitted.assertCurrent();
     const key = pageKey(params.query, { tier: 'hints', poolSize: maxResults });
     let cursor = readPageCursor(params.query.cursor, key);
     while (true) {
       const candidates = db.search({ query: params.query.query, scope: params.query.scope,
-        eligibleSessionIds: params.query.eligibleSessionIds, maxResults: maxResults + 1, offset: cursor.offset,
+        eligibleSessionIds, maxResults: maxResults + 1, offset: cursor.offset,
         createdAfterMs: params.query.createdAfterMs, createdBeforeMs: params.query.createdBeforeMs });
       const qualified = candidates.slice(0, maxResults).map((hit) => ({
           sessionId: hit.sessionId,
@@ -90,6 +104,7 @@ export function searchTier1Memory(params: Readonly<{
       const next = position < qualified.length ? { ...cursor, position }
         : candidates.length > maxResults ? { ...cursor, offset: cursor.offset + maxResults, position: 0 } : null;
       if (hits.length || !next) return { v: 1, ok: true, hits, hasMore: next !== null,
+        ...(projectCoverage ? { project: projectCoverage } : {}),
         ...(next ? { nextCursor: encodePageCursor(next) } : {}),
         ...(documentsRequested ? { documents: { state: 'unavailable' as const } } : {}) };
       cursor = next;
@@ -99,6 +114,12 @@ export function searchTier1Memory(params: Readonly<{
   } finally {
     db.close();
   }
+}
+
+function intersectSessionEligibility(admitted: readonly string[], requested?: readonly string[]): string[] {
+  if (requested === undefined) return [...admitted];
+  const selected = new Set(requested);
+  return admitted.filter(id => selected.has(id));
 }
 
 export async function searchTier2Memory(params: Readonly<{
@@ -115,9 +136,11 @@ export async function searchTier2Memory(params: Readonly<{
   resolveDocuments?: (scope: MemorySearchQueryV1['scope'], signal?: AbortSignal) => Promise<MemoryDocumentSearchScope>;
 }>): Promise<MemorySearchResultV1> {
   params.signal?.throwIfAborted();
-  const documentsRequested = params.query.corpora?.includes('documents') === true;
-  const sessionsRequested = !params.query.corpora || params.query.corpora.includes('sessions');
-  const externalRequested = params.query.corpora?.includes('external_transcripts') === true;
+  const corpora = resolveMemorySearchCorporaV1(params.query);
+  const documentsRequested = corpora.includes('documents');
+  const sessionsRequested = corpora.includes('sessions');
+  const externalRequested = corpora.includes('external_transcripts');
+  const projectRequested = params.query.scope.type === 'project';
   const maxResults = params.query.maxResults ?? 20;
   const minScore = params.query.minScore ?? 0;
   const previewChars = params.previewChars;
@@ -128,6 +151,19 @@ export async function searchTier2Memory(params: Readonly<{
   const db = openDeepIndexDb({ dbPath: params.dbPath });
   let summaryDb: ReturnType<typeof openSummaryShardIndexDb> | null = null;
   try {
+    // Project admission owns both transcript membership and direct attachments.
+    // It precedes candidate windows, reranking, limits and cursors.
+    let projectScope = projectRequested && params.resolveDocuments
+      ? await params.resolveDocuments(params.query.scope, params.signal) : undefined;
+    if (projectRequested && (!projectScope || (projectScope.state !== 'ready' && projectScope.state !== 'partial')
+      || projectScope.eligibleSessionIds === undefined)) {
+      return { v: 1, ok: true, hits: [], project: { state: 'unavailable' },
+        ...(documentsRequested ? { documents: { state: 'unavailable' } } : {}) };
+    }
+    let eligibleSessionIds = projectRequested
+      ? intersectSessionEligibility(projectScope?.eligibleSessionIds ?? [], params.query.eligibleSessionIds)
+      : params.query.eligibleSessionIds;
+    let projectMembershipChanged = false;
     summaryDb = params.sessionSummaryDbPath && sessionsRequested
       ? openSummaryShardIndexDb({ dbPath: params.sessionSummaryDbPath }) : null;
     const key = pageKey(params.query, { tier: 'deep', poolSize: candidateLimit,
@@ -138,18 +174,18 @@ export async function searchTier2Memory(params: Readonly<{
       const candidates = (sessionsRequested && !summaryDb) || externalRequested ? db.search({
         query: params.query.query,
         scope: params.query.scope,
-        eligibleSessionIds: params.query.eligibleSessionIds,
+        eligibleSessionIds,
         maxResults: candidateLimit + 1,
         offset: cursor.offset,
         createdAfterMs: params.query.createdAfterMs,
         createdBeforeMs: params.query.createdBeforeMs,
         includeSessions: sessionsRequested && !summaryDb,
-        includeExternal: externalRequested,
+        includeExternal: externalRequested && !projectRequested,
         externalAgentIds: params.externalAgentIds,
         externalSource: params.query.externalSource,
       }) : [];
       const hintedCandidates = summaryDb ? summaryDb.search({ query: params.query.query, scope: params.query.scope,
-        eligibleSessionIds: params.query.eligibleSessionIds, maxResults: candidateLimit + 1, offset: cursor.offset,
+        eligibleSessionIds, maxResults: candidateLimit + 1, offset: cursor.offset,
         createdAfterMs: params.query.createdAfterMs, createdBeforeMs: params.query.createdBeforeMs }) : [];
 
       let ranked = candidates.slice(0, candidateLimit).map((hit) => ({
@@ -165,12 +201,14 @@ export async function searchTier2Memory(params: Readonly<{
         finalScore: undefined as number | undefined,
       }));
 
+      let crossedEmbeddingBoundary = false;
       if (embeddings?.enabled === true && typeof params.embedQuery === 'function' && ranked.length > 0) {
         const provider = String(embeddings.providerKind ?? '').trim();
         const modelId = String(embeddings.modelId ?? '').trim();
         if (provider && modelId) {
           try {
             params.signal?.throwIfAborted();
+            crossedEmbeddingBoundary = true;
             const queryEmbedding = await params.embedQuery(params.query.query, params.signal);
             params.signal?.throwIfAborted();
             const embeddingMap = db.loadEmbeddings({
@@ -208,13 +246,27 @@ export async function searchTier2Memory(params: Readonly<{
         }
       }
 
+      // Embedding failure may fall back to lexical ranking; failed scope
+      // admission must never fall back to previously authorized snippets.
+      if (crossedEmbeddingBoundary && projectRequested && params.resolveDocuments) {
+        projectScope = await params.resolveDocuments(params.query.scope, params.signal);
+        if ((projectScope.state !== 'ready' && projectScope.state !== 'partial') || !projectScope.eligibleSessionIds) {
+          return { v: 1, ok: true, hits: [], project: { state: 'unavailable' },
+            ...(documentsRequested ? { documents: { state: 'unavailable' } } : {}) };
+        }
+        const currentIds = intersectSessionEligibility(projectScope.eligibleSessionIds, params.query.eligibleSessionIds);
+        const previousIds = new Set(eligibleSessionIds);
+        if (currentIds.length !== previousIds.size || currentIds.some(id => !previousIds.has(id))) projectMembershipChanged = true;
+        eligibleSessionIds = currentIds;
+      }
+
       // Qualify documents after asynchronous reranking, immediately before disclosure.
-      const documentScope = documentsRequested && params.resolveDocuments
+      const documentScope = projectScope ?? (documentsRequested && params.resolveDocuments
         ? await params.resolveDocuments(params.query.scope, params.signal)
-        : { state: 'unavailable' as const, eligibleDocuments: [] };
+        : { state: 'unavailable' as const, eligibleDocuments: [] });
       params.signal?.throwIfAborted();
-      if (documentScope.state === 'ready') documentScope.assertCurrent();
-      const documentHits = documentScope.state === 'ready' ? db.searchDocuments({
+      if (documentScope.state === 'ready' || documentScope.state === 'partial') documentScope.assertCurrent();
+      const documentHits = documentsRequested && (documentScope.state === 'ready' || documentScope.state === 'partial') ? db.searchDocuments({
         query: params.query.query, eligibleDocuments: documentScope.eligibleDocuments, maxResults,
       }).map(hit => ({ type: 'artifact' as const, ref: { kind: 'doc' as const, ...hit.ref }, revision: hit.revision,
         ...(hit.factId ? { factId: hit.factId } : {}), location: hit.location,
@@ -237,7 +289,8 @@ export async function searchTier2Memory(params: Readonly<{
       })));
       // Documents retain their existing one-query top-result contract. Conversation
       // cursors traverse fixed candidate windows so reranking cannot repeat a hit.
-      const qualified = [...conversationHits, ...(cursor.offset === 0 ? documentHits : [])]
+      const eligible = projectRequested ? new Set(eligibleSessionIds) : null;
+      const qualified = [...conversationHits.filter(hit => !eligible || (hit.type === undefined && eligible.has(hit.sessionId))), ...(cursor.offset === 0 ? documentHits : [])]
         .sort(summaryDb ? (a, b) => (
           ('createdAtToMs' in b ? b.createdAtToMs : 0) - ('createdAtToMs' in a ? a.createdAtToMs : 0)
         ) : (a, b) => b.score - a.score)
@@ -248,10 +301,11 @@ export async function searchTier2Memory(params: Readonly<{
         : candidates.length > candidateLimit || hintedCandidates.length > candidateLimit
           ? { ...cursor, offset: cursor.offset + candidateLimit, position: 0 } : null;
       if (!hits.length && next) { cursor = next; continue; }
-      if (documentScope.state === 'ready') documentScope.assertCurrent();
+      if (documentScope.state === 'ready' || documentScope.state === 'partial') documentScope.assertCurrent();
       return {
         v: 1,
         ok: true,
+        ...(projectRequested ? { project: { state: documentScope.state === 'ready' && !externalRequested && !projectMembershipChanged ? 'ready' as const : 'partial' as const } } : {}),
         ...(documentsRequested ? { documents: { state: documentScope.state } } : {}),
         hits, hasMore: next !== null,
         ...(next ? { nextCursor: encodePageCursor(next) } : {}),

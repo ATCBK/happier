@@ -313,7 +313,7 @@ describe('external memory transcript ingestion', () => {
     retirement.abort();
     const result = await discoverMemoryExternalTranscriptSources({ agents, account: { connectedServicesV2: [] },
       activeServerId: 'home', activeServerDir: '/fixture/home', signal: new AbortController().signal,
-      resolveBoundary: async () => ({ externalSessions: bounded, occurrenceId: 'retired', retirementSignal: retirement.signal,
+      resolveBoundary: async () => ({ catalogEntry: null, externalSessions: bounded, occurrenceId: 'retired', retirementSignal: retirement.signal,
         isCurrent: () => !retirement.signal.aborted }) });
     expect(result.descriptors).toEqual([]);
     expect(result.configuredSourceKeys.size).toBe(1);
@@ -325,7 +325,7 @@ describe('external memory transcript ingestion', () => {
       createInvocationExec: async () => createUnavailablePluginServices().exec });
     const available = await discoverMemoryExternalTranscriptSources({ agents, account: { connectedServicesV2: [] },
       activeServerId: 'home', activeServerDir: '/fixture/home', signal: new AbortController().signal,
-      resolveBoundary: async () => ({ externalSessions: live, occurrenceId: 'live', retirementSignal: liveRetirement.signal,
+      resolveBoundary: async () => ({ catalogEntry: null, externalSessions: live, occurrenceId: 'live', retirementSignal: liveRetirement.signal,
         isCurrent: () => true }) });
     expect(available.descriptors).toHaveLength(1);
     expect(available.configuredSourceKeys.has(JSON.stringify(['claude', available.descriptors[0]?.configuredSourceKey]))).toBe(true);

@@ -73,6 +73,7 @@ import {
 import { createMemoryExternalTranscriptSources, type MemoryExternalObservation } from './externalTranscriptSources';
 import { syncExternalMemoryTranscriptsBatch } from './externalTranscriptIndex';
 import { runMemoryWorkerSourcesTick } from './runMemoryWorkerSourcesTick';
+import { readCliProjectPromptStackContext } from '@/agent/prompting/coding/sessionProjectPromptStack';
 
 export type MemoryWorkerHandle = Readonly<{
   stop: () => void | Promise<void>;
@@ -229,6 +230,7 @@ export async function startMemoryWorker(params: Readonly<{
     const operationSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const promise = syncMemoryDocuments({ credentials: params.credentials, machineId: params.machineId, scope,
       db, includeArchivedSessions: basis.includeArchivedSessions, signal: operationSignal,
+      readProjectContext: (projectRef, signal) => readCliProjectPromptStackContext({ credentials: params.credentials, projectRef, signal }),
       assertCurrent: () => {
         if (stopped || settings !== basis || deep !== db) throw new Error('memory_document_scope_changed');
       } });

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { decryptSecretValueWithKeysV1 } from '@happier-dev/protocol/crypto/settingsSecretStringsV1';
 import type { MemoryEmbeddingsOpenAiCompatibleConfig } from '@happier-dev/protocol';

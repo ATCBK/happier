@@ -80,8 +80,9 @@ export async function discoverMemoryExternalTranscriptSources(input: Parameters<
   const configuredSourceKeys = new Set<string>();
   for (const candidate of materializeConfiguredExternalSessionSourceCandidates(input)) {
     if (candidate.refusal) continue;
-    const admitted = resolveConfiguredExternalSessionSourceAtAdmission({ ...input,
-      agentId: candidate.agentId, source: candidate.source });
+    const boundary = await input.resolveBoundary(candidate.agentId).catch(() => null);
+    const admitted = await resolveConfiguredExternalSessionSourceAtAdmission({ ...input,
+      agentId: candidate.agentId, source: candidate.source, catalogEntry: boundary?.catalogEntry ?? null });
     if (admitted.ok) configuredSourceKeys.add(JSON.stringify([candidate.agentId, admitted.sourceKey]));
   }
   const descriptors = await discoverNativeUsageSourceMetadata(input);
@@ -104,15 +105,15 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
   const lifetime = new AbortController();
 
   const acquire = async (agentId: string): Promise<NativeUsageSourceBoundary | null> => {
-    const [{ activateAgentRuntimeContributionOnDemand }, { acquireAuthoritativePluginRuntimeRegistryLease }] = await Promise.all([
-      import('@/agent/runtime/registry/activationDemand'), import('@/plugins/runtime/reload/runtimeLease'),
+    const [{ readRegistryCatalogHook }, { acquireAuthoritativePluginRuntimeRegistryLease }] = await Promise.all([
+      import('@/agent/catalog/runtimeEntry'), import('@/plugins/runtime/reload/runtimeLease'),
     ]);
     const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
     try {
-      await activateAgentRuntimeContributionOnDemand(lease.registry, agentId);
+      const catalogEntry = await readRegistryCatalogHook(lease.registry, agentId, entry => entry);
       const runtime = lease.registry.agentRuntimesByAgentId.get(agentId);
       return runtime?.externalSessions && runtime.isCurrent() && !runtime.retirementSignal.aborted
-        ? { externalSessions: runtime.externalSessions, occurrenceId: runtime.occurrenceId,
+        ? { catalogEntry, externalSessions: runtime.externalSessions, occurrenceId: runtime.occurrenceId,
           retirementSignal: runtime.retirementSignal, isCurrent: runtime.isCurrent } : null;
     } finally { await lease.release(); }
   };

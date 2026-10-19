@@ -40,6 +40,10 @@ describe('summaryShardIndexDb', () => {
       const insert = (sessionId: string, seq: number, summary: string, time: number) => db.insertSummaryShard({ sessionId, summary, entities: [], keywords: [], decisions: [], seqFrom: seq, seqTo: seq, createdAtFromMs: time, createdAtToMs: time });
       insert('target', 1, 'quasar planet', 100);
       for (let seq = 1; seq <= 5; seq += 1) insert('excluded', seq, 'quasray planes', 200);
+      const project = { type: 'project' as const, projectRef: { serverId: 'home', projectKey: 'project' } };
+      expect(db.search({ query: 'quasar', scope: project, maxResults: 1 })).toEqual([]);
+      expect(db.search({ query: 'quasar', scope: project, eligibleSessionIds: ['target'], maxResults: 1 }))
+        .toMatchObject([{ sessionId: 'target' }]);
       for (const query of ['quasra', 'planer']) {
         expect.soft(db.search({ query, scope: { type: 'session', sessionId: 'target' }, maxResults: 10 }).map((hit) => hit.sessionId), query).toEqual(['target']);
         expect.soft(db.search({ query, scope: { type: 'global' }, eligibleSessionIds: ['target', ...Array.from({ length: 1000 }, (_, i) => `absent-${i}`)], maxResults: 10 }).map((hit) => hit.sessionId), query).toEqual(['target']);
