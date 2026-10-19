@@ -182,21 +182,22 @@ async function follows(
 }
 
 async function discussion(
-  deps: ActionExecutorDeps, base: ActionSessionAddress, discussionId: string, context: ActionExecutorContext,
+  deps: ActionExecutorDeps, serverId: string, discussionId: string, context: ActionExecutorContext,
 ): Promise<readonly ActionSessionAddress[] | ActionExecuteFailure> {
   if (!deps.discussionAction) return unavailable('selector_backing_unavailable');
   const result = DiscussionParticipantsListResponseV1Schema.safeParse(await deps.discussionAction({
-    actionId: 'discussion.participants.list', input: { discussionId }, context: { ...context, serverId: base.serverId },
+    actionId: 'discussion.participants.list', input: { discussionId }, context: { ...context, serverId },
     ...(context.signal ? { signal: context.signal } : {}),
   }));
   if (!result.success || result.data.discussionId !== discussionId) return unavailable('discussion_participants_unavailable');
   const selected: ActionSessionAddress[] = [];
   for (const row of result.data.participants) {
-    if (row.participant.kind === 'session') selected.push({ serverId: base.serverId, sessionId: row.participant.sessionId });
+    if (row.participant.kind === 'session') selected.push({ serverId, sessionId: row.participant.sessionId });
     else if ('sessionId' in row && row.sessionId) {
       // An unbound model slot is a selection, not permission to create work.
-      if (!('launch' in row) || row.launch.executionTarget.serverId !== base.serverId) return unavailable('discussion_participant_home_mismatch');
-      selected.push({ serverId: base.serverId, sessionId: row.sessionId });
+      // The authorized roster's bound Session FK belongs to this read Home.
+      // Saved launch placement carries the creator's local alias, not membership authority.
+      selected.push({ serverId, sessionId: row.sessionId });
     }
   }
   return selected;
@@ -208,10 +209,22 @@ type SessionTargetsRequest = Readonly<{ actionId: ActionId; declaration: Readonl
 export function readActionSessionTargetField(input: Readonly<Record<string, unknown>>, field: string): unknown {
   let value: unknown = input;
   for (const key of field.split('.')) {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.hasOwn(value, key)) return undefined;
+    if (!value || typeof value !== 'object' || !Object.hasOwn(value, key)) return undefined;
     value = (value as Readonly<Record<string, unknown>>)[key];
   }
   return value;
+}
+
+/** Wildcards select only existing declared leaves; Account slots have no Session operand. */
+export function readActionSessionTargetOperands(input: Readonly<Record<string, unknown>>, field: string): readonly Readonly<{ field: string; value: unknown }>[] {
+  const visit = (value: unknown, keys: readonly string[], path: readonly string[]): Array<{ field: string; value: unknown }> => {
+    if (!keys.length) return value === undefined ? [] : [{ field: path.join('.'), value }];
+    const [key, ...rest] = keys;
+    if (key === '*') return Array.isArray(value) ? value.flatMap((child, index) => visit(child, rest, [...path, String(index)])) : [];
+    if (!value || typeof value !== 'object' || !Object.hasOwn(value, key)) return [];
+    return visit((value as Readonly<Record<string, unknown>>)[key], rest, [...path, key]);
+  };
+  return visit(input, field.split('.'), []);
 }
 
 /** Replace only the declared target leaf, preserving its surrounding intent. */
@@ -222,10 +235,37 @@ export function replaceActionSessionTargetField(
   if (separator < 0) return { ...input, [field]: target };
   const key = field.slice(0, separator);
   const child = input[key];
-  if (!child || typeof child !== 'object' || Array.isArray(child)) throw new Error('Session target path is unavailable');
+  if (Array.isArray(child)) {
+    const tail = field.slice(separator + 1);
+    const split = tail.indexOf('.');
+    const index = Number(split < 0 ? tail : tail.slice(0, split));
+    if (!Number.isInteger(index) || index < 0 || index >= child.length || split < 0) throw new Error('Session target slot is unavailable');
+    return { ...input, [key]: child.map((item, slot) => slot === index
+      ? replaceActionSessionTargetField(item, tail.slice(split + 1), target) : item) };
+  }
+  if (!child || typeof child !== 'object') throw new Error('Session target path is unavailable');
   return { ...input, [key]: replaceActionSessionTargetField(
     child as Readonly<Record<string, unknown>>, field.slice(separator + 1), target,
   ) };
+}
+
+/** Bind only reviewed, declared slots. This same proof fences approval replay. */
+export function bindActionSessionTargetOperands(input: Readonly<Record<string, unknown>>, snapshot: ActionResolvedSessionTargetsV1,
+  requireConcrete = false): Readonly<Record<string, unknown>> | null {
+  const fields = readActionSessionTargetOperands(input, snapshot.field);
+  if (!snapshot.operands || fields.length !== snapshot.operands.length) return null;
+  const addresses = new Map<string, ActionSessionAddress>();
+  let bound = input;
+  for (const [index, operand] of snapshot.operands.entries()) {
+    const field = fields[index];
+    if (field?.field !== operand.field || (requireConcrete && field.value !== operand.target.sessionId)) return null;
+    addresses.set(JSON.stringify([operand.target.serverId, operand.target.sessionId]), operand.target);
+    bound = replaceActionSessionTargetField(bound, operand.field, operand.target.sessionId);
+  }
+  const targets = [...addresses.values()];
+  if (targets.length !== snapshot.targets.length || targets.some((target, index) => target.serverId !== snapshot.targets[index].serverId
+    || target.sessionId !== snapshot.targets[index].sessionId)) return null;
+  return bound;
 }
 
 async function readActionSessionTargets(
@@ -240,13 +280,19 @@ async function readActionSessionTargets(
   catch { return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' }; }
   if (typeof target === 'string') return null; // Existing exact-ID result and transport fast path.
   const baseId = target.of ?? id(context.defaultSessionId);
-  if (!baseId && (target.selector !== 'matching' || !target.filter.homeServerIds.length)) return unavailable('session_context_unavailable');
+  if (!baseId && target.selector !== 'discussion' && (target.selector !== 'matching' || !target.filter.homeServerIds.length)) return unavailable('session_context_unavailable');
   const base = baseId ? await resolveActionSessionAddress(deps, { sessionId: baseId }, context, actionId,
     Boolean(deps.resolveSessionReference) || target.of !== undefined) : null;
   if (base && base.kind !== 'unique') return unavailable(base.kind === 'ambiguous' ? 'session_id_ambiguous' : 'session_context_unavailable');
   let targets: readonly ActionSessionAddress[];
   if (target.selector === 'matching') {
     const selected = await matching(deps, target, context, base?.address ?? null);
+    if ('ok' in selected) return selected;
+    targets = selected;
+  } else if (target.selector === 'discussion') {
+    const serverId = base?.address.serverId ?? id(context.serverId);
+    if (!serverId) return unavailable('session_context_unavailable');
+    const selected = await discussion(deps, serverId, target.discussionId, context);
     if ('ok' in selected) return selected;
     targets = selected;
   } else if (!base) return unavailable('session_context_unavailable');
@@ -270,10 +316,6 @@ async function readActionSessionTargets(
     targets = selected;
   } else if (target.selector === 'followers' || target.selector === 'following') {
     const selected = await follows(deps, base.address, target.selector, context, actionId);
-    if ('ok' in selected) return selected;
-    targets = selected;
-  } else if (target.selector === 'discussion') {
-    const selected = await discussion(deps, base.address, target.discussionId, context);
     if ('ok' in selected) return selected;
     targets = selected;
   } else return unavailable('selector_backing_unavailable');
@@ -301,6 +343,22 @@ export async function resolveActionSessionTargets(
   args: SessionTargetsRequest,
 ): Promise<ActionResolvedSessionTargetsV1 | ActionExecuteFailure | null> {
   try {
+    if (args.declaration.field.includes('*')) {
+      const operands: NonNullable<ActionResolvedSessionTargetsV1['operands']> = [];
+      const targets = new Map<string, ActionSessionAddress>();
+      for (const operand of readActionSessionTargetOperands(args.input, args.declaration.field)) {
+        const resolved = await readActionSessionTargets(deps, { ...args, declaration: { ...args.declaration, field: operand.field } });
+        if (resolved && 'ok' in resolved) return resolved;
+        const normalized = normalizeSessionTargetV1(operand.value);
+        const exact = resolved ? resolved.targets : typeof normalized === 'string' && id(args.context.serverId)
+          ? [{ serverId: id(args.context.serverId), sessionId: normalized }] : [];
+        if (exact.length !== 1) return unavailable('session_context_unavailable');
+        const target = exact[0];
+        operands.push({ field: operand.field, target });
+        targets.set(JSON.stringify([target.serverId, target.sessionId]), target);
+      }
+      return operands.length ? { actionId: args.actionId, field: args.declaration.field, targets: [...targets.values()], selector: false, operands } : null;
+    }
     return await readActionSessionTargets(deps, args);
   } catch {
     return args.context.signal?.aborted
