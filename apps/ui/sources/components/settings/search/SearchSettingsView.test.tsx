@@ -62,6 +62,10 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock({ params: () => routeParams.value }).module;
 });
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpcSpy }));
+// Search settings never renders the vendor's DOM streaming renderer.
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => { throw new Error('Unexpected Markdown reveal in Search settings'); },
+}));
 
 beforeEach(async () => {
     routeParams.value = {};
@@ -268,6 +272,33 @@ async function decideClear(artifactId: string, decision: 'approve' | 'reject') {
 }
 
 describe('SearchSettingsView', () => {
+    it.each(['parked', 'remounted'] as const)('reads the selected machine again after navigating away and returning to Search (%s)', lifecycle => withPopoverWebGlobals(async () => {
+        const daemons = installDaemons({ enabled: true, indexMode: 'deep' });
+        const { SearchSettingsView } = await import('./SearchSettingsView');
+        const { RetainedPanelSurface } = await import('@/components/ui/panels/RetainedPanelSurface');
+        const page = (visible: boolean) => React.createElement(React.Fragment, null,
+            !visible && lifecycle === 'remounted' ? null
+                : React.createElement(RetainedPanelSurface, { isActive: visible, suspendWhenHidden: true,
+                    children: React.createElement(SearchSettingsView) }));
+        const screen = await renderScreen(page(true), { flushOptions: { runOnlyPendingTimers: true } });
+        await renderedControl(screen, 'search-settings-standard');
+        await screen.update(page(false));
+        // A Home refresh/presence update may settle while this tab is parked.
+        await act(async () => { storage.setState(state => ({
+            machines: Object.fromEntries(Object.values(state.machines).map(machine => [machine.id, { ...machine }])),
+            machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverIdentityId]: 'loading' },
+        })); });
+        await screen.update(page(true));
+        await screen.pressByTestIdAsync('search-settings-target.chip');
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 400 }); });
+        await screen.pressByTestIdAsync('search-settings-target.picker-option:m1');
+        expect((await renderedControl(screen, 'search-settings-standard')).props.value).toBe(true);
+        await enabledClearControl(screen);
+        await toggle(screen, 'search-settings-standard');
+        expect(daemons.m1.settings.conversationSearch.standardSearch.enabled).toBe(false);
+        expect(daemons.m2.settings.conversationSearch.standardSearch.enabled).toBe(true);
+    }));
+
     it('reads the selected online machine while its scoped inventory refreshes and exposes the search controls', () => withPopoverWebGlobals(async () => {
         const daemons = installDaemons({ enabled: true, indexMode: 'deep' });
         await account.selectMachine(serverId, null, MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory);

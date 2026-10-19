@@ -915,7 +915,10 @@ describe('web glass material', () => {
         expect(backdropsIn(shipped, 'inner')).toHaveLength(0);
         standardCleanup();
         // A person's own named preset (Everywhere at strong blur) follows the same rule.
-        act(() => storage.setState({ settings: { ...storage.getState().settings, ...resolvePreset(storage.getState().settings, 'everywhere'), glassBlurIntensity: 'strong' } }));
+        act(() => {
+            const strong = { ...storage.getState().settings, glassBlurIntensity: 'strong' as const };
+            storage.setState({ settings: { ...strong, ...resolvePreset(strong, 'everywhere') } });
+        });
         const named = await renderScreen(<GlassSurface surfaceGroup="floating"><GlassSurface testID="inner" surfaceGroup="floating"><DraftInput /></GlassSurface></GlassSurface>);
         expect(named.findAll(hasBackdrop)).toHaveLength(1);
         expect(backdropsIn(named, 'inner')).toHaveLength(0);

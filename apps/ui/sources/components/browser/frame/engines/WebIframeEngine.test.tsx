@@ -158,7 +158,7 @@ describe('WebIframeEngine diagnostics wiring', () => {
         const identityFor = (navigationGeneration: number) => ({ browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration, collectorId: 'collector_1', nonce: `nonce_${navigationGeneration}` });
         const onNavigationStateChange = vi.fn();
         const service = createBrowserAutomationControlService({ nowMs: Date.now });
-        const element = (generation: number, extra: Partial<React.ComponentProps<typeof WebIframeEngine>> = {}) => {
+        const element = (generation: number, extra: Readonly<{ navigationKey?: string; navigationCommand?: { commandId: string; kind: 'goBack' | 'goForward' | 'reload' | 'stop' } }> = {}) => {
             const identity = identityFor(generation);
             return <WebIframeEngine title="Relay" url="https://preview.example.test/?signed=a%20b" sandbox="allow-scripts allow-same-origin" testID="relay"
                 onNavigationStateChange={onNavigationStateChange}
