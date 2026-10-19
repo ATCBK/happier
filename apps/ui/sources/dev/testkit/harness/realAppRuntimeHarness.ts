@@ -1,14 +1,11 @@
-import { afterAll, afterEach, beforeEach, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach } from 'vitest';
 
 import { installDisconnectedServerSocketBoundary } from './serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 
 installDisconnectedServerSocketBoundary();
-vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
-vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'));
-vi.mock('@/platform/digest', () => import('@/platform/digest.node'));
-vi.mock('@/platform/hmacSha512', () => import('@/platform/hmacSha512.node'));
-vi.mock('@/platform/randomUUID', () => import('@/platform/randomUUID.node'));
+// The canonical Vitest platform aliases own Node crypto selection. A mock of
+// an alias which imports its resolved target would wait on its own factory.
 
 let initialized = false;
 let disposeSyncBridge: (() => void) | null = null;

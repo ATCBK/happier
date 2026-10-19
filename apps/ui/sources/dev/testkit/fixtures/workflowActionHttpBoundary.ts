@@ -1,5 +1,4 @@
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { encodeBase64 } from '@/encryption/base64';
 import { primeServerFeaturesSnapshot, deleteServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { storage } from '@/sync/domains/state/storageStore';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
@@ -8,6 +7,8 @@ import { createWorkflowActionHttpTransport } from './workflowActionHttpTransport
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { createAccountTokenForTests } from '../harness/homeGovernanceHarness';
+import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
 
 /** Native fixture installer; the same HTTP response owner is consumed by real source browser journeys. */
 export async function installWorkflowActionHttpBoundary(params: Readonly<{
@@ -15,6 +16,7 @@ export async function installWorkflowActionHttpBoundary(params: Readonly<{
     accountId?: () => string;
     automationDefinitions?: (url: URL, init?: RequestInit) => Promise<Response | undefined>;
     automationRuns?: (url: URL, init?: RequestInit) => Promise<Response>;
+    machineRows?: () => readonly FetchedMachineRow[];
 }>) {
     const restoreExecutorLoader = await installRealActionExecutorModuleLoader();
     const accountId = params.accountId ?? (() => storage.getState().profileScope?.accountId ?? 'account-a');
@@ -39,7 +41,7 @@ export async function installWorkflowActionHttpBoundary(params: Readonly<{
         const isAppliedHome = getActiveServerAccountScope()?.serverId === home.serverId;
         const { disconnectActiveServerConnection, restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
         if (isAppliedHome) await disconnectActiveServerConnection();
-        const next = { token: `e30.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: nextAccountId })), 'base64url')}.signature` };
+        const next = { token: createAccountTokenForTests(nextAccountId, { currentAccount: true }) };
         const write = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: home.serverId }, next);
         if (!write) throw new Error('Workflow Home credentials could not be persisted');
         writes.push(write);

@@ -1,7 +1,10 @@
+// Restore/Sync also uses device record persistence; browser storage is a system boundary.
+import 'fake-indexeddb/auto';
 import { vi } from 'vitest';
 import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
 import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 import type { AuthCredentials, HomeCredentialWriteRollback } from '@/auth/storage/tokenStorage';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol';
 import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import {
@@ -42,6 +45,8 @@ type HomeSpec = Readonly<{
     /** Actual initial settings document served before Account bootstrap starts. */
     settings?: Readonly<Record<string, unknown>>;
     accountMode?: 'plain' | 'e2ee';
+    /** Current Account wire fact, including mutable Settings revisions during maintenance tests. */
+    encryptionCurrentness?: () => AccountEncryptionCurrentnessResponse;
     credentials?: AuthCredentials;
     currentAccount?: boolean;
 }>;
@@ -211,6 +216,9 @@ export async function serveAccountHomes(params: Readonly<{
         }
         if (target.pathname === '/v1/account/encryption/currentness') {
             const spec = specsByHome.get(home);
+            if (authenticatedAccountId === spec?.accountId && spec.encryptionCurrentness) {
+                return Response.json(spec.encryptionCurrentness());
+            }
             const mode = authenticatedAccountId === spec?.accountId ? spec?.accountMode ?? 'plain' : 'plain';
             if (mode === 'plain') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version: 0, updatedAt: 0 }));
         }

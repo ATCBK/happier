@@ -1,5 +1,6 @@
-import { SessionCurrentProjectionRecordV1Schema, SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema, SessionOwnerMetadataEnvelopeV1Schema } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema, SessionOwnerMetadataEnvelopeV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { z } from 'zod/mini';
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
@@ -16,9 +17,9 @@ export function createSessionMetadataHttpBoundary(readSessions: () => Readonly<R
         replaceSession(sessionId: string) { records.delete(sessionId); },
         /** Mirror the current /v1/sessions hosted plain create/load transport contract. */
         createSessionFromPost(sessionId: string, init: RequestInit): Response {
-            const body = z.object({ tag: z.string().min(1), metadataLayoutVersion: z.literal(1),
-                sharedMetadata: z.object({ ciphertext: z.string().min(1) }).strict(), ownerMetadata: SessionOwnerMetadataEnvelopeV1Schema,
-                agentState: z.null(), dataEncryptionKey: z.null(), encryptionMode: z.literal('plain') }).strict().parse(JSON.parse(String(init.body)));
+            const body = z.strictObject({ tag: z.string().check(z.minLength(1)), metadataLayoutVersion: z.literal(1),
+                sharedMetadata: z.strictObject({ ciphertext: z.string().check(z.minLength(1)) }), ownerMetadata: SessionOwnerMetadataEnvelopeV1Schema,
+                agentState: z.null(), dataEncryptionKey: z.null(), encryptionMode: z.literal('plain') }).parse(JSON.parse(String(init.body)));
             const current = records.get(sessionId);
             if (current?.metadataLayoutVersion === 1) return Response.json({ created: false, session: current });
             if (current) throw new Error('Create/load fixture requires an existing current owner tuple, not a candidate migration');

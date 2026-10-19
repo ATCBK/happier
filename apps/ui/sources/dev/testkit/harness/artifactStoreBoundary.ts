@@ -1,10 +1,13 @@
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema, type ArtifactAccessGrantRowV1, type ArtifactAccessLevelV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema,
+    ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema,
+    type ArtifactAccessGrantRowV1, type ArtifactAccessLevelV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { encodeBase64, decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { Buffer } from 'buffer';
 
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 
 /**
  * A Home's Artifact rows and explicitly seeded Account grants, answered over HTTP.
@@ -90,6 +93,23 @@ export function createArtifactStoreBoundary(params: Readonly<{
         const readable = row ? readableRow(row, accountId) : null;
         return readable !== null && readable.access !== 'view';
     };
+    const recipientCensus = (row: Artifact, access: Artifact['access']) => {
+        const plain = row.encryptionMode === 'plain';
+        return ArtifactAccessRecipientCensusResponseV1Schema.parse({
+            artifactId: row.id, ownerAccountId: row.ownerAccountId, access,
+            encryptionMode: row.encryptionMode,
+            dataEncryptionKey: plain ? null : row.dataEncryptionKey,
+            callerDataEncryptionKey: plain ? null : row.dataEncryptionKey,
+            provenanceDataEncryptionKey: plain ? null : row.provenanceDataEncryptionKey ?? null,
+            callerProvenanceDataEncryptionKey: plain ? null : row.provenanceDataEncryptionKey ?? null,
+            // No Account content-key binding is published in this boundary.
+            // Local key possession is not server recipient readiness.
+            recipients: [row.ownerAccountId, ...(accountGrants.get(row.id)?.keys() ?? [])].sort().map(recipientAccountId => ({ recipientAccountId,
+                contentKey: { status: 'unavailable', reason: plain ? 'plain_account' : 'encryption_setup_required' },
+                contentPublicKeyFingerprint: null, encryptedDataKey: null,
+                encryptedProvenanceDataKey: null, recipientContentPublicKeyFingerprint: null })),
+        });
+    };
 
     const create = (ownerAccountId: string, input: Record<string, unknown> | null): Response => {
         const { id, header, body, dataEncryptionKey, provenance, provenanceDataEncryptionKey } = input ?? {};
@@ -164,6 +184,23 @@ export function createArtifactStoreBoundary(params: Readonly<{
             // Account once, before any row access or acknowledgement hook.
             const callerAccountId = params.ownerAccountId();
             if (!callerAccountId) return Promise.resolve(json({ error: 'Missing authorization header' }, 401));
+            if (url.pathname === `${ARTIFACTS_PATH}/read` && method === 'POST') {
+                const input = ArtifactReadBatchInputV1Schema.safeParse(parseBody(init));
+                if (!input.success) return Promise.resolve(json({ error: 'Invalid parameters' }, 400));
+                const items = input.data.artifactIds.map(artifactId => {
+                    const row = rows.get(artifactId);
+                    if (!row || !accessFor(row, callerAccountId)) return {
+                        artifactId, ok: false, error: 'artifact_not_found', status: 404, retryable: false,
+                    };
+                    const readable = readableRow(row, callerAccountId);
+                    if (!readable) return {
+                        artifactId, ok: false, error: 'artifact_content_unavailable', status: 409, retryable: false,
+                    };
+                    return { artifactId, ok: true, artifact: readable,
+                        recipientCensus: readable.encryptionMode === 'plain' ? null : recipientCensus(readable, readable.access) };
+                });
+                return Promise.resolve(json(ArtifactReadBatchResponseV1Schema.parse({ items })));
+            }
             if (url.pathname === ARTIFACTS_PATH && method === 'GET') {
                 const limit = Number(url.searchParams.get('limit') ?? 500);
                 if (!Number.isInteger(limit) || limit < 1 || limit > 500) return Promise.resolve(json({ error: 'Failed to get artifacts' }, 400));
@@ -206,20 +243,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 if (!row || !access) return Promise.resolve(json({ error: 'artifact_not_found' }, 404));
                 const plain = row.encryptionMode === 'plain';
                 if (!plain && access !== 'owner') return Promise.resolve(json({ error: 'artifact_content_unavailable' }, 409));
-                return Promise.resolve(json(ArtifactAccessRecipientCensusResponseV1Schema.parse({
-                    artifactId: row.id, ownerAccountId: row.ownerAccountId, access,
-                    encryptionMode: row.encryptionMode,
-                    dataEncryptionKey: plain ? null : row.dataEncryptionKey,
-                    callerDataEncryptionKey: plain ? null : row.dataEncryptionKey,
-                    provenanceDataEncryptionKey: plain ? null : row.provenanceDataEncryptionKey ?? null,
-                    callerProvenanceDataEncryptionKey: plain ? null : row.provenanceDataEncryptionKey ?? null,
-                    // No Account content-key binding is published in this boundary.
-                    // Local key possession is not server recipient readiness.
-                    recipients: [row.ownerAccountId, ...(accountGrants.get(row.id)?.keys() ?? [])].sort().map(recipientAccountId => ({ recipientAccountId,
-                        contentKey: { status: 'unavailable', reason: plain ? 'plain_account' : 'encryption_setup_required' },
-                        contentPublicKeyFingerprint: null, encryptedDataKey: null,
-                        encryptedProvenanceDataKey: null, recipientContentPublicKeyFingerprint: null })),
-                })));
+                return Promise.resolve(json(recipientCensus(row, access)));
             }
             const grantsTarget = /^\/v1\/artifacts\/([^/]+)\/access\/grants$/.exec(url.pathname);
             if (grantsTarget && method === 'GET') {
@@ -299,7 +323,10 @@ export function createArtifactStoreBoundary(params: Readonly<{
 
 /** Real qualified client operations above the shared HTTP/CAS boundary. */
 export async function createPlainArtifactHomeFixture(serverUrl: string, options?: Readonly<{
+    accountId?: string;
     accountSettingsVersion?: number;
+    /** Models the current authenticated Account instead of a retained legacy bearer. */
+    currentAccount?: boolean;
     /** Optional real wire payload for feature-gated consumers using this Home fixture. */
     serverFeatures?: unknown;
     /** Additional real Home HTTP routes needed by the consumer under test. */
@@ -307,13 +334,18 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
     /** Public catalogs leave the Home; the caller supplies their HTTP boundary. */
     handleExternalRequest?: (url: string, init?: RequestInit) => Promise<Response | null>;
 }>) {
+    // Match the app entry's readiness graph before a captured Account lists
+    // Artifacts. Keep the real foreground-acquisition owner in these journeys.
+    await import('@/sync/syncEngine');
     const [{ TokenStorage }, { upsertServerProfileOnly, setActiveServer, getActiveServerSnapshot }, { storage }, { setRuntimeFetch, resetRuntimeFetch }, applied] = await Promise.all([
         import('@/auth/storage/tokenStorage'), import('@/sync/domains/server/serverRuntime'),
         import('@/sync/domains/state/storage'), import('@/utils/system/runtimeFetch'),
         import('@/sync/runtime/orchestration/appliedActiveServerRuntime'),
     ]);
-    const accountId = 'artifact-account';
-    const token = `header.${encodeBase64(Buffer.from(JSON.stringify({ sub: accountId })), 'base64url')}.signature`;
+    const accountId = options?.accountId ?? 'artifact-account';
+    const token = `header.${encodeBase64(Buffer.from(JSON.stringify({ sub: accountId, ...(options?.currentAccount ? {
+        provenance: AuthTokenProvenanceSchema.parse({ v: 1, kind: 'account', authority: 'present_user' }), tokenEpoch: 0,
+    } : {}) })), 'base64url')}.signature`;
     const boundary = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: 'plain' });
     const requests: Readonly<{ path: string; method: string }>[] = [];
     setRuntimeFetch(async (input, init) => {

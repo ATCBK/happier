@@ -1,7 +1,7 @@
 import { SessionCurrentProjectionRecordV1Schema, type SessionCurrentProjectionRecordV1 } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionAccessGrantsListRequestV1Schema, SessionAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { SessionResponsibilityCandidatesRequestSchema } from '@happier-dev/protocol/sessions/access/sessionResponsibilityV1';
-import { SessionDiscussionListResponseV1Schema } from '@happier-dev/protocol/sessions/discussions/api';
+import { DiscussionListResponseV1Schema } from '@happier-dev/protocol/discussions/api';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { createRootLayoutFeaturesResponse } from '../fixtures/featureFixtures';
 import { createSessionAccessFixture } from '../fixtures/sessionFixtures';
@@ -92,7 +92,7 @@ export function createSessionCollaborationHttpBoundary() {
         }
         if (/^\/v2\/sessions\/[^/]+\/discussions$/.test(request.path)) {
             if (home.discussionResponse) return await home.discussionResponse(request);
-            return Response.json(SessionDiscussionListResponseV1Schema.parse({ discussions: [], nextCursor: null }));
+            return Response.json(DiscussionListResponseV1Schema.parse({ discussions: [], nextCursor: null }));
         }
         const publicShare = /^\/v1\/sessions\/([^/]+)\/public-share$/.exec(request.path);
         if (publicShare || request.path === '/v1/public-shares') {

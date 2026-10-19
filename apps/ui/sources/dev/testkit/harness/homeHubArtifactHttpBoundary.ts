@@ -5,18 +5,26 @@ import { type ArtifactCallerAccessV1, type ArtifactAccessGrantRowV1 } from '@hap
 import { buildHomeHubArtifactIdV1, HOME_HUB_ARTIFACT_KIND_V1, HOME_HUB_DEFAULT_LAYOUT, HomeHubLayoutV1Schema } from '@happier-dev/protocol/home';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 
 /** HTTP persistence boundary: the real Account mode, Artifact codec, Action and Home owners run above it. */
 export function createHomeHubArtifactHttpBoundary(
     accountId: string,
     profile: ReturnType<typeof AccountProfileSchema.parse> | (() => ReturnType<typeof AccountProfileSchema.parse>) = AccountProfileSchema.parse({ id: accountId }),
+    options?: Readonly<{ machines?: readonly FetchedMachineRow[] }>,
 ) {
     const boundary = createLayoutArtifactHttpBoundary(accountId, { artifactId: buildHomeHubArtifactIdV1(accountId), kind: HOME_HUB_ARTIFACT_KIND_V1,
         defaultLayout: HOME_HUB_DEFAULT_LAYOUT, parseLayout: value => HomeHubLayoutV1Schema.parse(value) });
     return { ...boundary, request: async (input: RequestInfo | URL, init?: RequestInit) => {
         // The signed-in Account establishes the Home lifetime. A shared layout's
         // owner is a different principal and must never supply this Profile.
-        if (new URL(String(input)).pathname === '/v1/account/profile') {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/machines' && options?.machines) return Response.json(options.machines);
+        if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(ProjectAccountRowListResponseV1Schema.parse({
+            status: 'listed', rows: [], coverage: 'complete',
+        }));
+        if (path === '/v1/account/profile') {
             const currentProfile = AccountProfileSchema.parse(typeof profile === 'function' ? profile() : profile);
             if (currentProfile.id !== accountId) throw new Error('Home HTTP profile must belong to the signed-in Account');
             return Response.json(currentProfile);

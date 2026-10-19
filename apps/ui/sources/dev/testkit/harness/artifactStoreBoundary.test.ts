@@ -1,9 +1,58 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeFormatV1';
+import { ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/storage/artifactStoredContent';
 
 import { createArtifactStoreBoundary } from './artifactStoreBoundary';
 
 describe('Artifact store HTTP boundary', () => {
+    it('serves selected batch reads in request order through the same Account and content-mode owner', async () => {
+        for (const mode of ['plain', 'e2ee'] as const) {
+            let accountId: string | null = 'owner';
+            const boundary = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: mode });
+            for (const id of ['first', 'second']) {
+                await boundary.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({
+                    id, header: 'private-header-' + id, body: 'private-body-' + id,
+                    dataEncryptionKey: mode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER
+                        : Buffer.alloc(ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES, 1).toString('base64'),
+                }) });
+            }
+            const before = boundary.list();
+            const read = (artifactIds: readonly string[]) => boundary.handle('/v1/artifacts/read', {
+                method: 'POST', body: JSON.stringify({ artifactIds }),
+            });
+            const response = await read(['second', 'missing', 'first']);
+            expect(response?.status).toBe(200);
+            const result = ArtifactReadBatchResponseV1Schema.parse(await response!.json());
+            expect(result.items.map(item => item.artifactId)).toEqual(['second', 'missing', 'first']);
+            expect(result.items[1]).toEqual({ artifactId: 'missing', ok: false,
+                error: 'artifact_not_found', status: 404, retryable: false });
+            for (const [index, id] of [[0, 'second'], [2, 'first']] as const) {
+                const item = result.items[index];
+                expect(item?.ok).toBe(true);
+                if (!item?.ok) throw new Error('Expected an authorized selected Artifact read');
+                expect(item.artifact).toEqual(boundary.read(id));
+                if (mode === 'plain') expect(item.recipientCensus).toBeNull();
+                else expect(item.recipientCensus).toMatchObject({ artifactId: id, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'e2ee' });
+            }
+            expect(boundary.list()).toEqual(before);
+            expect((await read(['first', 'first']))?.status).toBe(400);
+            accountId = 'foreign';
+            const refused = ArtifactReadBatchResponseV1Schema.parse(await (await read(['first']))!.json());
+            expect(refused.items).toEqual([{ artifactId: 'first', ok: false,
+                error: 'artifact_not_found', status: 404, retryable: false }]);
+            boundary.seedAccountGrant('first', 'foreign', 'view');
+            const granted = ArtifactReadBatchResponseV1Schema.parse(await (await read(['first']))!.json());
+            if (mode === 'plain') expect(granted.items).toEqual([{ artifactId: 'first', ok: true,
+                artifact: { ...boundary.read('first'), access: 'view' }, recipientCensus: null }]);
+            else expect(granted.items).toEqual([{ artifactId: 'first', ok: false,
+                error: 'artifact_content_unavailable', status: 409, retryable: false }]);
+            accountId = null;
+            expect((await read(['first']))?.status).toBe(401);
+            expect(boundary.list()).toEqual(before);
+        }
+    });
+
     it('projects seeded Account grants and admits only writable grants through the same CAS owner', async () => {
         let accountId = 'owner';
         const boundary = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: 'plain' });

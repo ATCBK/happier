@@ -2,11 +2,13 @@ import { afterEach, expect, it } from 'vitest';
 import { installWorkflowActionHttpBoundary } from './workflowActionHttpBoundary';
 import { initializeRealAppRuntimeForTests } from '../harness/realAppRuntimeHarness';
 
+// Resolve the app graph before measuring the Account lifecycle exercised below.
+await initializeRealAppRuntimeForTests();
+
 let boundary: Awaited<ReturnType<typeof installWorkflowActionHttpBoundary>> | null = null;
 afterEach(async () => { await boundary?.dispose(); boundary = null; });
 
 it('owns genuine Workflow Home custody, replaces its focused Account and refuses traffic after teardown', async () => {
-    await initializeRealAppRuntimeForTests();
     const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
     await upsertAndActivateServer({ serverUrl: 'https://workflow-boundary-custody.test' });
     let accountId = 'account-a';
@@ -16,6 +18,25 @@ it('owns genuine Workflow Home custody, replaces its focused Account and refuses
     });
     const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     await restoreConnectionToActiveServer(boundary.credentials);
+    const { apiSocket } = await import('@/sync/api/session/apiSocket');
+    const { storage } = await import('@/sync/domains/state/storageStore');
+    const { fetchPushTokens, fetchPushTokensRemoteAlertProjection } = await import('@/sync/api/session/apiPush');
+    expect(await fetchPushTokens(boundary.credentials, { request: apiSocket.request.bind(apiSocket) })).toEqual([]);
+    expect(await fetchPushTokensRemoteAlertProjection(boundary.credentials, apiSocket.request.bind(apiSocket))).toEqual({
+        v: 2, accountRemoteAlerts: { settingsVersion: 1, status: 'disabled' }, tokens: [],
+    });
+    const upgrades = await apiSocket.request('/v2/sessions/metadata-upgrades', { method: 'GET' });
+    expect(upgrades.status).toBe(200);
+    expect(await upgrades.json()).toEqual({ sessionIds: [] });
+    const feed = await apiSocket.request('/v1/feed?limit=100', { method: 'GET' });
+    expect(feed.status).toBe(200);
+    expect(await feed.json()).toEqual({ items: [], hasMore: false });
+    for (const method of ['GET', 'POST']) {
+        const missing = await apiSocket.request('/v1/unsupported-fixture-route', { method });
+        expect(missing.status).toBe(404);
+        expect(await missing.json()).toEqual({ error: 'Not found', path: '/v1/unsupported-fixture-route', method });
+    }
+    expect(storage.getState().endpointStatus).toBe('online');
     const { getActiveServerAccountScope, captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
     expect(getActiveServerAccountScope()).toEqual({ serverId: boundary.serverId, accountId });
     const captured = captureActiveServerAccountScopeLifetime();

@@ -46,6 +46,19 @@ export function createSessionSystemRecordHttpFixture(params: Readonly<{
 }
 
 type ConfigureSocketBoundary = (socket: Socket, serverUrl: string | undefined) => void;
+
+/** Deliver the external SDK's successful dial through its real registered listeners. */
+export function configureConnectedServerSocketBoundary(socket: Socket): void {
+    socket.connected = false;
+    socket.connect = vi.fn<typeof socket.connect>(() => {
+        if (!socket.connected) {
+            socket.connected = true;
+            for (const listener of socket.listeners('connect')) listener();
+        }
+        return socket;
+    });
+}
+
 type SocketResponder = Readonly<{ configure: ConfigureSocketBoundary }>;
 const socketBoundary = vi.hoisted(() => ({
     configure: undefined as ConfigureSocketBoundary | undefined,
