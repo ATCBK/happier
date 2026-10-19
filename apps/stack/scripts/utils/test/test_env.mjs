@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { applyTestHomeEnvironment } from '../../../../../scripts/testing/testHomeEnvironment.mjs';
 
 export function readBooleanEnvFlag(env, name, fallback = false) {
   const raw = env && typeof env === 'object' ? env[name] : undefined;
@@ -61,6 +62,7 @@ export function sanitizeStackTestRunnerEnv(env = {}, { isolatedStackRoot = '', r
 
   const root = String(isolatedStackRoot ?? '').trim() || inheritedIsolatedStackRoot;
   if (root) {
+    applyTestHomeEnvironment(cleanEnv, root);
     cleanEnv[STACK_TEST_ISOLATED_ROOT_MARKER] = root;
     cleanEnv.HAPPIER_STACK_CANONICAL_HOME_DIR = join(root, 'canonical-home');
     cleanEnv.HAPPIER_STACK_HOME_DIR = join(root, 'home');
