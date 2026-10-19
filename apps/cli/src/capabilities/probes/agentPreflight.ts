@@ -56,6 +56,7 @@ export type CliProbeDependencies = Readonly<{
     }> | null;
     agentRegistrySnapshot?: ResolvedContributionRegistry;
     activatePurposeBindings?: ConnectedAccountPurposeBindingOwner['activatePurposeBindings'];
+    connectedAccountsOwner?: Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['connectedAccountsOwner'];
     isAgentRegistryCurrent?: () => boolean;
     resolveNativeCatalogBearer?: (input: Parameters<typeof resolveNativeCatalogBearer>[0]) => Promise<NativeCatalogBearer | null>;
 }>;
@@ -130,6 +131,7 @@ async function resolveConnectedServiceProbeEnvironment(params: Readonly<{
         baseDir: materializationBaseDir,
         credentials: params.credentials,
         api: await params.dependencies.createApiClient(params.credentials),
+        connectedAccountsOwner: params.dependencies.connectedAccountsOwner,
         accountSettings: {
             ...params.accountSettings,
             connectedServicesProviderStateSharingSettingsV1: {

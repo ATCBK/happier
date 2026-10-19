@@ -495,7 +495,11 @@ describe('capabilities.invoke connected-service preflight', () => {
         { value: 'native/selected-account', label: 'selected-account', description: 'native' },
       ]) } });
       if (!options.ok) throw new Error('Native options unavailable');
-      const nativeOptions = getActionSpec('action.options.resolve').outputSchema.parse(options.result).options;
+      const optionsSpec = getActionSpec('action.options.resolve');
+      if (!optionsSpec) throw new Error('Native options Action unavailable');
+      const nativeResult = optionsSpec.outputSchema.parse(options.result);
+      if (!nativeResult || typeof nativeResult !== 'object' || !('options' in nativeResult)) throw new Error('Native options unavailable');
+      const nativeOptions = nativeResult.options;
       const agentTarget = { kind: 'agent', identity: {
         pluginId: targetId === 'external' ? SAMPLE_PLUGIN_ID : 'happier.agent.opencode',
         localId: targetId === 'external' ? 'sample-provider' : 'opencode',

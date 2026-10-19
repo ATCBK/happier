@@ -32,7 +32,7 @@ export async function readNativeExecutionRunOfferedModel(params: Parameters<NonN
     signal?: AbortSignal;
     createAgentInvocationServices?: CreateAgentInvocationServices;
     isCurrent?: () => boolean;
-    preflightDependencies?: Pick<CliProbeDependencies, 'createApiClient' | 'activatePurposeBindings'>;
+    preflightDependencies?: Pick<CliProbeDependencies, 'createApiClient' | 'activatePurposeBindings' | 'connectedAccountsOwner'>;
   }>) {
   // The same executable occurrence may probe for more than one Session Account.
   const runtimeCacheKey = params.promptCredentials
