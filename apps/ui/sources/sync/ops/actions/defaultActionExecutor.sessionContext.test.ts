@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { createSessionFixture, renderHook, renderScreen } from '@/dev/testkit';
+import { createDeferred, createSessionFixture, renderHook, renderScreen } from '@/dev/testkit';
 import { MetadataSchema } from '@happier-dev/session-core/state';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { MemoryDocBodyV1Schema } from '@happier-dev/protocol/prompts/library/memoryDocV1';
@@ -21,11 +21,69 @@ const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { sessionInstructionsActions } = await import('@/components/sessions/work/sessionWorkSources');
 const { useSessionInstructionsDetail } = await import('@/components/sessions/work/useSessionInstructionsSource');
 const { SessionContextSection } = await import('@/components/sessions/work/context/SessionContextSection');
+const { SessionMemorySection } = await import('@/components/sessions/work/memory/SessionMemorySection');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { ItemRowActions } = await import('@/components/ui/lists/ItemRowActions');
 beforeEach(async () => { await homes.reset(); await loadSyncSingletonForTests(); });
 afterEach(async () => { await homes.reset(); });
 
 describe('reviewed Session context through the default UI Action host', () => {
+    it.each(['memory', 'context'] as const)('does not carry a pending %s choice or late refusal into another Session', async field => {
+        const serverId = await homes.addHome({ name: 'Info switches', serverUrl: 'https://info-switches.test', accountId: 'switch-owner' });
+        const sessionId = 'c123456789012345678901234';
+        const nextSessionId = 'c123456789012345678901235';
+        const ref = { kind: 'doc', artifactId: 'notes', serverId } as const;
+        const work = { memoryEnabled: true, promptStack: [{ id: 'notes', ref, enabled: true, placement: 'system_append' as const }] };
+        const ownerMetadata = { v: 1 as const, work };
+        const row = SessionCurrentProjectionRecordV1Schema.parse({ id: sessionId, seq: 1, createdAt: 1, updatedAt: 1,
+            active: false, activeAt: 1, encryptionMode: 'plain', metadataLayoutVersion: 1,
+            metadata: JSON.stringify({ v: 1 }), metadataVersion: 4,
+            ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(ownerMetadata),
+            agentState: null, agentStateVersion: 1, dataEncryptionKey: null, share: null,
+            responsibleAccountId: null, responsibleAccount: null,
+            effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities } });
+        await homes.artifacts(serverId).handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({ id: 'notes',
+            header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: 'Notes' }),
+            body: encodePlainArtifactStoredContent({ body: '' }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER }) });
+        homes.answer(serverId, '/v1/account/encryption/currentness', { body: {
+            mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+        const path = `/v2/sessions/${sessionId}`;
+        for (const suffix of ['', '?accessProjectionVersion=1']) homes.answer(serverId, `GET ${path}${suffix}`, { body: { session: row } });
+        let pending = createDeferred<void>();
+        homes.answer(serverId, `PATCH ${path}`, { select: () => ({ status: 403, body: { error: 'forbidden' }, respondAfter: pending.promise }) });
+        const render = (id: string) => {
+            const session = createSessionFixture({ id, metadataVersion: 4, metadataLayoutVersion: 1,
+                ownerMetadataView: MetadataSchema.parse(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 }, ownerMetadata })) });
+            return React.createElement(InjectedAuthProvider, { credentials: null, children:
+                field === 'memory' ? React.createElement(SessionMemorySection, { serverId, session })
+                    : React.createElement(SessionContextSection, { serverId, session }) });
+        };
+        const control = field === 'memory' ? 'session-work-memory.enabled.switch' : 'session-work-context.entry.session.notes.enabled';
+        const refusal = field === 'memory' ? 'session-work-memory.refused' : 'session-work-context.refused';
+        const screen = await renderScreen(render(sessionId));
+        try {
+            await vi.waitFor(() => expect(screen.findByTestId(control)?.props.value).toBe(true));
+            await act(async () => { screen.findByTestId(control)?.props.onValueChange(false); });
+            await vi.waitFor(() => expect(homes.requests.some(request => request.path === path && request.input !== null
+                && typeof request.input === 'object' && 'ownerMetadata' in request.input)).toBe(true));
+            expect(screen.findByTestId(control)?.props.disabled).toBe(true);
+            // A terminal refusal with unchanged canonical metadata must release the switch.
+            await act(async () => { pending.resolve(); });
+            await vi.waitFor(() => expect(Boolean(screen.findByTestId(control)?.props.disabled)).toBe(false));
+            expect(screen.findByTestId(control)?.props.value).toBe(true);
+            expect(screen.findByTestId(refusal)).not.toBeNull();
+            pending = createDeferred<void>();
+            await act(async () => { screen.findByTestId(control)?.props.onValueChange(false); });
+            await vi.waitFor(() => expect(homes.requests.filter(request => request.path === path && request.input !== null
+                && typeof request.input === 'object' && 'ownerMetadata' in request.input)).toHaveLength(2));
+            await act(async () => { screen.update(render(nextSessionId)); });
+            expect(screen.findByTestId(control)?.props.value).toBe(true);
+            expect(Boolean(screen.findByTestId(control)?.props.disabled)).toBe(false);
+            await act(async () => { pending.resolve(); });
+            await vi.waitFor(() => expect(screen.findByTestId(refusal)).toBeNull());
+        } finally { pending.resolve(); await screen.unmount(); }
+    });
+
     it.each(['memory', 'context', 'instructions', 'voice'] as const)(
         'rebases the %s Action over active-runtime metadata, and refuses a competing field edit', async (field) => {
             const serverId = await homes.addHome({ name: 'Active Context Home', serverUrl: 'https://active-context-owner.test', accountId: 'context-owner' });
@@ -84,9 +142,21 @@ describe('reviewed Session context through the default UI Action host', () => {
                     : field === 'instructions' ? { promptStack: [] } : {}) } } });
             if (field === 'voice' && row.ownerMetadata?.t === 'plain') expect(row.ownerMetadata.v.work).not.toHaveProperty('voicePreference');
             row = { ...row, ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, work: initialWork }), metadataVersion: row.metadataVersion + 1 };
+            const { getStorage } = await import('@/sync/domains/state/storageStore');
+            getStorage().setState({ sessions: { [sessionId]: createSessionFixture({ id: sessionId, serverId,
+                metadataLayoutVersion: 1, metadataVersion: row.metadataVersion,
+                ownerMetadataView: MetadataSchema.parse(projectSessionOwnerCompatibilityViewV1({
+                    sharedMetadata: { v: 1 }, ownerMetadata: { v: 1, work: initialWork },
+                })) }) }, sessionLocalStateScope: { serverId, accountId: 'context-owner' } });
             race = 'same-field';
             expect(await execute()).toMatchObject({ ok: false, errorCode: 'conflict' });
             expect(commits).toBe(1);
+            // Conflict refresh is canonical even though our write was refused.
+            // An Info switch must settle to that read rather than its older mounted value.
+            const projected = getStorage().getState().sessions[sessionId];
+            expect(projected?.metadataVersion).toBe(row.metadataVersion);
+            if (row.ownerMetadata?.t !== 'plain') throw new Error('Expected plain owner fixture');
+            expect(projected?.ownerMetadataView?.work).toEqual(row.ownerMetadata.v.work);
             expect(homes.requests.some(request => request.path.includes('/machines/'))).toBe(false);
         },
     );
