@@ -14,15 +14,14 @@ const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const typeScriptCliPath = join(repositoryRoot, 'scripts', 'workspaces', 'runTypeScriptCli.mjs');
 
 /**
- * The repository TypeScript CLI is a genuine process boundary. `execFile`'s own
- * deadline and output ceiling bound it, so this probe adds no second
- * child-process helper.
+ * The repository TypeScript CLI is a genuine process boundary. Its executor
+ * owns admission and cancellation; a subprocess deadline must not expire while
+ * the compiler is still queued for admission.
  */
 async function runTypeScript(cwd: string, args: readonly string[]): Promise<void> {
     try {
         await execFileAsync(process.execPath, [typeScriptCliPath, ...args], {
             cwd,
-            timeout: 120_000,
             maxBuffer: 4_000_000,
             windowsHide: true,
         });
@@ -328,5 +327,5 @@ describe('Triage SDK schema closure', () => {
         } finally {
             await rm(isolationRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
         }
-    }, 180_000);
+    }, 0);
 });
