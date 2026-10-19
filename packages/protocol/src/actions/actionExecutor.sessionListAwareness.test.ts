@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { buildSessionAwarenessListResultV1, markSessionListQueryResultV1 } from '../sessions/awareness/action.js';
-import type { SessionListQueryV1 } from '../sessions/listing/query.js';
+import { SESSION_LIST_PAGE_MAX_LIMIT, type SessionListQueryV1 } from '../sessions/listing/query.js';
 import { getActionSpec } from './actionSpecs.js';
 import type { SessionAwarenessProjectionV1 } from '../sessions/awareness/projectionV1.js';
 import { encodeV2SessionListCursorV1 } from '../sessions/listing/cursor.js';
@@ -145,8 +145,9 @@ describe('session.list execution', () => {
     ] } });
     expect(requests).toHaveLength(2);
     expect(requests.map(request => ({ serverId: request.serverId, view: request.view, query: request.query }))).toEqual([
-      { serverId: 'home-current', view: 'awareness', query: { ...canonicalQuery, includeInactive: true, includeAttention: false } },
-      { serverId: 'home-current', view: 'awareness', query: { ...canonicalQuery, includeInactive: true, includeAttention: false, cursor } },
+      // Pages are as large as the Home's list contract allows: the picker reads the whole inventory, and each page is a round trip.
+      { serverId: 'home-current', view: 'awareness', query: { ...canonicalQuery, includeInactive: true, includeAttention: false, limit: SESSION_LIST_PAGE_MAX_LIMIT } },
+      { serverId: 'home-current', view: 'awareness', query: { ...canonicalQuery, includeInactive: true, includeAttention: false, limit: SESSION_LIST_PAGE_MAX_LIMIT, cursor } },
     ]);
   });
 

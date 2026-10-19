@@ -43,6 +43,9 @@ import { useWorkflowsDestinationAccess } from '@/components/workflows/gating/wor
 import { useInboxAvailable } from '@/hooks/inbox/useInboxAvailable';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 import type { KeyboardCommandId } from '@/keyboard/types';
 import { selectPluginRightSidebarTabPlacements } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import { getStorage, selectSessionDisplayNameSource, useActiveServerAccountScopeLifetime, useSessionDisplayNameProjections } from '@/sync/domains/state/storage';
@@ -1197,6 +1200,13 @@ export function useDestinationInstanceTitles(
         sessionId: entry.ref.params.id!, serverId: entry.ref.params.serverId ?? null,
     })), [sessionEntries]);
     const sessionTitles = useSessionDisplayNameProjections(addresses, sessionDisplayTitle);
+    // A restored tab's page is not mounted, so its Session is named from content nobody has demanded yet.
+    const activeServerId = useActiveServerSnapshot(addresses.some(address => !address.serverId)).serverId;
+    const demandedSessions = React.useMemo(() => addresses.flatMap(address => {
+        const demanded = normalizeSessionAddress(address.serverId ?? activeServerId, address.sessionId);
+        return demanded ? [demanded] : [];
+    }), [addresses, activeServerId]);
+    useSessionContentDemand(demandedSessions, { tag: 'workspace.hydrateSessionTabs', hydrate: 'unsettled' });
     const discussionEntries = React.useMemo(() => entries.flatMap(entry => {
         if (entry.ref.kind === DISCUSSIONS_DESTINATION_ID && entry.ref.params.discussionId) {
             return [{ key: entry.key, serverId: entry.ref.params.serverId ?? null, discussionId: entry.ref.params.discussionId }];

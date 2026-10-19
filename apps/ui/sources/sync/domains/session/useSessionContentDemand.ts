@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { isSessionContentUnsettled } from '@/sync/domains/session/encryptedContentAvailability';
+import { isSessionContentUnsettled as isSessionRowContentUnsettled } from '@/sync/domains/session/encryptedContentAvailability';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { retainVisibleSessionListSurfaces } from '@/sync/domains/session/sessionSurfaceVisibility';
@@ -16,7 +16,7 @@ function isSessionContentUnsettled(address: SessionAddress): boolean {
     const row = readSessionListRowForServerId(
         readRegisteredStorageState()?.sessionListRowsByServerId, address.serverId, address.sessionId,
     );
-    return row === null || isSessionContentUnsettled(row);
+    return row === null || isSessionRowContentUnsettled(row);
 }
 
 /**

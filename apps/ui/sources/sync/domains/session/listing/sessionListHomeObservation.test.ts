@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+
 import type { SessionListQueryHomeState } from './sessionListQueryController';
 import {
     buildSessionListHomeObservations,
+    isSessionListHomeOpening,
     isSessionListQueryHomeCoverageComplete,
     resolveOrdinarySessionListCoverage,
 } from './sessionListHomeObservation';
@@ -155,5 +158,24 @@ describe('isSessionListQueryHomeCoverageComplete', () => {
             state: { ...state, appliedSourceKind: 'ordinary' },
             requestedQueryKey: 'query',
         })).toBe(false);
+    });
+});
+
+describe('isSessionListHomeOpening', () => {
+    const row = createSessionListRenderableSessionFixture({ id: 'listed' });
+    const state = (phase: SessionListQueryHomeState['phase'] | null, listed: boolean) => ({
+        sessionListRowsByServerId: listed ? { home: { [row.id]: row } } : {},
+        concurrentSessionListCacheByServerId: phase ? { home: { listObservation: { phase, lastSuccessAt: null } } } : {},
+    });
+
+    it('offers rows once a Home has listed some, without waiting for its last page', () => {
+        // Nothing listed yet: opening, until the Home answers.
+        expect(isSessionListHomeOpening(state(null, false), 'home')).toBe(true);
+        expect(isSessionListHomeOpening(state('loading', false), 'home')).toBe(true);
+        expect(isSessionListHomeOpening(state('ready', false), 'home')).toBe(false);
+        expect(isSessionListHomeOpening(state('error', false), 'home')).toBe(false);
+        // The observation settles only at the last page; the first page is already pickable.
+        expect(isSessionListHomeOpening(state('loading', true), 'home')).toBe(false);
+        expect(isSessionListHomeOpening(state('refreshing', true), 'home')).toBe(false);
     });
 });
