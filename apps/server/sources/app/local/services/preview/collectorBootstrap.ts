@@ -87,7 +87,7 @@ async function decodeBody(chunks: Uint8Array[], encoding: string, maxBytes: numb
 function readBoundCollectorConfig(input: ProxyLocalServicePreviewHttpRequestInput): CooperativeCollectorConfig | null {
     if (input.request.method !== 'GET' || input.preview.originMode !== 'host' || input.request.headers['sec-fetch-dest'] !== 'iframe') return null;
     const cookies = input.request.headers.cookie;
-    for (const entry of (Array.isArray(cookies) ? cookies.join(';') : cookies ?? '').split(';')) {
+    for (const entry of (typeof cookies === 'string' ? cookies : (cookies ?? []).join(';')).split(';')) {
         const [name, ...value] = entry.trim().split('=');
         if (name !== COOPERATIVE_COLLECTOR_BINDING_COOKIE) continue;
         try { return parseCooperativeCollectorConfig(decodeURIComponent(value.join('='))); } catch { return null; }

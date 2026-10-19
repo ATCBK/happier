@@ -77,6 +77,18 @@ export class AccountSettingsPublicationConflict extends Error {
     }
 }
 
+function profileTransferAuthorityRejection(
+    control: Awaited<ReturnType<typeof readProfileTransferControlInTx>>,
+    expectedRevision: number | 'absent' | undefined,
+): Readonly<{ status: 'storage_unavailable' }> | Readonly<{ status: 'profile_transfer_mismatch'; currentRevision: number | 'absent' }> | null {
+    if (control.status !== 'present' && control.status !== 'deleted' && control.status !== 'absent') {
+        return { status: 'storage_unavailable' };
+    }
+    const revision = control.status === 'absent' ? 'absent' : control.revision;
+    return expectedRevision !== undefined && revision !== expectedRevision
+        ? { status: 'profile_transfer_mismatch', currentRevision: revision } : null;
+}
+
 async function readAccountSettingsPublicationConflictInTx(
     tx: Tx,
     input: Readonly<{ accountId: string; kind?: "v1" | "v2" }>,
@@ -135,12 +147,8 @@ export async function writeAccountSettingsInTx(
 
     const currentAccount = fence.account;
     const profileTransferControl = await readProfileTransferControlInTx(input.tx, { accountId: input.accountId });
-    if (profileTransferControl.status !== 'present' && profileTransferControl.status !== 'deleted'
-        && profileTransferControl.status !== 'absent') return { status: 'storage_unavailable' };
-    if (input.expectedProfileTransferRevision !== undefined) {
-        const revision = profileTransferControl.status === 'absent' ? 'absent' : profileTransferControl.revision;
-        if (revision !== input.expectedProfileTransferRevision) return { status: 'profile_transfer_mismatch', currentRevision: revision };
-    }
+    const transferRejection = profileTransferAuthorityRejection(profileTransferControl, input.expectedProfileTransferRevision);
+    if (transferRejection) return transferRejection;
     const mode = currentAccount.currentness.encryptionMode;
     if (input.next.kind === "v1" && mode === "plain") {
         return { status: "plain_requires_v2" };
@@ -171,48 +179,63 @@ export async function writeAccountSettingsInTx(
         };
     }
 
-    if (mode === 'plain' && input.next.kind === 'v2') {
-        const currentSettings = currentContent?.t === 'plain' ? currentContent.v : {};
-        const nextSettings = input.next.content?.t === 'plain' ? input.next.content.v : {};
-        if (profileTransferControl.status === 'present' && profileTransferControl.envelope.t === 'plain'
-            && profileTransferControl.envelope.v.phase === 'active'
-            && (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'profiles')
-                || !isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'secretBindingsByProfileId'))) {
-            return { status: 'invalid_content' };
-        }
-        const acpSourceChanged = Object.hasOwn(currentSettings, 'acpCatalogSettingsV1') !== Object.hasOwn(nextSettings, 'acpCatalogSettingsV1')
-            || (Object.hasOwn(currentSettings, 'acpCatalogSettingsV1')
-                && !pluginJsonValuesEqual(currentSettings.acpCatalogSettingsV1, nextSettings.acpCatalogSettingsV1));
-        if (acpSourceChanged) {
-            const catalog = await readConfiguredAgentCatalogRowInTx(input.tx, { accountId: input.accountId });
-            if (catalog.status !== 'present' && catalog.status !== 'deleted' && catalog.status !== 'absent') return { status: 'storage_unavailable' };
-            if (catalog.status === 'present' && catalog.content.t === 'plain'
-                && openAcpCatalogContentV1({ mode: 'plain', material: null, content: catalog.content }).status !== 'opened') return { status: 'invalid_content' };
-            if (catalog.status !== 'absent' && !isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'acpCatalogSettingsV1')) {
+    const validateSourceAuthority = async (
+        tx: Tx,
+        control: Awaited<ReturnType<typeof readProfileTransferControlInTx>>,
+    ): Promise<Readonly<{ status: 'invalid_content' | 'storage_unavailable' }> | null> => {
+        if (mode === 'plain' && input.next.kind === 'v2') {
+            const currentSettings = currentContent?.t === 'plain' ? currentContent.v : {};
+            const nextSettings = input.next.content?.t === 'plain' ? input.next.content.v : {};
+            if (control.status === 'present' && control.envelope.t === 'plain'
+                && control.envelope.v.phase === 'active'
+                && (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'profiles')
+                    || !isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'secretBindingsByProfileId'))) {
                 return { status: 'invalid_content' };
             }
+            const acpSourceChanged = Object.hasOwn(currentSettings, 'acpCatalogSettingsV1') !== Object.hasOwn(nextSettings, 'acpCatalogSettingsV1')
+                || (Object.hasOwn(currentSettings, 'acpCatalogSettingsV1')
+                    && !pluginJsonValuesEqual(currentSettings.acpCatalogSettingsV1, nextSettings.acpCatalogSettingsV1));
+            if (acpSourceChanged) {
+                const catalog = await readConfiguredAgentCatalogRowInTx(tx, { accountId: input.accountId });
+                if (catalog.status !== 'present' && catalog.status !== 'deleted' && catalog.status !== 'absent') return { status: 'storage_unavailable' };
+                if (catalog.status === 'present' && catalog.content.t === 'plain'
+                    && openAcpCatalogContentV1({ mode: 'plain', material: null, content: catalog.content }).status !== 'opened') return { status: 'invalid_content' };
+                if (catalog.status !== 'absent' && !isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'acpCatalogSettingsV1')) {
+                    return { status: 'invalid_content' };
+                }
+            }
+            if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'providerSettingsV1')) {
+                const catalog = await readProviderConnectionsRowInTx(tx, { accountId: input.accountId });
+                if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
+                if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
+            }
+            if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'mcpServersSettingsV1')) {
+                const catalog = await readMcpServerCatalogRowInTx(tx, { accountId: input.accountId });
+                if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
+                if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
+            }
+            if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'connectedAccountServiceConfigurationsV1')) {
+                const catalog = await readConnectedAccountCatalogRowInTx(tx, { accountId: input.accountId, key: 'configurations' });
+                if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
+                if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
+            }
+            if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'connectedAccountPurposeBindingsV1')) {
+                const catalog = await readConnectedAccountCatalogRowInTx(tx, { accountId: input.accountId, key: 'purposes' });
+                if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
+                if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
+            }
         }
-        if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'providerSettingsV1')) {
-            const catalog = await readProviderConnectionsRowInTx(input.tx, { accountId: input.accountId });
-            if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
-            if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
-        }
-        if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'mcpServersSettingsV1')) {
-            const catalog = await readMcpServerCatalogRowInTx(input.tx, { accountId: input.accountId });
-            if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
-            if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
-        }
-        if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'connectedAccountServiceConfigurationsV1')) {
-            const catalog = await readConnectedAccountCatalogRowInTx(input.tx, { accountId: input.accountId, key: 'configurations' });
-            if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
-            if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
-        }
-        if (!isAccountSettingsSourceRetainedOrRemoved(currentSettings, nextSettings, 'connectedAccountPurposeBindingsV1')) {
-            const catalog = await readConnectedAccountCatalogRowInTx(input.tx, { accountId: input.accountId, key: 'purposes' });
-            if (catalog.status === 'present' || catalog.status === 'deleted') return { status: 'invalid_content' };
-            if (catalog.status !== 'absent') return { status: 'storage_unavailable' };
-        }
-    }
+        return null;
+    };
+    const sourceRejection = await validateSourceAuthority(input.tx, profileTransferControl);
+    if (sourceRejection) return sourceRejection;
+
+    beforeAccountChangePublication(input.tx, [input.accountId], async (tx) => {
+        const currentControl = await readProfileTransferControlInTx(tx, { accountId: input.accountId });
+        const rejection = profileTransferAuthorityRejection(currentControl, input.expectedProfileTransferRevision)
+            ?? await validateSourceAuthority(tx, currentControl);
+        if (rejection) throw new AccountSettingsPublicationConflict(rejection);
+    });
 
     const nextSettingsDbValue =
         input.next.kind === "v1"
