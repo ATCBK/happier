@@ -17,6 +17,7 @@ import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/l
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { logger } from '@/utils/logger';
 import { refreshActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
 import { bindRequesterSessionRuntimeMachineAdmissionCurrentness, prepareRequesterSessionBootstrap,
   verifyRequesterSessionCredentialBinding, verifyRequesterSessionMachineAdmissionCurrent } from './requesterSessionCredentials';
@@ -37,6 +38,7 @@ it('opens owner metadata only for creation correspondence while retaining fresh 
   const requests: string[] = [];
   const responses: string[] = [];
   let heldSession: (() => Promise<void>) | undefined;
+  let sessionStatus = 200;
   const credentials: Credentials = { token: 'bob-ordinary', encryption: {
     // Observe real key demand; decryption and authorization remain production code.
     type: 'legacy', get secret() { materialReads++; return secret; },
@@ -73,7 +75,8 @@ it('opens owner metadata only for creation correspondence while retaining fresh 
           rpcAdmission: { context: body.context, purpose: body.purpose } } });
     return access && valid ? { v: 1, ok: true } : reply.code(403).send({ error: 'access_denied' });
   });
-  app.get('/v2/sessions/session', async () => ({ session: createSessionRecordFixture({ id: 'session',
+  app.get('/v2/sessions/session', async (_request, reply) => sessionStatus !== 200
+    ? reply.code(sessionStatus).send({ error: 'private-response-body' }) : ({ session: createSessionRecordFixture({ id: 'session',
     encryptionMode: 'e2ee', metadata, dataEncryptionKey: null,
     share: role === 'owner' ? null : { accessLevel: 'view', canApprovePermissions: false },
   }) }));
@@ -95,6 +98,17 @@ it('opens owner metadata only for creation correspondence while retaining fresh 
     expect(requests.filter(path => path === '/v1/machines/machine/access')).toHaveLength(1);
     expect(requests.filter(path => path === '/v1/machines/machine/admission/verify')).toHaveLength(2);
     expect(materialReads).toBe(0);
+    const phaseLog = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    try {
+      sessionStatus = 403;
+      expect(await verifyRequesterSessionCredentialBinding(binding)).toBe(false);
+      const failed = phaseLog.mock.calls.filter(([message]) => message === '[PluginExec] Requester currentness phase');
+      expect(failed).toEqual(expect.arrayContaining([[expect.any(String), expect.objectContaining({
+        phase: 'session', status: 'failed', errorClass: 'HttpStatusError', errorCode: 'not_authenticated', httpStatus: 403,
+        stackFrames: expect.arrayContaining([expect.objectContaining({ file: expect.stringContaining('sessionsHttp.ts') })]),
+      })]]));
+      expect(JSON.stringify(failed)).not.toMatch(/private-response-body|bob-ordinary|Unauthorized|Zod/);
+    } finally { sessionStatus = 200; phaseLog.mockRestore(); }
     requests.length = 0;
     let releaseSession: (() => void) | undefined;
     let enteredSession: (() => void) | undefined;

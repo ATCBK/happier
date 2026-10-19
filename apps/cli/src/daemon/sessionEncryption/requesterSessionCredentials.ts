@@ -33,6 +33,7 @@ import type { QualifiedConnectedAccountEstablishedRuntimeOwner } from '../connec
 import type { RequesterAccountActionAuthorizationInput } from './requesterAccountActionProjection';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { readMachineRpcAdmissionCurrentOrThrow } from '@/api/machine/machineRpcAuthorization';
 import { listProtectedLocalStateDirectory } from '@/utils/fs/protectedLocalState';
@@ -91,16 +92,18 @@ export type RequesterSessionRuntimeContext = Readonly<{
 
 export type ResolveRequesterSessionRuntimeContext = (
   sessionId: string, attribution?: RequesterWorkAttributionV1, signal?: AbortSignal,
+  onPreparationRefused?: (bootstrap: AdmittedRequesterSessionBootstrap) => Promise<void>,
 ) => Promise<RequesterSessionRuntimeContext | null>;
 
 /** The daemon's one tracked/recovered requester selection and publication owner. */
 export function createRequesterSessionRuntimeContextResolver(input: Readonly<{
   trackedSessions: ReadonlyMap<number, TrackedSession>;
   getCreateRuntime(): ((bootstrap: AdmittedRequesterSessionBootstrap, signal?: AbortSignal) => Promise<RequesterSessionRuntimeContext | null>) | null;
-  recoverBootstrap(input: Readonly<{ sessionId: string; attribution?: RequesterWorkAttributionV1; tracked: boolean; signal?: AbortSignal }>): Promise<AdmittedRequesterSessionBootstrap | null>;
+  recoverBootstrap(input: Readonly<{ sessionId: string; attribution?: RequesterWorkAttributionV1; tracked: boolean; signal?: AbortSignal;
+    onSessionReadRefused?: () => void }>): Promise<AdmittedRequesterSessionBootstrap | null>;
 }>): ResolveRequesterSessionRuntimeContext {
   const pidToTrackedSession = input.trackedSessions;
-  return async (sessionId, attribution, signal) => {
+  return async (sessionId, attribution, signal, onPreparationRefused) => {
     if (signal?.aborted) return null;
     // Exited runners no longer lend requester authority. Inactive operations
     // still recover their own temporary context through the same custody path.
@@ -111,11 +114,22 @@ export function createRequesterSessionRuntimeContextResolver(input: Readonly<{
     let stamp = tracked?.requesterWorkAttributionV1 ?? tracked?.spawnOptions?.requesterWorkAttributionV1
       ?? context?.bootstrap.attribution ?? attribution;
     if (stamp && attribution && !isDeepStrictEqual(stamp, attribution)) return null;
-    const recoverBootstrap = () => input.recoverBootstrap({ sessionId, ...(stamp ? { attribution: stamp } : {}), tracked: tracked !== undefined,
-      ...(signal ? { signal } : {}) });
+    let sessionReadRefused = false;
+    const recoverBootstrap = (observeRefusal = true) => input.recoverBootstrap({ sessionId, ...(stamp ? { attribution: stamp } : {}), tracked: tracked !== undefined,
+      ...(signal ? { signal } : {}),
+      ...(onPreparationRefused && observeRefusal ? { onSessionReadRefused: () => { sessionReadRefused = true; } } : {}) });
+    const settlePreparationRefusal = async () => {
+      if (!sessionReadRefused || !onPreparationRefused || signal?.aborted) return;
+      // A failed read is not authority. Only a newly verified bootstrap may
+      // report that refusal; persistent unreadability keeps activation waiting.
+      const current = await recoverBootstrap(false);
+      if (!current) return;
+      try { if (!signal?.aborted && await current.isCurrent(signal)) await onPreparationRefused(current); }
+      finally { await current.dispose(); }
+    };
     const coldBootstrap = !context ? await recoverBootstrap() : null;
     stamp ??= coldBootstrap?.attribution;
-    if (!stamp) return null;
+    if (!stamp) { await settlePreparationRefusal(); return null; }
     const stillOwnsTrackedContext = (expected: RequesterSessionRuntimeContext | undefined): boolean => {
       const currentStamp = tracked?.requesterWorkAttributionV1 ?? tracked?.spawnOptions?.requesterWorkAttributionV1;
       return tracked !== undefined && tracked.requesterSessionRuntimeContext === expected
@@ -138,7 +152,7 @@ export function createRequesterSessionRuntimeContextResolver(input: Readonly<{
     const createRequesterRuntime = input.getCreateRuntime();
     if (!createRequesterRuntime) return null;
     const bootstrap = context ? await recoverBootstrap() : coldBootstrap;
-    if (!bootstrap) return null;
+    if (!bootstrap) { await settlePreparationRefusal(); return null; }
     const recovered = await createRequesterRuntime(bootstrap, signal);
     if (!recovered) { bootstrap.savedSecretOperationContext.withdrawCatalog(); return null; }
     if (tracked) {
@@ -550,6 +564,7 @@ export async function resolveRequesterSessionBootstrap(input: RequesterSessionCr
   serverHttpBaseUrl: string;
   machineAdmissionBoundary: RequesterSessionMachineAdmissionBoundary;
   signal?: AbortSignal;
+  onSessionReadRefused?: () => void;
 }>): Promise<AdmittedRequesterSessionBootstrap | null> {
   try {
     const stored = await readBoundCustody(requesterSessionCredentialPath(input), input);
@@ -578,6 +593,7 @@ export async function resolveRequesterSessionBootstrapFromCustody(input: Readonl
   legacyOwnerCredentials?: StoredCredentials;
   expectedAttribution?: RequesterWorkAttributionV1;
   signal?: AbortSignal;
+  onSessionReadRefused?: () => void;
 }>): Promise<AdmittedRequesterSessionBootstrap | null> {
   const boundary = input.machineAdmissionBoundary;
   const installation = boundary.readInstallation();
@@ -712,14 +728,24 @@ export async function verifyRequesterSessionCredentialBinding(input: Readonly<{
   verifyMachineAdmissionCurrent(signal?: AbortSignal): Promise<boolean>;
   signal?: AbortSignal;
   expectedSessionCreationTag?: string;
+  onSessionReadRefused?: () => void;
 }>): Promise<boolean> {
   return await timeWebLatencyPhase('requester.credential_binding', async () => {
+    let sessionReadRefused = false;
     const observe = async <T>(phase: 'machine_before' | 'profile' | 'encryption' | 'session' | 'machine_after', work: () => Promise<T>): Promise<T> => {
       const startedAt = performance.now();
       let status: 'completed' | 'failed' = 'failed';
+      let diagnostic: ReturnType<typeof readUnexpectedActionErrorDiagnosticV1> | undefined;
       try { const result = await timeWebLatencyPhase(`requester.${phase}`, work); status = 'completed'; return result; }
+      catch (error) {
+        diagnostic = readUnexpectedActionErrorDiagnosticV1(error);
+        if (phase === 'session' && ['session_detail_invalid_response', 'session_detail_projection_unavailable',
+          'not_authenticated', 'client-upgrade-required'].includes(diagnostic.errorCode ?? '')) sessionReadRefused = true;
+        throw error;
+      }
       finally { logger.debug('[PluginExec] Requester currentness phase', {
         phase, status, sessionId: input.sessionId, durationMs: Math.round(performance.now() - startedAt),
+        ...diagnostic,
       }); }
     };
     const discovery: RequesterBindingDiscovery = { active: true, binding: input };
@@ -748,7 +774,11 @@ export async function verifyRequesterSessionCredentialBinding(input: Readonly<{
           && !input.signal?.aborted && await observe('machine_after', () => input.verifyMachineAdmissionCurrent(input.signal))
           && isRequesterAccountEncryptionCurrentnessObserved({ accountId: input.attribution.accountId,
             token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl }, currentness);
-      } catch (error) { rethrowRequesterHomeReadFailure(error); return false; }
+      } catch (error) {
+        rethrowRequesterHomeReadFailure(error);
+        if (sessionReadRefused && !input.signal?.aborted) input.onSessionReadRefused?.();
+        return false;
+      }
       finally { discovery.active = false; discovery.context = undefined; }
     });
   });
@@ -790,6 +820,7 @@ export async function resolveRequesterSessionCredentials(input: RequesterSession
   serverHttpBaseUrl: string;
   verifyMachineAdmissionCurrent(signal?: AbortSignal): Promise<boolean>;
   signal?: AbortSignal;
+  onSessionReadRefused?: () => void;
 }>): Promise<StoredCredentials | null> {
   try {
     if (input.signal?.aborted || !await input.verifyMachineAdmissionCurrent(input.signal)) return null;

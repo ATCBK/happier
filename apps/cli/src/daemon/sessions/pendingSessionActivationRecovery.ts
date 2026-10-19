@@ -5,8 +5,12 @@ import { fetchSessionsPage as fetchSessionsPageDefault } from '@/session/transpo
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import type { RawSessionListRow } from '@/session/transport/http/sessionsHttp';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import type { AdmittedRequesterSessionBootstrap } from '../sessionEncryption/requesterSessionCredentials';
+import type { AdmittedRequesterSessionBootstrap, RequesterSessionCredentialBinding, RequesterSessionRuntimeContext,
+  ResolveRequesterSessionRuntimeContext, ReleaseRequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { activatePendingInactiveSession, type PendingInactiveSessionActivationRejected } from './activatePendingInactiveSession';
+import type { SpawnSessionOptions, SpawnSessionResult } from '@/session/shared/spawnSessionContract';
+import { logger } from '@/utils/logger';
 
 export type PendingSessionActivationInput = Readonly<{
   sessionId: string;
@@ -16,6 +20,45 @@ export type PendingSessionActivationInput = Readonly<{
   target?: SessionInputMachineTargetV1;
   requestedAt?: number;
 }>;
+
+/** Live hints and reconnect scans share exact requester recovery and failure settlement. */
+export async function activateRequesterPendingSession(params: Readonly<{
+  machineId: string;
+  binding: Pick<RequesterSessionCredentialBinding, 'sessionId' | 'attribution'>;
+  hint?: PendingSessionActivationInput;
+  resolveRequesterSessionRuntimeContext: ResolveRequesterSessionRuntimeContext;
+  releaseRequesterSessionRuntimeContext: ReleaseRequesterSessionRuntimeContext;
+  resolveCurrentMachineExecutionOriginContext(): Promise<CurrentMachineExecutionOriginContext | null>;
+  onActivationRejected?: (event: PendingInactiveSessionActivationRejected) => Promise<void>;
+  spawnSession(options: SpawnSessionOptions): Promise<SpawnSessionResult>;
+}>): Promise<void> {
+  const { binding, hint } = params;
+  if (binding.attribution.machineId !== params.machineId) return;
+  const activate = async (bootstrap: AdmittedRequesterSessionBootstrap, context?: RequesterSessionRuntimeContext) => {
+    const isCurrent = () => context ? context.isCurrent() : bootstrap.isCurrent();
+    if (!await isCurrent()) return;
+    const current = await readRequesterPendingSessionActivation({ sessionId: binding.sessionId, bootstrap,
+      resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext });
+    if (!await isCurrent() || !current || hint && (hint.requestId !== current.requestId
+      || hint.requestedAt !== undefined && hint.requestedAt !== current.requestedAt)) return;
+    const result = await activatePendingInactiveSession({ credentials: bootstrap.credentials,
+      machineId: params.machineId, sessionId: current.sessionId, requestId: current.requestId,
+      pendingVersion: hint?.pendingVersion ?? current.pendingVersion, requester: bootstrap,
+      expectedTarget: current.target, preparationFailed: context === undefined,
+      resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext,
+      onActivationRejected: params.onActivationRejected,
+      spawnSession: options => params.spawnSession({ ...options, requesterSessionBootstrap: bootstrap,
+        ...(context ? { requesterSessionRuntimeContext: context } : {}) }) });
+    if (result.status === 'rejected') logger.warn('[DAEMON RUN] Requester Pending activation rejected; custody retained', {
+      sessionId: current.sessionId, requestId: current.requestId, reason: result.reason, failureDetails: result.failureDetails,
+    });
+  };
+  const context = await params.resolveRequesterSessionRuntimeContext(binding.sessionId, binding.attribution, undefined,
+    bootstrap => activate(bootstrap));
+  if (!context) return;
+  try { await activate(context.bootstrap, context); }
+  finally { await params.releaseRequesterSessionRuntimeContext(context); }
+}
 
 /** A protected local ref identifies the read; only fresh requester Home facts authorize recovery. */
 export async function readRequesterPendingSessionActivation(params: Readonly<{

@@ -59,6 +59,8 @@ type PendingInactiveSessionActivationParams = Readonly<{
   expectedTarget?: SessionInputMachineTargetV1;
   resolveCurrentMachineExecutionOriginContext?: () => Promise<CurrentMachineExecutionOriginContext | null>;
   onActivationRejected?: (event: PendingInactiveSessionActivationRejected) => Promise<void>;
+  /** A definite cold preparation refusal, with freshly recovered requester authority. */
+  preparationFailed?: boolean;
 }>;
 
 export async function activatePendingInactiveSession(params: PendingInactiveSessionActivationParams): Promise<PendingInactiveSessionActivationResult> {
@@ -158,6 +160,7 @@ async function activateAtAdmittedHome(params: PendingInactiveSessionActivationPa
     return { status: 'not-needed', reason: 'pending-resolved' };
   }
   if (pendingEligibility === 'ineligible') return await rejectTerminal('ineligible');
+  if (params.preparationFailed && params.requester) return await rejectTerminal('identity-unavailable');
 
   const accountEncryptionCurrentness = await fetchAccountEncryptionCurrentness({
     token: params.credentials.token,

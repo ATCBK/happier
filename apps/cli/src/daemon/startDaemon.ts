@@ -2022,9 +2022,10 @@ export async function startDaemon(
     const resolveRequesterSessionRuntimeContext = createRequesterSessionRuntimeContextResolver({
       trackedSessions: pidToTrackedSession,
       getCreateRuntime: () => createRequesterRuntime,
-      recoverBootstrap: ({ sessionId, attribution: stamp, tracked, signal }) => resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: configuration.happyHomeDir,
+      recoverBootstrap: ({ sessionId, attribution: stamp, tracked, signal, onSessionReadRefused }) => resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: configuration.happyHomeDir,
         serverId: requesterRuntimeServerId, sessionId, serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl,
         signal,
+        onSessionReadRefused,
         machineAdmissionBoundary: requesterMachineAdmissionBoundary(),
         ...(stamp ? { expectedAttribution: stamp } : {}),
         // Retained attribution is not proof that a legacy Session has a

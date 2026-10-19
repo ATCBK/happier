@@ -59,7 +59,7 @@ import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encrypti
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import {
   createPendingSessionActivationRecovery,
-  readRequesterPendingSessionActivation,
+  activateRequesterPendingSession,
   type PendingSessionActivationInput,
 } from '@/daemon/sessions/pendingSessionActivationRecovery';
 import type { RequesterSessionRuntimeContext, ResolveRequesterSessionRuntimeContext, RequesterSessionCredentialBindingsResult,
@@ -1900,27 +1900,10 @@ export async function bootstrapMachineSyncRuntime(
         if (!params.resolveRequesterSessionRuntimeContext || !params.releaseRequesterSessionRuntimeContext
           || !params.resolveCurrentMachineExecutionOriginContext
           || binding.attribution.machineId !== params.machineId) return;
-        const context = await params.resolveRequesterSessionRuntimeContext(binding.sessionId, binding.attribution);
-        if (!context) return;
-        try {
-          if (!await context.isCurrent()) return;
-          const current = await readRequesterPendingSessionActivation({ sessionId: binding.sessionId, bootstrap: context.bootstrap,
-            resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext });
-          if (!await context.isCurrent() || !current || hint && (hint.requestId !== current.requestId
-            || hint.requestedAt !== undefined && hint.requestedAt !== current.requestedAt)) return;
-          const result = await activatePendingInactiveSession({ credentials: context.bootstrap.credentials,
-            machineId: params.machineId, sessionId: current.sessionId, requestId: current.requestId,
-            pendingVersion: hint?.pendingVersion ?? current.pendingVersion, requester: context.bootstrap,
-            expectedTarget: current.target,
-            resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext,
-            onActivationRejected: params.onActivationRejected,
-            spawnSession: options => params.spawnSession({ ...options, requesterSessionBootstrap: context.bootstrap,
-              requesterSessionRuntimeContext: context }) });
-          if (result.status === 'rejected') logger.warn('[DAEMON RUN] Requester Pending activation rejected; custody retained', {
-            sessionId: current.sessionId, requestId: current.requestId, reason: result.reason,
-            failureDetails: result.failureDetails,
-          });
-        } finally { await params.releaseRequesterSessionRuntimeContext(context); }
+        await activateRequesterPendingSession({ ...params, binding, hint,
+          resolveRequesterSessionRuntimeContext: params.resolveRequesterSessionRuntimeContext,
+          releaseRequesterSessionRuntimeContext: params.releaseRequesterSessionRuntimeContext,
+          resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext });
       };
       const activatePendingSession = async (hint: PendingSessionActivationInput): Promise<void> => {
         if (hint.target) {
