@@ -11963,8 +11963,7 @@ class Sync {
       }): Promise<ResumeViaChangesOutcome> {
           const CHANGES_PAGE_LIMIT = this.syncTuning.changesPageLimit;
           const embedScope = this.embedSessionScope;
-          // Only a Session-scoped embed reads a from-zero page; a full device without a cursor adopts the current one.
-          const afterCursor = embedScope ? this.changesCursor ?? '0' : this.changesCursor;
+          const afterCursor = this.changesCursor ?? '0';
           const shouldContinue = () => (opts.shouldContinue?.() ?? true)
               && (!embedScope || this.embedSessionScope === embedScope && embedScope.isCurrent());
           const appliedTransportTarget = this.getAppliedTransportTarget();
