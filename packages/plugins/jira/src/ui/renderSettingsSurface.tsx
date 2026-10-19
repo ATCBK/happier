@@ -73,5 +73,6 @@ function DraftEditor(props: TriageSourceSettingsDraftEditorPropsV1): React.React
 export const renderSurface = createTriageSourceSettingsSurface({
     pluginId: JIRA_PLUGIN_ID, listInstancesLocalActionId: JIRA_ACTIONS.listInstances,
     connectedAccountServiceLocalId: JIRA_ACCOUNT_PURPOSE, sourceDisplayName: 'Jira',
+    connectedAccountPurpose: JIRA_ACCOUNT_PURPOSE,
     DraftEditor,
 });

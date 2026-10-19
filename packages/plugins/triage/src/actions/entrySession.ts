@@ -90,28 +90,9 @@ function destinationFrom(
         kind: 'new',
         creationKey: destination.creationKey,
         spawn: {
-            executionTarget: destination.spawn.executionTarget,
-            agentTarget: destination.spawn.agentTarget,
-            // The pressed action's configured Launch Profile is carried to the
-            // canonical creator that owns what it means. The remaining optional
-            // members are not Triage-authored defaults: they are the host's
-            // already-settled Session choices, forwarded in the spawn wire's
-            // own vocabulary without reinterpretation.
-            ...(destination.spawn.profileId === undefined
-                ? {}
-                : { profileId: destination.spawn.profileId }),
-            ...(destination.spawn.modelSelection === undefined
-                ? {}
-                : { modelSelection: destination.spawn.modelSelection }),
-            ...(destination.spawn.permissionMode === undefined
-                ? {}
-                : { permissionMode: destination.spawn.permissionMode }),
-            ...(destination.spawn.transcriptStorage === undefined
-                ? {}
-                : { transcriptStorage: destination.spawn.transcriptStorage }),
-            ...(destination.spawn.terminal === undefined
-                ? {}
-                : { terminal: destination.spawn.terminal }),
+            // The closed Action carrier already selected the allowed recipe
+            // fields. Forward them whole so this adapter cannot drop a choice.
+            ...destination.spawn,
         } as Extract<TriageEntrySessionDestinationV1, Readonly<{ kind: 'new' }>>['spawn'],
         materialization: destination.materialization,
     };

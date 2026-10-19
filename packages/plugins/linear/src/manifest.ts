@@ -5,6 +5,7 @@ import {
   TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1,
 } from '@happier-dev/triage-protocol/v1';
 import { withTriageSourceSettingsTranslationsV1 } from '@happier-dev/triage-sources/translations';
+import { LINEAR_UI_TRANSLATIONS } from './ui/translations.js';
 import { linearConnectedAccountRuntime } from './account.js';
 import {
   LINEAR_PLUGIN_ID, LINEAR_SOURCE_ID, LINEAR_SERVICE_ID, LINEAR_PURPOSE, LINEAR_ORIGIN, LINEAR_ACTIONS,
@@ -39,17 +40,7 @@ export const LINEAR_PLUGIN = definePlugin({
     settingsGroups: [{ id: 'linear', title: 'Linear', icon: 'settings', defaultRank: 40 }],
     settingsPages: [{ id: 'triage-sources', group: { kind: 'plugin', localId: 'linear' }, title: 'PRs, Issues & Tasks',
       subtitle: 'Choose which Linear teams appear in PRs, Issues & Tasks.', icon: 'settings', renderer: 'linear-sources', defaultRank: 10 }],
-    translations: withTriageSourceSettingsTranslationsV1([{ locale: 'en', messages: {
-      'plugins.linear.detail.unavailable': 'Linear issue details are unavailable on this surface.',
-      'plugins.linear.detail.loading': 'Reading this Linear issue…',
-      'plugins.linear.detail.retry': 'Try again', 'plugins.linear.detail.more': 'Load more',
-      'plugins.linear.detail.overview': 'Description', 'plugins.linear.detail.labels': 'Labels',
-      'plugins.linear.detail.children': 'Sub-issues', 'plugins.linear.detail.blocks': 'Blocks',
-      'plugins.linear.detail.blockedBy': 'Blocked by', 'plugins.linear.detail.comments': 'Comments',
-      'plugins.linear.detail.transitions': 'Workflow states',
-      'plugins.linear.detail.empty': 'Linear has no entries in this section.',
-      'plugins.linear.detail.truncated': 'This response is incomplete. Open the issue in Linear for the full content.',
-    } }]),
+    translations: withTriageSourceSettingsTranslationsV1(LINEAR_UI_TRANSLATIONS),
   },
   actions: {
     [LINEAR_ACTIONS.listInstances]: {

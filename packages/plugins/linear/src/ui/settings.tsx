@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Button, Item, ItemGroup, Row, Select, usePluginTranslation } from '@happier-dev/plugin-ui';
 import { TriageSourceInstanceConfigurationV1Schema } from '@happier-dev/triage-protocol/v1';
 import { createTriageSourceSettingsSurface, type TriageSourceSettingsDraftEditorPropsV1 } from '@happier-dev/triage-sources/ui';
-import { LINEAR_PLUGIN_ID, LINEAR_SERVICE_ID, LINEAR_ACTIONS, LinearConfigurationSchema } from '../contracts.js';
+import { LINEAR_PLUGIN_ID, LINEAR_SERVICE_ID, LINEAR_PURPOSE, LINEAR_ACTIONS, LinearConfigurationSchema } from '../contracts.js';
 
 function DraftEditor({ draft, busy, onSubmit, onCancel }: TriageSourceSettingsDraftEditorPropsV1): React.ReactElement {
   const text = usePluginTranslation();
@@ -32,6 +32,7 @@ function DraftEditor({ draft, busy, onSubmit, onCancel }: TriageSourceSettingsDr
 
 export const renderSurface = createTriageSourceSettingsSurface({
   pluginId: LINEAR_PLUGIN_ID, connectedAccountServiceLocalId: LINEAR_SERVICE_ID,
+  connectedAccountPurpose: LINEAR_PURPOSE,
   listInstancesLocalActionId: LINEAR_ACTIONS.listInstances, sourceDisplayName: 'Linear',
   configuredInstanceKeyStability: 'stable',
   DraftEditor,

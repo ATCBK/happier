@@ -33,6 +33,15 @@ menu placement, not Action invocation. Discovery never creates a source and neve
 returns credential material; source administration retains its shared approval
 default for Account writes.
 
+Source settings supplies its discovery Action's `connectedAccountPurpose` to
+the shared settings factory. Connect/Manage opens the host's existing purpose
+setup for that qualified Action. Selecting an existing account or pool writes
+the canonical purpose default; return and Refresh to discover candidates.
+Creating a connection alone does not bind this purpose. Agents use the same
+approval-controlled `connectedServices.purposes.default.set` Action with the
+declaration machine, qualified discovery consumer/purpose, and exact target.
+Discovery retains `use` authority and performs no selection write.
+
 Account-only sources declare their Action inputs with the shared
 `TriageSourceConnectedAccountInputsV1` schemas from the same protocol owner.
 These preserve each role's fields while requiring a configured-account instance.

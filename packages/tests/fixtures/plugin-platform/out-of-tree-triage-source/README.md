@@ -149,9 +149,14 @@ Then, on that machine:
 
 1. **Connect** — Settings → Connected services → add the **Acme Ledger (fixture)** connection and
    paste `acme-ledger-fixture-key`.
-2. **Bind** — let the host bind the `acme-ledger-api` purpose to that account. The source never opens
-   a selection flow of its own; it declares only `operations: ['use']` and enumerates what the host
-   already authorized.
+2. **Bind** — open the source's PRs & Issues settings and press **Connect account** (or **Manage
+   connected accounts**). Choose the existing fixture account in the host's purpose setup. This
+   saves the `acme-ledger-api` default for `acme.ledger/ledger/discover-spaces`. Return to source
+   settings and press **Refresh**. The shared settings identity supplies `connectedAccountPurpose`;
+   account creation alone does not select that purpose. The source still declares only
+   `operations: ['use']`: the host-owned setup selects the default, and discovery remains read-only.
+   Agents use the same `connectedServices.purposes.default.set` Action with that qualified purpose,
+   the selected machine and `{ kind: 'account', account: <qualified fixture account> }` target.
 3. **Configure** — open Acme Ledger from PRs & Issues' source configuration offer, or open its
    PRs & Issues page in Settings. Add a discovered candidate:
    `acme/ledger` for the correctness rows, `acme/ledger-qa` for the 2,000-row workload.

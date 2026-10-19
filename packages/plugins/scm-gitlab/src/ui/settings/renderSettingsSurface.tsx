@@ -19,6 +19,7 @@ import { createTriageSourceSettingsSurface } from '@happier-dev/triage-sources/u
 import {
   GITLAB_PLUGIN_ID,
   GITLAB_CONNECTED_ACCOUNT_ID,
+  GITLAB_CONNECTED_ACCOUNT_PURPOSE,
   GITLAB_TRIAGE_ACTION_IDS,
   GITLAB_TRIAGE_SOURCE_DESCRIPTOR_V1,
 } from '../../triage/contribution.js';
@@ -27,5 +28,6 @@ export const renderSurface = createTriageSourceSettingsSurface({
   pluginId: GITLAB_PLUGIN_ID,
   listInstancesLocalActionId: GITLAB_TRIAGE_ACTION_IDS.listInstances,
   connectedAccountServiceLocalId: GITLAB_CONNECTED_ACCOUNT_ID,
+  connectedAccountPurpose: GITLAB_CONNECTED_ACCOUNT_PURPOSE,
   sourceDisplayName: GITLAB_TRIAGE_SOURCE_DESCRIPTOR_V1.displayName,
 });
