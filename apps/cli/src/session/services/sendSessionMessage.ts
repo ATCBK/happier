@@ -1402,15 +1402,17 @@ export async function sendSessionMessage(
         admissionResult: { status: 'rejected', code: 'session_input_target_update_required' } };
   }
   const replyAdmission = replyIntent ? { ...replyIntent,
-    ...(protectedAdmission?.request.v === 1 && protectedAdmission.request.discussionAddressing
+    ...(protectedAdmission?.request.discussionAddressing
       ? { discussion: protectedAdmission.request.discussionAddressing } : {}),
+    ...(protectedAdmission?.request.v === 2 && protectedAdmission.request.discussionAddressing
+      ? { workflow: protectedAdmission.request.workflow } : {}),
     ...(protectedAdmission?.request.actionRequestAttributionV1
       ? { actionRequestAttributionV1: protectedAdmission.request.actionRequestAttributionV1 } : {}),
     ...(protectedAdmission?.request.sourceSession ? { sourceSession: protectedAdmission.request.sourceSession } : {}) } : undefined;
   // Completed returns carry an actual protected sender without inventing a live
   // causal turn. Display-only answer attribution never selects receiver policy.
   const senderSessionId = protectedAdmission ? readSessionInputSenderSessionIdV1(protectedAdmission.request) : undefined;
-  const discussionAddressing = protectedAdmission?.request.v === 1 ? protectedAdmission.request.discussionAddressing : undefined;
+  const discussionAddressing = protectedAdmission?.request.discussionAddressing;
   let receiverPolicyAvailable = true;
   if (senderSessionId || discussionAddressing) {
     const scopes = await readSessionDeliveryMutedScopes({

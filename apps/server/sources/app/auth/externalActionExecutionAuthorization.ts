@@ -686,6 +686,11 @@ function isDocDecisionPreparationEffect(rootActionId: string, effectActionId: st
     return rootActionId === 'doc.edit.accept' && (effectActionId === 'discussion.read' || effectActionId === 'artifact.get');
 }
 
+/** Run admission opens its committed C3 question through the installed requester codec. */
+function isWorkflowDiscussionPreparationEffect(rootActionId: string, effectActionId: string): boolean {
+    return rootActionId === 'workflow.run.start' && effectActionId === 'discussion.read';
+}
+
 async function verifyCommon(
     proof: ExternalActionExecutionRequestProof,
 ): Promise<VerifiedExternalActionExecutionRequest | null> {
@@ -709,6 +714,7 @@ async function verifyCommon(
                 && !isDocDiscussionEffect(binding.actionId, effectActionId.data)
                 && !isDocReadEffect(binding.actionId, effectActionId.data)
                 && !isSecondOpinionEffect(binding.actionId, effectActionId.data)
+                && !isWorkflowDiscussionPreparationEffect(binding.actionId, effectActionId.data)
                 && !isDocDecisionPreparationEffect(binding.actionId, effectActionId.data))) return null;
     if (binding.serverIdentityId !== await getOrCreateServerIdentityId()) return null;
     const currentnessBody = ExternalActionExecutionAuthorizationVerifyRequestV1Schema.safeParse(proof.body);
@@ -1061,7 +1067,8 @@ function isDiscussionActionHttpPreparation(verified: VerifiedExternalActionExecu
     const docChild = isDocDiscussionEffect(verified.binding.actionId, actionId)
         || isDocDecisionPreparationEffect(verified.binding.actionId, actionId);
     if (!isDiscussionActionIdV1(actionId) || verified.binding.actionId !== actionId && !docChild
-        && !isSecondOpinionEffect(verified.binding.actionId, actionId)) return false;
+        && !isSecondOpinionEffect(verified.binding.actionId, actionId)
+        && !isWorkflowDiscussionPreparationEffect(verified.binding.actionId, actionId)) return false;
     if (actionId === 'discussion.create' && isAccountEncryptionCurrentnessHttpRead(proof)) {
         return proof.routeInput === undefined || sameManagedInput(proof.routeInput, {});
     }
@@ -1389,6 +1396,14 @@ function isSessionStateFieldActionHttpPurpose(verified: VerifiedExternalActionEx
 /** The Run Action owner spends its storage phases without acquiring a worker claim. */
 function isWorkflowRunActionHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
     proof: ExternalActionExecutionRequestProof): boolean {
+    if (isWorkflowDiscussionPreparationEffect(verified.binding.actionId, verified.effectActionId)) {
+        // Home retains the root envelope digest. Its installed host signs the
+        // exact derived read; C3 still owns grants, current keys and disclosure.
+        return proof.method.toUpperCase() === 'GET' && proof.body === undefined
+            && (isAccountActionHttpOperation('discussion.read', proof)
+                || isDiscussionActionHttpPreparation(verified, proof)
+                || proof.path === '/v1/features/authenticated');
+    }
     const reads = ['get', 'run-key.census', 'run-key.commit'];
     const invocationReads = [...reads, 'invocations.list', 'invocations.get', 'invocations.current'];
     const purposes: Readonly<Record<string, readonly string[]>> = {

@@ -220,7 +220,8 @@ function buildInputSettlementValidation(
         ...(request.v === 1 && request.automation ? { automation: request.automation } : {}),
         ...(request.replyIntent ? { reply: { mode: request.replyIntent.mode,
             ...(request.replyIntent.humanOrigin ? { humanOrigin: request.replyIntent.humanOrigin } : {}),
-            ...(request.v === 1 && request.discussionAddressing ? { discussion: request.discussionAddressing } : {}),
+            ...(request.discussionAddressing ? { discussion: request.discussionAddressing } : {}),
+            ...(request.v === 2 && request.discussionAddressing ? { workflow: request.workflow } : {}),
             ...(request.actionRequestAttributionV1 ? { actionRequestAttributionV1: request.actionRequestAttributionV1 } : {}),
             ...(request.sourceSession ? { sourceSession: request.sourceSession } : {}) } } : {}),
         ...(request.v === 1 && request.returnedAnswer ? { returnedAnswer: request.returnedAnswer } : {}),
@@ -319,7 +320,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     }
 
     const senderSessionId = readSessionInputSenderSessionIdV1(request);
-    const discussionAddressing = request.v === 1 ? request.discussionAddressing : undefined;
+    const discussionAddressing = request.discussionAddressing;
     if (senderSessionId || discussionAddressing) {
         const scopes = await readSessionDeliveryMutedScopes({
             receiver: { kind: 'session', sessionId: params.sessionId }, token: params.token,
@@ -1294,7 +1295,7 @@ export function createSessionClientInteractionApi(
             const crypto = deps.getStoredContentCryptoContext();
             const payload = readPendingStoredPayload(message, crypto);
             const request = readSessionInputRequest(payload?.meta, 'stored');
-            const originalAddress = request?.v === 1 ? request.discussionAddressing : undefined;
+            const originalAddress = request?.discussionAddressing;
             const address = input.discussionAddressing;
             if (!originalAddress || originalAddress.discussionId !== address.discussionId
                 || originalAddress.messageId !== address.messageId || originalAddress.throughSeq !== address.throughSeq

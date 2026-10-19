@@ -230,7 +230,7 @@ export function registerSessionClientRuntimeHandlers(
             serverUrl: params.serverUrl, session: params.session, readOwnerAccountCredentials: params.readOwnerAccountCredentials,
             isApprovalExecutionOriginCurrent: args => isApprovalExecutionOriginCurrent(args),
             executeSourceAction: async (actionId, input, context) => {
-                if (actionId !== 'session.transcript.get' && actionId !== 'doc.read') {
+                if (actionId !== 'session.transcript.get' && actionId !== 'doc.read' && actionId !== 'workflow.run.invocations.get') {
                     return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
                 }
                 const credentialed = await resolveCredentialedRoleParams(context.signal);
