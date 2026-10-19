@@ -74,6 +74,48 @@ An existing same-concept split-brain in the touched corridor must be consolidate
 
 Before adding dual writers, parallel persisted formats, rollout modes, operator flags, socket-drain protocols, or a mandatory client floor, compare their lifetime cost with the actual user behavior required. If preserving old-client/new-server behavior for a major change would require substantial machinery, stop and obtain an explicit developer/product decision among: operation-scoped degradation, a documented client update requirement, or the heavier compatibility transition. An agent must not silently choose either forced upgrades or heavy compatibility machinery. This exception is for genuinely incompatible, high-cost transitions; routine server changes must remain compatible and must not manufacture client-update requirements.
 
+### Autonomous exchange Turn-begin witness (0.3 development)
+
+The new optional `startingInputId` on a Session `begin` mutation identifies the
+host-correlated accepted input that caused that exact native Turn start. It is
+sent only when the current Home advertises `sessions.autonomousExchange` as
+enabled; ordinary human Turn mutations keep their previous wire shape. An
+older Home's strict Turn-mutation reader rejects unknown fields, so a current
+CLI must hold a countable autonomous effect before provider dispatch when the
+bit is missing or malformed, rather than omit the witness and run uncounted.
+The current Home accepts older clients' witness-free begins without inferring
+an input cause or counting them. The moving `../0.2` predecessor inspected at
+`40f515ff4bfe55b839e2dc585292f960164ee1e9` has a strict `begin` schema
+without this field; the relevant predecessor paths were clean at inspection.
+
+### Question-wait primary turns (0.3 development)
+
+An authored wait-mode question ends its exact primary Turn as `waiting`, not
+completed or cancelled. This refines the existing, unshipped cumulative
+stored-content V4 declaration; it adds no version, header or minimum client
+floor. Current Homes already advertise V4 as their current supported wire
+version while retaining the existing V2 minimum for incumbent operations.
+Before publishing a wait-mode question or ending its native Turn, the question
+owner requires that existing advertised wire version to be V4 or newer. An
+older or unknown Home returns `question_turn_yield_unavailable`; continue-mode
+and ordinary native questions keep their existing paths. This is operation
+wire admission, not a new feature flag or connection-wide update requirement.
+
+The CLI reader at `cli-v0.2.16` and `cli-v0.2.16-preview.1` (both
+`b8d1c449c46ab4dfa8637db36b66f643d149e66d`) strictly parses the four-state
+primary-Turn union. For peers below V4, the server's canonical compatibility
+projection withholds waiting history rows and projects the current status as
+unknown, without sending a ready or cancelled result. External-message cursor
+settlement still treats waiting as unresolved input; withholding an unknown
+history row cannot advance that cursor past it. V4 peers retain the typed state.
+Older UI reconciliation can retain historical readiness, so this projection
+preserves readable transport rather than promising V4 waiting UX on older apps.
+
+The moving `../0.2` predecessor was rechecked at
+`f16a3759a3944bc4be4bbb7e14a3e6a01397f7b5`; its relevant schema and HTTP reader
+paths were clean. The [runtime owner](runtime-core.md) owns waiting semantics;
+this adapter only translates reader shapes.
+
 ### Retained skill bundles (0.3 development)
 
 The inspected 0.2 predecessor at `82f2997875dd45b0af68bbee2763d095aaa87505`
@@ -183,8 +225,8 @@ old processes disappear. This integration is unreleased and still under validati
 
 ### Pending reset starts (0.3 development)
 
-Activation failure diagnostics keep the predecessor's closed failure POST body
-and activation authorization envelope unchanged. The optional, strictly decoded
+Runtime failure diagnostics keep the predecessor's closed failure POST fields
+and activation authorization fields unchanged. The optional, strictly decoded
 `failureDetails` query carries only closed diagnostic codes; a predecessor
 without that query reader ignores it and still performs the exact failure CAS.
 Current Session reads expose those facts as the separate additive
@@ -198,6 +240,18 @@ recognizes only the scalar failure code and cannot project these new writes.
 The current reader preserves 0.2-created scalar failure state. This does not
 promise predecessor-server coexistence or downgrade; old-client reads of the
 unchanged authorization envelope are a separate direction.
+
+Managed accepted-input Start failures use that same failure-code field with the
+closed development vocabulary `managed_start_refused`, `managed_start_denied`,
+`managed_start_expired`, and `managed_start_failed`. The installed controller
+reports through the existing signed activation-failure route even when Ask
+settles before native admission. The pending owner compares the original input
+and `requestedAt`, retains its queued content, and publishes the failed state;
+an explicit retry rearms the same input with a newer timestamp. Native or approval
+error prose is not persisted in this field. Unknown codes are omitted by stored
+readers, and the current reader still accepts predecessor `runtime_start_failed`.
+This extends unreleased managed-wake contracts; it adds no migration, reverse
+0.2 writer, or promise that a predecessor understands managed wake.
 
 The existing Pending Input numeric protocol revision 4 advertises the new
 identity-bound `reset_start` arm, installed Machine release, and source-filtered
@@ -642,7 +696,43 @@ states remain valid and supply no count. New daemons reconstruct their projectio
 from the current inventory and republish through the existing Machine lifecycle,
 without a persisted format migration or a parallel count writer.
 
+### Plain Machine and credential predecessors (0.3 development)
+
+The moving 0.2 predecessor writes plain Machine metadata/state as base64 JSON
+`{t:'plain',v}` and the existing data-key carrier as base64 `{t:'plain',v:null}`.
+Current 0.3 readers recognize that carrier as plain without a Machine database
+mode column. Retained encrypted predecessor Machines on an already-plain Account
+stay locked until the old key holder performs the existing whole-content
+conversion described in [encryption.md](encryption.md). Neither case generates
+replacement Account encryption material.
+
+The canonical CLI credential reader accepts 0.2's explicit
+`{token,encryption:null}` and its genuine legacy/data-key shapes; current 0.3
+plain writes may omit `encryption`. Historical custody survives ordinary
+same-Account refresh, while active provisioning follows authenticated Account
+currentness. The all-component upgrade requires a fresh terminal/QR pairing link
+for an in-flight predecessor request; it does not preserve the predecessor's
+reader-negotiation decisions. The 0.2 Account-link QR carries the recipient public
+key and reader support bit; its recipient secret exists only in the mounted
+Restore QR view. A saved image of that link is therefore an in-flight pairing
+request, not a recovery-key backup. Its additional applied auth-reader migration history
+is retained by the existing SQLite deploy owner rather than copied into a second
+0.3 pairing authority.
+
 ### Machine resources and Storage (0.3 development)
+
+The transient V1 resource summary preserves the sampler's optional
+`memory.pressureSource` (`kernel_level`, `psi`, `events`, or `none`). Its memory
+presentation object is additive-open/drop: readers accept omission without
+inferring a source, drop unknown presentation fields, and strictly validate
+known fields. The summary envelope, other metric objects and series points
+remain closed. The shared summary strip and full Memory tile use the same
+localized provenance wording; samples and this value projection are not
+published in `daemonState.resources`. This refines an unreleased 0.3 read
+projection without changing its V1 epoch or package version. The inspected
+0.2 predecessor at `1ad2f24eaa24a217d631dbdb5691ead73407f7da` has no resource
+summary or vitals module in the corresponding Protocol paths; no predecessor
+writer or reverse compatibility adapter is introduced.
 
 Storage is a new Machine RPC V1 epoch, independent of package SemVer. Current
 contracts live in [`storageV1`](../packages/protocol/src/storage/storageV1.ts),
@@ -1800,6 +1890,34 @@ therefore cannot replace the newer removal result in the shared UI store.
 
 ### Workflow Session input admission (development)
 
+Typed Session inputs confer no authority by themselves. Current admission records
+per-leaf `sessionAuthorityBindings` only after exact target resolution and the
+starting principal's current Session-corpus check. Session-authored direct and
+trigger starts retain their own/led restrictions; person-authorized starts use
+that person's current access. A matching retry after a lost start response
+returns the existing Run receipt (`admission: 'existing'`) after checking that
+the accepted authorization is still current; it does not re-run target
+admission or widen the retained witnesses. Every effect that uses a target
+re-checks current Session access at execution time. Runtime Actions resolve the existing run/logical-invocation/attempt
+correspondence against the accepted leaf and its exact lexical frame, so one
+child's target never becomes another child's authority.
+
+The signed ReviewComment principal carries that invocation's `workflowScope` to
+Home. The scope, its addresses and its invocation identity are closed objects
+covered by the existing Machine-installation signature. Home checks the Run's
+assigned host, invocation slot and current Session access again. A snapshot or
+principal without the new witness cannot extend origin-only authority. These
+undeployed 0.3 producers and strict consumers move together; an older consumer
+rejects the extended header rather than granting broader authority. No schema
+migration, reverse writer or older-development compatibility mode is added.
+
+Input/item-bound Agent engines and their finite accepted `engineBindings` are
+closed development Workflow declarations and private snapshot content. Unknown
+engine fields or choices outside the admitted roster refuse before execution.
+They use the current 0.3 direct cut; no predecessor reader or reverse writer is
+added for these undeployed managed Workflow shapes. Native Workflow activity in
+0.2 remains a separate contract.
+
 The current daemon may return a strict `launch_retired` detail with
 `SPAWN_FAILED` after its startup owner verifies process exit and custody cleanup.
 The Workflow Session creator accepts it only for the requested spawn nonce, then
@@ -2720,6 +2838,14 @@ at `37a6541578749067b49d4579be8c752c9591b8c8`: only `forkRequest`,
 `setupReview`, `observation`, and failure `details`; it never rewrites retained
 custody, state, revisions, or revision notifications.
 
+Managed controller failures in the current development V2 read retain a strict
+`managedControllerRequest` diagnostic: the static request path, failure category,
+observed HTTP status when available, and safe machine-readable code when supplied.
+The controller request owner validates responses before returning them; enrollment
+and Action execution preserve that observation through the terminal operation.
+Response bodies, messages, headers, credentials and schema issue values are never
+part of this diagnostic. V1 continues projecting only `errorCode` and `error`.
+
 Current Actions, Workflow observation/recovery, UI reconciliation, command output,
 and prepared-copy completion use the existing V2 list/get methods so they retain
 those richer facts. Stop uses the unchanged V1 cancel method. This is a bounded
@@ -2727,6 +2853,14 @@ read-epoch projection, not a second operation owner, parser, or promise of mixed
 0.2/0.3 stack support. Remove it only when the original V1 reader contract is
 explicitly retired; unrelated operations and retained operation results are
 unchanged.
+
+While the shared Action executor holds a blocking Ask, current operation progress
+uses `waiting_for_approval` and carries the existing `approval_request_created`
+reference in `progress.approval`. The reference identifies the Inbox Ask; it grants
+no decision authority and contains no Action inputs. All wait exits clear it before
+the domain owner continues or settles. V1 retains the phase and label but omits the
+reference through its existing progress projection. This is development-only V2
+observation data; the snapshot and nested reference remain closed schemas.
 
 V2 get separates snapshot reconciliation from `refreshSetupReview: true`, which
 awaits the retained producer's current setup effect before a human consent
@@ -3139,3 +3273,16 @@ For `main`, shared, staging, production, external, another checkout's/named QA s
 That reconciliation is an operator/development action, not a shipped compatibility path. Do not add runtime checksum exceptions, migration-name aliases, duplicate no-op migrations, or automatic ledger repair merely to preserve unpublished development history.
 
 Keep PostgreSQL, SQLite, and MySQL migrations aligned by intent. Before publication, validate both a clean migration from the published baseline and the executed repo-local reconciliation path when affected; use the approved reconciliation path for other retained databases. After publication, preserve the exact migration history and test upgrades append-only.
+
+### Unistyles native bindings (development)
+
+The development UI upgrades Unistyles from 3.2.4 to 3.5.3 and Nitro Modules
+from 0.35.6 to 0.37.1. Non-publicdev lanes use the new `0.3.1-native`
+runtime train, so this JavaScript cannot be delivered to binaries containing
+the previous bindings on `0.3.0-native`. Publicdev retains Expo's fingerprint
+policy. Rebuild the native development client after installing these dependencies;
+a Metro reload alone cannot update the native bindings. Publish the matching
+native build before publishing an OTA update for this train.
+React Native's CocoaPods post-install owner marks glog's namespace-fragment
+headers textual, so Swift can import Nitro's public Fabric headers without
+Clang attempting a submodule import inside `namespace google`.
