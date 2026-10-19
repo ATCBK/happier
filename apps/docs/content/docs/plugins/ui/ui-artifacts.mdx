@@ -33,7 +33,6 @@ react-native-reanimated
 @happier-dev/plugin-ui/components
 @happier-dev/plugin-ui/hostApi
 @happier-dev/plugin-ui/data
-@happier-dev/plugin-ui/presentation
 @happier-dev/plugin-ui/declarative
 @happier-dev/plugin-ui/environment
 @happier-dev/plugin-ui/advanced
@@ -117,9 +116,10 @@ invented installed-plugin identity are needed.
 Reuse public `@happier-dev/plugin-ui/components` components, including
 `StackedSeriesChart`, for trusted native presentation, and
 `@happier-dev/plugin-ui/declarative` for the shared declarative rendering
-contract. Multi-series **declarative** authoring remains pending the widgets
-platform contract; the public chart component does not authorize inventing a
-second document schema. Live Usage widgets consume ordinary Resources and the
+contract. In 0.3 development source, multi-series declarative charts use neutral
+long rows with typed `x`, `series` and `value` fields; `bar`, `area` and `line`
+styles share that chart renderer. Use the SDK document producer to validate the
+document. Live Usage widgets consume ordinary Resources and the
 platform's declared input bindings, not copied query implementations.
 
 See [Session visuals](/sessions/session-board#session-visuals-in-development),
