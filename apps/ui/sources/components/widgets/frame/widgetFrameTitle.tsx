@@ -17,19 +17,25 @@ export function readWidgetInstanceName(instance: WidgetInstanceV1, candidate: Re
 }
 
 /**
- * The same name, and for a widget of an installed plugin that has no name of its own yet, the plugin's own
- * name while the plugin is known to the app: a card whose surface cannot mount here is still named by
- * what it belongs to, never by a placeholder word.
+ * The header title of a widget card, for every host (Home, WorkBoard): its name when one is known (its own, its
+ * definition's, or for an unnamed installed widget the plugin's own name while the plugin is known to the app);
+ * a skeleton line while the name is still on its way (an Artifact definition loading, or the plugin projection not
+ * current yet); and, once that has settled with no name, the generic kind word. A card whose surface cannot mount
+ * here is thus named by what it belongs to or by its kind, never by a placeholder or a loading line that never ends.
  */
-export function useWidgetInstanceName(instance: WidgetInstanceV1, candidate: Readonly<{ title: string }> | null | undefined): string | null {
-    const installed = useAppShellPluginUiProjection().pluginUiProjection?.installedPackagesById;
+export function useWidgetFrameTitle(instance: WidgetInstanceV1, candidate: Readonly<{ title: string }> | null | undefined): React.ReactNode {
+    const { pluginUiProjection, phase } = useAppShellPluginUiProjection();
     const own = readWidgetInstanceName(instance, candidate);
-    if (own !== null || instance.definition.kind !== 'installed') return own;
-    return installed?.[instance.definition.surface.pluginId]?.displayName.trim() || null;
+    const installedName = own === null && instance.definition.kind === 'installed'
+        ? pluginUiProjection?.installedPackagesById[instance.definition.surface.pluginId]?.displayName.trim() || null
+        : null;
+    const name = own ?? installedName;
+    if (name !== null) return name;
+    return instance.definition.kind === 'artifact' || phase !== 'current' ? <WidgetFrameTitleSkeleton /> : t('boards.widgets.kind');
 }
 
 /** The header's title line while the name is not known yet: it keeps the title's room, so arrival moves nothing. */
-export function WidgetFrameTitleSkeleton(): React.ReactElement {
+function WidgetFrameTitleSkeleton(): React.ReactElement {
     const { theme } = useUnistyles();
     const reducedMotion = useReducedMotionPreference();
     return (
