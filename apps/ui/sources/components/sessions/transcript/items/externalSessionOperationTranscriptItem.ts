@@ -14,8 +14,8 @@ export type ExternalSessionOperationTranscriptDismissal = Readonly<{
     revision: number;
 }>;
 
-export function appendExternalSessionOperationTranscriptItem(
-    base: readonly ChatTranscriptListItem[],
+export function appendExternalSessionOperationTranscriptItem<Base extends readonly ChatTranscriptListItem[]>(
+    base: Base,
     operation: Readonly<{
         presentation: ExternalSessionOperationSharedPresentationV1 | null;
         progress: ExternalSessionOperationProgressV1 | null;
@@ -24,8 +24,8 @@ export function appendExternalSessionOperationTranscriptItem(
         sessionId: string;
         dismissed: ExternalSessionOperationTranscriptDismissal | null;
     }>,
-): ChatTranscriptListItem[] {
-    if (!operation.presentation) return [...base];
+): Base | ChatTranscriptListItem[] {
+    if (!operation.presentation) return base;
     const progress = (
         operation.progress
         && matchesExternalSessionOperationPresentation(
@@ -42,7 +42,7 @@ export function appendExternalSessionOperationTranscriptItem(
         && presentation.dismissed.operationId === operation.presentation.operationId
         && presentation.dismissed.revision === operation.presentation.revision
     ) {
-        return [...base];
+        return base;
     }
     return [...base, {
         kind: 'external-session-operation',

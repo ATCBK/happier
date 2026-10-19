@@ -1,140 +1,148 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { createSessionFixture, createSessionMessagesFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
+import { storage } from '@/sync/domains/state/storageStore';
 import type { AgentTextMessage } from "@happier-dev/session-core/messages";
-import { installTranscriptCommonModuleMocks, resetTranscriptCommonModuleMockState } from './transcriptTestHelpers';
+import { AppSessionTranscriptSourceProvider } from './source/appSessionTranscriptSource';
+import { readSessionMessagesSnapshot } from '@/sync/store/sessionMessagesSnapshot';
+import { isEnrichedMarkdownRuntimePreloaded } from '@/components/markdown/enriched/preloadEnrichedMarkdownRuntime';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
+    return (await import('@/dev/testkit/mocks/legendList')).createCapturingLegendListMock({ original }).module;
+});
 
-// The Legend renderer (default transcript renderer) schedules landing verification through
-// requestAnimationFrame; this suite's bare environment does not provide one.
-if (typeof (globalThis as any).requestAnimationFrame !== 'function') {
-    (globalThis as any).requestAnimationFrame = (callback: (time: number) => void) => (
-        setTimeout(() => callback(Date.now()), 0) as unknown as number
+// The installed SDK is the boundary; preload dedupe, readiness and retry stay real.
+const preloadMarkdownRuntimeSpy = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('react-native-enriched-markdown', async (importOriginal) => ({
+    ...await importOriginal<typeof import('react-native-enriched-markdown')>(),
+    preloadMarkdownRuntime: preloadMarkdownRuntimeSpy,
+}));
+
+const { ChatList } = await import('./ChatList');
+const cachedMessage: AgentTextMessage = {
+    kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'hello',
+};
+let home: Awaited<ReturnType<typeof serveSessionActionHome>>;
+let previousState = storage.getState();
+
+beforeEach(async () => {
+    previousState = storage.getState();
+    home = await serveSessionActionHome();
+    const session = createSessionFixture({ id: 'session-1', serverId: home.serverId, active: true });
+    storage.setState({
+        sessions: { [session.id]: session },
+        sessionMessages: { [session.id]: createSessionMessagesFixture({
+            messageIdsOldestFirst: [cachedMessage.id], messagesById: { [cachedMessage.id]: cachedMessage }, isLoaded: true,
+        }) },
+        settings: { ...storage.getState().settings, transcriptGroupingMode: 'linear', transcriptGroupToolCalls: false },
+    });
+    const transcript = storage.getState().sessionMessages[session.id]!;
+    // The real ordered-snapshot reader owns SWR continuity. Model the prior
+    // loaded reader, rather than manufacturing its cached array in a hook mock.
+    readSessionMessagesSnapshot(session.id, transcript.messageIdsOldestFirst,
+        transcript.messagesById, transcript.messagesVersion, transcript.isLoaded);
+    preloadMarkdownRuntimeSpy.mockClear();
+});
+
+afterEach(async () => {
+    await standardCleanup();
+    await home.dispose();
+    storage.setState(previousState, true);
+});
+
+function renderTranscript() {
+    const session = storage.getState().sessions['session-1']!;
+    return renderScreen(
+        <AppSessionTranscriptSourceProvider sessionId={session.id} serverId={home.serverId}>
+            <ChatList session={session} sessionSurfaceKey={JSON.stringify([home.serverId, session.id])} />
+        </AppSessionTranscriptSourceProvider>,
     );
-    (globalThis as any).cancelAnimationFrame = (handle: number) => {
-        clearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
-    };
 }
 
-const buildChatListItemsCachedSpy = vi.hoisted(() => vi.fn((_args: unknown) => ({ cache: null, items: [] })));
-const preloadEnrichedMarkdownRuntimeSpy = vi.hoisted(() => vi.fn(() => Promise.resolve()));
-
-vi.mock('@/components/sessions/chatListItems', () => ({
-    buildChatListItems: () => [],
-    buildChatListItemsCached: (args: unknown) => buildChatListItemsCachedSpy(args),
-}));
-
-vi.mock('@/components/markdown/enriched/preloadEnrichedMarkdownRuntime', () => ({
-    preloadEnrichedMarkdownRuntime: preloadEnrichedMarkdownRuntimeSpy,
-    isEnrichedMarkdownRuntimePreloaded: () => true,
-    useEnrichedMarkdownRuntimeStatus: () => 'ready',
-}));
-
-vi.mock('react-native-safe-area-context', () => ({
-    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
-}));
-
-function installSwrFallbackMocks(params: { transcriptLoaded: boolean }) {
-    installTranscriptCommonModuleMocks({
-        reactNative: async () => {
-            const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-            return createReactNativeWebMock();
-        },
-        storage: async () => {
-            const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-
-            const cachedMessage: AgentTextMessage = {
-                kind: 'agent-text',
-                id: 'm1',
-                localId: null,
-                createdAt: 1,
-                text: 'hello',
-            };
-
-            return createStorageModuleStub({
-                useSession: () => null,
-                useSessionTranscriptIds: () => ({ ids: [], isLoaded: params.transcriptLoaded }),
-                useSessionMessagesById: () => ({}),
-                useSessionMessages: () => ({ messages: [cachedMessage], isLoaded: params.transcriptLoaded }),
-                useForkedTranscriptSnapshot: () => null,
-                useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: false }),
-                useSessionActionDrafts: () => ([]),
-                useSessionLatestThinkingMessageId: () => null,
-                useSessionLatestThinkingMessageActivityAtMs: () => null,
-                useMessage: () => null,
-                useSetting: (key: string) => {
-                    if (key === 'transcriptGroupingMode') return 'linear';
-                    if (key === 'transcriptGroupToolCalls') return false;
-                    if (key === 'transcriptTurnToolCallsGroupStrategy') return 'consecutive_tools';
-                    if (key === 'toolViewTimelineChromeMode') return 'activity_feed';
-                    return null;
-                },
-            });
-        },
-    });
+function expectCachedRow(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    expect(screen.findByType('LegendList').props.data).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'message', messageId: cachedMessage.id }),
+    ]));
+    expect(screen.getTextContent()).toContain(cachedMessage.text);
 }
 
 describe('ChatList (SWR fallback)', () => {
-    afterEach(() => {
-        resetTranscriptCommonModuleMockState();
-        buildChatListItemsCachedSpy.mockClear();
-        preloadEnrichedMarkdownRuntimeSpy.mockClear();
-        vi.resetModules();
-    });
 
-    it('preloads the enriched markdown runtime when the transcript mounts', async () => {
-        installSwrFallbackMocks({ transcriptLoaded: false });
-        const { ChatList } = await import('./ChatList');
-
-        const session = {
-            id: 'session-1',
-            metadata: null,
-            accessLevel: null,
-            canApprovePermissions: true,
-        } as any;
-
-        await renderScreen(<ChatList session={session} sessionSurfaceKey={JSON.stringify(['test-server', 'session-1'])} />);
-
-        expect(preloadEnrichedMarkdownRuntimeSpy).toHaveBeenCalledOnce();
+    it('preloads the SDK on an empty transcript mount before a Markdown row can request it', async () => {
+        storage.getState().evictSessionMessages('session-1');
+        storage.setState({ sessionMessages: { 'session-1': createSessionMessagesFixture({ isLoaded: true }) } });
+        expect(isEnrichedMarkdownRuntimePreloaded()).toBe(false);
+        await renderTranscript();
+        await vi.waitFor(() => {
+            expect(preloadMarkdownRuntimeSpy).toHaveBeenCalledOnce();
+            expect(isEnrichedMarkdownRuntimePreloaded()).toBe(true);
+        });
     });
 
     it('uses the SWR messages array when transcript ids are empty during a refresh', async () => {
-        installSwrFallbackMocks({ transcriptLoaded: false });
-        const { ChatList } = await import('./ChatList');
-
-        const session = {
-            id: 'session-1',
-            metadata: null,
-            accessLevel: null,
-            canApprovePermissions: true,
-        } as any;
-
-        await renderScreen(<ChatList session={session} sessionSurfaceKey={JSON.stringify(['test-server', 'session-1'])} />);
-
-        expect(buildChatListItemsCachedSpy).toHaveBeenCalled();
-        const call = (buildChatListItemsCachedSpy.mock.calls[0] as any)?.[0];
-        expect(call?.messageIdsOldestFirst).toEqual(['m1']);
-        expect(call?.messagesById?.m1).toMatchObject({ id: 'm1', kind: 'agent-text' });
+        const screen = await renderTranscript();
+        expectCachedRow(screen);
+        await act(async () => {
+            storage.setState({ sessionMessages: { 'session-1': createSessionMessagesFixture({ isLoaded: false }) } });
+        });
+        expectCachedRow(screen);
     });
 
-    it('uses the SWR messages array when transcript ids are empty but the transcript is incorrectly marked loaded', async () => {
-        installSwrFallbackMocks({ transcriptLoaded: true });
-        const { ChatList } = await import('./ChatList');
+    it('uses retained messages when transcript ids are empty but the transcript is marked loaded', async () => {
+        storage.setState({ sessionMessages: { 'session-1': createSessionMessagesFixture({
+            messagesById: { [cachedMessage.id]: cachedMessage }, isLoaded: true,
+        }) } });
+        const screen = await renderTranscript();
+        expectCachedRow(screen);
+    });
 
-        const session = {
-            id: 'session-1',
-            metadata: null,
-            accessLevel: null,
-            canApprovePermissions: true,
-        } as any;
+    it('clears retained rows when the refresh settles with an empty transcript', async () => {
+        const screen = await renderTranscript();
+        expectCachedRow(screen);
+        await act(async () => {
+            storage.setState({ sessionMessages: { 'session-1': createSessionMessagesFixture({ isLoaded: false }) } });
+        });
+        expectCachedRow(screen);
+        await act(async () => {
+            storage.setState({ sessionMessages: { 'session-1': createSessionMessagesFixture({ isLoaded: true }) } });
+        });
+        expect(screen.findByType('LegendList').props.data).not.toEqual(expect.arrayContaining([
+            expect.objectContaining({ kind: 'message', messageId: cachedMessage.id }),
+        ]));
+        expect(screen.getTextContent()).not.toContain(cachedMessage.text);
+    });
 
-        await renderScreen(<ChatList session={session} sessionSurfaceKey={JSON.stringify(['test-server', 'session-1'])} />);
-
-        expect(buildChatListItemsCachedSpy).toHaveBeenCalled();
-        const call = (buildChatListItemsCachedSpy.mock.calls[0] as any)?.[0];
-        expect(call?.messageIdsOldestFirst).toEqual(['m1']);
-        expect(call?.messagesById?.m1).toMatchObject({ id: 'm1', kind: 'agent-text' });
+    it('retires retained content on an Account switch and displays the new Account\'s messages', async () => {
+        const screen = await renderTranscript();
+        expectCachedRow(screen);
+        await act(async () => {
+            await home.switchAccount('session', 'next-account');
+            storage.setState({
+                sessions: { 'session-1': createSessionFixture({ id: 'session-1', serverId: home.serverId, active: true }) },
+                sessionMessages: { 'session-1': createSessionMessagesFixture({ isLoaded: false }) },
+            });
+        });
+        expect(screen.findByType('LegendList').props.data).not.toEqual(expect.arrayContaining([
+            expect.objectContaining({ kind: 'message', messageId: cachedMessage.id }),
+        ]));
+        expect(screen.getTextContent()).not.toContain(cachedMessage.text);
+        const replacement: AgentTextMessage = { ...cachedMessage, id: 'next-message', text: 'replacement answer' };
+        await act(async () => {
+            storage.setState({ sessionMessages: { 'session-1': createSessionMessagesFixture({
+                messageIdsOldestFirst: [replacement.id], messagesById: { [replacement.id]: replacement }, isLoaded: true,
+            }) } });
+        });
+        expect(screen.getTextContent()).toContain(replacement.text);
+        expect(screen.getTextContent()).not.toContain(cachedMessage.text);
     });
 });

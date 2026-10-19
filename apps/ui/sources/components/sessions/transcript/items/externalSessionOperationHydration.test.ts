@@ -49,6 +49,17 @@ function createCompleteProgress(
 }
 
 describe('external session operation transcript hydration', () => {
+    it('retains the base identity when no operation tail is visible', () => {
+        const base = [{ kind: 'message' as const, id: 'base', messageId: 'base', createdAt: 1, seq: null }];
+        expect(appendExternalSessionOperationTranscriptItem(base, { presentation: null, progress: null })).toBe(base);
+        const presentation = ExternalSessionOperationSharedPresentationV1Schema.parse({ v: 1,
+            operationId: 'operation-1', revision: 4, kind: 'materialize', status: 'running', phase: 'validating' });
+        expect(appendExternalSessionOperationTranscriptItem(base, { presentation, progress: null }, {
+            sessionId: 'session-1', dismissed: { sessionId: 'session-1', operationId: presentation.operationId,
+                revision: presentation.revision },
+        })).toBe(base);
+    });
+
     it('projects only the strict shared presentation into the generic transcript item', () => {
         const presentation = ExternalSessionOperationSharedPresentationV1Schema.parse({
             v: 1,

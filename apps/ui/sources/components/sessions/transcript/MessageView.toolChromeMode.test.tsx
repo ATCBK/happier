@@ -7,6 +7,7 @@ import { createReducer } from "@happier-dev/session-core/reducer";
 import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
 
 let toolChromeMode: 'cards' | 'activity_feed' = 'cards';
+let pinActionEnabled = true;
 const renderedToolViewProps: any[] = [];
 const renderedToolTimelineRowProps: any[] = [];
 const routerPushSpy = vi.fn();
@@ -34,6 +35,7 @@ installMessageViewCommonModuleMocks({
             useSetting: (key: string) => {
                 if (key === 'sessionThinkingDisplayMode') return 'inline';
                 if (key === 'toolViewTimelineChromeMode') return toolChromeMode;
+                if (key === 'transcriptMessagePinActionEnabled') return pinActionEnabled;
                 return null;
             },
             useSession: () => null,
@@ -102,6 +104,7 @@ vi.mock('@/components/sessions/transcript/references/StructuredReferencesRow', (
 
 afterEach(() => {
     toolChromeMode = 'cards';
+    pinActionEnabled = true;
     renderedToolViewProps.length = 0;
     renderedToolTimelineRowProps.length = 0;
     standardCleanup();
@@ -170,8 +173,9 @@ describe('MessageView (tool timeline chrome mode)', () => {
         expect(renderedToolViewProps).toHaveLength(0);
     });
 
-    it('passes a tool pin action to the activity feed header when pinning is available', async () => {
+    it.each([true, false])('honors the Pin switch on an ordinary tool row (enabled=%s)', async (enabled) => {
         toolChromeMode = 'activity_feed';
+        pinActionEnabled = enabled;
         const onToggleToolPin = vi.fn();
         const { MessageView } = await import('./MessageView');
 
@@ -204,7 +208,8 @@ describe('MessageView (tool timeline chrome mode)', () => {
         );
 
         expect(renderedToolTimelineRowProps).toHaveLength(1);
-        expect(renderedToolTimelineRowProps[0]!.headerAction).toBeTruthy();
+        if (enabled) expect(renderedToolTimelineRowProps[0]!.headerAction).toBeTruthy();
+        else expect(renderedToolTimelineRowProps[0]!.headerAction).toBeNull();
     });
 
     it('omits the tool pin header action in read-only contexts', async () => {

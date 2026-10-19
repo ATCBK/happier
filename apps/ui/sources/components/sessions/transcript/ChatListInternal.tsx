@@ -106,8 +106,8 @@ import {
     TRANSCRIPT_EDGE_PREFETCH_MAX_PX,
     TRANSCRIPT_EDGE_PREFETCH_MIN_PX,
 } from '@/components/sessions/transcript/scroll/resolveTranscriptEdgePrefetchThresholdPx';
-import { buildChatListNativeId } from './chatListNativeId';
 import { requestSessionOpenInitialFill } from '@/components/sessions/transcript/useChatListRootState';
+import { buildChatListNativeId } from './chatListNativeId';
 import type {
     ChatListInternalProps,
     ChatTranscriptListItem,

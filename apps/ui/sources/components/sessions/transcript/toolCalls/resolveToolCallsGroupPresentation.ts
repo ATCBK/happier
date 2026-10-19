@@ -2,6 +2,7 @@ import type { ToolCallMessage } from '@happier-dev/session-core/messages';
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
 import { resolveInactiveSessionToolCallFailure } from '@/components/tools/shell/permissions/resolveInactiveSessionToolCallFailure';
 import { resolveToolStatusIndicatorKind } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
+import { projectReviewToolMessage } from '@/components/sessions/reviews/messages/projectReviewToolMessage';
 
 export type ToolCallsGroupStatus = 'running' | 'completed' | 'error' | 'permission_denied' | 'permission_canceled';
 
@@ -16,7 +17,7 @@ export function resolveToolCallsGroupStatus(params: Readonly<{
     let sawRunning = false;
     for (const message of params.toolMessages) {
         const tool = resolveInactiveSessionToolCallFailure({
-            tool: message.tool,
+            tool: projectReviewToolMessage(message).tool,
             permissionDisabledReason: params.permissionDisabledReason,
         });
         const kind = resolveToolStatusIndicatorKind(tool);

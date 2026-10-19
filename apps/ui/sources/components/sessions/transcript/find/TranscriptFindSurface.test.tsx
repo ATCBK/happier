@@ -15,6 +15,8 @@ import type { TranscriptJumpResult, TranscriptJumpTarget } from '../viewport/jum
 import { TranscriptFindSurface } from './TranscriptFindSurface';
 import { revealTranscriptFindMatch } from './revealTranscriptFindMatch';
 import { createTranscriptFindModel, type TranscriptFindCorpus } from './useTranscriptFind';
+import { buildChatListItems } from '../../chatListItems';
+import { OlderLoadRetryOverlay } from '../OlderLoadRetryOverlay';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -31,7 +33,12 @@ describe('transcript Find surface registration', () => {
         };
         // Paging and viewport scrolling are the external boundaries; source,
         // display projection, matching, reveal and registration remain real.
+        let failNextPage = true;
         const loadOlder = vi.fn(async () => {
+            if (failNextPage) {
+                failNextPage = false;
+                return { loaded: 0, hasMore: true, status: 'retryable_error' as const };
+            }
             corpus = { messages: [message('older', 1), ...corpus.messages],
                 history: { isLoaded: true, hasOlder: false, isLoadingOlder: false } };
             source.update({ messages: corpus.messages, historyState: corpus.history,
@@ -65,13 +72,21 @@ describe('transcript Find surface registration', () => {
         const viewportRef = React.createRef<React.ElementRef<typeof View>>();
         const publishCorpus = (next: TranscriptFindCorpus) => { corpus = next; };
         const measureMessage = () => null;
+        function SourceSurface({ focused }: Readonly<{ focused: boolean }>) {
+            const ids = source.useMessageIdsOldestFirst();
+            const byId = source.useMessagesById();
+            const items = React.useMemo(() => buildChatListItems({
+                messageIdsOldestFirst: ids, messagesById: byId, pendingMessages: [],
+            }), [ids, byId]);
+            return <TranscriptFindSurface model={model} source={source} sessionId="session" serverId="home"
+                focused={focused} viewportRef={viewportRef} items={items} loadedMessages={[]}
+                publishCorpus={publishCorpus} measureMessage={measureMessage} contentHeight={0}>
+                <View testID="retained-transcript" />
+            </TranscriptFindSurface>;
+        }
         const render = (eligible: boolean, focused = true) => <KeyboardShortcutContextBridge snapshot={keyboard}>
             <PluginSurfaceFocusEligibilityProvider active={eligible}>
-                <TranscriptFindSurface model={model} source={source} sessionId="session" serverId="home"
-                    focused={focused} viewportRef={viewportRef} loadedMessages={[]}
-                    publishCorpus={publishCorpus} measureMessage={measureMessage} contentHeight={0}>
-                    <View testID="retained-transcript" />
-                </TranscriptFindSurface>
+                <SourceSurface focused={focused} />
             </PluginSurfaceFocusEligibilityProvider>
         </KeyboardShortcutContextBridge>;
         const execute = (input: unknown) => executeFindAction({
@@ -121,6 +136,12 @@ describe('transcript Find surface registration', () => {
                 await execute({ op: 'step', target: 'transcript:home:session', direction: -1 });
                 await model.settled();
             });
+            expect(model.status).toMatchObject({ coverage: 'partialErrors', total: 1 });
+            expect(screen.findByTestId('transcript-find-retry')).not.toBeNull();
+            await act(async () => {
+                screen!.pressByTestId('transcript-find-retry');
+                await model.settled();
+            });
             expect(await execute({ op: 'read', target: 'transcript:home:session' })).toMatchObject({
                 result: { status: 'results', current: 1, total: 2, coverage: 'complete' },
             });
@@ -129,6 +150,58 @@ describe('transcript Find surface registration', () => {
         } finally {
             await screen?.unmount();
             release();
+            model.dispose();
+        }
+    });
+});
+
+describe('transcript older-load failure notice beside Find', () => {
+    const message: Message = { kind: 'user-text', id: 'loaded', localId: null, createdAt: 2, seq: 2, text: 'needle' };
+    const history = { isLoaded: true, hasOlder: true, isLoadingOlder: false } as const;
+    const corpus: TranscriptFindCorpus = { messages: [message], history };
+
+    async function renderFailedOlderLoad(openFind: boolean) {
+        const source = createReadOnlySessionTranscriptSource({
+            sessionId: 'session', serverId: 'home', messages: [message], reducerState: null,
+            metadata: null, agentState: null, historyState: history,
+            loadOlder: async () => ({ loaded: 0, hasMore: true, status: 'retryable_error' as const }),
+        });
+        const model = createTranscriptFindModel({
+            readCorpus: () => corpus, loadPage: null,
+            jumpToTarget: async (target) => ({ status: 'scrolled', target }),
+            reveal: async () => {},
+        });
+        if (openFind) { model.open(); model.setQuery('needle'); }
+        const retryOlder = vi.fn();
+        const viewportRef = React.createRef<React.ElementRef<typeof View>>();
+        const screen = await renderScreen(<TranscriptFindSurface model={model} source={source} sessionId="session"
+            serverId="home" focused={false} viewportRef={viewportRef} items={[]} loadedMessages={[]}
+            publishCorpus={() => {}} measureMessage={() => null} contentHeight={0}
+            olderLoadFailed onRetryOlderLoad={retryOlder}>
+            <OlderLoadRetryOverlay onRetry={retryOlder} />
+        </TranscriptFindSurface>);
+        return { screen, model, retryOlder };
+    }
+
+    it('shows one notice: the failure moves into the open Find note with the same Retry', async () => {
+        const { screen, model, retryOlder } = await renderFailedOlderLoad(true);
+        try {
+            expect(screen.findByTestId('transcript.olderLoad.failed')).toBeNull();
+            await act(async () => { screen.pressByTestId('transcript-find-older-load-retry'); });
+            expect(retryOlder).toHaveBeenCalledTimes(1);
+        } finally {
+            await screen.unmount();
+            model.dispose();
+        }
+    });
+
+    it('keeps the transcript banner when Find is closed', async () => {
+        const { screen, model } = await renderFailedOlderLoad(false);
+        try {
+            expect(screen.findByTestId('transcript.olderLoad.failed')).not.toBeNull();
+            expect(screen.findByTestId('transcript-find-older-load-retry')).toBeNull();
+        } finally {
+            await screen.unmount();
             model.dispose();
         }
     });

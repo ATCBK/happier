@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { standardCleanup } from '@/dev/testkit';
+import { findGestureByKind, type TestGestureChain } from '@/dev/testkit/mocks/gestureHandler';
 import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -72,8 +73,10 @@ vi.mock('@/utils/sessions/discardedCommittedMessages', () => ({
 }));
 
 vi.mock('expo-clipboard', () => ({
-    setStringAsync: vi.fn(),
+    setStringAsync: vi.fn(async () => true),
 }));
+vi.mock('react-native-gesture-handler', async () =>
+    (await import('@/dev/testkit/mocks/gestureHandler')).createGestureHandlerMock());
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
@@ -110,7 +113,6 @@ describe('MessageView (native inline action targets)', () => {
         'renders inline message actions on %s instead of relying on long-press dropdowns',
         async (platformOS) => {
             platformState.os = platformOS;
-            vi.resetModules();
             const { MessageView } = await import('./MessageView');
             const { renderWithSessionTranscriptSource: renderScreen } = await import('@/dev/testkit/sessionTranscriptSource');
             const { TranscriptMessageSelectionProvider } = await import('./messageSelection/TranscriptMessageSelectionContext');
@@ -161,10 +163,16 @@ describe('MessageView (native inline action targets)', () => {
             expect(selectionAnchorStyle).not.toHaveProperty('left');
             expect(selectionAnchorStyle).not.toHaveProperty('marginBottom');
 
-            const longPressables = screen.findAll(
-                (node: any) => node.type === 'Pressable' && typeof node.props?.onLongPress === 'function',
-            );
-            expect(longPressables.length).toBe(1);
+            const holds = screen.findAllByType('GestureDetector').map((node) =>
+                findGestureByKind(node.props.gesture as TestGestureChain, 'longPress')).filter((gesture) => gesture?.__config.enabled);
+            expect(holds).toHaveLength(1);
+            await act(async () => { holds[0]!.__handlers.onStart?.(); });
+            const { ContextMenu } = await import('@/components/ui/forms/dropdown/ContextMenu');
+            expect(screen.findByType(ContextMenu).props).toMatchObject({ open: true, items: expect.arrayContaining([
+                expect.objectContaining({ id: 'copy' }), expect.objectContaining({ id: 'select' }),
+            ]) });
+            // The hold uses the native recognizer without acquiring a parent JS responder.
+            expect(screen.findAll((node) => typeof node.type === 'string' && typeof node.props.onLongPress === 'function')).toHaveLength(0);
 
             const dropdowns = screen.findAllByType('DropdownMenu');
             expect(dropdowns.length).toBe(0);
@@ -178,7 +186,6 @@ describe('MessageView (native inline action targets)', () => {
         'sets transcript markdown selectability on %s to %s',
         async (platformOS, expectedSelectable) => {
             platformState.os = platformOS;
-            vi.resetModules();
             const { MessageView } = await import('./MessageView');
             const { renderWithSessionTranscriptSource: renderScreen } = await import('@/dev/testkit/sessionTranscriptSource');
             const { TranscriptMessageSelectionProvider } = await import('./messageSelection/TranscriptMessageSelectionContext');
@@ -208,7 +215,6 @@ describe('MessageView (native inline action targets)', () => {
 
     it('copies user message options on long press without submitting them', async () => {
         platformState.os = 'ios';
-        vi.resetModules();
         const Clipboard = await import('expo-clipboard');
         const { sync } = await import('@/sync/sync');
         const { MessageView } = await import('./MessageView');

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, View, type TextStyle } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { t } from '@/text';
 import { Text } from '@/components/ui/text/Text';
@@ -26,8 +26,7 @@ interface CommandViewProps {
 }
 
 /** Web keeps an unbroken token inside the line box; native Text already breaks it by character. */
-// `wordBreak` is a web-only style React Native's TextStyle does not declare (same pattern as SimpleSyntaxHighlighter).
-const LONG_TOKEN_WRAP: TextStyle = Platform.OS === 'web' ? ({ wordBreak: 'break-word' } as unknown as TextStyle) : {};
+const LONG_TOKEN_WRAP = Platform.OS === 'web' ? { wordBreak: 'break-word' as const } : {};
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {

@@ -416,6 +416,11 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     } else if (props.event.type === 'worker-report') {
         testID = 'transcript-event-worker-report';
         text = props.event.summary;
+    } else if (props.event.type === 'goal-changed') {
+        // Content-free by contract: the event says the Goal moved, never what it says now.
+        testID = 'transcript-event-goal-changed';
+        iconName = 'target';
+        text = t('message.goalChanged');
     } else if (props.event.type === 'switch') {
         iconName = 'arrows-left-right';
         text = t('message.switchedToMode', { mode: props.event.mode });

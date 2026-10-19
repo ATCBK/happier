@@ -11,7 +11,8 @@ export type MessagePinUnavailableReason =
     | 'missing-seq'
     | 'unsupported-role'
     | 'invalid-identity'
-    | 'read-only-context';
+    | 'read-only-context'
+    | 'action-disabled';
 
 /**
  * Row identity for a pin. `pinnedAtMs` is deliberately absent: stamping it while
@@ -43,6 +44,7 @@ export type MessagePinAvailabilityInput = Readonly<{
     routeMessageId: string | null | undefined;
     role: SessionMessagePinRole | string | null | undefined;
     pins?: readonly PersistedSessionMessagePinV1[];
+    pinActionEnabled?: boolean;
 }>;
 
 function normalizeSessionId(sessionId: string | null | undefined): string | null {
@@ -113,10 +115,13 @@ export function resolveMessagePinAvailability(input: MessagePinAvailabilityInput
         label: null,
     };
 
+    const pinned = (input.pins ?? []).some((existingPin) => sessionMessagePinRowsMatch(existingPin, pinTarget));
+    if (input.pinActionEnabled === false && !pinned) return { status: 'unavailable', reason: 'action-disabled' };
+
     return {
         status: 'available',
         identityKey,
         pinTarget,
-        pinned: (input.pins ?? []).some((existingPin) => sessionMessagePinRowsMatch(existingPin, pinTarget)),
+        pinned,
     };
 }

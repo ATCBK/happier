@@ -84,21 +84,21 @@ describe('renderer-owned layout/content-size observation applier', () => {
         ]);
     });
 
-    it('applies web layout facts without native entry restore', () => {
+    it.each(['web', 'ios', 'android'])('observes unchanged %s layout without committing height state again', (platformOS) => {
         const log: string[] = [];
 
         applyTranscriptLayoutObservation({
             contentHeight: 0,
             layoutHeight: 600,
             layoutHeightChanged: false,
-            platformOS: 'web',
+            platformOS,
             shouldRestoreNativeEntry: true,
         }, layoutEffects(log));
 
         expect(log).toEqual([
-            'commit-layout:600',
             'visible-window:layout-change:600:0',
             'mount-settle',
+            ...(platformOS === 'web' ? [] : ['entry-restore']),
         ]);
     });
 
@@ -134,7 +134,7 @@ describe('renderer-owned layout/content-size observation applier', () => {
         ]);
     });
 
-    it('keeps unchanged content observations observable without growth telemetry', () => {
+    it.each(['web', 'ios', 'android'])('observes unchanged %s content while preserving native deferred height synchronization', (platformOS) => {
         const log: string[] = [];
 
         applyTranscriptContentSizeObservation({
@@ -142,16 +142,18 @@ describe('renderer-owned layout/content-size observation applier', () => {
             observation: measuredObservation({
                 contentHeightChanged: false,
                 contentHeightGrew: false,
+                previousMeasuredContentHeight: 1200,
                 reason: 'content-size-change',
             }),
-            platformOS: 'web',
+            platformOS,
             shouldRestoreNativeEntry: true,
         }, contentSizeEffects(log));
 
         expect(log).toEqual([
-            'commit-content:1200',
+            ...(platformOS === 'web' ? [] : ['commit-content:1200']),
             'visible-window:content-size-change:800:1200',
             'mount-settle',
+            ...(platformOS === 'web' ? [] : ['entry-restore']),
         ]);
     });
 

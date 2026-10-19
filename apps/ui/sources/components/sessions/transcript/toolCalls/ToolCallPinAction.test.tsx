@@ -228,4 +228,17 @@ describe('resolveToolRowPinAction', () => {
             onTogglePin: () => {},
         })).toBeNull();
     });
+
+    it('honors the Pin switch while keeping an existing tool pin removable', async () => {
+        const { resolveToolRowPinAction } = await import('./ToolCallPinAction');
+        const onTogglePin = vi.fn();
+        expect(resolveToolRowPinAction({ ...rowIdentity, pinActionEnabled: false, onTogglePin })).toBeNull();
+        expect(resolveToolRowPinAction({ ...rowIdentity, pinActionEnabled: true, onTogglePin })).not.toBeNull();
+        const pin = { ...available().pinTarget, pinnedAtMs: 1000 };
+        const action = resolveToolRowPinAction({ ...rowIdentity, pinActionEnabled: false, pins: [pin], onTogglePin });
+        expect(action?.pinned).toBe(true);
+        const screen = await renderScreen(<>{action?.node}</>);
+        await screen.pressByTestId('tool-pin');
+        expect(onTogglePin).toHaveBeenCalledWith(expect.objectContaining(available().pinTarget));
+    });
 });

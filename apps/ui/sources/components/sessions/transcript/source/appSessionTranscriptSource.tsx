@@ -8,14 +8,17 @@ import { shouldReadTranscriptForPendingRequestList } from '@happier-dev/session-
 import { listPendingRequestListsFromSession, readPendingRequestFactsFromSession } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import { useSessionAwareness } from '@/sync/domains/session/awareness/useSessionAwareness';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { selectHomeQualifiedSession } from '@/sync/domains/session/selectHomeQualifiedSession';
+import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
+import { areSessionValuesDeepEqual } from '@/sync/store/domains/areStoredSessionsEqual';
 import { getForkedTranscriptSnapshotCached } from '@/sync/domains/sessionFork/forkedTranscriptSnapshot';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { sync } from '@/sync/sync';
 import {
-    getStorage, storage, useForkedTranscriptSnapshot, useMessage, useMessagesByRefs,
+    getStorage, storage, useForkedTranscriptSnapshot, useMessagesByRefs,
     readSessionMessagesSnapshot,
-    useSession, useSessionForkSupportSource, useSessionInteractionSource,
+    useSessionForkSupportSource, useSessionInteractionSource,
     useSessionMessages, useSessionMessagesById, useSessionMessagesReducerState, useSessionMessagesVersion,
     useSessionTranscriptIds, useSessionWorkspacePath, useSocketStatus,
     type MessageStoreRef,
@@ -168,6 +171,18 @@ function createAppSessionTranscriptReads(sessionId: string, serverId: string | n
     function useMessageScope(): boolean {
         return useSessionField((session) => !serverId || session !== null);
     }
+    function useSelectedMessages(ids: readonly string[]): readonly (Message | null)[] {
+        const scoped = useMessageScope();
+        const refs = React.useMemo(() => scoped ? ids.map((messageId) => ({ sessionId, messageId })) : [], [ids, scoped]);
+        const selected = useMessagesByRefs(refs);
+        // Live rows keep their revision-local subscription. Only a row absent
+        // from the live map reads the same retained snapshot as the list's ids.
+        const needsRetained = scoped && selected.some((message) => message === null);
+        const { messages } = useSessionMessages(sessionId, { enabled: needsRetained });
+        return React.useMemo(() => needsRetained
+            ? selected.map((message, index) => message ?? messages.find((candidate) => candidate.id === ids[index]) ?? null)
+            : selected, [ids, messages, needsRetained, selected]);
+    }
     return {
         useMessageIdsOldestFirst: () => {
             const scoped = useMessageScope();
@@ -187,15 +202,10 @@ function createAppSessionTranscriptReads(sessionId: string, serverId: string | n
                 ? Object.fromEntries(messages.map((message) => [message.id, message])) : byId, [byId, fork, ids, messages, scoped]);
         },
         useMessage: (id) => {
-            const scoped = useMessageScope();
-            const message = useMessage(sessionId, id);
-            return scoped ? message : null;
+            const ids = React.useMemo(() => [id], [id]);
+            return useSelectedMessages(ids)[0] ?? null;
         },
-        useMessagesByIds: (ids) => {
-            const scoped = useMessageScope();
-            const refs = React.useMemo(() => scoped ? ids.map((messageId) => ({ sessionId, messageId })) : [], [ids, scoped]);
-            return useMessagesByRefs(refs);
-        },
+        useMessagesByIds: useSelectedMessages,
         useReducerState: () => {
             const scoped = useMessageScope();
             const state = useSessionMessagesReducerState(sessionId);
@@ -207,10 +217,33 @@ function createAppSessionTranscriptReads(sessionId: string, serverId: string | n
         useForkSupportSource: () => useSessionForkSupportSource(sessionId, serverId),
         useAuthorship: () => useSessionMessageAuthorshipScope(sessionId, serverId),
         usePendingRequests: () => {
-            const session = useSession(sessionId, serverId);
-            const readTranscript = session !== null && shouldReadTranscriptForPendingRequestList(readPendingRequestFactsFromSession(session));
-            const { messages } = useSessionMessages(sessionId, { enabled: readTranscript });
-            return React.useMemo(() => session ? listPendingRequestListsFromSession(session, messages) : EMPTY_PENDING, [messages, session]);
+            const normalizedSessionId = normalizeSessionId(sessionId);
+            const activeServerId = useActiveServerSnapshot(Boolean(serverId)).serverId;
+            const selector = React.useMemo(() => {
+                let current: ReturnType<SessionTranscriptSource['usePendingRequests']> = EMPTY_PENDING;
+                let previousSession: Session | null | undefined;
+                let previousTranscript: StorageState['sessionMessages'][string] | undefined;
+                let previousReadsTranscript = false;
+                return (state: StorageState) => {
+                    const session = selectHomeQualifiedSession(state, sessionId, serverId ?? undefined, activeServerId);
+                    if (session === previousSession
+                        && (!previousReadsTranscript || state.sessionMessages[normalizedSessionId] === previousTranscript)) return current;
+                    const readTranscript = session !== null && shouldReadTranscriptForPendingRequestList(readPendingRequestFactsFromSession(session));
+                    const transcript = readTranscript ? state.sessionMessages[normalizedSessionId] : undefined;
+                    previousSession = session;
+                    previousTranscript = transcript;
+                    previousReadsTranscript = readTranscript;
+                    const messages = readTranscript ? readSessionMessagesSnapshot(
+                        normalizedSessionId, transcript?.messageIdsOldestFirst ?? EMPTY_IDS,
+                        transcript?.messagesById ?? EMPTY_MESSAGES_BY_ID,
+                        transcript?.messagesVersion ?? 0, transcript?.isLoaded ?? false,
+                    ) : EMPTY_MESSAGES;
+                    const next = session ? listPendingRequestListsFromSession(session, messages) : EMPTY_PENDING;
+                    if (!areSessionValuesDeepEqual(current, next)) current = next;
+                    return current;
+                };
+            }, [activeServerId]);
+            return getStorage()(selector);
         },
         useAwareness: () => useSessionAwareness(sessionId, serverId).awareness,
         useRuntimeLastObservedAt: () => useSessionField((session) => typeof session?.activeAt === 'number' && Number.isFinite(session.activeAt) ? session.activeAt : null),

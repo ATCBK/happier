@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 
 import { useCurrentProjectedAgentCapabilities } from '@/agents/hooks/useCurrentProjectedAgentCapabilities';
@@ -162,7 +163,11 @@ export function useTranscriptSessionCommon(): TranscriptSessionCommon {
     const accountActorViewerScope = authorship.viewerScope;
     const sessionForkSupportSource = source.useForkSupportSource();
     const workspacePath = source.useWorkspacePath();
-    const messagesById = source.useMessagesById();
+    const sourceMessagesById = source.useMessagesById();
+    // Only tool rows use this route lookup; streamed text has its own row-local reader.
+    const messagesById = useShallow((messages: Readonly<Record<string, Message>>) => Object.fromEntries(
+        Object.entries(messages).filter(([, message]) => message.kind === 'tool-call'),
+    ))(sourceMessagesById);
     const reducerState = source.useReducerState();
     // The server the fork launchers spawn the child on, resolved through the one
     // owner they already use, so the decision below is scoped to that exact

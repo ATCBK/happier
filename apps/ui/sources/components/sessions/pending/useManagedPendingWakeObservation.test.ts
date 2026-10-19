@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe('managed pending wake protected observation', () => {
-    it('reads exact Home facts, refreshes its ordinary change edge and retires without requesting native Start', async () => {
+    async function mountObservation(options: Readonly<{ readGate?: () => Promise<void> }> = {}) {
         const target = await upsertAndActivateServer({ serverUrl: 'https://wake-target.test', scope: 'tab' });
         expect((await setServerProfileIdentityForUrl(target.serverUrl, 'srv_home_a'))?.serverIdentityId).toBe('srv_home_a');
         await upsertAndActivateServer({ serverUrl: 'https://wake-focused.test', scope: 'tab' });
@@ -29,16 +29,16 @@ describe('managed pending wake protected observation', () => {
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
         const controller = { machineId: 'controller-a', installationId: 'installation-a' };
         const contribution = { pluginId: 'happier.machine.lima', localId: 'lima' };
-        let power: 'stopped' | 'running' = 'stopped';
-        const paths: string[] = [];
+        const state = { power: 'stopped' as 'stopped' | 'running', paths: [] as string[] };
         setRuntimeFetch(async (input, init) => {
             const url = new URL(String(input));
             expect(url.origin).toBe('https://wake-target.test');
             expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${token}`);
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-            paths.push(url.pathname);
+            state.paths.push(url.pathname);
             expect(JSON.parse(String(init?.body))).toEqual({ homeId: 'srv_home_a', managedId: 'managed-a' });
+            if (state.power === 'running') await options.readGate?.();
             return Response.json({
                 id: 'managed-a', homeId: 'srv_home_a', custodianAccountId: 'wake-owner',
                 launch: { provider: contribution, schemaVersion: 1, name: 'Guest', choices: {} },
@@ -46,7 +46,7 @@ describe('managed pending wake protected observation', () => {
                 controller, allocation: 'bound', creationState: 'active', enrolledMachineId: 'guest-a',
                 desired: 'start', desiredWhen: 'now', intentRevision: 1,
                 retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: true,
-                observation: { observedAt: 10, availability: 'present', power, storage: 'retained', daemon: 'disconnected' },
+                observation: { observedAt: 10, availability: 'present', power: state.power, storage: 'retained', daemon: 'disconnected' },
             });
         });
         const retirement = new AbortController();
@@ -60,16 +60,40 @@ describe('managed pending wake protected observation', () => {
             sessionId: 'session-a', reconnectSignal: 1, accountLifetime: account.accountLifetime,
             authorization,
         }));
+        return { target, state, retirement, account, hook };
+    }
+
+    it('reads exact Home facts, refreshes its ordinary change edge and retires without requesting native Start', async () => {
+        const { target, state, retirement, account, hook } = await mountObservation();
         try {
-            await vi.waitFor(() => expect(hook.getCurrent()?.observation?.power).toBe('stopped'));
-            power = 'running';
+            await vi.waitFor(() => expect(hook.getCurrent().machine?.observation?.power).toBe('stopped'));
+            state.power = 'running';
             await act(async () => publishHomeAccountChange(target.id, ['managed-a']));
             await flushHookEffects();
-            await vi.waitFor(() => expect(hook.getCurrent()?.observation?.power).toBe('running'));
+            await vi.waitFor(() => expect(hook.getCurrent().machine?.observation?.power).toBe('running'));
             await act(async () => retirement.abort());
-            expect(hook.getCurrent()).toBeNull();
-            expect(paths.every((path) => path === '/v1/machines/managed/actions/get')).toBe(true);
+            expect(hook.getCurrent()).toEqual({ kind: 'read', machine: null });
+            expect(state.paths.every((path) => path === '/v1/machines/managed/actions/get')).toBe(true);
         } finally {
+            await hook.unmount(); account.dispose();
+        }
+    });
+
+    it('keeps the last observation while a refresh is in flight, so the wake line does not fall back to unknown', async () => {
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        const { target, state, account, hook } = await mountObservation({ readGate: () => gate });
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().machine?.observation?.power).toBe('stopped'));
+            state.power = 'running';
+            await act(async () => publishHomeAccountChange(target.id, ['managed-a']));
+            await flushHookEffects();
+            // The reread is parked at the server: the incumbent observation is still the best fact.
+            expect(hook.getCurrent()).toMatchObject({ kind: 'read', machine: { observation: { power: 'stopped' } } });
+            release();
+            await vi.waitFor(() => expect(hook.getCurrent().machine?.observation?.power).toBe('running'));
+        } finally {
+            release();
             await hook.unmount(); account.dispose();
         }
     });

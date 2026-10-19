@@ -31,7 +31,7 @@ describe('Navigate session present', () => {
     it.each([
         { ...working, freshness: 'stale' as const },
         { ...working, lifecycle: 'archived' as const },
-        { ...working, runtime: 'unknown' as const },
+        { ...working, runtime: 'unknown' as const, operational: { primary: 'none' as const, reasons: [] } },
         { ...working, operational: { ...working.operational, reasons: ['resuming'] as SessionAwarenessProjectionV1['operational']['reasons'] } },
         { ...working, operational: { ...working.operational, reasons: ['runtime_unservable'] as SessionAwarenessProjectionV1['operational']['reasons'] } },
     ])('does not animate a turn whose presented state is no longer working', async (awareness) => {
@@ -40,6 +40,9 @@ describe('Navigate session present', () => {
 
     it('shows live working and waiting turns, and disconnects only when the presenter does', async () => {
         expect(await present(working)).toEqual({ newestTurn: 'working', offline: false, offlineSinceMs: null });
+        // Runtime presence and current turn evidence are independent for externally followed Sessions.
+        expect(await present({ ...working, runtime: 'unknown' }))
+            .toEqual({ newestTurn: 'working', offline: false, offlineSinceMs: null });
         expect(await present({ ...working, operational: { ...working.operational, primary: 'permission_required' } }))
             .toEqual({ newestTurn: 'waiting', offline: false, offlineSinceMs: null });
         expect(await present({ ...working, runtime: 'offline' }))

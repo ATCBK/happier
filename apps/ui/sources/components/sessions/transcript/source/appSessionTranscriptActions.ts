@@ -40,6 +40,7 @@ export async function submitAppSessionComposerMessage(port: SessionSubmitPort, o
     });
     const execution = await execute('session.message.send', {
         sessionId: options.sessionId, message: options.text,
+        ...(options.metaOverrides?.happierStructuredInputV1 !== undefined ? { structuredInput: options.metaOverrides.happierStructuredInputV1 } : {}),
         ...(typeof options.metaOverrides?.permissionMode === 'string' ? { permissionModeOverride: options.metaOverrides.permissionMode } : {}),
         ...(options.localId ? { localId: options.localId } : {}),
         ...(options.recipient ? { recipient: options.recipient } : {}),

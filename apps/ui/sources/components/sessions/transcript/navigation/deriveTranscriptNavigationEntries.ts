@@ -551,7 +551,7 @@ function shareTranscriptNavigationEntries(
     nextEntries: TranscriptNavigationEntry[],
     previousEntries: readonly TranscriptNavigationEntry[] | null | undefined,
 ): TranscriptNavigationEntry[] {
-    if (!previousEntries || previousEntries.length === 0) return nextEntries;
+    if (!previousEntries) return nextEntries;
 
     const previousById = new Map<string, TranscriptNavigationEntry>();
     for (const entry of previousEntries) {

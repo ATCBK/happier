@@ -32,11 +32,6 @@ vi.hoisted(async () => {
     const { installProjectFileLinkPickerCommonModuleMocks } = await import('@/components/sessions/linkedFiles/projectPicker/projectFileLinkPickerTestHelpers');
 
     installProjectFileLinkPickerCommonModuleMocks({
-        // The shared helper's default `@/constants/Typography` stub exposes only `default` and
-        // `mono`. This suite mounts the real app-pane tree, and modules in it build stylesheets
-        // at import time from the full typography surface, so the stub has to be the real
-        // module or the file fails to collect before a single test runs.
-        typography: async () => await vi.importActual('@/constants/Typography'),
         reactNative: async () => {
             const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
             return createReactNativeWebMock({

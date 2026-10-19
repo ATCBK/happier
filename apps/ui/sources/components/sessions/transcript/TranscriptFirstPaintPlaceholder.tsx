@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
-import { Animated, Easing, View } from 'react-native';
+import { HappierSkeletonPulse, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
+import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 
 const PLACEHOLDER_TOP_PADDING_PX = 18;
 const PLACEHOLDER_HORIZONTAL_PADDING_PX = 16;
@@ -12,9 +13,6 @@ const PLACEHOLDER_BUBBLE_PADDING_PX = 12;
 const PLACEHOLDER_BUBBLE_LINE_GAP_PX = 8;
 const PLACEHOLDER_LINE_HEIGHT_PX = 10;
 const PLACEHOLDER_LINE_RADIUS_PX = 5;
-const PLACEHOLDER_PULSE_MS = 900;
-const PLACEHOLDER_MIN_OPACITY = 0.48;
-const PLACEHOLDER_MAX_OPACITY = 0.86;
 
 const PLACEHOLDER_ROWS: ReadonlyArray<Readonly<{
     align: 'left' | 'right';
@@ -81,38 +79,7 @@ export function TranscriptFirstPaintPlaceholder(
     const { theme } = useUnistyles();
     const materialColor = useHappierMaterialColorResolver();
     const contentMaxWidth = useLayoutMaxWidth();
-    const opacity = React.useRef(new Animated.Value(PLACEHOLDER_MIN_OPACITY)).current;
-    React.useEffect(() => {
-        if (props.reducedMotion) {
-            opacity.setValue(PLACEHOLDER_MAX_OPACITY);
-            return;
-        }
-        opacity.setValue(PLACEHOLDER_MIN_OPACITY);
-        if (typeof Animated.sequence !== 'function') {
-            opacity.setValue(PLACEHOLDER_MAX_OPACITY);
-            return;
-        }
-        const animation = Animated.loop(
-            Animated.sequence([
-                Animated.timing(opacity, {
-                    toValue: PLACEHOLDER_MAX_OPACITY,
-                    duration: PLACEHOLDER_PULSE_MS,
-                    easing: Easing.inOut(Easing.cubic),
-                    useNativeDriver: true,
-                }),
-                Animated.timing(opacity, {
-                    toValue: PLACEHOLDER_MIN_OPACITY,
-                    duration: PLACEHOLDER_PULSE_MS,
-                    easing: Easing.inOut(Easing.cubic),
-                    useNativeDriver: true,
-                }),
-            ]),
-        );
-        animation.start();
-        return () => {
-            animation.stop();
-        };
-    }, [opacity, props.reducedMotion]);
+    const hostActivelyViewed = useHostActivelyViewed();
 
     const rows = (
         <View
@@ -156,12 +123,14 @@ export function TranscriptFirstPaintPlaceholder(
                     {rows}
                 </View>
             ) : (
-                <Animated.View
+                <HappierSkeletonPulse
                     testID="transcript-first-paint-placeholder:active"
-                    style={[styles.activeSurface, { opacity }]}
+                    animationEnabled={hostActivelyViewed}
+                    reducedMotion={props.reducedMotion}
+                    style={styles.activeSurface}
                 >
                     {rows}
-                </Animated.View>
+                </HappierSkeletonPulse>
             )}
         </View>
     );

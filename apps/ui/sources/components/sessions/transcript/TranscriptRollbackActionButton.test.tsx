@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import {
     getTranscriptModalMockRef,
     installTranscriptCommonModuleMocks,
@@ -12,6 +13,7 @@ import {
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const executeSpy = vi.fn();
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | null = null;
 const writeExistingSessionDraftSpy = vi.fn();
 const createDefaultActionExecutorSpy = vi.fn((_: Readonly<{
     resolveServerIdForSessionId?: (sessionId: string) => string | null;
@@ -104,9 +106,14 @@ vi.mock('@/components/sessions/model/resolveSessionTargetServerId', () => ({
 describe('TranscriptRollbackActionButton', () => {
     afterEach(() => {
         standardCleanup();
+        browser?.restore();
+        browser = null;
     });
 
-    beforeEach(() => {
+    beforeEach(async () => {
+        browser = await installBrowserRuntimeForTests({ url: 'https://rollback-target.test' });
+        // This regression covers a touch-primary web host, not a precise desktop pointer.
+        Object.defineProperty(browser.window.navigator, 'maxTouchPoints', { configurable: true, value: 1 });
         executeSpy.mockReset();
         writeExistingSessionDraftSpy.mockReset();
         createDefaultActionExecutorSpy.mockClear();

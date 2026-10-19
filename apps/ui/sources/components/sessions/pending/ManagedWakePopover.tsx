@@ -17,18 +17,35 @@ type WakeNames = Readonly<{ controllerName: string; machineName: string; homeNam
 /** Copy only: native stages and pending custody remain the projection owner's facts. */
 export function describeManagedWakeLabel(projection: ManagedWakeProjection, names: WakeNames): string {
     switch (projection.kind) {
+        case 'loading': return t('common.loading');
         case 'waiting': return t('managedWake.waiting', { controller: names.controllerName });
         case 'starting': return t('managedWake.starting', { machine: names.machineName });
         case 'connecting': return t('managedWake.connecting', { machine: names.machineName, home: names.homeName });
         case 'resuming': return t('managedWake.resuming');
         case 'resourceAbsent': return t('managedPower.resourceAbsent');
         case 'storageLost': return t('managedPower.volumeLost');
-        case 'unknown': return t('status.unknown');
+        case 'unknown': return t('managedWake.unknown', { machine: names.machineName });
         case 'deliveryUnknown': return t('managedWake.deliveryUnknown');
-        case 'agentStartFailed': return projection.canRetryAgentStart
-            ? t('managedWake.agentStartFailed', { machine: names.machineName, agent: names.agentName })
-            : t('managedWake.unavailable');
+        case 'agentStartFailed': return describeStartFailure(projection, names);
         case 'unavailable': return t(projection.inputCustody === 'queued' ? 'managedWake.unavailable' : 'managedWake.deliveryUnknown');
+    }
+}
+
+/** Which start failed: starting the machine (and why) is never reported as the Agent failing, or the reverse. */
+function describeStartFailure(projection: ManagedWakeProjection, names: WakeNames): string {
+    const machine = names.machineName;
+    switch (projection.failureCode) {
+        case 'managed_start_refused': return t('managedWake.startRefused', { machine });
+        case 'managed_start_denied': return t('managedWake.startDenied', { machine });
+        case 'managed_start_expired': return t('managedWake.startExpired', { machine });
+        case 'managed_start_failed': return t('managedWake.startFailed', { machine });
+        case 'runtime_start_failed': return projection.canRetryAgentStart
+            ? t('managedWake.agentStartFailed', { machine, agent: names.agentName })
+            : t('managedWake.agentFailed', { agent: names.agentName });
+        // A predecessor row without a cause: say only what is known.
+        default: return projection.canRetryAgentStart
+            ? t('managedWake.agentStartFailed', { machine, agent: names.agentName })
+            : t('managedWake.unavailable');
     }
 }
 

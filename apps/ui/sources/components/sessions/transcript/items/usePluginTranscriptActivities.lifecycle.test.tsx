@@ -6,7 +6,6 @@ import { createServerScopedMachineRpcBoundaryMock } from '@/dev/testkit/mocks/se
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
-import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
 import {
     DaemonPluginUiResourceReadRequestSchema,
@@ -22,13 +21,7 @@ import {
     PLUGIN_TRANSCRIPT_ACTIVITY_CONTENT_TYPE_V1,
 } from '@happier-dev/protocol';
 
-import { PluginContextualResourceStoreProvider } from '@/components/plugins/surfaces/PluginContextualResourceStoreProvider';
-import {
-    EMPTY_PLUGIN_UI_PROJECTION,
-    type PluginUiProjectionModel,
-} from '@/sync/domains/plugins/ui/projection';
-
-import { usePluginTranscriptActivities } from './usePluginTranscriptActivities';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 
 const transport = vi.hoisted(() => ({
     read: vi.fn(),
@@ -62,6 +55,10 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
+const { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { PluginContextualResourceStoreProvider } = await import('@/components/plugins/surfaces/PluginContextualResourceStoreProvider');
+const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
+const { usePluginTranscriptActivities } = await import('./usePluginTranscriptActivities');
 const connections: Awaited<ReturnType<typeof restoreServerAccountForTest>>[] = [];
 async function createAccountLifetime(accountId = 'account-a') {
     const http = createHomeHubArtifactHttpBoundary(accountId);

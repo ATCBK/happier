@@ -9,11 +9,15 @@ import { normalizeRawMessage, RawRecordSchema, type AgentEvent } from "@happier-
 
 import { TranscriptEventRow } from './TranscriptEventRow';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const executeDefaultAction = vi.fn();
 const modalConfirm = vi.fn();
 const modalAlert = vi.fn();
 const workerUpdateRouter = vi.hoisted(() => ({ push: vi.fn() }));
+
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -26,10 +30,6 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
     }),
 }));
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId', () => ({
-    resolveServerIdForSessionIdFromLocalCache: () => 'server-1',
-}));
-
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({
@@ -39,6 +39,9 @@ vi.mock('@/modal', async () => {
         },
     }).module;
 });
+
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
 describe('TranscriptEventRow', () => {
     it('retains canonical MCP accounting evidence without displaying it as an unknown conversation event', async () => {
@@ -98,6 +101,13 @@ describe('TranscriptEventRow', () => {
         expect(screen.getTextContent()).toContain(summary);
         expect(screen.findByTestId('worker-update-inspect')).toBeNull();
         expect(screen.findByTestId('transcriptEvent.clearTerminalComposer')).toBeNull();
+    });
+    it('says a Goal changed in one quiet line without claiming any Goal content', async () => {
+        const screen = await renderScreen(<TranscriptEventRow event={{ type: 'goal-changed' }} sessionId="lead" />);
+
+        expect(screen.getTextContent()).toBe(t('message.goalChanged'));
+        expect(screen.getTextContent()).not.toContain(t('message.unknownEvent'));
+        await screen.unmount();
     });
     it.each([
         { pointer: { kind: 'session', sessionId: 'worker', seq: 7 } as const, expected: '/session/worker?serverId=home-b' },

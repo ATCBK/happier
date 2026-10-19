@@ -1,15 +1,21 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildReviewCommentFixture, createTestSessionTranscriptSource, flushHookEffects, renderWithSessionTranscriptSource, storePlainReviewCommentFixture, wrapWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
-import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { buildReviewCommentFixture, createSessionFixture, createRootLayoutFeaturesResponse, createTestSessionTranscriptSource, flushHookEffects, renderWithSessionTranscriptSource, storePlainReviewCommentFixture, wrapWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
+import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
 import { loadReviewRunComments, resetReviewRunCommentsForTests } from '@/sync/domains/reviews/comments/reviewRunComments';
 import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
-import { createReducer } from "@happier-dev/session-core/reducer";
+import { createReducer, reducer } from "@happier-dev/session-core/reducer";
+import type { NormalizedMessage } from '@happier-dev/session-core/raw';
+import { ReviewFindingsV2Schema } from '@happier-dev/protocol/messages/structured/reviewFindingsV2';
+import { ScmDiffSummaryGenerateSuccessSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { deriveTranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
-import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
 import type { UserTextMessage } from "@happier-dev/session-core/messages";
+import { DEFAULT_SESSION_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/sessionCapabilities';
+import { PENDING_INPUT_PROTOCOL_VERSION_V4 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import {
     formatVoiceToolResultsFollowUp,
     readSessionMessageProvenance,
@@ -19,9 +25,21 @@ import {
 const structuredRouterState = vi.hoisted(() => ({
     push: vi.fn(),
 }));
+const modalShowSpy = vi.hoisted(() => vi.fn());
 
-installMessageViewCommonModuleMocks({
-    reactNative: async () => {
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    const modalMock = createModalModuleMock();
+    modalMock.spies.show.mockImplementation((config: unknown) => {
+        modalShowSpy(config);
+        return 'modal-id';
+    });
+    return modalMock.module;
+});
+
+vi.mock('react-native', async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             Easing: {
@@ -39,12 +57,12 @@ installMessageViewCommonModuleMocks({
             ActivityIndicator: 'ActivityIndicator',
             Pressable: ({ children, ...props }: any) => React.createElement('Pressable', props, children),
         });
-    },
-    unistyles: async () => {
+});
+vi.mock('react-native-unistyles', async () => {
         const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
         return createUnistylesMock();
-    },
-    text: async () => {
+});
+vi.mock('@/text', async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         // The transcript byline is asserted against the REAL English catalog.
         // A hand-written literal here would let the shipped copy drift while
@@ -75,17 +93,8 @@ installMessageViewCommonModuleMocks({
                 return key;
             },
         });
-    },
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        const modalMock = createModalModuleMock();
-        modalMock.spies.show.mockImplementation((config: unknown) => {
-            modalShowSpy(config);
-            return 'modal-id';
-        });
-        return modalMock.module;
-    },
-    router: async () => {
+});
+vi.mock('expo-router', async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         const routerMock = createExpoRouterMock({
             router: { push: structuredRouterState.push },
@@ -94,35 +103,6 @@ installMessageViewCommonModuleMocks({
             ...routerMock.module,
             useRouter: () => ({ push: structuredRouterState.push }),
         };
-    },
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createPartialStorageModuleMock(importOriginal, {
-            useSession: () => ({
-                accessLevel: null,
-                canApprovePermissions: true,
-                active: true,
-                presence: 'online',
-            }),
-            useSessionInteractionSource: () => ({
-                accessLevel: null,
-                access: OWNER_SESSION_ACCESS,
-                canApprovePermissions: true,
-                active: true,
-            }),
-            useSessionMessages: () => ({ messages: [], isLoaded: true }),
-            useSetting: (key: string) => {
-                if (key === 'sessionThinkingDisplayMode') return thinkingDisplayMode;
-                if (key === 'sessionThinkingInlinePresentation') return thinkingInlinePresentation;
-                if (key === 'filesImagePreviewMaxBytes') return filesImagePreviewMaxBytes;
-                if (key === 'toolViewTimelineChromeMode') return toolViewTimelineChromeMode;
-                return null;
-            },
-            useLocalSetting: () => null,
-            useSessionMessagesById: () => ({}),
-            useSessionMessagesReducerState: () => createReducer(),
-        });
-    },
 });
 
 vi.mock('@/components/markdown/MarkdownView', () => ({
@@ -142,27 +122,17 @@ vi.mock('@/components/sessions/transcript/transcriptRowActionVisibility', () => 
     shouldShowTranscriptRowPinAction: () => false,
 }));
 
-const modalShowSpy = vi.fn();
-
-const submitMessageSpy = vi.fn<
-    (
-        sessionId: string,
-        text: string,
-        displayText?: string,
-        metaOverrides?: Record<string, unknown>,
-    ) => Promise<void>
->(async () => undefined);
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        submitMessage: (
-            sessionId: string,
-            text: string,
-            displayText?: string,
-            metaOverrides?: Record<string, unknown>,
-        ) => submitMessageSpy(sessionId, text, displayText, metaOverrides),
-        sendMessage: vi.fn(),
-    },
-}));
+await initializeRealAppRuntimeForTests();
+const { sync } = await import('@/sync/sync');
+const { getStorage } = await import('@/sync/domains/state/storage');
+const { currentPendingEnqueueAck } = await import('@/sync/engine/pending/pendingQueueV2.testHelpers');
+let submitMessageSpy: MockInstance<typeof sync.submitMessage>;
+let previousStorageState = getStorage().getState();
+beforeEach(() => {
+    previousStorageState = getStorage().getState();
+    // Observe the public owner without replacing admission, queueing or transport.
+    submitMessageSpy = vi.spyOn(sync, 'submitMessage');
+});
 
 const { sessionReadFileSpy } = vi.hoisted(() => ({
     sessionReadFileSpy: vi.fn(async (_sessionId: string, _path: string) => ({ success: true, content: 'aGVsbG8=' })),
@@ -205,9 +175,37 @@ afterEach(async () => {
     standardCleanup();
     await disposeReviewHome?.();
     disposeReviewHome = null;
+    submitMessageSpy.mockRestore();
+    getStorage().setState(previousStorageState, true);
     resetReviewRunCommentsForTests();
     invalidateAccountEncryptionModeCache();
 });
+
+async function serveStructuredSubmitHome(route?: (request: ServedHomeRequest) => Response | undefined) {
+    const served = await serveActionHomes({
+        homes: [{ key: 'review', serverUrl: 'https://structured-review.test', accountId: 'account-1', currentAccount: true,
+            settings: { sessionMessageSendMode: 'server_pending' } }],
+        route: (request) => {
+            if (request.path === '/v1/features' || request.path === '/v1/features/authenticated') {
+                return Response.json(createRootLayoutFeaturesResponse({ capabilities: { session: {
+                    ...DEFAULT_SESSION_CAPABILITIES,
+                    pendingInput: { protocolVersion: PENDING_INPUT_PROTOCOL_VERSION_V4 },
+                } } }));
+            }
+            if (request.path === '/v2/sessions/s1/pending') {
+                return request.method === 'POST'
+                    ? currentPendingEnqueueAck({ body: JSON.stringify(request.body) })
+                    : Response.json({ pending: [], discarded: [] });
+            }
+            return route?.(request);
+        },
+    });
+    disposeReviewHome = served.dispose;
+    getStorage().setState({ sessions: { s1: createSessionFixture({
+        id: 's1', serverId: served.homes.review!.id, active: true, activeAt: Date.now(), pendingVersion: 2,
+    }) } });
+    return served;
+}
 
 vi.mock('@/utils/sessions/discardedCommittedMessages', () => ({
     isCommittedMessageDiscarded: () => false,
@@ -275,6 +273,11 @@ function createStructuredTranscriptSource(input: Parameters<typeof createTestSes
 }
 
 async function renderScreen(element: React.ReactElement, input: Parameters<typeof createTestSessionTranscriptSource>[0] = {}) {
+    getStorage().setState({ settings: { ...getStorage().getState().settings,
+        sessionThinkingDisplayMode: thinkingDisplayMode,
+        sessionThinkingInlinePresentation: thinkingInlinePresentation,
+        filesImagePreviewMaxBytes: filesImagePreviewMaxBytes ?? settingsDefaults.filesImagePreviewMaxBytes,
+        toolViewTimelineChromeMode: toolViewTimelineChromeMode ?? 'cards' } });
     return renderWithSessionTranscriptSource(element, createStructuredTranscriptSource(input));
 }
 function createStructuredToolMessage(
@@ -305,6 +308,29 @@ function createStructuredToolMessage(
             },
         },
     };
+}
+
+function createRetainedReviewMessages() {
+    const payload = ReviewFindingsV2Schema.parse({
+        runRef: { runId: 'review-run', callId: 'review-call', backendId: 'claude', retentionPolicy: 'resumable' },
+        reviewOutcome: 'complete', summary: 'Reviewed captured changes.', overviewMarkdown: 'Review overview.',
+        findings: [{ id: 'f1', title: 'Captured finding', severity: 'high', category: 'correctness', summary: 'Check the response.' }],
+        generatedAtMs: 2,
+    });
+    const messages: NormalizedMessage[] = [{
+        id: 'parent-review', localId: null, createdAt: 1, role: 'agent', isSidechain: false,
+        content: [{ type: 'tool-call', id: 'review-call', name: 'SubAgentRun',
+            input: { runId: 'review-run', intent: 'review', retentionPolicy: 'resumable', runClass: 'long_lived' },
+            description: null, uuid: 'review-call', parentUUID: null }],
+    }, {
+        id: 'published-findings', localId: null, createdAt: 2, role: 'agent', isSidechain: true, sidechainId: 'review-call',
+        content: [{ type: 'text', text: payload.summary, uuid: 'published-findings', parentUUID: 'review-call' }],
+        meta: { happier: { kind: 'review_findings.v2', payload } },
+    }, {
+        id: 'review-narration', localId: null, createdAt: 3, role: 'agent', isSidechain: true, sidechainId: 'review-call',
+        content: [{ type: 'text', text: 'Writing the walkthrough.', uuid: 'review-narration', parentUUID: 'review-call' }],
+    }];
+    return { messages, payload };
 }
 
 function createPlanOutputMessage() {
@@ -1463,6 +1489,93 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
         expect(routerPushSpy).toHaveBeenCalledWith('/session/s1/file?path=src%2Ffoo.ts&source=file&anchor=range&startLine=5&endLine=8');
     });
 
+    it.each(['cards', 'activity_feed'] as const)('presents published retained review findings on the parent row while narration continues (%s)', async (chromeMode) => {
+        toolViewTimelineChromeMode = chromeMode;
+        const { MessageView } = await import('./MessageView');
+        const { ReviewFindingsMessageCard } = await import('../reviews/messages/ReviewFindingsMessageCard');
+        const { projectTranscriptFindText } = await import('./find/transcriptFindText');
+        const state = createReducer();
+        const { messages, payload } = createRetainedReviewMessages();
+        const reduced = reducer(state, messages);
+        const parent = reduced.messages.find((message) => message.kind === 'tool-call');
+        if (!parent || parent.kind !== 'tool-call') throw new Error('Review parent must be materialized');
+        expect(parent.children.map((message) => message.meta?.happier)).toContainEqual({ kind: 'review_findings.v2', payload });
+        expect(parent.tool.state).toBe('running');
+
+        const screen = await renderScreen(<MessageView message={parent} metadata={null} sessionId="s1" />);
+
+        expect(screen.findAllByType(ReviewFindingsMessageCard)).toHaveLength(1);
+        const toolRows = [...screen.findAllByType('ToolView'), ...screen.findAllByType('ToolTimelineRow')];
+        expect(toolRows.every((row) => row.props.tool.state !== 'running')).toBe(true);
+        expect(projectTranscriptFindText(parent, { toolViewTimelineChromeMode: chromeMode })
+            .some((block) => block.text.includes(payload.summary))).toBe(true);
+        expect(parent.tool.state).toBe('running');
+        expect(parent.meta?.happier).toBeUndefined();
+    });
+
+    it.each(['cards', 'activity_feed'] as const)('loads a collapsed review sidechain on cold open and presents its findings (%s)', async (chromeMode) => {
+        const { ToolCallsGroupUnitToolRowWithSessionCommon } = await import('./toolCalls/units/ToolCallsGroupUnitToolRow');
+        const { createTranscriptSessionCommonPropsFixture } = await import('./toolCalls/units/toolCallsGroupUnitsTestFixtures');
+        const { ReviewFindingsMessageCard } = await import('../reviews/messages/ReviewFindingsMessageCard');
+        const { TranscriptContentDemandProvider } = await import('./viewport/visibility/TranscriptRowContentDemand');
+        const state = createReducer();
+        const { messages } = createRetainedReviewMessages();
+        const initial = reducer(state, messages.slice(0, 1)).messages.find((message) => message.kind === 'tool-call');
+        if (!initial || initial.kind !== 'tool-call') throw new Error('Review parent must be materialized');
+        const loadSidechain = vi.fn(async (sidechainId: string) => {
+            expect(sidechainId).toBe('review-call');
+            const loaded = reducer(state, messages.slice(1)).messages;
+            source.update({ messages: loaded, reducerState: state, metadata: null, agentState: null });
+            return 'loaded' as const;
+        });
+        const source = createStructuredTranscriptSource({ messages: [initial], reducerState: state, loadSidechain });
+        const common = createTranscriptSessionCommonPropsFixture({ toolChromeCommon: { toolViewTimelineChromeMode: chromeMode } });
+        function ColdReviewRow() {
+            const message = source.useMessage(initial!.id);
+            if (!message || message.kind !== 'tool-call') return null;
+            return <ToolCallsGroupUnitToolRowWithSessionCommon {...common} message={message} expanded={false}
+                sessionId="s1" groupId="review-group" metadata={null} interaction={sessionInteraction} />;
+        }
+        const row = (enabled: boolean) => <TranscriptContentDemandProvider enabled={enabled}><ColdReviewRow /></TranscriptContentDemandProvider>;
+        const screen = await renderWithSessionTranscriptSource(row(false), source);
+        expect(loadSidechain).not.toHaveBeenCalled();
+        await screen.update(row(true));
+        await flushHookEffects();
+
+        expect(screen.findAllByType(ReviewFindingsMessageCard)).toHaveLength(1);
+        const rows = [...screen.findAllByType('ToolView'), ...screen.findAllByType('ToolTimelineRow')];
+        expect(rows.every((row) => row.props.tool.state !== 'running')).toBe(true);
+        expect(loadSidechain).toHaveBeenCalledWith('review-call');
+        expect(initial.children).toEqual([]);
+        expect(state.messages.get(initial.id)?.tool?.state).toBe('running');
+    });
+
+    it('settles failed review without findings from its emitted narration producer', async () => {
+        const { MessageView } = await import('./MessageView');
+        const { ReviewFindingsMessageCard } = await import('../reviews/messages/ReviewFindingsMessageCard');
+        const { messages } = createRetainedReviewMessages();
+        const payload = ScmDiffSummaryGenerateSuccessSchema.parse({
+            success: true, summaryMarkdown: 'Walkthrough ready.', sourceKey: 'comparison',
+            metadata: { source: { kind: 'workingTree' }, sourceKey: 'comparison' },
+            producer: { kind: 'review', narrationMode: 'continued_review', reviewedRuns: [{
+                runId: 'review-run', callId: 'review-call', backendId: 'claude', status: 'failed', hasOutput: false, reviewOutcome: 'unavailable',
+            }] },
+        });
+        const reduced = reducer(createReducer(), [messages[0], {
+            id: 'narration-result', localId: null, createdAt: 3, role: 'agent', isSidechain: true, sidechainId: 'review-call',
+            content: [{ type: 'text', text: 'Walkthrough ready.', uuid: 'narration-result', parentUUID: 'review-call' }],
+            meta: { happier: { kind: 'scm_diff_summary.v1', payload } },
+        }]);
+        const parent = reduced.messages.find((message) => message.kind === 'tool-call');
+        if (!parent || parent.kind !== 'tool-call') throw new Error('Review parent must be materialized');
+        const screen = await renderScreen(<MessageView message={parent} metadata={null} sessionId="s1" />);
+
+        expect(screen.findAllByType(ReviewFindingsMessageCard)).toHaveLength(0);
+        expect(screen.findByType('ToolView').props.tool.state).toBe('error');
+        expect(parent.tool.state).toBe('running');
+        expect(parent.meta?.happier).toBeUndefined();
+    });
+
     it('renders a structured review-findings card for tool-call messages when meta.happier.kind is review_findings.v1', async () => {
         const { MessageView } = await import('./MessageView');
         const { ReviewFindingsMessageCard } = await import('../reviews/messages/ReviewFindingsMessageCard');
@@ -1652,6 +1765,7 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
 
     it('can adopt a plan by sending a structured user message to the parent session', async () => {
         submitMessageSpy.mockClear();
+        const served = await serveStructuredSubmitHome();
         const { MessageView } = await import('./MessageView');
 
         const message: any = {
@@ -1701,6 +1815,15 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
         expect(submitMessageSpy).toHaveBeenCalledTimes(1);
         expect(submitMessageSpy.mock.calls[0]?.[0]).toBe('s1');
         expect(String(submitMessageSpy.mock.calls[0]?.[1] ?? '')).toContain('@happier/plan.adopt');
+        await expect(submitMessageSpy.mock.results[0]!.value).resolves.toMatchObject({
+            type: 'wake_pending', persistence: 'pending', wake: { attempted: false, state: 'not_needed' },
+        });
+        const writes = served.requests.filter(request => (
+            request.path === '/v2/sessions/s1/pending' && request.method === 'POST'
+        ));
+        expect(writes).toHaveLength(1);
+        expect(writes[0]?.body).toMatchObject({ requestedAction: { v: 1, kind: 'enqueue' }, content: { t: 'plain',
+            v: { role: 'user', content: { type: 'text', text: expect.stringContaining('@happier/plan.adopt') } } } });
     });
 
     it('can apply accepted findings by sending a structured user message to the parent session', async () => {
@@ -1713,13 +1836,11 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
             findingId: 'f1',
             reviewTriageStatus: 'accept' as const,
         };
-        const served = await serveActionHomes({
-            homes: [{ key: 'review', serverUrl: 'https://structured-review.test', accountId: 'account-1' }],
-            route: (request) => request.path === '/v1/reviews/comments' && request.method === 'GET'
+        const served = await serveStructuredSubmitHome(
+            (request) => request.path === '/v1/reviews/comments' && request.method === 'GET'
                 ? Response.json({ items: [storePlainReviewCommentFixture(comment)], cursor: null })
                 : undefined,
-        });
-        disposeReviewHome = served.dispose;
+        );
         const scope = { serverId: served.homes.review!.id, accountId: 'account-1' };
 
         const message: any = {
@@ -1796,6 +1917,15 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
         expect(String(text)).toContain('reviews.comments.transition');
         expect(String(text)).toContain('reviews.comments.setDisposition');
         expect(metaOverrides).toBeUndefined();
+        await expect(submitMessageSpy.mock.results[0]!.value).resolves.toMatchObject({
+            type: 'wake_pending', persistence: 'pending', wake: { attempted: false, state: 'not_needed' },
+        });
+        const writes = served.requests.filter(request => (
+            request.path === '/v2/sessions/s1/pending' && request.method === 'POST'
+        ));
+        expect(writes).toHaveLength(1);
+        expect(writes[0]?.body).toMatchObject({ requestedAction: { v: 1, kind: 'enqueue' }, content: { t: 'plain',
+            v: { role: 'user', content: { type: 'text', text: expect.stringContaining('reviews.comments.transition') } } } });
     });
 
     it.each([

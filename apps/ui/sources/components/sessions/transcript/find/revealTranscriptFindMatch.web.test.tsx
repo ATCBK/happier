@@ -265,7 +265,7 @@ describe('web Find reveal through the real jump owner', () => {
                 jumpToTarget: hook.getCurrent().jumpToTranscriptTarget }, context),
         });
         const screen = await renderScreen(<PluginSurfaceFocusEligibilityProvider active><TranscriptFindSurface model={model} source={source} sessionId="s1" serverId={null}
-            focused viewportRef={React.createRef()} loadedMessages={[]} publishCorpus={next => { corpus = next; }}
+            focused viewportRef={React.createRef()} items={items} loadedMessages={[]} publishCorpus={next => { corpus = next; }}
             measureMessage={() => null} contentHeight={2000} onClearanceChange={value => { clearance = value; }}><></></TranscriptFindSurface></PluginSurfaceFocusEligibilityProvider>);
         try {
             await act(async () => { model.setQuery('remount'); await model.settled(); });
@@ -335,7 +335,7 @@ describe('web Find reveal through the real jump owner', () => {
         });
         const screen = await renderScreen(<PluginSurfaceFocusEligibilityProvider active><TranscriptFindSurface
             model={model} source={source} sessionId="s1" serverId={null} focused viewportRef={React.createRef()}
-            loadedMessages={messages} publishCorpus={next => { corpus = next; }} measureMessage={() => null}
+            items={items} loadedMessages={messages} publishCorpus={next => { corpus = next; }} measureMessage={() => null}
             contentHeight={2000} onClearanceChange={value => { clearance = value; }}><></></TranscriptFindSurface></PluginSurfaceFocusEligibilityProvider>);
         try {
             await act(async () => { model.setQuery('remount'); await model.settled(); });

@@ -293,6 +293,7 @@ describe('StructuredMessageBlock', () => {
         // action owner without reviving the retired structured-message route.
         expect(machinePluginStructuredMessageActionExecuteMock).toHaveBeenCalledWith('machine-1', {
             serverId: 'server-1',
+            isCurrent: expect.any(Function),
             expectedContributorOccurrenceId: 'open-report-occurrence-a',
             qualifiedActionId: 'acme.preview/open-report',
             input: { reportId: 'report-1' },

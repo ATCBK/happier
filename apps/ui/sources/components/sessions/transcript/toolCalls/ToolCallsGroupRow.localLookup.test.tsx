@@ -52,6 +52,9 @@ function getRenderedToolCallsGroupViewProps() {
     return [...renderedToolCallsGroupViewProps, ...renderedToolCallsGroupViewWithCommonProps];
 }
 
+// Load the real row after its ports are installed, outside individual behavior budgets.
+const { ToolCallsGroupRow, ToolCallsGroupRowWithSessionCommon } = await import('./ToolCallsGroupRow');
+
 describe('ToolCallsGroupRow', () => {
   it('reads tool rows from the mounted source instead of a same-id viewer store row', async () => {
     const sourceMessage = {
@@ -60,7 +63,6 @@ describe('ToolCallsGroupRow', () => {
       children: [],
     };
     messageById[sourceMessage.id] = { ...sourceMessage, tool: { ...sourceMessage.tool, input: { command: 'viewer' } } };
-    const { ToolCallsGroupRow } = await import('./ToolCallsGroupRow');
     await renderWithSessionTranscriptSource(React.createElement(ToolCallsGroupRow, {
       sessionId: 's1', toolCallsGroupId: 'group-source', toolMessageIds: [sourceMessage.id],
       metadata: null, expanded: false, onSetExpanded: () => {},
@@ -114,8 +116,6 @@ describe('ToolCallsGroupRow', () => {
       children: [],
     };
 
-    const { ToolCallsGroupRowWithSessionCommon } = await import('./ToolCallsGroupRow');
-
     await renderWithSessionTranscriptSource(React.createElement(ToolCallsGroupRowWithSessionCommon as any, {
       sessionId: 's1',
       toolCallsGroupId: 'group-1',
@@ -160,8 +160,6 @@ describe('ToolCallsGroupRow', () => {
       tool: { id: 'bash-2', name: 'Bash', state: 'running', input: { command: 'ls' } },
       children: [],
     };
-
-    const { ToolCallsGroupRow } = await import('./ToolCallsGroupRow');
 
     await renderWithSessionTranscriptSource(React.createElement(ToolCallsGroupRow as any, {
           sessionId: 's1',
@@ -213,8 +211,6 @@ describe('ToolCallsGroupRow', () => {
       children: [],
     };
 
-    const { ToolCallsGroupRow } = await import('./ToolCallsGroupRow');
-
     await renderWithSessionTranscriptSource(React.createElement(ToolCallsGroupRow as any, {
       sessionId: 's1',
       toolCallsGroupId: 'group-1',
@@ -251,8 +247,6 @@ describe('ToolCallsGroupRow', () => {
       children: [],
     };
 
-    const { ToolCallsGroupRow } = await import('./ToolCallsGroupRow');
-
     await renderWithSessionTranscriptSource(React.createElement(ToolCallsGroupRow as any, {
       sessionId: 's1',
       toolCallsGroupId: 'group-1',
@@ -286,8 +280,6 @@ describe('ToolCallsGroupRow', () => {
       },
       children: [],
     };
-
-    const { ToolCallsGroupRow } = await import('./ToolCallsGroupRow');
 
     await renderWithSessionTranscriptSource(React.createElement(ToolCallsGroupRow as any, {
           sessionId: 's1',
@@ -349,8 +341,6 @@ describe('ToolCallsGroupRow', () => {
       },
       children: [],
     };
-
-    const { ToolCallsGroupRow } = await import('./ToolCallsGroupRow');
 
     await renderWithSessionTranscriptSource(React.createElement(ToolCallsGroupRow as any, {
           sessionId: 's1',

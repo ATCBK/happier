@@ -279,7 +279,7 @@ function placeSyntheticUserActionItemsInChronologicalOrder(
     return items;
 }
 
-export function buildTranscriptTurnUnits(params: Readonly<{
+type TranscriptTurnUnitBuildParams = Readonly<{
     items: readonly TranscriptTurnUnitSourceItem[];
     getMessageById: (messageId: string) => Message | null;
     metadataByMessageId?: Readonly<Record<string, { originSessionId: string; isReadOnlyContext: boolean }>>;
@@ -287,7 +287,14 @@ export function buildTranscriptTurnUnits(params: Readonly<{
     collapsedPreviewCount: number; // already-resolved K; <= 0 means no preview tail
     /** Producer-observed suppressed notifications only; absent/unknown facts keep ordinary rows. */
     quietWorkflowTurnIds?: ReadonlySet<string>;
-}>): TranscriptTurnUnitListItem[] {
+}>;
+
+/** Without quiet evidence every semantic turn is decomposed into ordinary rows. */
+export function buildTranscriptTurnUnits(
+    params: TranscriptTurnUnitBuildParams & Readonly<{ quietWorkflowTurnIds?: undefined }>,
+): Exclude<TranscriptTurnUnitListItem, { kind: 'turn' }>[];
+export function buildTranscriptTurnUnits(params: TranscriptTurnUnitBuildParams): TranscriptTurnUnitListItem[];
+export function buildTranscriptTurnUnits(params: TranscriptTurnUnitBuildParams): TranscriptTurnUnitListItem[] {
     const collapsedPreviewCount = params.collapsedPreviewCount;
     const output: TranscriptTurnUnitListItem[] = [];
 

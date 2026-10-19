@@ -1,8 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { resolveToolCallsGroupPresentation, resolveToolCallsGroupStatus, shouldShowToolCallsGroupStatusIndicator } from './resolveToolCallsGroupPresentation';
 import { createToolCallMessageFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
+import { ReviewFindingsV2Schema } from '@happier-dev/protocol/messages/structured/reviewFindingsV2';
 
 describe('hidden tool group presentation', () => {
+    it('settles a published review group while preserving other running tool activity', () => {
+        const ordinary = createToolCallMessageFixture({ id: 'ordinary' });
+        const review = createToolCallMessageFixture({ id: 'review', tool: { ...ordinary.tool, id: 'review-call',
+            name: 'SubAgentRun', input: { intent: 'review', runId: 'review-run' } }, children: [{
+            kind: 'agent-text', id: 'findings', localId: null, createdAt: 2, text: 'Reviewed.',
+            meta: { happier: { kind: 'review_findings.v2', payload: ReviewFindingsV2Schema.parse({
+                runRef: { runId: 'review-run', callId: 'review-call', backendId: 'claude' },
+                reviewOutcome: 'complete', summary: 'Reviewed.', overviewMarkdown: 'Overview.', findings: [], generatedAtMs: 2,
+            }) } },
+        }] });
+
+        expect(resolveToolCallsGroupStatus({ toolMessages: [review] })).toBe('completed');
+        expect(resolveToolCallsGroupStatus({ toolMessages: [review, ordinary] })).toBe('running');
+        expect(review.tool.state).toBe('running');
+    });
+
     it('retains an error or denied recovery indication while ordinary tool activity continues', () => {
         const running = createToolCallMessageFixture({ id: 'running' });
         const error = createToolCallMessageFixture({ id: 'error', tool: { ...running.tool, state: 'error' } });

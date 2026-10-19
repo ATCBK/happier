@@ -3,9 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createTestSessionTranscriptSource, renderWithSessionTranscriptSource } from '@/dev/testkit/sessionTranscriptSource';
 
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
-    return createCapturingLegendListMock().module;
+    return createCapturingLegendListMock({ original }).module;
 });
 
 vi.mock('@/sync/sync', () => ({

@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 import { TranscriptOriginSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
 import { View } from 'react-native';
 import type { ExternalSessionOperationSharedPresentationV1 } from '@happier-dev/protocol';
@@ -59,7 +61,9 @@ import { PluginTranscriptActivityCard } from '@/components/sessions/transcript/P
 import { matchesExternalSessionOperationPresentation } from '@/sync/runtime/external/externalSessionOperationPresentationIdentity';
 import { TurnViewWithSessionCommon } from '../turns/TurnView';
 import { QuietWorkflowTurn } from '../turns/QuietWorkflowTurn';
+import { WorkflowRunFold } from '../turns/WorkflowRunFold';
 import { collectMessageIdsFromTurn } from '../measurement/transcriptRowShellSignature';
+import { useCommittedTranscriptRef } from '../viewport/lifecycle/host/useCommittedTranscriptRef';
 
 type Ref<T> = { current: T };
 
@@ -143,7 +147,7 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
         onDismissPluginTranscriptActivity,
         onOpenPluginTranscriptActivityAction,
         onExternalSessionOperationActionResult,
-        onEditPendingMessage,
+        onEditPendingMessage: editPendingMessageInput,
         onToggleMessagePin,
         rollbackActionsByMessageId,
         rollbackRanges,
@@ -151,6 +155,17 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
         sessionServerId,
         toolChromeCommon,
     } = deps.props;
+    // Editing is an event, not row data. A retained/recycled pending row must
+    // invoke the current committed composer without invalidating every row
+    // whenever SessionView publishes a new closure. Presence still changes the
+    // rendered affordance and therefore remains a renderer dependency.
+    const editPendingMessageRef = React.useRef(editPendingMessageInput);
+    useCommittedTranscriptRef(editPendingMessageRef, editPendingMessageInput);
+    const editPendingMessage = React.useCallback<NonNullable<ChatListInternalProps['onEditPendingMessage']>>(
+        (request) => editPendingMessageRef.current?.(request),
+        [],
+    );
+    const onEditPendingMessage = editPendingMessageInput ? editPendingMessage : undefined;
     const pendingExternalSessionOperationFocusTransitionRef = React.useRef<Readonly<{
         itemId: string;
         kind: ExternalSessionOperationFocusTransitionKind;
@@ -199,6 +214,19 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
         externalSessionOperationOwnerTarget?.machineId ?? null;
     const operationServerId =
         externalSessionOperationOwnerTarget?.serverId ?? null;
+    const presentationActive = useLayoutPresentationActive();
+    const operationControllerRef = React.useRef<AbortController | null>(null);
+    React.useEffect(() => {
+        const controller = new AbortController();
+        operationControllerRef.current = controller;
+        const retirement = captureActiveServerAccountScopeCurrentness().onRetire(() => controller.abort());
+        if (!presentationActive) controller.abort();
+        return () => {
+            pendingExternalSessionOperationFocusTransitionRef.current = null;
+            controller.abort();
+            retirement.dispose();
+        };
+    }, [operationMachineId, operationServerId, presentationActive, sessionId]);
     const operationRowCapabilities = React.useMemo(
         () => resolveExternalSessionOperationRowCapabilities({
             canSendMessages: transcriptInteraction.canSendMessages,
@@ -244,6 +272,8 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
             presentation: ExternalSessionOperationSharedPresentationV1;
         }>,
     ) => {
+        const signal = operationControllerRef.current?.signal;
+        if (!signal || signal.aborted) return;
         armExternalSessionOperationFocusTransition(
             focusTransition.itemId,
             focusTransition.kind,
@@ -264,7 +294,8 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
                 machineId: operationMachineId,
                 sessionId,
                 ...actionRef,
-            }, operationServerId ? { serverId: operationServerId } : undefined);
+            }, { serverId: operationServerId, signal });
+            if (signal.aborted) return;
             if (!result.ok) {
                 clearExternalSessionOperationFocusTransition(
                     focusTransition.itemId,
@@ -302,6 +333,7 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
                 focusTransition.itemId,
                 focusTransition.kind,
             );
+            if (signal.aborted) return;
             Modal.alert(
                 t('common.error'),
                 t('externalSessions.operationActionErrorUnavailable'),
@@ -507,26 +539,30 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
                 buildRowShellSignature={buildRowShellSignature} measurementReconciler={measurementReconciler}
                 onRowLayoutMutation={handleRowLayoutMutation} onRowMeasured={handleRowShellMeasured}>
                 {(messages) => {
-                    const userMessage = messages.find((message) => message.id === item.turn.userMessageId);
-                    if (!userMessage) return null;
                     const liveMessagesById = new Map(messages.map((message) => [message.id, message]));
                     const getLiveMessageById = (id: string) => liveMessagesById.get(id) ?? getMessageById(id);
+                    const turnView = <TurnViewWithSessionCommon turn={item.turn} sessionId={sessionId} metadata={metadata}
+                        hideUserProvenanceAttribution
+                        serverId={sessionServerId} activeThinkingMessageId={activeThinkingMessageId}
+                        getMessageById={getLiveMessageById} getMessageRevisionById={getMessageRevisionById}
+                        getMessageOrigin={(id) => { const origin = forkMessageMetadataById?.[id]; return origin ? {
+                            sessionId: origin.originSessionId, isReadOnlyContext: origin.isReadOnlyContext,
+                        } : null; }}
+                        approvalRequests={approvalRequests} expandedToolCallsAnchorMessageIds={expandedToolCallsAnchorMessageIds}
+                        setToolCallsGroupExpanded={setToolCallsGroupExpanded}
+                        resolveThinkingExpanded={resolveThinkingExpanded} setThinkingExpanded={setThinkingExpanded}
+                        interaction={transcriptInteraction} rollbackRanges={rollbackRanges}
+                        resolveRollbackAction={(id) => rollbackActionsByMessageId[id] ?? null}
+                        messagePins={messagePins} onToggleMessagePin={onToggleMessagePin}
+                        forkCommon={forkCommon} messageDisplayCommon={messageDisplayCommon}
+                        toolChromeCommon={toolChromeCommon} toolRouteCommon={toolRouteCommon} />;
+                    if (item.workflowRun) {
+                        return <WorkflowRunFold turnId={item.id} run={item.workflowRun} serverId={sessionServerId}>{turnView}</WorkflowRunFold>;
+                    }
+                    const userMessage = messages.find((message) => message.id === item.turn.userMessageId);
+                    if (!userMessage) return null;
                     return <QuietWorkflowTurn turnId={item.id} userMessage={userMessage} messages={messages} serverId={sessionServerId}>
-                        <TurnViewWithSessionCommon turn={item.turn} sessionId={sessionId} metadata={metadata}
-                            hideUserProvenanceAttribution
-                            serverId={sessionServerId} activeThinkingMessageId={activeThinkingMessageId}
-                            getMessageById={getLiveMessageById} getMessageRevisionById={getMessageRevisionById}
-                            getMessageOrigin={(id) => { const origin = forkMessageMetadataById?.[id]; return origin ? {
-                                sessionId: origin.originSessionId, isReadOnlyContext: origin.isReadOnlyContext,
-                            } : null; }}
-                            approvalRequests={approvalRequests} expandedToolCallsAnchorMessageIds={expandedToolCallsAnchorMessageIds}
-                            setToolCallsGroupExpanded={setToolCallsGroupExpanded}
-                            resolveThinkingExpanded={resolveThinkingExpanded} setThinkingExpanded={setThinkingExpanded}
-                            interaction={transcriptInteraction} rollbackRanges={rollbackRanges}
-                            resolveRollbackAction={(id) => rollbackActionsByMessageId[id] ?? null}
-                            messagePins={messagePins} onToggleMessagePin={onToggleMessagePin}
-                            forkCommon={forkCommon} messageDisplayCommon={messageDisplayCommon}
-                            toolChromeCommon={toolChromeCommon} toolRouteCommon={toolRouteCommon} />
+                        {turnView}
                     </QuietWorkflowTurn>;
                 }}
             </TranscriptLiveMessagesRowShell>;
@@ -889,13 +925,13 @@ export function useTranscriptItemsEdgeSlots(deps: TranscriptItemsEdgeSlotsDeps) 
                 : olderPaginationCanContinue
                     ? <OlderLoadContinuationOverlay onContinue={onContinueOlderPagination} />
                 : null;
-    const catchUpOverlay = (
+    const catchUpOverlay = React.useMemo(() => (
         <CatchUpProgressOverlay
             isCatchingUp={showCatchUpOverlay}
             bottomInset={composerInsetHeight}
             spinnerDelayMs={transcriptOlderLoadSpinnerDelayMs}
         />
-    );
+    ), [composerInsetHeight, showCatchUpOverlay, transcriptOlderLoadSpinnerDelayMs]);
 
     return React.useMemo(() => ({
         catchUpOverlay,

@@ -40,9 +40,10 @@ vi.mock('@/components/sessions/transcript/MessageView', () => ({
     MessageViewWithSessionCommon: (props: Record<string, unknown>) => React.createElement('MessageViewWithSessionCommon', props),
 }));
 
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
-    const mock = createCapturingLegendListMock();
+    const mock = createCapturingLegendListMock({ original });
     legendListCapture.state = mock.state;
     return mock.module;
 });

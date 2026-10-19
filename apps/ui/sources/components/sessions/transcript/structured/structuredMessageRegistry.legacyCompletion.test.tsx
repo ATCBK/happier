@@ -2,14 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { deriveTranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
-import { renderStructuredMessage } from './StructuredMessageBlock';
-import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const routerSpies = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { push: routerSpies.push } }).module;
 });
+
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { renderStructuredMessage } = await import('./StructuredMessageBlock');
+const { AppSessionTranscriptSourceProvider } = await import('@/components/sessions/transcript/source/appSessionTranscriptSource');
 
 describe('legacy execution completion transcript reader', () => {
     // Vector from ../0.2 @17ba05df68 structuredMessages/executionRunCompletionV1.ts.

@@ -9,6 +9,7 @@ export function deriveReadOnlyTranscriptInteraction(
         ...interaction,
         canSendMessages: false,
         canApprovePermissions: false,
+        canApproveActions: false,
         canFork: false,
         permissionDisabledReason: 'readOnly',
     };

@@ -89,6 +89,7 @@ export function AgentTransitionHandedOverContextModal(
             return;
         }
         let applies = true;
+        const cancellation = new AbortController();
         setState({ kind: 'loading' });
         void previewSessionAgentTransitionBriefOnMachine({
             machineId,
@@ -98,6 +99,7 @@ export function AgentTransitionHandedOverContextModal(
             returningAgentLastSeenSeqInclusive,
             sourceAgentId,
             targetAgentId,
+            signal: cancellation.signal,
         })
             .catch((): SessionAgentTransitionBriefPreviewQueryV1 => ({ status: 'indeterminate' }))
             .then((query) => {
@@ -106,6 +108,7 @@ export function AgentTransitionHandedOverContextModal(
             });
         return () => {
             applies = false;
+            cancellation.abort();
         };
     }, [
         attempt,

@@ -1,15 +1,12 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import {
-    createPlainSessionOwnerMetadataEnvelopeV1,
-    projectLegacySessionAccessCapabilitiesV1,
-    projectSessionSharedMetadataV1,
-    SessionOwnerMetadataV1Schema,
-    type SessionMessageV1,
-    type V2SessionRecord,
-} from '@happier-dev/protocol';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+import type { SessionMessageV1 } from '@happier-dev/protocol';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import {
     chatListHarnessState,
@@ -21,18 +18,22 @@ import {
     withChatListHarnessWebScrollerDom,
 } from '@/dev/testkit/harness/chatListHarness';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage } from '@/sync/domains/state/storage';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { markSessionSurfaceHidden, markSessionSurfaceVisible } from '@/sync/domains/session/sessionSurfaceVisibility';
-import { installTranscriptCommonModuleMocks } from './transcriptTestHelpers';
 import { buildSessionMessageRouteId } from '@happier-dev/session-core/messages';
 
-installTranscriptCommonModuleMocks({
-    reactNative: async () =>
-        (await import('@/dev/testkit/harness/chatListHarness')).createChatListHarnessReactNativeMock({ platformOs: 'web' }),
-});
+vi.mock('react-native', async () =>
+    (await import('@/dev/testkit/harness/chatListHarness')).createChatListHarnessReactNativeMock({ platformOs: 'web' }));
+vi.mock('react-native-unistyles', async () =>
+    (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () =>
+    (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('@/modal', async () =>
+    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 installDisconnectedServerSocketBoundary();
 vi.mock('@legendapp/list/react-native', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@legendapp/list/react-native')>()),
@@ -66,18 +67,11 @@ function wireMessage(seq: number): SessionMessageV1 {
         createdAt: seq, updatedAt: seq,
     };
 }
-function wireSession(seq: number): V2SessionRecord {
-    return {
+function wireSession(seq: number) {
+    return createPlainSessionCurrentProjectionRecordFixture({
         id: SESSION_ID, seq, createdAt: 1, updatedAt: seq, active: true, activeAt: seq, archivedAt: null,
-        encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 1,
-        metadata: JSON.stringify(projectSessionSharedMetadataV1({ metadata: {} })),
-        ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(SessionOwnerMetadataV1Schema.parse({ v: 1 })),
-        metadataVersion: 1, agentState: null, agentStateVersion: 0, share: null,
-        effectiveAccess: {
-            v: 1, level: 'owner', sources: [{ kind: 'owner' }], audienceContext: null,
-            capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner', canApprovePermissions: true }),
-        },
-    };
+        metadataVersion: 1, agentStateVersion: 0,
+    });
 }
 
 afterEach(() => {
@@ -97,6 +91,9 @@ async function prepareHistory() {
         locks.restore();
     });
     const http = createHomeHubArtifactHttpBoundary('reader');
+    // Session list refresh also reads organization. Its canonical HTTP fixture
+    // supplies the empty server snapshot; the dynamic Session rows stay below.
+    const sessionHttp = createSessionMetadataHttpBoundary(() => ({}));
     let serverSeq = 10;
     const forwardRequests: URL[] = [];
     connection = await restoreServerAccountForTest({
@@ -116,7 +113,7 @@ async function prepareHistory() {
                     hasMore: false, nextAfterSeq: null, nextBeforeSeq: null,
                 });
             }
-            return http.request(input, init);
+            return sessionHttp.handle(input, init) ?? http.request(input, init);
         },
     });
     await sync.refreshSessions({ awaitSessionListHydration: true });

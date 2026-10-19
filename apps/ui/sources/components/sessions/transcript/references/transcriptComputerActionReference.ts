@@ -1,6 +1,6 @@
 import { ComputerActionResultV1Schema, ComputerApprovalDisplayV1Schema, ComputerCaptureResponseV1Schema, ComputerInputRequestV1Schema, ComputerQueryResponseV1Schema, type ComputerCaptureResponseV1 } from '@happier-dev/protocol/computer/v1';
 import { maybeParseJson } from '@happier-dev/protocol/activity/parseJson';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { ToolCall } from '@happier-dev/session-core/messages';
 
 import {

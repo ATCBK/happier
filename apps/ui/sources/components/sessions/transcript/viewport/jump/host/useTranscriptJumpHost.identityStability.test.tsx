@@ -2,21 +2,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { createSessionMessagesFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
 import type { Message } from '@happier-dev/session-core/messages';
+import { buildMessageRouteId } from '@happier-dev/session-core/messages';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { getStorage } from '@/sync/domains/state/storageStore';
-import { createTranscriptFindModel } from '../../../find/useTranscriptFind';
-import { revealTranscriptFindMatch } from '../../../find/revealTranscriptFindMatch';
+import { SessionMessagesPageV1Schema } from '@happier-dev/protocol';
+import type { ExternalSessionTranscriptRawMessageV1 } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import type { ChatTranscriptListItem, TranscriptViewportChangeState } from '../../../chatListTypes';
 import type { TranscriptJumpHostDeps } from './useTranscriptJumpHost';
 import type { TranscriptJumpResult } from '../transcriptJumpTargetTypes';
-import {
-    createTranscriptJumpHostTestHarness, createTranscriptJumpWebMetrics, emptyTranscriptJumpPage,
-    restoreTranscriptJumpEnvironment, transcriptJumpPage,
-} from './transcriptJumpHostTestHarness';
+import type { restoreTranscriptJumpEnvironment } from './transcriptJumpHostTestHarness';
 
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
+const { createTranscriptFindModel } = await import('../../../find/useTranscriptFind');
+const { revealTranscriptFindMatch } = await import('../../../find/revealTranscriptFindMatch');
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { sync } = await import('@/sync/sync');
+const { resolveChatFindSeed } = await import('@/components/appShell/panes/fileFindSeedHandoff');
+const { normalizeExternalSessionTranscriptMessages } = await import('@/sync/runtime/external/normalizeExternalSessionTranscriptMessages');
+const {
+    createTranscriptJumpHostTestHarness, createTranscriptJumpWebMetrics, emptyTranscriptJumpPage,
+    restoreTranscriptJumpEnvironment: restoreJumpEnvironment, transcriptJumpPage,
+} = await import('./transcriptJumpHostTestHarness');
 
 function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -31,6 +38,116 @@ let read: (url: URL) => Response | Promise<Response>;
 const initialReads: URL[] = [];
 
 describe('useTranscriptJumpHost actual owner lifetime and identity', () => {
+    it('lands cold and warm History seeds on the first occurrence in the exact older message after many tool rows', async () => {
+        const identity = { agentId: 'claude', remoteSessionId: 'long-history-turn' };
+        const item = (id: string, seq: number, tool: boolean): ExternalSessionTranscriptRawMessageV1 => ({
+            id, createdAtMs: seq, raw: { role: 'agent', content: { type: 'output', data: {
+                type: 'assistant', message: { content: tool
+                    ? [{ type: 'tool_use', id: `call-${id}`, name: 'Bash', input: { command: 'echo harbor' } }]
+                    : [{ type: 'text', text: 'The selected harbor message has another harbor occurrence.' }] },
+            } } },
+        });
+        const targetItem = item('claude:matched', 100, false);
+        const prefix = Array.from({ length: 80 }, (_, index) => item(`claude:tool-${index}`, index + 1, true));
+        const middle = Array.from({ length: 10 }, (_, index) => item(`claude:middle-${index}`, index + 110, true));
+        const tail = [item('claude:tail', 200, true)];
+        const normalize = (items: readonly ExternalSessionTranscriptRawMessageV1[]) =>
+            normalizeExternalSessionTranscriptMessages(items, identity).map(message => ({ ...message, seq: message.createdAt }));
+        const harness = createTranscriptJumpHostTestHarness();
+        // External renderer commits consume the real reducer's current message identities.
+        const commitRows = async () => {
+            const stored = getStorage().getState().sessionMessages.s1!;
+            harness.messages.current = stored.messagesById;
+            harness.rows.current = stored.messageIdsOldestFirst.map(messageId => ({
+                kind: 'message', id: `row-${messageId}`, messageId,
+                seq: stored.messagesById[messageId]!.seq ?? null, createdAt: stored.messagesById[messageId]!.createdAt,
+            }));
+        };
+        const pages = [tail, middle, [...prefix, targetItem]];
+        read = () => {
+            const items = pages.shift();
+            if (!items) throw new Error('The jump read beyond the addressed target');
+            return Response.json(SessionMessagesPageV1Schema.parse({
+                messages: normalize(items).map(message => ({ id: message.id, seq: message.seq, localId: message.localId,
+                    sidechainId: null, createdAt: message.createdAt, updatedAt: message.createdAt,
+                    content: { t: 'plain', v: items.find(item => item.createdAtMs === message.createdAt)!.raw } })),
+                hasMore: true, nextBeforeSeq: items[0]!.createdAtMs, nextAfterSeq: null,
+            }));
+        };
+        await sync.loadOlderMessagesFromCursor('s1', 201);
+        initialReads.length = 0;
+        await commitRows();
+        const hook = await harness.render({ hasMoreOlderRef: { current: true }, waitForNextVisualUpdate: commitRows });
+        const seed = resolveChatFindSeed({ query: 'harbor', target: { kind: 'native-message', ...identity, sourceItemId: targetItem.id } });
+        const jumps: TranscriptJumpResult[] = [];
+        const model = createTranscriptFindModel({
+            readCorpus: () => {
+                const stored = getStorage().getState().sessionMessages.s1!;
+                return { messages: stored.messageIdsOldestFirst.map(id => stored.messagesById[id]!),
+                    history: { isLoaded: true, hasOlder: true, isLoadingOlder: false } };
+            },
+            loadPage: null, jumpToTarget: async (target, context) => {
+                const result = await hook.getCurrent().jumpToTranscriptTarget(target, context);
+                jumps.push(result);
+                return result;
+            },
+            afterLoad: commitRows,
+            reveal: (match, context) => revealTranscriptFindMatch(match, {
+                items: harness.rows.current, setToolCallsGroupExpanded() {}, setThinkingExpanded() {},
+                readClearancePx: () => 0, waitForVisualUpdate: commitRows,
+                jumpToTarget: (target, options) => hook.getCurrent().jumpToTranscriptTarget(target, options),
+            }, context),
+        });
+        try {
+            for (const open of ['cold', 'warm']) {
+                await act(async () => { await model.applySeed(seed); });
+                expect(jumps[0], open).toEqual({ status: 'scrolled', target: seed.target });
+                expect(initialReads, open).toHaveLength(2);
+                const currentId = model.getOverview().currentMessageId;
+                const current = currentId ? getStorage().getState().sessionMessages.s1!.messagesById[currentId] : null;
+                expect(current ? buildMessageRouteId(current) : null, open)
+                    .toBe(seed.target.kind === 'route-message-id' ? seed.target.routeMessageId : null);
+                expect(model.rowStore.getSnapshot(currentId!)?.blocks.flatMap(block => block.sourceRanges)
+                    .filter(range => range.current).map(range => range.start), open).toEqual([13]);
+                expect(harness.rows.current[harness.native.indexWrites.at(-1)!.index]).toMatchObject({ messageId: currentId });
+                expect(pages, open).toHaveLength(0);
+            }
+        } finally { model.dispose(); await hook.unmount(); }
+    });
+    it('exhausts an opaque missing target without scrolling a different loaded row', async () => {
+        read = () => Response.json({ ...transcriptJumpPage(100), hasMore: true, nextBeforeSeq: 100 });
+        await sync.loadOlderMessagesFromCursor('s1', 101);
+        read = () => Response.json(emptyTranscriptJumpPage());
+        const harness = createTranscriptJumpHostTestHarness({ rows: [row(100)] });
+        const hook = await harness.render({ hasMoreOlderRef: { current: true } });
+        try {
+            await expect(hook.getCurrent().jumpToTranscriptTarget({ kind: 'route-message-id', routeMessageId: 'missing-native-item' }))
+                .resolves.toEqual({ status: 'not-found', reason: 'exhausted' });
+            expect(harness.native.indexWrites).toEqual([]);
+            expect(harness.scheduler.current.explicitJumpActive).toBe(false);
+        } finally { await hook.unmount(); }
+    });
+    it('releases an opaque-target jump on cancellation without reading the next older page', async () => {
+        read = () => Response.json({ ...transcriptJumpPage(100), hasMore: true, nextBeforeSeq: 100 });
+        await sync.loadOlderMessagesFromCursor('s1', 101);
+        initialReads.length = 0;
+        const page = deferred<Response>();
+        read = () => page.promise;
+        const harness = createTranscriptJumpHostTestHarness({ rows: [row(100)] });
+        const hook = await harness.render({ hasMoreOlderRef: { current: true } });
+        const intent = new AbortController();
+        try {
+            const landing = hook.getCurrent().jumpToTranscriptTarget({ kind: 'route-message-id', routeMessageId: 'older-native-item' },
+                { signal: intent.signal });
+            await vi.waitFor(() => expect(initialReads).toHaveLength(1));
+            intent.abort();
+            expect(harness.scheduler.current.explicitJumpActive).toBe(false);
+            page.resolve(Response.json(transcriptJumpPage(50)));
+            await expect(landing).resolves.toEqual({ status: 'aborted' });
+            expect(initialReads).toHaveLength(1);
+            expect(harness.native.indexWrites).toEqual([]);
+        } finally { await hook.unmount(); }
+    });
     it('reveals a counted loaded Find match outside the partly loaded rendered window', async () => {
         const message: Message = { kind: 'user-text', id: 'message-50', realID: 'message-50',
             localId: null, seq: 50, createdAt: 50, text: 'needle' };
@@ -157,7 +274,7 @@ describe('useTranscriptJumpHost actual owner lifetime and identity', () => {
     beforeEach(async () => {
         initialReads.length = 0;
         read = () => Response.json(emptyTranscriptJumpPage());
-        environment = await restoreTranscriptJumpEnvironment(url => {
+        environment = await restoreJumpEnvironment(url => {
             if (url.searchParams.has('beforeSeq')) {
                 initialReads.push(url);
                 return read(url);
@@ -195,7 +312,8 @@ describe('useTranscriptJumpHost actual owner lifetime and identity', () => {
         expect(harness.scheduler.current.explicitJumpActive).toBe(false);
         expect(harness.native.activeOperation).toBeNull();
         expect(harness.native.indexWrites.at(-1)).toMatchObject({ index: 0, viewPosition: 0.5 });
-        expect(getStorage().getState().sessionMessages.s1?.messagesById['message-50']?.seq).toBe(50);
+        expect(Object.values(getStorage().getState().sessionMessages.s1?.messagesById ?? {})
+            .find((message) => 'realID' in message && message.realID === 'message-50')?.seq).toBe(50);
         await hook.unmount();
     });
 
@@ -293,16 +411,23 @@ describe('useTranscriptJumpHost actual owner lifetime and identity', () => {
         const page = deferred<Response>();
         read = () => page.promise;
         const harness = createTranscriptJumpHostTestHarness();
-        const hook = await harness.render();
+        const hook = await harness.render({ resolveSeqForMessageId: () => null });
         const stableJump = hook.getCurrent().jumpToTranscriptTarget;
         const landing = stableJump({ kind: 'seq', seq: 500 }, { preferTargetWindow: true });
         await vi.waitFor(() => expect(initialReads).toHaveLength(1));
-        harness.rows.current = [{ kind: 'message', id: 'target-row', messageId: 'message-500', createdAt: 500, seq: null }];
+        page.resolve(Response.json(transcriptJumpPage(500)));
+        const readMaterializedTarget = () => Object.values(getStorage().getState().sessionMessages.s1?.messagesById ?? {})
+            .find((message) => 'realID' in message && message.realID === 'message-500');
+        await vi.waitFor(() => expect(readMaterializedTarget()).toBeDefined());
+        const message = readMaterializedTarget()!;
+        // Native target-window landing waits for the renderer's committed rows
+        // before it can scroll. Its later visual-update callback cannot supply
+        // that commit; publish the real reducer identity at the renderer boundary.
+        harness.rows.current = [{ kind: 'message', id: 'target-row', messageId: message.id, createdAt: message.createdAt, seq: null }];
         await hook.rerender(harness.props({
             resolveSeqForMessageId: id => getStorage().getState().sessionMessages.s1?.messagesById[id]?.seq ?? null,
         }));
         expect(hook.getCurrent().jumpToTranscriptTarget).toBe(stableJump);
-        page.resolve(Response.json(transcriptJumpPage(500)));
         await expect(landing).resolves.toMatchObject({ status: 'window-rendered', target: { kind: 'seq', seq: 500 } });
         expect(harness.native.indexWrites.at(-1)).toMatchObject({ index: 0 });
         await hook.unmount();
@@ -365,7 +490,7 @@ describe('useTranscriptJumpHost actual owner lifetime and identity', () => {
         const harness = createTranscriptJumpHostTestHarness();
         const hook = await harness.render({ forkedTranscriptEnabled: true });
         await hook.getCurrent().jumpToTranscriptTarget({ kind: 'seq', seq: 500 }, { preferTargetWindow: true });
-        expect(initialReads.map(url => url.pathname)).toEqual(['/v2/sessions/s1/messages']);
+        expect(initialReads.map(url => url.pathname)).toEqual(['/v1/sessions/s1/messages']);
         expect(harness.native.indexWrites).toEqual([]);
         await hook.unmount();
     });
@@ -429,11 +554,11 @@ describe('useTranscriptJumpHost actual owner lifetime and identity', () => {
         const first = hook.getCurrent().jumpToTranscriptTarget({ kind: 'seq', seq: 500 }, { preferTargetWindow: true });
         await vi.waitFor(() => expect(initialReads).toHaveLength(1));
         const second = hook.getCurrent().jumpToTranscriptTarget({ kind: 'seq', seq: 500 }, { preferTargetWindow: true });
-        await vi.waitFor(() => expect(initialReads).toHaveLength(2));
         const replacement = harness.native.acquisitions[1];
         expect(replacement).not.toBe(harness.native.acquisitions[0]);
         firstPage.resolve(Response.json(transcriptJumpPage(500)));
         await expect(first).resolves.toEqual({ status: 'aborted' });
+        await vi.waitFor(() => expect(initialReads).toHaveLength(2));
         expect(harness.native.activeOperation).toBe(replacement);
         expect(harness.scheduler.current.explicitJumpActive).toBe(true);
         secondPage.resolve(Response.json(emptyTranscriptJumpPage()));

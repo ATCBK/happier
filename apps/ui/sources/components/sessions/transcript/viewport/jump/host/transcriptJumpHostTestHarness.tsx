@@ -30,7 +30,7 @@ import type { TranscriptViewportCommand } from '../../transcriptViewportTypes';
 import { resolveTranscriptRenderWindowProjection } from '../../window/resolveTranscriptRenderWindowProjection';
 import { stampViewportAnchorForEmit } from '../../entryRestore/stampViewportAnchorForEmit';
 import type { WebTranscriptScrollMetrics } from '../../../webTranscriptScrollMetrics';
-import { useTranscriptJumpHost, type TranscriptJumpHostDeps } from './useTranscriptJumpHost';
+import { useTranscriptJumpHost, useTranscriptJumpWindowFacts, type TranscriptJumpHostDeps } from './useTranscriptJumpHost';
 
 const ref = <T,>(current: T) => ({ current });
 let environmentSequence = 0;
@@ -163,8 +163,14 @@ export function createTranscriptJumpHostTestHarness(options: Readonly<{
     const userScrollIntent = createTranscriptUserScrollIntentOwner();
     const resolveJumpIndex = ref<TranscriptJumpHostDeps['resolveJumpToSeqIndexForCommandRef']['current']>(() => null);
     const emptyEffects = () => {};
-    const resolveSeq = (id: string) => messages.current[id]?.seq
-        ?? getStorage().getState().sessionMessages[currentSessionId.current]?.messagesById[id]?.seq ?? null;
+    const getMessage = (id: string) => messages.current[id]
+        ?? getStorage().getState().sessionMessages[currentSessionId.current]?.messagesById[id];
+    const resolveSeq = (id: string) => getMessage(id)?.seq ?? null;
+    const windowFacts = ref<ReturnType<typeof useTranscriptJumpWindowFacts> | null>(null);
+    const resolveTargetWindowItemSeq = (item: { id: string }) => {
+        const row = rows.current.find(candidate => candidate.id === item.id);
+        return row ? windowFacts.current?.resolveTargetWindowItemSeq(row) ?? null : null;
+    };
     const commitPin = (next: TranscriptScrollPinState) => { scrollPin.current = next; };
     const commitBottom = (next: TranscriptBottomFollowModeState) => { bottomFollow.current = next; };
     const emitViewport = (state: TranscriptViewportChangeState) => {
@@ -184,6 +190,11 @@ export function createTranscriptJumpHostTestHarness(options: Readonly<{
             const projection = resolveTranscriptRenderWindowProjection({
                 items: rows.current, sessionId: currentSessionId.current, listOrientation: 'standard',
                 targetWindowState: sync.getSessionTargetWindowState(currentSessionId.current),
+                resolveSeq: resolveTargetWindowItemSeq,
+                ...(windowFacts.current ? {
+                    isSeqLoaded: windowFacts.current.isSeqLoaded,
+                    isSeqRangeLoaded: windowFacts.current.isSeqRangeLoaded,
+                } : {}),
                 createWindowGapItem: (gap): ChatTranscriptListItem => ({ ...gap, kind: 'transcript-window-gap' }),
             });
             return projection.indexMap.resolveRendererTargetForItemId(rows.current[index]!.id);
@@ -224,10 +235,7 @@ export function createTranscriptJumpHostTestHarness(options: Readonly<{
         readCurrentNativeDistanceFromBottom: () => native.distance,
         resolveJumpToSeqIndexForCommandRef: resolveJumpIndex, resolveSeqForMessageId: resolveSeq,
         resolveSyncLoadOlderOptions: () => undefined,
-        resolveTargetWindowItemSeq: item => {
-            const row = rows.current.find(candidate => candidate.id === item.id);
-            return row && 'seq' in row ? row.seq : null;
-        },
+        resolveTargetWindowItemSeq,
         resolveViewportCommand: controller.resolve, resolveWebScrollMetrics: driver.resolveWebScrollMetrics,
         scrollPin: scrollPin.current, scrollPinRef: scrollPin, sessionId,
         stampViewportAnchorForEmit: anchor => stampViewportAnchorForEmit({
@@ -244,6 +252,12 @@ export function createTranscriptJumpHostTestHarness(options: Readonly<{
     function useOwner(deps: TranscriptJumpHostDeps) {
         const source = useSessionTranscriptSource();
         source.history.useState();
+        const committedWindowFacts = useTranscriptJumpWindowFacts({
+            getMessageById: getMessage,
+            messagesById: deps.messagesById,
+            sessionId: deps.sessionId,
+        });
+        useCommittedTranscriptRef(windowFacts, committedWindowFacts);
         const [begin, end] = useExplicitJumpWriteBarrier({ applyEffects: emptyEffects, schedulerStateRef: scheduler });
         const liveTail = useTranscriptLiveTailIntentHost({
             commitBottomFollowModeState: commitBottom, commitJumpToBottomDistanceForVisibilityRef: visibilityCommit,

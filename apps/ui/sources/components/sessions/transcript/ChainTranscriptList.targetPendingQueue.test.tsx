@@ -21,9 +21,10 @@ vi.mock('@/sync/sync', () => ({
     },
 }));
 
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
-    return createCapturingLegendListMock().module;
+    return createCapturingLegendListMock({ original }).module;
 });
 
 /**
@@ -194,7 +195,7 @@ describe('ChainTranscriptList target-scoped pending queue', () => {
                 v: 1,
                 serverId: homeB.id,
                 accountId: 'viewer-b',
-                profile: { firstName: 'Viewer', lastName: null, username: null, avatarUrl: null },
+                profile: { name: 'Viewer', firstName: 'Viewer', lastName: null, username: null, avatarUrl: null },
             },
         };
 

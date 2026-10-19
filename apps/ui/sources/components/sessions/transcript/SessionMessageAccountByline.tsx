@@ -6,8 +6,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
-import { areServerAccountScopesEqual, serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
+import { resolveAccountActorPresentation } from '@/sync/domains/account/accountActorPresentation';
 import { t } from '@/text';
 
 export type SessionMessageAccountBylineProps = Readonly<{
@@ -20,13 +19,8 @@ export type SessionMessageAccountBylineProps = Readonly<{
 export function SessionMessageAccountByline(props: SessionMessageAccountBylineProps) {
     const { actor, viewerScope } = props;
     if (!actor || !viewerScope) return null;
-    const isSelf = areServerAccountScopesEqual(actor, viewerScope);
+    const { isSelf, name, avatar } = resolveAccountActorPresentation(actor, viewerScope);
     if (isSelf && !props.hasOtherNamedCollaborator) return null;
-    const name = actor.profile === null
-        ? t('message.accountActorFormerMember')
-        : isSelf
-            ? t('message.accountActorYou')
-            : formatAccountDisplayName(actor.profile) ?? t('message.accountActorUnnamedMember');
     return (
         <View style={styles.byline}>
             <Text
@@ -46,8 +40,8 @@ export function SessionMessageAccountByline(props: SessionMessageAccountBylinePr
                 importantForAccessibility="no-hide-descendants"
             >
                 <Avatar
-                    id={actor.profile === null ? 'former-member' : serverAccountScopeKeySuffix(actor)}
-                    imageUrl={actor.profile?.avatarUrl}
+                    id={avatar.id}
+                    imageUrl={avatar.imageUrl}
                     monochrome
                     size={20}
                 />

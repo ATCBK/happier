@@ -2,6 +2,9 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 import { createTestSessionTranscriptSource, flushHookEffects, renderWithSessionTranscriptSource as renderSourceScreen, standardCleanup, wrapWithSessionTranscriptSource } from '@/dev/testkit';
 import type { AgentTextMessage } from "@happier-dev/session-core/messages";
 import { getStorage } from '@/sync/domains/state/storage';

@@ -1,5 +1,5 @@
 import React from 'react';
-import type { z } from 'zod';
+import type { core } from 'zod/mini';
 import { t } from '@/text';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
@@ -100,7 +100,7 @@ function legacyCompletionUpdate(payload: ExecutionRunCompletionV1, sessionId: st
     };
 }
 
-const structuredMessageRegistryEntries: readonly (StructuredMessageRegistryEntry<any> & Readonly<{ schema: z.ZodType }>)[] = [
+const structuredMessageRegistryEntries: readonly (StructuredMessageRegistryEntry<any> & Readonly<{ schema: core.$ZodType }>)[] = [
     {
         kind: 'voice_note.v1',
         schema: VoiceTranscriptNotePayloadSchema,

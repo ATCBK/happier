@@ -49,8 +49,7 @@ describe('TranscriptCollapsible', () => {
             return React.createElement('div');
         }
 
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(
+        const screen = await renderScreen(
             <TranscriptRowLayoutMutationProvider
                 value={(mutation) => {
                     events.push(`mutation:${mutation.reason}:${mutation.sourceId}`);
@@ -62,12 +61,12 @@ describe('TranscriptCollapsible', () => {
                     </TranscriptCollapsible>
                 </TranscriptMotionContext.Provider>
             </TranscriptRowLayoutMutationProvider>
-        )).tree;
+        );
 
         expect(events).toEqual([]);
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 <TranscriptRowLayoutMutationProvider
                     value={(mutation) => {
                         events.push(`mutation:${mutation.reason}:${mutation.sourceId}`);
@@ -108,8 +107,7 @@ describe('TranscriptCollapsible', () => {
             return React.createElement('div');
         }
 
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(
+        const screen = await renderScreen(
             <TranscriptRowLayoutMutationProvider
                 value={(mutation) => {
                     events.push(`mutation:${mutation.reason}:${mutation.sourceId}`);
@@ -121,13 +119,13 @@ describe('TranscriptCollapsible', () => {
                     </TranscriptCollapsible>
                 </TranscriptMotionContext.Provider>
             </TranscriptRowLayoutMutationProvider>
-        )).tree;
+        );
 
         expect(events).toEqual(['child-render']);
         events.length = 0;
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 <TranscriptRowLayoutMutationProvider
                     value={(mutation) => {
                         events.push(`mutation:${mutation.reason}:${mutation.sourceId}`);
@@ -167,13 +165,12 @@ describe('TranscriptCollapsible', () => {
             </TranscriptRowLayoutMutationProvider>
         );
 
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(renderTree(1))).tree;
+        const screen = await renderScreen(renderTree(1));
 
         expect(events).toEqual([]);
 
         await act(async () => {
-            tree!.update(renderTree(2));
+            await screen.update(renderTree(2));
         });
 
         expect(events).toEqual([]);
@@ -201,14 +198,13 @@ describe('TranscriptCollapsible', () => {
             </TranscriptRowLayoutMutationProvider>
         );
 
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(renderTree('t1'))).tree;
+        const screen = await renderScreen(renderTree('t1'));
 
         hoistedAnimatedSpies.timingSpy.mockClear();
         expect(events).toEqual([]);
 
         await act(async () => {
-            tree!.update(renderTree('t2'));
+            await screen.update(renderTree('t2'));
         });
 
         expect(events).toEqual([]);
@@ -233,16 +229,15 @@ describe('TranscriptCollapsible', () => {
 
         const { renderScreen } = await import('@/dev/testkit');
 
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(<TranscriptMotionContext.Provider value={runtime}>
+        const screen = await renderScreen(<TranscriptMotionContext.Provider value={runtime}>
                     <TranscriptCollapsible id="t1" createdAt={1} expanded={false}>
                         <div />
                     </TranscriptCollapsible>
-                </TranscriptMotionContext.Provider>)).tree;
+                </TranscriptMotionContext.Provider>);
 
         hoistedAnimatedSpies.timingSpy.mockClear();
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 <TranscriptMotionContext.Provider value={runtime}>
                     <TranscriptCollapsible id="t1" createdAt={1} expanded={true}>
                         <div />
@@ -271,10 +266,10 @@ describe('TranscriptCollapsible', () => {
         const cap = (tree: renderer.ReactTestRenderer) => tree.root.findByType('AnimatedView' as never).props.style.maxHeight;
         const mountedOpen = (await renderScreen(view(true))).tree;
         expect(cap(mountedOpen)).toBeUndefined();
-        const toggled = (await renderScreen(view(false))).tree;
-        expect(cap(toggled)).toBeDefined();
-        await act(async () => { toggled.update(view(true)); });
-        expect(cap(toggled)).toBeUndefined();
+        const toggled = await renderScreen(view(false));
+        expect(cap(toggled.tree)).toBeDefined();
+        await toggled.update(view(true));
+        expect(cap(toggled.tree)).toBeUndefined();
     });
 
     it('does not animate when fresh-only gate rejects', async () => {
@@ -295,16 +290,15 @@ describe('TranscriptCollapsible', () => {
 
         const { renderScreen } = await import('@/dev/testkit');
 
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(<TranscriptMotionContext.Provider value={runtime}>
+        const screen = await renderScreen(<TranscriptMotionContext.Provider value={runtime}>
                     <TranscriptCollapsible id="t1" createdAt={1} expanded={false}>
                         <div />
                     </TranscriptCollapsible>
-                </TranscriptMotionContext.Provider>)).tree;
+                </TranscriptMotionContext.Provider>);
 
         hoistedAnimatedSpies.timingSpy.mockClear();
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 <TranscriptMotionContext.Provider value={runtime}>
                     <TranscriptCollapsible id="t1" createdAt={1} expanded={true}>
                         <div />

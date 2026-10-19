@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { readSessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
+import { readSessionOwnerMetadataViewPreferences } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { resolveTranscriptToolVisibility } from './resolveTranscriptToolVisibility';
 import { useTranscriptToolCallsExpansionState } from './rowHost/useTranscriptToolCallsExpansionState';
 import { TranscriptSessionActivityLine } from './TranscriptSessionActivityLine';
@@ -215,7 +216,7 @@ function ChainTranscriptListContent(props: ChainTranscriptListProps) {
 
     const groupingMode = transcriptGroupingMode === 'turns' ? 'turns' : 'linear';
     const toolVisibility = resolveTranscriptToolVisibility({
-        sessionOverride: props.metadata?.work?.viewPreferences?.showToolCalls,
+        sessionOverride: readSessionOwnerMetadataViewPreferences(props.metadata)?.showToolCalls,
         isBot: readSessionBotV1(props.metadata?.bot) !== null,
         accountShowToolCalls: transcriptShowToolCalls,
         groupToolCalls: transcriptGroupToolCalls === true && toolViewTimelineChromeMode === 'activity_feed',

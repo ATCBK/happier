@@ -139,10 +139,12 @@ describe('ChatList (turn grouping mode)', () => {
       chatListHarnessState.settingValues.transcriptTurnToolCallsGroupStrategy = 'consecutive_tools';
       const workerUpdate = (workerId: string) => ({
         type: 'worker-update',
+        followWakeEventLocalId: 'session-follow-wake:batch-1',
         update: { v: 1, workerKind: 'session', workerId, ownerState: 'settled', wake: 'finished', headline: 'Finished', canInspect: false },
       });
       const messages = [
-        { kind: 'agent-event', id: 'wake-1', createdAt: 1, event: workerUpdate('w1') },
+        { kind: 'agent-event', id: 'wake-1', localId: 'session-follow-wake:batch-1',
+          followDeliveryProjection: { status: 'woke', reason: null }, createdAt: 1, event: workerUpdate('w1') },
         { kind: 'agent-event', id: 'wake-2', createdAt: 2, event: workerUpdate('w2') },
       ];
       chatListHarnessState.sessionMessagesState = { isLoaded: true, messages };

@@ -1813,6 +1813,53 @@ describe('PendingMessagesTranscriptBlock', () => {
 	        expect(screen.findByTestId('pendingMessages.remove:p1')).toBeTruthy();
 	    });
 
+    it('keeps content controls back while a queued row is still loading, and offers them once its reader opens it', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        sessionValue = createFreshSteerCapableSession();
+        // The pending owner's own placeholder for an encrypted row whose Session reader hasn't arrived.
+        const loadingRow: PendingMessage = {
+            id: 'p1',
+            localId: 'p1',
+            createdAt: 0,
+            updatedAt: 0,
+            source: 'server_pending',
+            pendingDeliveryStatus: 'server_queued',
+            text: '',
+            displayText: t('common.loading'),
+            pendingDecryption: { kind: 'loading' },
+            rawRecord: { pendingDecryption: { kind: 'loading' } },
+        };
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [loadingRow],
+            discardedMessages: [],
+        }));
+
+        await hoverPendingMessageRow(screen, 'p1');
+
+        expect(screen.findByTestId('pendingMessages.steerNow:p1')).toBeNull();
+        expect(screen.findByTestId('pendingMessages.sendNow:p1')).toBeNull();
+        expect(screen.findByTestId('pendingMessages.edit:p1')).toBeNull();
+        expect(screen.findByTestId('pendingMessages.copy:p1')).toBeNull();
+        expect(screen.findByTestId('pendingMessages.remove:p1')).toBeTruthy();
+
+        await screen.update(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [{
+                id: 'p1', localId: 'p1', createdAt: 0, updatedAt: 0,
+                source: 'server_pending', pendingDeliveryStatus: 'server_queued',
+                text: 'Ship the release notes', rawRecord: {},
+            } satisfies PendingMessage],
+            discardedMessages: [],
+        }));
+        await hoverPendingMessageRow(screen, 'p1');
+
+        expect(screen.findByTestId('pendingMessages.edit:p1')).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.sendNow:p1')).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.steerNow:p1')).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.remove:p1')).toBeTruthy();
+    });
+
 	    it('renders with app theme shape (no secondary background / no danger box)', async () => {
 	        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
 	        await expect((async () => {

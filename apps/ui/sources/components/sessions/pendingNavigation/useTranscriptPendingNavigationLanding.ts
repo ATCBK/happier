@@ -26,16 +26,23 @@ export type TranscriptPendingNavigationLandingInput = Readonly<{
     jumpToTarget(target: TranscriptJumpTarget, options: Readonly<{ signal: AbortSignal; preferTargetWindow: boolean }>): Promise<TranscriptJumpResult>;
 }>;
 
-export function TranscriptPendingNavigationLanding(input: Omit<TranscriptPendingNavigationLandingInput, 'reducerState'>): React.ReactElement | null {
+type TranscriptPendingNavigationLandingProps = Omit<TranscriptPendingNavigationLandingInput, 'reducerState' | 'messagesById'> & Readonly<{
+    messagesById?: TranscriptPendingNavigationLandingInput['messagesById'];
+}>;
+
+export function TranscriptPendingNavigationLanding(input: TranscriptPendingNavigationLandingProps): React.ReactElement | null {
     const landing = usePendingNavigationLanding(input.address);
     return landing?.state === 'pending' && input.focused
         ? React.createElement(ActiveTranscriptPendingNavigationLanding, { input }) : null;
 }
 
-function ActiveTranscriptPendingNavigationLanding(props: Readonly<{ input: Omit<TranscriptPendingNavigationLandingInput, 'reducerState'> }>): null {
+function ActiveTranscriptPendingNavigationLanding(props: Readonly<{ input: TranscriptPendingNavigationLandingProps }>): null {
     const source = useSessionTranscriptSource();
     const reducerState = source.useReducerState();
-    useTranscriptPendingNavigationLanding({ ...props.input, reducerState });
+    // Ordinary list hosts omit message detail to keep subscriptions row-local.
+    // Only an active landing reads it; fork hosts retain their composed corpus.
+    const messagesById = source.useMessagesById();
+    useTranscriptPendingNavigationLanding({ ...props.input, messagesById: props.input.messagesById ?? messagesById, reducerState });
     return null;
 }
 

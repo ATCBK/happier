@@ -4,7 +4,7 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFailed, vi } from 'vitest';
 
 import type { ChatListItem } from '@/components/sessions/chatListItems';
 
@@ -49,7 +49,10 @@ const activity: PluginActivityItem = {
 
 describe('PluginTranscriptActivityCard web pointer-events ownership', () => {
     it('keeps its progress rail and live status non-interactive without RNW deprecated props', async () => {
+        let phase = 'component import';
+        onTestFailed(() => console.error(`PluginTranscriptActivityCard DOM last stage: ${phase}`));
         const { PluginTranscriptActivityCard } = await import('./PluginTranscriptActivityCard');
+        phase = 'DOM render';
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root: Root = createRoot(container);
@@ -66,6 +69,7 @@ describe('PluginTranscriptActivityCard web pointer-events ownership', () => {
                 );
             });
 
+            phase = 'pointer-events assertions';
             const progress = container.querySelector<HTMLElement>('[data-testid="plugin-transcript-activity-progress"]');
             const liveStatus = container.querySelector<HTMLElement>('[data-testid="plugin-transcript-activity-a11y-status"]');
             expect(progress).not.toBeNull();
@@ -76,6 +80,7 @@ describe('PluginTranscriptActivityCard web pointer-events ownership', () => {
                 String(message).includes('props.pointerEvents is deprecated. Use style.pointerEvents')
             ))).toEqual([]);
         } finally {
+            phase = 'DOM cleanup';
             await act(async () => {
                 root.unmount();
             });

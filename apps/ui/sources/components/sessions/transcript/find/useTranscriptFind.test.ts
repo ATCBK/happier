@@ -193,12 +193,12 @@ describe('transcript Find model', () => {
     it('opens a travelling query at its addressed result without first jumping to another hit', async () => {
         const revealed: string[] = [];
         const model = createTranscriptFindModel({
-            readCorpus: () => ({ messages: [message('first', 'needle', 1), message('target', 'needle', 2)],
+            readCorpus: () => ({ messages: [message('first', 'needle', 1), { ...message('target', 'needle', 2), realID: 'persisted-target' }],
                 history: { isLoaded: true, hasOlder: false, isLoadingOlder: false } }),
             loadPage: null, jumpToTarget: noJump, reveal: async (match) => { revealed.push(match.messageId); },
         });
         model.applySeed({ query: 'needle', options: { matchCase: false, regex: false },
-            target: { kind: 'route-message-id', routeMessageId: 'target' } });
+            target: { kind: 'route-message-id', routeMessageId: 'server:persisted-target' } });
         await model.settled();
         expect(revealed).toEqual(['target']);
         expect(model.status).toMatchObject({ kind: 'results', current: 2, total: 2 });
@@ -393,7 +393,8 @@ describe('transcript Find model', () => {
         let failing = true;
         const paged = createTranscriptFindModel({
             readCorpus: () => ({ messages: [message('a', 'needle')], history: { isLoaded: true, hasOlder: failing, isLoadingOlder: false } }),
-            loadPage: async () => ({ loaded: 0, hasMore: true, status: 'retryable_error' }),
+            loadPage: async () => failing ? { loaded: 0, hasMore: true, status: 'retryable_error' }
+                : { loaded: 0, hasMore: false, status: 'no_more' },
             jumpToTarget: noJump, reveal: async () => {},
         });
         paged.setQuery('needle');
@@ -401,6 +402,11 @@ describe('transcript Find model', () => {
         await paged.settled();
         expect(paged.status).toMatchObject({ coverage: 'partialErrors' });
         failing = false;
+        // Retry the same query through the same source, without closing Find.
+        // A successful retry must clear only the previous paging failure.
+        paged.searchOlder();
+        await paged.settled();
+        expect(paged.status).toMatchObject({ coverage: 'complete' });
         paged.close();
         paged.setQuery('needle');
         expect(paged.status).toMatchObject({ kind: 'results', total: 1, coverage: 'complete' });

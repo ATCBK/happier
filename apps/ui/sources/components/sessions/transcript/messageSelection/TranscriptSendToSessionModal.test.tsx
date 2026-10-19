@@ -11,6 +11,7 @@ import type { SessionListRenderableSession } from '@/sync/domains/session/listin
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import { t } from '@/text';
 
 import { TranscriptSendToSessionModal } from './TranscriptSendToSessionModal';
 
@@ -259,7 +260,7 @@ describe('TranscriptSendToSessionModal', () => {
         });
         const meta = screen.findByTestId('transcript-send-to-session-meta-same-server');
         expect(meta).not.toBeNull();
-        expect(screen.getTextContent()).toContain('working...');
+        expect(screen.getTextContent()).toContain(t('status.working'));
         expect(screen.getTextContent()).toContain('2h');
     });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { HAPPIER_TYPE_SCALE } from '@happier-dev/plugin-ui/presentation';
 
 import { buildEnrichedMarkdownStyle } from '@/components/markdown/enriched/useEnrichedMarkdownStyle';
 import { transcriptMarkdownTextStyle } from './transcriptMarkdownTypography';
@@ -59,6 +60,21 @@ describe('transcriptMarkdownTypography', () => {
         expect(h4.marginBottom).toBeGreaterThan(0);
         expect(markdownStyle.math).toMatchObject({ marginTop: 8, marginBottom: 8 });
         expect(markdownStyle.thematicBreak).toMatchObject({ marginTop: 8, marginBottom: 8 });
+    });
+
+    it('reads a document at the interface reading size with headings that never outrank the step holding it', () => {
+        // Live 2026-10-16 (UI2): `##` sections in a plugin detail step rendered at 20-24px, above the
+        // step title. Document Markdown steps down from the type roles instead; the transcript keeps its scale.
+        const { markdownStyle } = buildEnrichedMarkdownStyle({ colors, profile: 'document', uiFontScale: 1 });
+        const size = (name: 'paragraph' | 'h1' | 'h2' | 'h3' | 'h4') =>
+            requireNumber(requireMarkdownStyle(markdownStyle[name], name).fontSize, `${name}.fontSize`);
+
+        expect(size('paragraph')).toBe(HAPPIER_TYPE_SCALE.reading.fontSize);
+        expect(size('h1')).toBeLessThanOrEqual(HAPPIER_TYPE_SCALE.heading.fontSize);
+        expect(size('h1')).toBeGreaterThanOrEqual(size('h2'));
+        expect(size('h2')).toBeGreaterThanOrEqual(size('h3'));
+        expect(size('h3')).toBeGreaterThanOrEqual(size('paragraph'));
+        expect(size('h4')).toBe(size('paragraph'));
     });
 
     it('ignores margin values in caller text styles for thinking markdown structure', () => {

@@ -174,6 +174,12 @@ function TranscriptSameSessionHandoffProviderForSession(props: Readonly<{
                 if (current && current.mountToken !== input.mountToken) {
                     return () => undefined;
                 }
+                // A layout change can now retain the physical transcript. Its
+                // own snapshot is not a handoff to a future unrelated remount.
+                const slot = slotRef.current;
+                if (slot?.producerMountToken === input.mountToken && slot.toExperience === input.experience) {
+                    slotRef.current = null;
+                }
                 producerRef.current = input;
                 return () => {
                     if (producerRef.current?.mountToken === input.mountToken) {

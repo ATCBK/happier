@@ -26,6 +26,14 @@ function pendingMessage(overrides: Partial<PendingMessage> = {}): PendingMessage
 }
 
 describe('getPendingMessageVisualState', () => {
+    it('keeps check-in holds and muted input distinct from unknown delivery failures', () => {
+        expect(getPendingMessageVisualState(pendingMessage({
+            pendingDeliveryStatus: 'blocked', pendingDeliveryBlockedReason: 'autonomous_check_in',
+        }))).toMatchObject({ kind: 'blocked', showSpinner: false,
+            deliveryBlockedPresentation: { labelKey: 'settingsCoordination.checkInPaused', isUnknown: false } });
+        expect(getSessionInputFailureLabelKey(createSessionInputFailureError('session_input_muted')))
+            .toBe('settingsCoordination.inputMuted');
+    });
     it('treats server accepted rows as queued, not actively processing', () => {
         expect(getPendingMessageVisualState(pendingMessage({
             source: 'server_pending',
@@ -368,6 +376,12 @@ describe('resolvePendingMessageHeightBearingChrome', () => {
 });
 
 describe('session input failure copy owner', () => {
+    it('points a missing admitted runner runtime source to the existing runner restart guidance', () => {
+        expect(getSessionInputFailureLabelKey(Object.assign(new Error('private runtime detail'), {
+            code: 'RUNNER_AGENT_SESSION_RUNTIME_SOURCE_MISSING',
+        }))).toBe('session.staleRunner.banner.body');
+    });
+
     it('gives delivery_outcome_uncertain its own copy instead of the generic needs-review label', () => {
         expect(getPendingMessageVisualState(pendingMessage({
             pendingDeliveryStatus: 'blocked',

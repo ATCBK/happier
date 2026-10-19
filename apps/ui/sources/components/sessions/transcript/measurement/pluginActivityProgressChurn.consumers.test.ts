@@ -99,8 +99,8 @@ function projectActivityWithSessionActionAdmission(
         dismissedActivityIds: new Set<string>(),
         isActionAvailable,
     };
-    const row = appendPluginTranscriptActivityTranscriptItems([], input)
-        .find((candidate): candidate is PluginActivityItem => candidate.kind === 'plugin-transcript-activity');
+    const rows: readonly TranscriptRowShellItem[] = appendPluginTranscriptActivityTranscriptItems([], input);
+    const row = rows.find((candidate): candidate is PluginActivityItem => candidate.kind === 'plugin-transcript-activity');
     if (!row) throw new Error('Expected the synthetic Plugin transcript Activity row.');
     return row;
 }

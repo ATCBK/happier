@@ -52,9 +52,11 @@ vi.mock('@/components/sessions/transcript/MessageView', () => ({
     MessageViewWithSessionCommon: (props: any) => React.createElement('MessageViewWithSessionCommon', props),
 }));
 
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
     const mock = createCapturingLegendListMock({
+        original,
         resolveState: () => legendState.current,
     });
     legendListCapture.state = mock.state;
@@ -74,6 +76,9 @@ function createChainTestRoot(Content: typeof import('./ChainTranscriptList')['Ch
     };
 }
 
+// Module graph preparation is collection work, outside each keyboard interaction's deadline.
+const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
+
 describe('ChainTranscriptList web keyboard ownership', () => {
     afterEach(() => {
         standardCleanup();
@@ -90,7 +95,6 @@ describe('ChainTranscriptList web keyboard ownership', () => {
 
     it('selects the sole sidechain from BODY PageUp without prior transcript interaction', async () => {
         const { Platform } = await import('react-native');
-        const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
         const ChainTranscriptList = createChainTestRoot(ChainContent);
         const originalPlatform = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
@@ -148,7 +152,6 @@ describe('ChainTranscriptList web keyboard ownership', () => {
 
     it('keeps sidechain held-end maintenance through bottom-clamped PageDown and later growth', async () => {
         const { Platform } = await import('react-native');
-        const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
         const ChainTranscriptList = createChainTestRoot(ChainContent);
         const originalPlatform = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });

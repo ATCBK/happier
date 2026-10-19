@@ -481,7 +481,7 @@ describe('ChatFooter (local control)', () => {
         const action = screen.findByTestId('session-chatFooter-takeOverDirect');
         expect(action?.props.accessibilityState).toEqual({ busy: true, disabled: true });
         expect(action?.props.disabled).toBe(true);
-        expect(action?.props.onPress).toBeUndefined();
+        await screen.pressByTestIdAsync('session-chatFooter-takeOverDirect');
         expect(screen.getTextContent()).toContain('chatFooter.checkingExternalSessionTakeover');
 
         expect(onRequestTakeoverPreflight).not.toHaveBeenCalled();

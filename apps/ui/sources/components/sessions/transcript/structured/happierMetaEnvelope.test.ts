@@ -9,6 +9,11 @@ describe('parseHappierMetaEnvelope', () => {
         expect(parseHappierMetaEnvelope({ happier: null })).toBeNull();
     });
 
+    it('accepts a payload-free internal marker through the shared envelope', () => {
+        expect(parseHappierMetaEnvelope({ happier: { kind: 'claude_jsonl_consumed_marker.v1' } }))
+            .toEqual({ kind: 'claude_jsonl_consumed_marker.v1' });
+    });
+
     it('returns kind + payload when meta contains a valid envelope', () => {
         const parsed = parseHappierMetaEnvelope({
             happier: { kind: 'review_comments.v1', payload: { ok: true } },
@@ -29,6 +34,14 @@ describe('parseHappierMetaEnvelope', () => {
         expect(parseHappierMetaEnvelope({
             happierStructuredInputV1: { v: 1, executionRunCompletion: completion },
         })).toEqual({ kind: 'execution_run_completion.v1', payload: completion });
+    });
+
+    it('does not fall back when an invalid primary envelope is explicitly present', () => {
+        const meta = { happierStructuredInputV1: { executionRunCompletion: { runId: 'run-1' } } };
+        for (const happier of [undefined, null, {}, { kind: 1 }, { kind: '', payload: {} }]) {
+            expect(parseHappierMetaEnvelope({ ...meta, happier })).toBeNull();
+        }
+        expect(parseHappierMetaEnvelope(meta, 'custom')).toBeNull();
     });
 
     it('preserves optional qualified resource refs while accepting historical envelopes without them', () => {

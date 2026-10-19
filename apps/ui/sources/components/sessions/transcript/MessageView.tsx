@@ -1,4 +1,5 @@
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 import * as React from "react";
 import { useShallow } from 'zustand/react/shallow';
 import { HappierProvenanceChip } from '@happier-dev/plugin-ui/presentation';
@@ -54,6 +55,8 @@ import { resolveSessionMediaInlineRenderableImageMimeType } from '@/components/s
 import { readSessionMessageProvenance } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { TranscriptRollbackAction } from '@/sync/domains/sessionRollback/rollbackUiSupport';
 import { CommittedMessageActions } from '@/components/sessions/transcript/messageActions/CommittedMessageActions';
+import { presentDiscussionSecondOpinion } from '@/components/discussions/DiscussionSecondOpinionSheet';
+import type { DiscussionSecondOpinionSourceV1 } from '@happier-dev/protocol/discussions/secondOpinion';
 import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import { readCoarsePrimaryPointer, useRowActionHoverHost } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
 import { resolveMessagePinAvailability } from '@/components/sessions/transcript/messageActions/resolveMessagePinAvailability';
@@ -90,6 +93,10 @@ import { SessionMessageAccountByline } from './SessionMessageAccountByline';
 import type { ToolViewDisplaySettings } from '@/components/tools/shell/views/toolViewDisplaySettings';
 import { TranscriptTurnChangesCard } from '@/components/sessions/files/turnChanges/TranscriptTurnChangesCard';
 import { deriveToolMessageDisplay } from '@/components/sessions/transcript/toolCalls/deriveToolMessageDisplay';
+import { projectReviewToolMessage, readReviewToolRunId } from '@/components/sessions/reviews/messages/projectReviewToolMessage';
+import { useEnsureSidechainsLoaded } from '@/hooks/session/useEnsureSidechainsLoaded';
+import { useTranscriptRowContentDemand } from '@/components/sessions/transcript/viewport/visibility/TranscriptRowContentDemand';
+import { resolveToolTranscriptSidechainId } from '@/components/tools/shell/views/resolveToolTranscriptSidechainId';
 
 const TRANSCRIPT_SELECTION_CHECKBOX_ANCHOR_TOP = 0;
 // The jump-landing ring inherits the radius of the element it paints, so each
@@ -229,12 +236,12 @@ function AppWorkflowMessageProvenanceAttribution(props: WorkflowMessageProvenanc
   const display = getStorage()(useShallow((state) => {
     const inScope = !serverId || Boolean(state.profileScope
       && areServerProfileIdentifiersEquivalent(state.profileScope.serverId, serverId));
-    const run = inScope ? state.workflowRunsById[props.runId] : undefined;
+    const run = inScope ? state.workflowRunsById[workflowRunStoreKey(props.runId)] : undefined;
     return {
       inScope,
       title: run?.metadata?.kind === 'available' ? run.metadata.value.title : null,
       stepOrdinal: props.stepOrdinal ?? (inScope
-        ? state.workflowRunInvocationsByRunId[props.runId]?.factsById[props.invocationRecordId]?.stepOrdinal : undefined),
+        ? state.workflowRunInvocationsByRunId[workflowRunStoreKey(props.runId)]?.factsById[props.invocationRecordId]?.stepOrdinal : undefined),
     };
   }));
   const source = display.title ?? t('message.provenanceWorkflow');
@@ -815,7 +822,8 @@ function UserTextBlock(props: {
     routeMessageId: buildMessageRouteId(props.message),
     role: 'user',
     pins: props.messagePins ?? [],
-  }), [props.message, props.messagePins, props.sessionId]);
+    pinActionEnabled: props.messageDisplayCommon.transcriptMessagePinActionEnabled,
+  }), [props.message, props.messagePins, props.sessionId, props.messageDisplayCommon.transcriptMessagePinActionEnabled]);
   const rowActionVisibilityInput = {
     platformOS: Platform.OS,
     isRowHovered: isMessageHovered,
@@ -985,7 +993,7 @@ function UserTextBlock(props: {
             discarded={isDiscarded}
             attention={{ sessionAddress: transcriptSource.sessionId === props.sessionId ? normalizeSessionAddress(transcriptSource.serverId, props.sessionId) : null, routeMessageId: buildMessageRouteId(props.message), seq: resolveTranscriptMessageSeq(props.message), radius: TRANSCRIPT_MESSAGE_HIGHLIGHT_RADIUS }}
           >
-            <MarkdownView markdown={renderedMarkdownText} findActive={findActive} findSourceRanges={findSourceRanges} renderCacheKey={buildMessageMarkdownRenderCacheKey(props.message.id, props.messageRevision)} onOptionPress={handleOptionPress} onOptionLongPress={handleOptionLongPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} />
+            <MarkdownView codeBlockStateKey={JSON.stringify([props.sessionId, props.message.id])} markdown={renderedMarkdownText} findActive={findActive} findSourceRanges={findSourceRanges} renderCacheKey={buildMessageMarkdownRenderCacheKey(props.message.id, props.messageRevision)} onOptionPress={handleOptionPress} onOptionLongPress={handleOptionLongPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} />
             {attachmentsMeta ? (
               <AttachmentsInlineImages
                 sessionId={props.sessionId}
@@ -1163,7 +1171,8 @@ function AgentTextBlock(props: {
     routeMessageId: buildMessageRouteId(props.message),
     role: 'assistant',
     pins: props.messagePins ?? [],
-  }), [props.message, props.messagePins, props.sessionId]);
+    pinActionEnabled: props.messageDisplayCommon.transcriptMessagePinActionEnabled,
+  }), [props.message, props.messagePins, props.sessionId, props.messageDisplayCommon.transcriptMessagePinActionEnabled]);
   const rowActionVisibilityInput = {
     platformOS: Platform.OS,
     isRowHovered: isMessageHovered,
@@ -1314,6 +1323,14 @@ function AgentTextBlock(props: {
     return parseSessionMediaMessageMeta(envelope);
   }, [props.message.meta]);
 
+  // L7: an interactive transcript (one that can navigate) offers Second opinion and Discuss… on a committed answer.
+  const navigateFromTranscript = transcriptSource.navigate;
+  const answerText = selectableMessage?.text ?? null;
+  const openDiscussionSource = React.useCallback((source: DiscussionSecondOpinionSourceV1, intent: 'second_opinion' | 'discuss') => {
+    if (source.kind !== 'session' || answerText === null || !navigateFromTranscript) return;
+    presentDiscussionSecondOpinion({ source, intent, sourceText: answerText, onOpenDiscussion: navigateFromTranscript });
+  }, [answerText, navigateFromTranscript]);
+
   // Hidden thinking and filtered text keep the mounted row's hook order stable.
   if (messageDisplay.text === null) return null;
 
@@ -1321,6 +1338,7 @@ function AgentTextBlock(props: {
     <CommittedMessageActions
       message={props.message} sessionId={props.sessionId} serverId={props.serverId}
       selectableText={selectableMessage} copyText={copyText} isStructuredOnly={isStructuredOnly}
+      openDiscussionSource={navigateFromTranscript ? openDiscussionSource : undefined}
       canFork={props.canFork} forkCommon={props.forkCommon} isForkAllowed={props.isForkAllowed}
       settings={props.messageDisplayCommon} rollbackAction={props.rollbackAction}
       messagePins={props.messagePins} onToggleMessagePin={props.onToggleMessagePin}
@@ -1417,6 +1435,7 @@ function AgentTextBlock(props: {
               shouldRenderStreamingMarkdown ? (
                   <MarkdownView
                       markdown={streamingMarkdownText}
+                      codeBlockStateKey={JSON.stringify([props.sessionId, props.message.id])}
                       findActive={findActive} findSourceRanges={findSourceRanges}
                       agentTexMath
                       renderCacheKey={buildMessageMarkdownRenderCacheKey(props.message.id, props.messageRevision)}
@@ -1441,6 +1460,7 @@ function AgentTextBlock(props: {
               ) : (
                   <MarkdownView
                       markdown={markdown}
+                      codeBlockStateKey={JSON.stringify([props.sessionId, props.message.id])}
                       findActive={findActive} findSourceRanges={findSourceRanges}
                       agentTexMath
                       renderCacheKey={buildMessageMarkdownRenderCacheKey(props.message.id, props.messageRevision)}
@@ -1497,7 +1517,19 @@ function ToolCallBlock(props: {
   toolChromeCommon: TranscriptToolChromeCommon;
   toolRouteCommon: TranscriptToolRouteCommon;
 }) {
+  const message = React.useMemo(() => projectReviewToolMessage(props.message), [props.message]);
 	  const transcriptSource = useSessionTranscriptSource();
+  const contentDemand = useTranscriptRowContentDemand();
+  const reviewSidechainIds = React.useMemo(() => readReviewToolRunId(props.message) !== null
+    && message.tool.state === 'running'
+    ? [resolveToolTranscriptSidechainId({ tool: props.message.tool, normalizedToolName: props.message.tool.name })] : [],
+  [message.tool.state, props.message]);
+  useEnsureSidechainsLoaded({
+    enabled: contentDemand && reviewSidechainIds.length > 0 && transcriptSource.loadSidechain !== null,
+    sessionId: props.sessionId,
+    loadSidechain: transcriptSource.loadSidechain,
+    sidechainIds: reviewSidechainIds,
+  });
   const structuredPinHost = useRowActionHoverHost();
   const handleJumpToAnchor = useStructuredMessageJumpHandler(
     props.sessionId,
@@ -1507,11 +1539,11 @@ function ToolCallBlock(props: {
 	  const toolViewTimelineChromeMode = props.toolChromeCommon.toolViewTimelineChromeMode;
   const messagesById = props.toolRouteCommon.messagesById;
   const reducerState = props.toolRouteCommon.reducerState;
-  if (!props.message.tool) {
+  if (!message.tool) {
     return null;
   }
   const structuredNode = renderStructuredMessage({
-	    message: props.message,
+	    message,
 	    sessionId: props.sessionId,
         serverId: props.toolChromeCommon.serverId,
         interaction: props.interaction,
@@ -1520,11 +1552,11 @@ function ToolCallBlock(props: {
 	  });
   const hasStructuredNode = structuredNode != null;
   const { turnChanges, shouldRenderToolChrome } = React.useMemo(() => deriveToolMessageDisplay({
-    tool: props.message.tool,
+    tool: message.tool,
     hasStructuredNode,
     toolViewTimelineChromeMode,
     permissionDisabledReason: props.interaction.permissionDisabledReason,
-  }), [props.message.tool, hasStructuredNode, toolViewTimelineChromeMode, props.interaction.permissionDisabledReason]);
+  }), [message.tool, hasStructuredNode, toolViewTimelineChromeMode, props.interaction.permissionDisabledReason]);
   const toolRouteMessageId = resolveMessageRouteIdForDisplay({
         message: props.message,
         messagesById,
@@ -1537,6 +1569,7 @@ function ToolCallBlock(props: {
     transcriptBlockIndex: resolveTranscriptMessageBlockIndex(props.message),
     routeMessageId: toolRouteMessageId ?? null,
     pins: props.messagePins,
+    pinActionEnabled: props.messageDisplayCommon.transcriptMessagePinActionEnabled,
     readOnlyContext: props.interaction.permissionDisabledReason === 'readOnly',
     onTogglePin: props.onToggleToolPin,
     testID: `transcript-tool-call-pin:${props.message.id}`,
@@ -1592,7 +1625,7 @@ function ToolCallBlock(props: {
       ) : null}
       {shouldRenderToolChrome ? (toolViewTimelineChromeMode === 'activity_feed' ? (
         <ToolTimelineRow
-          tool={props.message.tool}
+          tool={message.tool}
           metadata={props.metadata}
           messages={props.message.children}
           sessionId={props.sessionId}
@@ -1607,7 +1640,7 @@ function ToolCallBlock(props: {
         />
       ) : (
         <ToolView
-          tool={props.message.tool}
+          tool={message.tool}
           metadata={props.metadata}
           messages={props.message.children}
           sessionId={props.sessionId}

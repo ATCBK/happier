@@ -14,19 +14,16 @@ import {
     type SessionMessagesWindowState,
 } from '@/sync/runtime/sessionMessagesWindowState';
 import { ChatList } from './ChatList';
+import { AppSessionTranscriptSourceProvider } from './source/appSessionTranscriptSource';
 
-// Only the native recycler and immutable packaged asset inventory are replaced. The
-// mounted ChatList, target-window projection, pager, Sync and storage remain real.
+// Replace only the native recycler; Vitest's canonical asset alias supplies the
+// packaged inventory. ChatList, target-window projection, pager, Sync and storage remain real.
 vi.mock('@legendapp/list/react-native', async (importOriginal) => {
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
     return createCapturingLegendListMock({
         original: await importOriginal<Record<string, unknown>>(),
         renderItems: false,
     }).module;
-});
-vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', async () => {
-    const { emptyBundledPluginUiAssetsModule } = await import('@/dev/testkit/mocks/bundledPluginUiAssets');
-    return emptyBundledPluginUiAssetsModule;
 });
 
 describe('ChatList older continuation scope', () => {
@@ -45,7 +42,9 @@ describe('ChatList older continuation scope', () => {
         storage.getState().applySessions([session]);
         storage.getState().applyMessagesLoaded(session.id);
         const screen = await renderScreen(
-            <ChatList session={session} sessionSurfaceKey={sessionAddressKey({ serverId: 'test-server', sessionId: session.id })} />,
+            <AppSessionTranscriptSourceProvider sessionId={session.id}>
+                <ChatList session={session} sessionSurfaceKey={sessionAddressKey({ serverId: 'test-server', sessionId: session.id })} />
+            </AppSessionTranscriptSourceProvider>,
         );
         try {
             // Positive control: bounded, empty main history has the explicit recovery action.

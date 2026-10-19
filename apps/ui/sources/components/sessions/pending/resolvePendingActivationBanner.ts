@@ -10,6 +10,8 @@ export type PendingActivationBannerPresentation = Readonly<{
     secondaryAction: 'keep_queued' | null;
     settingsAction: 'settings';
     managedWakeProjection?: ManagedWakeProjection;
+    holdReason?: PendingMessage['pendingActivationHoldReason'];
+    titleKey?: 'managedWake.refused';
 }>;
 
 function isEligiblePendingUserRow(message: PendingMessage): boolean {
@@ -42,6 +44,19 @@ export function resolvePendingActivationBanner(input: Readonly<{
 }>): PendingActivationBannerPresentation | null {
     if (!input.canWrite) return null;
     const managedWakeProjection = input.managedWakeProjection;
+    const rows = input.pendingMessages.filter(isEligiblePendingUserRow).sort(comparePendingRows);
+    // Current refusal can outlive a retained target after a grant downgrade.
+    // Actual native progress/loss still wins over an older queue diagnostic.
+    const held = !input.machineReachable && input.resumingAt == null
+        && (!managedWakeProjection || managedWakeProjection.kind === 'unknown' || managedWakeProjection.kind === 'waiting'
+            || managedWakeProjection.kind === 'agentStartFailed' && managedWakeProjection.canRequestWake)
+        ? rows.find(row => row.pendingActivationHoldReason) : undefined;
+    if (held) return {
+        kind: 'queued_offline', row: held, holdReason: held.pendingActivationHoldReason,
+        ...(held.pendingActivationHoldReason === 'managed_power_required' ? { titleKey: 'managedWake.refused' as const } : {}),
+        primaryAction: held.pendingActivationHoldReason === 'managed_power_required' ? null : 'process_when_online',
+        secondaryAction: null, settingsAction: 'settings',
+    };
     if (managedWakeProjection) {
         // The managed badge owns observed native stages, including runtime resume,
         // absence and uncertain custody; the generic banner must not reinterpret them.
@@ -51,14 +66,14 @@ export function resolvePendingActivationBanner(input: Readonly<{
             kind: managedWakeProjection.kind === 'agentStartFailed' ? 'failed' : input.machineReachable ? 'waiting' : 'waiting_offline',
             managedWakeProjection, row,
             primaryAction: row && managedWakeProjection.canRetryAgentStart ? 'retry'
-                : row && managedWakeProjection.canResumeRuntime ? 'resume' : null,
+                : row && managedWakeProjection.canResumeRuntime ? 'resume'
+                    : row && managedWakeProjection.canRequestWake ? 'process_when_online' : null,
             secondaryAction: null,
             settingsAction: 'settings',
         };
     }
     if (input.resumingAt != null) return null;
     if (input.active && input.machineReachable) return null;
-    const rows = input.pendingMessages.filter(isEligiblePendingUserRow).sort(comparePendingRows);
     const authorization = input.authorization && input.authorization.requestedAt > input.activeAt
         ? input.authorization
         : null;

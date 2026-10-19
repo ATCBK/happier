@@ -1,11 +1,15 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
-import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { collectHostText, createDeferred, flushHookEffects, makeSessionWorkflowActivityMetadata, makeSessionWorkflowRunHeadline, makeSessionWorkflowRunSnapshot, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createTestSessionTranscriptSource, wrapWithSessionTranscriptSource } from '@/dev/testkit/sessionTranscriptSource';
-import { installTranscriptCommonModuleMocks } from './transcriptTestHelpers';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionSystemRecordHttpFixture } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { buildWorkflowRunSystemRecordLocalId, projectSessionAccessCapabilitiesV1, SessionSystemRecordStoredSchema, type SessionSystemRecordStored } from '@happier-dev/protocol';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -17,50 +21,39 @@ const hostState = vi.hoisted(() => ({
     messageViewProps: [] as Array<Record<string, any>>,
     motionConfigs: [] as Array<Record<string, any> | null>,
     nowMs: 1_000,
-    workflowDetail: null as any,
-    workflowListeners: new Set<() => void>(),
+    workflowMetadata: null as ReturnType<typeof createSessionFixture>['metadata'],
+    workflowServerId: '',
 }));
 
-installTranscriptCommonModuleMocks({
-    reactNative: async () => {
+vi.mock('react-native', async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
+            AccessibilityInfo: {
+                isReduceMotionEnabled: async () => true,
+                addEventListener: () => ({ remove() {} }),
+            },
             Platform: {
                 OS: 'ios',
                 select: <T,>(options: { ios?: T; native?: T; default?: T; web?: T }) =>
                     options.ios ?? options.native ?? options.default ?? options.web,
             },
         });
-    },
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSetting: createUseSettingMock({ fallback: () => undefined }),
-            },
-        });
-    },
 });
+vi.mock('react-native-unistyles', async () =>
+    (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () =>
+    (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('@/modal', async () =>
+    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => true,
-}));
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        getSyncTuning: () => ({
-            transcriptBackwardPrefetchThresholdPx: 800,
-            transcriptEstimatedItemSizePx: 120,
-            transcriptOlderLoadCooldownMs: 2500,
-            transcriptOlderLoadSpinnerDelayMs: 0,
-        }),
-    },
-}));
-
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
     const legendList = createCapturingLegendListMock({
+        original,
         resolveState: () => hostState.legendGeometry.current,
     });
     hostState.legendList = legendList.state;
@@ -70,23 +63,6 @@ vi.mock('@legendapp/list/react-native', async () => {
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
-
-vi.mock('@/components/sessions/workState/useSessionWorkflowActivity', async () => {
-    const ReactModule = await import('react');
-    return {
-        useWorkflowRunForToolUseId: () => {
-            const detail = ReactModule.useSyncExternalStore(
-                (listener) => {
-                    hostState.workflowListeners.add(listener);
-                    return () => hostState.workflowListeners.delete(listener);
-                },
-                () => hostState.workflowDetail,
-                () => hostState.workflowDetail,
-            );
-            return { runHeadline: null, detail };
-        },
-    };
-});
 
 vi.mock('@/components/sessions/transcript/MessageView', async () => {
     const { useTranscriptMotion } = await import('./motion/TranscriptMotionContext');
@@ -119,9 +95,10 @@ vi.mock('@/components/sessions/transcript/MessageView', async () => {
                             startedAt: null,
                             completedAt: null,
                         } as any}
-                        metadata={null}
+                        metadata={hostState.workflowMetadata}
                         messages={[]}
                         sessionId="s1"
+                        serverId={hostState.workflowServerId}
                         detailLevel="summary"
                     />
                 );
@@ -197,7 +174,51 @@ function createChainTestRoot(Content: typeof import('./ChainTranscriptList')['Ch
     };
 }
 
+const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+installDisconnectedServerSocketBoundary();
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const initialSettings = getStorage().getState().settings;
+const records: SessionSystemRecordStored[] = [];
+const recordHttp = createSessionSystemRecordHttpFixture({ sessionId: 's1', records,
+    effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+        capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) },
+});
+let recordGate: ReturnType<typeof createDeferred<void>> | undefined;
+const recordRequests: string[] = [];
+const runtime = installSessionPaneRuntimeTestHarness({
+    features: () => {
+        const features = createRootLayoutFeaturesResponse();
+        return { ...features, capabilities: { ...features.capabilities,
+            session: { ...features.capabilities.session, systemRecords: { protocolVersions: [1] } },
+        } };
+    },
+    request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (!path.endsWith('/system-records/record')) return null;
+        recordRequests.push(path);
+        await recordGate?.promise;
+        return recordHttp.request(url, init);
+    },
+});
+// Cold module loading is fixture setup, before the test clock and queued animation frames.
+const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
+
 describe('ChainTranscriptList row-layout mutation ownership', () => {
+    beforeEach(() => {
+        getStorage().setState({ settings: {
+            ...initialSettings,
+            transcriptGroupingMode: 'linear',
+            transcriptGroupToolCalls: false,
+        } });
+        records.length = 0;
+        recordHttp.recordReads.length = 0;
+        recordRequests.length = 0;
+        recordGate = undefined;
+        hostState.workflowMetadata = null;
+        hostState.workflowServerId = runtime.serverId;
+    });
     afterEach(() => {
         hostState.legendList?.reset();
         hostState.legendList?.refHandle.scrollToOffset.mockReset();
@@ -205,11 +226,13 @@ describe('ChainTranscriptList row-layout mutation ownership', () => {
         hostState.messageViewProps.length = 0;
         hostState.motionConfigs.length = 0;
         hostState.nowMs = 1_000;
-        hostState.workflowDetail = null;
-        hostState.workflowListeners.clear();
+        recordGate?.resolve();
+        recordGate = undefined;
+        hostState.workflowMetadata = null;
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
         standardCleanup();
+        getStorage().setState({ settings: initialSettings });
     });
 
     it('keeps the real Legend visible anchor stable across a nested workflow-row expansion', async () => {
@@ -217,11 +240,11 @@ describe('ChainTranscriptList row-layout mutation ownership', () => {
         const animationFrames = installAnimationFrameQueue();
         let positions = [0, 240, 480, 720, 960];
         setDetachedNativeGeometry(positions, 1_200);
-        const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
         const ChainTranscriptList = createChainTestRoot(ChainContent);
         const screen = await renderScreen(
             <ChainTranscriptList
                 sessionId="s1"
+                serverId={runtime.serverId}
                 datasetKey={JSON.stringify(['s1', 'sidechain-a'])}
                 messages={transcriptMessages('workflow-agent')}
                 metadata={null}
@@ -229,6 +252,7 @@ describe('ChainTranscriptList row-layout mutation ownership', () => {
             />,
         );
         installNativeOffsetCommit();
+        expect(hostState.legendList.props.data).toHaveLength(positions.length);
         const anchorViewportTop = readAnchorViewportTop(positions);
         expect(typeof hostState.legendList.props.onScrollBeginDrag).toBe('function');
         expect(typeof hostState.legendList.props.onScrollEndDrag).toBe('function');
@@ -264,20 +288,29 @@ describe('ChainTranscriptList row-layout mutation ownership', () => {
         const animationFrames = installAnimationFrameQueue();
         let positions = [0, 240, 480, 720, 960];
         setDetachedNativeGeometry(positions, 1_200);
-        hostState.workflowDetail = { state: 'loading', runId: 'workflow-run' };
-        const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
+        recordGate = createDeferred<void>();
+        hostState.workflowMetadata = createSessionFixture().metadata;
+        hostState.workflowMetadata = {
+            ...hostState.workflowMetadata!,
+            ...makeSessionWorkflowActivityMetadata([
+                makeSessionWorkflowRunHeadline({ runId: 'workflow-run', workflowToolUseId: 'workflow-tool' }),
+            ]),
+        };
         const ChainTranscriptList = createChainTestRoot(ChainContent);
         const renderTranscript = () => (
             <ChainTranscriptList
                 sessionId="s1"
+                serverId={runtime.serverId}
                 datasetKey={JSON.stringify(['s1', 'sidechain-a'])}
                 messages={transcriptMessages('workflow-hydration')}
                 metadata={null}
                 interaction={{ canSendMessages: true, canApprovePermissions: true }}
             />
         );
-        await renderScreen(renderTranscript());
+        const screen = await renderScreen(renderTranscript());
+        await vi.waitFor(() => expect(recordRequests).toEqual(['/v2/sessions/s1/system-records/record']));
         installNativeOffsetCommit();
+        expect(hostState.legendList.props.data).toHaveLength(positions.length);
         const anchorViewportTop = readAnchorViewportTop(positions);
         expect(typeof hostState.legendList.props.onScrollBeginDrag).toBe('function');
         expect(typeof hostState.legendList.props.onScrollEndDrag).toBe('function');
@@ -293,26 +326,24 @@ describe('ChainTranscriptList row-layout mutation ownership', () => {
         hostState.legendList.refHandle.scrollToOffset.mockClear();
 
         await act(async () => {
-            hostState.workflowDetail = {
-                state: 'loaded',
-                runId: 'workflow-run',
-                snapshot: {
-                    runId: 'workflow-run',
-                    title: 'Hydrated workflow',
-                    status: 'active',
-                    totalAgents: 1,
-                    completedAgents: 0,
-                    phases: [],
-                    agents: [{
-                        id: 'agent-1',
-                        title: 'Hydrated worker',
-                        status: 'active',
-                        updatedAt: 2,
-                    }],
-                },
-            };
-            for (const listener of hostState.workflowListeners) listener();
+            const snapshot = makeSessionWorkflowRunSnapshot({
+                runId: 'workflow-run', title: 'Hydrated workflow', workflowToolUseId: 'workflow-tool',
+                totalAgents: 1, completedAgents: 0, phases: [],
+                agents: [{ id: 'agent-1', title: 'Hydrated worker', status: 'active', updatedAt: 2 }],
+            });
+            records.push(SessionSystemRecordStoredSchema.parse({
+                id: 'sysrec_1',
+                address: { owner: 'host', namespace: 'activity', kind: 'workflow_run.v1',
+                    localId: buildWorkflowRunSystemRecordLocalId({ runId: snapshot.runId }) },
+                revision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
+                content: { t: 'plain', v: snapshot },
+                createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+            }));
+            recordGate?.resolve();
+            await flushHookEffects({ cycles: 40 });
         });
+        expect(collectHostText(screen.tree)).toContain('Hydrated workflow');
+        expect(recordHttp.recordReads).toEqual([buildWorkflowRunSystemRecordLocalId({ runId: 'workflow-run' })]);
 
         positions = [0, 240, 2_480, 2_720, 2_960];
         setDetachedNativeGeometry(positions, 3_200);
@@ -327,11 +358,11 @@ describe('ChainTranscriptList row-layout mutation ownership', () => {
     });
 
     it('installs the effective reduced-motion config for the sidechain transcript surface', async () => {
-        const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
         const ChainTranscriptList = createChainTestRoot(ChainContent);
         await renderScreen(
             <ChainTranscriptList
                 sessionId="s1"
+                serverId={runtime.serverId}
                 datasetKey={JSON.stringify(['s1', 'sidechain-a'])}
                 messages={[{
                     kind: 'agent-text',

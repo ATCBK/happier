@@ -91,7 +91,7 @@ describe('buildTranscriptTurnUnits', () => {
     it('keeps a workflow invocation and its reply together for row-local quiet-turn disclosure', () => {
         const user = { ...userMessage('habit', 1, 1), meta: { happierProvenanceV1: {
             v: 2, kind: 'workflow_invocation', runId: 'daily', invocationRecordId: 'summary',
-        } } };
+        } } } satisfies Message;
         const messagesById = indexMessages([user, toolMessage('habit-tool', 2, 2), agentMessage('reply', 3, 3)]);
         const item = turnItem({ id: 'turn:habit', userMessageId: 'habit', content: [
             { kind: 'tool_calls', id: 'habit-tools', toolMessageIds: ['habit-tool'] },

@@ -39,7 +39,6 @@ import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeatu
 import { storage } from '@/sync/domains/state/storage';
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 vi.mock('socket.io-client', async (importOriginal) =>
   (
@@ -198,7 +197,9 @@ async function prepare(height: Readonly<Record<string, string>>, viewer: 'owner'
   if (!executed.ok) throw new Error(`Visual publication failed: ${executed.errorCode}`);
   // The canonical UI front door confirms the present user's intent, then returns
   // its mutation acknowledgement. A durable Inbox request is a separate policy.
-  const acknowledged = getActionSpec('session.board.item.upsert').outputSchema.parse(executed.result);
+  const outputSchema = getActionSpec('session.board.item.upsert').outputSchema;
+  if (!outputSchema) throw new Error('Visual publication must declare its Action result contract');
+  const acknowledged = outputSchema.parse(executed.result);
   expect(records.filter(row => row.address.kind === 'item.v1')).toHaveLength(1);
   if (viewer === 'view') boundary.effectiveAccess = SessionEffectiveAccessV1Schema.parse({ v: 1, level: 'view',
     sources: [{ kind: 'direct', shareId: 'reader-grant' }], capabilities: projectSessionAccessCapabilitiesV1({
@@ -374,16 +375,13 @@ describe('live inline transcript visuals', () => {
       .find((node) => node.props.overflowTriggerTestID === 'transcript-board-widget-visual-actions')
       ?.props.actions.find((action: { id: string }) => action.id === 'pin-to-board');
     await vi.waitFor(() => expect(readPin()).toBeTruthy());
-    // This Board port has no present-user confirmation, so its ordinary
-    // dangerous layout mutation still follows the real durable Inbox path.
+    // Pin is a present-user reversible edit: the canonical policy applies it directly.
     const priorApprovals = new Set(artifacts.list().map(row => row.id));
     await act(async () => { readPin()?.onPress?.(); });
-    await vi.waitFor(() => expect(artifacts.list().some(row => !priorApprovals.has(row.id))).toBe(true));
-    const approvalId = artifacts.list().find(row => !priorApprovals.has(row.id))!.id;
-    expect(await decideApprovalAsInbox(serverId, approvalId, 'approve')).toMatchObject({ ok: true, result: { status: 'executed' } });
     await vi.waitFor(() => expect(records.find(row => row.address.kind === 'layout.v1')?.content).toMatchObject({
       t: 'plain', v: { tabs: [{ id: 'view-a', items: [{ itemId: 'visual' }] }] },
     }));
+    expect(artifacts.list().some(row => !priorApprovals.has(row.id))).toBe(false);
     expect(records.filter(row => row.address.kind === 'item.v1')).toEqual([itemBefore]);
   });
 });

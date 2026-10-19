@@ -670,6 +670,9 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 	        const menuOpen = openMenuKey === menuKey;
 	        const menuAnchor = menuPressAnchor?.menuKey === menuKey ? menuPressAnchor.anchor : undefined;
 	        const hasDecryptFailure = message.pendingDecryptFailure?.kind === 'decrypt_failed';
+        // Its Session reader hasn't opened it yet: the bubble holds a placeholder, not the message, so
+        // nothing that reads or delivers the content is offered until the real text arrives.
+        const isContentLoading = message.pendingDecryption?.kind === 'loading';
         const visualState = getPendingMessageVisualState(message, {
             materializingLocalIds,
             hasEarlierRow: pendingMessages.slice(0, index).some((candidate) =>
@@ -769,11 +772,11 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         const canUseDirectDeliveryActions = !hasDurableOutboxOperation
             && !isCancellationState
             && !hasEffectPossibleDelivery
-            && canUseDirectPendingDeliveryActions(message, hasDecryptFailure);
+            && canUseDirectPendingDeliveryActions(message, hasDecryptFailure || isContentLoading);
 
 	        const menuItems = (() => {
 	            const items: DropdownMenuItem[] = [];
-                if (text) {
+                if (text && !isContentLoading) {
                     items.push({
                         id: 'copy',
                         testID: `pendingMessages.menu.copy:${message.id}`,
@@ -808,7 +811,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 	                items.push({ id: 'markDeliveryHandled', title: t('session.pendingMessages.actions.markHandled'), icon: <Icon name="checks" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
 	                items.push({ id: 'remove', title: t('common.remove'), icon: <Icon name="trash" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
                 } else if (canUsePendingQueueActions) {
-		                items.push({ id: 'edit', title: t('session.pendingMessages.actions.edit'), icon: <Icon name="pencil" size={16} color={theme.colors.text.secondary} /> });
+		                if (!isContentLoading) items.push({ id: 'edit', title: t('session.pendingMessages.actions.edit'), icon: <Icon name="pencil" size={16} color={theme.colors.text.secondary} /> });
 		                items.push({ id: 'remove', title: t('common.remove'), icon: <Icon name="trash" size={16} color={theme.colors.text.secondary} /> });
                 }
 	            if (canSteerNow && canUseDirectDeliveryActions) {
@@ -1013,7 +1016,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                 revealed={hoveredMessageId === message.id || menuOpen || visualState.kind === 'send_failed' || usesDeliveryResolutionActions || isUncertainDelivery}
                                 style={styles.messageActionContainer}
                             >
-                                {text ? (
+                                {text && !isContentLoading ? (
                                     <PendingMessageCopyAction
                                         testID={`pendingMessages.copy:${message.id}`}
                                         message={message}
@@ -1100,7 +1103,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                         disabled={deliveryActionBusy}
                                     />
                                 ) : null}
-                                {canUsePendingQueueActions && !usesDeliveryResolutionActions ? (
+                                {canUsePendingQueueActions && !usesDeliveryResolutionActions && !isContentLoading ? (
 	                                    <IconAction
 	                                        testID={`pendingMessages.edit:${message.id}`}
                                         accessibilityLabel={t('session.pendingMessages.actions.edit')}

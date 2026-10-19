@@ -20,15 +20,16 @@ function latestWorkerUpdateMessageId(messages: readonly Message[], worker: Worke
     return null;
 }
 
-/** Historical notices keep their result; only the latest notice in this exact transcript owns live answers. */
-export function useCurrentWorkerUpdate(update: WorkerUpdateV1, messageId: string, serverId: string): boolean {
+/** Historical notices keep their result; only the latest notice in this exact transcript owns live answers. A null message reads nothing. */
+export function useCurrentWorkerUpdate(update: WorkerUpdateV1, messageId: string | null, serverId: string | null | undefined): boolean {
     const source = useSessionTranscriptSource();
     const history = source.history.useState();
     const sameHome = areServerProfileIdentifiersEquivalent(source.serverId, serverId);
     if (source.kind !== 'app') {
         const ids = source.useMessageIdsOldestFirst();
         const byId = source.useMessagesById();
-        return sameHome && !history.hasNewer && latestWorkerUpdateMessageId(ids.flatMap(id => byId[id] ? [byId[id]] : []), update) === messageId;
+        return messageId !== null && sameHome && !history.hasNewer
+            && latestWorkerUpdateMessageId(ids.flatMap(id => byId[id] ? [byId[id]] : []), update) === messageId;
     }
     const activeServerId = useActiveServerSnapshot(Boolean(source.serverId)).serverId;
     const selector = React.useMemo(() => {
@@ -43,6 +44,7 @@ export function useCurrentWorkerUpdate(update: WorkerUpdateV1, messageId: string
             const nextSessionPresent = state.sessions[source.sessionId] !== undefined;
             // Unrelated streaming and metadata writes do not rescan this transcript or rerender
             // historical cards. The retained row still has to prove its Home on every change.
+            if (messageId === null) return false;
             if (transcript !== nextTranscript || home !== nextHome || sessionPresent !== nextSessionPresent) {
                 transcript = nextTranscript;
                 home = nextHome;

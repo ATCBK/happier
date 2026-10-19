@@ -8,8 +8,11 @@ import { createStorageStoreMock } from '@/dev/testkit/mocks/storage';
 import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
 import { createReducer } from "@happier-dev/session-core/reducer";
 import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
+import { findGestureByKind, type TestGestureChain } from '@/dev/testkit/mocks/gestureHandler';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+vi.mock('react-native-gesture-handler', async () =>
+    (await import('@/dev/testkit/mocks/gestureHandler')).createGestureHandlerMock());
 
 installMessageViewCommonModuleMocks({
     reactNative: async () => {
@@ -302,12 +305,14 @@ describe('MessageView (rollback button)', () => {
             />, createTestSessionTranscriptSource({ sessionId: 'session-1' }),
         );
 
-        const longPressTargets = screen.findAll((node: any) => node.type === 'Pressable' && typeof node.props.onLongPress === 'function');
-        expect(longPressTargets.length).toBeGreaterThan(0);
+        const holds = screen.findAllByType('GestureDetector').map((node) =>
+            findGestureByKind(node.props.gesture as TestGestureChain, 'longPress')).filter((gesture) => gesture?.__config.enabled);
+        expect(holds).toHaveLength(1);
         await act(async () => {
-            longPressTargets[0]?.props.onLongPress();
+            holds[0]!.__handlers.onStart?.();
         });
         const contextMenuProps = contextMenuPropsSpy.mock.calls.at(-1)?.[0];
+        expect(contextMenuProps?.open).toBe(true);
         expect(contextMenuProps?.items).toEqual(expect.arrayContaining([
             expect.objectContaining({ id: 'rollback' }),
         ]));

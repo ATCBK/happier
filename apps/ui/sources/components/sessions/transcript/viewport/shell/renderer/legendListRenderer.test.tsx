@@ -1145,10 +1145,11 @@ describe('Legend transcript renderer adapter', () => {
 
         legendRenderSuspense = new Promise<void>(() => {});
         await act(async () => {
+            let update: Promise<void> | undefined;
             React.startTransition(() => {
-                screen.tree.update(render(2, callbackB));
+                update = screen.update(render(2, callbackB));
             });
-            await Promise.resolve();
+            await update;
         });
         expect(capturedLegendListProps.dataVersion).toBe(2);
         expect(screen.findByType('LegendList' as any).props.dataVersion).toBe(1);

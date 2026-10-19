@@ -1,4 +1,5 @@
 import type { Message } from "@happier-dev/session-core/messages";
+import { isSessionFollowWakeEventLocalId } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 
 export type TranscriptEventEmphasis = 'normal' | 'deemphasized';
 export type TranscriptEventEmphasisByMessageId = Readonly<Record<string, TranscriptEventEmphasis>>;
@@ -36,30 +37,36 @@ export type TranscriptHostWakeCountByMessageId = Readonly<Record<string, number>
 
 const EMPTY_TRANSCRIPT_HOST_WAKE_COUNT_BY_MESSAGE_ID: TranscriptHostWakeCountByMessageId = Object.freeze({});
 
-function isWorkerUpdateEvent(message: Message | undefined): boolean {
-    return message?.kind === 'agent-event' && message.event.type === 'worker-update';
-}
-
 /**
- * A context-only wake commits one `worker-update` host event per update, back to back, before the
- * lead's turn. The update that opens such a run carries the run's length so its row can say the
- * session was woken by those updates rather than by the user (ORC R-01, lab D1); the rest carry
- * nothing. Counts are primitives, so an unchanged run keeps every row's props equal.
+ * An adjacent WorkerUpdate run is not provider acceptance. Count only the
+ * same-destination cards linked to a batch whose canonical server projection
+ * proves a new turn, with the first card displaying that batch's count.
  */
 export function resolveTranscriptHostWakeCountByMessageId(input: Readonly<{
     messageIdsOldestFirst: readonly string[];
     messagesById: Readonly<Record<string, Message>>;
 }>): TranscriptHostWakeCountByMessageId {
-    let counts: Record<string, number> | null = null;
-    let openerId: string | null = null;
+    const acceptedBatches = new Set<string>();
     for (const messageId of input.messageIdsOldestFirst) {
-        if (!isWorkerUpdateEvent(input.messagesById[messageId])) {
-            openerId = null;
-            continue;
+        const message = input.messagesById[messageId];
+        if (message?.kind === 'agent-event'
+            && isSessionFollowWakeEventLocalId(message.localId)
+            && 'followDeliveryProjection' in message
+            && message.followDeliveryProjection?.status === 'woke') {
+            acceptedBatches.add(message.localId);
         }
+    }
+    let counts: Record<string, number> | null = null;
+    const openerByBatch = new Map<string, string>();
+    for (const messageId of input.messageIdsOldestFirst) {
+        const message = input.messagesById[messageId];
+        if (message?.kind !== 'agent-event' || message.event.type !== 'worker-update') continue;
+        const batchId = message.event.followWakeEventLocalId;
+        if (!batchId || !acceptedBatches.has(batchId)) continue;
         counts ??= {};
-        if (openerId === null) {
-            openerId = messageId;
+        const openerId = openerByBatch.get(batchId);
+        if (!openerId) {
+            openerByBatch.set(batchId, messageId);
             counts[messageId] = 1;
         } else {
             counts[openerId] = (counts[openerId] ?? 0) + 1;

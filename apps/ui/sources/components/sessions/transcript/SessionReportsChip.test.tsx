@@ -24,7 +24,7 @@ const reports = (total: number) => ({ total, working: total, needsYou: 0, stalle
 describe('transcript Sessions chip', () => {
     it('shows the Session\'s own reports.total at the end of the transcript and opens the Agents destination; absent without children', async () => {
         const account = await restoreServerAccountForTest({ serverUrl: 'https://transcript-reports.test', accountId: 'account-a' });
-        const shell = createSessionFixture({ id: 'lead-session', serverId: account.home.id, reports: reports(3) });
+        const shell = createSessionFixture({ id: 'lead-session', serverId: account.home.id, managedSessions: reports(3) });
         let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
         try {
             storage.getState().applySessions([shell]);
@@ -40,12 +40,12 @@ describe('transcript Sessions chip', () => {
             expect(pushed[0]).toContain('lead-session');
             expect(pushed[0]).toContain('agents');
 
-            await act(async () => { storage.getState().applySessions([{ ...shell, reports: reports(4) }]); });
+            await act(async () => { storage.getState().applySessions([{ ...shell, managedSessions: reports(4) }]); });
             expect(screen.getTextContent()).toContain('Sessions · 4');
 
-            await act(async () => { storage.getState().applySessions([{ ...shell, reports: reports(0) }]); });
+            await act(async () => { storage.getState().applySessions([{ ...shell, managedSessions: reports(0) }]); });
             expect(screen.findByTestId('transcript-session-reports-chip')).toBeNull();
-            await act(async () => { storage.getState().applySessions([{ ...shell, reports: undefined }]); });
+            await act(async () => { storage.getState().applySessions([{ ...shell, managedSessions: undefined }]); });
             expect(screen.findByTestId('transcript-session-reports-chip')).toBeNull();
         } finally {
             await screen?.unmount();

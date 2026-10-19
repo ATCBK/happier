@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 import type { Message } from "@happier-dev/session-core/messages";
 import { storage, useActiveServerAccountScope, useForkedTranscriptSnapshot } from '@/sync/domains/state/storage';
 import { readSessionMessageProvenance } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -67,8 +68,8 @@ export function useTranscriptRootMessages(sessionId: string) {
             const message = messagesById[id];
             const provenance = message && readSessionMessageProvenance(message.meta, 'stored');
             if (provenance?.kind !== 'workflow_invocation') continue;
-            const needsTitle = !state.workflowRunsById[provenance.runId]?.summary;
-            const fact = state.workflowRunInvocationsByRunId[provenance.runId]?.factsById[provenance.invocationRecordId];
+            const needsTitle = !state.workflowRunsById[workflowRunStoreKey(provenance.runId)]?.summary;
+            const fact = state.workflowRunInvocationsByRunId[workflowRunStoreKey(provenance.runId)]?.factsById[provenance.invocationRecordId];
             const needsStep = !provenance.stepOrdinal
                 && !fact?.stepOrdinal;
             const needsProvenance = !fact?.provenanceLoaded;

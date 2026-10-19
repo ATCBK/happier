@@ -6,8 +6,6 @@ import { createServerScopedMachineRpcBoundaryMock } from '@/dev/testkit/mocks/se
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
-import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { disconnectActiveServerConnection } from '@/sync/runtime/orchestration/connectionManager';
 
 import {
     DaemonPluginUiResourceReadRequestSchema,
@@ -25,22 +23,7 @@ import {
     PluginProjectionV2Schema,
 } from '@happier-dev/protocol';
 
-import {
-    EMPTY_PLUGIN_UI_PROJECTION,
-    normalizePluginUiProjection,
-    type PluginUiProjectionModel,
-} from '@/sync/domains/plugins/ui/projection';
-import { PluginContextualResourceStoreProvider } from '@/components/plugins/surfaces/PluginContextualResourceStoreProvider';
-import { storage } from '@/sync/domains/state/storage';
-
-import {
-    appendPluginTranscriptActivityTranscriptItems,
-    buildPluginTranscriptActivityIdentityKey,
-    createPluginTranscriptActivityTranscriptItemsCache,
-} from './pluginTranscriptActivityTranscriptItem';
-import { PluginTranscriptActivityDismissalProvider } from './PluginTranscriptActivityDismissalProvider';
-import { usePluginTranscriptActivities } from './usePluginTranscriptActivities';
-import { usePluginTranscriptActivityDismissal } from './PluginTranscriptActivityDismissalProvider';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 
 const transport = vi.hoisted(() => ({
     read: vi.fn(),
@@ -74,6 +57,18 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
+const { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+const { EMPTY_PLUGIN_UI_PROJECTION, normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+const { PluginContextualResourceStoreProvider } = await import('@/components/plugins/surfaces/PluginContextualResourceStoreProvider');
+const { storage } = await import('@/sync/domains/state/storage');
+const {
+    appendPluginTranscriptActivityTranscriptItems,
+    buildPluginTranscriptActivityIdentityKey,
+    createPluginTranscriptActivityTranscriptItemsCache,
+} = await import('./pluginTranscriptActivityTranscriptItem');
+const { PluginTranscriptActivityDismissalProvider, usePluginTranscriptActivityDismissal } = await import('./PluginTranscriptActivityDismissalProvider');
+const { usePluginTranscriptActivities } = await import('./usePluginTranscriptActivities');
 const connections: Awaited<ReturnType<typeof restoreServerAccountForTest>>[] = [];
 async function createAccountLifetime(accountId = 'account-a') {
     // Cold restore is an app-entry operation; a new Account first retires the live connection.
