@@ -228,7 +228,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('P
     type SiblingFixture = Awaited<ReturnType<typeof siblingFixture>>;
 
     async function interleaveSibling(f: SiblingFixture, mutation: Exclude<Mutation, 'account'>, referenced: boolean, fullCatalogRead = false) {
-        let peer: 'not-run' | 'committed' | 'serialized' = 'not-run';
+        const peer: { status: 'not-run' | 'committed' | 'serialized' } = { status: 'not-run' };
         try {
             const result = await inTx(async tx => {
                 await tx.$executeRaw`SET LOCAL enable_seqscan = off`;
@@ -248,17 +248,17 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('P
                         else if (mutation === 'revocation') await other.savedSecretAccountGrant.deleteMany({ where: { resourceId, accountId: f.caller.id } });
                         else await other.savedSecretResource.delete({ where: { id: resourceId } });
                     }, { isolationLevel: 'Serializable' });
-                    peer = 'committed';
+                    peer.status = 'committed';
                 } catch (error) {
                     if (!isPrismaErrorCode(error, 'P2034')) throw error;
-                    peer = 'serialized';
+                    peer.status = 'serialized';
                 }
                 return result;
             }, { isolationLevel: 'Serializable' });
-            return { peer, result };
+            return { peer: peer.status, result };
         } catch (error) {
             if (!isPrismaErrorCode(error, 'P2034') && !isTransactionConflictExhaustedError(error)) throw error;
-            return { peer, result: { status: 'serialized' } };
+            return { peer: peer.status, result: { status: 'serialized' } };
         }
     }
 
