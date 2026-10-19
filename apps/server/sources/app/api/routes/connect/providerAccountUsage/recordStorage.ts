@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 
 import { db } from "@/storage/db";
-import { prismaRuntime, type TransactionClient } from "@/storage/prisma";
+import { getDbProviderFromEnv, prismaRuntime, type TransactionClient } from "@/storage/prisma";
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { ProviderAccountUsageRecordKeyV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { parseBuiltInLegacyProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
@@ -41,6 +41,12 @@ export function projectProviderAccountUsageRecordV4(record: StoredProviderAccoun
 }
 
 export async function readProviderAccountUsageHistory(params: Readonly<{ accountId: string; recordId: string; history: import('@happier-dev/protocol/connect/providerAccountUsageHistory').ProviderAccountUsageHistoryRequestV1 }>, client: ProviderAccountUsageRecordClient = db) {
+    const page = await readProviderAccountUsageHistoryPageRows(params, client);
+    return { entries: page.entries.map(parseProviderAccountUsageHistoryEntry), nextCursor: page.nextCursor };
+}
+
+/** Capture database values in the admission snapshot; validate payloads after releasing its connection. */
+export async function readProviderAccountUsageHistoryPageRows(params: Readonly<{ accountId: string; recordId: string; history: import('@happier-dev/protocol/connect/providerAccountUsageHistory').ProviderAccountUsageHistoryRequestV1 }>, client: ProviderAccountUsageRecordClient) {
     const { range, pageSize, cursor } = params.history;
     const row = await client.providerAccountUsageRecord.findUnique({
         where: { accountId_recordId: { accountId: params.accountId, recordId: params.recordId } },
@@ -50,9 +56,13 @@ export async function readProviderAccountUsageHistory(params: Readonly<{ account
         }, orderBy: [{ observedAt: 'asc' }, { id: 'asc' }], take: pageSize + 1, select: { id: true, observedAt: true, payload: true } } },
     });
     const rows = row?.history ?? [];
-    const entries = rows.slice(0, pageSize).map(entry => ({ id: entry.id, observedAtMs: entry.observedAt.getTime(), record: parseHistoryRecord(entry.payload) }));
+    const entries = rows.slice(0, pageSize);
     const last = entries.at(-1);
-    return { entries, nextCursor: rows.length > pageSize && last ? { observedAtMs: last.observedAtMs, id: last.id } : null };
+    return { entries, nextCursor: rows.length > pageSize && last ? { observedAtMs: last.observedAt.getTime(), id: last.id } : null };
+}
+
+export function parseProviderAccountUsageHistoryEntry(entry: Readonly<{ id: string; observedAt: Date; payload: unknown }>) {
+    return { id: entry.id, observedAtMs: entry.observedAt.getTime(), record: parseHistoryRecord(entry.payload) };
 }
 
 function parseHistoryRecord(payload: unknown): StoredProviderAccountUsageRecord {
@@ -73,12 +83,16 @@ export async function hasProviderAccountUsageHistory(params: Readonly<{ accountI
 }
 
 export async function readProviderAccountUsageHistoryWitness(params: Readonly<{ accountId: string; recordId: string; witness: import('@happier-dev/protocol/connect/providerAccountUsageHistory').ProviderAccountUsageHistoryWitnessV1 }>, client: ProviderAccountUsageRecordClient = db) {
+    const entry = await readProviderAccountUsageHistoryWitnessRow(params, client);
+    return entry ? parseProviderAccountUsageHistoryEntry(entry) : null;
+}
+
+export async function readProviderAccountUsageHistoryWitnessRow(params: Readonly<{ accountId: string; recordId: string; witness: import('@happier-dev/protocol/connect/providerAccountUsageHistory').ProviderAccountUsageHistoryWitnessV1 }>, client: ProviderAccountUsageRecordClient) {
     const row = await client.providerAccountUsageRecord.findUnique({
         where: { accountId_recordId: { accountId: params.accountId, recordId: params.recordId } },
         select: { history: { where: { id: params.witness.id, observedAt: new Date(params.witness.observedAtMs) }, select: { id: true, observedAt: true, payload: true } } },
     });
-    const entry = row?.history[0];
-    return entry ? { id: entry.id, observedAtMs: entry.observedAt.getTime(), record: parseHistoryRecord(entry.payload) } : null;
+    return row?.history[0] ?? null;
 }
 
 /** Only the accepted-write policy invokes this inside the same transaction as its CAS. */
@@ -92,12 +106,17 @@ export async function retainProviderAccountUsageHistory(raw: UpsertProviderAccou
     await client.providerAccountUsageRecord.update({
         where: { accountId_recordId: { accountId: parsed.accountId, recordId: parsed.recordId } },
         data: { history: { create: { observedAt: new Date(parsed.fetchedAt), payload: retained as Prisma.InputJsonValue } } },
+        // History insertion does not consume the parent row. Returning it
+        // would transfer the packed page projection under the write locks.
+        select: { id: true },
     });
 }
 
 export type ProviderAccountUsageRecordCurrentGuard = Readonly<{
     fetchedAt: number | null;
     refreshRequestedAt?: number;
+    content?: Pick<Prisma.ProviderAccountUsageRecordWhereInput,
+        "payloadMode" | "status" | "staleAfterMs" | "snapshot" | "sealedPayload" | "metadata">;
 }>;
 
 function normalizeQuotaScopeIdKey(quotaScopeId: string | undefined): string {
@@ -181,6 +200,7 @@ function buildProviderAccountUsageRecordCurrentWhere(
         recordId: parsed.recordId,
         fetchedAt: guard.fetchedAt === null ? null : new Date(guard.fetchedAt),
         refreshRequestedAt: guard.refreshRequestedAt === undefined ? null : new Date(guard.refreshRequestedAt),
+        ...guard.content,
     };
 }
 
@@ -284,40 +304,45 @@ export async function upsertProviderAccountUsageRecord(
 export async function createProviderAccountUsageRecord(
     raw: UpsertProviderAccountUsageRecordParams,
     client: ProviderAccountUsageRecordClient = db,
-): Promise<StoredProviderAccountUsageRecord> {
+): Promise<void> {
     const parsed = parseProviderAccountUsageRecordWrite(raw);
     await client.providerAccountUsageRecord.create({
         data: buildProviderAccountUsageRecordCreateData(parsed),
     });
-    const stored = await readProviderAccountUsageRecord({
-        accountId: parsed.accountId,
-        recordId: parsed.recordId,
-    }, client);
-    if (!stored) {
-        throw new Error("Provider account usage record disappeared after create");
+}
+
+/** An insert race must not abort PostgreSQL before the policy can reread its winner. */
+export async function createProviderAccountUsageRecordIfAbsent(
+    raw: UpsertProviderAccountUsageRecordParams,
+    client: ProviderAccountUsageRecordClient,
+): Promise<boolean> {
+    if (getDbProviderFromEnv(process.env, "postgres") === "sqlite") {
+        // SQLite serializes these writers; preserve its existing unique-error recovery.
+        await createProviderAccountUsageRecord(raw, client);
+        return true;
     }
-    return stored;
+    const parsed = parseProviderAccountUsageRecordWrite(raw);
+    const created = await client.providerAccountUsageRecord.createMany({
+        data: buildProviderAccountUsageRecordCreateData(parsed),
+        skipDuplicates: true,
+    });
+    return created.count === 1;
 }
 
 export async function updateProviderAccountUsageRecordIfCurrent(
     raw: UpsertProviderAccountUsageRecordParams,
     guard: ProviderAccountUsageRecordCurrentGuard,
     client: ProviderAccountUsageRecordClient = db,
-): Promise<StoredProviderAccountUsageRecord | null> {
+): Promise<boolean> {
     const parsed = parseProviderAccountUsageRecordWrite(raw);
     const updated = await client.providerAccountUsageRecord.updateMany({
         where: buildProviderAccountUsageRecordCurrentWhere(parsed, guard),
         data: buildProviderAccountUsageRecordUpdateData(parsed),
     });
-    if (updated.count === 0) return null;
-    const stored = await readProviderAccountUsageRecord({
-        accountId: parsed.accountId,
-        recordId: parsed.recordId,
-    }, client);
-    if (!stored) {
-        throw new Error("Provider account usage record disappeared after guarded update");
-    }
-    return stored;
+    // The write policy consumes only this acknowledgement. Its qualified
+    // caller reads the final record after history/source settlement; reading
+    // and decoding it here extends the credential lock for a discarded value.
+    return updated.count > 0;
 }
 
 export async function writeProviderAccountUsageRecord(
@@ -331,6 +356,17 @@ export async function readProviderAccountUsageRecord(params: Readonly<{
     accountId: string;
     recordId: string;
 }>, client: ProviderAccountUsageRecordClient = db): Promise<StoredProviderAccountUsageRecord | null> {
+    return (await readProviderAccountUsageRecordWithCurrentGuard(params, client))?.record ?? null;
+}
+
+/** Keep raw persisted JSON in the CAS: legacy projections and unknown retained fields need not reserialize identically. */
+export async function readProviderAccountUsageRecordWithCurrentGuard(params: Readonly<{
+    accountId: string;
+    recordId: string;
+}>, client: ProviderAccountUsageRecordClient): Promise<Readonly<{
+    record: StoredProviderAccountUsageRecord;
+    guard: ProviderAccountUsageRecordCurrentGuard;
+}> | null> {
     const row = await client.providerAccountUsageRecord.findUnique({
         where: {
             accountId_recordId: {
@@ -352,7 +388,22 @@ export async function readProviderAccountUsageRecord(params: Readonly<{
             metadata: true,
         },
     });
-    return row ? parseStoredProviderAccountUsageRecord(row) : null;
+    if (!row) return null;
+    return {
+        record: parseStoredProviderAccountUsageRecord(row),
+        guard: {
+            fetchedAt: row.fetchedAt?.getTime() ?? null,
+            ...(row.refreshRequestedAt ? { refreshRequestedAt: row.refreshRequestedAt.getTime() } : {}),
+            content: {
+                payloadMode: row.payloadMode,
+                status: row.status,
+                staleAfterMs: row.staleAfterMs,
+                snapshot: { equals: row.snapshot ?? prismaRuntime.AnyNull },
+                sealedPayload: { equals: row.sealedPayload ?? prismaRuntime.AnyNull },
+                metadata: { equals: row.metadata ?? prismaRuntime.AnyNull },
+            },
+        } satisfies ProviderAccountUsageRecordCurrentGuard,
+    };
 }
 
 export async function requestProviderAccountUsageRefresh(params: Readonly<{

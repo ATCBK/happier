@@ -1,4 +1,5 @@
-import { z } from "zod";
+import { z } from "zod/mini";
+import { createHash } from 'node:crypto';
 import { QualifiedProviderAccountUsageHistoryRequestV4Schema, QualifiedProviderAccountUsageHistoryResponseV4Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { ProviderAccountUsagePageProjectionReadV1Schema, ProviderAccountUsagePageProjectionWriteV1Schema } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
 import { projectProviderAccountUsageRecordV4 } from '../providerAccountUsage/recordStorage';
@@ -77,43 +78,43 @@ const defaultDependencies:
         mutateQualifiedConnectedServiceCredentialHealth,
     };
 
-const StructuredServiceQuerySchema = z.object({
+const StructuredServiceQuerySchema = z.strictObject({
     service: z.union([z.string(), z.array(z.string())]),
-}).strict();
-const StructuredRefQuerySchema = z.object({
+});
+const StructuredRefQuerySchema = z.strictObject({
     ref: z.union([z.string(), z.array(z.string())]),
-}).strict();
-const StructuredConfigurationTargetQuerySchema = z.object({
+});
+const StructuredConfigurationTargetQuerySchema = z.strictObject({
     target: z.union([z.string(), z.array(z.string())]),
-}).strict();
-const StructuredGroupQuerySchema = z.object({
+});
+const StructuredGroupQuerySchema = z.strictObject({
     group: z.union([z.string(), z.array(z.string())]),
-    expectedRuntimeStateRevision: z.string().optional(),
-}).strict();
-const StructuredGroupDeleteQuerySchema = z.object({
+    expectedRuntimeStateRevision: z.optional(z.string()),
+});
+const StructuredGroupDeleteQuerySchema = z.strictObject({
     group: z.union([z.string(), z.array(z.string())]),
     expectedGeneration: z.string(),
-    expectedRuntimeStateRevision: z.string().optional(),
-    expectedIncarnation: z.string().optional(),
-}).strict();
-const StructuredGroupMemberDeleteQuerySchema = z.object({
+    expectedRuntimeStateRevision: z.optional(z.string()),
+    expectedIncarnation: z.optional(z.string()),
+});
+const StructuredGroupMemberDeleteQuerySchema = z.strictObject({
     mutation: z.union([z.string(), z.array(z.string())]),
-}).strict();
-const StructuredUsageSourceQuerySchema = z.object({
+});
+const StructuredUsageSourceQuerySchema = z.strictObject({
     source: z.union([z.string(), z.array(z.string())]),
-}).strict();
-const CredentialDeleteQuerySchema = z.object({
+});
+const CredentialDeleteQuerySchema = z.strictObject({
     ref: z.union([z.string(), z.array(z.string())]),
-    expectedCredentialRevision: z.string().trim().min(1).max(128),
+    expectedCredentialRevision: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
     cleanupGroupReferences: z.enum(["true", "false"]),
-    emergencyRevoke: z.enum(["true", "false"]).optional(),
-    reviewOnly: z.enum(["true", "false"]).optional(),
-    managedResourceDispositions: z.union([z.string(), z.array(z.string())]).optional(),
-}).strict();
+    emergencyRevoke: z.optional(z.enum(["true", "false"])),
+    reviewOnly: z.optional(z.enum(["true", "false"])),
+    managedResourceDispositions: z.optional(z.union([z.string(), z.array(z.string())])),
+});
 const ProviderUsageRecordQuerySchema =
     QualifiedProviderAccountUsageRecordQueryV4Schema;
 
-const NotFoundResponseSchema = z.object({
+const NotFoundResponseSchema = z.strictObject({
     error: z.enum([
         "connect_credential_not_found",
         "connect_quotas_not_found",
@@ -121,8 +122,8 @@ const NotFoundResponseSchema = z.object({
         "provider_account_usage_source_not_found",
         "provider_account_usage_not_found",
     ]),
-}).strict();
-const GroupConflictResponseSchema = z.object({
+});
+const GroupConflictResponseSchema = z.strictObject({
     error: z.enum([
         "connect_group_already_exists",
         "connect_group_generation_conflict",
@@ -134,10 +135,10 @@ const GroupConflictResponseSchema = z.object({
         "connect_group_source_revision_conflict",
         "connect_group_profile_runtime_cooldown",
     ]),
-    runtimeStateRevision: z.number().int().nonnegative().nullable().optional(),
-    generation: z.number().int().nonnegative().optional(),
-    resetAtMs: z.number().int().nonnegative().optional(),
-}).strict();
+    runtimeStateRevision: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    generation: z.optional(z.number().check(z.int(), z.nonnegative())),
+    resetAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+});
 
 function parseOptionalCanonicalInteger(
     value: string | undefined,
@@ -200,9 +201,9 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             querystring: StructuredServiceQuerySchema,
             response: {
                 200: QualifiedConnectedAccountListResponseV4Schema,
-                400: z.object({
+                400: z.strictObject({
                     error: z.literal("invalid-params"),
-                }).strict(),
+                }),
             },
         },
     }, async (request, reply) => {
@@ -231,9 +232,9 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             response: {
                 200:
                     QualifiedConnectedAccountCredentialMutationSuccessV4Schema,
-                400: z.object({
+                400: z.strictObject({
                     error: z.literal("invalid-params"),
-                }).strict(),
+                }),
                 409: QualifiedConnectedAccountCredentialErrorV4Schema,
             },
         },
@@ -280,12 +281,12 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             querystring: StructuredRefQuerySchema,
             response: {
                 200: QualifiedConnectedAccountCredentialSnapshotV4Schema,
-                400: z.object({
+                400: z.strictObject({
                     error: z.literal("invalid-params"),
-                }).strict(),
-                404: z.object({
+                }),
+                404: z.strictObject({
                     error: z.literal("connect_credential_not_found"),
-                }).strict(),
+                }),
                 409: QualifiedConnectedAccountCredentialErrorV4Schema,
             },
         },
@@ -327,12 +328,12 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             response: {
                 200:
                     QualifiedConnectedAccountConfigurationSnapshotV4Schema,
-                400: z.object({
+                400: z.strictObject({
                     error: z.literal("invalid-params"),
-                }).strict(),
-                404: z.object({
+                }),
+                404: z.strictObject({
                     error: z.literal("connect_credential_not_found"),
-                }).strict(),
+                }),
             },
         },
     }, async (request, reply) => {
@@ -368,12 +369,12 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             response: {
                 200:
                     QualifiedConnectedAccountCredentialMutationSuccessV4Schema,
-                400: z.object({
+                400: z.strictObject({
                     error: z.literal("invalid-params"),
-                }).strict(),
-                404: z.object({
+                }),
+                404: z.strictObject({
                     error: z.literal("connect_credential_not_found"),
-                }).strict(),
+                }),
                 409: QualifiedConnectedAccountCredentialErrorV4Schema,
             },
         },
@@ -422,12 +423,12 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             response: {
                 200:
                     QualifiedConnectedAccountCredentialMutationSuccessV4Schema,
-                400: z.object({
+                400: z.strictObject({
                     error: z.literal("invalid-params"),
-                }).strict(),
-                404: z.object({
+                }),
+                404: z.strictObject({
                     error: z.literal("connect_credential_not_found"),
-                }).strict(),
+                }),
                 409: QualifiedConnectedAccountCredentialErrorV4Schema,
             },
         },
@@ -480,7 +481,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             querystring: CredentialDeleteQuerySchema,
             response: {
                 200: QualifiedConnectedAccountCredentialDeleteResponseV4Schema,
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 404: NotFoundResponseSchema,
                 409: QualifiedConnectedAccountCredentialErrorV4Schema,
             },
@@ -544,7 +545,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             response: {
                 200:
                     QualifiedConnectedAccountRefreshLeaseResponseV4Schema,
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 404: NotFoundResponseSchema,
             },
         },
@@ -580,7 +581,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             querystring: StructuredRefQuerySchema,
             response: {
                 200: QualifiedConnectedAccountQuotaResponseV4Schema,
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 404: NotFoundResponseSchema,
                 409: QualifiedProviderAccountUsageReadErrorV4Schema,
             },
@@ -623,7 +624,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             querystring: StructuredRefQuerySchema,
             response: {
                 200: QualifiedConnectedAccountSuccessV4Schema,
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 404: NotFoundResponseSchema,
                 409: QualifiedProviderAccountUsageReadErrorV4Schema,
             },
@@ -690,7 +691,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             querystring: StructuredServiceQuerySchema,
             response: {
                 200: QualifiedConnectedAccountGroupListResponseV4Schema,
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
             },
         },
     }, async (request, reply) => {
@@ -718,7 +719,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             body: QualifiedConnectedAccountGroupCreateV4Schema,
             response: {
                 200: QualifiedConnectedAccountGroupResponseV4Schema,
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 409: GroupConflictResponseSchema,
             },
         },
@@ -768,7 +769,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             querystring: StructuredGroupQuerySchema,
             response: {
                 200: QualifiedConnectedAccountGroupResponseV4Schema,
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 404: NotFoundResponseSchema,
                 409: GroupConflictResponseSchema,
             },
@@ -816,7 +817,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             body: QualifiedConnectedAccountGroupPatchV4Schema,
             response: {
                 200: QualifiedConnectedAccountGroupResponseV4Schema,
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 404: NotFoundResponseSchema,
                 409: GroupConflictResponseSchema,
             },
@@ -886,7 +887,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             querystring: StructuredGroupDeleteQuerySchema,
             response: {
                 200: QualifiedConnectedAccountSuccessV4Schema,
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 404: NotFoundResponseSchema,
                 409: GroupConflictResponseSchema,
             },
@@ -1120,7 +1121,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             querystring: StructuredGroupMemberDeleteQuerySchema,
             response: {
                 200: QualifiedConnectedAccountGroupResponseV4Schema,
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 404: NotFoundResponseSchema,
                 409: GroupConflictResponseSchema,
             },
@@ -1251,9 +1252,9 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
                 response: {
                     200:
                         QualifiedConnectedServiceUsageSourceResolutionV4Schema,
-                    400: z.object({
+                    400: z.strictObject({
                         error: z.literal("invalid-params"),
-                    }).strict(),
+                    }),
                     404: NotFoundResponseSchema,
                 },
             },
@@ -1293,7 +1294,7 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             body: QualifiedProviderAccountUsageWriteV4Schema,
             response: {
                 200: QualifiedProviderAccountUsageWriteSuccessV4Schema,
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 409: QualifiedConnectedAccountCredentialErrorV4Schema,
             },
         },
@@ -1372,31 +1373,93 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
         }
     });
 
-    app.get('/v4/connect/qualified/provider-account-usage/history', {
+    app.route({ method: ['GET', 'HEAD'], url: '/v4/connect/qualified/provider-account-usage/history', exposeHeadRoute: false,
         preHandler: app.authenticate,
-        schema: { querystring: z.object({ query: z.union([z.string(), z.array(z.string())]) }).strict(), response: { 200: z.union([QualifiedProviderAccountUsageHistoryResponseV4Schema, ProviderAccountUsagePageProjectionReadV1Schema]), 400: z.object({ error: z.literal('invalid-params') }).strict(), 404: NotFoundResponseSchema, 409: QualifiedProviderAccountUsageReadErrorV4Schema } },
+        schema: { querystring: z.strictObject({ query: z.union([z.string(), z.array(z.string())]) }), response: { 200: z.optional(z.union([QualifiedProviderAccountUsageHistoryResponseV4Schema, ProviderAccountUsagePageProjectionReadV1Schema])), 304: z.optional(z.null()), 400: z.strictObject({ error: z.literal('invalid-params') }), 404: NotFoundResponseSchema, 409: QualifiedProviderAccountUsageReadErrorV4Schema } },
+        handler: async (request, reply) => {
+            let query;
+            try { query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema, request.query.query); }
+            catch { return reply.code(400).send({ error: 'invalid-params' }); }
+            const page = await readQualifiedProviderAccountUsageHistory({ accountId: request.userId, ...query });
+            if (page.status === 'storage_mode_mismatch') return reply.code(409).send({ error: 'provider_account_usage_storage_mode_mismatch' });
+            if (page.status === 'not_found') return reply.code(404).send({ error: 'provider_account_usage_not_found' });
+            if ('projection' in page) {
+                reply.header('x-happier-usage-projection-complete', String(page.complete));
+                // Bind demand coverage to the stable protected prefix, whose
+                // identity is independent of subsequently accepted tails.
+                const etag = page.projection ? providerAccountUsageProjectionEtag(page.projection) : null;
+                if (etag) reply.header('etag', etag);
+                const exposed = reply.getHeader('access-control-expose-headers');
+                reply.header('access-control-expose-headers', [...(Array.isArray(exposed) ? exposed : exposed ? [String(exposed)] : []),
+                    'x-happier-usage-projection-complete', 'x-happier-usage-projection-document-etag', 'x-happier-usage-projection-prefix', 'ETag'].join(', '));
+                // HEAD checks this demand without transferring the protected body.
+                // GET remains the original contract for older clients/transports.
+                if (request.method === 'HEAD') {
+                    reply.header('cache-control', 'no-store');
+                    if (page.prefix) reply.header('x-happier-usage-projection-prefix', encodeURIComponent(JSON.stringify(page.prefix)));
+                    if (etag && request.headers['if-none-match'] === etag) return reply.code(304).send(undefined);
+                    return reply.send(undefined);
+                }
+                if (etag) {
+                    // GET's body also carries demand coverage. Keep its HTTP
+                    // validator distinct from the retained prefix's identity.
+                    reply.header('x-happier-usage-projection-document-etag', etag);
+                    reply.header('etag', providerAccountUsageProjectionEtag(page.projection, page.complete));
+                }
+                return reply.send({ projection: page.projection, complete: page.complete });
+            }
+            return reply.send({ entries: page.entries.map(entry => ({ id: entry.id, observedAtMs: entry.observedAtMs, record: projectProviderAccountUsageRecordV4(entry.record, page.sources) })), nextCursor: page.nextCursor });
+        }
+    });
+
+    app.get('/v4/connect/qualified/provider-account-usage/history/document', {
+        preHandler: app.authenticate,
+        schema: { querystring: ProviderUsageRecordQuerySchema, response: {
+            200: ProviderAccountUsagePageProjectionReadV1Schema, 304: z.optional(z.null()), 404: NotFoundResponseSchema, 409: QualifiedProviderAccountUsageReadErrorV4Schema,
+        } },
     }, async (request, reply) => {
-        let query;
-        try { query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema, request.query.query); }
-        catch { return reply.code(400).send({ error: 'invalid-params' }); }
-        const page = await readQualifiedProviderAccountUsageHistory({ accountId: request.userId, ...query });
+        const page = await readQualifiedProviderAccountUsageHistory({ accountId: request.userId, recordId: request.query.recordId, document: true });
         if (page.status === 'storage_mode_mismatch') return reply.code(409).send({ error: 'provider_account_usage_storage_mode_mismatch' });
         if (page.status === 'not_found') return reply.code(404).send({ error: 'provider_account_usage_not_found' });
-        if ('projection' in page) return reply.send({ projection: page.projection, complete: page.complete });
-        return reply.send({ entries: page.entries.map(entry => ({ id: entry.id, observedAtMs: entry.observedAtMs, record: projectProviderAccountUsageRecordV4(entry.record, page.sources) })), nextCursor: page.nextCursor });
+        if (!('projection' in page)) throw new ProviderAccountUsagePayloadInvariantError('Expected B page projection');
+        // The stable resource is the protected prefix only. Demand coverage
+        // belongs to HEAD/original GET and must not change this representation
+        // merely because accepted history grew beyond its frontier.
+        const body = { projection: page.projection, complete: false };
+        if (page.projection) {
+            // The HTTP transport owns its held representation, without a
+            // second response cache in the Usage reader.
+            const etag = providerAccountUsageProjectionEtag(page.projection);
+            const exposed = reply.getHeader('access-control-expose-headers');
+            reply.header('access-control-expose-headers', [...(Array.isArray(exposed) ? exposed : exposed ? [String(exposed)] : []), 'ETag'].join(', '));
+            const vary = reply.getHeader('vary');
+            reply.header('vary', [...(Array.isArray(vary) ? vary : vary ? [String(vary)] : []), 'Authorization'].join(', '));
+            reply.header('cache-control', 'private, no-cache').header('etag', etag);
+            // Always admit the qualified source, Account mode and accepted
+            // prefix before evaluating a conditional read.
+            if (request.headers['if-none-match']?.split(',').some(value => {
+                const validator = value.trim();
+                return validator === '*' || validator.replace(/^W\//u, '') === etag;
+            })) return reply.code(304).send(undefined);
+        }
+        return reply.send(body);
     });
 
     app.put('/v4/connect/qualified/provider-account-usage/history', {
         preHandler: app.authenticate,
         schema: { body: ProviderAccountUsagePageProjectionWriteV1Schema, response: {
-            200: z.object({ success: z.literal(true) }).strict(), 404: NotFoundResponseSchema,
-            409: z.union([QualifiedProviderAccountUsageReadErrorV4Schema, z.object({ error: z.literal('provider_account_usage_projection_conflict') }).strict()]),
+            200: z.strictObject({ success: z.literal(true) }), 404: NotFoundResponseSchema,
+            409: z.union([QualifiedProviderAccountUsageReadErrorV4Schema, z.strictObject({ error: z.literal('provider_account_usage_projection_conflict') })]),
         } },
     }, async (request, reply) => {
         const result = await writeQualifiedProviderAccountUsagePageProjection({ accountId: request.userId, ...request.body });
         if (result === 'not_found') return reply.code(404).send({ error: 'provider_account_usage_not_found' });
         if (result === 'storage_mode_mismatch') return reply.code(409).send({ error: 'provider_account_usage_storage_mode_mismatch' });
         if (result === 'projection_conflict') return reply.code(409).send({ error: 'provider_account_usage_projection_conflict' });
+        if (result.projection) reply.header('etag', providerAccountUsageProjectionEtag(result.projection));
+        const exposed = reply.getHeader('access-control-expose-headers');
+        reply.header('access-control-expose-headers', [...(Array.isArray(exposed) ? exposed : exposed ? [String(exposed)] : []), 'ETag'].join(', '));
+        reply.header('cache-control', 'no-store');
         return reply.send({ success: true });
     });
 
@@ -1517,4 +1580,8 @@ export function registerQualifiedConnectedAccountCredentialRoutesV4(
             return reply.send({ success: true });
         },
     );
+}
+
+function providerAccountUsageProjectionEtag(projection: unknown, complete = false): string {
+    return '"' + createHash('sha256').update(JSON.stringify({ projection, complete })).digest('hex') + '"';
 }

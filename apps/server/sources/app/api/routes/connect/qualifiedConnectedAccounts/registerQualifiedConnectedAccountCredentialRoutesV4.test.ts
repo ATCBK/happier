@@ -56,12 +56,16 @@ describe("qualified Connected Account V4 credential routes", () => {
                 ? route.method
                 : [route.method];
             for (const method of methods) {
-                if (method !== "HEAD") registered.push([method, route.url]);
+                // Explicit HEAD handlers are part of the contract; Fastify's
+                // automatic GET aliases are intentionally omitted.
+                if (method !== "HEAD" || Array.isArray(route.method)) registered.push([method, route.url]);
             }
         });
 
         connectRoutes(app);
         await app.ready();
+
+        expect(app.hasRoute({ method: 'HEAD', url: '/v4/connect/qualified/provider-account-usage/history/document' })).toBe(true);
 
         expect(
             registered.sort(([leftMethod, leftPath], [rightMethod, rightPath]) =>
@@ -88,7 +92,7 @@ describe("qualified Connected Account V4 credential routes", () => {
                 ? route.method
                 : [route.method];
             for (const method of methods) {
-                if (method !== "HEAD") {
+                if (method !== "HEAD" || Array.isArray(route.method)) {
                     registered.push(`${method} ${route.url}`);
                 }
             }

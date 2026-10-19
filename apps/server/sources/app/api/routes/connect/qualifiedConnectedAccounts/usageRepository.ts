@@ -13,13 +13,15 @@ import { isConnectedServiceUsageProviderCompatible } from "@happier-dev/agents";
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import {
     deleteProviderAccountUsageRecord,
     deleteProviderAccountUsageRecordsForAccount,
     readProviderAccountUsageRecord,
-    readProviderAccountUsageHistory,
     readProviderAccountUsageHistoryWitness,
+    readProviderAccountUsageHistoryPageRows,
+    readProviderAccountUsageHistoryWitnessRow,
+    parseProviderAccountUsageHistoryEntry,
     projectSealedProviderAccountUsageContentV4,
     requestProviderAccountUsageRefresh,
 } from "../providerAccountUsage/recordStorage";
@@ -232,6 +234,7 @@ async function resolveQualifiedUsageBinding(
         accountId: string;
         source: QualifiedConnectedServiceUsageSourceV4;
         allowLegacyUnfencedCredential?: boolean;
+        fenceGroupMembership?: boolean;
     }>,
 ) {
     const source =
@@ -310,6 +313,7 @@ async function resolveQualifiedUsageBinding(
                     qualifiedGroupDigest: true,
                     qualifiedIdentityDigest: true,
                     enabled: true,
+                    updatedAt: true,
                 },
             });
         if (!member) {
@@ -339,16 +343,48 @@ async function resolveQualifiedUsageBinding(
                 "unavailable",
             );
         }
+        let admittedGeneration = group.generation;
+        if (params.fenceGroupMembership) {
+            const fenced = await tx.connectedServiceAuthGroupMember.updateMany({
+                where: {
+                    groupDbId: group.id,
+                    credentialId: binding.credential.id,
+                    accountId: params.accountId,
+                    enabled: true,
+                    updatedAt: member.updatedAt,
+                },
+                // Like credential admission, retain the tuple lock without
+                // changing metadata. Lifecycle removal waits for source insertion
+                // and then removes its committed sources in its current statement view.
+                data: { updatedAt: member.updatedAt },
+            });
+            if (fenced.count !== 1) {
+                throw new ConnectedServiceUsageSourceBindingError(
+                    "Qualified Connected Account group member is unavailable",
+                    "unavailable",
+                );
+            }
+            const currentGroup = await tx.connectedServiceAuthGroup.findUnique({
+                where: { id: group.id }, select: { generation: true },
+            });
+            if (!currentGroup) {
+                throw new ConnectedServiceUsageSourceBindingError(
+                    "Qualified Connected Account group binding does not exist",
+                    "unavailable",
+                );
+            }
+            admittedGeneration = currentGroup.generation;
+        }
         if (
             source.groupGeneration !== undefined
-            && source.groupGeneration !== group.generation
+            && source.groupGeneration !== admittedGeneration
         ) {
             throw new ConnectedServiceUsageSourceBindingError(
                 "Qualified Connected Account group generation is stale",
                 "unavailable",
             );
         }
-        groupGeneration = source.groupGeneration ?? group.generation;
+        groupGeneration = source.groupGeneration ?? admittedGeneration;
     }
     if (source.bindingKind === "group_member") {
         if (groupGeneration === null) {
@@ -536,7 +572,7 @@ async function readExactQualifiedConnectedServiceUsageSourceWithCredentialAdmiss
     }> = {},
 ): Promise<ExactQualifiedConnectedServiceUsageSource | null> {
     try {
-        return await inTx(async (tx) => {
+        return await inReadSnapshot(async (tx) => {
             const binding =
                 await resolveQualifiedUsageBinding(tx, {
                     ...params,
@@ -583,7 +619,7 @@ async function readExactQualifiedConnectedServiceUsageSourceWithCredentialAdmiss
                 fetchedAt: record.fetchedAt?.getTime() ?? null,
                 staleAfterMs: record.staleAfterMs,
             };
-        }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+        });
     } catch (error) {
         if (
             error instanceof ConnectedServiceUsageSourceBindingError
@@ -631,6 +667,7 @@ async function upsertQualifiedSourceInTx(
         providerAccountUsageRecordId: string;
         source: QualifiedConnectedServiceUsageSourceV4;
         allowLegacyUnfencedCredential?: boolean;
+        beforeWrite?: () => Promise<void>;
     }>,
 ) {
     const binding = await resolveQualifiedUsageBinding(tx, params);
@@ -691,78 +728,73 @@ async function upsertQualifiedSourceInTx(
             "Stored qualified Connected Account usage source does not match its lookup identity",
         );
     }
-    await tx.connectedServiceUsageSource.upsert({
-        where: {
-            accountId_sourceKey: {
+    const obsoleteWhere = {
+        accountId: params.accountId,
+        credentialId: binding.credential.id,
+        ...(source.bindingKind === 'group_member'
+            ? { bindingKind: 'group_member', groupId: source.groupId }
+            : { bindingKind: { in: ['account', 'profile'] } }),
+        sourceKey: { not: sourceKey },
+    };
+    const obsolete = await tx.connectedServiceUsageSource.findFirst({ where: obsoleteWhere, select: { id: true } });
+    const linkChanged = !existing || existing.providerAccountUsageRecordId !== params.providerAccountUsageRecordId;
+    if (!linkChanged && !obsolete) return;
+    await params.beforeWrite?.();
+    if (linkChanged) {
+        await tx.connectedServiceUsageSource.upsert({
+            where: {
+                accountId_sourceKey: {
+                    accountId: params.accountId,
+                    sourceKey,
+                },
+            },
+            create: {
                 accountId: params.accountId,
+                serviceId: binding.credential.vendor,
+                profileId: binding.credential.profileId,
+                servicePluginId: binding.credential.servicePluginId,
+                serviceLocalId: binding.credential.serviceLocalId,
+                qualifiedServiceDigest:
+                    binding.credential.qualifiedServiceDigest,
+                connectedAccountId:
+                    binding.credential.connectedAccountId,
+                qualifiedIdentityDigest:
+                    binding.credential.qualifiedIdentityDigest,
+                credentialId: binding.credential.id,
                 sourceKey,
+                providerAccountUsageRecordId:
+                    params.providerAccountUsageRecordId,
+                bindingKind: source.bindingKind,
+                ...(source.bindingKind === "group_member"
+                    ? {
+                        groupId: source.groupId,
+                        groupGeneration: source.groupGeneration ?? null,
+                    }
+                    : {}),
             },
-        },
-        create: {
-            accountId: params.accountId,
-            serviceId: binding.credential.vendor,
-            profileId: binding.credential.profileId,
-            servicePluginId: binding.credential.servicePluginId,
-            serviceLocalId: binding.credential.serviceLocalId,
-            qualifiedServiceDigest:
-                binding.credential.qualifiedServiceDigest,
-            connectedAccountId:
-                binding.credential.connectedAccountId,
-            qualifiedIdentityDigest:
-                binding.credential.qualifiedIdentityDigest,
-            credentialId: binding.credential.id,
-            sourceKey,
-            providerAccountUsageRecordId:
-                params.providerAccountUsageRecordId,
-            bindingKind: source.bindingKind,
-            ...(source.bindingKind === "group_member"
-                ? {
-                    groupId: source.groupId,
-                    groupGeneration: source.groupGeneration ?? null,
-                }
-                : {}),
-        },
-        update: {
-            providerAccountUsageRecordId:
-                params.providerAccountUsageRecordId,
-            bindingKind: source.bindingKind,
-            groupId: source.bindingKind === "group_member"
-                ? source.groupId
-                : null,
-            groupGeneration: source.bindingKind === "group_member"
-                ? source.groupGeneration ?? null
-                : null,
-            servicePluginId: binding.credential.servicePluginId,
-            serviceLocalId: binding.credential.serviceLocalId,
-            qualifiedServiceDigest:
-                binding.credential.qualifiedServiceDigest,
-            connectedAccountId:
-                binding.credential.connectedAccountId,
-            qualifiedIdentityDigest:
-                binding.credential.qualifiedIdentityDigest,
-            credentialId: binding.credential.id,
-        },
-    });
-    if (source.bindingKind === "group_member") {
-        await tx.connectedServiceUsageSource.deleteMany({
-            where: {
-                accountId: params.accountId,
+            update: {
+                providerAccountUsageRecordId:
+                    params.providerAccountUsageRecordId,
+                bindingKind: source.bindingKind,
+                groupId: source.bindingKind === "group_member"
+                    ? source.groupId
+                    : null,
+                groupGeneration: source.bindingKind === "group_member"
+                    ? source.groupGeneration ?? null
+                    : null,
+                servicePluginId: binding.credential.servicePluginId,
+                serviceLocalId: binding.credential.serviceLocalId,
+                qualifiedServiceDigest:
+                    binding.credential.qualifiedServiceDigest,
+                connectedAccountId:
+                    binding.credential.connectedAccountId,
+                qualifiedIdentityDigest:
+                    binding.credential.qualifiedIdentityDigest,
                 credentialId: binding.credential.id,
-                bindingKind: "group_member",
-                groupId: source.groupId,
-                sourceKey: { not: sourceKey },
-            },
-        });
-    } else {
-        await tx.connectedServiceUsageSource.deleteMany({
-            where: {
-                accountId: params.accountId,
-                credentialId: binding.credential.id,
-                bindingKind: { in: ["account", "profile"] },
-                sourceKey: { not: sourceKey },
             },
         });
     }
+    if (obsolete) await tx.connectedServiceUsageSource.deleteMany({ where: obsoleteWhere });
 }
 
 type QualifiedProviderAccountUsageWriteParams =
@@ -805,6 +837,7 @@ async function writeQualifiedProviderAccountUsageRecordInTx(
             providerAccountUsageRecordId: params.recordId,
             source,
             allowLegacyUnfencedCredential,
+            beforeWrite: params.beforeWrite,
         });
         sourceOutcome = { status: "linked" };
     } catch (error) {
@@ -911,33 +944,43 @@ export async function writeQualifiedProviderAccountUsageRecord(
                     binding.credential.configurationRevision,
             });
         }
-        const locked = await tx.serviceAccountToken.updateMany({
-            where: {
-                id: binding.credential.id,
-                updatedAt: binding.credential.updatedAt,
-                configurationRevision:
-                    params.expectedConfigurationRevision,
-            },
-            data: { updatedAt: binding.credential.updatedAt },
-        });
-        if (locked.count !== 1) {
-            const latest = await resolveQualifiedCredential(tx, {
-                accountId: params.accountId,
-                ref: params.source.ref,
+        let needsFence = false;
+        const fenceWrite = async () => {
+            const locked = await tx.serviceAccountToken.updateMany({
+                where: {
+                    id: binding.credential.id,
+                    updatedAt: binding.credential.updatedAt,
+                    configurationRevision:
+                        params.expectedConfigurationRevision,
+                },
+                data: { updatedAt: binding.credential.updatedAt },
             });
-            const latestProjection =
-                resolveQualifiedConnectedAccountStoredMetadata({
-                    rowId: latest.credential.id,
-                    metadata: latest.credential.metadata,
+            if (locked.count !== 1) {
+                const latest = await resolveQualifiedCredential(tx, {
+                    accountId: params.accountId,
+                    ref: params.source.ref,
                 });
-            throw new QualifiedConnectedAccountUsageBasisError({
-                reason: "concurrent_mutation",
-                credentialRevision:
-                    latestProjection.credentialRevision,
-                configurationRevision:
-                    latest.credential.configurationRevision,
-            });
-        }
+                const latestProjection =
+                    resolveQualifiedConnectedAccountStoredMetadata({
+                        rowId: latest.credential.id,
+                        metadata: latest.credential.metadata,
+                    });
+                throw new QualifiedConnectedAccountUsageBasisError({
+                    reason: "concurrent_mutation",
+                    credentialRevision:
+                        latestProjection.credentialRevision,
+                    configurationRevision:
+                        latest.credential.configurationRevision,
+                });
+            }
+            if (params.source.bindingKind === "group_member") {
+                await resolveQualifiedUsageBinding(tx, {
+                    accountId: params.accountId,
+                    source: params.source,
+                    fenceGroupMembership: true,
+                });
+            }
+        };
         const {
             source: _source,
             expectedCredentialRevision: _expectedCredentialRevision,
@@ -945,14 +988,21 @@ export async function writeQualifiedProviderAccountUsageRecord(
                 _expectedConfigurationRevision,
             ...write
         } = params;
-        return await writeQualifiedProviderAccountUsageRecordInTx(
+        const result = await writeQualifiedProviderAccountUsageRecordInTx(
             tx,
             {
                 ...write,
                 source: params.source,
+                beforeWrite: async () => { needsFence = true; },
             },
         );
-    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+        // Publication can wait on the shared Account row. Do not hold the
+        // credential/member tuples across that wait: their lifecycle writers
+        // acquire Account first. A failed final CAS still rolls back the entire
+        // observation/source write, while a no-op takes no credential lock.
+        if (needsFence) await fenceWrite();
+        return result;
+    }, { transactionClass: "qualified-provider-account-usage.write" });
 }
 
 type LegacyConnectedServiceQuotaCompatibilityWriteParams = Readonly<{
@@ -1106,11 +1156,6 @@ export async function writeLegacyConnectedServiceQuotaCompatibilityRecord(
                 "unproven",
             );
         }
-        await assertLegacyConnectedServiceQuotaCredentialCurrentInTx(tx, {
-            accountId: params.accountId,
-            credential: binding.credential,
-        });
-
         if (params.payloadMode === "plain_json_v1") {
             if (
                 params.snapshot.fetchedAt !== params.fetchedAt
@@ -1146,6 +1191,10 @@ export async function writeLegacyConnectedServiceQuotaCompatibilityRecord(
                 );
             }
             await deleteReleasedConnectedServiceQuotaSnapshotInStorage(tx, params);
+            await assertLegacyConnectedServiceQuotaCredentialCurrentInTx(tx, {
+                accountId: params.accountId,
+                credential: binding.credential,
+            });
             return;
         }
 
@@ -1188,6 +1237,12 @@ export async function writeLegacyConnectedServiceQuotaCompatibilityRecord(
             );
         }
         await deleteReleasedConnectedServiceQuotaSnapshotInStorage(tx, params);
+        // Match the qualified writer: validate the captured credential last so
+        // Account publication never waits while holding its credential tuple.
+        await assertLegacyConnectedServiceQuotaCredentialCurrentInTx(tx, {
+            accountId: params.accountId,
+            credential: binding.credential,
+        });
     }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
@@ -1238,37 +1293,48 @@ export async function listQualifiedUsageSourcesForRecord(
 export async function readQualifiedProviderAccountUsageRecord(
     params: Readonly<{ accountId: string; recordId: string }>,
 ): Promise<QualifiedProviderAccountUsageAdmission> {
-    return await inTx(async (tx) =>
-        await admitQualifiedProviderAccountUsageRecordInTx(tx, params), { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+    return await inReadSnapshot(async (tx) =>
+        await admitQualifiedProviderAccountUsageRecordInTx(tx, params));
 }
 
-export async function readQualifiedProviderAccountUsageHistory(params: Readonly<{ accountId: string }> & ReturnType<typeof import('@happier-dev/protocol/connect/providerAccountUsageHistory').QualifiedProviderAccountUsageHistoryRequestV4Schema.parse>) {
-    return await inTx(async tx => {
+export async function readQualifiedProviderAccountUsageHistory(params: Readonly<{ accountId: string }> & (ReturnType<typeof import('@happier-dev/protocol/connect/providerAccountUsageHistory').QualifiedProviderAccountUsageHistoryRequestV4Schema.parse>
+    | Readonly<{ recordId: string; document: true }>)): Promise<
+    Exclude<QualifiedProviderAccountUsageAdmission, { status: 'resolved' }>
+    | ({ status: 'resolved' } & Awaited<ReturnType<typeof readProviderAccountUsagePageProjection>>)
+    | Readonly<{ status: 'resolved'; entries: ReturnType<typeof parseProviderAccountUsageHistoryEntry>[];
+        nextCursor: Awaited<ReturnType<typeof readProviderAccountUsageHistoryPageRows>>['nextCursor']; sources: QualifiedConnectedServiceUsageSourceV4[] }>
+> {
+    const captured = await inReadSnapshot(async tx => {
         let admitted;
         try { admitted = await admitQualifiedProviderAccountUsageRecordInTx(tx, params); }
         catch (error) {
-            if ('projection' in params && error instanceof ProviderAccountUsagePayloadInvariantError) return { status: 'storage_mode_mismatch' as const };
+            if (('projection' in params || 'document' in params) && error instanceof ProviderAccountUsagePayloadInvariantError) return { status: 'storage_mode_mismatch' as const };
             throw error;
         }
         if (admitted.status !== 'resolved') return admitted;
-        if ('projection' in params) {
+        if ('projection' in params || 'document' in params) {
             const stored = admitted.record.metadata?.pageProjection;
             if (stored && !projectionMatchesMode(stored, admitted.record)) return { status: 'storage_mode_mismatch' as const };
-            try { return { status: 'resolved' as const, ...await readProviderAccountUsagePageProjection(params, tx) }; }
+            try { return { status: 'resolved' as const, ...await readProviderAccountUsagePageProjection(params, tx, admitted.record) }; }
             catch (error) {
                 if (error instanceof ProviderAccountUsagePayloadInvariantError) return { status: 'storage_mode_mismatch' as const };
                 throw error;
             }
         }
-        const page = 'history' in params
-            ? await readProviderAccountUsageHistory(params, tx)
-            : { entries: [await readProviderAccountUsageHistoryWitness(params, tx)].filter((entry): entry is NonNullable<typeof entry> => entry !== null), nextCursor: null };
-        if (page.entries.some(entry => entry.record.accountId !== params.accountId || entry.record.recordId !== params.recordId || entry.record.payloadMode !== admitted.record.payloadMode)) return { status: 'storage_mode_mismatch' as const };
-        return { status: 'resolved' as const, entries: page.entries, nextCursor: page.nextCursor, sources: admitted.sources };
-    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+        const historyPage = 'history' in params
+            ? await readProviderAccountUsageHistoryPageRows(params, tx)
+            : { entries: [await readProviderAccountUsageHistoryWitnessRow(params, tx)].filter((entry): entry is NonNullable<typeof entry> => entry !== null), nextCursor: null };
+        return { status: 'resolved' as const, historyPage, payloadMode: admitted.record.payloadMode, sources: admitted.sources };
+    });
+    if (!('historyPage' in captured) || captured.historyPage === undefined) return captured;
+    // Admission and row capture share one database snapshot. Decoding large
+    // pages must not hold that connection through CPU work or HTTP delivery.
+    const entries = captured.historyPage.entries.map(parseProviderAccountUsageHistoryEntry);
+    if (entries.some(entry => entry.record.accountId !== params.accountId || entry.record.recordId !== params.recordId || entry.record.payloadMode !== captured.payloadMode)) return { status: 'storage_mode_mismatch' as const };
+    return { status: 'resolved' as const, entries, nextCursor: captured.historyPage.nextCursor, sources: captured.sources };
 }
 
-function projectionMatchesMode(value: ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse>, record: StoredProviderAccountUsageRecord) {
+function projectionMatchesMode(value: Pick<ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse>, 'content'>, record: StoredProviderAccountUsageRecord) {
     return record.payloadMode === 'plain_json_v1' ? value.content.t === 'plain'
         : value.content.t === 'encrypted' && isAccountScopedBlobCiphertextForKind({ kind: 'provider_account_usage_page_projection', ciphertext: value.content.c });
 }
@@ -1280,7 +1346,21 @@ export async function writeQualifiedProviderAccountUsagePageProjection(params: R
         if (admitted.status !== 'resolved') return admitted.status;
         if (!projectionMatchesMode(params, admitted.record)) return 'storage_mode_mismatch' as const;
         const { accountId, ...value } = params;
-        return await writeProviderAccountUsagePageProjection({ accountId, value }, tx) ? 'written' as const : 'projection_conflict' as const;
+        // Writes merge the raw persisted metadata, including unknown retained
+        // fields that the admitted read projection intentionally drops.
+        const projection = await writeProviderAccountUsagePageProjection({ accountId, value }, tx);
+        if (!projection) return 'projection_conflict' as const;
+        // A no-op can retain another writer's ciphertext. Acknowledge the
+        // actual stored representation returned by the same admitted write,
+        // without transferring its multi-MB metadata through Prisma again.
+        const submittedCoverage = projection.recordId === value.recordId && projection.encoding === value.encoding
+            && projection.demand.range.startAtMs === value.demand.range.startAtMs
+            && projection.demand.range.endAtMs === value.demand.range.endAtMs
+            && projection.observationCount === value.observationCount
+            && projection.frontier?.id === value.frontier?.id
+            && projection.frontier?.observedAtMs === value.frontier?.observedAtMs;
+        // A concurrently retained wider document is not held by this producer.
+        return { status: 'written' as const, projection: submittedCoverage ? projection : null };
     }, { isolationLevel: 'Serializable' });
 }
 
@@ -1445,7 +1525,7 @@ async function readFirstQualifiedSourceForRef(
             }
             return null;
         };
-        return await (storage ? readInStorage(storage) : inTx(readInStorage, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" }));
+        return await (storage ? readInStorage(storage) : inReadSnapshot(readInStorage));
     } catch (error) {
         if (
             error instanceof ConnectedServiceUsageSourceBindingError
@@ -1484,7 +1564,7 @@ export async function readQualifiedConnectedAccountUsageRecordWithSource(
     sourceResolution: QualifiedConnectedServiceUsageSourceResolutionV4;
     record: StoredProviderAccountUsageRecord;
 }> | Readonly<{ status: "not_found" }> | Readonly<{ status: "storage_mode_mismatch" }>> {
-    return await inTx(async (tx) => {
+    return await inReadSnapshot(async (tx) => {
         const source = await readFirstQualifiedSourceForRef(params, tx);
         if (!source) return { status: "not_found" as const };
         const admitted = await admitQualifiedProviderAccountUsageRecordInTx(tx, {
@@ -1497,7 +1577,7 @@ export async function readQualifiedConnectedAccountUsageRecordWithSource(
             sourceResolution: source,
             record: admitted.record,
         };
-    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+    });
 }
 
 /**
@@ -1515,7 +1595,7 @@ export async function readLegacyConnectedServiceQuotaCompatibilityRecordWithSour
     sourceResolution: ExactQualifiedConnectedServiceUsageSource;
     record: StoredProviderAccountUsageRecord;
 }> | Readonly<{ status: "not_found" }> | Readonly<{ status: "storage_mode_mismatch" }>> {
-    return await inTx(async (tx) => {
+    return await inReadSnapshot(async (tx) => {
         const source = await readFirstQualifiedSourceForRef({
             ...params,
             allowLegacyUnfencedCredential: true,
@@ -1534,7 +1614,7 @@ export async function readLegacyConnectedServiceQuotaCompatibilityRecordWithSour
             sourceResolution: source,
             record: admitted.record,
         };
-    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
+    });
 }
 
 export async function readQualifiedConnectedAccountQuota(

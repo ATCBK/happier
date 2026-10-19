@@ -116,11 +116,21 @@ const { uniqueConflictTransaction } = vi.hoisted(() => ({
     },
 }));
 
-vi.mock("@/storage/inTx", () => ({
-    inTx: async (
-        callback: (tx: typeof uniqueConflictTransaction) => Promise<unknown>,
-    ) => await callback(uniqueConflictTransaction),
-}));
+vi.mock("@/storage/db", async () => {
+    const { inTxPostgresControlStatementMock } = await import("@/app/api/testkit/dbMocks");
+    const transaction = {
+        ...inTxPostgresControlStatementMock,
+        ...uniqueConflictTransaction,
+        async $queryRawUnsafe(query: string) {
+            if (query.includes('FROM "Account"') && query.includes('FOR NO KEY UPDATE')) {
+                return [{ id: "account-concurrent-create" }];
+            }
+            throw new Error("Unexpected fixture SQL");
+        },
+    };
+    // Only Prisma is substituted; transaction/fence and uniqueness handling stay real.
+    return { db: { $transaction: async <T>(callback: (tx: typeof transaction) => Promise<T>) => callback(transaction) } };
+});
 
 describe("qualified Connected Account group repository", () => {
     it("projects one strict structured service identity", () => {

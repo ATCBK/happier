@@ -7,6 +7,7 @@ import type { Prisma } from "@prisma/client";
 
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import {
     isPrismaErrorCode,
 } from "@/storage/prisma";
@@ -733,6 +734,7 @@ export async function createQualifiedConnectedAccountGroup(
         group: params.group,
     });
     return await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         const serviceDigest =
             createQualifiedConnectedAccountServiceDigest(parsed.service);
         const groupDigest =
@@ -877,7 +879,7 @@ export async function createQualifiedConnectedAccountGroup(
             service: parsed.service,
             groupId: parsed.group.groupId,
         });
-    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+    });
 }
 
 export async function patchQualifiedConnectedAccountGroup(
@@ -892,6 +894,7 @@ export async function patchQualifiedConnectedAccountGroup(
         params.patch,
     );
     return await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: patch.service,
@@ -1057,7 +1060,7 @@ export async function patchQualifiedConnectedAccountGroup(
             service: patch.service,
             groupId: patch.groupId,
         });
-    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+    });
 }
 
 export async function deleteQualifiedConnectedAccountGroup(
@@ -1073,6 +1076,7 @@ export async function deleteQualifiedConnectedAccountGroup(
     const service =
         QualifiedConnectedAccountServiceRefSchema.parse(params.service);
     return await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service,
@@ -1147,7 +1151,7 @@ export async function deleteQualifiedConnectedAccountGroup(
             accountId: params.accountId,
         });
         return { status: "deleted" };
-    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+    });
 }
 
 export async function patchQualifiedConnectedAccountGroupRuntimeState(
@@ -1162,6 +1166,7 @@ export async function patchQualifiedConnectedAccountGroupRuntimeState(
             params.patch,
         );
     return await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: patch.service,
@@ -1267,7 +1272,7 @@ export async function patchQualifiedConnectedAccountGroupRuntimeState(
             service: patch.service,
             groupId: patch.groupId,
         });
-    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+    });
 }
 
 async function mutateQualifiedGroupMember(
@@ -1285,6 +1290,7 @@ async function mutateQualifiedGroupMember(
         );
     try {
         return await inTx(async (tx) => {
+            await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
             const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
                 accountId: params.accountId,
                 service: mutation.group.service,
@@ -1500,7 +1506,7 @@ async function mutateQualifiedGroupMember(
                 service: mutation.group.service,
                 groupId: mutation.group.groupId,
             });
-        }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+        });
     } catch (error) {
         if (error instanceof QualifiedGroupMemberCasConflictError) {
             return await settleQualifiedGroupMemberCasConflict({
@@ -1576,6 +1582,7 @@ export async function deleteQualifiedConnectedAccountGroupMember(
         );
     try {
         return await inTx(async (tx) => {
+            await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
             const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
                 accountId: params.accountId,
                 service: mutation.group.service,
@@ -1660,7 +1667,7 @@ export async function deleteQualifiedConnectedAccountGroupMember(
                 service: mutation.group.service,
                 groupId: mutation.group.groupId,
             });
-        }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+        });
     } catch (error) {
         if (!(error instanceof QualifiedGroupMemberCasConflictError)) {
             throw error;
@@ -1687,6 +1694,7 @@ export async function setQualifiedConnectedAccountGroupActiveAccount(
             params.mutation,
         );
     return await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: mutation.group.service,
@@ -1812,5 +1820,5 @@ export async function setQualifiedConnectedAccountGroupActiveAccount(
             service: mutation.group.service,
             groupId: mutation.group.groupId,
         });
-    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+    });
 }

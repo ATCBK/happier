@@ -2,7 +2,7 @@ import type { ConnectedServiceQuotaSnapshotV1, ConnectedServiceQuotaRecoveryCred
 import type { ProviderAccountUsageRecordId, ProviderAccountUsageRecordKeyV1, ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
 import type { ProviderAccountSubscriptionV1 } from '@happier-dev/protocol/connect/accountSubscription';
 import type { SealedProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/accountUsage';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { StoredProviderAccountUsagePageProjectionV1Schema } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
 
 export type ProviderAccountUsagePayloadMode = "plain_json_v1" | "sealed_account_scoped_v1";

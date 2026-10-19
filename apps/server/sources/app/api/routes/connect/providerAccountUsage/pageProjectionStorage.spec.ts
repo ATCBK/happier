@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TransactionClient } from '@/storage/prisma';
-import { buildProviderAccountUsagePageProjectionV1, sealProviderAccountUsagePageProjectionV1 } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
+import { buildProviderAccountUsagePageProjectionV1, PROVIDER_ACCOUNT_USAGE_PAGE_ENCODING } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
+import { sealProviderAccountUsagePageProjectionV1 } from '@happier-dev/protocol/connect/providerAccountUsagePageProjectionCrypto';
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { readProviderAccountUsagePageProjection, writeProviderAccountUsagePageProjection } from './pageProjectionStorage';
+import { logger } from '@/utils/logging/log';
 
 const recordKey = { providerId: 'test', accountSubjectId: 'account', subjectKind: 'account' as const, quotaScope: 'account' as const };
 const snapshot = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
@@ -10,7 +12,7 @@ const snapshot = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: bu
     staleAfterMs: 100, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data', meters: [] });
 const demand = { range: { startAtMs: 0, endAtMs: 3 }, resolution: 'accepted_observations' as const };
 const frontier = { id: 'accepted', observedAtMs: 1 };
-const value = { recordId: snapshot.recordId, demand, frontier, observationCount: 1,
+const value = { recordId: snapshot.recordId, encoding: PROVIDER_ACCOUNT_USAGE_PAGE_ENCODING, demand, frontier, observationCount: 1,
     content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain', projection: buildProviderAccountUsagePageProjectionV1({
         recordId: snapshot.recordId, range: demand.range, history: { entries: [{ ...frontier, snapshot }], nextCursor: null },
     }) }) };
@@ -28,6 +30,43 @@ function databaseBoundary() {
 }
 
 describe('B page projection persistence', () => {
+    it('distinguishes null-ingress branches without logging protected content', async () => {
+        // Logging is the process output boundary; storage and its branch logic remain real.
+        const output = vi.spyOn(logger, 'info').mockImplementation(() => {});
+        try {
+            const db = databaseBoundary();
+            const params = { accountId: 'owner', recordId: snapshot.recordId, projection: demand };
+            db.findUnique.mockResolvedValueOnce({ metadata: {} });
+            await readProviderAccountUsagePageProjection(params, db.storage);
+            if (value.content.t !== 'plain') throw new Error('Expected plain fixture');
+            const superseded = { ...Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'encoding')),
+                content: { t: 'plain', v: Object.fromEntries(Object.entries(value.content.v).filter(([key]) => key !== 'encoding')) } };
+            db.findUnique.mockResolvedValueOnce({ metadata: { pageProjection: superseded } });
+            await readProviderAccountUsagePageProjection(params, db.storage);
+            db.findUnique.mockResolvedValueOnce({ metadata: { pageProjection: { ...value,
+                demand: { ...demand, range: { startAtMs: 1, endAtMs: 3 } },
+                content: { ...value.content, v: { ...value.content.v, range: { startAtMs: 1, endAtMs: 3 } } } } } });
+            await readProviderAccountUsagePageProjection(params, db.storage);
+            db.count.mockResolvedValue(2);
+            await readProviderAccountUsagePageProjection(params, db.storage);
+            const diagnostics = output.mock.calls.map(([entry]) => entry);
+            expect(diagnostics).toEqual(['absent', 'superseded', 'range', 'prefix'].map(reason => ({
+                module: 'provider-account-usage', event: 'page_projection_read', recordId: snapshot.recordId,
+                reason, range: demand.range,
+            })));
+        } finally { output.mockRestore(); }
+    });
+    it('backfills and replaces superseded development encodings even when accepted coverage is unchanged', async () => {
+        const db = databaseBoundary();
+        if (value.content.t !== 'plain') throw new Error('Expected plain fixture');
+        const superseded = { ...Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'encoding')),
+            content: { t: 'plain', v: Object.fromEntries(Object.entries(value.content.v).filter(([key]) => key !== 'encoding')) } };
+        db.findUnique.mockResolvedValue({ metadata: { materialFingerprint: 'retained', pageProjection: superseded } });
+        expect(await readProviderAccountUsagePageProjection({ accountId: 'owner', recordId: snapshot.recordId, projection: demand }, db.storage))
+            .toEqual({ projection: null, complete: false });
+        expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toEqual(value);
+        expect(db.update.mock.calls[0]?.[0].data.metadata).toEqual({ materialFingerprint: 'retained', pageProjection: value });
+    });
     it('reuses a complete admitted prefix and distinguishes a new tail from a changed prefix', async () => {
         const db = databaseBoundary();
         const params = { accountId: 'owner', recordId: snapshot.recordId, projection: demand };
@@ -42,15 +81,66 @@ describe('B page projection persistence', () => {
 
     it('admits only the complete accepted count/frontier and preserves sibling metadata', async () => {
         const db = databaseBoundary();
-        expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toBe(true);
-        expect(db.update.mock.calls[0]?.[0].data.metadata).toEqual({ materialFingerprint: 'retained', pageProjection: value });
+        const metadata = { materialFingerprint: 'retained', futureField: { retained: true } };
+        db.findUnique.mockResolvedValue({ metadata });
+        expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toEqual(value);
+        expect(db.update.mock.calls[0]?.[0].data.metadata).toEqual({ ...metadata, pageProjection: value });
         db.update.mockClear();
         db.count.mockResolvedValue(2);
-        expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toBe(false);
+        expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toBeNull();
         expect(db.update).not.toHaveBeenCalled();
         db.count.mockResolvedValue(1);
         db.findFirst.mockResolvedValue({ id: 'different', observedAt: new Date(1) });
-        expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toBe(false);
+        expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toBeNull();
         expect(db.update).not.toHaveBeenCalled();
+    });
+
+    it('does not rewrite accepted coverage even when another client reseals it or extends an empty tail', async () => {
+        const db = databaseBoundary();
+        const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const projection = buildProviderAccountUsagePageProjectionV1({ recordId: snapshot.recordId,
+            range: demand.range, history: { entries: [{ ...frontier, snapshot }], nextCursor: null } });
+        const sealed = { ...value, content: sealProviderAccountUsagePageProjectionV1({ projection, accountMode: 'e2ee', material,
+            randomBytes: length => new Uint8Array(length).fill(1) }) };
+        db.findUnique.mockResolvedValue({ metadata: { pageProjection: sealed } });
+        for (let index = 0; index < 10; index++) {
+            const range = { ...demand.range, endAtMs: demand.range.endAtMs + index };
+            expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value: { ...sealed,
+                demand: { ...demand, range },
+                content: sealProviderAccountUsagePageProjectionV1({ projection: { ...projection, range }, accountMode: 'e2ee', material,
+                    randomBytes: length => new Uint8Array(length).fill(index + 2) }) } }, db.storage)).toEqual(sealed);
+        }
+        expect(db.update).not.toHaveBeenCalled();
+        db.count.mockResolvedValue(2);
+        db.findFirst.mockResolvedValue({ id: 'next', observedAt: new Date(2) });
+        expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value: { ...sealed,
+            observationCount: 2, frontier: { id: 'next', observedAtMs: 2 },
+            content: sealProviderAccountUsagePageProjectionV1({ projection: buildProviderAccountUsagePageProjectionV1({ recordId: snapshot.recordId,
+                range: demand.range, history: { entries: [{ ...frontier, snapshot }, { id: 'next', observedAtMs: 2,
+                    snapshot: { ...snapshot, observedAtMs: 2, fetchedAtMs: 2 } }], nextCursor: null } }), accountMode: 'e2ee', material,
+                randomBytes: length => new Uint8Array(length).fill(20) }) } }, db.storage)).toMatchObject({ observationCount: 2, frontier: { id: 'next', observedAtMs: 2 } });
+        expect(db.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('transfers the retained projection metadata once when acknowledging unchanged accepted history', async () => {
+        const db = databaseBoundary();
+        const metadata = { materialFingerprint: 'retained', pageProjection: value };
+        let transferredBytes = 0;
+        // Prisma transport is the boundary: the loaded QA record carries a multi-MB
+        // ciphertext here. Re-reading that body amplifies I/O inside its transaction.
+        db.findUnique.mockImplementation(async () => {
+            transferredBytes += new TextEncoder().encode(JSON.stringify(metadata)).length;
+            return { metadata };
+        });
+        expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toEqual(value);
+        expect(transferredBytes).toBe(new TextEncoder().encode(JSON.stringify(metadata)).length);
+        expect(db.update).not.toHaveBeenCalled();
+    });
+
+    it('replaces a retained envelope that does not match the admitted write mode', async () => {
+        const db = databaseBoundary();
+        db.findUnique.mockResolvedValue({ metadata: { pageProjection: { ...value, content: { t: 'encrypted', c: 'opaque' } } } });
+        expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toEqual(value);
+        expect(db.update).toHaveBeenCalledTimes(1);
     });
 });

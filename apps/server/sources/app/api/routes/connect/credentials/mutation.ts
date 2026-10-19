@@ -1,6 +1,7 @@
 import type { ConnectedServiceCredentialHealthV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 
 import { inTx, type Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { recordConnectedServiceAccountProfileChange } from "../connectedServicesAccountProfileChange";
 import {
@@ -236,12 +237,13 @@ export async function mutateConnectedServiceCredential(
     params: ConnectedServiceCredentialMutationParams,
 ): Promise<ConnectedServiceCredentialMutationResult> {
     return await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         const result = await mutateConnectedServiceCredentialInTx(tx, params);
         if (result.status === "written") {
             await recordConnectedServiceAccountProfileChange({ tx, accountId: params.accountId });
         }
         return result;
-    }, { /* Credential mode admission and full connected-services projection precede Account publication. */ isolationLevel: "Serializable" });
+    });
 }
 
 export async function mutateConnectedServiceCredentialHealth(params: Readonly<{
