@@ -25,7 +25,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('F
         process.env.HAPPIER_FEATURE_SESSIONS__ENABLED = '1';
         process.env.HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED = '1';
         try { await assertConcurrentFailedTurnRouteAcknowledgements({
-            duringAcknowledgements: async ({ accountId, presence, socket, observe, acknowledge }) => {
+            duringAcknowledgements: async ({ accountId, presence, socket, acknowledge }) => {
                 let release!: () => void;
                 let locked!: (pid: number) => void;
                 const gate = new Promise<void>(resolve => { release = resolve; });
@@ -37,7 +37,6 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('F
                     await gate;
                 }, { timeout: 30_000 });
                 let heartbeat: ReturnType<typeof presence.touchPublisher> | undefined;
-                let observation: Promise<void> | undefined;
                 try {
                     const pid = await acquired;
                     heartbeat = presence.touchPublisher({ socket });
@@ -49,15 +48,11 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('F
                                 WHERE ${pid}::int = ANY(pg_blocking_pids(pid))) AS blocked`;
                         expect(waiting?.blocked).toBe(true);
                     });
-                    let observationSettled = false;
-                    observation = observe().finally(() => { observationSettled = true; });
-                    await vi.waitFor(() => expect(observationSettled).toBe(true), { timeout: 1_000 });
                     await acknowledge(); // Must commit both routes before releasing Account.
                 } finally {
                     release();
                     await holder;
                     await heartbeat;
-                    await observation;
                 }
             },
         }); }

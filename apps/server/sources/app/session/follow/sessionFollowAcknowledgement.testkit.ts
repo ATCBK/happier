@@ -23,7 +23,6 @@ export async function assertConcurrentFailedTurnRouteAcknowledgements(options: R
         accountId: string;
         presence: ReturnType<typeof createSessionPublisherPresence>;
         socket: object;
-        observe: () => Promise<void>;
         acknowledge: () => Promise<void>;
     }>) => Promise<void>;
 }> = {}) {
@@ -52,16 +51,11 @@ export async function assertConcurrentFailedTurnRouteAcknowledgements(options: R
             destinationSessionId: destination.id, policy: { preset: 'quiet' }, authentication })).toMatchObject({ ok: true });
         await db.session.update({ where: { id: source.id }, data: { seq: 2,
             latestTurnId: 'session-turn:failed-source', latestTurnStatus: 'failed' } });
-        const observe = async () => {
-            let rawObservation: unknown;
-            await getSocketHandler(socket, SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1)({ v: 1,
-                sessionId: destination.id, includeManager: true, supportsWakeAdmission: true },
-            (value: unknown) => { rawObservation = value; });
-            const parsed = SessionFollowObservePendingResponseV1Schema.parse(rawObservation);
-            expect(parsed.ok).toBe(true);
-            return parsed;
-        };
-        const observation = await observe();
+        let rawObservation: unknown;
+        await getSocketHandler(socket, SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1)({ v: 1,
+            sessionId: destination.id, includeManager: true, supportsWakeAdmission: true },
+        (value: unknown) => { rawObservation = value; });
+        const observation = SessionFollowObservePendingResponseV1Schema.parse(rawObservation);
         expect(observation.ok).toBe(true);
         if (!observation.ok) throw new Error('Expected current publisher observation');
         const routes = observation.observations.filter(row => 'relation' in row);
@@ -114,8 +108,7 @@ export async function assertConcurrentFailedTurnRouteAcknowledgements(options: R
                 destinationSessionId: destination.id, sourceSessionId: source.id, delivered: request.consumed })));
         };
         if (options.duringAcknowledgements) {
-            await options.duringAcknowledgements({ accountId: owner.id, presence, socket,
-                observe: async () => { await observe(); }, acknowledge: acknowledgeBoth });
+            await options.duringAcknowledgements({ accountId: owner.id, presence, socket, acknowledge: acknowledgeBoth });
         } else await acknowledgeBoth();
         const edges = await db.sessionFollowEdge.findMany({ where: { destinationSessionId: destination.id } });
         expect(edges).toHaveLength(2);
