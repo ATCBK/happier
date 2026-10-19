@@ -10,12 +10,14 @@ import {
     resetScopedHomeActionExecutorsForTests,
     scopedHomeActionExecutor,
 } from '@/sync/ops/actions/scopedHomeActionExecutor';
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
-import { classifyHomeActionOutcome } from '@/sync/ops/home/homeActionOutcome';
+import { classifyHomeActionOutcome, type HomeActionFailure, type HomeActionOutcome } from '@/sync/ops/home/homeActionOutcome';
+import type { HomeDomainFailure as HomeTransportFailure } from '@/sync/api/home/homeServerActionTransport';
 
-/** The failure vocabulary Team surfaces speak; re-exported so a wrapper never
- * reaches past this client into the transport. */
-export type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+/** Team wrappers retain the transport fields and the classifier's actual
+ * refusal vocabulary, including failures before the Home is dispatched. */
+export type HomeDomainFailure<
+    TCode extends string = NonNullable<HomeActionFailure['code']>,
+> = HomeTransportFailure<TCode>;
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { randomUUID } from '@/platform/randomUUID';
 
@@ -93,7 +95,7 @@ function buildTeamActionApprovalRegistration<TValue>(input: Readonly<{
 
 export type TeamActionOutcome<TValue> =
     | Readonly<{ kind: 'succeeded'; value: TValue }>
-    | Readonly<{ kind: 'failed'; failure: HomeDomainFailure }>;
+    | Extract<HomeActionOutcome, { kind: 'failed' }>;
 
 /**
  * The shared Action front door created a durable approval request instead of

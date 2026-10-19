@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -8,16 +8,16 @@ import { runtimeFetchWithServerReachability } from '@/sync/runtime/connectivity/
 
 const LIVE_ACTIVITY_TARGETS_PATH = '/v1/live-activity-targets';
 
-const LiveActivityTargetRegistrationResponseSchema = z.object({
+const LiveActivityTargetRegistrationResponseSchema = z.looseObject({
     success: z.literal(true),
-    target: z.object({
-        id: z.string().trim().min(1),
-    }).passthrough(),
-}).passthrough();
+    target: z.looseObject({
+        id: z.string().check(z.trim(), z.minLength(1)),
+    }),
+});
 
-const LiveActivityTargetDeleteResponseSchema = z.object({
+const LiveActivityTargetDeleteResponseSchema = z.looseObject({
     success: z.literal(true),
-}).passthrough();
+});
 
 export type LiveActivityTargetRegistrationInput = Readonly<{
     deviceId: string;

@@ -34,7 +34,7 @@ import {
 } from '@happier-dev/protocol/home/governance';
 import type { ManagedResourceDispositionV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
 
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeActionFailure as HomeDomainFailure } from '@/sync/ops/home/homeActionOutcome';
 import { homeDomainFailureFromActionFailure } from '@/sync/api/home/homeDomainActions';
 import { awaitActionApprovalResult, createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -60,8 +60,7 @@ export { classifyHomeActionOutcome as classifyHomeGovernanceActionOutcome } from
  * refresh of the same Home after a change the Home actually accepted, a result
  * union that keeps an incomplete erasure distinguishable from a completed one,
  * and the Home's own typed refusal carried through untouched so the surface can
- * explain the real reason. Confirmation stays with the surface, where the person
- * is; nothing here decides whether an action was intended.
+ * explain the real reason. The shared Action executor owns confirmation.
  */
 
 export type HomeGovernanceMutationOutcome =
@@ -580,7 +579,7 @@ export function getHomeReachability(params: Readonly<{
 
 /**
  * Turns direct (Iroh) connections on or off. Off retires the current direct-connection identity for
- * good; the surface confirms that with the person before calling.
+ * good; the Action declaration owns its input-sensitive confirmation default.
  */
 export function setHomeIrohMode(params: Readonly<{
     scope: ServerAccountScope;

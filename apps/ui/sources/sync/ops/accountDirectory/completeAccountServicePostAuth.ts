@@ -9,11 +9,10 @@ import type { VerifiedAccountServiceAuthority } from '@/auth/accountDirectory/ac
 import { createAccountDirectoryServiceKey, type AccountDirectorySession } from '@/sync/domains/accountDirectory/accountDirectorySession';
 import { AccountDirectoryRequestError } from '@/sync/api/accountDirectory/accountDirectoryClient';
 import { TokenStorage, isTokenOnlyAuthCredentials, type AuthCredentials } from '@/auth/storage/tokenStorage';
-import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { resolveProvisioningMaterial } from '@/auth/terminal/resolveProvisioningMaterial';
 import { resolveHomeEnrollmentTransport } from '@/auth/enrollment/homeEnrollmentTransport';
 import { authGetTokenAtEndpoint } from '@/auth/flows/getToken';
-import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
+import { fetchAccountEncryptionCurrentness } from '@/sync/api/account/apiAccountEncryptionMode';
 import { buildHomeConnectionDescriptorForProfile, resolveServerProfileForPortableIdentity } from '@/sync/domains/server/serverProfiles';
 import { parseToken } from '@/utils/auth/parseToken';
 import { encodeBase64 } from '@/encryption/base64';
@@ -219,7 +218,7 @@ async function completeMaterial(input: AccountPostAuthInput, homeServerIdentityI
         const transport = transportResult.transport;
         try {
             const request = transport.createRequest({ credentials });
-            const mode = await fetchAccountEncryptionMode(credentials, {
+            const mode = await fetchAccountEncryptionCurrentness(credentials, {
                 request: async (path, init) => {
                     const response = await request(path, { ...init, signal: input.signal }, { includeAuth: false, retry: 'none' });
                     if (response.status === 408 || response.status === 429 || response.status >= 500) {
@@ -230,22 +229,17 @@ async function completeMaterial(input: AccountPostAuthInput, homeServerIdentityI
             });
             const currentAfterMode = await TokenStorage.getCredentialsForServerUrl(resolved.profile.serverUrl, { serverId: homeServerIdentityId });
             if (shouldCancel() || currentAfterMode?.token !== retainedToken) return stopped(input);
-            if (mode.mode === 'plain' && ('secret' in credentials || 'encryption' in credentials)) {
-                const tokenOnlyCredentials = { token: retainedToken };
-                if (!await TokenStorage.setCredentialsForServerUrl(
-                    resolved.profile.serverUrl,
-                    { serverId: homeServerIdentityId },
-                    tokenOnlyCredentials,
-                )) {
-                    return failure('material', { source: 'local', code: 'account_mode_unavailable' }, 'stop', true, homeServerIdentityId, homeAccountId);
-                }
-                credentials = tokenOnlyCredentials;
-            }
             if (mode.mode === 'e2ee') {
                 if (pairedCredentials) credentials = pairedCredentials;
                 const secret = suppliedSecret?.slice() ?? (isTokenOnlyAuthCredentials(credentials) && input.service.serverIdentityId === homeServerIdentityId ? input.session.takeKeyAuthSecret() : null);
                 if (secret) {
                     try {
+                        const materialCredentials = { token: credentials.token, secret: encodeBase64(secret, 'base64url') };
+                        try {
+                            await resolveProvisioningMaterial(materialCredentials, mode);
+                        } catch {
+                            return materialRequired('invalid_material');
+                        }
                         const recovered = await authGetTokenAtEndpoint({
                             endpointUrl: transport.endpointUrl,
                             canonicalServerUrl: descriptor.canonicalServerUrl,
@@ -259,8 +253,7 @@ async function completeMaterial(input: AccountPostAuthInput, homeServerIdentityI
                         if (parseToken(recovered.token) !== parseToken(credentials.token)) {
                             return materialRequired('invalid_material');
                         }
-                        const recoveredCredentials = { token: recovered.token, secret: encodeBase64(secret, 'base64url') };
-                        await createEncryptionFromAuthCredentials(recoveredCredentials);
+                        const recoveredCredentials = { ...materialCredentials, token: recovered.token };
                         const current = await TokenStorage.getCredentialsForServerUrl(resolved.profile.serverUrl, { serverId: homeServerIdentityId });
                         if (shouldCancel() || current?.token !== retainedToken) return stopped(input);
                         if (!await TokenStorage.setCredentialsForServerUrl(resolved.profile.serverUrl, { serverId: homeServerIdentityId }, recoveredCredentials)) {
@@ -281,7 +274,7 @@ async function completeMaterial(input: AccountPostAuthInput, homeServerIdentityI
                     return materialRequired('missing_material');
                 }
                 try {
-                    await resolveProvisioningMaterial(credentials);
+                    await resolveProvisioningMaterial(credentials, mode);
                 } catch {
                     return materialRequired('invalid_material');
                 }

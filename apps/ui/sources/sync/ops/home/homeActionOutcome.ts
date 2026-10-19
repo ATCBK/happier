@@ -17,6 +17,8 @@ export type HomeActionOutcome =
     | Readonly<{ kind: 'approval_pending'; artifactId: string }>
     | Readonly<{ kind: 'failed'; failure: HomeDomainFailure<string> }>;
 
+export type HomeActionFailure = Extract<HomeActionOutcome, { kind: 'failed' }>['failure'];
+
 export function classifyHomeActionOutcome(result: ActionExecuteResult): HomeActionOutcome {
     if (!result.ok) {
         return Object.freeze({

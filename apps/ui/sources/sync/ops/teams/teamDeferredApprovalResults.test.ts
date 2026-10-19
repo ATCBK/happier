@@ -1,301 +1,194 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { teamGroupsQueryKeyV1 } from '@happier-dev/protocol/teams';
+import { createDeferred, standardCleanup, teamGroupFixture, teamGroupMemberFixture, teamInvitationRowFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
-/**
- * What a Team wrapper owes the operation that was deferred.
- *
- * Every Lane 01 mutation whose success carries data the initiating journey
- * still needs — a new Team or Group id, a membership to prepare history at —
- * must finish with the Home's own answer when an explicit UI-approval
- * requirement turns it into a durable approval request. Invitation creation
- * and reissue are the deliberate exception, on live-only custody, and the last
- * case here holds that line.
- * The shared front door owns the approval lifecycle and the binding; what these
- * cases pin is the wrappers' half of it:
- *
- *  - the caller's result handler actually reaches the front door, so the
- *    registration is upgraded from a bare Artifact id to a continuation;
- *  - the wrapper's own post-success work — publishing the Home's row into the
- *    one Team/Group projection, invalidating the sequences a mutation moved,
- *    re-reading the exact Team after an admission — happens on the deferred
- *    path exactly as it does on the immediate one, so an approved mutation is
- *    not a half-settled one;
- *  - settlement never redispatches the mutation, because the Home already
- *    performed it when the approval was granted.
- */
+// Only the Home HTTP and secure-storage boundaries are synthetic. Approval
+// creation/replay, continuation parsing, Team wrappers and projections stay real.
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+const { createTeamGroup, addTeamGroupMember } = await import('./teamGroupOperations');
+const { addTeamMember } = await import('./teamMemberOperations');
+const { createTeam } = await import('./teamOperations');
+const { createTeamInvitation, reissueTeamInvitation } = await import('./teamInvitationOperations');
+const { isTeamActionApprovalPendingError, resetTeamActionClientForTests } = await import('./teamActionClient');
+const snapshots = await import('@/sync/store/teams/teamsSnapshots');
+const { captureActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
 
-const runTeamActionMock = vi.hoisted(() => vi.fn());
-const applyTeamProjectionMock = vi.hoisted(() => vi.fn());
-const applyTeamGroupProjectionMock = vi.hoisted(() => vi.fn());
-const invalidateTeamGroupsForTeamMock = vi.hoisted(() => vi.fn());
-const refreshTeamMock = vi.hoisted(() => vi.fn(async () => {}));
+let serverId: string;
+let scope: Readonly<{ serverId: string; accountId: string }>;
+let address: Readonly<{ serverId: string; teamId: string }>;
+const team = teamSummaryFixture({ id: 'team-new', name: 'Design' });
+const group = teamGroupFixture({ id: 'group-new', name: 'Design' });
+const membership = teamMembershipFixture({ id: 'membership-grace', accountId: 'account-grace' });
 
-vi.mock('./teamActionClient', () => ({
-    runTeamAction: runTeamActionMock,
-}));
-vi.mock('@/sync/store/teams/teamsSnapshots', () => ({
-    applyTeamProjection: applyTeamProjectionMock,
-    applyTeamGroupProjection: applyTeamGroupProjectionMock,
-    invalidateTeamGroupsForTeam: invalidateTeamGroupsForTeamMock,
-}));
-vi.mock('@/sync/engine/teams/teamsDirectoryEngine', () => ({
-    refreshTeam: refreshTeamMock,
-}));
-
-import { createTeamGroup, addTeamGroupMember } from './teamGroupOperations';
-import { addTeamMember } from './teamMemberOperations';
-import { createTeam } from './teamOperations';
-import { createTeamInvitation, reissueTeamInvitation } from './teamInvitationOperations';
-
-const SCOPE = Object.freeze({ serverId: 'home-1', accountId: 'account-ada' });
-const ADDRESS = Object.freeze({ serverId: 'home-1', teamId: 'team-1' });
-
-const TEAM = Object.freeze({ id: 'team-new', name: 'Design' });
-const GROUP = Object.freeze({ id: 'group-new', name: 'Design' });
-const MEMBERSHIP = Object.freeze({ id: 'membership-grace', accountId: 'account-grace' });
-const GROUP_MEMBER_ADDED = Object.freeze({ status: 'added' as const });
-const GROUP_MEMBER_UNCHANGED = Object.freeze({ status: 'unchanged' as const });
-const INVITATION = Object.freeze({
-    invitation: { id: 'invitation-1' },
-    joinUrl: `https://home-a.example/join/${'a'.repeat(43)}`,
+beforeEach(async () => {
+    await homes.reset();
+    resetTeamActionClientForTests();
+    serverId = await homes.addHome({ name: 'Team Home', serverUrl: 'https://deferred-team.test', accountId: 'account-ada' });
+    scope = { serverId, accountId: 'account-ada' };
+    address = { serverId, teamId: 'team-1' };
 });
-const REISSUE = Object.freeze({
-    replacement: { id: 'invitation-2' },
-    joinUrl: `https://home-a.example/join/${'b'.repeat(43)}`,
-});
+afterEach(() => { resetTeamActionClientForTests(); standardCleanup(); });
 
-/**
- * Stands in for the shared front door having created an approval Artifact.
- *
- * It captures the handlers the wrapper passed down and throws the pending
- * error the real client throws, so a case can settle the deferred answer
- * afterwards exactly as the mounted continuation would.
- */
-type Deferred = Readonly<{
-    settle: (value: unknown) => Promise<void>;
-    refuse: (code: string) => void;
-}>;
+async function pendingApproval(operation: Promise<unknown>) {
+    const result = await operation.then(() => null, (cause: unknown) => cause);
+    expect(isTeamActionApprovalPendingError(result)).toBe(true);
+    if (!isTeamActionApprovalPendingError(result)) throw result ?? new Error('Expected pending approval');
+    return result;
+}
 
-function deferNextAction(): { readonly captured: Deferred | null } {
-    const holder: { captured: Deferred | null } = { captured: null };
-    runTeamActionMock.mockImplementationOnce(async (params: Readonly<{
-        onApprovalSucceeded?: (value: unknown) => void | Promise<void>;
-        onApprovalFailed?: (code: string) => void;
-    }>) => {
-        holder.captured = params.onApprovalSucceeded || params.onApprovalFailed
-            ? {
-                settle: async (value: unknown) => { await params.onApprovalSucceeded?.(value); },
-                refuse: (code: string) => params.onApprovalFailed?.(code),
-            }
-            : null;
-        throw new Error('team_action_approval_pending');
+async function settle(pending: Awaited<ReturnType<typeof pendingApproval>>, decision: 'approve' | 'reject' = 'approve') {
+    expect(typeof pending.registration).not.toBe('string');
+    if (typeof pending.registration === 'string') throw new Error('Expected result-bearing approval');
+    await expect(decideApprovalAsInbox(serverId, pending.artifactId, decision)).resolves.toMatchObject({
+        ok: true, result: decision === 'approve' ? { status: 'executed', execution: { ok: true } } : { status: 'rejected' },
     });
-    return holder;
+    const account = await captureActionAccountContext(serverId, new AbortController().signal);
+    try {
+        const artifact = await account.fetchArtifact(pending.artifactId);
+        if (!artifact) throw new Error('Expected persisted approval Artifact');
+        if (decision === 'approve') expect(await pending.registration.onExecuted(artifact)).toBe('consumed');
+        else {
+            expect(typeof pending.registration.onTerminal).toBe('function');
+            pending.registration.onTerminal?.('rejected', artifact);
+        }
+    } finally { account.dispose(); }
 }
 
-async function expectDeferred(operation: Promise<unknown>): Promise<void> {
-    await expect(operation).rejects.toThrow('team_action_approval_pending');
+function seedGroups() {
+    const queryKey = teamGroupsQueryKeyV1({ v: 1, teamId: address.teamId, archived: 'active' });
+    snapshots.applyTeamGroupsPage({ scope, address, queryKey, items: [], nextCursor: null, observedAt: 1 });
+    return () => snapshots.getTeamGroupsSnapshot(scope, address, queryKey);
 }
-
-beforeEach(() => {
-    runTeamActionMock.mockReset();
-    applyTeamProjectionMock.mockReset();
-    applyTeamGroupProjectionMock.mockReset();
-    invalidateTeamGroupsForTeamMock.mockReset();
-    refreshTeamMock.mockClear();
-});
 
 describe('deferred Team mutation results', () => {
     it('publishes an approved Team creation under the id only its answer carries', async () => {
-        const deferred = deferNextAction();
+        const path = '/v1/teams/create';
+        homes.answer(serverId, path, { body: team });
+        await homes.requireUiApproval(serverId, 'teams.create');
         const received: unknown[] = [];
-
-        await expectDeferred(createTeam({
-            scope: SCOPE,
-            name: 'Design',
-            description: null,
-            requestKey: 'key-1',
-            onApprovalSucceeded: (team) => { received.push(team); },
-        }));
-
-        // Nothing is published before the approval is decided.
-        expect(applyTeamProjectionMock).not.toHaveBeenCalled();
-        await deferred.captured!.settle(TEAM);
-
-        // The new Team's id exists only in this answer, so the projection is
-        // addressed by it rather than by an address the caller never had.
-        expect(applyTeamProjectionMock).toHaveBeenCalledWith(expect.objectContaining({
-            scope: SCOPE,
-            address: { serverId: 'home-1', teamId: 'team-new' },
-            team: TEAM,
-        }));
-        expect(received).toEqual([TEAM]);
-        // The Home created the Team when the approval was granted; settling it
-        // must never send the mutation a second time.
-        expect(runTeamActionMock).toHaveBeenCalledTimes(1);
+        const pending = await pendingApproval(createTeam({ scope, name: 'Design', description: null, requestKey: 'key-1',
+            onApprovalSucceeded: result => { received.push(result); } }));
+        const createdAddress = { serverId, teamId: team.id };
+        expect(snapshots.getTeamSnapshot(scope, createdAddress)).toBeNull();
+        expect(homes.requestsFor(path)).toHaveLength(0);
+        await settle(pending);
+        expect(snapshots.getTeamSnapshot(scope, createdAddress)?.data).toEqual(team);
+        expect(received).toEqual([team]);
+        expect(homes.requestsFor(path)).toHaveLength(1);
     });
 
     it('publishes an approved Group creation and marks the sequences it moved', async () => {
-        const deferred = deferNextAction();
+        const path = '/v1/teams/groups/create';
+        homes.answer(serverId, path, { body: group });
+        await homes.requireUiApproval(serverId, 'teams.groups.create');
+        const readGroups = seedGroups();
         const received: unknown[] = [];
-
-        await expectDeferred(createTeamGroup({
-            scope: SCOPE,
-            address: ADDRESS,
-            name: 'Design',
-            description: null,
-            requestKey: 'key-1',
-            onApprovalSucceeded: (group) => { received.push(group); },
-        }));
-        await deferred.captured!.settle(GROUP);
-
-        expect(applyTeamGroupProjectionMock).toHaveBeenCalledWith(expect.objectContaining({
-            scope: SCOPE,
-            address: ADDRESS,
-            group: GROUP,
-        }));
-        expect(invalidateTeamGroupsForTeamMock).toHaveBeenCalledWith(SCOPE, ADDRESS);
-        expect(received).toEqual([GROUP]);
-        expect(runTeamActionMock).toHaveBeenCalledTimes(1);
+        const pending = await pendingApproval(createTeamGroup({ scope, address, name: 'Design', description: null,
+            requestKey: 'key-1', onApprovalSucceeded: result => { received.push(result); } }));
+        expect(readGroups()?.stale).toBe(false);
+        await settle(pending);
+        expect(snapshots.getTeamGroupSnapshot(scope, address, group.id)?.data).toEqual(group);
+        expect(readGroups()?.stale).toBe(true);
+        expect(received).toEqual([group]);
+        expect(homes.requestsFor(path)).toHaveLength(1);
     });
 
-    it('re-reads the exact Team behind an approved admission before the caller acts', async () => {
-        const deferred = deferNextAction();
+    it('invalidates the exact Team behind an approved admission before the caller acts', async () => {
+        const path = '/v1/teams/members/add';
+        homes.answer(serverId, path, { body: membership });
+        await homes.requireUiApproval(serverId, 'teams.members.add');
+        snapshots.applyTeamProjection({ scope, address, team: teamSummaryFixture(), observedAt: 1 });
+        const revalidation = createDeferred<void>();
+        homes.answer(serverId, '/v1/teams/get', { body: teamSummaryFixture(), respondAfter: revalidation.promise });
         const received: unknown[] = [];
-
-        await expectDeferred(addTeamMember({
-            scope: SCOPE,
-            address: ADDRESS,
-            accountId: 'account-grace',
-            role: 'member',
-            historyAccess: 'all_existing',
-            onApprovalSucceeded: (membership) => { received.push(membership); },
-        }));
-        expect(refreshTeamMock).not.toHaveBeenCalled();
-        await deferred.captured!.settle(MEMBERSHIP);
-
-        // An admission can move the viewer's own Team capabilities, and the
-        // membership id it answers with is where the history journey continues.
-        expect(refreshTeamMock).toHaveBeenCalledWith(SCOPE, ADDRESS);
-        expect(received).toEqual([MEMBERSHIP]);
-        expect(runTeamActionMock).toHaveBeenCalledTimes(1);
+        const pending = await pendingApproval(addTeamMember({ scope, address, accountId: 'account-grace', role: 'member',
+            historyAccess: 'all_existing', onApprovalSucceeded: result => {
+                expect(snapshots.getTeamSnapshot(scope, address)?.stale).toBe(true);
+                received.push(result);
+            } }));
+        expect(homes.requestsFor('/v1/teams/get')).toHaveLength(0);
+        try {
+            await settle(pending);
+            await waitForHomeGovernance(() => expect(homes.requestsFor('/v1/teams/get')).toHaveLength(1));
+            expect(received).toEqual([membership]);
+            expect(homes.requestsFor(path)).toHaveLength(1);
+        } finally {
+            revalidation.resolve();
+            const { refreshTeam } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+            await refreshTeam(scope, address);
+        }
     });
 
     it('keeps an approved Group contribution truthful about whether it changed anything', async () => {
-        const added = deferNextAction();
-        const addedResults: unknown[] = [];
-        await expectDeferred(addTeamGroupMember({
-            scope: SCOPE,
-            address: ADDRESS,
-            groupId: 'group-1',
-            accountId: 'account-grace',
-            historyAccess: 'all_existing',
-            onApprovalSucceeded: (result) => { addedResults.push(result); },
-        }));
-        await added.captured!.settle(GROUP_MEMBER_ADDED);
-
-        expect(invalidateTeamGroupsForTeamMock).toHaveBeenCalledWith(SCOPE, ADDRESS);
-        expect(addedResults).toEqual([GROUP_MEMBER_ADDED]);
-
-        invalidateTeamGroupsForTeamMock.mockClear();
-        const unchanged = deferNextAction();
-        const unchangedResults: unknown[] = [];
-        await expectDeferred(addTeamGroupMember({
-            scope: SCOPE,
-            address: ADDRESS,
-            groupId: 'group-1',
-            accountId: 'account-grace',
-            historyAccess: 'from_membership',
-            onApprovalSucceeded: (result) => { unchangedResults.push(result); },
-        }));
-        await unchanged.captured!.settle(GROUP_MEMBER_UNCHANGED);
-
-        // A truthful zero-effect answer changed nothing on the Home, so it must
-        // not cost every holder of these rows a re-read — approved or not.
-        expect(invalidateTeamGroupsForTeamMock).not.toHaveBeenCalled();
-        expect(unchangedResults).toEqual([GROUP_MEMBER_UNCHANGED]);
+        const path = '/v1/teams/groups/members/add';
+        await homes.requireUiApproval(serverId, 'teams.groups.members.add');
+        for (const status of ['added', 'unchanged'] as const) {
+            const result = status === 'added'
+                ? { status, member: teamGroupMemberFixture({ accountId: 'account-grace', membershipId: 'membership-grace' }) }
+                : { status };
+            homes.answer(serverId, path, { body: result });
+            const readGroups = seedGroups();
+            const received: unknown[] = [];
+            const pending = await pendingApproval(addTeamGroupMember({ scope, address, groupId: 'group-1', accountId: 'account-grace',
+                historyAccess: status === 'added' ? 'all_existing' : 'from_membership',
+                onApprovalSucceeded: value => { received.push(value); } }));
+            await settle(pending);
+            expect(readGroups()?.stale).toBe(status === 'added');
+            expect(received).toEqual([result]);
+        }
+        expect(homes.requestsFor(path)).toHaveLength(2);
     });
 
-    /**
-     * The two bearer-carrying answers deliberately do NOT join the deferred
-     * family.
-     *
-     * They are declared live-only custody: the raw link returns to the live
-     * invocation and the durable Artifact retains only the safe observation
-     * projection, so there is nothing a later continuation could hand back. A
-     * wrapper that quietly registered one would be asking the platform to keep
-     * a re-readable secret, which is the exact property this domain refuses.
-     * What they carry instead is the caller's mount lifetime.
-     */
     it('keeps invitation creation and reissue on live-only custody, never a continuation', async () => {
-        runTeamActionMock.mockResolvedValueOnce({ kind: 'succeeded', value: INVITATION });
-        const lifetime = new AbortController();
-        await createTeamInvitation({
-            scope: SCOPE,
-            address: ADDRESS,
-            role: 'member',
-            historyAccess: 'from_membership',
-            recipientEmail: null,
-            requestKey: 'key-1',
-            signal: lifetime.signal,
-        });
-
-        runTeamActionMock.mockResolvedValueOnce({ kind: 'succeeded', value: REISSUE });
-        await reissueTeamInvitation({
-            scope: SCOPE,
-            address: ADDRESS,
-            invitationId: 'invitation-1',
-            recipientEmail: null,
-            requestKey: 'key-2',
-            signal: lifetime.signal,
-        });
-
-        for (const call of runTeamActionMock.mock.calls) {
-            const params = call[0] as Readonly<Record<string, unknown>>;
-            // The invocation is what the approval waits on, and losing it is
-            // what cancels the wait — so the lifetime travels and no result
-            // handler does.
-            expect(params.signal).toBe(lifetime.signal);
-            expect(params.onApprovalSucceeded).toBeUndefined();
-            expect(params.onApprovalFailed).toBeUndefined();
+        await homes.requireUiApproval(serverId, ['teams.invitations.create', 'teams.invitations.reissue']);
+        const token = 'a'.repeat(43);
+        for (const operation of ['create', 'reissue'] as const) {
+            const lifetime = new AbortController();
+            const path = `/v1/teams/invitations/${operation}`;
+            homes.answer(serverId, path, { body: operation === 'create'
+                ? { invitation: teamInvitationRowFixture(), joinUrl: `https://deferred-team.test/join/${token}` }
+                : { replacement: teamInvitationRowFixture({ id: 'invitation-2' }), joinUrl: `https://deferred-team.test/join/${token}` } });
+            const before = homes.artifacts(serverId).list().length;
+            const pending = (operation === 'create'
+                ? createTeamInvitation({ scope, address, role: 'member', historyAccess: 'from_membership', recipientEmail: null,
+                    requestKey: 'key-create', signal: lifetime.signal })
+                : reissueTeamInvitation({ scope, address, invitationId: 'invitation-1', recipientEmail: null,
+                    requestKey: 'key-reissue', signal: lifetime.signal })).then(value => ({ value }), cause => ({ cause }));
+            try {
+                await waitForHomeGovernance(() => expect(homes.artifacts(serverId).list()).toHaveLength(before + 1));
+                expect(homes.requestsFor(path)).toHaveLength(0);
+                lifetime.abort();
+                await expect(pending).resolves.toMatchObject({ value: { kind: 'failed' } });
+                const artifactId = homes.artifacts(serverId).list().at(-1)!.id;
+                await expect(decideApprovalAsInbox(serverId, artifactId, 'approve')).resolves.toMatchObject({
+                    ok: true, result: { status: 'failed', execution: { errorCode: 'approval_stale', effectAttempted: false } },
+                });
+                expect(homes.requestsFor(path)).toHaveLength(0);
+                expect(homes.artifacts(serverId).readPlainBody(artifactId)).not.toContain(token);
+            } finally { lifetime.abort(); await pending; }
         }
-        expect(runTeamActionMock).toHaveBeenCalledTimes(2);
     });
 
     it('carries a refusal back as the operations own typed code, not as success', async () => {
-        const deferred = deferNextAction();
-        const succeededWith: unknown[] = [];
+        await homes.requireUiApproval(serverId, 'teams.create');
+        const received: unknown[] = [];
         const refusals: string[] = [];
-
-        await expectDeferred(createTeam({
-            scope: SCOPE,
-            name: 'Design',
-            description: null,
-            requestKey: 'key-1',
-            onApprovalSucceeded: (team) => { succeededWith.push(team); },
-            onApprovalFailed: (code) => { refusals.push(code); },
-        }));
-        deferred.captured!.refuse('approval_rejected');
-
+        const pending = await pendingApproval(createTeam({ scope, name: 'Design', description: null, requestKey: 'key-1',
+            onApprovalSucceeded: result => { received.push(result); }, onApprovalFailed: code => { refusals.push(code); } }));
+        await settle(pending, 'reject');
         expect(refusals).toEqual(['approval_rejected']);
-        expect(succeededWith).toEqual([]);
-        // A refused mutation changed nothing, so no projection may claim it did.
-        expect(applyTeamProjectionMock).not.toHaveBeenCalled();
-        expect(runTeamActionMock).toHaveBeenCalledTimes(1);
+        expect(received).toEqual([]);
+        expect(snapshots.getTeamSnapshot(scope, { serverId, teamId: team.id })).toBeNull();
+        expect(homes.requestsFor('/v1/teams/create')).toHaveLength(0);
     });
 
-    it('leaves a wrapper without result handlers registering nothing to settle', async () => {
-        const deferred = deferNextAction();
-
-        await expectDeferred(createTeamGroup({
-            scope: SCOPE,
-            address: ADDRESS,
-            name: 'Design',
-            description: null,
-            requestKey: 'key-1',
-        }));
-
-        // The existing non-result-bearing contract is preserved: a caller that
-        // asked for nothing still registers only its Artifact id.
-        expect(deferred.captured).toBeNull();
+    it('leaves a wrapper without result handlers registering only its Artifact id', async () => {
+        await homes.requireUiApproval(serverId, 'teams.groups.create');
+        const pending = await pendingApproval(createTeamGroup({ scope, address, name: 'Design', description: null, requestKey: 'key-1' }));
+        expect(pending.registration).toBe(pending.artifactId);
+        expect(homes.requestsFor('/v1/teams/groups/create')).toHaveLength(0);
     });
 });

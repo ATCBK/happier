@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_HOME_CAPABILITIES_V1 } from '@happier-dev/protocol/home/governance';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { projectApprovalRequestForPublicRead } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { ApprovalRequestV2Schema, StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { projectApprovalExecutionFailureV2, readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
+import { ManagedResourceDependencyV1Schema } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
 
 const serverFetchMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
@@ -91,6 +95,35 @@ afterEach(() => {
 
 describe('createHomeDomainActionExecutorForScope', () => {
     it.each([
+        { actionId: 'secrets.shared.delete', input: { resourceId: 'secret-1', expectedRevision: 3, expectedSettingsVersion: 1,
+            referenceCensus: { accountMode: 'plain', profiles: { referenceGuardRevision: 'absent', rows: [] } } },
+            code: 'managed_resources_review_required' },
+        { actionId: 'home.accounts.delete', input: { accountId: 'account-to-delete' }, code: 'account_erasure_managed_resources_review_required' },
+    ] as const)('carries the HTTP $actionId removal review through durable approval and public follow', async ({ actionId, input, code }) => {
+        const { serverId, scope } = await scopeForNewHome('https://removal-review.example');
+        const provider = { pluginId: 'custom.compute', localId: 'vm' };
+        const resource = ManagedResourceDependencyV1Schema.parse({ managedId: 'managed-1', homeId: serverId,
+            custodianAccountId: 'account', intentRevision: 7,
+            controller: { machineId: 'controller-1', installationId: 'installation-1' }, provider, allocation: 'may-exist',
+            resource: { contributionRef: provider, schemaVersion: 1, value: { nativeId: 'native-1' } } });
+        const details = { error: code, resources: [resource] };
+        runtimeFetchMock.mockResolvedValue(jsonResponse(details, 409));
+        const result = await createHomeDomainActionExecutorForScope(scope)({ actionId, input,
+            context: { surface: 'ui', authority: 'present_user' } });
+        const failure = ActionExecuteFailureSchema.parse(result);
+        expect(failure.details).toEqual({ ...details, httpStatus: 409 });
+        const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'system' }, requestedSurface: 'ui', actionId, actionArgs: input, summary: 'Review removal',
+            executionOriginV1: { v: 1, authority: 'present_user', surface: 'ui', caller: { kind: 'host' },
+                serverId, accountId: 'account', actionId, requestId: 'request-1' } });
+        const execution = projectApprovalExecutionFailureV2({ request, failure, executedAtMs: 3 });
+        expect(execution.details).toEqual(details);
+        const stored = StoredApprovalRequestSchema.parse({ ...request, status: 'failed', updatedAtMs: 3,
+            decision: { kind: 'approve', decidedAtMs: 2 }, execution });
+        expect(readApprovalExecutionFailure(stored)?.details).toEqual(details);
+        expect(projectApprovalRequestForPublicRead(stored)).toMatchObject({ execution: { details } });
+    });
+    it.each([
         { payload: { error: 'credential_scope_denied' }, errorCode: 'credential_scope_denied' },
         { payload: { error: 'credential_scope_denied', details: {} }, errorCode: 'home_forbidden' },
         { payload: { error: 'unknown_denial' }, errorCode: 'home_forbidden' },
@@ -116,6 +149,7 @@ describe('createHomeDomainActionExecutorForScope', () => {
 
     it.each([
         { status: 404, error: 'Session not found or not owned by user', code: 'session_absent' },
+        { status: 409, error: 'Session is active', code: 'session_active' },
         { status: 409, error: 'Session delete condition was lost', code: 'session_delete_conflict' },
     ])('retains deletion refusal $code and its exact Home payload', async ({ status, error, code }) => {
         const { scope } = await scopeForNewHome('https://delete-home.example');
@@ -123,6 +157,23 @@ describe('createHomeDomainActionExecutorForScope', () => {
         const result = await createHomeDomainActionExecutorForScope(scope)({ actionId: 'session.delete',
             input: { sessionId: 'session' }, context: { surface: 'ui', authority: 'present_user' } });
         expect(result).toEqual({ ok: false, errorCode: code, error: code, details: { error, httpStatus: status } });
+    });
+
+    it('settles a confirmed transaction rollback as a typed failure instead of an unknown mutation outcome', async () => {
+        const { scope } = await scopeForNewHome('https://delete-rollback.example');
+        runtimeFetchMock.mockResolvedValue(jsonResponse({
+            error: 'database_transaction_conflict_exhausted', statusCode: 503,
+        }, 503));
+        const result = await createHomeDomainActionExecutorForScope(scope)({
+            actionId: 'session.delete', input: { sessionId: 'session' },
+            context: { surface: 'ui', authority: 'present_user' },
+        });
+        expect(result).toEqual({
+            ok: false,
+            errorCode: 'database_transaction_conflict_exhausted',
+            error: 'database_transaction_conflict_exhausted',
+            details: { error: 'database_transaction_conflict_exhausted', statusCode: 503, httpStatus: 503 },
+        });
     });
     it('carries a family intent to the path its Action row declares', async () => {
         const { scope } = await scopeForNewHome('https://home-a.example');

@@ -12,9 +12,12 @@ const UNNAMED = { name: null, firstName: null, lastName: null, username: null, a
 
 describe('formatAccountDisplayName', () => {
     it('uses trimmed current names before username, with an explicit unnamed result', () => {
-        expect(formatAccountDisplayName({ ...UNNAMED, name: ' Alice Chen ', firstName: 'Old', lastName: 'Name', username: 'alice' })).toBe('Alice Chen');
-        expect(formatAccountDisplayName({ ...UNNAMED, name: ' ', firstName: 'Old', username: ' alice ' })).toBe('alice');
-        expect(formatAccountDisplayName({ ...UNNAMED, firstName: 'Old', username: ' ' })).toBeNull();
+        const named = { ...UNNAMED, name: ' Alice Chen ', firstName: 'Old', lastName: 'Name', username: 'alice' };
+        const usernameOnly = { ...UNNAMED, name: ' ', firstName: 'Old', username: ' alice ' };
+        const unnamed = { ...UNNAMED, firstName: 'Old', username: ' ' };
+        expect(formatAccountDisplayName(named)).toBe('Alice Chen');
+        expect(formatAccountDisplayName(usernameOnly)).toBe('alice');
+        expect(formatAccountDisplayName(unnamed)).toBeNull();
     });
 });
 

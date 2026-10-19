@@ -300,11 +300,16 @@ describe('teamInvitationOperations', () => {
         await expect(creation).resolves.toMatchObject({ kind: 'failed' });
         expect(harness.requestsFor(CREATE_PATH)).toHaveLength(0);
 
-        // A later approval still performs the reviewed creation, but nobody is
-        // waiting for its link and the durable record keeps only the safe
-        // projection: the bearer is not recoverable afterwards (reissue is).
-        await decideApprovalAsInbox(serverId, artifactId, 'approve');
-        expect(harness.requestsFor(CREATE_PATH)).toHaveLength(1);
+        // The durable Artifact cannot restore a lost live bearer recipient.
+        // Refuse before minting, exactly like the canonical approval executor.
+        await expect(decideApprovalAsInbox(serverId, artifactId, 'approve')).resolves.toMatchObject({
+            ok: true,
+            result: { status: 'failed', execution: {
+                ok: false, errorCode: 'approval_stale', effectAttempted: false,
+                details: { reason: 'live_invocation_unavailable' },
+            } },
+        });
+        expect(harness.requestsFor(CREATE_PATH)).toHaveLength(0);
         expect(harness.artifacts(serverId).readPlainBody(artifactId)).not.toContain(TOKEN);
     });
 

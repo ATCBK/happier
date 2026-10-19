@@ -2,6 +2,7 @@ import {
     readHomeDomainActionErrorV1,
     type HomeDomainActionErrorCodeV1,
 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -40,8 +41,10 @@ export type HomeDomainFailureKind =
     | 'outcome_unknown'
     | 'unknown';
 
-/** The exact code union accepted by the canonical Protocol family reader. */
-export type HomeDomainErrorCode = HomeDomainActionErrorCodeV1 | 'credential_scope_denied';
+/** The exact codes accepted by the canonical Home domain and HTTP rollback readers. */
+export type HomeDomainErrorCode = HomeDomainActionErrorCodeV1
+    | 'credential_scope_denied'
+    | NonNullable<ReturnType<typeof readHomeDomainConfirmedRollbackV1>>['code'];
 
 export type HomeDomainFailure<TCode extends string = HomeDomainErrorCode> = Readonly<{
     kind: HomeDomainFailureKind;
@@ -127,6 +130,16 @@ function classifyAnswer<TCode extends string>(
 ): HomeDomainResult<never, TCode | HomeDomainErrorCode> {
     const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(status, body);
     if (scopeDenial) return failure('forbidden', false, scopeDenial.errorCode, undefined, status);
+    const confirmedRollback = readHomeDomainConfirmedRollbackV1(status, body);
+    if (confirmedRollback) {
+        return failure(
+            homeDomainFailureKindForHttpStatus(status, confirmedRollback.code),
+            true,
+            confirmedRollback.code,
+            confirmedRollback.details,
+            status,
+        );
+    }
     const domain = readHomeDomainActionErrorV1(body);
     if (domain) {
         // The shared Protocol parser is the sole authority for publishable

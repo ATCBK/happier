@@ -5,7 +5,7 @@ import { createPasswordCredentialTargetDigestV1 } from '@happier-dev/protocol/au
 import { PlainAccountPasswordCredentialV1Schema, type PlainAccountPasswordCredentialV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 import { classifyHomeDomainHttpMutationFailureV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import type { KeyChallengeV2Audience } from '@happier-dev/protocol/auth/keyChallenge';
-import { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import type { ServerFetch } from '@/sync/http/client';
 import { createHomeIdentityMismatchFailure } from '@/auth/flows/authenticationFailure';
@@ -39,7 +39,7 @@ async function call(
     path: string,
     body: unknown | null,
     signal?: AbortSignal,
-    mutationOutput?: z.ZodType,
+    mutationOutput?: z.ZodMiniType,
 ): Promise<unknown> {
     signal?.throwIfAborted();
     let issued = false;

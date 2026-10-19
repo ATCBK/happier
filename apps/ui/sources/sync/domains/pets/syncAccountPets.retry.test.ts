@@ -16,7 +16,7 @@ it('rejects a transient currentness transport failure and applies the next autho
     upsertAndActivateServer({ serverUrl: 'https://pets.example.test', scope: 'tab' });
     storage.getState().applySettingsLocal({ featureToggles: { pets: true, 'pets.sync': true } });
     primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse({
-        features: { pets: { enabled: true, sync: { enabled: true } } },
+        features: { pets: { companion: { enabled: true }, sync: { enabled: true } } },
     }) } });
     const failure = new TypeError('Failed to fetch');
     const request = vi.fn(async (path: string) => new Response(JSON.stringify(

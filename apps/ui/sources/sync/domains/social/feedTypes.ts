@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 // Feed body schema matching backend exactly
 export const FeedBodySchema = z.discriminatedUnion('kind', [
@@ -12,7 +12,7 @@ export type FeedBody = z.infer<typeof FeedBodySchema>;
 // Feed item schema
 export const FeedItemSchema = z.object({
     id: z.string(),
-    repeatKey: z.string().nullable(),
+    repeatKey: z.nullable(z.string()),
     body: FeedBodySchema,
     createdAt: z.number(),
     cursor: z.string(),
@@ -26,7 +26,7 @@ export const FeedResponseSchema = z.object({
     items: z.array(z.object({
         id: z.string(),
         body: FeedBodySchema,
-        repeatKey: z.string().nullable(),
+        repeatKey: z.nullable(z.string()),
         cursor: z.string(),
         createdAt: z.number()
     })),

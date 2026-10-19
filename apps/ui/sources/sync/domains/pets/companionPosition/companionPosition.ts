@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PET_COMPANION_POSITION_SCHEMA_VERSION = 1;
 export const PET_COMPANION_POSITION_DEFAULT_NORMALIZED_X = 0.82;
@@ -6,27 +6,27 @@ export const PET_COMPANION_POSITION_DEFAULT_NORMALIZED_Y = 0.72;
 export const PET_COMPANION_POSITION_DEFAULT_MARGIN_PT = 12;
 
 export const PetCompanionSafeAreaInsetsSchema = z.object({
-    top: z.number().min(0),
-    right: z.number().min(0),
-    bottom: z.number().min(0),
-    left: z.number().min(0),
-}).strip();
+    top: z.number().check(z.minimum(0)),
+    right: z.number().check(z.minimum(0)),
+    bottom: z.number().check(z.minimum(0)),
+    left: z.number().check(z.minimum(0)),
+});
 
 export const PetCompanionViewportMetricsSchema = z.object({
-    width: z.number().min(0),
-    height: z.number().min(0),
-    margin: z.number().min(0),
-    keyboardHeight: z.number().min(0),
+    width: z.number().check(z.minimum(0)),
+    height: z.number().check(z.minimum(0)),
+    margin: z.number().check(z.minimum(0)),
+    keyboardHeight: z.number().check(z.minimum(0)),
     safeAreaInsets: PetCompanionSafeAreaInsetsSchema,
-}).strip();
+});
 
 export const PetCompanionStoredPositionSchema = z.object({
     schemaVersion: z.literal(PET_COMPANION_POSITION_SCHEMA_VERSION),
     surface: z.literal('mobile-app-shell'),
-    normalizedX: z.number().min(0).max(1),
-    normalizedY: z.number().min(0).max(1),
-    lastViewport: PetCompanionViewportMetricsSchema.nullable(),
-}).strip();
+    normalizedX: z.number().check(z.minimum(0), z.maximum(1)),
+    normalizedY: z.number().check(z.minimum(0), z.maximum(1)),
+    lastViewport: z.nullable(PetCompanionViewportMetricsSchema),
+});
 
 export type PetCompanionSafeAreaInsets = z.infer<typeof PetCompanionSafeAreaInsetsSchema>;
 export type PetCompanionViewportMetrics = z.infer<typeof PetCompanionViewportMetricsSchema>;
