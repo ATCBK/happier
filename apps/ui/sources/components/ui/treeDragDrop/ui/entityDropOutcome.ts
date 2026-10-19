@@ -24,7 +24,7 @@ import { WIDGET_MOVE_SILENT_CODES } from '../widgetLayoutEntityDrop';
  * Targets declare their mark in the same portable preview as plugins.
  */
 
-const isRelation = (effect: HappierDropEffect) => effect.actionId === 'session.reports_to.set';
+const isRelation = (effect: HappierDropEffect) => effect.actionId === 'session.manager.set';
 
 function vocabulary(verdict?: HappierDropVerdict): HappierDropOutcomeVocabulary {
     return {

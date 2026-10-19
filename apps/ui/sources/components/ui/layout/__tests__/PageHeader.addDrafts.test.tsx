@@ -24,6 +24,8 @@ installSettingsViewCommonModuleMocks({
     },
     storage: (importOriginal) => importOriginal(),
 });
+vi.mock('@/components/ui/popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
 const { NavigationTitleChromeProvider } = await import('@/components/ui/layout/PageHeader');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
@@ -51,6 +53,10 @@ async function expectNativeDiscard(screen: Awaited<ReturnType<typeof renderScree
     expect(headerRight).toBeTypeOf('function');
     if (!headerRight) throw new Error('Expected navigation to publish the native discard action');
     const nativeHeader = await renderScreen(headerRight());
+    expect(nativeHeader.findByTestId(testID)).toBeNull();
+    await nativeHeader.pressByTestIdAsync('page-header-actions.trigger');
+    // DropdownMenu opens after the triggering press has finished.
+    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
     expect(nativeHeader.findByTestId(testID)).not.toBeNull();
 }
 afterEach(() => {

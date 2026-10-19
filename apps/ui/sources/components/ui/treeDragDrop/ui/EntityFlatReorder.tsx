@@ -187,14 +187,15 @@ export function EntityFlatReorderList(props: Readonly<{
     React.useEffect(() => {
         const update = () => {
             const snapshot = runtime.getSnapshot();
-            isActive.value = snapshot.phase === 'carrying' && props.binding.items.some(item => rowSourceId({ id }, item.id) === snapshot.sourceId);
-            pointerY.value = isActive.value ? runtime.getPointer()?.y ?? null : null;
+            isActive.value = snapshot.phase === 'carrying' && snapshot.admission?.status === 'allowed'
+                && latest.current.binding.items.some(item => rowTargetId({ id }, item.id) === snapshot.targetId);
+            // Only the selected target's runtime callback supplies pointer coordinates.
+            if (!isActive.value) pointerY.value = null;
         };
         update();
         const semantic = runtime.subscribe(update);
-        const pointer = runtime.subscribePointer(update);
-        return () => { semantic(); pointer(); isActive.value = false; pointerY.value = null; };
-    }, [runtime, id, props.binding.items, isActive, pointerY]);
+        return () => { semantic(); isActive.value = false; pointerY.value = null; };
+    }, [runtime, id, isActive, pointerY]);
     React.useEffect(() => {
         if (Platform.OS !== 'web' || typeof window === 'undefined') return;
         const refresh = () => { void measure(); };

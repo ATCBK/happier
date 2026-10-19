@@ -13,7 +13,6 @@ const reducedMotionState = vi.hoisted(() => ({
     current: false,
     listener: null as ((enabled: boolean) => void) | null,
 }));
-const localSettingValues = vi.hoisted(() => ({}) as Partial<Record<string, unknown>>);
 const nativeBoundary = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'android' }));
 /** `Animated.loop` hands the clock to the native driver; recording start/stop is the observable boundary. */
 const animatedLoops = vi.hoisted(() => [] as Array<{ started: number; stopped: number }>);
@@ -31,9 +30,13 @@ vi.mock('react-native', async () => {
         }),
         AccessibilityInfo: {
             isReduceMotionEnabled: async () => reducedMotionState.current,
-            addEventListener: (_event: string, listener: (enabled: boolean) => void) => {
+            addEventListener: (event: string, listener: (enabled: boolean) => void) => {
+                // Reduce Transparency is a separate OS event used by the release mark's glass.
+                if (event !== 'reduceMotionChanged') return { remove: () => {} };
                 reducedMotionState.listener = listener;
-                return { remove: () => { reducedMotionState.listener = null; } };
+                return { remove: () => {
+                    if (reducedMotionState.listener === listener) reducedMotionState.listener = null;
+                } };
             },
         },
         Animated: {
@@ -58,16 +61,27 @@ vi.mock('react-native-unistyles', async () => {
     });
 });
 
-vi.mock('@/sync/store/hooks', async () => {
-    const { createUseLocalSettingMock } = await import('@/dev/testkit/mocks/storage');
-    return { useLocalSetting: createUseLocalSettingMock({ values: localSettingValues as Partial<LocalSettings> }) };
+vi.mock('socket.io-client', async (importOriginal) => {
+    const { createSocketIoClientBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    return createSocketIoClientBoundary(importOriginal);
 });
 
-beforeEach(() => {
+async function applySpinnerSettings(overrides: Partial<LocalSettings> = {}) {
+    const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
+    const { getStorage } = await import('@/sync/domains/state/storageStore');
+    getStorage().getState().applyLocalSettings({
+        loadingIndicatorStyle: localSettingsDefaults.loadingIndicatorStyle,
+        loadingIndicatorSpeed: localSettingsDefaults.loadingIndicatorSpeed,
+        loadingIndicatorPause: localSettingsDefaults.loadingIndicatorPause,
+        ...overrides,
+    }, { persist: false });
+}
+
+beforeEach(async () => {
     nativeBoundary.os = 'ios';
     reducedMotionState.current = false;
     animatedLoops.length = 0;
-    for (const key of Object.keys(localSettingValues)) delete localSettingValues[key];
+    await applySpinnerSettings();
 });
 
 function flattenStyle(style: unknown): Record<string, unknown> {
@@ -127,7 +141,7 @@ describe('ActivitySpinner (native)', () => {
         { platform: 'ios', variant: 'classicRing' },
     ] as const)('removes a stopped hidden $variant from $platform accessibility and restores it on resume', async ({ platform, variant }) => {
         nativeBoundary.os = platform;
-        localSettingValues.loadingIndicatorStyle = variant;
+        await applySpinnerSettings({ loadingIndicatorStyle: variant });
         const { ActivitySpinner } = await import('./ActivitySpinner');
         const { act } = await import('react-test-renderer');
         const spinner = (animating: boolean) => (
@@ -174,7 +188,7 @@ describe('ActivitySpinner (native)', () => {
 
     it('pauses a pending release mark in the background and preserves the device-local H choice', async () => {
         vi.resetModules();
-        localSettingValues.loadingIndicatorStyle = 'hWave';
+        await applySpinnerSettings({ loadingIndicatorStyle: 'hWave' });
         const { AppState } = await import('react-native');
         const { act } = await import('react-test-renderer');
         const { createReactNativeAppStateEmitter } = await import('@/dev/testkit/mocks/reactNative');
@@ -202,7 +216,7 @@ describe('ActivitySpinner (native)', () => {
             { pause: 'explicit stop', size: 16, expectedSize: 16 },
         ] as const)('keeps a visible still Android ring during $pause', async ({ pause, size, expectedSize }) => {
             nativeBoundary.os = 'android';
-            localSettingValues.loadingIndicatorStyle = 'classicRing';
+            await applySpinnerSettings({ loadingIndicatorStyle: 'classicRing' });
             reducedMotionState.current = pause === 'reduced motion';
             // Opaque native colours are passed to RN unchanged, rather than normalized as CSS ink.
             const color = pause === 'explicit stop' ? Object.freeze({ semantic: ['label'] }) : '#2468ab';
@@ -235,7 +249,7 @@ describe('ActivitySpinner (native)', () => {
 
         it('preserves its Android native hosts while pausing, stopping and resuming', async () => {
             nativeBoundary.os = 'android';
-            localSettingValues.loadingIndicatorStyle = 'classicRing';
+            await applySpinnerSettings({ loadingIndicatorStyle: 'classicRing' });
             const { ActivitySpinner } = await import('./ActivitySpinner');
             const { act } = await import('react-test-renderer');
             const spinner = (props: Partial<React.ComponentProps<typeof ActivitySpinner>>) => (
@@ -265,14 +279,14 @@ describe('ActivitySpinner (native)', () => {
 
         it('retains the Android platform widget when turning or explicitly stopped and hidden', async () => {
             nativeBoundary.os = 'android';
-            localSettingValues.loadingIndicatorStyle = 'classicRing';
+            await applySpinnerSettings({ loadingIndicatorStyle: 'classicRing' });
             expect((await renderSpinner({})).rings[0]!.props.nativeVisibility).toBe('visible');
             expect((await renderSpinner({ animating: false })).rings[0]!.props.nativeVisibility).toBe('invisible');
             expect((await renderSpinner({ animating: false, hidesWhenStopped: true })).rings[0]!.props.nativeVisibility).toBe('invisible');
         });
 
         it('animates by default and never hands the platform component an unknown prop', async () => {
-            localSettingValues.loadingIndicatorStyle = 'classicRing';
+            await applySpinnerSettings({ loadingIndicatorStyle: 'classicRing' });
             const { rings } = await renderSpinner({});
             const props = rings[0]!.props as Record<string, unknown>;
 
@@ -284,7 +298,7 @@ describe('ActivitySpinner (native)', () => {
         });
 
         it('actually stops the native ring when ambient motion is paused, and keeps it visible', async () => {
-            localSettingValues.loadingIndicatorStyle = 'classicRing';
+            await applySpinnerSettings({ loadingIndicatorStyle: 'classicRing' });
             const { rings } = await renderSpinner({ animationEnabled: false });
             const props = rings[0]!.props as Record<string, unknown>;
 
@@ -293,7 +307,7 @@ describe('ActivitySpinner (native)', () => {
         });
 
         it('preserves explicit stopped visibility under reduced motion and ambient pause', async () => {
-            localSettingValues.loadingIndicatorStyle = 'classicRing';
+            await applySpinnerSettings({ loadingIndicatorStyle: 'classicRing' });
             reducedMotionState.current = true;
             const running = (await renderSpinner({})).rings[0]!.props;
             expect(running.animating).toBe(false);
@@ -309,7 +323,7 @@ describe('ActivitySpinner (native)', () => {
         });
 
         it('leaves an explicitly stopped ring alone, so hiding it stays the caller\'s decision', async () => {
-            localSettingValues.loadingIndicatorStyle = 'classicRing';
+            await applySpinnerSettings({ loadingIndicatorStyle: 'classicRing' });
             const { rings } = await renderSpinner({ animating: false });
             const props = rings[0]!.props as Record<string, unknown>;
 

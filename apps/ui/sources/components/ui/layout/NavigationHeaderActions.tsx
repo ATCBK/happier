@@ -266,7 +266,7 @@ const NavigationHeaderActionsPublisher = React.memo(function NavigationHeaderAct
 
 const stylesheet = StyleSheet.create((theme) => ({
     foldedControls: { flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' },
-    actions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+    actions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minWidth: 0, maxWidth: '100%' },
     cancel: {
         paddingHorizontal: theme.space.s8,
         paddingVertical: theme.space.s6,

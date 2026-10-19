@@ -60,6 +60,8 @@ export { withItemGroupDividers } from './ItemGroup.dividers';
 export { HappierItemGroupSelectionContext as ItemGroupSelectionContext } from '@happier-dev/plugin-ui/presentation';
 
 export interface ItemGroupProps {
+    /** Identifies the whole section (header and rows) for tests and automation. */
+    testID?: string;
     /** A containing sheet may already own this section's header and spacing. */
     header?: 'section' | 'none';
     title?: string | React.ReactNode;
@@ -243,6 +245,17 @@ const stylesheet = StyleSheet.create((theme) => {
             flexWrap: 'wrap',
             columnGap: theme.space.s10,
             rowGap: theme.space.s2,
+        },
+        pageTitleName: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            flexShrink: 1,
+            minWidth: 0,
+            columnGap: theme.space.s10,
+        },
+        pageTitleText: {
+            flexShrink: 1,
+            minWidth: 0,
         },
         pageDescription: {
             ...Typography.default('regular'),
@@ -571,6 +584,7 @@ export const ItemGroup = React.memo<ItemGroupProps>((props) => {
         clipContent = false,
         surface = 'sheet',
         density,
+        testID,
     } = props;
     const resolvedAccessibilityLabel = accessibilityLabel ?? (typeof title === 'string' ? title : undefined);
     // Bare rows in a contained scope (a widget body or flow, grouped or page) bleed by their own padding: their
@@ -602,15 +616,18 @@ export const ItemGroup = React.memo<ItemGroupProps>((props) => {
     }, [children, selectableItemCountOverride]);
 
     return (
-        <View style={[styles.wrapper, style]}>
+        <View testID={testID} style={[styles.wrapper, style]}>
             <View style={[styles.container, contained ? styles.containedContainer : null, constrainToContentWidth ? { maxWidth } : undefined]}>
                 {/* Header */}
                 {props.header === 'none' ? null : isPage && (title || description || action) ? (
                     <HappierPageSectionHeader
                         title={(titleAccessory || titleLeading) && typeof title === 'string' ? (
                             <View style={styles.pageTitleRow}>
-                                {titleLeading}
-                                <Text accessibilityRole="header" style={[styles.pageTitle, titleStyle]}>{title}</Text>
+                                {/* The mark stays beside the first line of its name; only the accessory wraps below. */}
+                                <View style={styles.pageTitleName}>
+                                    {titleLeading}
+                                    <Text accessibilityRole="header" style={[styles.pageTitle, styles.pageTitleText, titleStyle]}>{title}</Text>
+                                </View>
                                 {titleAccessory}
                             </View>
                         ) : title}

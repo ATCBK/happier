@@ -105,6 +105,10 @@ const stylesheet = StyleSheet.create(() => ({
     label: {
         ...Typography.variant('micro', 'semiBold'),
     },
+    truncating: {
+        flexShrink: 1,
+        minWidth: 0,
+    },
     // Ordinary 11px chrome type, matching the status text a phrase pill sits beside.
     phraseLabel: {
         ...Typography.default(),
@@ -150,11 +154,12 @@ export function StatusPill(props: StatusPillProps): React.ReactElement {
             testID={props.testID}
             accessibilityLabel={props.accessibilityLabel ?? props.label}
             color={foregroundColor}
-            backgroundColor={plain ? 'transparent' : 'background' in state ? state.background : undefined}
+            backgroundColor={plain ? 'transparent' : state.background}
             shape={props.shape}
             {...(plain ? { horizontalPadding: 0, verticalPadding: 0 } : {})}
             // Core's RN style prop crosses into the portable badge style at this one adapter boundary.
-            style={[plain ? styles.plainContainer : null, props.style] as HappierBadgeStyle}
+            // A truncating pill shrinks with its row, so its label can ellipsize instead of spilling out.
+            style={[plain ? styles.plainContainer : null, props.labelNumberOfLines === undefined ? null : styles.truncating, props.style] as HappierBadgeStyle}
             leading={(
                 <>
                     <View
@@ -180,7 +185,7 @@ export function StatusPill(props: StatusPillProps): React.ReactElement {
                     testID={props.testID ? `${props.testID}:label` : undefined}
                     numberOfLines={props.labelNumberOfLines}
                     ellipsizeMode={props.labelNumberOfLines === undefined ? undefined : 'tail'}
-                    style={[styles.label, labelVariantStyle, { color: foregroundColor }, props.labelStyle, props.labelNumberOfLines === undefined ? null : { flexShrink: 1 }]}
+                    style={[styles.label, labelVariantStyle, { color: foregroundColor }, props.labelStyle, props.labelNumberOfLines === undefined ? null : styles.truncating]}
                 >
                     {props.label}
                     {props.detail ? (

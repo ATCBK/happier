@@ -167,6 +167,18 @@ describe('Item', () => {
         }
     });
 
+    it('renders no title line for an empty title, so the description leads the row', async () => {
+        const { Item } = await import('./Item');
+
+        const screen = await renderScreen(
+            <Item title="" subtitle="Speaks with your account voice" showChevron={false} />,
+        );
+
+        const textChildren = screen.findAllByType('Text' as any).map((node) => node.props.children);
+        expect(textChildren).toContain('Speaks with your account voice');
+        expect(textChildren).not.toContain('');
+    });
+
     it('renders detail even when rightElement is provided', async () => {
         const { Item } = await import('./Item');
 

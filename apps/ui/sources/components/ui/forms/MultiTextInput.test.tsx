@@ -573,6 +573,32 @@ describe('MultiTextInput', () => {
         expect(() => tree.findByProps({ 'data-testid': 'composer-input-large-value-preview' })).toThrow();
     });
 
+    it('batches collapse and measurement across composers before restoring their heights', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput.web');
+        const measurements: string[] = [];
+        const nodes = [64, 96].map((height, index) => {
+            let currentHeight = '';
+            const style = { get height() { return currentHeight; }, set height(value: string) {
+                measurements.push(`${index}:height:${value}`);
+                currentHeight = value;
+            } };
+            return { value: 'line', selectionStart: 0, selectionEnd: 0, scrollTop: 0,
+                get scrollHeight() { measurements.push(`${index}:measure`); return height; }, style,
+                setSelectionRange() {}, dispatchEvent() {}, focus() {}, blur() {},
+            };
+        });
+        const screen = await renderScreen(<>{nodes.map((_, index) => <MultiTextInput key={index}
+            testID={`batch-${index}`} value="line" maxHeight={144} onChangeText={() => {}} />)}</>, {
+            createNodeMock: element => element.type === 'textarea'
+                ? nodes[Number(String(element.props['data-testid']).split('-')[1])] : null,
+        });
+        try {
+            expect(nodes.map(node => node.style.height)).toEqual(['64px', '96px']);
+            expect(measurements.indexOf('1:height:auto')).toBeLessThan(measurements.indexOf('0:measure'));
+            expect(measurements.lastIndexOf('1:measure')).toBeLessThan(measurements.indexOf('0:height:64px'));
+        } finally { await screen.unmount(); }
+    });
+
     it('dedupes web content height reports before notifying callers', async () => {
         const { MultiTextInput } = await import('./MultiTextInput.web');
         const onContentHeightChange = vi.fn();

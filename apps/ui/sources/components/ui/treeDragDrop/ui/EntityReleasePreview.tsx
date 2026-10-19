@@ -202,6 +202,7 @@ export function EntityDragGripTrigger(props: Readonly<{
     accessibilityActions?: HappierDragGripTriggerProps['accessibilityActions'];
     onAccessibilityAction?: HappierDragGripTriggerProps['onAccessibilityAction'];
     controlRef?: HappierDragGripTriggerProps['controlRef'];
+    tabIndex?: HappierDragGripTriggerProps['tabIndex'];
     active?: boolean;
     revealed?: boolean;
     density?: 'pointer' | 'touch';
@@ -218,6 +219,7 @@ export function EntityDragGripTrigger(props: Readonly<{
             accessibilityActions={props.accessibilityActions}
             onAccessibilityAction={props.onAccessibilityAction}
             controlRef={props.controlRef}
+            tabIndex={props.tabIndex}
             expanded={props.expanded}
             onPress={props.onPress}
             onFocusChange={props.onFocusChange}

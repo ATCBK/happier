@@ -63,7 +63,7 @@ function fixture(scrollRef?: React.RefObject<ScrollView | null>, acknowledgement
             if (!next || next.every((id, offset) => id === model.ids[offset])) {
                 return { status: 'refused', reason: { code: 'stale_or_noop', message: 'Unavailable' } };
             }
-            return { status: 'allowed', effect: { actionId: 'todos.reorder',
+            return { status: 'allowed', effect: { actionId: 'tasks.internal.reorder',
                 input: { scope: model.scope, sourceId, position: { ...position } },
                 preview: { glyph: position.placement === 'before' ? 'above' : 'below', verb: 'Move', target: position.anchorId ?? 'List edge' } } };
         },
@@ -283,7 +283,7 @@ describe('shared flat reorder UI binding', () => {
                 const sourceId = runtime.getSnapshot().sourceId!;
                 expect.soft(runtime.getSourceBounds(sourceId)).toEqual({ x: 0, y: f.model.ids.indexOf(id) * 50, width: 300, height: 50 });
                 await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
-                expect(runtime.getSnapshot().admission).toMatchObject({ status: 'allowed', effect: { actionId: 'todos.reorder' } });
+                expect(runtime.getSnapshot().admission).toMatchObject({ status: 'allowed', effect: { actionId: 'tasks.internal.reorder' } });
                 await act(async () => { pan.__handlers.onEnd!({ absoluteX: 10, absoluteY: 90 }, true); });
                 expect(runtime.getSnapshot()).toMatchObject({ phase: 'settled', outcome: { status: 'applied' } });
                 const committed = f.model.writes.at(-1)!;
@@ -345,10 +345,11 @@ describe('shared flat reorder UI binding', () => {
             .toMatchObject({ status: 'unknown' });
     });
 
-    it('autoscrolls the actual RN Web scrollable node using its viewport and current metrics', async () => {
+    it('autoscrolls the RN Web viewport only for this list\'s admitted target and stops on exit, refusal, cancel and unmount', async () => {
         const scrollNode = document.createElement('div');
         Object.defineProperty(scrollNode, 'scrollHeight', { value: 1000 });
         scrollNode.getBoundingClientRect = () => new DOMRect(0, 0, 300, 100);
+        scrollNode.scrollTop = 100;
         // A genuine RN Web ScrollView exposes this OS adapter rather than DOM metrics itself.
         const scrollRef = { current: {
             getScrollableNode: () => scrollNode,
@@ -358,9 +359,72 @@ describe('shared flat reorder UI binding', () => {
         const screen = await mount(f);
         const pan = gesture(screen, 'a');
         await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: 10 }); });
+        // The source is in this list, but its current place is refused as a no-op.
+        expect(runtime.getSnapshot().admission?.status).toBe('refused');
+        await screen.update(f.render());
+        expect(scrollNode.scrollTop).toBe(100);
+
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
+        expect(runtime.getSnapshot().admission?.status).toBe('allowed');
+        await screen.update(f.render());
+        expect(scrollNode.scrollTop).toBeGreaterThan(100);
+        const offset = scrollNode.scrollTop;
+
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 310, absoluteY: 90 }); });
+        expect(runtime.getSnapshot().targetId).toBeNull();
+        await screen.update(f.render());
+        expect(scrollNode.scrollTop).toBe(offset);
+
+        // An admitted target elsewhere in the realm must not keep this viewport scrolling.
+        let unregister = () => {};
+        await act(async () => { unregister = runtime.registerTarget({ id: 'other-list', scope, acceptedKinds: ['todo'],
+            isCurrent: () => true, getBounds: () => ({ x: 300, y: 0, width: 300, height: 100 }),
+            resolve: () => ({ status: 'allowed', effect: { actionId: 'tasks.internal.reorder', input: {},
+                preview: { glyph: 'below', verb: 'Move', target: 'Other list' } } }),
+            execute: async () => ({ status: 'applied' }),
+        }); });
+        try {
+            await act(async () => { runtime.autoscroll(); });
+            expect(runtime.getSnapshot()).toMatchObject({ targetId: 'other-list', admission: { status: 'allowed' } });
+            await screen.update(f.render());
+            expect(scrollNode.scrollTop).toBe(offset);
+        } finally { await act(async () => { unregister(); }); }
+
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 10 }); });
+        expect(runtime.getSnapshot().admission?.status).toBe('refused');
+        await screen.update(f.render());
+        expect(scrollNode.scrollTop).toBe(offset);
+
         await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
         await screen.update(f.render());
-        expect(scrollNode.scrollTop).toBeGreaterThan(0);
+        const beforeCancel = scrollNode.scrollTop;
+        expect(beforeCancel).toBeGreaterThan(offset);
+        await act(async () => { runtime.cancel('pointer-cancel'); });
+        await screen.update(f.render());
+        expect(scrollNode.scrollTop).toBe(beforeCancel);
+
+        // Scrolling belongs to the target list, even when the source is registered elsewhere.
+        let unregisterSource = () => {};
+        await act(async () => { unregisterSource = runtime.registerSource({ id: 'other-source', scope, isCurrent: () => true,
+            getItem: () => ({ kind: 'todo', scope, todoId: 'a' }),
+        }); });
+        try {
+            await act(async () => { runtime.begin('other-source')!.move({ x: 10, y: 90 }); runtime.autoscroll(); });
+            expect(runtime.getSnapshot().admission?.status).toBe('allowed');
+            await screen.update(f.render());
+            expect(scrollNode.scrollTop).toBeGreaterThan(beforeCancel);
+            await act(async () => { runtime.cancel(); });
+        } finally { await act(async () => { unregisterSource(); }); }
+
+        await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: 10 }); });
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
+        await screen.update(f.render());
+        const beforeUnmount = scrollNode.scrollTop;
+        await screen.unmount();
+        screens.splice(screens.indexOf(screen), 1);
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); runtime.autoscroll(); });
+        expect(scrollNode.scrollTop).toBe(beforeUnmount);
+        expect(runtime.getSnapshot().phase).toBe('idle');
         expect(f.model.writes).toEqual([]);
     });
 

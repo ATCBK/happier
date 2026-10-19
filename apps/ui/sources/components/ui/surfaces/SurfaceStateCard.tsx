@@ -327,13 +327,13 @@ export function SurfaceStateCard(props: Readonly<{
 function useSurfaceStateBindings(testID: string | undefined, animationEnabled: boolean): HappierSurfaceStateBindings {
     const { theme } = useUnistyles();
     return React.useMemo<HappierSurfaceStateBindings>(() => ({
-        renderText: ({ role, metrics, testID: textTestID, onPress, children }) => {
+        renderText: ({ role, metrics, align, testID: textTestID, onPress, children }) => {
             if (role === 'quietLink') {
                 return <Text testID={textTestID} accessibilityRole="link" onPress={onPress} style={stylesheet.quietLink}>{children}</Text>;
             }
             const roleStyle = role === 'lineAction' ? stylesheet.lineAction : role === 'quiet' ? stylesheet.quiet
                 : role === 'live' ? stylesheet.liveText : stylesheet.lineText;
-            return <Text testID={textTestID} style={[roleStyle, metrics]}>{children}</Text>;
+            return <Text testID={textTestID} style={[roleStyle, metrics, role === 'quiet' && align === 'start' ? { textAlign: 'auto' } : null]}>{children}</Text>;
         },
         renderButton: ({ action, emphasis, tone, compact, fullWidth, testID: buttonTestID }) => (
             <RoundButton

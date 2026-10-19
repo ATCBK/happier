@@ -10,7 +10,7 @@ const allowed = (actionId: string, glyph?: EntityDropPreviewV1['glyph'], verb = 
 describe('Happier core outcome vocabulary (lab SYS verbs)', () => {
     it('honors declared core and plugin marks without reinterpreting their Action input', () => {
         for (const glyph of ['copy', 'move', 'board', 'below', 'split'] as const) {
-            for (const actionId of ['session.reports_to.set', 'plugin.releases.link']) {
+            for (const actionId of ['session.manager.set', 'plugin.releases.link']) {
                 expect(describeEntityDropOutcome({ phase: 'carrying', admission: allowed(actionId, glyph) })?.glyph).toBe(glyph);
             }
         }
@@ -68,9 +68,9 @@ describe('Happier core outcome vocabulary (lab SYS verbs)', () => {
 
     it('names a late relation refusal by item and lead, and any other one by its verb', () => {
         const refused = { status: 'refused' as const, reason: { code: 'changed', message: 'This session was just moved. Try again' } };
-        expect(describeEntityDropSettled({ phase: 'settled', admission: allowed('session.reports_to.set', 'nest'), outcome: refused }, 'Review #2481'))
+        expect(describeEntityDropSettled({ phase: 'settled', admission: allowed('session.manager.set', 'nest'), outcome: refused }, 'Review #2481'))
             .toMatchObject({ kind: 'refused', title: 'Couldn’t put Review #2481 under Target', detail: 'This session was just moved. Try again' });
-        expect(describeEntityDropSettled({ phase: 'settled', admission: allowed('todos.reorder', 'above', 'Move above Buy milk'), outcome: refused }))
+        expect(describeEntityDropSettled({ phase: 'settled', admission: allowed('tasks.internal.reorder', 'above', 'Move above Buy milk'), outcome: refused }))
             .toMatchObject({ kind: 'refused', title: 'Move above Buy milk didn’t go through' });
     });
 });

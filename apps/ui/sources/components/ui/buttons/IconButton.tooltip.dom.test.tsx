@@ -47,6 +47,8 @@ it.each(['action', 'help'] as const)('keeps a focused %s tooltip outside a clipp
         if (!button) throw new Error('Missing review action');
         if (kind === 'help') expect(button.getAttribute('role')).not.toBe('button');
         expect(contentMounts).toBe(0);
+        // The shared pressable exposes keyboard focus after a real navigation event.
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
         await act(async () => { button.focus(); });
         await vi.waitFor(() => {
             const tooltip = document.body.querySelector('[data-testid="review-action-tooltip"]');

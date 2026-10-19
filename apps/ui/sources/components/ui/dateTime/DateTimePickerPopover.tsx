@@ -1,14 +1,7 @@
-import type * as React from 'react';
-import type { View } from 'react-native';
+import type { HappierLocalDateTimePickerRequest } from '@happier-dev/plugin-ui/presentation';
 
-export type DateTimePickerPopoverProps = Readonly<{
-    mode: 'date' | 'time';
-    anchorRef: React.RefObject<View | null>;
-    value: Date;
-    minimumDate: Date;
+export type DateTimePickerPopoverProps = HappierLocalDateTimePickerRequest & Readonly<{
     accentColor: string;
-    onChange: (value: Date) => void;
-    onDismiss: () => void;
 }>;
 
 export function isDateTimePickerPopoverAvailable(): boolean { return false; }

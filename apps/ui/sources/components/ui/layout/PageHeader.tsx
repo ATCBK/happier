@@ -30,6 +30,9 @@ export type PageHeaderMetaFact = Readonly<{
     /** The fact is an address, path or id: drawn in the mono face. */
     mono?: boolean;
     testID?: string;
+    /** The fact is the link to what it names; `accessibilityLabel` says where it goes. */
+    onPress?: () => void;
+    accessibilityLabel?: string;
 }>;
 
 /**
@@ -92,6 +95,12 @@ export type PageHeaderProps = Readonly<{
     /** Always show the title even when navigation chrome shows it (entity pages whose title is the entity). */
     alwaysShowTitle?: boolean;
     /**
+     * Keep Back in the phone navigation bar even on a deep link with no history, without drawing the
+     * title in the body (a page whose entity cannot be shown, such as a Run that no longer exists).
+     * Where chrome does not show the title, the header draws the title and Back itself as usual.
+     */
+    alwaysShowBack?: boolean;
+    /**
      * `column` (default): aligned with the page's content column. `pane`: spans the whole pane, for a
      * page whose body is full-bleed (a board's canvas), so the header lines up with it.
      */
@@ -140,7 +149,7 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
     const BackControl = useNavigationBackControl();
     // An entity page under retained title chrome puts its Back in that bar even on a deep link with no
     // history, so the identity starts on the same edge however the page was opened (DESIGN-9 P12).
-    const publishesBack = Boolean(setChromeBack && chromeShowsTitle && BackControl && (chromeShowsBack || props.alwaysShowTitle === true));
+    const publishesBack = Boolean(setChromeBack && chromeShowsTitle && BackControl && (chromeShowsBack || props.alwaysShowTitle === true || props.alwaysShowBack === true));
     const renderBack = React.useMemo(
         () => (BackControl && !chromeShowsBack && !publishesBack ? (style: StyleProp<ViewStyle>) => <BackControl style={style} /> : null),
         [BackControl, chromeShowsBack, publishesBack],
@@ -172,6 +181,8 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
         text: fact.text,
         ...(fact.mono ? { mono: true } : {}),
         ...(fact.testID === undefined ? {} : { testID: fact.testID }),
+        ...(fact.onPress === undefined ? {} : { onPress: fact.onPress }),
+        ...(fact.accessibilityLabel === undefined ? {} : { accessibilityLabel: fact.accessibilityLabel }),
         ...(fact.icon
             ? { icon: <Icon name={fact.icon} size={ICON_SIZE.xs} color={theme.colors.text.secondary} /> }
             : {}),

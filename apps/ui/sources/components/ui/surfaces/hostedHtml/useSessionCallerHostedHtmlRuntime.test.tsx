@@ -3,7 +3,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSessionAccessFixture, createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionAccessFixture, createSessionFixture, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { PluginUiHostApiSurfaceContextV1Schema, type PluginHostedWebBridgeEnvelopeV1 } from '@happier-dev/protocol/plugins/ui';
 import type { SessionPluginRuntimeState } from '@/components/sessions/plugins/useSessionPluginRuntime';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
@@ -74,12 +74,15 @@ vi.mock('./hostedInlineDocumentFrameCapability', () => ({
 import { useSessionCallerHostedHtmlRuntime } from './useSessionCallerHostedHtmlRuntime';
 import { HostedHtmlSurfaceAdapter } from './HostedHtmlSurfaceAdapter';
 import { ApprovalVisualPreview } from '@/components/approvals/ApprovalVisualPreview';
+import { resolveApprovalVisualPreview } from '@/components/approvals/approvalFieldValues';
+import { SESSION_BOARD_SEMANTIC_HEIGHTS } from '@/components/sessions/board/sessionBoardItemHeight';
 import { createPluginUiHostApiClient } from '@happier-dev/plugin-sdk/ui/client';
 import type { PluginUiHostApiWireEnvelopeV1 } from '@happier-dev/protocol/plugins/ui/client';
 
 const pluginRuntime: SessionPluginRuntimeState = {
     phase: 'current', interactionEnabled: true, machineId: 'machine-a', serverId: 'srv_home-a',
     platform: 'web', pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 1 }, pluginBrowserProjection: null,
+    accountLifetime: null,
 };
 
 const source = artifactHtmlBundleFromBodyV1('<main>Same document</main>');
@@ -140,6 +143,40 @@ describe('useSessionCallerHostedHtmlRuntime', () => {
         expect(await resolveServerCredentialAccountScope('srv_home-a')).toMatchObject({
             kind: 'bound', scope: { serverId: 'srv_home-a', accountId: 'account:srv_home-a' },
         });
+    });
+
+    it.each(['fixed', 'auto'] as const)('reserves the declared %s approval height while account mode is pending', async (mode) => {
+        let release!: () => void;
+        const pending = new Promise<void>(resolve => { release = resolve; });
+        vi.stubGlobal('fetch', async () => {
+            await pending;
+            return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }), { status: 200 });
+        });
+        const preview = resolveApprovalVisualPreview({ actionId: 'session.board.item.upsert', actionArgs: {
+            item: { title: 'Build health', height: mode === 'fixed'
+                ? { mode: 'fixed', size: 'compact' } : { mode: 'auto', fallback: 'compact' },
+                source: { kind: 'hostedHtml', source } },
+        } });
+        if (!preview) throw new Error('expected_html_preview');
+        const screen = await renderScreen(<ApprovalVisualPreview artifactId="approval-pending" serverId="srv_home-a"
+            preview={preview} testID="preview" />);
+        try {
+            expect(screen.findByTestId('physical-caller-frame')).toBeNull();
+            expect(screen.findByTestId('preview-row')).not.toBeNull();
+            expect(screen.findByTestId('preview')?.props.style.height).toBe(SESSION_BOARD_SEMANTIC_HEIGHTS.compact);
+        } finally {
+            await act(async () => { release(); });
+        }
+        await vi.waitFor(() => expect(screen.findByTestId('physical-caller-frame')).not.toBeNull());
+        expect(screen.findByTestId('preview')?.props.style.height).toBe(SESSION_BOARD_SEMANTIC_HEIGHTS.compact);
+        const guest = readFrame(frames.at(-1)!);
+        await act(async () => {
+            await guest.send({ version: 1, identity: guest.identity, sequence: 1, kind: 'ready', payload: { ready: true } });
+            await guest.send({ version: 1, identity: guest.identity, sequence: 2, kind: 'heightChanged', payload: { height: 116 } });
+        });
+        await flushHookEffects({ frames: 1 });
+        expect(screen.findByTestId('preview')?.props.style.height).toBe(mode === 'fixed'
+            ? SESSION_BOARD_SEMANTIC_HEIGHTS.compact : 116);
     });
 
     it('opens an inert approval preview without a Session or plugin runtime through the strict guest client', async () => {

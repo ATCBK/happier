@@ -53,6 +53,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { ICON_LABEL_OPTICAL_NUDGE_STYLE } from '@/components/ui/icons/iconOpticalAlignment';
 import { useListPresentation } from './listPresentation';
 import { GROUPED_SURFACE_RADIUS_PX, PAGE_LIST_METRICS } from './pageListMetrics';
+import { HAPPIER_RADIUS_V1 } from '@happier-dev/plugin-ui/environment';
 import { useSectionLeadingColumn } from './sectionLeadingColumn';
 import {
     HAPPIER_COLLECTION_LIST_METRICS,
@@ -157,6 +158,12 @@ export interface ItemProps {
      * so the fixed slot doesn't clip its left edge or eat the title gap.
      */
     iconBoxSize?: number;
+    /**
+     * A picture of the thing itself (a window's or a screen's thumbnail, a file's preview) in place of
+     * a glyph: drawn in the landscape leading-media box (`HAPPIER_PAGE_METRICS.rowLeadingMediaPx`),
+     * clipped to the small radius with an ink hairline. The child fills the box (`width/height: 100%`).
+     */
+    leadingMedia?: React.ReactNode;
     /**
      * Which surface this row belongs to.
      *
@@ -372,6 +379,14 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     containerWithoutSubtitleTight: {
         paddingVertical: Platform.select({ ios: 8, default: 2 }),
+    },
+    leadingMedia: {
+        overflow: 'hidden',
+        borderRadius: HAPPIER_RADIUS_V1.sm,
+        borderCurve: 'continuous',
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: theme.colors.border.subtle,
+        backgroundColor: theme.colors.surface.inset,
     },
     iconContainer: {
         marginRight: theme.space.s12,
@@ -629,9 +644,10 @@ export const Item = React.memo<ItemProps>((props) => {
         detail,
         detailTestID,
         icon,
-        leftElement,
+        leftElement: leftElementProp,
         leftElementWhenHovered,
-        iconBoxSize,
+        iconBoxSize: iconBoxSizeProp,
+        leadingMedia,
     rowRole,
         rightElement: rightElementProp,
         onPress: onPressProp,
@@ -688,6 +704,13 @@ export const Item = React.memo<ItemProps>((props) => {
         copy,
         itemGroupRadioIndex,
     } = props;
+    // Leading media is a sized identity mark: it takes the media box in every row style, and the
+    // row's leading column (titles, dividers, stacked controls) follows the box's width.
+    const leadingMediaBox = leadingMedia != null ? PAGE_LIST_METRICS.rowLeadingMediaPx : null;
+    const leftElement = leadingMediaBox ? (
+        <View style={[styles.leadingMedia, { width: leadingMediaBox.width, height: leadingMediaBox.height }]}>{leadingMedia}</View>
+    ) : leftElementProp;
+    const iconBoxSize = leadingMediaBox ? leadingMediaBox.width : iconBoxSizeProp;
     // A switch row (owner ruling 2026-10-12): with no press of its own, a row whose accessory is a
     // switch toggles it from anywhere and is itself the one `switch` control; the switch only draws.
     const rowSwitch = !onPressProp && !props.onDoublePress && !rightElementOutsidePressable && mode !== 'info'
@@ -953,6 +976,11 @@ export const Item = React.memo<ItemProps>((props) => {
     const measuresFieldLabel = isPageRow && fieldAccessory && isNarrowRow;
     const measuresTitle = (measuresDetail || measuresFieldLabel) && (typeof title === 'string' || typeof title === 'number');
     const [titleTrailingWidthPx, setTitleTrailingWidthPx] = React.useState<number | null>(null);
+    // The room at which the field's value last filled its box (see `resolveHappierPageRowFieldMaxWidth`).
+    const [fieldSaturatedAtPx, setFieldSaturatedAtPx] = React.useState<number | null>(null);
+    const handleFieldSaturated = React.useCallback((maxWidthPx: number) => {
+        setFieldSaturatedAtPx((current) => (current !== null && current >= maxWidthPx ? current : maxWidthPx));
+    }, []);
     const fieldMaxWidthPx = React.useMemo(() => {
         if (!isPageRow || !fieldAccessory) return null;
         return resolveHappierPageRowFieldMaxWidth({
@@ -961,8 +989,9 @@ export const Item = React.memo<ItemProps>((props) => {
             titleNaturalWidthPx: measuresFieldLabel && measuresTitle ? titleNaturalWidthPx : null,
             ...(titleAccessory == null ? {} : { titleAccessoryWidthPx: titleTrailingWidthPx, titleAccessoryGapPx: theme.space.s8 }),
             ...(fieldAccessorySiblingPx === undefined ? {} : { siblingPx: fieldAccessorySiblingPx }),
+            fieldSaturatedAtPx,
         });
-    }, [fieldAccessory, fieldAccessorySiblingPx, isPageRow, measuresFieldLabel, measuresTitle, pageRowInsetPx, rowWidthPx, theme.space.s8, titleAccessory, titleNaturalWidthPx, titleTrailingWidthPx]);
+    }, [fieldAccessory, fieldAccessorySiblingPx, fieldSaturatedAtPx, isPageRow, measuresFieldLabel, measuresTitle, pageRowInsetPx, rowWidthPx, theme.space.s8, titleAccessory, titleNaturalWidthPx, titleTrailingWidthPx]);
     const detailTrailingPx = theme.space.s8 + (rightElement != null || showAccessory ? 8 : 0)
         + (showAccessory ? ITEM_CHEVRON_SIZE[resolvedIconDensity] + theme.space.s4 : 0);
     // A page section reserves the leading column for all its rows when any row has an icon or mark.
@@ -1003,7 +1032,11 @@ export const Item = React.memo<ItemProps>((props) => {
                 menuRow: isMenuRow,
             }))));
     const stackAccessoryRef = React.useRef(stackAccessory);
-    const fieldLayout = React.useMemo(() => ({ maxWidthPx: fieldMaxWidthPx, stacked: stackAccessory }), [fieldMaxWidthPx, stackAccessory]);
+    const fieldLayout = React.useMemo(() => ({
+        maxWidthPx: fieldMaxWidthPx,
+        stacked: stackAccessory,
+        onFieldSaturated: handleFieldSaturated,
+    }), [fieldMaxWidthPx, handleFieldSaturated, stackAccessory]);
     stackAccessoryRef.current = stackAccessory;
     const handleAccessoryLayout = React.useCallback((event: LayoutChangeEvent) => {
         // Only the inline position reports the control's natural width; a stacked control spans the row.
@@ -1036,9 +1069,11 @@ export const Item = React.memo<ItemProps>((props) => {
             : [styles.container, isMenuRow ? MENU_ROW_HEIGHT_STYLE : null, pageContainerStyle, stackedContainerStyle];
     const alignsToFirstLine = contentAlign === 'start';
     const containerCore = alignsToFirstLine ? [containerBase, styles.containerAlignStart] : containerBase;
-    const iconBoxSizeOverride = iconBoxSize != null
-        ? { width: iconBoxSize, height: iconBoxSize }
-        : null;
+    const iconBoxSizeOverride = leadingMediaBox
+        ? { width: leadingMediaBox.width, height: leadingMediaBox.height }
+        : iconBoxSize != null
+            ? { width: iconBoxSize, height: iconBoxSize }
+            : null;
     const chevronSize = ITEM_CHEVRON_SIZE[resolvedIconDensity];
     // One glyph size for every row in a list, whether or not that row happens to carry a subtitle.
     // Branching on the subtitle is tempting — it is what makes the icon span exactly two lines — but

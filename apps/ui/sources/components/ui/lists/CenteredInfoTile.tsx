@@ -4,6 +4,7 @@ import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { Typography } from '@/constants/Typography';
+import { BALANCED_TEXT_WRAP } from '@/components/ui/text/balancedTextWrap';
 import { Text } from '@/components/ui/text/Text';
 
 type CenteredInfoTileProps = Readonly<{
@@ -52,6 +53,7 @@ export const CenteredInfoTile = React.memo((props: CenteredInfoTileProps) => {
                         color: theme.colors.text.primary,
                         textAlign: 'center',
                         marginBottom: metrics?.bodyGapPx ?? 6,
+                        ...BALANCED_TEXT_WRAP,
                     }}
                 >
                     {props.titleContent ?? props.title}
@@ -66,6 +68,7 @@ export const CenteredInfoTile = React.memo((props: CenteredInfoTileProps) => {
                         color: theme.colors.text.secondary,
                         textAlign: 'center',
                         lineHeight: metrics?.body.lineHeight ?? 20,
+                        ...BALANCED_TEXT_WRAP,
                     }}
                 >
                     {props.description}

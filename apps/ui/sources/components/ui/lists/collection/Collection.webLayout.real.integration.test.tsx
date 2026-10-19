@@ -13,6 +13,7 @@ import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { PluginsPageCollection } from '@/components/settings/plugins/collection/PluginsPageCollection';
+import { PLUGIN_CARD_MIN_WIDTH_PX } from '@/components/settings/plugins/collection/PluginCardStatus';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { getStorage } from '@/sync/domains/state/storage';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -53,14 +54,15 @@ const renderPageScroller = (children: React.ReactNode) => (
 );
 
 function PageList() {
-    const model = useHappierCollection({ items, keyOf, groups, window: { kind: 'complete' } });
+    const model = useHappierCollection({ items, keyOf, groups, window: { kind: 'complete' }, openKey: null, onOpenChange: () => {} });
     return <CoreCollectionScope renderPageScroller={renderPageScroller}>
-        <Collection model={model} anatomy={anatomy} accessibilityLabel="Entries" presentation="list" detail="none" scroll="page" />
+        <Collection model={model} anatomy={anatomy} accessibilityLabel="Entries" presentation="list" detail="none" scroll="page"
+            minListWidth={PLUGIN_CARD_MIN_WIDTH_PX} minDetailWidth={PLUGIN_CARD_MIN_WIDTH_PX} preferredListRatio={0.5} />
     </CoreCollectionScope>;
 }
 
 function PluginsList() {
-    const model = useHappierCollection({ items, keyOf, groups, window: { kind: 'complete' } });
+    const model = useHappierCollection({ items, keyOf, groups, window: { kind: 'complete' }, openKey: null, onOpenChange: () => {} });
     return <PluginsPageCollection model={model} anatomy={anatomy} accessibilityLabel="Entries" presentation="list"
         header={<PageHeader title="Collection page" />}
         footer={<ItemGroup title="Neighbor section" surface="none"><View /></ItemGroup>}

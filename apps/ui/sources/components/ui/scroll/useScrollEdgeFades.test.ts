@@ -64,3 +64,18 @@ describe('useScrollEdgeFades end inset', () => {
         expect(hook.getCurrent().canScrollX).toBe(false);
     });
 });
+
+describe('useScrollEdgeFades identity', () => {
+    it('hands consumers the same handle across renders that report nothing new, so effects keyed on it do not re-run', () => {
+        let current!: ReturnType<typeof useScrollEdgeFades>;
+        function Harness(props: Readonly<{ tick: number }>) {
+            current = useScrollEdgeFades({ enabledEdges: { left: true, right: true } });
+            return React.createElement('div', null, props.tick);
+        }
+        let tree!: renderer.ReactTestRenderer;
+        act(() => { tree = renderer.create(React.createElement(Harness, { tick: 0 })); });
+        const first = current;
+        act(() => { tree.update(React.createElement(Harness, { tick: 1 })); });
+        expect(current).toBe(first);
+    });
+});

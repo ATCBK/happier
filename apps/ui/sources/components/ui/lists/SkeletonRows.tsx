@@ -20,7 +20,7 @@ export const SkeletonRows = React.memo(function SkeletonRows(props: SkeletonRows
         <HappierSkeletonRows
             {...props}
             theme={projectPluginUiTheme(theme)}
-            color={theme.colors.surface.ripple}
+            color={theme.colors.surface.skeleton}
             reducedMotion={reducedMotion}
         />
     );

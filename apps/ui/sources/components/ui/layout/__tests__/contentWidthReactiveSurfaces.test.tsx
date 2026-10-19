@@ -83,10 +83,6 @@ vi.mock('@/sync/domains/state/storageStore', () => ({
     }),
 }));
 
-vi.mock('@/components/ui/forms/SplitActionButtons', () => ({
-    SplitActionButtons: (props: Record<string, unknown>) => React.createElement('SplitActionButtons', props),
-}));
-
 vi.mock('@/components/ui/navigation/SegmentedTabBar', () => ({
     SegmentedTabBar: (props: Record<string, unknown>) => React.createElement('SegmentedTabBar', props),
 }));
@@ -164,26 +160,6 @@ describe('surfaces follow the content-width setting without a reload', () => {
             </ContainedPageScopeProvider>,
         );
         expect(readConstrainedMaxWidths(screen)).toEqual([Number.POSITIVE_INFINITY]);
-    });
-
-    it('re-applies the setting to the shared settings action footer in place', async () => {
-        const { SettingsActionFooter } = await import('@/components/ui/settingsSurface/SettingsActionFooter');
-
-        const screen = await renderScreen(
-            <SettingsActionFooter primaryLabel="Save" onPrimaryPress={() => {}} />,
-        );
-        expect(readConstrainedMaxWidths(screen)).toContain(CONTENT_WIDTH_PX_BY_MODE.compact);
-        const mountsAfterFirstPaint = mountCounts.constrainedViews;
-
-        await setContentWidthMode('medium');
-        expect(readConstrainedMaxWidths(screen)).toContain(CONTENT_WIDTH_PX_BY_MODE.medium);
-        expect(readConstrainedMaxWidths(screen)).not.toContain(CONTENT_WIDTH_PX_BY_MODE.compact);
-
-        await setContentWidthMode('full');
-        expect(readConstrainedMaxWidths(screen)).toContain(Number.POSITIVE_INFINITY);
-
-        // The width must reach the constrained node in place, not by replacing it.
-        expect(mountCounts.constrainedViews).toBe(mountsAfterFirstPaint);
     });
 
     it('re-applies the setting to a transcript tool-calls unit row in place', async () => {

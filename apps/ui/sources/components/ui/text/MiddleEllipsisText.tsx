@@ -1,26 +1,14 @@
 import * as React from 'react';
 import { Platform, type StyleProp, type TextStyle } from 'react-native';
 
+import { HAPPIER_MIDDLE_ELLIPSIS_STYLE, splitForWebMiddleEllipsis } from '@happier-dev/plugin-ui/presentation';
+
 import { Text } from '@/components/ui/text/Text';
 
-const ROW_STYLE = { display: 'flex', flexDirection: 'row', overflow: 'hidden', minWidth: 0 } as const;
-const HEAD_STYLE = { flexShrink: 1, minWidth: 0 } as const;
-const TAIL_STYLE = { flexShrink: 0 } as const;
+const { row: ROW_STYLE, head: HEAD_STYLE, tail: TAIL_STYLE } = HAPPIER_MIDDLE_ELLIPSIS_STYLE;
 
-/**
- * Where a middle ellipsis keeps the end: a path's last segment, a name's disambiguating suffix
- * ("devbox · 3ad2"), otherwise the last two fifths. The tail is a run of its own and a browser drops a
- * space at the start of a run, so a suffix keeps its " · " through a no-break space.
- */
-export function splitForWebMiddleEllipsis(value: string): Readonly<{ head: string; tail: string }> | null {
-    const slash = value.lastIndexOf('/');
-    if (slash > 0 && slash < value.length - 1) return { head: value.slice(0, slash), tail: value.slice(slash) };
-    const suffix = value.lastIndexOf(' · ');
-    if (suffix > 0 && suffix < value.length - 3) return { head: value.slice(0, suffix), tail: ` ${value.slice(suffix + 1)}` };
-    if (value.length < 8) return null;
-    const cut = Math.ceil(value.length * 0.6);
-    return { head: value.slice(0, cut), tail: value.slice(cut) };
-}
+/** The split is plugin-ui's, so a plugin row and a core row give up the same middle. */
+export { splitForWebMiddleEllipsis };
 
 /**
  * One line of text that gives up its middle, never its end: the web draws only a tail ellipsis, so there

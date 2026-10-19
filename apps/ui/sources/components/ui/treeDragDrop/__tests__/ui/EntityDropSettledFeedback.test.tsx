@@ -36,7 +36,7 @@ async function lateSettlement(outcome: EntityDropOutcomeV1, options: Readonly<{ 
         getItem: () => ({ kind: 'session' as const, scope, address: { serverId: scope.serverId, sessionId: 'review' } }),
         isCurrent: () => true, describe: () => ({ title: 'Review #2481' }) };
     const retireSource = runtime.registerSource(source);
-    const admission: EntityDropAdmissionV1 = { status: 'allowed', effect: { actionId: 'session.reports_to.set', input: {},
+    const admission: EntityDropAdmissionV1 = { status: 'allowed', effect: { actionId: 'session.manager.set', input: {},
         preview: { verb: 'Put under Fix settings', target: 'Fix settings', consequence: 'Reports to it · both keep running' } } };
     let finish = (_outcome: EntityDropOutcomeV1) => {};
     runtime.registerTarget({ id: 'lead', scope, acceptedKinds: ['session'], getBounds: () => ({ x: 0, y: 0, width: 100, height: 100 }),

@@ -27,8 +27,9 @@ const ICON_BUTTON_IMPORT = "from '@/components/ui/buttons/IconButton'";
 /** Files that were migrated onto `IconButton` and must stay on it. */
 const GUARDED_PATHS = [
     'components/browser/BrowserToolbar.tsx',
-    'components/browser/automation/BrowserAutomationControls.tsx',
-    'components/browser/recording/BrowserRecordingControls.tsx',
+    // BrowserShell now owns chrome actions; the retired automation controls use the presence capsule.
+    'components/browser/BrowserShell.tsx',
+    'components/browser/recording/BrowserRecordingCapsule.tsx',
     'components/browser/diagnostics/BrowserDiagnosticsDrawer.tsx',
     'components/terminal/embedded/EmbeddedTerminalPaneFrame.tsx',
 ] as const;

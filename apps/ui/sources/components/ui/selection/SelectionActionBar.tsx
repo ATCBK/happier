@@ -79,6 +79,7 @@ export type SelectionActionBarProps = Omit<HappierSelectionActionBarProps, 'colo
 export function SelectionActionBar(props: SelectionActionBarProps): React.ReactElement | null {
     const { theme } = useUnistyles();
     const reducedMotion = useReducedMotionPreference();
+    // The inverse fill is near black/white: the glass fixed point (its fill over the plain page) can only reach it with a ~full coat, so the rail paints opaque by design.
     const colors = React.useMemo(() => ({
         background: theme.colors.button.primary.background,
         foreground: theme.colors.button.primary.tint,

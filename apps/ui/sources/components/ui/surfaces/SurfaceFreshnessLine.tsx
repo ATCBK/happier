@@ -68,9 +68,9 @@ export function SurfaceFreshnessLine(props: Readonly<{
             testID={props.testID}
             busy={props.busy}
             onSheet={onSheet}
-            colors={props.tone === 'warning'
-                ? { background: theme.colors.state.warning.background, border: theme.colors.state.warning.border }
-                : { background: theme.colors.surface.inset, border: theme.colors.border.default }}
+            // The tint carries the warning; its edges stay ink hairlines (an amber rule read heavier than the words).
+            colors={{ background: props.tone === 'warning' ? theme.colors.state.warning.background : theme.colors.surface.inset,
+                border: theme.colors.border.default }}
             presentation={chip ? 'chip' : 'line'}
             lead={chip && props.lead ? (
                 <Text testID={props.testID ? `${props.testID}-lead` : undefined} style={[stylesheet.text, stylesheet.lead]} numberOfLines={1}>{props.lead}</Text>
