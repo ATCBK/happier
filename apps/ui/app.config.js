@@ -417,9 +417,11 @@ const baseExpoConfig = {
                 NSLocationWhenInUseUsageDescription: "Allow $(PRODUCT_NAME) to access your location to improve AI responses and suggestions.",
                 NSLocalNetworkUsageDescription: "Allow $(PRODUCT_NAME) to find and connect to local devices on your network.",
                 NSBonjourServices: ["_http._tcp", "_https._tcp"],
+                // Owner ruling (2026-10-16): users may connect to their own servers over plain HTTP
+                // (LAN, Tailscale, self-hosted), matching Android's cleartext default. Do not add
+                // NSAllowsLocalNetworking here: iOS 10+ ignores NSAllowsArbitraryLoads when it is present.
                 NSAppTransportSecurity: {
-                    NSAllowsLocalNetworking: true,
-                    NSAllowsArbitraryLoads: false,
+                    NSAllowsArbitraryLoads: true,
                 },
             },
             associatedDomains: appEnvironmentConfig.enableAssociatedDomains ? iosAssociatedDomains : []
