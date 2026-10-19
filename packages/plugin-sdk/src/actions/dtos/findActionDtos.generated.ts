@@ -23,6 +23,9 @@ export type FindActionInputById = {
         op: 'stop';
         target?: string | undefined;
     } | {
+        op: 'refold';
+        target?: string | undefined;
+    } | {
         op: 'close';
         target?: string | undefined;
     };
@@ -45,7 +48,7 @@ export type FindActionResultById = {
         total: number;
     } | {
         status: 'unavailable';
-        reason: 'offline' | 'unsupportedEngine' | 'noClient';
+        reason: 'offline' | 'unsupportedEngine' | 'noClient' | 'unsupportedOperation' | 'noRevealedFold';
     } | {
         status: 'unavailable';
         unavailable: 'engineOwned';

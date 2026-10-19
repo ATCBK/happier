@@ -94,7 +94,7 @@ test('invokes the public Coach Resource and Action and refuses denied or retired
     assert.ok(resource);
     const controller = new AbortController();
     assert.deepEqual(JSON.parse(await resource.read({ signal: controller.signal })), example.finding);
-    assert.deepEqual(await testkit.invokeAction(example.inspectAction.localId, {}), example.finding);
+    assert.deepEqual(JSON.parse(JSON.stringify(await testkit.invokeAction(example.inspectAction.localId, {}))), example.finding);
     await assert.rejects(deniedCaller.invokeAction('inspect', {}), { code: 'plugin_action_unavailable' });
     controller.abort();
     assert.throws(() => resource.read({ signal: controller.signal }), { name: 'AbortError' });

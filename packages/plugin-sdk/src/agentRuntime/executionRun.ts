@@ -7,6 +7,7 @@ import type { AgentExecutionRunEventV1 } from '@happier-dev/protocol/runtime';
 import type { AgentExecutionRunHostServicesV1, AgentRuntimeContext } from './context.js';
 import type {
   AgentLaunchEnvironment,
+  AgentPermissionIntent,
   AgentSessionConfigurationSnapshot,
   AgentSessionInput,
   AgentSessionOpenRequest,
@@ -126,6 +127,15 @@ export interface AgentSessionExecutionRunRuntimeFactoryV1 {
     request: AgentExecutionRunOpenRequest,
     context: AgentExecutionRunRuntimeContextV1,
   ): AgentExecutionRunRuntime | Promise<AgentExecutionRunRuntime>;
+  /**
+   * Optional retained conversation. Opening does not submit the initial input;
+   * the host watches first, then owns every turn and the conversation lifetime.
+   * Absence means retained detached interaction is unsupported, never a finite fallback.
+   */
+  openConversation?(
+    request: AgentExecutionRunOpenRequest,
+    context: AgentExecutionRunRuntimeContextV1,
+  ): AgentExecutionRunConversationRuntimeV1 | Promise<AgentExecutionRunConversationRuntimeV1>;
 }
 
 export type AgentExecutionRunSessionAdapterOptions = Readonly<{
@@ -183,6 +193,8 @@ export interface AgentExecutionRunConversationRuntimeV1 extends Disposable {
 
 export type AgentExecutionRunConversationSendOptionsV1 = Readonly<{
   signal?: AbortSignal;
+  /** Resolved native policy for this input; apply before effects or refuse the input. */
+  permissionIntent?: AgentPermissionIntent;
   /** Exact host-authored identity also carried in `request.inputIds`. */
   localInputId?: string;
   /** Per-turn result contract; never retained as conversation-wide configuration. */

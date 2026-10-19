@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PluginUiExecuteActionRequestV1Schema } from '@happier-dev/protocol/plugins/ui/client';
+import { getActionSpec } from '@happier-dev/protocol';
 import {
     type PluginUiHostApiSurfaceContextV1,
     type PluginUiHostApiWireEnvelopeV1,
@@ -18,6 +19,27 @@ import { createSurfaceContextFixture } from './surfaceContext.fixture.js';
 const surface: SurfaceContext = createSurfaceContextFixture();
 
 const identity = { instanceId: 'mount-1', mountNonce: 'nonce-1' } as const;
+
+describe('caller-owned Action admission over the hosted transport', () => {
+    it.each([true, false, 'invalid'] as const)('settles the strict host admission result: %s', async (answer) => {
+        let receive: ((message: unknown) => void) | undefined;
+        const api = await createPluginUiHostApiClientFromTransport({ identity, transport: {
+            subscribe(listener) { receive = listener; return { dispose() {} }; },
+            send(message) {
+                if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity,
+                    apiVersion: '1.0.0', methods: ['admitAction'], surface });
+                if (message.kind === 'request') {
+                    expect(PluginUiExecuteActionRequestV1Schema.parse(message.payload)).toEqual({ action: 'save', input: { id: 'view-a' } });
+                    receive?.({ wireVersion: 1, kind: 'result', identity, requestId: message.requestId, method: message.method,
+                        result: answer === 'invalid' ? { admitted: true, grant: 'unexpected' } : { admitted: answer } });
+                }
+            },
+        } });
+        const result = api.admitAction('save', { id: 'view-a' });
+        if (answer === 'invalid') await expect(result).rejects.toMatchObject({ code: 'invalid_payload' });
+        else await expect(result).resolves.toBe(answer);
+    });
+});
 
 const preparedOperation = {
     // Grammar-valid local id: the Protocol contribution-id grammar admits
@@ -57,6 +79,39 @@ const preparedSelection = {
 };
 
 describe('plugin UI domain client transport adapter', () => {
+    it('keeps Discussion producer, principal, Home and cutoff authority outside external Action input', async () => {
+        let receive: ((message: unknown) => void) | undefined;
+        const api = await createPluginUiHostApiClientFromTransport({ identity, transport: {
+            subscribe(listener) { receive = listener; return { dispose() {} }; },
+            send(message) {
+                if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity,
+                    apiVersion: '1.0.0', methods: ['executeAction'], surface });
+                if (message.kind !== 'request') return;
+                const request = PluginUiExecuteActionRequestV1Schema.parse(message.payload);
+                const action = request.action;
+                if (action !== 'discussion.post' && action !== 'discussion.read') throw new Error('Unexpected Action');
+                const parsed = getActionSpec(action).inputSchema.safeParse(request.input);
+                expect(parsed.success).toBe(false);
+                receive?.({ wireVersion: 1, kind: 'error', identity, requestId: message.requestId,
+                    method: message.method, error: { name: 'PluginError', code: 'invalid_payload', message: 'Invalid Action input' } });
+            },
+        } });
+        const post = { discussionId: 'discussion-1', localId: 'post-1',
+            content: { v: 1 as const, parts: [{ t: 'text' as const, text: 'Hello' }] } };
+        expect(getActionSpec('discussion.post').inputSchema.safeParse(post).success).toBe(true);
+        for (const authority of [
+            { producerV1: { kind: 'session', sessionId: 'forged' } },
+            { accountId: 'another-person' },
+            { serverId: 'another-home' },
+            { discussionAddressing: { throughSeq: 999, participantSessionId: 'forged' } },
+        ]) await expect(api.executeAction('discussion.post', { ...post, ...authority }))
+            .rejects.toMatchObject({ code: 'invalid_payload' });
+        const read = { discussionId: 'discussion-1', throughSeq: 999,
+            discussionAddressing: { throughSeq: 999, participantSessionId: 'forged' } };
+        await expect(api.executeAction('discussion.read', read))
+            .rejects.toMatchObject({ code: 'invalid_payload' });
+    });
+
     it('preserves host read identities over the hosted bridge and refuses unadmitted methods', async () => {
         let receive: ((message: unknown) => void) | undefined;
         const reference = { hostRead: 'usage.query' as const, input: { queries: [] } };
@@ -396,8 +451,10 @@ describe('plugin UI domain client transport adapter', () => {
         expect(sent).toHaveLength(1);
     });
 
-    it('round-trips the flat Composer document methods and retires observations and locks through one disposer', async () => {
-        const composer = { kind: 'session', sessionId: 'session-1' } as const;
+    it.each([
+        { kind: 'session', sessionId: 'session-1' } as const,
+        { kind: 'discussion', discussionId: 'discussion-1' } as const,
+    ])('round-trips the flat $kind Composer methods and retires observations and locks through one disposer', async (composer) => {
         const stagedMediaContent = {
             kind: 'stagedMedia',
             handle: {
@@ -455,6 +512,7 @@ describe('plugin UI domain client transport adapter', () => {
                             methods: [
                                 'activeComposer',
                                 'readComposer',
+                                'readDiscussionComposer',
                                 'watchComposer',
                                 'applyComposer',
                                 'focusComposer',
@@ -469,6 +527,7 @@ describe('plugin UI domain client transport adapter', () => {
                         const resultByMethod = {
                             activeComposer: composer,
                             readComposer: { status: 'ready', snapshot },
+                            readDiscussionComposer: { status: 'ready', snapshot },
                             applyComposer: { status: 'applied', revision: 4 },
                             focusComposer: { status: 'focused' },
                             setComposerDecorations: { status: 'set' },
@@ -554,7 +613,7 @@ describe('plugin UI domain client transport adapter', () => {
             message.kind === 'request' ? [message.method, message.payload] : null
         ))).toEqual(expect.arrayContaining([
             ['activeComposer', undefined],
-            ['readComposer', { ref: composer }],
+            [composer.kind === 'discussion' ? 'readDiscussionComposer' : 'readComposer', { ref: composer }],
             ['applyComposer', {
                 ref: composer,
                 transaction: {
@@ -578,6 +637,36 @@ describe('plugin UI domain client transport adapter', () => {
                 decorations: null,
             }],
         ]));
+    });
+
+    it('refuses Discussion operations before dispatch on a Session-only host while Session reads stay usable', async () => {
+        let receive: ((message: unknown) => void) | undefined;
+        const sent: PluginUiHostApiWireEnvelopeV1[] = [];
+        const api = await createPluginUiHostApiClientFromTransport({ identity, transport: {
+            subscribe(listener) { receive = listener; return { dispose() {} }; },
+            send(message) {
+                sent.push(message);
+                if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity,
+                    apiVersion: '1.0.0', methods: ['readComposer', 'watchComposer', 'applyComposer', 'focusComposer',
+                        'setComposerDecorations', 'acquireComposerInputLock', 'pickComposerMedia'], surface });
+                if (message.kind === 'request') receive?.({ wireVersion: 1, kind: 'result', identity,
+                    requestId: message.requestId, method: message.method,
+                    result: { status: 'unavailable', reason: 'notFound' } });
+            },
+        } });
+        const ref = { kind: 'discussion', discussionId: 'discussion-1' } as const;
+        for (const operation of [
+            () => api.readComposer(ref),
+            () => api.watchComposer(ref, () => undefined),
+            () => api.applyComposer(ref, { expectedRevision: 1, operations: [{ kind: 'text.set', text: 'hello' }] }),
+            () => api.focusComposer(ref),
+            () => api.setComposerDecorations(ref, 'test', null),
+            () => api.acquireComposerInputLock(ref, { reason: 'Review', mode: 'submit' }),
+        ]) await expect(operation()).rejects.toMatchObject({ code: 'unsupported_method' });
+        expect(sent.filter(message => message.kind === 'request' || message.kind === 'subscribe')).toEqual([]);
+        await expect(api.readComposer({ kind: 'session', sessionId: 'session-1' }))
+            .resolves.toEqual({ status: 'unavailable', reason: 'notFound' });
+        expect(sent.filter(message => message.kind === 'request')).toHaveLength(1);
     });
 
     it('uses one negotiated opaque media-content boundary and fails closed on an older host', async () => {

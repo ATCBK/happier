@@ -76,10 +76,12 @@ export type SkillsActionInputById = {
         skillId: string;
         sessionId?: string | undefined;
         file?: string | undefined;
+        includeFileContents?: true | undefined;
     } | {
         name: string;
         sessionId: string;
         file?: string | undefined;
+        includeFileContents?: true | undefined;
     };
     readonly "skills.create": {
         name: string;
@@ -356,6 +358,10 @@ export type SkillsActionResultById = {
                 kind: 'written';
             } | {
                 kind: 'first_party';
+            } | {
+                kind: 'plugin';
+                pluginId: string;
+                occurrenceId: string;
             };
             modified: boolean;
             updatePolicy: 'manual' | 'auto' | 'pinned';
@@ -436,6 +442,10 @@ export type SkillsActionResultById = {
             kind: 'written';
         } | {
             kind: 'first_party';
+        } | {
+            kind: 'plugin';
+            pluginId: string;
+            occurrenceId: string;
         };
         modified: boolean;
         trust: 'text_only' | 'has_files' | 'runs_scripts';
@@ -483,6 +493,12 @@ export type SkillsActionResultById = {
             } | undefined;
         } | undefined;
         lastUsedAt?: number | undefined;
+        fileContents?: {
+            path: string;
+            contentBase64: string;
+            contentKind: 'utf8' | 'binary';
+            unixMode?: number | null | undefined;
+        }[] | undefined;
         file?: {
             path: string;
             contentBase64: string;
@@ -579,6 +595,10 @@ export type SkillsActionResultById = {
                 kind: 'written';
             } | {
                 kind: 'first_party';
+            } | {
+                kind: 'plugin';
+                pluginId: string;
+                occurrenceId: string;
             };
         }[];
     };
@@ -661,6 +681,10 @@ export type SkillsActionResultById = {
             kind: 'written';
         } | {
             kind: 'first_party';
+        } | {
+            kind: 'plugin';
+            pluginId: string;
+            occurrenceId: string;
         };
     };
 };

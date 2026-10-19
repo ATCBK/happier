@@ -29,6 +29,32 @@ type ProviderContributionV1 = never; /* @sdk-negative-type-case-end */
 type VoiceModelPackContributionV1 = never; /* @sdk-negative-type-case-end */
 
 describe('manifest authoring contract', () => {
+    it('reports rejected view fields through the public definePlugin manifest parser', () => {
+        const plugin = sdk.definePlugin({
+            id: 'acme.manifest-diagnostics',
+            version: '1.0.0',
+            ui: {
+                views: [{
+                    id: 'overview', container: 'appPage', target: { kind: 'app' }, renderer: 'overview-renderer',
+                    ...{ unsupportedViewField: true },
+                    badge: { label: 'Preview', ...{ unsupportedBadgeField: true } },
+                }],
+                renderers: [{ id: 'overview-renderer', kind: 'declarative', root: { kind: 'text', text: 'Overview' } }],
+            },
+        });
+
+        expect(manifestSdk.parsePluginManifest(plugin.manifest)).toMatchObject({
+            ok: false,
+            diagnostics: expect.arrayContaining([expect.objectContaining({
+                code: 'plugin_manifest_invalid',
+                path: ['contributes', 'ui', 'views', 0, 'unsupportedViewField'],
+            }), expect.objectContaining({
+                code: 'plugin_manifest_invalid',
+                path: ['contributes', 'ui', 'views', 0, 'badge', 'unsupportedBadgeField'],
+            })]),
+        });
+    });
+
     it('lets an external Agent author an identity hue through the public manifest parser', () => {
         const ui = { identityColor: { light: '#112233', dark: '#aabbcc' } } as const satisfies manifestSdk.PluginAgentUiContribution;
         const parsed = manifestSdk.parsePluginManifest({
@@ -108,6 +134,12 @@ describe('manifest authoring contract', () => {
                 ...inputHints.fields[1], inputType: { hostType: 'usageQuery', accountId: 'forged' },
             }] },
         }] } })).toMatchObject({ ok: false });
+    });
+
+    it('admits the maintained UsageQuery widget with independently bindable fields', async () => {
+        const { manifest } = await import('../examples/public-authoring/usageQuery.js');
+        const parsed = manifestSdk.parsePluginManifest(manifest);
+        expect(parsed, JSON.stringify(parsed)).toMatchObject({ ok: true });
     });
 
     it('projects every node named by the declarative UI union', async () => {
@@ -202,6 +234,7 @@ describe('manifest authoring contract', () => {
             'AgentUiTranscriptStorageModeV1',
             'ParsedPluginManifest',
             'PluginAgentUiContribution',
+            'PluginAtmospherePictureContributionV1',
             'PluginContributes',
             'PluginContributionIdentity',
             'PluginContributionIdentityV1JsonSchema',
@@ -251,7 +284,9 @@ describe('manifest authoring contract', () => {
             'PluginManifestDiagnostic',
             'PluginManifestParseResult',
             'PluginProjectNativeAdapterContributionV1',
+            'PluginRegistrySourceContributionV1',
             'PluginRequestInterceptorContribution',
+            'PluginSkillContributionV1',
             'PluginSystemToolAcpFingerprintV1',
             'PluginSystemToolReadinessV1',
             'PluginTestkitManifest',

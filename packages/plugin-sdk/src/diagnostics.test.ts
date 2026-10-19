@@ -4,6 +4,9 @@ import {
     redactBugReportSensitiveText as canonicalRedactBugReportSensitiveText,
     trimBugReportTextToMaxBytes as canonicalTrimBugReportTextToMaxBytes,
 } from '@happier-dev/protocol/bugs/reports';
+import { projectPluginFailureText as canonicalProjectPluginFailureText } from '@happier-dev/protocol/plugins/failureProjection';
+import * as publicSdk from './index.js';
+import * as browserSdk from './index.browser.js';
 import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 
@@ -36,6 +39,8 @@ describe('Plugin SDK diagnostic projections', () => {
 
         expect(redactBugReportSensitiveText).toBe(canonicalRedactBugReportSensitiveText);
         expect(trimBugReportTextToMaxBytes).toBe(canonicalTrimBugReportTextToMaxBytes);
+        expect(Reflect.get(publicSdk, 'projectPluginFailureText')).toBe(canonicalProjectPluginFailureText);
+        expect(Reflect.get(browserSdk, 'projectPluginFailureText')).toBe(canonicalProjectPluginFailureText);
         expect(emittedIsolatedDeclaration(sourceText)).not.toMatch(/@happier-dev\/protocol(?:\/|['"])/u);
     });
 });

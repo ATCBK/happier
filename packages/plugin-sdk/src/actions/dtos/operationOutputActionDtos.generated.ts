@@ -80,6 +80,11 @@ export type OperationOutputActionResultById = {
                 phase: string;
                 label: string;
                 queueAhead?: number | undefined;
+                approval?: {
+                    kind: 'approval_request_created';
+                    artifactId: string;
+                    actionId: string;
+                } | undefined;
             } | {
                 kind: 'determinate';
                 current: number;
@@ -114,6 +119,14 @@ export type OperationOutputActionResultById = {
                     code: 'project_script_effect_changed';
                     reviewedEffect: JsonValue;
                     reviewedEffectDigest: string;
+                } | {
+                    reason: 'origin_not_current' | 'origin_version' | 'origin_invalid' | 'origin_action_changed' | 'currentness_owner_unavailable' | 'currentness_read_failed' | 'home_changed' | 'home_unavailable' | 'machine_changed' | 'account_changed' | 'account_unavailable' | 'credential_changed' | 'credential_expired' | 'target_unavailable' | 'plugin_source_changed' | 'automation_run_changed' | 'session_changed' | 'permission_changed' | 'run_occurrence_changed' | 'requester_account_unavailable' | 'workflow_authorization_unavailable' | 'workflow_authorization_changed' | 'spawn_policy_unavailable' | 'spawn_policy_changed' | 'directory_approval_missing' | 'directory_changed' | 'live_invocation_unavailable';
+                } | {
+                    kind: 'managedControllerRequest';
+                    path: string;
+                    category: 'transport' | 'status' | 'schema' | 'currentness';
+                    status?: number | undefined;
+                    code?: string | undefined;
                 } | undefined;
             } | undefined;
             domainRef?: {
@@ -197,6 +210,10 @@ export type OperationOutputActionResultById = {
                 bootstrapTask?: {
                     id: string;
                     taskKind: 'remote.ssh.bootstrapMachine.v1';
+                    prompt?: {
+                        kind: string;
+                        message: string;
+                    } | undefined;
                 } | undefined;
             } | {
                 kind: 'systemTask';
@@ -253,6 +270,16 @@ export type OperationOutputActionResultById = {
                         };
                     };
                 };
+                sourceWorkspace?: {
+                    serverId: string;
+                    refId: string;
+                } | undefined;
+                destinationWorkspace?: {
+                    serverId: string;
+                    workspaceId: string;
+                    machineId: string;
+                    rootPath: string;
+                } | undefined;
                 currentTarget?: {
                     kind: 'managed_service';
                     managedServiceId: string;
@@ -323,6 +350,11 @@ export type OperationOutputActionResultById = {
                 phase: string;
                 label: string;
                 queueAhead?: number | undefined;
+                approval?: {
+                    kind: 'approval_request_created';
+                    artifactId: string;
+                    actionId: string;
+                } | undefined;
             } | {
                 kind: 'determinate';
                 current: number;
@@ -357,6 +389,14 @@ export type OperationOutputActionResultById = {
                     code: 'project_script_effect_changed';
                     reviewedEffect: JsonValue;
                     reviewedEffectDigest: string;
+                } | {
+                    reason: 'origin_not_current' | 'origin_version' | 'origin_invalid' | 'origin_action_changed' | 'currentness_owner_unavailable' | 'currentness_read_failed' | 'home_changed' | 'home_unavailable' | 'machine_changed' | 'account_changed' | 'account_unavailable' | 'credential_changed' | 'credential_expired' | 'target_unavailable' | 'plugin_source_changed' | 'automation_run_changed' | 'session_changed' | 'permission_changed' | 'run_occurrence_changed' | 'requester_account_unavailable' | 'workflow_authorization_unavailable' | 'workflow_authorization_changed' | 'spawn_policy_unavailable' | 'spawn_policy_changed' | 'directory_approval_missing' | 'directory_changed' | 'live_invocation_unavailable';
+                } | {
+                    kind: 'managedControllerRequest';
+                    path: string;
+                    category: 'transport' | 'status' | 'schema' | 'currentness';
+                    status?: number | undefined;
+                    code?: string | undefined;
                 } | undefined;
             } | undefined;
             domainRef?: {
@@ -440,6 +480,10 @@ export type OperationOutputActionResultById = {
                 bootstrapTask?: {
                     id: string;
                     taskKind: 'remote.ssh.bootstrapMachine.v1';
+                    prompt?: {
+                        kind: string;
+                        message: string;
+                    } | undefined;
                 } | undefined;
             } | {
                 kind: 'systemTask';
@@ -496,6 +540,16 @@ export type OperationOutputActionResultById = {
                         };
                     };
                 };
+                sourceWorkspace?: {
+                    serverId: string;
+                    refId: string;
+                } | undefined;
+                destinationWorkspace?: {
+                    serverId: string;
+                    workspaceId: string;
+                    machineId: string;
+                    rootPath: string;
+                } | undefined;
                 currentTarget?: {
                     kind: 'managed_service';
                     managedServiceId: string;

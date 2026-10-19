@@ -6,6 +6,7 @@
 export type SessionAccessActionInputById = {
     readonly "session.access.grants.list": {
         sessionId: string;
+        recipientAccountId?: string | undefined;
     };
     readonly "session.access.grant.set": {
         subject: {
@@ -27,6 +28,7 @@ export type SessionAccessActionInputById = {
             expectedResourceRevision: number;
             deliveryMode: 'brokered' | 'direct';
         } | undefined;
+        recipientAccountId?: string | undefined;
     };
     readonly "session.access.grant.remove": {
         sessionId: string;
@@ -66,9 +68,46 @@ export type SessionAccessActionInputById = {
         maxUses?: number | undefined;
         isConsentRequired?: boolean | undefined;
         networkOff?: boolean | undefined;
+        recipientAccountId?: string | undefined;
     };
     readonly "session.public_link.remove": {
         sessionId: string;
+        recipientAccountId?: string | undefined;
+    };
+    readonly "session.access.candidates.inspect": {
+        v: 1;
+        sessionId: string;
+        subjects: ({
+            kind: 'account';
+            accountId: string;
+        } | {
+            kind: 'team';
+            teamId: string;
+        } | {
+            kind: 'group';
+            teamId: string;
+            groupId: string;
+        })[];
+    };
+    readonly "session.access.principals.resolve": {
+        v: 1;
+        subjects: ({
+            kind: 'account';
+            accountId: string;
+        } | {
+            kind: 'team';
+            teamId: string;
+        } | {
+            kind: 'group';
+            teamId: string;
+            groupId: string;
+        })[];
+        creationTeamId?: string | undefined;
+    };
+    readonly "session.access.accounts.search": {
+        query: string;
+        purpose: 'collaboration';
+        cursor?: string | undefined;
     };
 };
 export type SessionAccessActionResultById = {
@@ -176,6 +215,50 @@ export type SessionAccessActionResultById = {
             primaryTeamId?: string | null | undefined;
         };
         primaryTeamId: string | null;
+        recipientAccess?: {
+            accountId: string;
+            effectiveAccess: {
+                v: 1;
+                level: 'view' | 'edit' | 'admin' | 'owner';
+                sources: ({
+                    kind: 'owner';
+                } | {
+                    kind: 'direct';
+                    shareId: string;
+                } | {
+                    kind: 'team';
+                    teamId: string;
+                    requiredByTeamPolicy: boolean;
+                } | {
+                    kind: 'group';
+                    teamId: string;
+                    groupId: string;
+                })[];
+                capabilities: {
+                    readTranscript: boolean;
+                    submitAgentInput: boolean;
+                    editSessionRecords: boolean;
+                    approveRuntimePermissions: boolean;
+                    manageAccess: boolean;
+                    managePermissionDelegation: boolean;
+                    managePublicLink: boolean;
+                    archiveSession: boolean;
+                    renameSession: boolean;
+                    assignResponsibility: boolean;
+                    stopSession: boolean;
+                    deleteSession: boolean;
+                };
+                audienceContext?: {
+                    kind: 'team';
+                    teamId: string;
+                } | {
+                    kind: 'group';
+                    teamId: string;
+                    groupId: string;
+                } | null | undefined;
+                primaryTeamId?: string | null | undefined;
+            } | null;
+        } | undefined;
         credentialBindingConsequences?: {
             resourceId: string;
             teamId: string;
@@ -336,5 +419,88 @@ export type SessionAccessActionResultById = {
     };
     readonly "session.public_link.remove": {
         changed: boolean;
+    };
+    readonly "session.access.candidates.inspect": {
+        v: 1;
+        context: {
+            teamId: string;
+            name: string;
+            archived: boolean;
+            externalSharingReason: 'session_access_forbidden' | 'session_access_session_not_found' | 'session_access_subject_not_found' | 'session_access_subject_ineligible' | 'session_access_owner_grant_invalid' | 'session_access_self_grant_invalid' | 'session_access_permission_delegation_forbidden' | 'session_access_permission_delegation_requires_edit' | 'session_access_team_policy_required' | 'session_initial_access_creator_mismatch' | 'session_access_authentication_required' | 'session_access_authentication_unavailable' | 'session_access_external_sharing_requires_team_admin' | 'session_access_external_sharing_disabled' | 'session_access_sharing_unavailable' | 'session_access_invalid_recipient_envelope' | 'session_responsibility_assignee_unavailable' | 'invalid_cursor' | 'invalid_request' | 'data_key_not_required' | 'recipient_envelope_required' | 'recipient_key_unavailable' | null;
+        } | null;
+        candidates: {
+            subject: {
+                kind: 'account';
+                accountId: string;
+            } | {
+                kind: 'team';
+                teamId: string;
+            } | {
+                kind: 'group';
+                teamId: string;
+                groupId: string;
+            };
+            reason: 'session_access_forbidden' | 'session_access_session_not_found' | 'session_access_subject_not_found' | 'session_access_subject_ineligible' | 'session_access_owner_grant_invalid' | 'session_access_self_grant_invalid' | 'session_access_permission_delegation_forbidden' | 'session_access_permission_delegation_requires_edit' | 'session_access_team_policy_required' | 'session_initial_access_creator_mismatch' | 'session_access_authentication_required' | 'session_access_authentication_unavailable' | 'session_access_external_sharing_requires_team_admin' | 'session_access_external_sharing_disabled' | 'session_access_sharing_unavailable' | 'session_access_invalid_recipient_envelope' | 'session_responsibility_assignee_unavailable' | 'invalid_cursor' | 'invalid_request' | 'data_key_not_required' | 'recipient_envelope_required' | 'recipient_key_unavailable' | null;
+        }[];
+    };
+    readonly "session.access.principals.resolve": {
+        v: 1;
+        principals: ({
+            name: string | null;
+            firstName: string | null;
+            lastName: string | null;
+            username: string | null;
+            avatarUrl: string | null;
+            kind: 'account';
+            accountId: string;
+        } | {
+            kind: 'team';
+            teamId: string;
+            name: string;
+        } | {
+            kind: 'group';
+            teamId: string;
+            groupId: string;
+            name: string;
+            teamName: string;
+        })[];
+        creationDecision?: {
+            v: 1;
+            teamId: string;
+            teamName: string;
+            requiredByPolicy: boolean;
+            defaultGrant: {
+                accessLevel: 'view' | 'edit' | 'admin';
+                canApprovePermissions: boolean;
+            } | null;
+            externalSharingPolicy: 'allowed' | 'team_admins_only' | 'disabled';
+        } | null | undefined;
+    };
+    readonly "session.access.accounts.search": {
+        users: {
+            name: string | null;
+            id: string;
+            firstName: string;
+            lastName: string | null;
+            avatar: {
+                path: string;
+                url: string;
+                width?: number | undefined;
+                height?: number | undefined;
+                thumbhash?: string | undefined;
+            } | null;
+            username: string;
+            bio: string | null;
+            badges: {
+                id: string;
+                label: string;
+                url: string;
+            }[];
+            status: 'none' | 'requested' | 'pending' | 'friend' | 'rejected';
+            publicKey: string | null;
+            contentPublicKey?: string | null | undefined;
+            contentPublicKeySig?: string | null | undefined;
+        }[];
+        nextCursor?: string | null | undefined;
     };
 };

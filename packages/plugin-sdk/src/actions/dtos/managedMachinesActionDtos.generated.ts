@@ -11,6 +11,10 @@ export type ManagedMachinesActionInputById = {
             machineId: string;
             installationId: string;
         } | undefined;
+        contribution?: {
+            pluginId: string;
+            localId: string;
+        } | undefined;
     };
     readonly "machines.provisioners.check": {
         homeId: string;
@@ -129,7 +133,6 @@ export type ManagedMachinesActionInputById = {
                 };
                 definitionId?: string | undefined;
             };
-            creationKey?: string | undefined;
             placementOrigin?: {
                 kind: 'machine_pool';
                 poolId: string;
@@ -268,6 +271,43 @@ export type ManagedMachinesActionInputById = {
                 branchMode?: 'new' | 'existing' | undefined;
             } | null | undefined;
             title?: string | undefined;
+            memoryEnabled?: boolean | undefined;
+            primaryTeamId?: string | null | undefined;
+            teamCredentialBindings?: ({
+                v: 1;
+                slot: {
+                    kind: 'provider_model';
+                } | {
+                    kind: 'connected_service_purpose';
+                    purpose: {
+                        consumer: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        purpose: string;
+                    };
+                };
+                resourceId: string;
+                expectedResourceRevision: number;
+                deliveryMode: 'direct' | 'brokered';
+                teamId?: string | undefined;
+            } | {
+                v: 1;
+                slot: {
+                    kind: 'provider_model';
+                } | {
+                    kind: 'connected_service_purpose';
+                    purpose: {
+                        consumer: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        purpose: string;
+                    };
+                };
+                resourceId: null;
+            })[] | undefined;
+            creationKey?: string | undefined;
             attestedContext?: {
                 externalPrincipalId: string;
                 sourceMessageId: string;
@@ -280,7 +320,10 @@ export type ManagedMachinesActionInputById = {
                     installationId: string;
                 };
             } | undefined;
-            memoryEnabled?: boolean | undefined;
+            discussionParticipant?: {
+                discussionId: string;
+                participantSlotId: string;
+            } | undefined;
             promptStack?: {
                 id: string;
                 ref: {
@@ -293,18 +336,19 @@ export type ManagedMachinesActionInputById = {
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
                 skillMigrationV1?: true | undefined;
+                plan?: true | undefined;
             }[] | undefined;
             initialInput?: {
                 text?: string | undefined;
                 attachments?: {
                     attachmentLocalId: string;
                     value: {
-                        key: unknown;
+                        key: string;
                         value: unknown;
                         presentation: {
-                            label: unknown;
-                            description?: unknown;
-                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            label: string;
+                            description?: string | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     };
@@ -620,9 +664,9 @@ export type ManagedMachinesActionInputById = {
                         canInspect: boolean;
                         summary?: string | undefined;
                     } | undefined;
-                    sessionDiscussionSelectionSourceV1?: {
-                        kind: 'session_discussion';
-                        sessionId: string;
+                    discussionSelectionSourceV1?: {
+                        kind: 'discussion';
+                        serverId: string;
                         discussionId: string;
                         messageIds: string[];
                     } | undefined;
@@ -633,13 +677,13 @@ export type ManagedMachinesActionInputById = {
                             pluginId: string;
                             localId: string;
                         };
-                        key: unknown;
+                        key: string;
                         value: unknown;
                         presentation: {
-                            label: unknown;
-                            typeLabel: unknown;
-                            description?: unknown;
-                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            label: string;
+                            typeLabel: string;
+                            description?: string | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                         content?: {
@@ -662,6 +706,120 @@ export type ManagedMachinesActionInputById = {
                                 sha256: string;
                             };
                         } | undefined;
+                    }[] | undefined;
+                    reviewComments?: {
+                        sessionId: string;
+                        comments: {
+                            id: string;
+                            filePath: string;
+                            source: 'file' | 'diff';
+                            anchor: {
+                                kind: 'fileLine';
+                                startLine: number;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'diffLine';
+                                startLine: number;
+                                side: 'before' | 'after';
+                                oldLine: number | null;
+                                newLine: number | null;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'line';
+                                filePath: string;
+                                line: number;
+                                side?: 'before' | 'after' | undefined;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'range';
+                                filePath: string;
+                                startLine: number;
+                                endLine: number;
+                                side?: 'before' | 'after' | undefined;
+                                startLineHash?: `lh1:${string}` | undefined;
+                                endLineHash?: `lh1:${string}` | undefined;
+                                selectedTextHash?: `lh1:${string}` | undefined;
+                            };
+                            snapshot: {
+                                selectedLines: string[];
+                                beforeContext: string[];
+                                afterContext: string[];
+                            };
+                            body: string;
+                            createdAt: number;
+                            anchorResolution?: {
+                                filePath: string;
+                                originalAnchor: {
+                                    kind: 'fileLine';
+                                    startLine: number;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'diffLine';
+                                    startLine: number;
+                                    side: 'before' | 'after';
+                                    oldLine: number | null;
+                                    newLine: number | null;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'line';
+                                    filePath: string;
+                                    line: number;
+                                    side?: 'before' | 'after' | undefined;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'range';
+                                    filePath: string;
+                                    startLine: number;
+                                    endLine: number;
+                                    side?: 'before' | 'after' | undefined;
+                                    startLineHash?: `lh1:${string}` | undefined;
+                                    endLineHash?: `lh1:${string}` | undefined;
+                                    selectedTextHash?: `lh1:${string}` | undefined;
+                                };
+                                status: 'exact' | 'hash' | 'context' | 'ambiguous' | 'stale' | 'missing' | 'unsupported';
+                                confidence: number;
+                                id?: string | undefined;
+                                resolvedAnchor?: {
+                                    kind: 'fileLine';
+                                    startLine: number;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'diffLine';
+                                    startLine: number;
+                                    side: 'before' | 'after';
+                                    oldLine: number | null;
+                                    newLine: number | null;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'line';
+                                    filePath: string;
+                                    line: number;
+                                    side?: 'before' | 'after' | undefined;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'range';
+                                    filePath: string;
+                                    startLine: number;
+                                    endLine: number;
+                                    side?: 'before' | 'after' | undefined;
+                                    startLineHash?: `lh1:${string}` | undefined;
+                                    endLineHash?: `lh1:${string}` | undefined;
+                                    selectedTextHash?: `lh1:${string}` | undefined;
+                                } | undefined;
+                                reason?: string | undefined;
+                                preview?: {
+                                    selectedLines: string[];
+                                    beforeContext: string[];
+                                    afterContext: string[];
+                                } | undefined;
+                            } | undefined;
+                            includeInPrompt?: boolean | undefined;
+                        }[];
+                    } | undefined;
+                    sessionAttachments?: {
+                        v: 1;
+                        sessionId: string;
+                        id: string;
                     }[] | undefined;
                 } | undefined;
                 reviewComments?: {
@@ -946,8 +1104,10 @@ export type ManagedMachinesActionInputById = {
                             name: string;
                             valueType: 'string' | 'number' | 'boolean' | 'json';
                             required: boolean;
+                            multiple?: boolean | undefined;
                             enum?: string[] | undefined;
                             default?: JsonValue | undefined;
+                            defaultFrom?: 'origin_session' | undefined;
                             description?: string | undefined;
                             optionsSourceId?: string | undefined;
                             inputType?: {
@@ -957,7 +1117,7 @@ export type ManagedMachinesActionInputById = {
                                 hostType: 'usageQuery';
                                 field?: 'session' | 'period' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                         }[];
                         defaults: {
@@ -1089,6 +1249,9 @@ export type ManagedMachinesActionInputById = {
                             } | {
                                 kind: 'origin_session';
                             } | {
+                                kind: 'input';
+                                name: string;
+                            } | {
                                 kind: 'from_step';
                                 producer: {
                                     blockId: string;
@@ -1174,6 +1337,23 @@ export type ManagedMachinesActionInputById = {
                                     updatedAt: number;
                                 } | null | undefined;
                                 effort?: string | undefined;
+                            } | {
+                                kind: 'input';
+                                name: string;
+                                path?: (string | number)[] | undefined;
+                            } | {
+                                kind: 'item';
+                                field: 'value';
+                                path?: (string | number)[] | undefined;
+                            } | undefined;
+                            participant?: {
+                                kind: 'input';
+                                name: string;
+                                path?: (string | number)[] | undefined;
+                            } | {
+                                kind: 'item';
+                                field: 'value';
+                                path?: (string | number)[] | undefined;
                             } | undefined;
                             executionTarget?: {
                                 kind: 'session';
@@ -1197,6 +1377,7 @@ export type ManagedMachinesActionInputById = {
                             profileId?: string | undefined;
                             workspaceWrites?: 'deny' | 'allow' | undefined;
                             secondOpinion?: 'off' | 'encouraged' | undefined;
+                            canDelegateToOtherRoles?: boolean | undefined;
                         } | {
                             roleId: string;
                             name: string;
@@ -1215,6 +1396,7 @@ export type ManagedMachinesActionInputById = {
                             profileId?: string | undefined;
                             workspaceWrites?: 'deny' | 'allow' | undefined;
                             secondOpinion?: 'off' | 'encouraged' | undefined;
+                            canDelegateToOtherRoles?: boolean | undefined;
                         })[] | undefined;
                         blocks: readonly PluginActionWorkflowBlockV1<true>[];
                         finalOutput?: {
@@ -1242,7 +1424,7 @@ export type ManagedMachinesActionInputById = {
                     kind: 'detached_run';
                 } | undefined;
                 inputs?: Record<string, unknown> | undefined;
-                visibleTeamId?: unknown;
+                visibleTeamId?: string | null | undefined;
                 roleOverrides?: {
                     roleId: string;
                     engine?: {
@@ -1259,6 +1441,7 @@ export type ManagedMachinesActionInputById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 }[] | undefined;
                 onComplete?: {
                     kind: 'originating_session';
@@ -1289,44 +1472,9 @@ export type ManagedMachinesActionInputById = {
                     };
                 })[];
             } | undefined;
-            reportsTo?: {
+            manager?: {
                 sessionId: string;
             } | undefined;
-            primaryTeamId?: string | null | undefined;
-            teamCredentialBindings?: ({
-                v: 1;
-                slot: {
-                    kind: 'provider_model';
-                } | {
-                    kind: 'connected_service_purpose';
-                    purpose: {
-                        consumer: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        purpose: string;
-                    };
-                };
-                resourceId: string;
-                expectedResourceRevision: number;
-                deliveryMode: 'direct' | 'brokered';
-                teamId?: string | undefined;
-            } | {
-                v: 1;
-                slot: {
-                    kind: 'provider_model';
-                } | {
-                    kind: 'connected_service_purpose';
-                    purpose: {
-                        consumer: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        purpose: string;
-                    };
-                };
-                resourceId: null;
-            })[] | undefined;
             agentSessionStartupInstructionsV1?: Readonly<{
                 instructions: string;
                 v: 1;
@@ -1565,7 +1713,6 @@ export type ManagedMachinesActionInputById = {
                 };
                 definitionId?: string | undefined;
             };
-            creationKey?: string | undefined;
             placementOrigin?: {
                 kind: 'machine_pool';
                 poolId: string;
@@ -1704,6 +1851,43 @@ export type ManagedMachinesActionInputById = {
                 branchMode?: 'new' | 'existing' | undefined;
             } | null | undefined;
             title?: string | undefined;
+            memoryEnabled?: boolean | undefined;
+            primaryTeamId?: string | null | undefined;
+            teamCredentialBindings?: ({
+                v: 1;
+                slot: {
+                    kind: 'provider_model';
+                } | {
+                    kind: 'connected_service_purpose';
+                    purpose: {
+                        consumer: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        purpose: string;
+                    };
+                };
+                resourceId: string;
+                expectedResourceRevision: number;
+                deliveryMode: 'direct' | 'brokered';
+                teamId?: string | undefined;
+            } | {
+                v: 1;
+                slot: {
+                    kind: 'provider_model';
+                } | {
+                    kind: 'connected_service_purpose';
+                    purpose: {
+                        consumer: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        purpose: string;
+                    };
+                };
+                resourceId: null;
+            })[] | undefined;
+            creationKey?: string | undefined;
             attestedContext?: {
                 externalPrincipalId: string;
                 sourceMessageId: string;
@@ -1716,7 +1900,10 @@ export type ManagedMachinesActionInputById = {
                     installationId: string;
                 };
             } | undefined;
-            memoryEnabled?: boolean | undefined;
+            discussionParticipant?: {
+                discussionId: string;
+                participantSlotId: string;
+            } | undefined;
             promptStack?: {
                 id: string;
                 ref: {
@@ -1729,18 +1916,19 @@ export type ManagedMachinesActionInputById = {
                 maxChars?: number | undefined;
                 required?: boolean | undefined;
                 skillMigrationV1?: true | undefined;
+                plan?: true | undefined;
             }[] | undefined;
             initialInput?: {
                 text?: string | undefined;
                 attachments?: {
                     attachmentLocalId: string;
                     value: {
-                        key: unknown;
+                        key: string;
                         value: unknown;
                         presentation: {
-                            label: unknown;
-                            description?: unknown;
-                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            label: string;
+                            description?: string | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     };
@@ -2056,9 +2244,9 @@ export type ManagedMachinesActionInputById = {
                         canInspect: boolean;
                         summary?: string | undefined;
                     } | undefined;
-                    sessionDiscussionSelectionSourceV1?: {
-                        kind: 'session_discussion';
-                        sessionId: string;
+                    discussionSelectionSourceV1?: {
+                        kind: 'discussion';
+                        serverId: string;
                         discussionId: string;
                         messageIds: string[];
                     } | undefined;
@@ -2069,13 +2257,13 @@ export type ManagedMachinesActionInputById = {
                             pluginId: string;
                             localId: string;
                         };
-                        key: unknown;
+                        key: string;
                         value: unknown;
                         presentation: {
-                            label: unknown;
-                            typeLabel: unknown;
-                            description?: unknown;
-                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                            label: string;
+                            typeLabel: string;
+                            description?: string | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                         content?: {
@@ -2098,6 +2286,120 @@ export type ManagedMachinesActionInputById = {
                                 sha256: string;
                             };
                         } | undefined;
+                    }[] | undefined;
+                    reviewComments?: {
+                        sessionId: string;
+                        comments: {
+                            id: string;
+                            filePath: string;
+                            source: 'file' | 'diff';
+                            anchor: {
+                                kind: 'fileLine';
+                                startLine: number;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'diffLine';
+                                startLine: number;
+                                side: 'before' | 'after';
+                                oldLine: number | null;
+                                newLine: number | null;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'line';
+                                filePath: string;
+                                line: number;
+                                side?: 'before' | 'after' | undefined;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'range';
+                                filePath: string;
+                                startLine: number;
+                                endLine: number;
+                                side?: 'before' | 'after' | undefined;
+                                startLineHash?: `lh1:${string}` | undefined;
+                                endLineHash?: `lh1:${string}` | undefined;
+                                selectedTextHash?: `lh1:${string}` | undefined;
+                            };
+                            snapshot: {
+                                selectedLines: string[];
+                                beforeContext: string[];
+                                afterContext: string[];
+                            };
+                            body: string;
+                            createdAt: number;
+                            anchorResolution?: {
+                                filePath: string;
+                                originalAnchor: {
+                                    kind: 'fileLine';
+                                    startLine: number;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'diffLine';
+                                    startLine: number;
+                                    side: 'before' | 'after';
+                                    oldLine: number | null;
+                                    newLine: number | null;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'line';
+                                    filePath: string;
+                                    line: number;
+                                    side?: 'before' | 'after' | undefined;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'range';
+                                    filePath: string;
+                                    startLine: number;
+                                    endLine: number;
+                                    side?: 'before' | 'after' | undefined;
+                                    startLineHash?: `lh1:${string}` | undefined;
+                                    endLineHash?: `lh1:${string}` | undefined;
+                                    selectedTextHash?: `lh1:${string}` | undefined;
+                                };
+                                status: 'exact' | 'hash' | 'context' | 'ambiguous' | 'stale' | 'missing' | 'unsupported';
+                                confidence: number;
+                                id?: string | undefined;
+                                resolvedAnchor?: {
+                                    kind: 'fileLine';
+                                    startLine: number;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'diffLine';
+                                    startLine: number;
+                                    side: 'before' | 'after';
+                                    oldLine: number | null;
+                                    newLine: number | null;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'line';
+                                    filePath: string;
+                                    line: number;
+                                    side?: 'before' | 'after' | undefined;
+                                    lineHash?: `lh1:${string}` | undefined;
+                                } | {
+                                    kind: 'range';
+                                    filePath: string;
+                                    startLine: number;
+                                    endLine: number;
+                                    side?: 'before' | 'after' | undefined;
+                                    startLineHash?: `lh1:${string}` | undefined;
+                                    endLineHash?: `lh1:${string}` | undefined;
+                                    selectedTextHash?: `lh1:${string}` | undefined;
+                                } | undefined;
+                                reason?: string | undefined;
+                                preview?: {
+                                    selectedLines: string[];
+                                    beforeContext: string[];
+                                    afterContext: string[];
+                                } | undefined;
+                            } | undefined;
+                            includeInPrompt?: boolean | undefined;
+                        }[];
+                    } | undefined;
+                    sessionAttachments?: {
+                        v: 1;
+                        sessionId: string;
+                        id: string;
                     }[] | undefined;
                 } | undefined;
                 reviewComments?: {
@@ -2382,8 +2684,10 @@ export type ManagedMachinesActionInputById = {
                             name: string;
                             valueType: 'string' | 'number' | 'boolean' | 'json';
                             required: boolean;
+                            multiple?: boolean | undefined;
                             enum?: string[] | undefined;
                             default?: JsonValue | undefined;
+                            defaultFrom?: 'origin_session' | undefined;
                             description?: string | undefined;
                             optionsSourceId?: string | undefined;
                             inputType?: {
@@ -2393,7 +2697,7 @@ export type ManagedMachinesActionInputById = {
                                 hostType: 'usageQuery';
                                 field?: 'session' | 'period' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                         }[];
                         defaults: {
@@ -2525,6 +2829,9 @@ export type ManagedMachinesActionInputById = {
                             } | {
                                 kind: 'origin_session';
                             } | {
+                                kind: 'input';
+                                name: string;
+                            } | {
                                 kind: 'from_step';
                                 producer: {
                                     blockId: string;
@@ -2610,6 +2917,23 @@ export type ManagedMachinesActionInputById = {
                                     updatedAt: number;
                                 } | null | undefined;
                                 effort?: string | undefined;
+                            } | {
+                                kind: 'input';
+                                name: string;
+                                path?: (string | number)[] | undefined;
+                            } | {
+                                kind: 'item';
+                                field: 'value';
+                                path?: (string | number)[] | undefined;
+                            } | undefined;
+                            participant?: {
+                                kind: 'input';
+                                name: string;
+                                path?: (string | number)[] | undefined;
+                            } | {
+                                kind: 'item';
+                                field: 'value';
+                                path?: (string | number)[] | undefined;
                             } | undefined;
                             executionTarget?: {
                                 kind: 'session';
@@ -2633,6 +2957,7 @@ export type ManagedMachinesActionInputById = {
                             profileId?: string | undefined;
                             workspaceWrites?: 'deny' | 'allow' | undefined;
                             secondOpinion?: 'off' | 'encouraged' | undefined;
+                            canDelegateToOtherRoles?: boolean | undefined;
                         } | {
                             roleId: string;
                             name: string;
@@ -2651,6 +2976,7 @@ export type ManagedMachinesActionInputById = {
                             profileId?: string | undefined;
                             workspaceWrites?: 'deny' | 'allow' | undefined;
                             secondOpinion?: 'off' | 'encouraged' | undefined;
+                            canDelegateToOtherRoles?: boolean | undefined;
                         })[] | undefined;
                         blocks: readonly PluginActionWorkflowBlockV1<true>[];
                         finalOutput?: {
@@ -2678,7 +3004,7 @@ export type ManagedMachinesActionInputById = {
                     kind: 'detached_run';
                 } | undefined;
                 inputs?: Record<string, unknown> | undefined;
-                visibleTeamId?: unknown;
+                visibleTeamId?: string | null | undefined;
                 roleOverrides?: {
                     roleId: string;
                     engine?: {
@@ -2695,6 +3021,7 @@ export type ManagedMachinesActionInputById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 }[] | undefined;
                 onComplete?: {
                     kind: 'originating_session';
@@ -2725,44 +3052,9 @@ export type ManagedMachinesActionInputById = {
                     };
                 })[];
             } | undefined;
-            reportsTo?: {
+            manager?: {
                 sessionId: string;
             } | undefined;
-            primaryTeamId?: string | null | undefined;
-            teamCredentialBindings?: ({
-                v: 1;
-                slot: {
-                    kind: 'provider_model';
-                } | {
-                    kind: 'connected_service_purpose';
-                    purpose: {
-                        consumer: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        purpose: string;
-                    };
-                };
-                resourceId: string;
-                expectedResourceRevision: number;
-                deliveryMode: 'direct' | 'brokered';
-                teamId?: string | undefined;
-            } | {
-                v: 1;
-                slot: {
-                    kind: 'provider_model';
-                } | {
-                    kind: 'connected_service_purpose';
-                    purpose: {
-                        consumer: {
-                            pluginId: string;
-                            localId: string;
-                        };
-                        purpose: string;
-                    };
-                };
-                resourceId: null;
-            })[] | undefined;
             agentSessionStartupInstructionsV1?: Readonly<{
                 instructions: string;
                 v: 1;

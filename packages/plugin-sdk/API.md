@@ -6,6 +6,7 @@
 
 | Specifier | Export | Kind | Realm |
 |---|---|---|---|
+| `.` | `ActionConfirmationWhen` | type | any |
 | `.` | `ActionOperationDeclarationV1` | type | any |
 | `.` | `COMPOSER_MEDIA_CONTENT_CAPABILITY_V1` | value | any |
 | `.` | `ComposerAttachmentAuthorDeclaration` | type | any |
@@ -39,6 +40,7 @@
 | `.` | `ComposerRendererChainAuthorInput` | type | any |
 | `.` | `ComposerSessionMediaContentV1` | type | any |
 | `.` | `ComposerStagedMediaContentV1` | type | any |
+| `.` | `ComposerValueSchema` | type | any |
 | `.` | `ContributionAdmittedEntry` | type | any |
 | `.` | `ContributionOperationContracts` | type | any |
 | `.` | `ContributionSurfaceHandles` | type | any |
@@ -142,7 +144,17 @@
 | `.` | `PluginSettingsChange` | type | daemon |
 | `.` | `PluginSettingsMutationResult` | type | daemon |
 | `.` | `PluginSettingsSnapshot` | type | daemon |
+| `.` | `PluginSkillContributionV1` | type | any |
 | `.` | `PluginSourceCustodyV1` | type | daemon |
+| `.` | `PluginWorkItemCategoryV1` | type | any |
+| `.` | `PluginWorkItemTransitionInputV1` | type | any |
+| `.` | `PluginWorkItemV1` | type | any |
+| `.` | `PluginWorkItemsContributionV1` | type | any |
+| `.` | `PluginWorkItemsFindLinkedRequestV1` | type | any |
+| `.` | `PluginWorkItemsResolveRequestV1` | type | any |
+| `.` | `PluginWorkItemsResolveResultV1` | type | any |
+| `.` | `PluginWorkItemsRuntime` | type | any |
+| `.` | `PluginWorkItemsWatchRequestV1` | type | any |
 | `.` | `PluginWorkflowContributionV1` | type | any |
 | `.` | `ProjectDefinitionDetectionV1` | type | any |
 | `.` | `ProjectEnvironmentSelectionV1` | type | any |
@@ -185,10 +197,12 @@
 | `.` | `defineComposerRegion` | value | any |
 | `.` | `definePlugin` | value | any |
 | `.` | `defineUiSurfaceDefinition` | value | any |
+| `.` | `getPluginMachineExecutionOriginRef` | value | any |
 | `.` | `isPluginError` | value | any |
 | `.` | `isRecord` | value | any |
 | `.` | `parseJsonLine` | value | any |
 | `.` | `parseTimestampMs` | value | any |
+| `.` | `projectPluginFailureText` | value | any |
 | `.` | `readString` | value | any |
 | `.` | `readTrimmedString` | value | any |
 | `.` | `redactBugReportSensitiveText` | value | any |
@@ -223,6 +237,7 @@
 | `./actions` | `ActionInputOption` | type | any |
 | `./actions` | `ActionInputOptionValue` | type | any |
 | `./actions` | `ActionInputPredicate` | type | any |
+| `./actions` | `ActionSessionTargetDeclarationV1` | type | any |
 | `./actions` | `ActionSpec` | type | any |
 | `./actions` | `ActionsService` | type | daemon |
 | `./actions` | `AdmittedTargetedOperationExecutionHandle` | type | any |
@@ -247,6 +262,7 @@
 | `./actions` | `AutomationConversationActionResultById` | type | any |
 | `./actions` | `AutomationEventsActionInputById` | type | any |
 | `./actions` | `AutomationEventsActionResultById` | type | any |
+| `./actions` | `BoardItemRefV1` | type | any |
 | `./actions` | `BoardsActionInputById` | type | any |
 | `./actions` | `BoardsActionResultById` | type | any |
 | `./actions` | `BoundedLegacyJsonValue` | type | any |
@@ -292,13 +308,19 @@
 | `./actions` | `DiagnosticsActionResultById` | type | any |
 | `./actions` | `DiscoveryActionInputById` | type | any |
 | `./actions` | `DiscoveryActionResultById` | type | any |
+| `./actions` | `DiscussionActionInputById` | type | any |
+| `./actions` | `DiscussionActionResultById` | type | any |
+| `./actions` | `DocCollaborationActionInputById` | type | any |
+| `./actions` | `DocCollaborationActionResultById` | type | any |
 | `./actions` | `EXTERNAL_ACTION_ACTION_ID_MAX_LENGTH` | value | any |
 | `./actions` | `EXTERNAL_ACTION_REQUEST_ID_MAX_LENGTH_V1` | value | any |
 | `./actions` | `EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES` | value | any |
 | `./actions` | `EffectiveActionInputField` | type | any |
 | `./actions` | `EffectiveInputField` | type | any |
+| `./actions` | `ExecutionRunChildChoiceV1` | type | any |
 | `./actions` | `ExecutionRunControlActionInputById` | type | any |
 | `./actions` | `ExecutionRunControlActionResultById` | type | any |
+| `./actions` | `ExecutionRunStartFailureDetailsV1` | type | any |
 | `./actions` | `ExternalSessionsActionInputById` | type | any |
 | `./actions` | `ExternalSessionsActionResultById` | type | any |
 | `./actions` | `ExternalSessionsSource` | type | any |
@@ -306,6 +328,9 @@
 | `./actions` | `FilesystemActionResultById` | type | any |
 | `./actions` | `FindActionInputById` | type | any |
 | `./actions` | `FindActionResultById` | type | any |
+| `./actions` | `FollowEventDeliveryV1` | type | any |
+| `./actions` | `FollowEventMapV1` | type | any |
+| `./actions` | `FollowPolicyV1` | type | any |
 | `./actions` | `HomeGovernanceActionInputById` | type | any |
 | `./actions` | `HomeGovernanceActionResultById` | type | any |
 | `./actions` | `HomeHubLayoutActionInputById` | type | any |
@@ -326,6 +351,8 @@
 | `./actions` | `InputTypePickerLaunchInputV1` | type | any |
 | `./actions` | `IntentStartActionInputById` | type | any |
 | `./actions` | `IntentStartActionResultById` | type | any |
+| `./actions` | `InternalTasksActionInputById` | type | any |
+| `./actions` | `InternalTasksActionResultById` | type | any |
 | `./actions` | `InventoryActionInputById` | type | any |
 | `./actions` | `InventoryActionResultById` | type | any |
 | `./actions` | `JSONType` | type | any |
@@ -385,6 +412,8 @@
 | `./actions` | `NotificationConfigurationActionResultById` | type | any |
 | `./actions` | `NotificationsActionInputById` | type | any |
 | `./actions` | `NotificationsActionResultById` | type | any |
+| `./actions` | `NpmRegistryProfilesActionInputById` | type | any |
+| `./actions` | `NpmRegistryProfilesActionResultById` | type | any |
 | `./actions` | `ObservationActionInputById` | type | any |
 | `./actions` | `ObservationActionResultById` | type | any |
 | `./actions` | `OperationOutputActionInputById` | type | any |
@@ -393,6 +422,8 @@
 | `./actions` | `PeerMediationObservabilityActionResultById` | type | any |
 | `./actions` | `PersonalSavedSecretsActionInputById` | type | any |
 | `./actions` | `PersonalSavedSecretsActionResultById` | type | any |
+| `./actions` | `PluginAccountAdministrationActionInputById` | type | any |
+| `./actions` | `PluginAccountAdministrationActionResultById` | type | any |
 | `./actions` | `PluginActionAuthorDefaults` | type | any |
 | `./actions` | `PluginActionDeclaration` | type | any |
 | `./actions` | `PluginActionExecutionV2` | type | any |
@@ -427,6 +458,9 @@
 | `./actions` | `PluginJsonSchemaV2` | type | any |
 | `./actions` | `PluginMachineExecutionOriginV1` | type | any |
 | `./actions` | `PluginMachineExecutionOriginV1Schema` | value | any |
+| `./actions` | `PluginMachineExecutionRoutingV1` | type | any |
+| `./actions` | `PluginMachineExecutionRoutingV1JsonSchema` | value | any |
+| `./actions` | `PluginMachineExecutionRoutingV1Schema` | value | any |
 | `./actions` | `PluginPermissionGrantsActionInputById` | type | any |
 | `./actions` | `PluginPermissionGrantsActionResultById` | type | any |
 | `./actions` | `PluginPolicyExpressionV2` | type | any |
@@ -487,8 +521,6 @@
 | `./actions` | `SessionCapabilitiesActionResultById` | type | any |
 | `./actions` | `SessionControlActionInputById` | type | any |
 | `./actions` | `SessionControlActionResultById` | type | any |
-| `./actions` | `SessionDiscussionActionInputById` | type | any |
-| `./actions` | `SessionDiscussionActionResultById` | type | any |
 | `./actions` | `SessionFollowActionInputById` | type | any |
 | `./actions` | `SessionFollowActionResultById` | type | any |
 | `./actions` | `SessionLifecycleActionInputById` | type | any |
@@ -501,6 +533,8 @@
 | `./actions` | `SessionPermissionsActionResultById` | type | any |
 | `./actions` | `SessionReadStateActionInputById` | type | any |
 | `./actions` | `SessionReadStateActionResultById` | type | any |
+| `./actions` | `SessionTargetSelectorV1` | type | any |
+| `./actions` | `SessionTargetV1` | type | any |
 | `./actions` | `SessionTargetingActionInputById` | type | any |
 | `./actions` | `SessionTargetingActionResultById` | type | any |
 | `./actions` | `SessionTerminalLayoutV1` | type | any |
@@ -558,7 +592,9 @@
 | `./actions` | `WorkspaceLayoutActionInputById` | type | any |
 | `./actions` | `WorkspaceLayoutActionResultById` | type | any |
 | `./actions` | `actionInputOptionValueKey` | value | any |
+| `./actions` | `arePluginMachineExecutionRoutingsEqual` | value | any |
 | `./actions` | `getActionSpec` | value | any |
+| `./actions` | `getPluginMachineExecutionRouting` | value | any |
 | `./actions` | `isExternalActionResultWithinResponseEnvelopeLimitV1` | value | any |
 | `./actions` | `isPluginActionApprovalRequestCreated` | value | any |
 | `./actions` | `isPluginActionHandlerInvocationNotStartedAdvisory` | value | any |
@@ -571,6 +607,7 @@
 | `./actions` | `readInputTypePickerLaunchInput` | value | any |
 | `./actions` | `resolveEffectiveActionInputFields` | value | any |
 | `./actions` | `resolveEffectiveInputFields` | value | any |
+| `./actions` | `seedInputByFieldHints` | value | any |
 | `./actions` | `writeInputPath` | value | any |
 | `./agents` | `AgentContribution` | type | any |
 | `./agents` | `AgentDefinitionCapabilityFacts` | type | any |
@@ -607,6 +644,7 @@
 | `./agents` | `PluginHostOwnedAgentDeclaration` | type | any |
 | `./agents` | `buildAgentTargetKeyV2` | value | any |
 | `./agents` | `projectAgentCapabilitiesV2FromDefinition` | value | any |
+| `./agents` | `resolveModelDisplayName` | value | any |
 | `./agents/runtime` | `ACP_AGENT_CLI_TRANSPORT_TIMEOUTS` | value | daemon |
 | `./agents/runtime` | `ACP_HAPPIER_MCP_BRIDGE_STATIC_APPROVAL_TOOL_NAMES` | value | daemon |
 | `./agents/runtime` | `ACP_WRITE_LIKE_PERMISSION_KINDS` | value | daemon |
@@ -950,6 +988,7 @@
 | `./agents/runtime` | `ForkResultV1` | type | daemon |
 | `./agents/runtime` | `ForkSessionMetadata` | type | any |
 | `./agents/runtime` | `ForkSurfaceV1` | type | daemon |
+| `./agents/runtime` | `GoalControlFailure` | type | daemon |
 | `./agents/runtime` | `HandoffAvailabilityRequestV1` | type | daemon |
 | `./agents/runtime` | `HandoffExistingStateRequestV1` | type | daemon |
 | `./agents/runtime` | `HandoffExportRequestV1` | type | daemon |
@@ -992,6 +1031,7 @@
 | `./agents/runtime` | `RuntimeOutboundTranscriptUsageObservationV1` | type | daemon |
 | `./agents/runtime` | `SessionContextUsageSnapshotV1` | type | any |
 | `./agents/runtime` | `SessionContextUsageSnapshotV1Schema` | value | daemon |
+| `./agents/runtime` | `SessionGoalControlFailureV1` | type | any |
 | `./agents/runtime` | `ShellCommandDialect` | type | daemon |
 | `./agents/runtime` | `SkillCatalogItemV1` | type | daemon |
 | `./agents/runtime` | `SkillCatalogV1` | type | daemon |
@@ -1038,8 +1078,11 @@
 | `./agents/runtime` | `createExecutionRunHostBackendFromConversationRuntime` | value | daemon |
 | `./agents/runtime` | `createFiniteExecutionRunHostRuntime` | value | daemon |
 | `./agents/runtime` | `isRuntimeConfigUpdateOutcomeApplied` | value | daemon |
+| `./agents/runtime` | `isSessionPermissionShellToolName` | value | daemon |
+| `./agents/runtime` | `matchSessionPermissionToolIdentifier` | value | daemon |
 | `./agents/runtime` | `normalizeAcpPermissionIntent` | value | daemon |
 | `./agents/runtime` | `parsePermissionIntentAlias` | value | daemon |
+| `./agents/runtime` | `parseSessionPermissionToolIdentifier` | value | daemon |
 | `./agents/runtime` | `resolveAcpToolPermissionPolicy` | value | daemon |
 | `./agents/runtime` | `resolveRecoverableTurnFailureRetryDecision` | value | daemon |
 | `./agents/runtime` | `resolveRecoverableTurnFailureSecondFailure` | value | daemon |
@@ -1305,6 +1348,7 @@
 | `./exec` | `AgentCliReadinessRequest` | type | daemon |
 | `./exec` | `AgentCliReadinessResult` | type | daemon |
 | `./exec` | `AgentCliReadinessService` | type | daemon |
+| `./exec` | `AgentNativeLaunchQualifier` | type | daemon |
 | `./exec` | `ExecService` | type | daemon |
 | `./exec` | `ExecSpawnRequest` | type | daemon |
 | `./exec` | `PluginExecSpawnRequest` | type | daemon |
@@ -1678,6 +1722,7 @@
 | `./notifications` | `NotificationSender` | type | daemon |
 | `./notifications` | `NotificationsService` | type | daemon |
 | `./notifications` | `PluginNotificationRegistrationApi` | type | daemon |
+| `./protocol` | `CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1` | value | any |
 | `./protocol` | `PluginJsonSchema` | type | any |
 | `./protocol` | `ProtocolArrayOptions` | type | any |
 | `./protocol` | `ProtocolCollectionOpaqueCursorV1` | type | any |
@@ -1686,6 +1731,7 @@
 | `./protocol` | `ProtocolComposerRefV1` | type | any |
 | `./protocol` | `ProtocolComposerRefV1Schema` | value | any |
 | `./protocol` | `ProtocolComposerReferenceResolutionV1Schema` | value | any |
+| `./protocol` | `ProtocolCurrentUiContextSnapshotV1Schema` | value | any |
 | `./protocol` | `ProtocolJsonValue` | type | any |
 | `./protocol` | `ProtocolJsonValueOptions` | type | any |
 | `./protocol` | `ProtocolLaunchProfileIdV2Schema` | value | any |
@@ -1882,6 +1928,7 @@
 | `./reviews` | `validateReviewCommentPublicationClaimAgainstPlanV1` | value | any |
 | `./reviews` | `validateReviewCommentPublicationResultAgainstPlanV1` | value | any |
 | `./scm` | `PluginScmRegistrationApi` | type | daemon |
+| `./scm` | `ProtocolScmHostingProviderKind` | type | any |
 | `./scm` | `SCM_COMMIT_MESSAGE_MAX_LENGTH` | value | any |
 | `./scm` | `SCM_COMMIT_PATCH_MAX_COUNT` | value | any |
 | `./scm` | `SCM_COMMIT_PATCH_MAX_LENGTH` | value | any |
@@ -1941,6 +1988,7 @@
 | `./scm` | `ScmHistoryEntriesRequest` | type | any |
 | `./scm` | `ScmHistoryEntriesResponse` | type | any |
 | `./scm` | `ScmHistoryEntriesResponseSchema` | value | any |
+| `./scm` | `ScmHostingProviderKindProtocolSchema` | value | any |
 | `./scm` | `ScmHostingRepositoryAuthSummary` | type | any |
 | `./scm` | `ScmHostingRepositoryDescribePublishTargetsRequest` | type | any |
 | `./scm` | `ScmHostingRepositoryDescribePublishTargetsResponse` | type | any |
@@ -2380,7 +2428,9 @@
 | `./sessions/external` | `getAgentExternalSessionsInvocationFailure` | value | daemon |
 | `./sessions/external` | `isAgentExternalSessionsFailureCode` | value | daemon |
 | `./sessions/external` | `isAgentExternalSessionsResultWithinByteBudget` | value | daemon |
+| `./sessions/external` | `readSessionInputPromptUserTextV1` | value | daemon |
 | `./sessions/external` | `resolveExternalSessionCandidateIdentityKey` | value | daemon |
+| `./sessions/external` | `runWithSessionInputPromptUserTextReader` | value | daemon |
 | `./sessions/external` | `validateAgentExternalSessionHookMapEventRequest` | value | daemon |
 | `./sessions/external` | `validateAgentExternalSessionHookMapEventResult` | value | daemon |
 | `./sessions/external` | `validateAgentExternalSessionHookResolveInstallationRequest` | value | daemon |
@@ -2393,6 +2443,7 @@
 | `./sessions/file-stores` | `AgentAccountingJsonlProjection` | type | daemon |
 | `./sessions/file-stores` | `AgentAccountingJsonlState` | type | daemon |
 | `./sessions/file-stores` | `ExternalSessionContentSearchControl` | type | daemon |
+| `./sessions/file-stores` | `ExternalSessionContentSearchPageProgress` | type | daemon |
 | `./sessions/file-stores` | `ExternalSessionContentSearchYield` | value | daemon |
 | `./sessions/file-stores` | `JsonlByteCursorV1` | type | daemon |
 | `./sessions/file-stores` | `JsonlForwardLine` | type | daemon |
@@ -2408,6 +2459,7 @@
 | `./sessions/file-stores` | `SessionFileStoreResolutionInput` | type | daemon |
 | `./sessions/file-stores` | `SessionFileStoreRootDescriptorV1` | type | daemon |
 | `./sessions/file-stores` | `createExternalSessionContentSearchControl` | value | daemon |
+| `./sessions/file-stores` | `createExternalSessionUnsupportedTranscriptItem` | value | any |
 | `./sessions/file-stores` | `decodeIndexCursor` | value | daemon |
 | `./sessions/file-stores` | `decodeJsonlByteCursor` | value | daemon |
 | `./sessions/file-stores` | `discoverAgentAccountingJsonlSource` | value | daemon |
@@ -2419,6 +2471,7 @@
 | `./sessions/file-stores` | `listSessionFileStoreRoots` | value | daemon |
 | `./sessions/file-stores` | `parseDefaultSessionHeader` | value | daemon |
 | `./sessions/file-stores` | `parseSessionIdFromFileName` | value | daemon |
+| `./sessions/file-stores` | `prefilterExternalSessionContentPaths` | value | daemon |
 | `./sessions/file-stores` | `readAgentAccountingJsonlSource` | value | daemon |
 | `./sessions/file-stores` | `readJsonlAfterCursor` | value | daemon |
 | `./sessions/file-stores` | `readJsonlFileBackwardPage` | value | daemon |
@@ -2749,6 +2802,7 @@
 | `./ui` | `PluginUiIconTokenV1` | type | any |
 | `./ui` | `PluginUiJsonObjectV1` | type | any |
 | `./ui` | `PluginUiJsonValueV1` | type | any |
+| `./ui` | `PluginUiLaunchInputV1Schema` | value | any |
 | `./ui` | `PluginUiMountContextV1` | type | any |
 | `./ui` | `PluginUiPageHeaderActionV1` | type | any |
 | `./ui` | `PluginUiPlatform` | type | any |
@@ -2831,6 +2885,7 @@
 | `./ui/build` | `PublicToolchainScaffoldBindingsV1` | type | any |
 | `./ui/build` | `createPublicToolchainCompatibilityV1` | value | any |
 | `./ui/build` | `createPublicToolchainScaffoldBindingsV1` | value | any |
+| `./ui/build` | `createZodMiniEnglishLocaleCompilerPlugin` | value | daemon |
 | `./ui/client` | `PluginHostedEntityDragMount` | type | browser |
 | `./ui/client` | `PluginHostedEntityDragSourceMount` | type | browser |
 | `./ui/client` | `PluginUiThemeVariableTarget` | type | browser |

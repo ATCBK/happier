@@ -239,6 +239,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -338,6 +339,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "description": "Use models served by an external or locally detected CLIProxyAPI gateway.",

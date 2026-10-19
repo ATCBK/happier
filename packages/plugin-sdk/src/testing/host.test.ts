@@ -69,6 +69,23 @@ const manifest = {
   },
 } satisfies PluginManifest;
 
+it('keeps rejected manifest field paths in public testkit errors', async () => {
+  const plugin = definePlugin({
+    id: 'acme.manifest-diagnostics',
+    version: '1.0.0',
+    ui: {
+      renderers: [{
+        id: 'overview-renderer', kind: 'declarative',
+        root: { kind: 'text', text: 'Overview' },
+        ...{ unsupportedRendererField: true },
+      }],
+    },
+  });
+
+  await expect(createPluginTestkit({ manifest: plugin.manifest, module: plugin }))
+    .rejects.toThrow('contributes.ui.renderers.0.unsupportedRendererField');
+});
+
 const agentManifest = {
   ...manifest,
   contributes: {
@@ -634,6 +651,7 @@ describe('createPluginTestkit', () => {
                   machineId: caller.materialization.machineId,
                   materializationId: caller.materialization.materializationId,
                 },
+                executionOrigin: caller.executionOrigin ?? null,
                 ...(caller.originSurface === undefined ? {} : { originSurface: caller.originSurface }),
               },
               // The canonical contributed-Action owner represents a successful
@@ -681,6 +699,7 @@ describe('createPluginTestkit', () => {
             registeredRootId: 'plugin-testkit:acme.alpha',
           },
           materialization: alphaMaterialization,
+          executionOrigin: { serverIdentityId: 'srv_plugin_testkit', materializationRef: alphaMaterialization },
           originSurface: 'cli',
         },
         gamma: {
@@ -702,6 +721,7 @@ describe('createPluginTestkit', () => {
       await expect(alpha.invokeAction('send', null)).resolves.toMatchObject({
         caller: {
           materialization: alphaMaterialization,
+          executionOrigin: { serverIdentityId: 'srv_plugin_testkit', materializationRef: alphaMaterialization },
         },
       });
     } finally {
@@ -899,7 +919,8 @@ describe('createPluginTestkit', () => {
         code: 'plugin_action_generation_retired',
       });
 
-      const handlerH = vi.fn(async () => ({ accepted: true }));
+      let acceptedH = true;
+      const handlerH = vi.fn(async () => ({ accepted: acceptedH }));
       const betaHDefinition = defineTargetedOperationContributor(
         'acme.testkit.contributor',
         'publish-provider',
@@ -913,8 +934,29 @@ describe('createPluginTestkit', () => {
         },
       });
       const operationH: TestkitTargetedOperationRef = { current: undefined };
+      const replacementProtocol = defineContributionProtocol({
+        id: testkitTargetedOperationProtocol.id,
+        version: testkitTargetedOperationProtocol.version,
+        operations: {
+          publish: {
+            required: true,
+            input: { kind: 'protocolDefined', schema: testkitTargetedOperationInputSchema },
+            resultSchema: defineProtocolObject({ accepted: defineProtocolLiteral(false) }, { policy: 'closed' }),
+            action: { surfaces: ['plugin'], dangerLevel: 'safe' },
+          },
+        },
+      });
       const alphaH = await createPluginTestkit({
-        manifest: testkitTargetedTargetDefinition.manifest,
+        manifest: {
+          ...testkitTargetedTargetDefinition.manifest,
+          contributes: {
+            ...testkitTargetedTargetDefinition.manifest.contributes,
+            pluginContributionPoints: [{
+              id: 'providers',
+              ...replacementProtocol.point({ maxContributionsPerContributor: 1 }),
+            }],
+          },
+        },
         targetedContributionContributors: [betaH],
         module: createTargetedOperationTargetModule(operationH),
       });
@@ -934,8 +976,14 @@ describe('createPluginTestkit', () => {
         expect(handlerH).not.toHaveBeenCalled();
 
         operationH.current = freshH;
-        await expect(alphaH.invokeAction('send', null)).resolves.toEqual({ accepted: true });
-        expect(handlerH).toHaveBeenCalledOnce();
+        // The replacement has the same public protocol identity but distinct
+        // admitted bytes. Parser reuse cannot escape its owning occurrence.
+        await expect(alphaH.invokeAction('send', null)).rejects.toMatchObject({
+          code: 'plugin_targeted_operation_result_invalid',
+        });
+        acceptedH = false;
+        await expect(alphaH.invokeAction('send', null)).resolves.toEqual({ accepted: false });
+        expect(handlerH).toHaveBeenCalledTimes(2);
       } finally {
         await alphaH.dispose();
         await betaH.dispose();
@@ -1426,6 +1474,38 @@ describe('createPluginTestkit', () => {
       await alpha.dispose();
       await beta.dispose();
     }
+  });
+
+  it.each([
+    { serverIdentityId: 'srv_plugin_testkit', machineId: 'plugin-testkit-machine', pluginId: 'acme.beta', accepted: true },
+    { serverIdentityId: 'srv_other_home', machineId: 'plugin-testkit-machine', pluginId: 'acme.beta', accepted: false },
+    { serverIdentityId: 'srv_plugin_testkit', machineId: 'another-machine', pluginId: 'acme.beta', accepted: false },
+    { serverIdentityId: 'srv_plugin_testkit', machineId: 'plugin-testkit-machine', pluginId: 'acme.other', accepted: false },
+  ])('enforces routing before a real cross-plugin Action handler (%j)', async ({ accepted, ...expectedExecutionRouting }) => {
+    const targetHandler = vi.fn(async () => ({ accepted: true }));
+    const beta = await createPluginTestkit({
+      manifest: actionManifest('acme.beta', 'receive', ['plugin']),
+      module: { activate(api) { api.actions.register('receive', targetHandler); } },
+    });
+    const alpha = await createPluginTestkit({
+      manifest: actionManifest('acme.alpha', 'send', ['cli']),
+      actionTargets: [beta],
+      module: { activate(api) { api.actions.register('send', async (_input, context) => {
+        try {
+          const result = await context.services.actions.executeWithExecutionOrigin(
+            { pluginId: 'acme.beta', localId: 'receive' }, { title: 'Ready' }, { expectedExecutionRouting },
+          );
+          return result.result;
+        } catch (error) {
+          return { accepted: false, notStarted: isPluginActionHandlerInvocationNotStartedAdvisory(error) };
+        }
+      }); } },
+    });
+    try {
+      await expect(alpha.invokeAction('send', null)).resolves.toEqual(accepted
+        ? { accepted: true } : { accepted: false, notStarted: true });
+      expect(targetHandler).toHaveBeenCalledTimes(accepted ? 1 : 0);
+    } finally { await alpha.dispose(); await beta.dispose(); }
   });
 
   it('fails closed rather than replacing an unavailable target execution origin with a synthetic fallback', async () => {

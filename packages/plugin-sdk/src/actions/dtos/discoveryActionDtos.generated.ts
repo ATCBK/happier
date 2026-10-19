@@ -108,13 +108,14 @@ export type DiscoveryActionInputById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: unknown;
                             visibleWhen?: unknown;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: unknown;
@@ -128,6 +129,7 @@ export type DiscoveryActionInputById = {
                             options?: readonly {
                                 value: unknown;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -204,13 +206,14 @@ export type DiscoveryActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -224,6 +227,7 @@ export type DiscoveryActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -271,6 +275,10 @@ export type DiscoveryActionResultById = {
             contextualDefaults?: {
                 sessionId?: 'current_session' | undefined;
                 machineId?: 'current_session_machine' | undefined;
+            } | undefined;
+            sessionTarget?: {
+                field: string;
+                cardinality: 'one' | 'many';
             } | undefined;
             outputSchema?: Record<string, unknown> | undefined;
             sideEffectClass?: 'read' | 'none' | 'danger' | 'write' | 'external' | undefined;
@@ -324,13 +332,14 @@ export type DiscoveryActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -344,6 +353,7 @@ export type DiscoveryActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -393,6 +403,10 @@ export type DiscoveryActionResultById = {
             contextualDefaults?: {
                 sessionId?: 'current_session' | undefined;
                 machineId?: 'current_session_machine' | undefined;
+            } | undefined;
+            sessionTarget?: {
+                field: string;
+                cardinality: 'one' | 'many';
             } | undefined;
             outputSchema?: Record<string, unknown> | undefined;
             sideEffectClass?: 'read' | 'none' | 'danger' | 'write' | 'external' | undefined;
@@ -468,6 +482,7 @@ export type DiscoveryActionResultById = {
         options: readonly {
             value: JsonValue;
             label: string;
+            labelKey?: string | undefined;
             description?: string | undefined;
             disabled?: boolean | undefined;
         }[];
@@ -595,6 +610,35 @@ export type DiscoveryActionResultById = {
                         };
                         loadState: 'unknown' | 'loaded' | 'unloaded';
                         visibility: 'visible' | 'hidden_agent' | 'hidden_all_agents' | 'hidden_current_selection';
+                        gatewaySlots?: {
+                            purpose: {
+                                consumer: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                purpose: string;
+                            };
+                            target: {
+                                kind: 'account';
+                                account: {
+                                    service: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    accountId: string;
+                                };
+                            } | {
+                                kind: 'group';
+                                service: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | {
+                                    pluginId: 'happier';
+                                    localId: 'mcp-sign-in';
+                                };
+                                groupId: string;
+                            };
+                        }[] | undefined;
                         application?: {
                             agentTargetKey: string;
                             implementationIdentity: {

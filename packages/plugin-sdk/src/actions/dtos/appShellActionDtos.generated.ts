@@ -30,6 +30,9 @@ export type AppShellActionInputById = {
             kind: 'session';
             sessionId: string;
         } | {
+            kind: 'discussion';
+            discussionId: string;
+        } | {
             kind: 'newSession';
             instanceId: string;
         } | {
@@ -63,7 +66,7 @@ export type AppShellActionResultById = {
         status: 'opened';
         draftId: string;
     } | {
-        status: 'unavailable' | 'missing';
+        status: 'missing' | 'unavailable';
     };
     readonly "session.draft.append": {
         status: 'unavailable';
@@ -206,6 +209,7 @@ export type AppShellActionResultById = {
         }[];
         isLoading: boolean;
         refreshFailed: boolean;
+        accountNoticeIds?: string[] | undefined;
     };
     readonly "inbox.mark_all_read": {
         results: {
@@ -215,7 +219,7 @@ export type AppShellActionResultById = {
         }[];
     };
     readonly "session.draft.delete": {
-        status: 'unavailable' | 'deleted' | 'missing' | 'launch_custody';
+        status: 'missing' | 'unavailable' | 'deleted' | 'launch_custody';
     };
     readonly "session.draft.directory.set": {
         status: 'unavailable' | 'applied';

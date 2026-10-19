@@ -43,6 +43,7 @@ export {
  */
 export type { ProtocolComposerRefV1 } from './composerRef.js';
 export { ProtocolComposerRefV1Schema } from './composerRef.js';
+export { CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1, ProtocolCurrentUiContextSnapshotV1Schema } from './currentUiContext.js';
 /**
  * The canonical executable parser for a complete Composer reference
  * resolution, including Protocol's whole-value 16KiB boundary.
@@ -58,3 +59,17 @@ export type { ProtocolCollectionOpaqueCursorV1 } from './collectionCursor.js';
 export { ProtocolCollectionOpaqueCursorV1Schema } from './collectionCursor.js';
 /** Canonical Launch Profile V2 identity admission for feature Action references. */
 export { ProtocolLaunchProfileIdV2Schema } from './launchProfileId.js';
+/** Minimal Task/entry identity and the single V1 identity/string grammar owner. */
+export type { TriageEntryRefV1 } from './triageEntryRef.js';
+export {
+    TriageEntryRefV1Schema,
+    TriageEntryRefV1JsonSchema,
+    TriageIdentifierV1ProtocolSchema,
+    TriageCollisionScopeV1ProtocolSchema,
+    defineTriageSingleLineStringV1,
+    defineTriageCompositeIdentifierStringV1,
+    MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1,
+    MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1,
+    TRIAGE_SINGLE_LINE_STRING_PATTERN_V1,
+    TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1,
+} from './triageEntryRef.js';

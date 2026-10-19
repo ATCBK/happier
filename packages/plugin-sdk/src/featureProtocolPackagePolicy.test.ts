@@ -214,6 +214,8 @@ const FEATURE_PROTOCOL_SDK_IMPORT_ALLOWLIST: Readonly<Record<string, ReadonlySet
         'ScmComparisonSource',
         'ScmComparisonSourceSchema',
         'ScmComparisonSourceProtocolSchema',
+        'ScmHostingProviderKindProtocolSchema',
+        'ProtocolScmHostingProviderKind',
     ]),
     // The Collection revision ceiling is a portable numeric schema fact, and
     // SDK `/collections` is its public owner. A feature protocol that declares

@@ -59,6 +59,12 @@ export type SessionTerminalsActionInputById = {
             terminalId: string;
             terminalKey: string;
             cwd: string;
+            workspace?: {
+                serverId: string;
+                workspaceId: string;
+                machineId: string;
+                rootPath: string;
+            } | undefined;
             sessionId?: string | undefined;
         };
         title?: string | undefined;
@@ -115,6 +121,12 @@ export type SessionTerminalsActionInputById = {
             terminalId: string;
             terminalKey: string;
             cwd: string;
+            workspace?: {
+                serverId: string;
+                workspaceId: string;
+                machineId: string;
+                rootPath: string;
+            } | undefined;
             sessionId?: string | undefined;
         };
         tabId?: string | undefined;
@@ -235,6 +247,12 @@ export type SessionTerminalsActionResultById = {
                         terminalId: string;
                         terminalKey: string;
                         cwd: string;
+                        workspace?: {
+                            serverId: string;
+                            workspaceId: string;
+                            machineId: string;
+                            rootPath: string;
+                        } | undefined;
                         sessionId?: string | undefined;
                     };
                     title?: string | undefined;
@@ -246,6 +264,7 @@ export type SessionTerminalsActionResultById = {
                         artifactId: string;
                         actionId: 'machines.terminal.open' | 'machines.terminal.restart';
                     } | undefined;
+                    openCancelled?: true | undefined;
                 }[];
                 focusedTerminalId: string;
                 root: SessionTerminalLayoutV1;

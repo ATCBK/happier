@@ -15,6 +15,7 @@ import {
 import type { PluginErrorData } from '../errors.js';
 import type { JsonValue, PluginReference } from '../identity.js';
 import { PluginUiResourceSubscriptionTargetV1Schema } from '@happier-dev/protocol/plugins/ui/client';
+import { PluginUiActionAdmissionResultV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 import type { Disposable, PluginCancellationOptions } from '../lifecycle.js';
 import type {
     PluginUiHostApi,
@@ -28,6 +29,7 @@ import type {
     ComposerContentPickMediaRequestV1,
     ComposerFocusResultV1,
     ComposerReadResultV1,
+    ComposerRefV1,
     ComposerSnapshotV1,
     ComposerTransactionResultV1,
     OpenableContentReadRequest,
@@ -624,6 +626,28 @@ export async function createPluginUiHostApiClientFromTransport(
         const advertised: readonly string[] = negotiated?.version.methods ?? [];
         return advertised.includes(method);
     }
+
+    function assertComposerScopeSupported(ref: ComposerRefV1): void {
+        if (ref.kind === 'discussion' && !advertises('readDiscussionComposer')) {
+            throw new PluginUiHostApiClientError('unsupported_method', 'Discussion Composer operations are unavailable.');
+        }
+    }
+
+    async function readComposerScope(
+        ref: ComposerRefV1,
+        signal?: AbortSignal,
+    ): Promise<ComposerReadResultV1> {
+        const payload = PluginUiReadComposerRequestV1Schema.safeParse({ ref });
+        if (!payload.success) {
+            throw new PluginUiHostApiClientError('invalid_payload', 'readComposer request is invalid.');
+        }
+        assertComposerScopeSupported(payload.data.ref);
+        return readComposerReadResult(await request(
+            payload.data.ref.kind === 'discussion' ? 'readDiscussionComposer' : 'readComposer',
+            payload.data,
+            signal,
+        ));
+    }
     /**
      * A returned structured Action object is the sole author-visible value that
      * can retain a selected-operation currentness expectation. The association
@@ -1070,26 +1094,21 @@ export async function createPluginUiHostApiClientFromTransport(
                 requestOptions?.signal,
             ));
         },
-        activeComposer: async (requestOptions) => (
-            readActiveComposerResult(await request(
+        activeComposer: async (requestOptions) => {
+            const ref = readActiveComposerResult(await request(
                 'activeComposer',
                 undefined,
                 requestOptions?.signal,
-            ))
-        ),
-        readComposer: async (ref, requestOptions): Promise<ComposerReadResultV1> => {
-            const payload = PluginUiReadComposerRequestV1Schema.safeParse({ ref });
-            if (!payload.success) {
-                throw new PluginUiHostApiClientError(
-                    'invalid_payload',
-                    'readComposer request is invalid.',
-                );
-            }
-            return readComposerReadResult(await request(
-                'readComposer',
-                payload.data,
-                requestOptions?.signal,
             ));
+            if (ref !== null) assertComposerScopeSupported(ref);
+            return ref;
+        },
+        readComposer: (ref, requestOptions) => readComposerScope(ref, requestOptions?.signal),
+        readDiscussionComposer: (ref, requestOptions) => {
+            if (ref.kind !== 'discussion') {
+                return Promise.reject(new PluginUiHostApiClientError('invalid_payload', 'A Discussion Composer scope is required.'));
+            }
+            return readComposerScope(ref, requestOptions?.signal);
         },
         watchComposer: async (ref, listener, requestOptions) => {
             const payload = PluginUiWatchComposerRequestV1Schema.safeParse({ ref });
@@ -1099,6 +1118,7 @@ export async function createPluginUiHostApiClientFromTransport(
                     'watchComposer request is invalid.',
                 );
             }
+            assertComposerScopeSupported(payload.data.ref);
             const subscription = await subscribe(
                 'watchComposer',
                 payload.data,
@@ -1115,6 +1135,7 @@ export async function createPluginUiHostApiClientFromTransport(
                     'applyComposer request is invalid.',
                 );
             }
+            assertComposerScopeSupported(payload.data.ref);
             return readComposerTransactionResult(await request(
                 'applyComposer',
                 requireTransportJsonObject(payload.data, 'applyComposer request'),
@@ -1129,6 +1150,7 @@ export async function createPluginUiHostApiClientFromTransport(
                     'focusComposer request is invalid.',
                 );
             }
+            assertComposerScopeSupported(payload.data.ref);
             return readComposerFocusResult(await request(
                 'focusComposer',
                 payload.data,
@@ -1147,6 +1169,7 @@ export async function createPluginUiHostApiClientFromTransport(
                     'setComposerDecorations request is invalid.',
                 );
             }
+            assertComposerScopeSupported(payload.data.ref);
             return readComposerDecorationResult(await request(
                 'setComposerDecorations',
                 payload.data,
@@ -1164,6 +1187,7 @@ export async function createPluginUiHostApiClientFromTransport(
                     'acquireComposerInputLock request is invalid.',
                 );
             }
+            assertComposerScopeSupported(payload.data.ref);
             const subscription = await subscribe(
                 'acquireComposerInputLock',
                 payload.data,
@@ -1192,6 +1216,7 @@ export async function createPluginUiHostApiClientFromTransport(
                     'pickComposerMedia request is invalid.',
                 );
             }
+            assertComposerScopeSupported(payload.data.ref);
             return readComposerContentHandle(await request(
                 'pickComposerMedia',
                 payload.data,
@@ -1284,6 +1309,13 @@ export async function createPluginUiHostApiClientFromTransport(
                 );
             }
             return Object.freeze(settled.data);
+        },
+        admitAction: async (action, input, options) => {
+            const payload = PluginUiExecuteActionRequestV1Schema.safeParse({ action, ...(input === undefined ? {} : { input }) });
+            if (!payload.success) throw new PluginUiHostApiClientError('invalid_payload', 'Action admission input is invalid.');
+            const result = PluginUiActionAdmissionResultV1Schema.safeParse(await request('admitAction', payload.data, options?.signal));
+            if (!result.success) throw new PluginUiHostApiClientError('invalid_payload', 'Action admission result is invalid.');
+            return result.data.admitted;
         },
         notify: async (message, notifyOptions) => { await request('notify', { message, ...(notifyOptions?.severity === undefined ? {} : { severity: notifyOptions.severity }) }, notifyOptions?.signal); },
         confirm: async (message, confirmOptions) => {

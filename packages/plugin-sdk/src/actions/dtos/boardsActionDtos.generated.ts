@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { InputPredicate, PluginJsonSchemaV2, QualifiedAudienceSelection, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
+import type { BoardItemRefV1, InputPredicate, PluginJsonSchemaV2, QualifiedAudienceSelection, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
 
 export type BoardsActionInputById = {
     readonly "boards.list": Record<string, never>;
@@ -63,13 +63,14 @@ export type BoardsActionInputById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: unknown;
                                 visibleWhen?: unknown;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
@@ -83,6 +84,7 @@ export type BoardsActionInputById = {
                                 options?: readonly {
                                     value: unknown;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -260,13 +262,14 @@ export type BoardsActionInputById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: unknown;
                                 visibleWhen?: unknown;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
@@ -280,6 +283,7 @@ export type BoardsActionInputById = {
                                 options?: readonly {
                                     value: unknown;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -640,51 +644,66 @@ export type BoardsActionInputById = {
                 pinnedInSessions?: boolean | undefined;
                 source?: {
                     sections?: ('needs_you' | 'running' | 'my_machines')[] | null | undefined;
-                    filter?: {
+                    filter?: Readonly<{
                         show: 'sessions' | 'runs' | 'both';
-                        startedBy: ('you' | 'triggers' | 'agents')[];
+                        startedBy: readonly ('you' | 'triggers' | 'agents')[];
                         scope: 'my_work' | 'assigned_to_me' | 'following' | 'involving_me' | 'all_accessible';
                         attention: 'any' | 'needs_my_attention';
-                        homeServerIds: string[];
-                        audiences: ({
-                            kind: 'outside_teams';
-                            serverId: string;
-                        } | {
-                            kind: 'team';
-                            teamId: string;
-                            serverId: string;
-                        } | {
-                            kind: 'group';
-                            teamId: string;
-                            groupId: string;
-                            serverId: string;
-                        })[];
-                        tagIds: {
+                        bot?: 'bot' | 'ordinary' | undefined;
+                        coordinator?: 'coordinator' | undefined;
+                        projects?: Readonly<{
+                            include: readonly {
+                                serverId: string;
+                                projectKey: string;
+                            }[];
+                            exclude: readonly {
+                                serverId: string;
+                                projectKey: string;
+                            }[];
+                        }> | undefined;
+                        statuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                        underSessionId?: string | undefined;
+                        homeServerIds: readonly string[];
+                        audiences: readonly QualifiedAudienceSelection<true>[];
+                        tagIds: readonly Readonly<{
                             serverId: string;
                             tagId: string;
-                        }[];
+                        }>[];
                         source: 'all' | 'persisted' | 'direct';
-                        bot?: 'bot' | 'ordinary' | undefined;
-                    } | null | undefined;
-                    picked?: {
+                    }> | null | undefined;
+                    picked?: ({
                         kind: 'session' | 'machine' | 'workflow_run' | 'workflow';
                         qualifiedId: {
                             serverId: string;
                             id: string;
                         };
-                    }[] | undefined;
+                    } | {
+                        kind: 'task';
+                        qualifiedId: {
+                            serverId: string;
+                            id: string;
+                        };
+                        pluginId: string;
+                    })[] | undefined;
                 } | undefined;
             };
         } | {
             kind: 'add_items';
             boardId: string;
-            refs: {
+            refs: ({
                 kind: 'session' | 'machine' | 'workflow_run' | 'workflow';
                 qualifiedId: {
                     serverId: string;
                     id: string;
                 };
-            }[];
+            } | {
+                kind: 'task';
+                qualifiedId: {
+                    serverId: string;
+                    id: string;
+                };
+                pluginId: string;
+            })[];
             positionsByItemRef?: Record<string, {
                 x: number;
                 y: number;
@@ -698,6 +717,13 @@ export type BoardsActionInputById = {
                     serverId: string;
                     id: string;
                 };
+            } | {
+                kind: 'task';
+                qualifiedId: {
+                    serverId: string;
+                    id: string;
+                };
+                pluginId: string;
             };
             membership?: {
                 liveItemKeys: string[];
@@ -731,6 +757,19 @@ export type BoardsActionResultById = {
                     scope: 'my_work' | 'assigned_to_me' | 'following' | 'involving_me' | 'all_accessible';
                     attention: 'any' | 'needs_my_attention';
                     bot?: 'bot' | 'ordinary' | undefined;
+                    coordinator?: 'coordinator' | undefined;
+                    projects?: Readonly<{
+                        include: readonly {
+                            serverId: string;
+                            projectKey: string;
+                        }[];
+                        exclude: readonly {
+                            serverId: string;
+                            projectKey: string;
+                        }[];
+                    }> | undefined;
+                    statuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                    underSessionId?: string | undefined;
                     homeServerIds: readonly string[];
                     audiences: readonly QualifiedAudienceSelection[];
                     tagIds: readonly Readonly<{
@@ -739,13 +778,7 @@ export type BoardsActionResultById = {
                     }>[];
                     source: 'all' | 'persisted' | 'direct';
                 }> | undefined;
-                picked: readonly Readonly<{
-                    kind: 'session' | 'machine' | 'workflow_run' | 'workflow';
-                    qualifiedId: Readonly<{
-                        serverId: string;
-                        id: string;
-                    }>;
-                }>[];
+                picked: readonly BoardItemRefV1[];
                 unknown?: Readonly<{
                     sections?: readonly string[] | undefined;
                     picked?: readonly unknown[] | undefined;
@@ -846,13 +879,14 @@ export type BoardsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -866,6 +900,7 @@ export type BoardsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -929,6 +964,19 @@ export type BoardsActionResultById = {
                     scope: 'my_work' | 'assigned_to_me' | 'following' | 'involving_me' | 'all_accessible';
                     attention: 'any' | 'needs_my_attention';
                     bot?: 'bot' | 'ordinary' | undefined;
+                    coordinator?: 'coordinator' | undefined;
+                    projects?: Readonly<{
+                        include: readonly {
+                            serverId: string;
+                            projectKey: string;
+                        }[];
+                        exclude: readonly {
+                            serverId: string;
+                            projectKey: string;
+                        }[];
+                    }> | undefined;
+                    statuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                    underSessionId?: string | undefined;
                     homeServerIds: readonly string[];
                     audiences: readonly QualifiedAudienceSelection[];
                     tagIds: readonly Readonly<{
@@ -937,13 +985,7 @@ export type BoardsActionResultById = {
                     }>[];
                     source: 'all' | 'persisted' | 'direct';
                 }> | undefined;
-                picked: readonly Readonly<{
-                    kind: 'session' | 'machine' | 'workflow_run' | 'workflow';
-                    qualifiedId: Readonly<{
-                        serverId: string;
-                        id: string;
-                    }>;
-                }>[];
+                picked: readonly BoardItemRefV1[];
                 unknown?: Readonly<{
                     sections?: readonly string[] | undefined;
                     picked?: readonly unknown[] | undefined;
@@ -1044,13 +1086,14 @@ export type BoardsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -1064,6 +1107,7 @@ export type BoardsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;

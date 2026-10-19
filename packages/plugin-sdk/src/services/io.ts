@@ -3,6 +3,7 @@ import type { PluginDiagnosticData } from '../diagnostics.js';
 import type { JsonValue, PluginContributionRef } from '../identity.js';
 import type { Disposable, PluginCancellationOptions } from '../lifecycle.js';
 import type { ManagedExecutableRef } from '@happier-dev/protocol';
+import type { AgentNativeLaunchQualifier } from '../exec.js';
 
 export type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS';
 export const MAX_PLUGIN_FETCH_REDIRECTS = 10;
@@ -205,5 +206,5 @@ export interface PluginProtocolClientHandle<K extends PluginProtocolClientKind =
     dispose(): Promise<void>;
 }
 export interface ProtocolClientsService {
-    spawn<K extends PluginProtocolClientKind>(spec: PluginProtocolClientSpecByKind<K>, options?: { signal?: AbortSignal }): Promise<PluginProtocolClientHandle<K>>;
+    spawn<K extends PluginProtocolClientKind>(spec: PluginProtocolClientSpecByKind<K>, options?: { signal?: AbortSignal; nativeLaunch?: AgentNativeLaunchQualifier }): Promise<PluginProtocolClientHandle<K>>;
 }

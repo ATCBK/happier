@@ -54,22 +54,43 @@ export type SettingsDeclarationsActionInputById = {
         reversal?: {
             kind: 'capture';
         } | {
+            before: {
+                unset: true;
+            } | {
+                value: unknown;
+            };
+            applied: {
+                unset: true;
+            } | {
+                value: unknown;
+            };
             scope: {
                 serverId: string;
                 accountId: string;
             };
             beforeVersion: number;
             appliedVersion: number;
-            before: {
-                unset: true;
-            } | {
-                value: string | number | boolean | null;
+            kind: 'restore';
+        } | {
+            changes: {
+                before: {
+                    unset: true;
+                } | {
+                    value: unknown;
+                };
+                applied: {
+                    unset: true;
+                } | {
+                    value: unknown;
+                };
+                key: string;
+            }[];
+            scope: {
+                serverId: string;
+                accountId: string;
             };
-            applied: {
-                unset: true;
-            } | {
-                value: string | number | boolean | null;
-            };
+            beforeVersion: number;
+            appliedVersion: number;
             kind: 'restore';
         } | undefined;
     };
@@ -91,6 +112,20 @@ export type SettingsDeclarationsActionInputById = {
             serverId: string;
             teamId: string;
             connectionId: string;
+        } | undefined;
+        expected?: {
+            unset: true;
+        } | {
+            value: unknown;
+        } | {
+            changes: {
+                key: string;
+                applied: {
+                    unset: true;
+                } | {
+                    value: unknown;
+                };
+            }[];
         } | undefined;
     };
     readonly "settings.invoke": {
@@ -135,6 +170,19 @@ export type SettingsDeclarationsActionInputById = {
             revision: number;
         } | undefined;
     };
+    readonly "actions.policy.get": {
+        actionId: string;
+        audience: 'ui' | 'voice' | 'agent' | 'mcp' | 'cli' | 'rpc' | 'api' | 'plugin';
+    };
+    readonly "actions.policy.set": {
+        mode: 'default' | 'allowed' | 'ask_first' | 'off';
+        actionId: string;
+        audience: 'ui' | 'voice' | 'agent' | 'mcp' | 'cli' | 'rpc' | 'api' | 'plugin';
+    };
+    readonly "actions.policy.reset": {
+        actionId: string;
+        audience: 'ui' | 'voice' | 'agent' | 'mcp' | 'cli' | 'rpc' | 'api' | 'plugin';
+    };
 };
 export type SettingsDeclarationsActionResultById = {
     readonly "settings.list": {
@@ -172,22 +220,42 @@ export type SettingsDeclarationsActionResultById = {
         value: JsonValue;
         settingsVersion?: number | undefined;
         reversal?: {
+            before: {
+                unset: true;
+            } | {
+                value: JsonValue;
+            };
+            applied: {
+                unset: true;
+            } | {
+                value: JsonValue;
+            };
             scope: {
                 serverId: string;
                 accountId: string;
             };
             beforeVersion: number;
             appliedVersion: number;
-            before: {
-                unset: true;
-            } | {
-                value: string | number | boolean | null;
+        } | {
+            changes: {
+                before: {
+                    unset: true;
+                } | {
+                    value: JsonValue;
+                };
+                applied: {
+                    unset: true;
+                } | {
+                    value: JsonValue;
+                };
+                key: string;
+            }[];
+            scope: {
+                serverId: string;
+                accountId: string;
             };
-            applied: {
-                unset: true;
-            } | {
-                value: string | number | boolean | null;
-            };
+            beforeVersion: number;
+            appliedVersion: number;
         } | undefined;
         reversalUnavailableReason?: 'no_change' | undefined;
     } | {
@@ -195,22 +263,42 @@ export type SettingsDeclarationsActionResultById = {
         unset: true;
         settingsVersion?: number | undefined;
         reversal?: {
+            before: {
+                unset: true;
+            } | {
+                value: JsonValue;
+            };
+            applied: {
+                unset: true;
+            } | {
+                value: JsonValue;
+            };
             scope: {
                 serverId: string;
                 accountId: string;
             };
             beforeVersion: number;
             appliedVersion: number;
-            before: {
-                unset: true;
-            } | {
-                value: string | number | boolean | null;
+        } | {
+            changes: {
+                before: {
+                    unset: true;
+                } | {
+                    value: JsonValue;
+                };
+                applied: {
+                    unset: true;
+                } | {
+                    value: JsonValue;
+                };
+                key: string;
+            }[];
+            scope: {
+                serverId: string;
+                accountId: string;
             };
-            applied: {
-                unset: true;
-            } | {
-                value: string | number | boolean | null;
-            };
+            beforeVersion: number;
+            appliedVersion: number;
         } | undefined;
         reversalUnavailableReason?: 'no_change' | undefined;
     };
@@ -226,5 +314,26 @@ export type SettingsDeclarationsActionResultById = {
         status: 'completed' | 'cancelled' | 'unavailable' | 'interaction_opened';
         reason?: string | undefined;
         value?: JsonValue | undefined;
+    };
+    readonly "actions.policy.get": {
+        mode: 'default' | 'allowed' | 'ask_first' | 'off';
+        actionEnabled: boolean;
+        enabled: boolean;
+        actionId: string;
+        audience: 'ui' | 'voice' | 'agent' | 'mcp' | 'cli' | 'rpc' | 'api' | 'plugin';
+    };
+    readonly "actions.policy.set": {
+        mode: 'default' | 'allowed' | 'ask_first' | 'off';
+        actionEnabled: boolean;
+        enabled: boolean;
+        actionId: string;
+        audience: 'ui' | 'voice' | 'agent' | 'mcp' | 'cli' | 'rpc' | 'api' | 'plugin';
+    };
+    readonly "actions.policy.reset": {
+        mode: 'default' | 'allowed' | 'ask_first' | 'off';
+        actionEnabled: boolean;
+        enabled: boolean;
+        actionId: string;
+        audience: 'ui' | 'voice' | 'agent' | 'mcp' | 'cli' | 'rpc' | 'api' | 'plugin';
     };
 };

@@ -67,7 +67,7 @@ describe('bundled Collection migration artifacts', () => {
                 );
                 for (const entries of Object.values(callbacks)) {
                     for (const migration of entries) {
-                        expect(await migration.migrate({ retained: 'value' })).toEqual({ retained: 'value' });
+                        expect(await migration.migrate({ retained: 'value' }, { currentRevision: 1 })).toEqual({ retained: 'value' });
                     }
                 }
             }

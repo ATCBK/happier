@@ -57,6 +57,8 @@ export type PluginClientActionContext = Readonly<{
     /** Same Account/plugin/immutable-generation scope as mounted UI artifacts. */
     ephemeralSharedScope: PluginEphemeralSharedScope | null;
     currentUiContext?: CurrentUiContextSnapshotV1;
+    /** Same bounded host-resolved snapshot as daemon Actions; absent outside a message menu. */
+    messageAction?: PluginInvocationContext['messageAction'];
 }>;
 
 /** Handler for one daemon-targeted manifest Action contribution. */

@@ -35,6 +35,7 @@ import type {
     ComposerControlStateContentTypeV1 as ProtocolComposerControlStateContentTypeV1,
     ComposerControlStateV1 as ProtocolComposerControlStateV1,
     PluginUiContextEnrichmentV1 as ProtocolPluginUiContextEnrichmentV1,
+    PluginUiHostApiSurfaceContextV1 as ProtocolPluginUiHostApiSurfaceContextV1,
     PluginTargetedContributionSelectionV1 as ProtocolPluginUiTargetedContributionSelectionV1,
     PluginUiTargetedContributionOperationV1 as ProtocolPluginUiTargetedContributionOperationV1,
     PluginUiTargetedContributionPointRefV1 as ProtocolPluginUiTargetedContributionPointRefV1,
@@ -214,6 +215,8 @@ export type PluginUiHostApiSurfaceThemeV1 = {
         focus: string;
         accent: string;
         onAccent: string;
+        /** The one accent data marks are drawn in (series, meters); older snapshots omit it. */
+        dataAccent?: string;
         success: string;
         warning: string;
         attention: string;
@@ -282,6 +285,12 @@ export type PluginUiHostApiSurfaceContextV1 = {
     target: PluginUiHostApiSurfaceTargetV1;
     /** Host page chrome for app pages; absent on other surface placements. */
     page?: { columnVisible: boolean };
+    /** Read-only pending review from the mounted host's canonical approval presenter. */
+    pendingApproval?: ProtocolPluginUiHostApiSurfaceContextV1['pendingApproval'];
+    /** The mounted host is loading Machine prerequisites; Account/local work remains available. */
+    machineConnectionPending?: boolean;
+    /** Exact-target execution is currently admitted. Observation only; every invocation revalidates authority. */
+    machineExecutionReady?: boolean;
     accountEncryptionMode: 'plain' | 'e2ee';
     platform: PluginUiPlatform;
     locale: string;

@@ -46,6 +46,7 @@ export const CAPABILITY_HOST_BINDING_OWNERS_V1 = Object.freeze({
   inputTypeFamilyProjection: 'apps/cli/src/plugins/projection/registry/inputTypes.ts',
   atmospherePictureFamilyProjection: 'apps/cli/src/plugins/projection/registry/atmospherePictures.ts',
   registrySourceFamilyProjection: 'apps/cli/src/plugins/projection/registry/registrySources.ts',
+  skillFamilyProjection: 'apps/cli/src/plugins/projection/registry/skills.ts',
   /** Admits contribution points and the contributions targeting them. */
   targetedContributionAdmission: 'apps/cli/src/plugins/projection/registry/targetedContributions.ts',
   /** Binds declared plugin commands onto the CLI command surface. */
@@ -146,6 +147,10 @@ export const MANIFEST_FAMILY_REALM_OWNERS_V1 = Object.freeze({
     CAPABILITY_HOST_BINDING_OWNERS_V1.clientExecutableRegistration,
     CAPABILITY_HOST_BINDING_OWNERS_V1.clientExecutableRegistration,
   ),
+  workItems: realmOwners(
+    CAPABILITY_HOST_BINDING_OWNERS_V1.clientExecutableRegistration,
+    CAPABILITY_HOST_BINDING_OWNERS_V1.clientExecutableRegistration,
+  ),
   dropTargets: realmOwners(
     CAPABILITY_HOST_BINDING_OWNERS_V1.clientExecutableRegistration,
     CAPABILITY_HOST_BINDING_OWNERS_V1.clientExecutableRegistration,
@@ -189,6 +194,7 @@ export const MANIFEST_FAMILY_REALM_OWNERS_V1 = Object.freeze({
   inputTypes: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.inputTypeFamilyProjection),
   atmospherePictures: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.atmospherePictureFamilyProjection),
   registrySources: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.registrySourceFamilyProjection),
+  skills: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.skillFamilyProjection),
   notifications: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.pluginNotificationsHost),
   systemTools: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.systemToolProjection),
   pluginContributionPoints: declarativeFamilyOwners(

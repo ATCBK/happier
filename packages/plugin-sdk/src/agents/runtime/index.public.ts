@@ -220,6 +220,8 @@ export type { AgentSessionGoalControlContext } from '../../agentRuntime/projecti
 export type { AgentSessionGoalMutation } from '../../agentRuntime/projections.js';
 export type { AgentSessionGoalMutationResult } from '../../agentRuntime/projections.js';
 export type { AgentSessionGoalRefreshResult } from '../../agentRuntime/projections.js';
+export type { GoalControlFailure } from '../../agentRuntime/projections.js';
+export type { SessionGoalControlFailureV1 } from '../../actions/dtos/pluginActionDtoSupport.generated.js';
 export type { AgentSessionHookForwarderAssets } from '../../agentRuntime/projections.js';
 export type { AgentSessionHookPluginDirCreateRequest } from '../../agentRuntime/projections.js';
 export type { AgentSessionHookPluginFile } from '../../agentRuntime/projections.js';

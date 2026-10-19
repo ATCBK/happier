@@ -1,6 +1,8 @@
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { AgentExecutionTargetV1 } from '@happier-dev/protocol/plugins/agents';
 
+export { resolveModelDisplayName } from '@happier-dev/protocol/models/descriptor';
+
 export type { AgentExecutionTargetV1 } from '@happier-dev/protocol/plugins/agents';
 
 export type {

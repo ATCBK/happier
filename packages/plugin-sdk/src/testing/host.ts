@@ -1,5 +1,5 @@
 /** @moduleRealm daemon */
-import { arePluginMachineMaterializationRefsEqual, PluginMachineExecutionOriginV1Schema, PluginMachineMaterializationExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { arePluginMachineMaterializationRefsEqual, PluginMachineExecutionOriginV1Schema, PluginMachineMaterializationExecutionOriginV1Schema, PluginMachineExecutionRoutingV1Schema, getPluginMachineExecutionRouting, arePluginMachineExecutionRoutingsEqual, type PluginMachineExecutionRoutingV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { createPluginActionInvocation, readPluginActionFailureAuthorPayload } from '@happier-dev/protocol/plugins/actions/invocation';
 import { MessageActionAvailableSnapshotV1Schema } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
 import { PluginMachineMaterializationRefV1Schema } from '@happier-dev/protocol/plugins/availability/materializationRefV1';
@@ -10,6 +10,7 @@ import type {
     RehydratedPluginContributionPointOperationV1,
 } from '@happier-dev/protocol';
 import { derivePluginDaemonContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
+import { formatPluginManifestIngestionDiagnostics } from '@happier-dev/protocol/plugins/manifest/ingest';
 
 import type {
     ActionHandler,
@@ -70,6 +71,7 @@ type TestkitActionTargetInvocation = Readonly<{
     captureExecutionOrigin?: true;
     /** Equality-only precondition from ActionsService.executeWithExecutionOrigin only. */
     expectedExecutionOrigin?: PluginMachineExecutionOriginV1;
+    expectedExecutionRouting?: PluginMachineExecutionRoutingV1;
     /** Exact-generation expectation from one host-issued admitted handle. */
     admittedTargetedOperation?: Readonly<{
         contributorOccurrenceId: string;
@@ -167,6 +169,18 @@ type TestkitFixtureAdmittedContribution = Readonly<{
 /** Testkit's synthetic daemon identity; authors cannot supply or replace it. */
 const TESTKIT_SERVER_IDENTITY_ID = 'srv_plugin_testkit';
 let syntheticPluginGenerationSequence = 0;
+
+function readExpectedExecutionRouting(value: unknown): PluginMachineExecutionRoutingV1 | undefined {
+    if (value === undefined) return undefined;
+    const parsed = PluginMachineExecutionRoutingV1Schema.safeParse(value);
+    if (!parsed.success) {
+        throw createPluginActionHandlerNotStartedError({
+            code: 'plugin_action_execution_origin_invalid',
+            message: 'Expected target execution routing is invalid',
+        });
+    }
+    return Object.freeze(parsed.data);
+}
 
 function readExpectedExecutionOrigin(expectedExecutionOrigin: unknown): PluginMachineExecutionOriginV1 | undefined {
     if (expectedExecutionOrigin === undefined) return undefined;
@@ -427,13 +441,17 @@ export async function createPluginTestkit(
 ): Promise<PluginTestkit> {
     const manifestResult = parsePluginManifest(options.manifest);
     if (!manifestResult.ok) {
-        throw new TypeError(`Plugin test manifest is invalid: ${manifestResult.diagnostics.map((item) => item.message).join('; ')}`);
+        throw new TypeError(`Plugin test manifest is invalid: ${formatPluginManifestIngestionDiagnostics(manifestResult.diagnostics)}`);
     }
     if (!options.module || typeof options.module.activate !== 'function') {
         throw new TypeError('Plugin test module must export activate(api)');
     }
 
     const manifest = manifestResult.manifest;
+    const fixtureOperationSemantics = new Map<
+        TestkitFixtureProtocol,
+        ReadonlyMap<string, RehydratedPluginContributionPointOperationV1>
+    >();
     const rights = derivePluginDaemonContributionRegistrationRights(
         manifest.contributes as Readonly<Record<string, unknown>>,
     );
@@ -512,7 +530,7 @@ export async function createPluginTestkit(
      * target currentness/materialization resolver used for Action dispatch.
      * Neither Action input nor public testkit options can supply this origin.
      */
-    function resolveCurrentPluginExecutionOrigin(): PluginMachineExecutionOriginV1 | null {
+    function resolveCurrentPluginExecutionOrigin() {
         const materializationRef = resolveCurrentPluginMaterializationRef();
         if (!materializationRef) return null;
         const origin = PluginMachineMaterializationExecutionOriginV1Schema.safeParse({
@@ -635,8 +653,9 @@ export async function createPluginTestkit(
     function resolvePluginActionCaller(
         source: TestkitActionServiceSource,
     ): PluginActionCaller | null {
-        const materialization = resolveCurrentPluginMaterializationRef();
-        if (!materialization) return null;
+        const executionOrigin = resolveCurrentPluginExecutionOrigin();
+        if (!executionOrigin) return null;
+        const materialization = executionOrigin.materializationRef;
         const originSurface = source.surface === 'plugin'
             && source.caller?.kind === 'plugin'
             ? source.caller.originSurface
@@ -650,6 +669,7 @@ export async function createPluginTestkit(
             occurrenceId: syntheticOccurrenceId,
             sourceCustody: syntheticSourceCustody,
             materialization,
+            executionOrigin,
             ...(originSurface === undefined ? {} : { originSurface }),
         });
     }
@@ -744,11 +764,18 @@ export async function createPluginTestkit(
     function readFixtureOperationSemantics(
         protocol: TestkitFixtureProtocol,
     ): ReadonlyMap<string, RehydratedPluginContributionPointOperationV1> {
+        const admitted = fixtureOperationSemantics.get(protocol);
+        if (admitted) return admitted;
         const admittedProtocol = PluginContributionPointProtocolV1Schema.safeParse(protocol);
         if (!admittedProtocol.success) throw fixtureUnavailable();
         const semantics = rehydratePluginContributionPointSemanticsV1(admittedProtocol.data);
         if (!semantics) throw fixtureUnavailable();
-        return new Map(semantics.operations.map((operation) => [operation.role, operation]));
+        // The parsed manifest is immutable for this testkit occurrence, just
+        // like a production admission. Retain its executable parser pairs,
+        // not snapshots or handles: each read still checks currentness below.
+        const operations = new Map(semantics.operations.map((operation) => [operation.role, operation]));
+        fixtureOperationSemantics.set(protocol, operations);
+        return operations;
     }
 
     function createFixtureOperationHandle(
@@ -975,6 +1002,7 @@ export async function createPluginTestkit(
             admittedTargetedOperation?: Readonly<{
                 contributorOccurrenceId: string;
             }>,
+            expectedExecutionRouting?: PluginMachineExecutionRoutingV1,
         ): Promise<TestkitActionTargetInvocationResult> => {
             const caller = resolvePluginActionCaller(source);
             if (!caller) {
@@ -996,6 +1024,7 @@ export async function createPluginTestkit(
                 caller,
                 ...(captureExecutionOrigin ? { captureExecutionOrigin: true as const } : {}),
                 ...(expectedExecutionOrigin === undefined ? {} : { expectedExecutionOrigin }),
+                ...(expectedExecutionRouting === undefined ? {} : { expectedExecutionRouting }),
                 ...(admittedTargetedOperation === undefined
                     ? {}
                     : { admittedTargetedOperation }),
@@ -1053,6 +1082,8 @@ export async function createPluginTestkit(
                 signal,
                 true,
                 readExpectedExecutionOrigin(options?.expectedExecutionOrigin),
+                undefined,
+                readExpectedExecutionRouting(options?.expectedExecutionRouting),
             );
             if (!result.executionOrigin) {
                 throw new PluginError({
@@ -1114,6 +1145,7 @@ export async function createPluginTestkit(
                 Object.freeze({
                     contributorOccurrenceId: binding.contributorOccurrenceId,
                 }),
+                readExpectedExecutionRouting(options?.expectedExecutionRouting),
             );
             if (!result.executionOrigin) {
                 throw new PluginError({
@@ -1272,7 +1304,8 @@ export async function createPluginTestkit(
                 });
             }
             const requiresExecutionOrigin = targetInvocation.captureExecutionOrigin === true
-                || targetInvocation.expectedExecutionOrigin !== undefined;
+                || targetInvocation.expectedExecutionOrigin !== undefined
+                || targetInvocation.expectedExecutionRouting !== undefined;
             const beforeExecutionOrigin = requiresExecutionOrigin
                 ? resolveCurrentPluginExecutionOrigin()
                 : null;
@@ -1283,11 +1316,13 @@ export async function createPluginTestkit(
                 });
             }
             if (beforeExecutionOrigin !== null
-                && targetInvocation.expectedExecutionOrigin !== undefined
-                && !arePluginMachineExecutionOriginsEqual(
-                    targetInvocation.expectedExecutionOrigin,
-                    beforeExecutionOrigin,
-                )) {
+                && ((targetInvocation.expectedExecutionOrigin !== undefined
+                    && !arePluginMachineExecutionOriginsEqual(targetInvocation.expectedExecutionOrigin, beforeExecutionOrigin))
+                    || (targetInvocation.expectedExecutionRouting !== undefined
+                        && !arePluginMachineExecutionRoutingsEqual(
+                            targetInvocation.expectedExecutionRouting,
+                            getPluginMachineExecutionRouting(beforeExecutionOrigin),
+                        )))) {
                 throw createPluginActionHandlerNotStartedError({
                     code: 'plugin_action_execution_origin_mismatch',
                     message: 'Expected target execution origin does not match the current target',

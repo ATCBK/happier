@@ -36,13 +36,14 @@ export function buildConnectedAccountRequestAuthClientSource(
   input: ConnectedAccountRequestAuthClientSourceParams,
 ): string {
   const capabilityPathEnv = validateEnvName(input.capabilityPathEnv, 'capability-path');
-  const requestTimeoutMs = input.requestTimeoutMs ?? 30_000;
-  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 120_000) {
+  const requestTimeoutMs = input.requestTimeoutMs;
+  if (requestTimeoutMs !== undefined
+    && (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 120_000)) {
     throw new Error('Invalid request-auth timeout');
   }
   // The host recovery owner allows 300 seconds for the provider-owned refresh/evidence
-  // sequence. Keep the generated transport just above that owner without extending the
-  // ordinary lookup/quota budget.
+  // sequence. Keep the recovery transport just above that owner. Ordinary
+  // requests inherit caller cancellation unless an explicit budget is supplied.
   const authFailureRequestTimeoutMs = input.authFailureRequestTimeoutMs ?? 310_000;
   if (
     !Number.isSafeInteger(authFailureRequestTimeoutMs)
@@ -358,7 +359,7 @@ function requestAuthReadTransportTuple() {
 }
 
 function requestAuthComposeSignal(signal, timeoutMs) {
-  const timeout = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+  const timeout = timeoutMs !== undefined && typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
     ? AbortSignal.timeout(timeoutMs)
     : null;
   if (signal && timeout && typeof AbortSignal.any === "function") return AbortSignal.any([signal, timeout]);

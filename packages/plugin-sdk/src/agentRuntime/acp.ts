@@ -18,6 +18,7 @@ import type {
 } from './session.js';
 import type { AgentSessionConversationRollbackControl } from './controls.js';
 import type {
+  AgentExecutionRunConversationRuntimeV1,
   AgentExecutionRunOpenRequest,
   AgentExecutionRunRuntime,
 } from './executionRun.js';
@@ -262,6 +263,11 @@ export interface AgentAcpRuntimeComposer {
     request: AgentExecutionRunOpenRequest,
     options: AgentAcpRuntimeOptions,
   ): Promise<AgentExecutionRunRuntime>;
+  /** Optional retained detached conversation; the host submits all inputs after watch. */
+  openExecutionRunConversationV1?(
+    request: AgentExecutionRunOpenRequest,
+    options: AgentAcpRuntimeOptions,
+  ): Promise<AgentExecutionRunConversationRuntimeV1>;
 }
 
 export interface AgentRuntimeProtocolComposers {

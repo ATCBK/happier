@@ -1,0 +1,21 @@
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import { TriageEntryRefV1Schema as canonical, type TriageEntryRefV1 as CanonicalRef } from '@happier-dev/protocol/tasks/entryRefV1';
+import type { TriageEntryRefV1 } from './index.js';
+
+import * as sdkProtocol from './index.js';
+import { TriageEntryRefV1Schema as featureSchema, buildTriageEntryRouteSegmentV1, readTriageEntryRouteSegmentV1 } from '@happier-dev/triage-protocol/v1';
+
+describe('the shared Task entry reference publication', () => {
+  it('publishes one parser through Protocol, the SDK and Triage without a feature import in Protocol', () => {
+    expect('TriageEntryRefV1Schema' in sdkProtocol).toBe(true);
+    expect(Reflect.get(sdkProtocol, 'TriageEntryRefV1Schema')).toBe(canonical);
+    expect(featureSchema).toBe(canonical);
+    expectTypeOf<TriageEntryRefV1>().toEqualTypeOf<CanonicalRef>();
+    const entry = canonical.parse({
+      source: { pluginId: 'acme.tasks', localId: 'work-items' },
+      kindId: 'task', collisionScope: 'https://example.test\u001forg-1', entryId: '42/é',
+    });
+    expect(readTriageEntryRouteSegmentV1(buildTriageEntryRouteSegmentV1(entry))).toEqual(entry);
+    expect(featureSchema.parse(JSON.parse(JSON.stringify(entry)))).toEqual(entry);
+  });
+});

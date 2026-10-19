@@ -1,4 +1,5 @@
 import type { PluginDiagnosticData } from '../diagnostics.js';
+import type { SessionGoalControlFailureV1 } from '../actions/dtos/pluginActionDtoSupport.generated.js';
 import type { SkillCatalogItemV1 } from '@happier-dev/protocol/runtime/catalog/skills';
 import type {
   AgentSessionExecutionRunRuntimeFactoryV1,
@@ -89,11 +90,15 @@ export type AgentSessionGoalCommittedResult =
   | Readonly<{ status: 'applied' | 'unchanged'; revision: string }>
   | Readonly<{ status: 'pending'; operationId: string; diagnostic?: PluginDiagnosticData }>;
 
-export type AgentSessionGoalRefreshResult = AgentSessionGoalCommittedResult | AgentSessionControlFailure;
+export type GoalControlFailure = AgentSessionControlFailure & Readonly<{
+  goalControlFailure?: SessionGoalControlFailureV1;
+}>;
+
+export type AgentSessionGoalRefreshResult = AgentSessionGoalCommittedResult | GoalControlFailure;
 export type AgentSessionGoalMutationResult =
   | AgentSessionGoalCommittedResult
   | Readonly<{ status: 'scheduledForResume'; revision: string }>
-  | AgentSessionControlFailure;
+  | GoalControlFailure;
 
 export type AgentSessionGoalControlContext = AgentSessionControlContext & Readonly<{
   goalSource: WorkStatePublisher;

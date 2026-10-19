@@ -88,6 +88,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -102,6 +103,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "description": "Provides the first-party local Sapling SCM backend with audited limited capabilities.",

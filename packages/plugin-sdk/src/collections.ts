@@ -22,7 +22,8 @@ import type { ProtocolComposableSchema, ProtocolSchemaOutput } from './protocol/
 
 /**
  * Target-artifact code for one static Collection migration identity. The host
- * supplies only an opened, source-contract-validated value; an author cannot
+ * supplies an opened, source-contract-validated value and its validated
+ * physical row revision; an author cannot
  * name Account, collection, contract, storage, or writer authority here. The
  * host may invoke the callback at least once while preparing or retrying a
  * candidate, until that exact staged output is accepted, so callbacks must be
@@ -35,7 +36,7 @@ export type PluginAccountCollectionMigration<
     id: string;
     fromSchemaVersion: number;
     toSchemaVersion: number;
-    migrate: (value: TSource) => TTarget | Promise<TTarget>;
+    migrate: (value: TSource, context: Readonly<{ currentRevision: number }>) => TTarget | Promise<TTarget>;
 }>;
 
 /**

@@ -22,6 +22,8 @@ import type { PluginConnectedAccountRuntime } from '../../services/index.js';
 import type { VoiceProvidersRegistrationApi } from '../../voice/projections.js';
 import type { PluginCaptureSourceRuntime } from '../../captureSources.js';
 import type { PluginProjectNativeAdapterRuntimeV1 } from '../../projectNativeAdapters.js';
+import type { PluginWorkItemsRuntime } from '../../workItems.js';
+import { PluginWorkItemsResolveRequestV1Schema, PluginWorkItemsResolveResultV1Schema, PluginWorkItemsFindLinkedRequestV1Schema, PluginWorkItemsFindLinkedResultV1Schema, PluginWorkItemsWatchRequestV1Schema } from '@happier-dev/protocol/plugins/contributions/workItems';
 import type { ManagedServiceNativeLifecycleV1 } from '../../managed-services/contract.js';
 
 export { captureStaticRegistrationMethod };
@@ -812,6 +814,30 @@ export function snapshotStaticRegistrationValue<
 ): PluginRegistrationValueByFamily[TFamily] {
     const policyFamily: PluginRegistrationFamily = family;
     switch (policyFamily) {
+        case 'workItems': {
+            const receiver = requireObject(value, 'Work items runtime');
+            const resolve = captureStaticRegistrationMethod<PluginWorkItemsRuntime['resolve']>(receiver, 'resolve', 'Work items runtime.resolve', true)!;
+            const findLinked = captureStaticRegistrationMethod<NonNullable<PluginWorkItemsRuntime['findLinked']>>(receiver, 'findLinked', 'Work items runtime.findLinked', false);
+            const watch = captureStaticRegistrationMethod<NonNullable<PluginWorkItemsRuntime['watch']>>(receiver, 'watch', 'Work items runtime.watch', false);
+            const runtime: PluginWorkItemsRuntime = {
+                async resolve(request, context) {
+                    const input = PluginWorkItemsResolveRequestV1Schema.parse(request);
+                    const result = PluginWorkItemsResolveResultV1Schema.parse(await resolve(input, context));
+                    const ids = new Set(input.itemIds);
+                    if (Object.keys(result).some(id => !ids.has(id))) throw new TypeError('Work item resolver returned an unrequested item');
+                    return Object.freeze(Object.fromEntries(input.itemIds.map(id => [id, Object.hasOwn(result, id) ? result[id]! : null])));
+                },
+                ...(findLinked ? { async findLinked(request: Parameters<NonNullable<PluginWorkItemsRuntime['findLinked']>>[0], context: Parameters<NonNullable<PluginWorkItemsRuntime['findLinked']>>[1]) {
+                    return Object.freeze(PluginWorkItemsFindLinkedResultV1Schema.parse(await findLinked(PluginWorkItemsFindLinkedRequestV1Schema.parse(request), context)));
+                } } : {}),
+                ...(watch ? { watch(request: Parameters<NonNullable<PluginWorkItemsRuntime['watch']>>[0], onChange: () => void) {
+                    const cleanup = watch(PluginWorkItemsWatchRequestV1Schema.parse(request), onChange);
+                    if (typeof cleanup !== 'function') throw new TypeError('Work items runtime.watch must return cleanup');
+                    return cleanup;
+                } } : {}),
+            };
+            return Object.freeze(runtime) as PluginRegistrationValueByFamily[TFamily];
+        }
         case 'dragSources': {
             const receiver = requireObject(value, 'Drag source runtime');
             const toComposerAttachment = captureStaticRegistrationMethod(receiver, 'toComposerAttachment', 'Drag source runtime.toComposerAttachment', false);

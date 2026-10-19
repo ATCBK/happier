@@ -15,7 +15,7 @@ function publicProjectionSource(protocol) {
   const declarations = file.statements.filter(node => ts.isTypeAliasDeclaration(node) && helpers.has(node.name.text));
   assert.equal(declarations.length, helpers.size);
   const printer = ts.createPrinter();
-  return `import type { z } from 'zod';\nimport type { JsonValue } from '${protocol}/json/strictJsonValue.js';\nimport type { PluginJsonValueV2 } from '${protocol}/plugins/contributions/jsonSchema.js';\n`
+  return `import type { z } from 'zod/mini';\nimport type { JsonValue } from '${protocol}/json/strictJsonValue.js';\nimport type { PluginJsonValueV2 } from '${protocol}/plugins/contributions/jsonSchema.js';\n`
     + declarations.map(node => (['PublicValue', 'Failures'].includes(node.name.text) ? 'export ' : '')
       + printer.printNode(ts.EmitHint.Unspecified, node, file)).join('\n');
 }
@@ -62,7 +62,7 @@ test('public Action correspondence preserves empty objects, primitives, brands a
   writeFileSync(resolve(root, 'publicProjection.ts'), publicProjectionSource(protocol));
   const fixture = resolve(root, 'leaves.ts');
   writeFileSync(fixture, `
-    import type { z } from 'zod';
+    import type { z } from 'zod/mini';
     import type { Failures, PublicValue } from './publicProjection.js';
     import type { JsonValue } from '${protocol}/json/strictJsonValue.js';
     import type { PluginJsonValueV2 } from '${protocol}/plugins/contributions/jsonSchema.js';
@@ -79,7 +79,7 @@ test('public Action correspondence preserves empty objects, primitives, brands a
     type ReadonlyJson = Assert<Equal<PublicValue<JsonValue, true>, JsonValue>>;
     type InputJson = Assert<Equal<PublicValue<PluginJsonValueV2, true>, JsonValue>>;
     type ResultJson = Assert<Equal<PublicValue<PluginJsonValueV2, false>, PluginJsonValueV2>>;
-    type OpaqueSchema = Assert<Equal<PublicValue<z.ZodType, true>, unknown>>;
+    type OpaqueSchema = Assert<Equal<PublicValue<z.ZodMiniType, true>, unknown>>;
     // Deliberately invalid boundary declarations: the prior producer rejected whole-map any/unknown.
     type RejectDtoAny = Assert<Equal<Failures<{ action: { count: number } }, { action: any }, false>, 'action'>>;
     type RejectSchemaAny = Assert<Equal<Failures<{ action: any }, { action: { count: number } }, false>, 'action'>>;

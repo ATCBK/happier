@@ -664,6 +664,7 @@ const hostMethodPolicies = {
     settleEphemeralInput: 'settleEphemeralInput',
     activeComposer: 'activeComposer',
     readComposer: 'readComposer',
+    readDiscussionComposer: 'readComposer',
     watchComposer: 'watchComposer',
     applyComposer: 'applyComposer',
     focusComposer: 'focusComposer',
@@ -1388,10 +1389,14 @@ async function createPluginUiTestkitInternal<TSurface>(
                 if (!result.success) throw fixtureError('invalid_payload', 'activeComposer result is invalid.');
                 return requireTransportJson(result.data, 'activeComposer result');
             }
-            case 'readComposer': {
+            case 'readComposer':
+            case 'readDiscussionComposer': {
                 if (!handlers.readComposer) throw fixtureError('unsupported_method', 'readComposer is not installed.');
                 const payload = PluginUiReadComposerRequestV1Schema.safeParse(message.payload);
                 if (!payload.success) throw fixtureError('invalid_payload', 'readComposer payload is invalid.');
+                if (message.method === 'readDiscussionComposer' && payload.data.ref.kind !== 'discussion') {
+                    throw fixtureError('invalid_payload', 'readDiscussionComposer requires a Discussion scope.');
+                }
                 const result = PluginUiReadComposerResultV1Schema.safeParse(
                     await handlers.readComposer({ ref: payload.data.ref, signal }),
                 );

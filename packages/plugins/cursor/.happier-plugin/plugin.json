@@ -114,7 +114,39 @@
             "guideUrl": "https://cursor.com/docs/cli/installation",
             "managed": null,
             "manual": {
-              "kind": "vendor_recipe"
+              "kind": "vendor_recipe",
+              "recipes": {
+                "darwin": [
+                  {
+                    "args": [
+                      "-lc",
+                      "curl -fsSL https://cursor.com/install | bash"
+                    ],
+                    "cmd": "bash"
+                  }
+                ],
+                "linux": [
+                  {
+                    "args": [
+                      "-lc",
+                      "curl -fsSL https://cursor.com/install | bash"
+                    ],
+                    "cmd": "bash"
+                  }
+                ],
+                "win32": [
+                  {
+                    "args": [
+                      "-NoProfile",
+                      "-ExecutionPolicy",
+                      "Bypass",
+                      "-Command",
+                      "irm 'https://cursor.com/install?win32=true' | iex"
+                    ],
+                    "cmd": "powershell.exe"
+                  }
+                ]
+              }
             },
             "nativeUpdate": {
               "args": [
@@ -267,6 +299,7 @@
         "version": 1
       }
     ],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -297,6 +330,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "displayName": "Cursor",

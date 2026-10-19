@@ -66,6 +66,13 @@ export type SessionAgentTransitionActionResultById = {
         status: 'indeterminate';
     };
     readonly "session.agent.transition": {
+        type: 'accepted';
+        localId: string;
+    } | {
+        type: 'rejected';
+        code: 'target_unavailable' | 'unsupported_operation' | 'forbidden' | 'same_target' | 'stale_selection' | 'source_not_idle' | 'source_stop_failed';
+        sourceEffect: 'none';
+    } | {
         type: 'partially_applied';
         localId: string;
         applied: 'source_stopped';
@@ -75,13 +82,6 @@ export type SessionAgentTransitionActionResultById = {
         localId: string;
         applied: 'current_view_committed';
         code: 'divider_unavailable' | 'target_start_failed' | 'input_admission_failed' | 'input_rejected';
-    } | {
-        type: 'accepted';
-        localId: string;
-    } | {
-        type: 'rejected';
-        code: 'target_unavailable' | 'unsupported_operation' | 'forbidden' | 'same_target' | 'stale_selection' | 'source_not_idle' | 'source_stop_failed';
-        sourceEffect: 'none';
     } | {
         type: 'outcome_unknown';
         localId: string;

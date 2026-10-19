@@ -49,7 +49,11 @@
             }
           },
           "tools": {
-            "delivery": "native_mcp"
+            "delivery": "native_mcp",
+            "mcpToolControl": {
+              "approval": "host",
+              "off": "blocked"
+            }
           }
         },
         "catalog": {
@@ -216,6 +220,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -311,6 +316,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "displayName": "Gemini",

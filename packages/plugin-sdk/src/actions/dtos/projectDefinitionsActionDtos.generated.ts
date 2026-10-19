@@ -11,6 +11,7 @@ export type ProjectDefinitionsActionInputById = {
             machineId: string;
             rootPath: string;
         };
+        reviewSetupConsent?: true | undefined;
     };
     readonly "projects.manifest.update": {
         workspace: {
@@ -337,6 +338,15 @@ export type ProjectDefinitionsActionResultById = {
         setupReview?: {
             reviewedEffect: JsonValue;
             reviewedEffectDigest: string;
+        } | undefined;
+        setupConsent?: {
+            kind: 'admitted';
+        } | {
+            kind: 'required';
+            code: 'project_setup_consent_required' | 'project_setup_effect_changed';
+        } | {
+            kind: 'unavailable';
+            code: string;
         } | undefined;
     };
     readonly "projects.manifest.update": {

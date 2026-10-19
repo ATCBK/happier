@@ -121,6 +121,36 @@ export type LocalServicesPreviewActionResultById = {
                         tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sessionId?: string | undefined;
+                    serviceTarget?: {
+                        machineId: string;
+                        kind: 'managed_service';
+                        managedServiceId: string;
+                        cwd: string;
+                        declaration: {
+                            workspaceRefId: string;
+                            selection: {
+                                kind: 'manifest';
+                                name: string;
+                            } | {
+                                kind: 'native';
+                                source: {
+                                    kind: 'native';
+                                    tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                    file: string;
+                                    target: string;
+                                } | {
+                                    kind: 'pluginNative';
+                                    adapter: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    file: string;
+                                    target: string;
+                                };
+                            };
+                        };
+                        workspaceId?: string | undefined;
+                    } | undefined;
                 } | undefined;
             };
             accessUrl: string | null;
@@ -234,6 +264,36 @@ export type LocalServicesPreviewActionResultById = {
                         tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sessionId?: string | undefined;
+                    serviceTarget?: {
+                        machineId: string;
+                        kind: 'managed_service';
+                        managedServiceId: string;
+                        cwd: string;
+                        declaration: {
+                            workspaceRefId: string;
+                            selection: {
+                                kind: 'manifest';
+                                name: string;
+                            } | {
+                                kind: 'native';
+                                source: {
+                                    kind: 'native';
+                                    tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                    file: string;
+                                    target: string;
+                                } | {
+                                    kind: 'pluginNative';
+                                    adapter: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    file: string;
+                                    target: string;
+                                };
+                            };
+                        };
+                        workspaceId?: string | undefined;
+                    } | undefined;
                 } | undefined;
             }[];
             diagnostics: Record<string, unknown>[];
@@ -325,6 +385,36 @@ export type LocalServicesPreviewActionResultById = {
                             tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                         } | undefined;
                         sessionId?: string | undefined;
+                        serviceTarget?: {
+                            machineId: string;
+                            kind: 'managed_service';
+                            managedServiceId: string;
+                            cwd: string;
+                            declaration: {
+                                workspaceRefId: string;
+                                selection: {
+                                    kind: 'manifest';
+                                    name: string;
+                                } | {
+                                    kind: 'native';
+                                    source: {
+                                        kind: 'native';
+                                        tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                        file: string;
+                                        target: string;
+                                    } | {
+                                        kind: 'pluginNative';
+                                        adapter: {
+                                            pluginId: string;
+                                            localId: string;
+                                        };
+                                        file: string;
+                                        target: string;
+                                    };
+                                };
+                            };
+                            workspaceId?: string | undefined;
+                        } | undefined;
                     } | undefined;
                 };
                 accessUrl: string | null;
@@ -440,6 +530,36 @@ export type LocalServicesPreviewActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    machineId: string;
+                    kind: 'managed_service';
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | undefined;
         }[];
         diagnostics: Record<string, unknown>[];
@@ -531,6 +651,36 @@ export type LocalServicesPreviewActionResultById = {
                         tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sessionId?: string | undefined;
+                    serviceTarget?: {
+                        machineId: string;
+                        kind: 'managed_service';
+                        managedServiceId: string;
+                        cwd: string;
+                        declaration: {
+                            workspaceRefId: string;
+                            selection: {
+                                kind: 'manifest';
+                                name: string;
+                            } | {
+                                kind: 'native';
+                                source: {
+                                    kind: 'native';
+                                    tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                    file: string;
+                                    target: string;
+                                } | {
+                                    kind: 'pluginNative';
+                                    adapter: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    file: string;
+                                    target: string;
+                                };
+                            };
+                        };
+                        workspaceId?: string | undefined;
+                    } | undefined;
                 } | undefined;
             };
             accessUrl: string | null;
@@ -649,6 +799,36 @@ export type LocalServicesPreviewActionResultById = {
                         tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sessionId?: string | undefined;
+                    serviceTarget?: {
+                        machineId: string;
+                        kind: 'managed_service';
+                        managedServiceId: string;
+                        cwd: string;
+                        declaration: {
+                            workspaceRefId: string;
+                            selection: {
+                                kind: 'manifest';
+                                name: string;
+                            } | {
+                                kind: 'native';
+                                source: {
+                                    kind: 'native';
+                                    tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                    file: string;
+                                    target: string;
+                                } | {
+                                    kind: 'pluginNative';
+                                    adapter: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    file: string;
+                                    target: string;
+                                };
+                            };
+                        };
+                        workspaceId?: string | undefined;
+                    } | undefined;
                 } | undefined;
             }[];
             diagnostics: Record<string, unknown>[];
@@ -740,6 +920,36 @@ export type LocalServicesPreviewActionResultById = {
                             tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                         } | undefined;
                         sessionId?: string | undefined;
+                        serviceTarget?: {
+                            machineId: string;
+                            kind: 'managed_service';
+                            managedServiceId: string;
+                            cwd: string;
+                            declaration: {
+                                workspaceRefId: string;
+                                selection: {
+                                    kind: 'manifest';
+                                    name: string;
+                                } | {
+                                    kind: 'native';
+                                    source: {
+                                        kind: 'native';
+                                        tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                        file: string;
+                                        target: string;
+                                    } | {
+                                        kind: 'pluginNative';
+                                        adapter: {
+                                            pluginId: string;
+                                            localId: string;
+                                        };
+                                        file: string;
+                                        target: string;
+                                    };
+                                };
+                            };
+                            workspaceId?: string | undefined;
+                        } | undefined;
                     } | undefined;
                 };
                 accessUrl: string | null;

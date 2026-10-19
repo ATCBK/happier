@@ -1,4 +1,5 @@
 export type { PluginScmRegistrationApi } from './projections.js';
+export type { ProtocolScmHostingProviderKind } from './projections.js';
 export { SCM_COMMIT_MESSAGE_MAX_LENGTH } from './projections.js';
 export { SCM_COMMIT_PATCH_MAX_COUNT } from './projections.js';
 export { SCM_COMMIT_PATCH_MAX_LENGTH } from './projections.js';
@@ -58,6 +59,7 @@ export type { ScmHistoryEntriesOutputV1 } from './projections.js';
 export type { ScmHistoryEntriesRequest } from './projections.js';
 export type { ScmHistoryEntriesResponse } from './projections.js';
 export { ScmHistoryEntriesResponseSchema } from './projections.js';
+export { ScmHostingProviderKindProtocolSchema } from './projections.js';
 export type { ScmHostingRepositoryAuthSummary } from './projections.js';
 export type { ScmHostingRepositoryDescribePublishTargetsRequest } from './projections.js';
 export type { ScmHostingRepositoryDescribePublishTargetsResponse } from './projections.js';

@@ -183,7 +183,7 @@ describe('declarative plugin roles', () => {
             name: 'Security reviewer', instructions: 'Review security boundaries.',
             engine: { agentTargetKey: 'agent:codex', effort: 'high' },
             runsAs: { kind: 'background_run' as const, intent: 'review' as const },
-            workspaceWrites: 'deny' as const, secondOpinion: 'off' as const, enabled: true,
+            workspaceWrites: 'deny' as const, secondOpinion: 'off' as const, canDelegateToOtherRoles: true, enabled: true,
         };
         const plugin = definePlugin({
             id: 'com.acme.roles', version: '1.0.0', displayName: 'Review roles',
@@ -1401,7 +1401,7 @@ describe('definePlugin', () => {
                     'issue-control': defineComposerControl({
                         label: 'Issue',
                         icon: 'error',
-                        scopes: ['workflowAuthoring'],
+                        scopes: ['workflowAuthoring', 'discussion'],
                         interaction: {
                             kind: 'attachmentPicker',
                             attachment: 'issue',
@@ -1429,7 +1429,7 @@ describe('definePlugin', () => {
                     warning: defineComposerRegion({
                         placement: 'beforeComposer',
                         renderer: 'warning-surface',
-                        scopes: ['workflowAuthoring'],
+                        scopes: ['workflowAuthoring', 'discussion'],
                     }),
                 },
             },
@@ -1488,7 +1488,7 @@ describe('definePlugin', () => {
             id: 'issue-control',
             label: 'Issue',
             icon: 'error',
-            scopes: ['workflowAuthoring'],
+            scopes: ['workflowAuthoring', 'discussion'],
             interaction: {
                 kind: 'attachmentPicker',
                 attachment: 'issue',
@@ -1515,7 +1515,7 @@ describe('definePlugin', () => {
             id: 'warning',
             placement: 'beforeComposer',
             renderer: { renderer: 'warning-surface' },
-            scopes: ['workflowAuthoring'],
+            scopes: ['workflowAuthoring', 'discussion'],
         }]);
         const emitted = JSON.parse(JSON.stringify(plugin.manifest));
         expect(emitted.contributes.composerReferences).toEqual(plugin.manifest.contributes.composerReferences);

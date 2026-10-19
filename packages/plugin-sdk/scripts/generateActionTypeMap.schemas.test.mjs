@@ -1,12 +1,52 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import ts from 'typescript';
 import { deriveActionDtoSchemas } from './deriveActionDtos.mjs';
 import { prepareActionTypeMap } from './generateActionTypeMap.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
+
+test('literal Action rows derive the plugin surface input and output instead of host schemas', async t => {
+  const cache = resolve('packages/plugin-sdk/node_modules/.cache');
+  mkdirSync(cache, { recursive: true });
+  const root = mkdtempSync(resolve(cache, 'schema-plugin-surface-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const actions = resolve(root, 'packages/protocol/src/actions');
+  mkdirSync(actions, { recursive: true });
+  writeFileSync(resolve(actions, 'actionIds.ts'), "export const ACTION_ID_FAMILIES_V1 = { inventory: ['inventory.list'] } as const;");
+  writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
+  writeFileSync(resolve(actions, 'actionSpecs.ts'), `import { z } from 'zod/mini';
+    const HostInput = z.strictObject({ query: z.string(), hostRevision: z.number() });
+    const PluginInput = z.strictObject({ query: z.string() });
+    const HostOutput = z.strictObject({ count: z.number(), privateReceipt: z.string() });
+    const PluginOutput = z.strictObject({ count: z.number() });
+    export const ACTION_SPECS = [{ id: 'inventory.list', inputSchema: HostInput, outputSchema: HostOutput,
+      surfaceBindings: { plugin: { inputSchema: PluginInput, outputSchema: PluginOutput } } }];`);
+  const derived = await deriveActionDtoSchemas({ repoRoot: root, onlyFamilies: ['inventory'] });
+  const dto = derived.outputs.get(resolve(actions, 'inventoryActionDtos.ts'));
+  const source = ts.createSourceFile('dto.ts', dto, ts.ScriptTarget.ES2022, true);
+  for (const [alias, field] of [['InventoryActionInputById', 'query'], ['InventoryActionResultById', 'count']]) {
+    const row = source.statements.find(node => ts.isTypeAliasDeclaration(node) && node.name.text === alias)
+      .type.members.find(member => member.name.text === 'inventory.list').type;
+    assert.deepEqual(row.members.map(member => member.name.text), [field]);
+  }
+});
+
+test('Session exchange public DTO excludes host-only observation revisions in every decision', async () => {
+  const derived = await deriveActionDtoSchemas({ repoRoot: process.cwd(), onlyFamilies: ['session_control'] });
+  const dto = [...derived.outputs.values()][0];
+  const source = ts.createSourceFile('dto.ts', dto, ts.ScriptTarget.ES2022, true);
+  const input = source.statements.find(node => ts.isTypeAliasDeclaration(node) && node.name.text === 'SessionControlActionInputById')
+    .type.members.find(member => member.name.text === 'session.exchange.control').type;
+  assert.equal(ts.isUnionTypeNode(input), true, 'control decisions retain their discriminated union');
+  for (const arm of input.types) {
+    assert.equal(arm.members.some(member => member.name.text === 'observedRevision'), false,
+      'the strict plugin transport refuses the host-only observation operand');
+  }
+});
 
 for (const dialect of ['zod', 'zod/mini']) test(`tuple-backed ${dialect} Action specs derive their keyed canonical input and output schemas`, async t => {
   const cache = resolve('packages/plugin-sdk/node_modules/.cache');
@@ -70,6 +110,44 @@ for (const dialect of ['zod', 'zod/mini']) test(`closed ${dialect} schema DTOs c
   assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
 });
 
+test('namespace-imported Mini Action schemas retain concrete values in derived DTOs', async t => {
+  const cache = resolve('packages/plugin-sdk/node_modules/.cache');
+  mkdirSync(cache, { recursive: true });
+  const root = mkdtempSync(resolve(cache, 'schema-mini-namespace-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const actions = resolve(root, 'packages/protocol/src/actions');
+  mkdirSync(actions, { recursive: true });
+  writeFileSync(resolve(actions, 'actionIds.ts'), "export const ACTION_ID_FAMILIES_V1 = { inventory: ['inventory.list'] } as const;");
+  writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
+  writeFileSync(resolve(actions, 'actionSpecs.ts'), `import * as z from 'zod/mini';
+    export const ACTION_SPECS = [{ id: 'inventory.list',
+      inputSchema: z.catchall(z.object({ label: z.string() }), z.never()),
+      outputSchema: z.catchall(z.object({ label: z.string() }), z.never()) }];`);
+  const derived = await deriveActionDtoSchemas({ repoRoot: root, onlyFamilies: ['inventory'] });
+  const dto = derived.outputs.get(resolve(actions, 'inventoryActionDtos.ts'));
+  assert.match(dto, /label: string/u);
+});
+
+test('frozen Action schema inputs preserve symlinked dependency resolution', async t => {
+  const root = mkdtempSync(resolve(tmpdir(), 'schema-symlinked-actions-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  symlinkSync(resolve('node_modules'), resolve(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  const actions = resolve(root, 'packages/protocol/src/actions');
+  mkdirSync(actions, { recursive: true });
+  writeFileSync(resolve(actions, 'actionIds.ts'), "export const ACTION_ID_FAMILIES_V1 = { inventory: ['inventory.list'] } as const;");
+  writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
+  writeFileSync(resolve(actions, 'actionSpecs.ts'), `import * as z from 'zod/mini';
+    export const ACTION_SPECS = [{ id: 'inventory.list',
+      inputSchema: z.object({ label: z.string() }),
+      outputSchema: z.object({ count: z.number() }) }];`);
+  const derived = await deriveActionDtoSchemas({ repoRoot: root, onlyFamilies: ['inventory'] });
+  const dto = derived.outputs.get(resolve(actions, 'inventoryActionDtos.ts'));
+  assert.ok(dto, 'the symlinked dependency must retain concrete schema DTOs');
+  assert.match(dto, /label: string/u);
+  assert.match(dto, /count: number/u);
+  assert.doesNotMatch(dto, /\b(?:any|unknown)\b/u);
+});
+
 test('multi-argument family factories derive imported canonical schema maps without metadata evaluation', async t => {
   const cache = resolve('packages/plugin-sdk/node_modules/.cache');
   mkdirSync(cache, { recursive: true });
@@ -78,7 +156,7 @@ test('multi-argument family factories derive imported canonical schema maps with
   const actions = resolve(root, 'packages/protocol/src/actions');
   mkdirSync(actions, { recursive: true });
   writeFileSync(resolve(actions, 'actionIds.ts'), `export const ACTION_ID_FAMILIES_V1 = {
-    registries: ['registries.sources.list'], skills: ['skills.create']
+    registries: ['registries.sources.list'], skills: ['skills.create', 'skills.inspect']
   } as const;`);
   writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
   writeFileSync(resolve(actions, 'actionSpecs.ts'), `import { REGISTRY_ACTION_SPECS_V1 } from './registries.js';
@@ -86,9 +164,11 @@ test('multi-argument family factories derive imported canonical schema maps with
     export const ACTION_SPECS = [...REGISTRY_ACTION_SPECS_V1, ...SKILL_ACTION_SPECS_V1];`);
   writeFileSync(resolve(actions, 'schemas.ts'), `import { z } from 'zod';
     export const INPUTS = { 'registries.sources.list': z.object({ kind: z.string().optional() }).strict(),
-      'skills.create': z.object({ files: z.array(z.object({ path: z.string(), unixMode: z.number().optional() }).strict()) }).strict() };
+      'skills.create': z.object({ files: z.array(z.object({ path: z.string(), unixMode: z.number().optional() }).strict()) }).strict(),
+      'skills.inspect': z.object({ skillId: z.string() }).strict() };
     export const OUTPUTS = { 'registries.sources.list': z.object({ revision: z.number() }).strict(),
-      'skills.create': z.object({ skillId: z.string() }).strict() };`);
+      'skills.create': z.object({ skillId: z.string() }).strict(),
+      'skills.inspect': z.object({ updatedAt: z.number() }).strict() };`);
   writeFileSync(resolve(actions, 'registries.ts'), `import { INPUTS as inputs, OUTPUTS as outputs } from './schemas.js';
     function registrySpec(id: keyof typeof inputs, title: string, options: { write?: boolean } = {}) {
       throw new Error('Runtime spec metadata must never execute during derivation');
@@ -100,7 +180,13 @@ test('multi-argument family factories derive imported canonical schema maps with
       throw new Error('Runtime spec metadata must never execute during derivation');
       return { id, title, sideEffectClass: read ? 'read' : 'write', inputSchema: inputs[id], outputSchema: outputs[id] };
     }
-    export const SKILL_ACTION_SPECS_V1 = [{ ...skillSpec('skills.create', 'Create skill', false) }];`);
+    function skillMetadata(id: keyof typeof inputs, title: string, read = false) {
+      throw new Error('Runtime spec metadata must never execute during derivation');
+      return { id, title, sideEffectClass: read ? 'read' : 'write' };
+    }
+    export const SKILL_ACTION_SPECS_V1 = [{ ...skillSpec('skills.create', 'Create skill', false) },
+      { ...skillMetadata('skills.inspect', 'Inspect skill', true),
+        inputSchema: inputs['skills.inspect'], outputSchema: outputs['skills.inspect'] }];`);
   const derived = await deriveActionDtoSchemas({ repoRoot: root, onlyFamilies: ['registries', 'skills'] });
   const registry = derived.outputs.get(resolve(actions, 'registriesActionDtos.ts'));
   const skill = derived.outputs.get(resolve(actions, 'skillsActionDtos.ts'));
@@ -111,6 +197,12 @@ test('multi-argument family factories derive imported canonical schema maps with
   assert.match(skill, /path: string/u);
   assert.match(skill, /unixMode\?: number/u);
   assert.match(skill, /skillId: string/u);
+  const source = ts.createSourceFile('dto.ts', skill, ts.ScriptTarget.ES2022, true);
+  const inspectionField = (alias, field) => source.statements
+    .find(node => ts.isTypeAliasDeclaration(node) && node.name.text === alias).type.members
+    .find(member => member.name.text === 'skills.inspect').type.members.find(member => member.name.text === field)?.type.kind;
+  assert.equal(inspectionField('SkillsActionInputById', 'skillId'), ts.SyntaxKind.StringKeyword);
+  assert.equal(inspectionField('SkillsActionResultById', 'updatedAt'), ts.SyntaxKind.NumberKeyword);
 });
 
 test('retained registry install publishes a concrete current author input', async () => {
@@ -435,11 +527,11 @@ test('versioned imported Action spec owners supply generated DTO schemas', async
     export const ACTION_SPECS = [...widgetSpecs];
   `);
   writeFileSync(resolve(actions, 'specs/widgets.ts'), `
-    import { z } from 'zod';
+    import { z } from 'zod/mini';
     export const WIDGET_INSTANCE_ACTION_SPECS_V1 = [{
       id: 'widgets.catalog.list',
-      inputSchema: z.object({ query: z.string().optional() }).strict(),
-      outputSchema: z.object({ count: z.number() }).strict(),
+      inputSchema: z.strictObject({ query: z.optional(z.string()) }),
+      outputSchema: z.strictObject({ count: z.number() }),
     }] as const;
   `);
   const derived = await deriveActionDtoSchemas({ repoRoot: root, onlyFamilies: ['widgets'] });
@@ -447,10 +539,10 @@ test('versioned imported Action spec owners supply generated DTO schemas', async
   assert.match(dto, /query\?: string/u);
   assert.match(dto, /count: number/u);
   writeFileSync(resolve(actions, 'specs/widgets.ts'), `
-    import { z } from 'zod';
+    import { z } from 'zod/mini';
     const IDS = ['widgets.catalog.list'] as const;
-    const INPUTS = { 'widgets.catalog.list': z.object({ query: z.string().optional() }).strict() } as const;
-    const OUTPUTS = { 'widgets.catalog.list': z.object({ count: z.number() }).strict() } as const;
+    const INPUTS = { 'widgets.catalog.list': z.strictObject({ query: z.optional(z.string()) }) } as const;
+    const OUTPUTS = { 'widgets.catalog.list': z.strictObject({ count: z.number() }) } as const;
     export const WIDGET_INSTANCE_ACTION_SPECS_V1 = IDS.map(id => ({
       id, inputSchema: INPUTS[id], outputSchema: OUTPUTS[id],
     } as const));
@@ -460,9 +552,9 @@ test('versioned imported Action spec owners supply generated DTO schemas', async
   assert.match(mappedDto, /query\?: string/u);
   assert.match(mappedDto, /count: number/u);
   writeFileSync(resolve(actions, 'specs/widgets.ts'), `
-    import { z } from 'zod';
-    const INPUTS = { 'widgets.catalog.list': z.object({ query: z.string().optional() }).strict() } as const;
-    const OUTPUTS = { 'widgets.catalog.list': z.object({ count: z.number() }).strict() } as const;
+    import { z } from 'zod/mini';
+    const INPUTS = { 'widgets.catalog.list': z.strictObject({ query: z.optional(z.string()) }) } as const;
+    const OUTPUTS = { 'widgets.catalog.list': z.strictObject({ count: z.number() }) } as const;
     function actionRow<Id extends keyof typeof INPUTS>(id: Id): {
       id: Id; inputSchema: (typeof INPUTS)[Id]; outputSchema: (typeof OUTPUTS)[Id];
     };
@@ -476,9 +568,9 @@ test('versioned imported Action spec owners supply generated DTO schemas', async
   assert.match(adaptedDto, /query\?: string/u);
   assert.match(adaptedDto, /count: number/u);
   writeFileSync(resolve(actions, 'specs/widgets.ts'), `
-    import { z } from 'zod';
-    const INPUTS = { 'widgets.catalog.list': z.object({ query: z.string().optional() }).strict() } as const;
-    const OUTPUTS = { 'widgets.catalog.list': z.object({ count: z.number() }).strict() } as const;
+    import { z } from 'zod/mini';
+    const INPUTS = { 'widgets.catalog.list': z.strictObject({ query: z.optional(z.string()) }) } as const;
+    const OUTPUTS = { 'widgets.catalog.list': z.strictObject({ count: z.number() }) } as const;
     function actionRow<Id extends keyof typeof INPUTS>([title, id]: readonly [string, Id]) {
       return { id, title, inputSchema: INPUTS[id], outputSchema: OUTPUTS[id] };
     }
@@ -501,9 +593,9 @@ test('versioned imported Action spec owners supply generated DTO schemas', async
   assert.match(valuesDto, /query\?: string/u);
   assert.match(valuesDto, /count: number/u);
   writeFileSync(resolve(actions, 'widgetSchemas.ts'), `
-    import { z } from 'zod';
-    export const Input = z.object({ query: z.string().optional() }).strict();
-    export const Output = z.object({ count: z.number() }).strict();
+    import { z } from 'zod/mini';
+    export const Input = z.strictObject({ query: z.optional(z.string()) });
+    export const Output = z.strictObject({ count: z.number() });
   `);
   writeFileSync(resolve(actions, 'specs/widgets.ts'), `
     import * as schemas from '../widgetSchemas.js';
@@ -730,4 +822,18 @@ test('public support roots preserve requested re-export aliases and explicit pro
     '--target', 'ES2022', '--module', 'ESNext', '--moduleResolution', 'Bundler', '--types', 'node', '--noEmit', resolve(root, 'consumer.ts')],
   { encoding: 'utf8' });
   assert.equal(compile.status, 0, compile.stdout + compile.stderr);
+});
+
+test('real messaging Action DTOs preserve concrete identity string input contracts', async () => {
+  const derived = await deriveActionDtoSchemas({ repoRoot: process.cwd(), onlyFamilies: ['messaging'] });
+  const dto = derived.outputs.get(resolve('packages/protocol/src/actions/messagingActionDtos.ts'));
+  assert.ok(dto, 'the real messaging owner must publish its Action DTO');
+  const source = ts.createSourceFile('messaging.ts', dto, ts.ScriptTarget.ES2022, true);
+  const alias = source.statements.find(node => ts.isTypeAliasDeclaration(node) && node.name.text === 'MessagingActionInputById');
+  const input = alias.type.members.find(member => member.name.text === 'session.message.send').type;
+  assert.ok(ts.isUnionTypeNode(input));
+  for (const arm of input.types) {
+    const identity = arm.members.find(member => member.name.text === 'idempotencyKey');
+    assert.equal(identity?.type.kind, ts.SyntaxKind.StringKeyword, 'each real Session input arm retains its string idempotency contract');
+  }
 });

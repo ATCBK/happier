@@ -485,8 +485,8 @@ export type SessionSendRequest =
         Readonly<{ kind: 'sessionSubagentLaunch' | 'sessionSubagentCommand' }>
     >['source'];
   }>;
-/** Canonical result of the shared Session message Action. */
-export type SessionSendResult = PluginActionResultById['session.message.send'];
+/** A host-bound Session handle always sends to that one exact Session. */
+export type SessionSendResult = Exclude<PluginActionResultById['session.message.send'], Readonly<{ kind: 'fanout' }>>;
 export type SessionMessagePart =
     | Readonly<{ kind: 'text'; text: string }>
     | Readonly<{ kind: 'structured'; mediaType: string; value: JsonValue }>;

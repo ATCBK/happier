@@ -12,9 +12,10 @@ import { ScmCapabilitiesSchema as canonicalScmCapabilitiesSchema, ScmWorkingSnap
 import { ScmSelectedMutationPathSchema as canonicalScmSelectedMutationPathSchema } from '@happier-dev/protocol/scm/selectedMutationPath';
 import { SourceControlCloneProtocolSchema as canonicalScmCloneProtocolSchema } from '@happier-dev/protocol/scm/cloneProtocol';
 import { ScmComparisonSourceProtocolSchema as canonicalScmComparisonSourceProtocolSchema, ScmComparisonSchema as canonicalScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
+import { ScmHostingProviderKindProtocolSchema as canonicalScmHostingProviderKindProtocolSchema } from '@happier-dev/protocol/scm/pullRequests';
 import type { ScmComparison, ScmComparisonSource as CanonicalScmComparisonSource } from '@happier-dev/protocol/scm';
 import type { JsonValue, PluginContributionRef } from '../identity.js';
-import type { ProtocolComposableSchema } from '../protocol/index.js';
+import type { ProtocolComposableSchema } from '../protocol/protocolFacade.js';
 import { ScmHistoryEntriesInputV1Schema as canonicalHistoryInput, ScmHistoryEntriesResponseSchema as canonicalHistoryResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';
 export type { ScmEntryHistoryV1, ScmHistoryEntriesInputV1, ScmHistoryEntriesOutputV1, ScmHistoryEntriesRequest, ScmHistoryEntriesResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';
 import type { ScmHistoryEntriesRequest, ScmHistoryEntriesResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';
@@ -49,6 +50,8 @@ type _ScmSourceProjectionMustMatchCanonical = AssertScmSourceProjection<
 /** The source parser and portable grammar remain the Protocol-owned value. */
 export const ScmComparisonSourceProtocolSchema: ProtocolComposableSchema<ScmComparisonSource> = canonicalScmComparisonSourceProtocolSchema;
 export const ScmComparisonSourceSchema: ProtocolComposableSchema<ScmComparisonSource> = ScmComparisonSourceProtocolSchema;
+/** The SCM owner supplies the complete hosting vocabulary, including custom forges. */
+export const ScmHostingProviderKindProtocolSchema: ProtocolComposableSchema<ProtocolScmHostingProviderKind> = canonicalScmHostingProviderKindProtocolSchema;
 export const ScmComparisonSchema: {
     parse(value: unknown): ScmComparison;
     safeParse(value: unknown):
@@ -63,6 +66,23 @@ import type {
     ScmHostingProviderKind,
     ScmHostingProviderRef,
 } from './hostingProvider.js';
+/**
+ * Keep the public portable name in inferred author declarations. Both direct
+ * and template-literal aliases retain the hosting-only symbol during emission.
+ * The equality assertion prevents this projection from drifting from its owner.
+ */
+export type ProtocolScmHostingProviderKind =
+    | 'github'
+    | 'gitlab'
+    | 'bitbucket'
+    | 'azure-devops'
+    | 'custom'
+    | 'unknown';
+type _ScmHostingKindProjectionMustMatchCanonical = AssertScmSourceProjection<
+    [ProtocolScmHostingProviderKind] extends [ScmHostingProviderKind]
+        ? [ScmHostingProviderKind] extends [ProtocolScmHostingProviderKind] ? true : false
+        : false
+>;
 
 export type ScmRefreshPolicy =
     | 'cache-first'
@@ -184,7 +204,8 @@ export type ScmOperationErrorCode =
     | 'BRANCH_OPERATION_NOT_IN_PROGRESS'
     | 'FEATURE_UNSUPPORTED'
     | 'BACKEND_UNAVAILABLE'
-    | 'BACKEND_NOT_INSTALLED';
+    | 'BACKEND_NOT_INSTALLED'
+    | 'ROOT_NOT_FOUND';
 
 export type ScmCapabilities = {
     capabilityScope: 'local-backend';
@@ -1479,6 +1500,7 @@ export const SCM_OPERATION_ERROR_CODES: Readonly<{
     FEATURE_UNSUPPORTED: 'FEATURE_UNSUPPORTED';
     BACKEND_UNAVAILABLE: 'BACKEND_UNAVAILABLE';
     BACKEND_NOT_INSTALLED: 'BACKEND_NOT_INSTALLED';
+    ROOT_NOT_FOUND: 'ROOT_NOT_FOUND';
 }> = canonicalScmOperationErrorCodes;
 export const SCM_WORKTREE_REMOVE_AUTHORIZATION_TOKEN: 'remove-worktree' = canonicalScmWorktreeRemoveAuthorizationToken;
 export const ScmCapabilitiesSchema: {

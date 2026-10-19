@@ -35,6 +35,19 @@ export type ScopeActionInputById = {
             scope?: 'my_work' | 'assigned_to_me' | 'following' | 'involving_me' | 'all_accessible' | undefined;
             attention?: 'any' | 'needs_my_attention' | undefined;
             bot?: 'bot' | 'ordinary' | undefined;
+            coordinator?: 'coordinator' | undefined;
+            projects?: {
+                include: {
+                    serverId: string;
+                    projectKey: string;
+                }[];
+                exclude: {
+                    serverId: string;
+                    projectKey: string;
+                }[];
+            } | undefined;
+            statuses?: ('unknown' | 'archived' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+            underSessionId?: string | undefined;
             homeServerIds?: string[] | undefined;
             audiences?: ({
                 kind: 'outside_teams';
@@ -121,6 +134,19 @@ export type ScopeActionResultById = {
             source: 'all' | 'persisted' | 'direct';
             searchQuery: string;
             bot?: 'bot' | 'ordinary' | undefined;
+            coordinator?: 'coordinator' | undefined;
+            projects?: {
+                include: {
+                    serverId: string;
+                    projectKey: string;
+                }[];
+                exclude: {
+                    serverId: string;
+                    projectKey: string;
+                }[];
+            } | undefined;
+            statuses?: ('unknown' | 'archived' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+            underSessionId?: string | undefined;
         };
         includeInactive: boolean;
         queryEnabled: boolean;

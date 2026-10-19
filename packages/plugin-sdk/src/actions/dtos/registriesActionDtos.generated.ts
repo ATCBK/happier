@@ -238,9 +238,6 @@ export type RegistriesActionResultById = {
         pages: {
             sourceId: string;
             status: {
-                state: 'ok';
-                fetchedAt: number;
-            } | {
                 state: 'rate_limited';
                 retryAt?: number | undefined;
             } | {
@@ -248,6 +245,9 @@ export type RegistriesActionResultById = {
             } | {
                 state: 'newer_format';
                 found: string;
+            } | {
+                state: 'ok';
+                fetchedAt: number;
             };
             items: {
                 sourceId: string;

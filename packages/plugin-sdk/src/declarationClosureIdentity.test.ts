@@ -951,7 +951,7 @@ describe('normal SDK declaration closure identities', () => {
         }
     });
 
-    it('projects Voice author declarations through public Protocol DTO identities without Zod edges', async () => {
+    it('projects Voice DTO identities with an explicit native Mini schema seam', async () => {
         const sources = await Promise.all([
             ['voice/projections.ts', new URL('./voice/projections.ts', import.meta.url)],
             ['voice/client.ts', new URL('./voice/client.ts', import.meta.url)],
@@ -974,8 +974,9 @@ describe('normal SDK declaration closure identities', () => {
             "from '@happier-dev/protocol/voice/speech';",
         );
 
+        expect(declarations.get('voice/projections.ts')).toContain("from 'zod/mini';");
         for (const [fileName, declaration] of declarations) {
-            expect(declaration, fileName).not.toMatch(/\bzod\b/u);
+            expect(declaration, fileName).not.toMatch(/from ['"]zod['"]/u);
         }
     });
 

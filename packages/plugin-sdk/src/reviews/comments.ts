@@ -35,7 +35,7 @@ import {
     defineProtocolString,
     defineProtocolUnion,
     type ProtocolComposableSchema,
-} from '../protocol/index.js';
+} from '../protocol/protocolFacade.js';
 
 export type ReviewCommentPublicationTargetExpectationV1 = (
     | Readonly<{ configuredAccountId: string }>

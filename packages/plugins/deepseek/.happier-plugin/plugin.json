@@ -203,6 +203,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -217,6 +218,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "description": "Use DeepSeek models through Anthropic- or OpenAI-compatible agents.",

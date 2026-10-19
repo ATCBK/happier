@@ -8,6 +8,7 @@ export type PluginDevLoopActionInputById = {
         targetDir: string;
         id: string;
         name: string;
+        machineId?: string | undefined;
         ui?: 'declarative' | 'hostedWeb' | 'reactNative' | undefined;
         template?: 'session-agent' | undefined;
     };
@@ -30,10 +31,118 @@ export type PluginDevLoopActionInputById = {
             packageName?: string | undefined;
         };
         machineId: string;
+    } | {
+        source: {
+            kind: 'installed';
+            pluginId: string;
+        };
+        machineId?: string | undefined;
     };
     readonly "plugins.uninstall": {
         pluginId: string;
+        machineId?: string | undefined;
+        managedResourceDispositions?: {
+            managedId: string;
+            expectedIntentRevision: number;
+            expectedAllocation: 'unsubmitted' | 'may-exist' | 'bound' | 'confirmed-absent';
+            responsibility: 'manual';
+            expectedResource?: {
+                contributionRef: {
+                    pluginId: string;
+                    localId: string;
+                };
+                schemaVersion: number;
+                value: unknown;
+                devcontainerObservation?: {
+                    nativeResourceId: string;
+                    user: string;
+                    workspaceFolder: string;
+                    storage: {
+                        kind: 'bind';
+                        hostPath: string;
+                        childPath: string;
+                    } | {
+                        kind: 'child';
+                        childPath: string;
+                    };
+                } | undefined;
+            } | undefined;
+            expectedNativeOperationRef?: {
+                value: unknown;
+                contributionRef: {
+                    pluginId: string;
+                    localId: string;
+                };
+                schemaVersion: number;
+            } | undefined;
+            expectedRecovery?: {
+                reference: string;
+                reason: string;
+                consoleUrl?: string | undefined;
+            } | undefined;
+        }[] | undefined;
         deleteData?: boolean | undefined;
+    };
+    readonly "plugins.enable": {
+        pluginId: string;
+        machineId?: string | undefined;
+    };
+    readonly "plugins.disable": {
+        pluginId: string;
+        managedResourceDispositions?: {
+            managedId: string;
+            expectedIntentRevision: number;
+            expectedAllocation: 'unsubmitted' | 'may-exist' | 'bound' | 'confirmed-absent';
+            responsibility: 'manual';
+            expectedResource?: {
+                contributionRef: {
+                    pluginId: string;
+                    localId: string;
+                };
+                schemaVersion: number;
+                value: unknown;
+                devcontainerObservation?: {
+                    nativeResourceId: string;
+                    user: string;
+                    workspaceFolder: string;
+                    storage: {
+                        kind: 'bind';
+                        hostPath: string;
+                        childPath: string;
+                    } | {
+                        kind: 'child';
+                        childPath: string;
+                    };
+                } | undefined;
+            } | undefined;
+            expectedNativeOperationRef?: {
+                value: unknown;
+                contributionRef: {
+                    pluginId: string;
+                    localId: string;
+                };
+                schemaVersion: number;
+            } | undefined;
+            expectedRecovery?: {
+                reference: string;
+                reason: string;
+                consoleUrl?: string | undefined;
+            } | undefined;
+        }[] | undefined;
+        machineId?: string | undefined;
+    };
+    readonly "plugins.rollback": {
+        pluginId: string;
+        machineId?: string | undefined;
+    };
+    readonly "plugins.trust.forget": {
+        pluginId: string;
+        machineId?: string | undefined;
+    };
+    readonly "plugins.update_policy.set": {
+        policy: 'allowed' | 'pinned';
+        pluginId: string;
+        machineId?: string | undefined;
     };
     readonly "plugins.dev.submit": {
         projectRoot: string;
@@ -144,8 +253,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -176,8 +285,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -208,8 +317,168 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
+        pendingReview?: undefined;
+        pendingChangeId?: undefined;
+        review?: undefined;
+    };
+    readonly "plugins.enable": {
+        [x: string]: unknown;
+        ok: false;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload';
+        outcome: 'reviewRequired';
+        pendingReview: {
+            [x: string]: unknown;
+            kind: 'reviewRequired';
+            reviewKind: 'projectTrust' | 'installation';
+            pendingChangeId: string;
+            review: {
+                [x: string]: unknown;
+            };
+        };
+        pendingChangeId?: undefined;
+        review?: undefined;
+    } | {
+        [x: string]: unknown;
+        ok: true;
+        kind: 'plugins_change_status';
+        status: {
+            [x: string]: unknown;
+        };
+    } | {
+        [x: string]: unknown;
+        ok: boolean;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
+        pendingReview?: undefined;
+        pendingChangeId?: undefined;
+        review?: undefined;
+    };
+    readonly "plugins.disable": {
+        [x: string]: unknown;
+        ok: false;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload';
+        outcome: 'reviewRequired';
+        pendingReview: {
+            [x: string]: unknown;
+            kind: 'reviewRequired';
+            reviewKind: 'projectTrust' | 'installation';
+            pendingChangeId: string;
+            review: {
+                [x: string]: unknown;
+            };
+        };
+        pendingChangeId?: undefined;
+        review?: undefined;
+    } | {
+        [x: string]: unknown;
+        ok: true;
+        kind: 'plugins_change_status';
+        status: {
+            [x: string]: unknown;
+        };
+    } | {
+        [x: string]: unknown;
+        ok: boolean;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
+        pendingReview?: undefined;
+        pendingChangeId?: undefined;
+        review?: undefined;
+    };
+    readonly "plugins.rollback": {
+        [x: string]: unknown;
+        ok: false;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload';
+        outcome: 'reviewRequired';
+        pendingReview: {
+            [x: string]: unknown;
+            kind: 'reviewRequired';
+            reviewKind: 'projectTrust' | 'installation';
+            pendingChangeId: string;
+            review: {
+                [x: string]: unknown;
+            };
+        };
+        pendingChangeId?: undefined;
+        review?: undefined;
+    } | {
+        [x: string]: unknown;
+        ok: true;
+        kind: 'plugins_change_status';
+        status: {
+            [x: string]: unknown;
+        };
+    } | {
+        [x: string]: unknown;
+        ok: boolean;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
+        pendingReview?: undefined;
+        pendingChangeId?: undefined;
+        review?: undefined;
+    };
+    readonly "plugins.trust.forget": {
+        [x: string]: unknown;
+        ok: false;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload';
+        outcome: 'reviewRequired';
+        pendingReview: {
+            [x: string]: unknown;
+            kind: 'reviewRequired';
+            reviewKind: 'projectTrust' | 'installation';
+            pendingChangeId: string;
+            review: {
+                [x: string]: unknown;
+            };
+        };
+        pendingChangeId?: undefined;
+        review?: undefined;
+    } | {
+        [x: string]: unknown;
+        ok: true;
+        kind: 'plugins_change_status';
+        status: {
+            [x: string]: unknown;
+        };
+    } | {
+        [x: string]: unknown;
+        ok: boolean;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
+        pendingReview?: undefined;
+        pendingChangeId?: undefined;
+        review?: undefined;
+    };
+    readonly "plugins.update_policy.set": {
+        [x: string]: unknown;
+        ok: false;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload';
+        outcome: 'reviewRequired';
+        pendingReview: {
+            [x: string]: unknown;
+            kind: 'reviewRequired';
+            reviewKind: 'projectTrust' | 'installation';
+            pendingChangeId: string;
+            review: {
+                [x: string]: unknown;
+            };
+        };
+        pendingChangeId?: undefined;
+        review?: undefined;
+    } | {
+        [x: string]: unknown;
+        ok: true;
+        kind: 'plugins_change_status';
+        status: {
+            [x: string]: unknown;
+        };
+    } | {
+        [x: string]: unknown;
+        ok: boolean;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -240,8 +509,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -272,8 +541,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -304,8 +573,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -336,8 +605,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -368,8 +637,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -400,8 +669,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -432,8 +701,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -464,8 +733,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -496,8 +765,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -528,8 +797,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;
@@ -560,8 +829,8 @@ export type PluginDevLoopActionResultById = {
     } | {
         [x: string]: unknown;
         ok: boolean;
-        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
-        outcome?: 'applied' | 'failed' | undefined;
+        kind: 'plugins_install' | 'plugins_dev_submit' | 'plugins_reload' | 'plugins_scaffold' | 'plugins_uninstall' | 'plugins_enable' | 'plugins_disable' | 'plugins_rollback' | 'plugins_trust_forget' | 'plugins_update_policy_set' | 'plugins_dev_unregister' | 'plugins_dev_install' | 'plugins_dev_typecheck' | 'plugins_dev_build' | 'plugins_dev_test' | 'plugins_doctor' | 'plugins_pack' | 'plugins_list';
+        outcome?: 'failed' | 'applied' | undefined;
         pendingReview?: undefined;
         pendingChangeId?: undefined;
         review?: undefined;

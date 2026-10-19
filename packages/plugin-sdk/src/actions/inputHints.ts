@@ -3,7 +3,7 @@ import { normalizeInputByFieldHints as canonicalNormalizeActionInputByFieldHints
 import { readInputOptionValue as canonicalReadActionInputOptionValue } from '@happier-dev/protocol/inputs/inputFields';
 import { readInputPath as canonicalReadInputPath } from '@happier-dev/protocol/inputs/inputPredicates';
 import { writeInputPath as canonicalWriteInputPath, readInputTypePickerLaunchInput as canonicalReadInputTypePickerLaunchInput } from '@happier-dev/protocol/inputs';
-import { resolveEffectiveInputFields as canonicalResolveEffectiveInputFields, normalizeInputByFieldHints as canonicalNormalizeInputByFieldHints } from '@happier-dev/protocol/inputs/inputFieldRuntime';
+import { resolveEffectiveInputFields as canonicalResolveEffectiveInputFields, normalizeInputByFieldHints as canonicalNormalizeInputByFieldHints, seedInputByFieldHints as canonicalSeedInputByFieldHints } from '@happier-dev/protocol/inputs/inputFieldRuntime';
 
 import type {
   ActionInputFieldHint,
@@ -43,6 +43,8 @@ export const writeInputPath: (input: Readonly<Record<string, unknown>>, path: st
 export const resolveEffectiveInputFields: (spec: Readonly<{ inputHints?: InputHints }>, input: unknown,
   options?: Readonly<{ includeHidden?: boolean; contextSlots?: readonly string[] }>) => readonly EffectiveInputField[] = /* @__PURE__ */ projectProtocolValue(canonicalResolveEffectiveInputFields);
 export const normalizeInputByFieldHints: (spec: Readonly<{ inputHints?: InputHints }>, input: Record<string, unknown>) => Record<string, unknown> = /* @__PURE__ */ projectProtocolValue(canonicalNormalizeInputByFieldHints);
+/** Applies declared defaults to missing paths when opening a new form, before later edits or resets. */
+export const seedInputByFieldHints: (spec: Readonly<{ inputHints?: InputHints }>, input: Readonly<Record<string, unknown>>) => Record<string, unknown> = /* @__PURE__ */ projectProtocolValue(canonicalSeedInputByFieldHints);
 
 /**
  * The normalized, author-visible Action form contract consumed by UI

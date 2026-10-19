@@ -170,6 +170,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -192,6 +193,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "description": "Runs DeepSec as a review and security-review execution engine.",

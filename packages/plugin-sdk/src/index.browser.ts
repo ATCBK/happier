@@ -99,6 +99,7 @@ export { computeCanonicalDomainSeparatedDigest } from './identity.js';
 export { createCanonicalJsonSigningInput } from './identity.js';
 export {
   arePluginMachineExecutionOriginsEqual,
+  getPluginMachineExecutionOriginRef,
   arePluginMachineMaterializationRefsEqual,
 } from './executionOrigin.js';
 export { definePlugin } from './definePlugin.js';
@@ -175,6 +176,7 @@ export {
     readTrimmedString,
 } from './sessions/fileStores/records.js';
 export {
+    projectPluginFailureText,
     redactBugReportSensitiveText,
     trimBugReportTextToMaxBytes,
 } from './diagnostics.js';

@@ -164,13 +164,14 @@ export type WidgetsActionInputById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: unknown;
                             visibleWhen?: unknown;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: unknown;
@@ -184,6 +185,7 @@ export type WidgetsActionInputById = {
                             options?: readonly {
                                 value: unknown;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -930,13 +932,14 @@ export type WidgetsActionInputById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: unknown;
                                     visibleWhen?: unknown;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: unknown;
@@ -950,6 +953,7 @@ export type WidgetsActionInputById = {
                                     options?: readonly {
                                         value: unknown;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -1333,13 +1337,14 @@ export type WidgetsActionInputById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: unknown;
                                         visibleWhen?: unknown;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: unknown;
@@ -1353,6 +1358,7 @@ export type WidgetsActionInputById = {
                                         options?: readonly {
                                             value: unknown;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -1456,13 +1462,14 @@ export type WidgetsActionInputById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace' | 'machine';
+                                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
                                             requireExplicitSelection?: boolean | undefined;
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
+                                            defaultValue?: unknown;
                                             visibleWhen?: unknown;
                                             visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: unknown;
@@ -1476,6 +1483,7 @@ export type WidgetsActionInputById = {
                                             options?: readonly {
                                                 value: unknown;
                                                 label: string;
+                                                labelKey?: string | undefined;
                                                 description?: string | undefined;
                                                 disabled?: boolean | undefined;
                                             }[] | undefined;
@@ -1808,13 +1816,14 @@ export type WidgetsActionInputById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: unknown;
                     visibleWhen?: unknown;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: unknown;
@@ -1828,6 +1837,7 @@ export type WidgetsActionInputById = {
                     options?: readonly {
                         value: unknown;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -1894,13 +1904,14 @@ export type WidgetsActionInputById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: unknown;
                     visibleWhen?: unknown;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: unknown;
@@ -1914,6 +1925,7 @@ export type WidgetsActionInputById = {
                     options?: readonly {
                         value: unknown;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -1987,13 +1999,14 @@ export type WidgetsActionInputById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: unknown;
                     visibleWhen?: unknown;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: unknown;
@@ -2007,6 +2020,7 @@ export type WidgetsActionInputById = {
                     options?: readonly {
                         value: unknown;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -2069,13 +2083,14 @@ export type WidgetsActionInputById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: unknown;
                                         visibleWhen?: unknown;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: unknown;
@@ -2089,6 +2104,7 @@ export type WidgetsActionInputById = {
                                         options?: readonly {
                                             value: unknown;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -2180,13 +2196,14 @@ export type WidgetsActionInputById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: unknown;
                     visibleWhen?: unknown;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: unknown;
@@ -2200,6 +2217,7 @@ export type WidgetsActionInputById = {
                     options?: readonly {
                         value: unknown;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -2262,13 +2280,14 @@ export type WidgetsActionInputById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: unknown;
                                         visibleWhen?: unknown;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: unknown;
@@ -2282,6 +2301,7 @@ export type WidgetsActionInputById = {
                                         options?: readonly {
                                             value: unknown;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -2400,13 +2420,13 @@ export type WidgetsActionInputById = {
         itemId: string;
         title: string;
         preview: {
+            v: 1;
+            document: unknown;
             asOf: string;
             provenance: {
                 label: string;
                 digest?: string | undefined;
             }[];
-            v: 1;
-            document: unknown;
         };
         placement: {
             tabId?: string | undefined;
@@ -2512,13 +2532,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -2532,6 +2553,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -2572,13 +2594,14 @@ export type WidgetsActionResultById = {
                     hostType: 'usageQuery';
                     field?: 'period' | 'session' | undefined;
                 } | {
-                    hostType: 'session' | 'workspace' | 'machine';
+                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                 } | undefined;
                 contextMode?: 'follow' | 'own' | undefined;
                 required?: boolean | undefined;
                 requireExplicitSelection?: boolean | undefined;
                 listSeparator?: 'comma' | 'newline' | undefined;
                 maxSelections?: number | undefined;
+                defaultValue?: JsonValue | undefined;
                 visibleWhen?: InputPredicate | undefined;
                 visibleWhenContextSlot?: string | undefined;
                 requiredWhen?: InputPredicate | undefined;
@@ -2592,6 +2615,7 @@ export type WidgetsActionResultById = {
                 options?: readonly {
                     value: JsonValue;
                     label: string;
+                    labelKey?: string | undefined;
                     description?: string | undefined;
                     disabled?: boolean | undefined;
                 }[] | undefined;
@@ -2689,13 +2713,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -2709,6 +2734,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -2811,13 +2837,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -2831,6 +2858,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -2934,13 +2962,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -2954,6 +2983,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -3080,13 +3110,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -3100,6 +3131,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -3203,13 +3235,14 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace' | 'machine';
+                                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
                                             requireExplicitSelection?: boolean | undefined;
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
+                                            defaultValue?: JsonValue | undefined;
                                             visibleWhen?: InputPredicate | undefined;
                                             visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
@@ -3223,6 +3256,7 @@ export type WidgetsActionResultById = {
                                             options?: readonly {
                                                 value: JsonValue;
                                                 label: string;
+                                                labelKey?: string | undefined;
                                                 description?: string | undefined;
                                                 disabled?: boolean | undefined;
                                             }[] | undefined;
@@ -3343,13 +3377,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -3363,6 +3398,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -3466,13 +3502,14 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace' | 'machine';
+                                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
                                             requireExplicitSelection?: boolean | undefined;
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
+                                            defaultValue?: JsonValue | undefined;
                                             visibleWhen?: InputPredicate | undefined;
                                             visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
@@ -3486,6 +3523,7 @@ export type WidgetsActionResultById = {
                                             options?: readonly {
                                                 value: JsonValue;
                                                 label: string;
+                                                labelKey?: string | undefined;
                                                 description?: string | undefined;
                                                 disabled?: boolean | undefined;
                                             }[] | undefined;
@@ -3606,13 +3644,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -3626,6 +3665,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -3729,13 +3769,14 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace' | 'machine';
+                                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
                                             requireExplicitSelection?: boolean | undefined;
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
+                                            defaultValue?: JsonValue | undefined;
                                             visibleWhen?: InputPredicate | undefined;
                                             visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
@@ -3749,6 +3790,7 @@ export type WidgetsActionResultById = {
                                             options?: readonly {
                                                 value: JsonValue;
                                                 label: string;
+                                                labelKey?: string | undefined;
                                                 description?: string | undefined;
                                                 disabled?: boolean | undefined;
                                             }[] | undefined;
@@ -3870,13 +3912,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -3890,6 +3933,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -3993,13 +4037,14 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace' | 'machine';
+                                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
                                             requireExplicitSelection?: boolean | undefined;
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
+                                            defaultValue?: JsonValue | undefined;
                                             visibleWhen?: InputPredicate | undefined;
                                             visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
@@ -4013,6 +4058,7 @@ export type WidgetsActionResultById = {
                                             options?: readonly {
                                                 value: JsonValue;
                                                 label: string;
+                                                labelKey?: string | undefined;
                                                 description?: string | undefined;
                                                 disabled?: boolean | undefined;
                                             }[] | undefined;
@@ -4179,13 +4225,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -4199,6 +4246,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -4296,13 +4344,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -4316,6 +4365,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -4419,13 +4469,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -4439,6 +4490,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -4593,13 +4645,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -4613,6 +4666,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -4710,13 +4764,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -4730,6 +4785,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -4833,13 +4889,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -4853,6 +4910,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -5007,13 +5065,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -5027,6 +5086,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -5124,13 +5184,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -5144,6 +5205,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -5247,13 +5309,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -5267,6 +5330,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -5457,13 +5521,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -5477,6 +5542,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -5574,13 +5640,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -5594,6 +5661,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -5697,13 +5765,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -5717,6 +5786,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -5871,13 +5941,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -5891,6 +5962,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -5988,13 +6060,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -6008,6 +6081,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -6111,13 +6185,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -6131,6 +6206,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -6285,13 +6361,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -6305,6 +6382,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -6402,13 +6480,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -6422,6 +6501,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -6525,13 +6605,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -6545,6 +6626,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -6699,13 +6781,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -6719,6 +6802,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -6816,13 +6900,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -6836,6 +6921,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -6939,13 +7025,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -6959,6 +7046,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -7171,13 +7259,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -7191,6 +7280,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -7288,13 +7378,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -7308,6 +7399,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -7411,13 +7503,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -7431,6 +7524,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -7585,13 +7679,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -7605,6 +7700,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -7702,13 +7798,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -7722,6 +7819,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -7825,13 +7923,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -7845,6 +7944,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -8037,13 +8137,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -8057,6 +8158,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -8154,13 +8256,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -8174,6 +8277,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -8277,13 +8381,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -8297,6 +8402,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -8451,13 +8557,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -8471,6 +8578,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -8568,13 +8676,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -8588,6 +8697,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -8691,13 +8801,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -8711,6 +8822,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -8865,13 +8977,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -8885,6 +8998,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -8982,13 +9096,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -9002,6 +9117,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -9105,13 +9221,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -9125,6 +9242,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -9279,13 +9397,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -9299,6 +9418,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -9396,13 +9516,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -9416,6 +9537,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -9519,13 +9641,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -9539,6 +9662,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -9693,13 +9817,14 @@ export type WidgetsActionResultById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: JsonValue | undefined;
                             visibleWhen?: InputPredicate | undefined;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: InputPredicate | undefined;
@@ -9713,6 +9838,7 @@ export type WidgetsActionResultById = {
                             options?: readonly {
                                 value: JsonValue;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -9810,13 +9936,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -9830,6 +9957,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -9933,13 +10061,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -9953,6 +10082,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -10105,13 +10235,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -10125,6 +10256,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -10227,13 +10359,14 @@ export type WidgetsActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -10247,6 +10380,7 @@ export type WidgetsActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -10350,13 +10484,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -10370,6 +10505,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -10496,13 +10632,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -10516,6 +10653,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -10619,13 +10757,14 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace' | 'machine';
+                                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
                                             requireExplicitSelection?: boolean | undefined;
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
+                                            defaultValue?: JsonValue | undefined;
                                             visibleWhen?: InputPredicate | undefined;
                                             visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
@@ -10639,6 +10778,7 @@ export type WidgetsActionResultById = {
                                             options?: readonly {
                                                 value: JsonValue;
                                                 label: string;
+                                                labelKey?: string | undefined;
                                                 description?: string | undefined;
                                                 disabled?: boolean | undefined;
                                             }[] | undefined;
@@ -10759,13 +10899,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -10779,6 +10920,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -10882,13 +11024,14 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace' | 'machine';
+                                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
                                             requireExplicitSelection?: boolean | undefined;
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
+                                            defaultValue?: JsonValue | undefined;
                                             visibleWhen?: InputPredicate | undefined;
                                             visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
@@ -10902,6 +11045,7 @@ export type WidgetsActionResultById = {
                                             options?: readonly {
                                                 value: JsonValue;
                                                 label: string;
+                                                labelKey?: string | undefined;
                                                 description?: string | undefined;
                                                 disabled?: boolean | undefined;
                                             }[] | undefined;
@@ -11022,13 +11166,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -11042,6 +11187,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -11145,13 +11291,14 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace' | 'machine';
+                                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
                                             requireExplicitSelection?: boolean | undefined;
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
+                                            defaultValue?: JsonValue | undefined;
                                             visibleWhen?: InputPredicate | undefined;
                                             visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
@@ -11165,6 +11312,7 @@ export type WidgetsActionResultById = {
                                             options?: readonly {
                                                 value: JsonValue;
                                                 label: string;
+                                                labelKey?: string | undefined;
                                                 description?: string | undefined;
                                                 disabled?: boolean | undefined;
                                             }[] | undefined;
@@ -11286,13 +11434,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -11306,6 +11455,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -11409,13 +11559,14 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace' | 'machine';
+                                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
                                             requireExplicitSelection?: boolean | undefined;
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
+                                            defaultValue?: JsonValue | undefined;
                                             visibleWhen?: InputPredicate | undefined;
                                             visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
@@ -11429,6 +11580,7 @@ export type WidgetsActionResultById = {
                                             options?: readonly {
                                                 value: JsonValue;
                                                 label: string;
+                                                labelKey?: string | undefined;
                                                 description?: string | undefined;
                                                 disabled?: boolean | undefined;
                                             }[] | undefined;
@@ -11628,13 +11780,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -11648,6 +11801,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -11751,13 +11905,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -11771,6 +11926,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -11958,13 +12114,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -11978,6 +12135,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -12081,13 +12239,14 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace' | 'machine';
+                                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
                                             requireExplicitSelection?: boolean | undefined;
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
+                                            defaultValue?: JsonValue | undefined;
                                             visibleWhen?: InputPredicate | undefined;
                                             visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
@@ -12101,6 +12260,7 @@ export type WidgetsActionResultById = {
                                             options?: readonly {
                                                 value: JsonValue;
                                                 label: string;
+                                                labelKey?: string | undefined;
                                                 description?: string | undefined;
                                                 disabled?: boolean | undefined;
                                             }[] | undefined;
@@ -12294,13 +12454,14 @@ export type WidgetsActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -12314,6 +12475,7 @@ export type WidgetsActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -12417,13 +12579,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -12437,6 +12600,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -12624,13 +12788,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -12644,6 +12809,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -12747,13 +12913,14 @@ export type WidgetsActionResultById = {
                                                 hostType: 'usageQuery';
                                                 field?: 'period' | 'session' | undefined;
                                             } | {
-                                                hostType: 'session' | 'workspace' | 'machine';
+                                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                             } | undefined;
                                             contextMode?: 'follow' | 'own' | undefined;
                                             required?: boolean | undefined;
                                             requireExplicitSelection?: boolean | undefined;
                                             listSeparator?: 'comma' | 'newline' | undefined;
                                             maxSelections?: number | undefined;
+                                            defaultValue?: JsonValue | undefined;
                                             visibleWhen?: InputPredicate | undefined;
                                             visibleWhenContextSlot?: string | undefined;
                                             requiredWhen?: InputPredicate | undefined;
@@ -12767,6 +12934,7 @@ export type WidgetsActionResultById = {
                                             options?: readonly {
                                                 value: JsonValue;
                                                 label: string;
+                                                labelKey?: string | undefined;
                                                 description?: string | undefined;
                                                 disabled?: boolean | undefined;
                                             }[] | undefined;
@@ -13104,13 +13272,14 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -13124,6 +13293,7 @@ export type WidgetsActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -13202,13 +13372,14 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -13222,6 +13393,7 @@ export type WidgetsActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -13323,13 +13495,14 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -13343,6 +13516,7 @@ export type WidgetsActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -13406,13 +13580,14 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -13426,6 +13601,7 @@ export type WidgetsActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -13489,13 +13665,14 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -13509,6 +13686,7 @@ export type WidgetsActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -13576,13 +13754,14 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -13596,6 +13775,7 @@ export type WidgetsActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -13649,13 +13829,14 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -13669,6 +13850,7 @@ export type WidgetsActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -13734,13 +13916,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -13754,6 +13937,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -13857,13 +14041,14 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -13877,6 +14062,7 @@ export type WidgetsActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -13942,13 +14128,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -13962,6 +14149,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -14061,13 +14249,14 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -14081,6 +14270,7 @@ export type WidgetsActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -14146,13 +14336,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -14166,6 +14357,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -14265,13 +14457,14 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -14285,6 +14478,7 @@ export type WidgetsActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -14350,13 +14544,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -14370,6 +14565,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -14469,13 +14665,14 @@ export type WidgetsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -14489,6 +14686,7 @@ export type WidgetsActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -14554,13 +14752,14 @@ export type WidgetsActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -14574,6 +14773,7 @@ export type WidgetsActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;

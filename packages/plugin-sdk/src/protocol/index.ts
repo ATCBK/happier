@@ -1,3 +1,4 @@
+export { CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1 } from './currentUiContext.js';
 export type { PluginJsonSchema } from './protocolFacade.js';
 export type { ProtocolArrayOptions } from './protocolFacade.js';
 export type { ProtocolCollectionOpaqueCursorV1 } from './collectionCursor.js';
@@ -6,6 +7,7 @@ export type { ProtocolComposableSchema } from './protocolFacade.js';
 export type { ProtocolComposerRefV1 } from './composerRef.js';
 export { ProtocolComposerRefV1Schema } from './composerRef.js';
 export { ProtocolComposerReferenceResolutionV1Schema } from './composerReferenceResolution.js';
+export { ProtocolCurrentUiContextSnapshotV1Schema } from './currentUiContext.js';
 export type { ProtocolJsonValue } from './protocolFacade.js';
 export type { ProtocolJsonValueOptions } from './protocolFacade.js';
 export { ProtocolLaunchProfileIdV2Schema } from './launchProfileId.js';

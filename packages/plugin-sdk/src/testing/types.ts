@@ -71,6 +71,7 @@ export type PluginTestkitAdmittedTargetedOperation<
  * not the host's raw registration map.
  */
 export type PluginTestkitRegistrationByFamily = Readonly<{
+    workItems: Parameters<PluginClientApi['workItems']['register']>[1];
     dragSources: Parameters<PluginClientApi['dragSources']['register']>[1];
     dropTargets: Parameters<PluginClientApi['dropTargets']['register']>[1];
     captureSources: Parameters<PluginApi['captureSources']['register']>[1];

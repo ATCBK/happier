@@ -67,6 +67,7 @@ import type { BackgroundServiceRunner } from '../../backgroundServices.js';
 import type { PluginCaptureSourceRuntime } from '../../captureSources.js';
 import type { PluginProjectNativeAdapterRuntimeV1, ProjectNativeAdapterRoleV1 } from '../../projectNativeAdapters.js';
 import type { PluginDragSourceRuntime, PluginDropTargetRuntime } from '../../entityDragDrop.js';
+import type { PluginWorkItemsRuntime } from '../../workItems.js';
 import type { JsonValue } from '../../identity.js';
 import type { PluginDynamicResourceRuntime } from '../../services/resources.js';
 import type { PluginConnectedAccountRuntime } from '../../services/index.js';
@@ -220,6 +221,7 @@ const REGISTRATION_FAMILY = Object.freeze({
     captureSources: 'captureSources',
     projectNativeAdapters: 'projectNativeAdapters',
     dragSources: 'dragSources',
+    workItems: 'workItems',
     dropTargets: 'dropTargets',
     dynamicResources: 'resources',
     composerReferences: 'composerReferences',
@@ -1124,6 +1126,7 @@ function snapshotAgentPreflightSessionControlsContribution(
         throw new TypeError('Agent preflight contribution cannot declare both catalogs and probeCatalogs');
     }
     const snapshot: {
+        prepareLaunchEnvironment?: AgentPreflightSessionControlsContributionV1['prepareLaunchEnvironment'];
         catalogs?: AgentPreflightSessionControlsContributionV1['catalogs'];
         probeCatalogs?: AgentPreflightSessionControlsContributionV1['probeCatalogs'];
         resolveProbeVariant?: AgentPreflightSessionControlsContributionV1['resolveProbeVariant'];
@@ -1207,6 +1210,7 @@ function snapshotAgentPreflightSessionControlsContribution(
         }
     }
     for (const key of [
+        'prepareLaunchEnvironment',
         'probeModels',
         'probeCatalogs',
         'probeModes',
@@ -2187,6 +2191,7 @@ export function createPluginRegistrationScope(
         }),
     });
     const clientApi: PluginClientApi = Object.freeze({
+        workItems: Object.freeze({ register: (id: 'work-items', runtime: PluginWorkItemsRuntime) => register(REGISTRATION_FAMILY.workItems, id, runtime) }),
         actions: clientActions,
         voiceProviders,
         dragSources: Object.freeze({ register: (id: string, runtime: PluginDragSourceRuntime) => register(REGISTRATION_FAMILY.dragSources, id, runtime) }),

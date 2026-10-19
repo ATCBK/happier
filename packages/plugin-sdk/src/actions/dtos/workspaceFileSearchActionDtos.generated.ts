@@ -32,7 +32,7 @@ export type WorkspaceFileSearchActionResultById = {
         coverage: 'complete' | 'partial';
     } | {
         ok: false;
-        code: 'invalid_pattern' | 'root_not_allowed' | 'ripgrep_unavailable' | 'ripgrep_failed';
+        code: 'invalid_pattern' | 'root_not_allowed' | 'root_not_found' | 'ripgrep_unavailable' | 'ripgrep_failed';
         message?: string | undefined;
     };
 };

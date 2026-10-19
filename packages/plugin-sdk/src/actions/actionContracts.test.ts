@@ -66,6 +66,22 @@ const producer = definePlugin({
 });
 
 describe('single-declaration Action contracts', () => {
+    it('projects authored Session target metadata through the canonical manifest declaration', () => {
+        const plugin = definePlugin({
+            id: 'acme.session-target', version: '1.0.0',
+            actions: {
+                inspect: {
+                    title: 'Inspect Sessions', surfaces: ['agent'],
+                    sessionTarget: { field: 'sessionId', cardinality: 'many' },
+                    inputSchema: defineProtocolObject({ sessionId: defineProtocolString() }, { policy: 'closed' }),
+                    run: async () => null,
+                },
+            },
+        });
+        expect(plugin.manifest.contributes?.actions?.[0]).toMatchObject({
+            sessionTarget: { field: 'sessionId', cardinality: 'many' },
+        });
+    });
     it('keeps admitted targeted-operation handles structurally compatible across SDK copies', () => {
         type Input = Readonly<{ id: string }>;
         type Result = Readonly<{ accepted: true }>;

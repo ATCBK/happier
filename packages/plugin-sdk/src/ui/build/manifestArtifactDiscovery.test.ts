@@ -41,12 +41,13 @@ async function fixture(exportTarget: unknown): Promise<string> {
 }
 
 describe('discoverExecutablePluginUiArtifacts', () => {
-  it('discovers declared drag source and drop target activation exports without a renderer or Action', async () => {
+  it('discovers declared client read and drag/drop activation exports without a renderer or Action', async () => {
     const root = await fixture('./ui/panel.tsx');
     await writeFile(
       join(root, '.happier-plugin/plugin.json'),
       JSON.stringify({
         contributes: {
+          workItems: [{ id: 'work-items', client: { artifactId: 'panel', exportName: 'activateWorkItems' } }],
           dragSources: [
             {
               id: 'entry',
@@ -67,7 +68,7 @@ describe('discoverExecutablePluginUiArtifacts', () => {
       {
         artifactId: 'panel',
         entryPath: join(root, 'ui/panel.tsx'),
-        requestedExports: ['activateSources', 'activateTargets'],
+        requestedExports: ['activateSources', 'activateTargets', 'activateWorkItems'],
       },
     ]);
   });

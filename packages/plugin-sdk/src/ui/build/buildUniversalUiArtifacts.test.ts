@@ -70,7 +70,7 @@ describe('buildUniversalPluginUiArtifacts hosted static staging', () => {
         await writeFile(manifestPath, JSON.stringify(capturedManifest), 'utf8');
         await writeFile(
             join(root, 'src/collectionMigrations.ts'),
-            'export function collectionMigrations() { return { tasks: [{ id: "tasks-v1-to-v2", fromSchemaVersion: 1, toSchemaVersion: 2, migrate: value => ({ ...value, migrated: true }) }] }; } export function sharedExport() { return "shared"; } export default function clientAction() { return "client-action"; }',
+            'export function collectionMigrations() { return { tasks: [{ id: "tasks-v1-to-v2", fromSchemaVersion: 1, toSchemaVersion: 2, migrate: (value, context) => ({ ...value, migrated: context.currentRevision === 14 }) }] }; } export function sharedExport() { return "shared"; } export default function clientAction() { return "client-action"; }',
             'utf8',
         );
         await writeFile(
@@ -104,7 +104,7 @@ describe('buildUniversalPluginUiArtifacts hosted static staging', () => {
         if (typeof factory !== 'function') throw new Error('Missing migration factory');
         const payload = factory();
         expect(payload.manifest).toEqual(capturedManifest);
-        expect(payload.collectionMigrations.tasks[0].migrate({ retained: 'value' })).toEqual({
+        expect(payload.collectionMigrations.tasks[0].migrate({ retained: 'value' }, { currentRevision: 14 })).toEqual({
             retained: 'value', migrated: true,
         });
         // Other exports on the authored module retain their ordinary behavior.

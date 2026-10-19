@@ -436,7 +436,7 @@ export async function prepareActionTypeMap() {
     inputDigests: [...inputDigests],
     output,
     outputs,
-    obsoleteOutputs: ['strictJsonValue.generated.ts', 'jsonSchema.generated.ts'].map((name) =>
+    obsoleteOutputs: ['strictJsonValue.generated.ts', 'jsonSchema.generated.ts', 'sessionDiscussionActionDtos.generated.ts'].map((name) =>
       resolve(PACKAGE_ROOT, 'src/actions/dtos', name)),
     resultKeys,
     stale: false,
