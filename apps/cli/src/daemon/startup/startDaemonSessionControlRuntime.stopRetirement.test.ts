@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { join } from 'node:path';
 import axios from 'axios';
 import { afterEach, expect, it, vi } from 'vitest';
-import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol';
+import { SessionMetadataTuplePatchV1Schema, StopSessionResultSchema } from '@happier-dev/protocol';
 import { configuration } from '@/configuration';
 import type { StoredCredentials } from '@/persistence';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
@@ -14,12 +14,8 @@ import type { TrackedSession } from '../types';
 import { resolveRequesterSessionBootstrapFromCustody } from '../sessionEncryption/requesterSessionCredentials';
 import { createDaemonSessionMutationCustody } from '../connectedServices/usageLimitRecovery/createDaemonUsageLimitRecoveryMutationCustody';
 import { startDaemonSessionControlRuntime } from './startDaemonSessionControlRuntime';
-
-// Only the listening socket and Home HTTP are substituted; Stop and metadata
-// authority, serialization, currentness and lifecycle retirement remain real.
-vi.mock('@/daemon/controlServer', () => ({
-  startDaemonControlServer: async () => ({ port: 44323, stop: async () => {} }),
-}));
+// Home HTTP is external; control HTTP, Stop, metadata authority, serialization,
+// currentness and lifecycle retirement remain real.
 afterEach(() => vi.restoreAllMocks());
 
 it('rejoins the exact planned runner restart when Pending input requests Resume', async () => {
@@ -51,7 +47,7 @@ it('rejoins the exact planned runner restart when Pending input requests Resume'
   });
 });
 
-it.each(['owner', 'foreign-account', 'other-home', 'other-machine'] as const)('retires a stopped %s runner using only its own Account authority', async wiring => {
+it.each(['owner', 'explicit-owner', 'explicit-intent-refused', 'foreign-account', 'other-home', 'other-machine'] as const)('retires a stopped %s runner using only its own Account authority', async wiring => {
   await withConfiguredDaemonTestHome({ prefix: 'stop-retirement-' }, async ({ homeDir }) => {
     const sessions = new Map<number, TrackedSession>();
     const credentials = { token: 'fixture-owner', encryption: null } satisfies StoredCredentials;
@@ -73,10 +69,19 @@ it.each(['owner', 'foreign-account', 'other-home', 'other-machine'] as const)('r
       throw new Error(`Unexpected Home read ${path}`);
     });
     let retired = false;
+    let explicitIntent = false;
     vi.spyOn(axios, 'patch').mockImplementation(async (_url, body) => {
-      expect(SessionMetadataTuplePatchV1Schema.parse(body)).toMatchObject({ mode: 'owner_migration', target: {
-        ownerMetadata: { t: 'plain', v: { runtime: { terminal: { controlServiceabilityV1: { retired: true } } } } } } });
-      retired = true;
+      if (wiring === 'explicit-intent-refused') throw Object.assign(new Error('Home refused Stop intent'), { response: { status: 403 } });
+      const patch = SessionMetadataTuplePatchV1Schema.parse(body);
+      if (!explicitIntent && wiring === 'explicit-owner') {
+        expect(patch).toMatchObject({ mode: 'owner_migration', target: {
+          ownerMetadata: { t: 'plain', v: { runtime: { sessionExplicitStopV1: { cause: 'explicit_stop' } } } } } });
+        explicitIntent = true;
+      } else {
+        expect(patch).toMatchObject({ mode: 'owner_migration', target: {
+          ownerMetadata: { t: 'plain', v: { runtime: { terminal: { controlServiceabilityV1: { retired: true } } } } } } });
+        retired = true;
+      }
       return { status: 200, data: { success: true, metadataLayoutVersion: 1,
         sharedMetadata: { version: 2 }, agentState: { version: 0 } } };
     });
@@ -114,7 +119,7 @@ it.each(['owner', 'foreign-account', 'other-home', 'other-machine'] as const)('r
       if (!identity) throw new Error('Missing process fixture identity');
       const sessionId = 'stop-own-account';
       raw = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadataLayoutVersion: 0,
-        metadataVersion: 1, metadata: JSON.stringify({ path: homeDir, hostPid: pid,
+        metadataVersion: 1, metadata: JSON.stringify({ machineId: 'machine', path: homeDir, hostPid: pid,
           hostProcessStartTimeMs: identity.processStartTimeMs, terminal: { mode: 'plain', controlServiceabilityV1: {
             v: 1, attachmentId: 'departed-runner', state: 'servable', observedAt: 1 } } }) });
       const tracked: TrackedSession = { pid, childProcess: child, happySessionId: sessionId, startedBy: 'daemon',
@@ -126,21 +131,31 @@ it.each(['owner', 'foreign-account', 'other-home', 'other-machine'] as const)('r
       sessions.set(pid, tracked);
       await writeSessionMarker({ pid, happySessionId: sessionId, startedBy: 'daemon',
         processStartTimeMs: identity.processStartTimeMs, processCommandHash: hashProcessCommand(identity.command) });
-      child.kill('SIGTERM');
-      await exited;
+      const explicit = wiring === 'explicit-owner' || wiring === 'explicit-intent-refused';
+      if (!explicit) {
+        child.kill('SIGTERM');
+        await exited;
+      }
       let receipt: Awaited<ReturnType<typeof runtime.stopSession>> | undefined;
       const started = Date.now();
-      stopping = runtime.stopSession(sessionId).then(result => { receipt = result; return result; });
+      stopping = (explicit ? fetch(`http://127.0.0.1:${runtime.controlPort}/stop-session`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-happier-daemon-token': runtime.controlToken },
+        body: JSON.stringify({ sessionId }),
+      }).then(async response => StopSessionResultSchema.parse(await response.json())) : runtime.stopSession(sessionId))
+        .then(result => { receipt = result; return result; });
       void stopping.catch(() => {});
-      if (wiring !== 'owner') releaseProfile();
-      await vi.waitFor(() => expect(receipt).toEqual({ status: 'stopped' }), { timeout: 5000 });
-      expect(retired).toBe(wiring === 'owner');
-      if (wiring === 'owner') expect(reads.some(path => path.endsWith('/account/profile'))).toBe(false);
-      expect(sessions.size).toBe(0);
+      if (wiring !== 'owner' && !explicit) releaseProfile();
+      await vi.waitFor(() => expect(receipt).toEqual(wiring === 'explicit-intent-refused'
+        ? { status: 'incomplete', reason: 'explicit_stop_failed' } : { status: 'stopped' }), { timeout: 5000 });
+      expect(retired).toBe(wiring === 'owner' || wiring === 'explicit-owner');
+      expect(explicitIntent).toBe(wiring === 'explicit-owner');
+      if (wiring === 'owner' || explicit) expect(reads.some(path => path.endsWith('/account/profile'))).toBe(false);
+      expect(sessions.size).toBe(wiring === 'explicit-intent-refused' ? 1 : 0);
+      if (wiring === 'explicit-intent-refused') expect(child.exitCode === null && child.signalCode === null).toBe(true);
       console.info('[FIX64] physical Stop and Home retirement', { wiring, elapsedMs: Date.now() - started, reads });
     } finally {
       releaseProfile();
-      await stopping;
+      await stopping?.catch(() => {});
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       await exited;
       sessions.clear();

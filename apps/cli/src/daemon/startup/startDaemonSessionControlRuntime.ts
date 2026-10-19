@@ -4889,46 +4889,44 @@ export async function startDaemonSessionControlRuntime(
       const { metadataContext, ...target } = input;
       return await retireExactTerminalControlServiceability({ ...target, ...metadataContext });
     }
-    // Retiring this daemon Account's own stopped runner is an Account metadata
-    // write, not a new requester execution. Rebuilding its disposed launch
-    // runtime would also prepare Settings, secrets and Connected Accounts.
-    // Attribution only selects the matching credential; Home authorizes the
-    // write and the tuple writer still verifies Account encryption currentness.
-    if (retainedAttribution
-      && retainedAttribution.accountId === params.externalActionAccountId
-      && retainedAttribution.serverId === params.serverId
-      && retainedAttribution.machineId === params.machineId) {
-      return await runWithServerHttpBaseUrl(params.serverBaseUrl, () => retireExactTerminalControlServiceability({
+    return await withSessionStopMetadataContext(input.sessionId, context =>
+      retireExactTerminalControlServiceability({ ...input, ...context,
+        currentness: { ...input.currentness, ...context.currentness, assertCurrent: () => {
+          input.currentness?.assertCurrent?.();
+          context.currentness?.assertCurrent?.();
+        } },
+      }), retainedAttribution);
+  };
+  const withSessionStopMetadataContext = async <T>(
+    sessionId: string,
+    operation: (context: NonNullable<StopSessionOptions['metadataContext']>) => Promise<T>,
+    retainedAttribution?: TrackedSession['requesterWorkAttributionV1'],
+    signal?: AbortSignal,
+  ): Promise<T> => {
+    const tracked = findTrackedSessionByHappySessionId(params.pidToTrackedSession.values(), sessionId);
+    const attribution = retainedAttribution ?? tracked?.requesterWorkAttributionV1 ?? tracked?.spawnOptions?.requesterWorkAttributionV1;
+    // Stop writes Account metadata; it must not construct Settings, secrets or
+    // Connected Accounts just to stop this daemon Account's admitted runner.
+    // Attribution selects credentials, while Home and the tuple writer still
+    // authorize the mutation and verify encryption currentness.
+    if (attribution && attribution.accountId === params.externalActionAccountId
+      && attribution.serverId === params.serverId && attribution.machineId === params.machineId) {
+      return await runWithServerHttpBaseUrl(params.serverBaseUrl, () => operation({
         credentials: params.credentials,
-        ...input,
-        currentness: {
-          ...input.currentness,
-          assertCurrent: () => {
-            input.currentness?.assertCurrent?.();
-            if (controlRuntimeResourcesDisposed || isRuntimePublicationQuiescing()
-              || configuration.activeServerId !== params.serverId) {
-              throw new Error('requester_session_not_current');
-            }
-          },
-        },
+        currentness: { ...(signal ? { signal } : {}), assertCurrent: () => {
+          signal?.throwIfAborted();
+          if (controlRuntimeResourcesDisposed || isRuntimePublicationQuiescing()
+            || configuration.activeServerId !== params.serverId) throw new Error('requester_session_not_current');
+        } },
       }));
     }
-    return await withSessionAccountContext(input.sessionId, async (context) => {
-      await assertSessionAccountCurrent(input.sessionId, context);
-      return await withSessionAccountHome(context, () =>
-        retireExactTerminalControlServiceability({
-          credentials: context?.bootstrap.credentials ?? params.credentials,
-          ...input,
-          ...(context
-            ? {
-                currentness: {
-                  verifyCurrent: () => context.isCurrent(),
-                },
-              }
-            : {}),
-        }),
-      );
-    }, retainedAttribution);
+    return await withSessionAccountContext(sessionId, async context => {
+      await assertSessionAccountCurrent(sessionId, context);
+      return await withSessionAccountHome(context, () => operation({
+        credentials: context?.bootstrap.credentials ?? params.credentials,
+        currentness: { ...(signal ? { signal } : {}), ...(context ? { verifyCurrent: () => context.isCurrent(signal) } : {}) },
+      }));
+    }, retainedAttribution, signal);
   };
   const retireDisconnectedTerminalHostCandidate = async (
     input: Readonly<{
@@ -10671,27 +10669,31 @@ export async function startDaemonSessionControlRuntime(
       },
     );
   };
-  const stopSessionExplicit = async (sessionId: string): Promise<StopSessionResult> => {
-    return await stopSession(sessionId, undefined, undefined, async () => {
-      await withSessionAccountContext(sessionId, async requester => await withSessionAccountHome(requester, async () => {
-        const credentials = requester?.bootstrap.credentials ?? params.credentials;
-        const stopRawSession = await fetchSessionByIdCompat({ token: credentials.token, sessionId });
-        if (!stopRawSession || stopRawSession.id !== sessionId) {
-          throw new Error('Explicit Stop intent could not be persisted for the exact Session');
-        }
-        const accountEncryptionCurrentness = await fetchAccountEncryptionCurrentness({ token: credentials.token });
-        const owner = resolveSessionOwningMachineId({ credentials, rawSession: stopRawSession,
-          accountEncryptionMode: accountEncryptionCurrentness.mode });
-        if (!owner.ok || owner.machineId !== params.machineId) {
-          throw new Error('Explicit Stop target is not owned by this Machine');
-        }
-        await assertSessionAccountCurrent(sessionId, requester);
-        await recordSessionExplicitStopIntent({ credentials, sessionId, rawSession: stopRawSession,
-          accountEncryptionCurrentness,
-          currentness: { verifyCurrent: async () => { await assertSessionAccountCurrent(sessionId, requester); return true; } },
-        });
-      }));
-    });
+  const stopSessionExplicit = async (sessionId: string, signal?: AbortSignal): Promise<StopSessionResult> => {
+    try {
+      return await withSessionStopMetadataContext(sessionId, async metadataContext => {
+        const { credentials } = metadataContext;
+        return await stopSession(sessionId, { metadataContext }, undefined, async () => {
+          const stopRawSession = await fetchSessionByIdCompat({ token: credentials.token, sessionId, signal });
+          if (!stopRawSession || stopRawSession.id !== sessionId) {
+            throw new Error('Explicit Stop intent could not be persisted for the exact Session');
+          }
+          const accountEncryptionCurrentness = await fetchAccountEncryptionCurrentness({ token: credentials.token, signal });
+          const owner = resolveSessionOwningMachineId({ credentials, rawSession: stopRawSession,
+            accountEncryptionMode: accountEncryptionCurrentness.mode });
+          if (!owner.ok || owner.machineId !== params.machineId) {
+            throw new Error('Explicit Stop target is not owned by this Machine');
+          }
+          await recordSessionExplicitStopIntent({ credentials, sessionId, rawSession: stopRawSession,
+            accountEncryptionCurrentness,
+            ...(metadataContext.currentness ? { currentness: metadataContext.currentness } : {}),
+          });
+        }, credentials);
+      }, undefined, signal);
+    } catch (error) {
+      logger.warn('[DAEMON STOP] Explicit Stop could not settle', { sessionId, error: serializeAxiosErrorForLog(error) });
+      return { status: 'incomplete', reason: 'explicit_stop_failed' };
+    }
   };
   const isSessionAlreadyRunning = async (sessionId: string): Promise<boolean> =>
     await isSessionRunnerActive(sessionId);
@@ -16850,8 +16852,8 @@ export async function startDaemonSessionControlRuntime(
       runtimeId: params.runtimeId ?? '',
       readDoctorResourceVitals: params.readDoctorResourceVitals,
       ...(params.readPluginCatalogProjection ? { readPluginCatalogProjection: params.readPluginCatalogProjection } : {}),
-      stopSession: (sessionId, intent) => intent === 'explicit_stop'
-        ? stopSessionExplicit(sessionId) : stopSession(sessionId),
+      stopSession: (sessionId, intent, signal) => intent === 'explicit_stop'
+        ? stopSessionExplicit(sessionId, signal) : stopSession(sessionId),
       spawnSession,
       requestShutdown: () => params.requestShutdown('happier-cli'),
       ...(params.requestSelfRestart

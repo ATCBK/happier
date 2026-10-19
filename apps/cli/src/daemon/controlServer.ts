@@ -727,7 +727,7 @@ export function createDaemonControlApp({
   readDoctorResourceVitals?: () => DoctorSnapshotResourceVitals;
   readPluginCatalogProjection?: () => import('@/plugins/daemon/catalogProjection').DaemonPluginCatalogProjection;
   prepareStopSession?: (trackedSession: TrackedSession) => Promise<void> | void;
-  stopSession: (sessionId: string, intent?: 'explicit_stop') => Promise<StopSessionResult>;
+  stopSession: (sessionId: string, intent?: 'explicit_stop', signal?: AbortSignal) => Promise<StopSessionResult>;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
   requestShutdown: () => void;
   beforeShutdown?: () => Promise<void>;
@@ -3603,11 +3603,14 @@ export function createDaemonControlApp({
       }
     },
     preHandler: requireAuth,
-  }, async (request) => {
+  }, async (request, reply) => {
     const { sessionId } = request.body;
 
     logger.debug(`[CONTROL SERVER] Stop session request: ${sessionId}`);
-    return await stopSession(sessionId, 'explicit_stop');
+    const lifetime = createDaemonControlRequestLifetime(request, reply);
+    try {
+      return await lifetime.run(() => stopSession(sessionId, 'explicit_stop', lifetime.signal));
+    } finally { lifetime.dispose(); }
   });
 
   // Spawn new session
@@ -4222,7 +4225,7 @@ export function startDaemonControlServer({
   readDoctorResourceVitals?: () => DoctorSnapshotResourceVitals;
   readPluginCatalogProjection?: () => import('@/plugins/daemon/catalogProjection').DaemonPluginCatalogProjection;
   prepareStopSession?: (trackedSession: TrackedSession) => Promise<void> | void;
-  stopSession: (sessionId: string, intent?: 'explicit_stop') => Promise<StopSessionResult>;
+  stopSession: (sessionId: string, intent?: 'explicit_stop', signal?: AbortSignal) => Promise<StopSessionResult>;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
   requestShutdown: () => void;
   beforeShutdown?: () => Promise<void>;
