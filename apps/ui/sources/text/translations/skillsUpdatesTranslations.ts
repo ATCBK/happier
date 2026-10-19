@@ -40,6 +40,7 @@ export type SkillsUpdatesTranslation = Readonly<{
   }>;
   choose: Readonly<{
     purpose: (params: Readonly<{ total: number; off: number }>) => string;
+    purposeIdle: string;
     migratedTitle: (params: Count) => string;
     migratedBody: (params: Readonly<{ names: string }>) => string;
     listTitle: string;
@@ -106,6 +107,7 @@ const en: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `You have ${total} skills in your library. ${off} stay off until you choose, so your sessions don’t change yet.`,
+    purposeIdle: 'Decide which of your skills your agents get.',
     migratedTitle: ({ count }) =>
       `${count} ${count === 1 ? 'is' : 'are'} already on, where you used ${count === 1 ? 'it' : 'them'}`,
     migratedBody: ({ names }) =>
@@ -175,6 +177,7 @@ const de: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Deine Bibliothek hat ${total} Skills. ${off} bleiben aus, bis du wählst, deine Sitzungen ändern sich also noch nicht.`,
+    purposeIdle: 'Entscheide, welche deiner Skills deine Agents bekommen.',
     migratedTitle: ({ count }) =>
       `${count} ${count === 1 ? 'ist' : 'sind'} schon dort an, wo du sie genutzt hast`,
     migratedBody: ({ names }) =>
@@ -246,6 +249,7 @@ const fr: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Votre bibliothèque compte ${total} skills. ${off} restent désactivés jusqu’à votre choix : vos sessions ne changent pas encore.`,
+    purposeIdle: 'Choisissez quels skills vos agents reçoivent.',
     migratedTitle: ({ count }) =>
       `${count} ${count === 1 ? 'est déjà activé' : 'sont déjà activés'}, là où vous ${count === 1 ? 'l’avez utilisé' : 'les avez utilisés'}`,
     migratedBody: ({ names }) =>
@@ -316,6 +320,7 @@ const es: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Tienes ${total} habilidades en tu biblioteca. ${off} siguen desactivadas hasta que elijas, así que tus sesiones aún no cambian.`,
+    purposeIdle: 'Decide qué habilidades reciben tus agentes.',
     migratedTitle: ({ count }) =>
       `${count} ya ${count === 1 ? 'está activada' : 'están activadas'} donde las usabas`,
     migratedBody: ({ names }) =>
@@ -386,6 +391,7 @@ const ca: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Tens ${total} habilitats a la biblioteca. ${off} continuen desactivades fins que triïs, així que les sessions encara no canvien.`,
+    purposeIdle: 'Decideix quines habilitats reben els teus agents.',
     migratedTitle: ({ count }) =>
       `${count} ja ${count === 1 ? 'està activada' : 'estan activades'} on les feies servir`,
     migratedBody: ({ names }) =>
@@ -456,6 +462,7 @@ const it: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Hai ${total} skill nella libreria. ${off} restano disattivate finché non scegli, quindi le tue sessioni non cambiano ancora.`,
+    purposeIdle: 'Scegli quali skill ricevono i tuoi agenti.',
     migratedTitle: ({ count }) =>
       `${count} ${count === 1 ? 'è già attiva' : 'sono già attive'} dove le usavi`,
     migratedBody: ({ names }) =>
@@ -526,6 +533,7 @@ const pt: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Você tem ${total} habilidades na biblioteca. ${off} ficam desativadas até você escolher, então suas sessões ainda não mudam.`,
+    purposeIdle: 'Escolha quais habilidades seus agentes recebem.',
     migratedTitle: ({ count }) =>
       `${count} já ${count === 1 ? 'está ativada' : 'estão ativadas'} onde você as usava`,
     migratedBody: ({ names }) =>
@@ -595,6 +603,7 @@ const pl: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `Masz w bibliotece ${total} umiejętności. ${off} pozostaje wyłączonych, dopóki nie wybierzesz, więc Twoje sesje jeszcze się nie zmieniają.`,
+    purposeIdle: 'Wybierz, które umiejętności dostają Twoi agenci.',
     migratedTitle: ({ count }) =>
       `Już włączone tam, gdzie ich używałeś: ${count}`,
     migratedBody: ({ names }) =>
@@ -662,6 +671,7 @@ const ru: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `В вашей библиотеке ${total} навыков. ${off} остаются выключенными, пока вы не выберете, поэтому ваши сессии пока не меняются.`,
+    purposeIdle: 'Выберите, какие скиллы получают ваши агенты.',
     migratedTitle: ({ count }) =>
       `Уже включены там, где вы их использовали: ${count}`,
     migratedBody: ({ names }) =>
@@ -729,6 +739,7 @@ const ja: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `ライブラリには ${total} 個のスキルがあります。選ぶまで ${off} 個はオフのままなので、セッションはまだ変わりません。`,
+    purposeIdle: 'エージェントに渡すスキルを選びます。',
     migratedTitle: ({ count }) => `${count} 個は使っていた場所ですでにオンです`,
     migratedBody: ({ names }) =>
       `${names} はアカウントまたはプロジェクトのコンテキストから来たため、使っていた場所でオンのままです。`,
@@ -793,6 +804,7 @@ const zhHans: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `你的库中有 ${total} 个技能。在你选择之前，${off} 个保持关闭，所以你的会话暂时不会改变。`,
+    purposeIdle: '选择你的代理能获得哪些技能。',
     migratedTitle: ({ count }) => `${count} 个已在你用过的地方开启`,
     migratedBody: ({ names }) =>
       `${names} 来自你的账户或项目上下文，所以在你用过的地方保持开启。`,
@@ -857,6 +869,7 @@ const zhHant: SkillsUpdatesTranslation = {
   choose: {
     purpose: ({ total, off }) =>
       `你的庫中有 ${total} 個技能。在你選擇之前，${off} 個保持關閉，所以你的工作階段暫時不會改變。`,
+    purposeIdle: '選擇你的代理能獲得哪些技能。',
     migratedTitle: ({ count }) => `${count} 個已在你用過的地方開啟`,
     migratedBody: ({ names }) =>
       `${names} 來自你的帳戶或專案上下文，所以在你用過的地方保持開啟。`,

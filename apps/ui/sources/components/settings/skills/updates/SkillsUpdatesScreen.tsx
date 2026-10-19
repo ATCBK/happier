@@ -188,22 +188,21 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
           />
         </ItemGroup>
       ) : nothing ? (
-        <ItemGroup surface="none">
-          <SurfaceStateCard
-            testID="skills.updates.upToDate"
-            size="line"
-            kind="empty"
-            title={
-              !sourced
-                ? t('capabilities.skillsUpdates.updates.noSources')
-                : updates.check.checkedAt !== null
-                ? t('capabilities.skillsUpdates.updates.upToDateChecked', {
-                    time: formatTime(updates.check.checkedAt),
-                  })
-                : t('capabilities.skillsUpdates.updates.upToDate')
-            }
-          />
-        </ItemGroup>
+        // Nothing to review is a state of the page, on its column's edge, not a line floating in a blank one.
+        <SurfaceStateCard
+          testID="skills.updates.upToDate"
+          size="page"
+          kind="empty"
+          title={
+            !sourced
+              ? t('capabilities.skillsUpdates.updates.noSources')
+              : updates.check.checkedAt !== null
+              ? t('capabilities.skillsUpdates.updates.upToDateChecked', {
+                  time: formatTime(updates.check.checkedAt),
+                })
+              : t('capabilities.skillsUpdates.updates.upToDate')
+          }
+        />
       ) : null}
       {groups.ready.length > 0 || applied.length > 0 ? (
         // Once only receipts remain, the group no longer promises a safe update: it says what happened.

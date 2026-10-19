@@ -9,7 +9,9 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Typography } from '@/constants/Typography';
+import { useMachine } from '@/sync/store/hooks';
 import { t } from '@/text';
+import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import type { CapabilitySource } from '@/components/capabilities/facts/CapabilityFacts';
 
 import { SkillOutsideReferencesItem } from '../outsideReferences';
@@ -32,6 +34,7 @@ function formatDay(ms: number): string {
 function sourceRow(
   read: SkillReadResultV1,
   machineName: (machineId: string) => string,
+  homeDir: string | undefined,
   pluginSource?: Extract<CapabilitySource, { kind: 'plugin' }>,
 ): Readonly<{
   title: string;
@@ -71,7 +74,7 @@ function sourceRow(
           machine: machineName(provenance.machineId),
         }),
         subtitle: t('capabilities.skillDetail.source.foundOnBody', {
-          path: provenance.path,
+          path: formatPathRelativeToHome(provenance.path, homeDir),
         }),
         icon: 'desktop',
       };
@@ -124,7 +127,10 @@ export function SkillSourceSection(
   const { read } = props;
   const tracked =
     read.provenance.kind === 'registry' || read.provenance.kind === 'link';
-  const source = sourceRow(read, props.machineName, props.pluginSource);
+  const foundOn = read.provenance.kind === 'machine' ? read.provenance.machineId : null;
+  // The folder is shown the way the machine's person writes it (~/...), from that machine's own home.
+  const homeDir = useMachine(foundOn ?? '', foundOn !== null)?.metadata?.homeDir ?? undefined;
+  const source = sourceRow(read, props.machineName, homeDir, props.pluginSource);
   // Imported bundles are copies of a folder; a skill written here or shipped with Happier has no outside to miss.
   const importedCopy =
     read.provenance.kind === 'registry' ||

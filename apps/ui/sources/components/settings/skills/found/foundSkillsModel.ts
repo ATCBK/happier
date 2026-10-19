@@ -51,6 +51,29 @@ export function foundAgentIds(item: FoundItem): readonly string[] {
   return [...new Set(item.agents)];
 }
 
+/** One skill name on one machine: its row, the agents that read any copy and the folders the copies live in. */
+export type FoundRowGroup = Readonly<{
+  item: FoundItem;
+  agents: readonly string[];
+  /** The folder each copy sits in (the skill's parent directory), in scan order, once each. */
+  folders: readonly string[];
+}>;
+
+/**
+ * One row per skill name: the same skill kept in several agents' folders is one thing to add or compare, so its other
+ * copies fold into the first one given (callers order first, so a name that needs a decision leads its group).
+ */
+export function groupFoundRowsByName(items: readonly FoundItem[]): readonly FoundRowGroup[] {
+  const groups = new Map<string, { item: FoundItem; agents: Set<string>; folders: Set<string> }>();
+  for (const item of items) {
+    const group = groups.get(item.name) ?? { item, agents: new Set<string>(), folders: new Set<string>() };
+    for (const agent of item.agents) group.agents.add(agent);
+    group.folders.add(item.path.replace(/[\\/][^\\/]*[\\/]*$/, ''));
+    groups.set(item.name, group);
+  }
+  return [...groups.values()].map((group) => ({ item: group.item, agents: [...group.agents], folders: [...group.folders] }));
+}
+
 /**
  * One machine's section state (P6 §4.5): what the section says before its rows.
  * - `rows`: there is a result to show (last known included).

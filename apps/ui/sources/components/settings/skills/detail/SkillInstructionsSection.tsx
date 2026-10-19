@@ -425,7 +425,7 @@ export function SkillInstructionsSection(
             </View>
           ) : (
             <SectionContentRow showDivider testID={`${props.testID}:preview`}>
-              <MarkdownView markdown={body} selectable />
+              <MarkdownView markdown={body} selectable profile="document" />
             </SectionContentRow>
           )}
           <SectionContentRow
@@ -465,7 +465,7 @@ export function SkillInstructionsSection(
                   setClipped(event.nativeEvent.layout.height > clipHeight);
               }}
             >
-              <MarkdownView markdown={body} selectable />
+              <MarkdownView markdown={body} selectable profile="document" />
             </View>
           </View>
           {clipped ? (

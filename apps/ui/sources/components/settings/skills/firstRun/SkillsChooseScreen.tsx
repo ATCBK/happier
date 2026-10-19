@@ -102,19 +102,18 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
                   total,
                   off: firstRun.firstVisit.off,
                 })
-              : undefined
+              : t('capabilities.skillsUpdates.choose.purposeIdle')
           }
         />
         {library.status === 'loading' &&
         library.items.length === 0 ? null : !firstRun.eligible ? (
-          <ItemGroup surface="none">
-            <SurfaceStateCard
-              testID="skills.choose.nothingWaits"
-              size="line"
-              kind="empty"
-              title={t('capabilities.skillsUpdates.choose.nothingWaits')}
-            />
-          </ItemGroup>
+          <SurfaceStateCard
+            testID="skills.choose.nothingWaits"
+            size="page"
+            kind="empty"
+            title={t('capabilities.skillsUpdates.choose.nothingWaits')}
+            action={{ label: t('capabilities.skills.allSkills'), onPress: home, testID: 'skills.choose.nothingWaits.back' }}
+          />
         ) : (
           <>
             {firstRun.migrated.length > 0 ? (

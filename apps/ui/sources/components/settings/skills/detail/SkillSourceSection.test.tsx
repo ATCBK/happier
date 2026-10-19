@@ -4,12 +4,13 @@ import type { SkillReadResultV1 } from '@happier-dev/protocol/prompts/library/sk
 import { SkillReadResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storage';
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { t } from '@/text';
 
-import { SkillSourceSection } from './SkillSourceSection';
 import { skillSource } from '../skillsCollectionModel';
+import { SkillSourceSection } from './SkillSourceSection';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -27,6 +28,7 @@ vi.mock('react-native-unistyles', async () => {
 
 afterEach(() => {
   standardCleanup();
+  storage.setState({ machines: {} });
 });
 
 function read(
@@ -153,5 +155,20 @@ describe('SkillSourceSection', () => {
       <SkillSourceSection {...common} read={withReference({ kind: 'written' })} updatePolicy="manual" />,
     );
     expect(screen.findHostByTestId('src:outsideReferences')).toBeNull();
+  });
+  it('writes the folder a found skill came from relative to that machine\'s home', async () => {
+    const machine = createMachineFixture({ id: 'mac-1' });
+    storage.setState({
+      machines: { 'mac-1': { ...machine, metadata: { ...machine.metadata!, homeDir: '/home/leeroy' } } },
+    });
+    const screen = await renderScreen(
+      <SkillSourceSection
+        {...common}
+        read={read({ kind: 'machine', machineId: 'mac-1', path: '/home/leeroy/.claude/skills/code-review', importedAt: 1 } as SkillReadResultV1['provenance'])}
+        updatePolicy="manual"
+      />,
+    );
+    expect(screen.getTextContent()).toContain('~/.claude/skills/code-review');
+    expect(screen.getTextContent()).not.toContain('/home/leeroy');
   });
 });
