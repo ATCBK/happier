@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Text } from 'react-native';
+import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { installNavigationCommonModuleMocks } from '@/components/ui/navigation/navigationTestHelpers';
@@ -39,5 +40,41 @@ describe('WorkspaceScmReviewBody', () => {
       withState.findHostByTestId('scm-comparison-start-review'),
     ).toBeNull();
     expect(withState.findHostByTestId('propose')).toBeNull();
+  });
+
+  it('puts a review\'s status in Start review\'s place on the wide bar and keeps Start review one choice away in the menu', async () => {
+    const { WorkspaceScmReviewBody } = await import('./WorkspaceScmReviewBody');
+    const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+    const onStartReview = vi.fn();
+    const props = {
+      comparison: null,
+      view: 'walkthrough' as const,
+      scopeLabel: 'Pending changes',
+      scopeOptions: [],
+      onSelectComparison: vi.fn(),
+      onSelectView: vi.fn(),
+      explain: false,
+      onExplainChange: vi.fn(),
+      onStartReview,
+      proposeCommits: <Text testID="propose">Propose commits</Text>,
+      renderFiles: () => null,
+    };
+    const unreviewed = await renderScreen(
+      <WorkspaceScmReviewBody {...props} renderWalkthrough={({ renderBar }) => renderBar(null)} />,
+    );
+    expect(unreviewed.findHostByTestId('scm-comparison-start-review')).not.toBeNull();
+
+    const reviewed = await renderScreen(
+      <WorkspaceScmReviewBody {...props}
+        renderWalkthrough={({ renderBar }) => renderBar(null, undefined, <Text testID="review-status">Reviewed · 6 findings</Text>)} />,
+    );
+    expect(reviewed.findHostByTestId('review-status')).not.toBeNull();
+    expect(reviewed.findHostByTestId('propose')).not.toBeNull();
+    expect(reviewed.findHostByTestId('scm-comparison-start-review')).toBeNull();
+    const menu = reviewed.root.find((node) => node.type === DropdownMenu && node.props.testID === 'scm-comparison-more-menu');
+    const row = (menu.props.items as Array<{ id: string; testID?: string }>).find((item) => item.testID === 'scm-comparison-start-review');
+    expect(row).toBeDefined();
+    await act(async () => { menu.props.onSelect(row!.id); });
+    expect(onStartReview).toHaveBeenCalledTimes(1);
   });
 });

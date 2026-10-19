@@ -22,7 +22,7 @@ vi.mock('@/text', async () => {
 });
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ confirmResult: true }).module;
+    return createModalModuleMock({ confirmResult: true, spies: { alert: vi.fn(), confirm: vi.fn(async () => true), show: vi.fn() } }).module;
 });
 vi.mock('@legendapp/list/react-native', async (importOriginal) => {
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
@@ -53,7 +53,27 @@ describe('ScmStashDetailsCore captured stash identity', () => {
         await screen.pressByTestIdAsync(operation);
 
         expect(adapter.show).toHaveBeenCalledWith(stashOid);
-        expect(adapter[operation === 'restore' ? 'pop' : operation === 'discard' ? 'drop' : 'apply']).toHaveBeenCalledWith(stashOid);
+        expect(adapter[operation === 'restore' ? 'pop' : operation === 'discard' ? 'drop' : 'apply']).toHaveBeenCalledWith(stashOid, { onDispatched: expect.any(Function) });
+    });
+
+    it('a discard waiting for approval is neither a failure nor busy work: no alert, no refresh', async () => {
+        const stashOid = 'a'.repeat(40);
+        const { Modal } = await import('@/modal');
+        const adapter = {
+            list: vi.fn(async () => ({ success: true, stashes: [{ stashRef: 'stash@{0}', stashOid, kind: 'branch' as const, branch: 'main' }] })),
+            show: vi.fn(async (_identity: string) => ({ success: true, diff: '' })),
+            pop: vi.fn(async (_identity: string) => ({ success: true })),
+            // The shape the SCM facade hands back once the Action's approval request exists (see scmUiConfirmation.test).
+            drop: vi.fn(async (_identity: string) => ({ success: false, awaitingApproval: true, approvalArtifactId: 'artifact-1' })),
+            apply: vi.fn(async (_identity: string) => ({ success: true })),
+        };
+        const onAfterMutation = vi.fn(async () => {});
+        const { ScmStashDetailsCore } = await import('./ScmStashDetailsCore');
+        const screen = await renderScreen(<ScmStashDetailsCore adapter={adapter as unknown as ScmStashDetailsAdapter} scopeResetKey="repo" onAfterMutation={onAfterMutation} discardButtonTestId="discard" />);
+        await screen.pressByTestIdAsync('discard');
+        expect(adapter.drop).toHaveBeenCalledTimes(1);
+        expect(Modal.alert).not.toHaveBeenCalled();
+        expect(onAfterMutation).not.toHaveBeenCalled();
     });
 
     it('keeps the selected object when a refreshed list reuses its old index for another stash', async () => {
@@ -77,6 +97,6 @@ describe('ScmStashDetailsCore captured stash identity', () => {
 
         expect(screen.getTextContent()).toContain('stash@{1}');
         expect(adapter.show).toHaveBeenLastCalledWith(stashOid);
-        expect(adapter.apply).toHaveBeenCalledWith(stashOid);
+        expect(adapter.apply).toHaveBeenCalledWith(stashOid, { onDispatched: expect.any(Function) });
     });
 });

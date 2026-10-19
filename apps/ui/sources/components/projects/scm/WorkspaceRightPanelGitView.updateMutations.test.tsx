@@ -337,37 +337,37 @@ describe('WorkspaceRightPanelGitView update mutations', () => {
         expect(machineScmRemoteAddMock).toHaveBeenCalledWith(
             'machine-1',
             { cwd: '/repo', name: 'origin', fetchUrl: 'git@example.com:repo.git' },
-            { serverId: 'server-1' },
+            { serverId: 'server-1', onDispatched: expect.any(Function) },
         );
         expect(machineScmRemoteSetUrlMock).toHaveBeenCalledWith(
             'machine-1',
             { cwd: '/repo', name: 'origin', fetchUrl: 'https://example.com/repo.git', pushUrl: null },
-            { serverId: 'server-1' },
+            { serverId: 'server-1', onDispatched: expect.any(Function) },
         );
         expect(machineScmRemoteRemoveMock).toHaveBeenCalledWith(
             'machine-1',
             { cwd: '/repo', name: 'origin' },
-            { serverId: 'server-1' },
+            { serverId: 'server-1', onDispatched: expect.any(Function) },
         );
         expect(machineScmBranchMergeMock).toHaveBeenCalledWith(
             'machine-1',
             { cwd: '/repo', sourceRef: 'origin/main' },
-            { serverId: 'server-1' },
+            { serverId: 'server-1', onDispatched: expect.any(Function) },
         );
         expect(machineScmBranchRebaseMock).toHaveBeenCalledWith(
             'machine-1',
             { cwd: '/repo', sourceRef: 'origin/main' },
-            { serverId: 'server-1' },
+            { serverId: 'server-1', onDispatched: expect.any(Function) },
         );
         expect(machineScmBranchOperationContinueMock).toHaveBeenCalledWith(
             'machine-1',
             { cwd: '/repo', operation: 'merge' },
-            { serverId: 'server-1' },
+            { serverId: 'server-1', onDispatched: expect.any(Function) },
         );
         expect(machineScmBranchOperationAbortMock).toHaveBeenCalledWith(
             'machine-1',
             { cwd: '/repo', operation: 'merge' },
-            { serverId: 'server-1' },
+            { serverId: 'server-1', onDispatched: expect.any(Function) },
         );
         expect(machineScmPullRequestOpenOrReuseMock).toHaveBeenCalledWith(
             'machine-1',

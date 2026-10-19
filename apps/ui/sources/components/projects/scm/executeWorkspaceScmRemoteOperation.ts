@@ -2,7 +2,7 @@ import { executeScmRemoteOperation, type ScmRemoteOperationKind } from '@/scm/op
 import { withWorkspaceScmOperationLock } from '@/scm/operations/withOperationLock';
 import { reportWorkspaceScmOperation, type ScmOperationTracker } from '@/scm/operations/reporting';
 import type { ScmCommitStrategy } from '@/scm/settings/commitStrategy';
-import type { ScmPushRejectPolicy, ScmRemoteConfirmPolicy } from '@/scm/settings/preferences';
+import type { ScmPushRejectPolicy } from '@/scm/settings/preferences';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storage';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
@@ -20,7 +20,6 @@ export async function executeWorkspaceScmRemoteOperation(input: Readonly<{
     scmSnapshot: ScmWorkingSnapshot | null;
     scmWriteEnabled: boolean;
     scmCommitStrategy: ScmCommitStrategy;
-    scmRemoteConfirmPolicy: ScmRemoteConfirmPolicy;
     scmPushRejectPolicy: ScmPushRejectPolicy;
     refreshScmData: () => Promise<void>;
     setScmOperationBusy: (busy: boolean) => void;
@@ -36,7 +35,6 @@ export async function executeWorkspaceScmRemoteOperation(input: Readonly<{
         scmSnapshot: input.scmSnapshot,
         scmWriteEnabled: input.scmWriteEnabled,
         scmCommitStrategy: input.scmCommitStrategy,
-        scmRemoteConfirmPolicy: input.scmRemoteConfirmPolicy,
         scmPushRejectPolicy: input.scmPushRejectPolicy,
         policy: input.policy,
         surface: 'files',
@@ -49,12 +47,13 @@ export async function executeWorkspaceScmRemoteOperation(input: Readonly<{
                 state: storage.getState(),
                 scope: input.scope,
                 operation,
+                deferRunning: true,
                 run,
             });
             return lockResult.started ? { started: true } : lockResult;
         },
-        executeRemoteOperation: async (operation, remoteTarget) => {
-            const options = { serverId: input.scope.serverId };
+        executeRemoteOperation: async (operation, remoteTarget, call) => {
+            const options = { serverId: input.scope.serverId, ...call };
             return operation === 'fetch'
                 ? await machineScmRemoteFetch(input.scope.machineId, {
                     cwd: input.scope.rootPath,

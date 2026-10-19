@@ -1,5 +1,8 @@
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { Modal } from '@/modal';
 import type { CodeLinesExternalScrollView } from '@/components/ui/code/view/CodeLinesViewCore';
 import * as React from 'react';
+import type { FindController } from '@happier-dev/plugin-ui/presentation';
 import { Image, Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import { Text } from '@/components/ui/text/Text';
@@ -178,6 +181,8 @@ function useHunkNotesColumn(input: Readonly<{
 
 export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReviewDiffBlockProps) => {
     const { theme, sessionId, filePath, snapshotSignature } = props;
+    const registerFindRefold = React.useCallback((refold: NonNullable<FindController['refold']>) =>
+        props.findModel?.registerRefold(filePath, refold), [filePath, props.findModel]);
     const findRangesByLineId = React.useSyncExternalStore(
         React.useCallback((listener) => props.findModel?.subscribeFile(filePath, listener) ?? (() => {}), [filePath, props.findModel]),
         () => props.findModel?.getFileSnapshot(filePath).ranges,
@@ -309,7 +314,17 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
             if (imagePreview.status === 'loaded') {
                 return (
                     <View testID={blockTestId} style={[{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12, gap: theme.space.s10 }, noOverflowAnchor]}>
-                        <View
+                        <HappierPressable
+                            testID="scm-review-image-preview"
+                            accessibilityRole="button"
+                            accessibilityLabel={`${t('common.open')}: ${filePath}`}
+                            onPress={async () => {
+                                const { AttachmentImagePreviewModal } = await import('@/components/sessions/attachments/preview/AttachmentImagePreviewModal');
+                                Modal.show({
+                                    component: AttachmentImagePreviewModal,
+                                    props: { images: [{ kind: 'session-image', sessionId, workspaceScope: props.workspaceScope, filePath, title: filePath }] },
+                                });
+                            }}
                             style={{
                                 width: '100%',
                                 maxWidth: 860,
@@ -327,7 +342,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
                                 style={{ width: '100%', height: '100%' }}
                                 accessibilityLabel={t('files.binaryFile')}
                             />
-                        </View>
+                        </HappierPressable>
                         <Text style={{ ...Typography.variant('meta'), color: theme.colors.text.secondary,  }}>
                             {t('files.binaryFile')}
                         </Text>
@@ -396,6 +411,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
             <View style={[props.flat ? FLAT_DIFF_FRAME_STYLE : { borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: theme.colors.border.default }, diffContainerStyle]}>
                 <DiffViewer
                     findActive={props.findActive}
+                    registerFindRefold={registerFindRefold}
                     findRangesByLineId={findRangesByLineId}
                     renderAfterLine={props.hunkNotes ? renderAfterLine : undefined}
                     scrollToLineId={props.scrollToLineId}

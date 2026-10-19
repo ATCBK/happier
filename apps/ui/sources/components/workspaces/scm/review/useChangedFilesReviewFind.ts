@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { matchFindText, type FindOptions, type FindStatus, type FindTextRange } from '@happier-dev/plugin-ui/presentation';
+import { matchFindText, type FindController, type FindOptions, type FindStatus, type FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import type { ChangedFilesReviewDiffStateSource } from './ChangedFilesReviewDiffStore';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import { isKnownBinaryPath } from '@/scm/utils/filePresentation';
@@ -44,6 +44,7 @@ export function createChangedFilesReviewFind() {
     let unsubscribes: Array<() => void> = [];
     let matches: Match[] = [];
     let current: Match | null = null;
+    const refolders = new Map<string, NonNullable<FindController['refold']>>();
     const publish = () => { for (const listener of listeners) listener(); };
     const decorate = () => {
         const rangesByPath = new Map<string, Map<string, FindTextRange[]>>();
@@ -125,6 +126,14 @@ export function createChangedFilesReviewFind() {
             return () => { set.delete(listener); if (!set.size) fileListeners.delete(path); };
         },
         getFileSnapshot: (path: string) => files.get(path) ?? EMPTY_FILE,
+        registerRefold(path: string, refold: NonNullable<FindController['refold']>) {
+            refolders.set(path, refold);
+            return () => { if (refolders.get(path) === refold) refolders.delete(path); };
+        },
+        refold(): ReturnType<NonNullable<FindController['refold']>> {
+            if (!current) return 'noRevealedFold';
+            return refolders.get(current.filePath)?.() ?? 'unsupported';
+        },
         connect(next: Input) {
             input = next;
             for (const path of parsed.keys()) if (!next.paths.includes(path)) parsed.delete(path);

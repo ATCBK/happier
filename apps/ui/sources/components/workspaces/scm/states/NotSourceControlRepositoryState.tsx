@@ -3,6 +3,7 @@ import * as React from 'react';
 import { Modal } from '@/modal';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { t } from '@/text';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 type RepositoryInitResponse = Readonly<{
     success: boolean;
@@ -28,18 +29,10 @@ export function NotSourceControlRepositoryState(props: Readonly<{
         const onInitializeRepository = props.onInitializeRepository;
         if (!onInitializeRepository || busy || props.initializeRepositoryBusy) return;
         void (async () => {
-            const confirmed = await Modal.confirm(
-                t('files.sourceControlOperations.repositoryInit.confirmTitle'),
-                t('files.sourceControlOperations.repositoryInit.confirmBody'),
-                {
-                    confirmText: t('files.sourceControlOperations.repositoryInit.confirm'),
-                    cancelText: t('common.cancel'),
-                },
-            );
-            if (!confirmed) return;
             setBusy(true);
             try {
                 const response = await onInitializeRepository();
+                if (isScmActionNotRun(response)) return;
                 if (!response.success) {
                     Modal.alert(t('common.error'), response.error || t('files.sourceControlOperations.repositoryInit.failed'));
                     return;

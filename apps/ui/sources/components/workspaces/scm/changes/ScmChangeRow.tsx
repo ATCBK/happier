@@ -287,12 +287,9 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                     filePath={file.filePath}
                     fullPath={file.fullPath}
                     preferNameOverPath
-                    alignForRootFiles={false}
+                    align="start"
                     findRanges={props.findRanges?.path}
                     pathTextStyle={{
-                        flex: 0,
-                        flexBasis: 'auto',
-                        flexShrink: 1,
                         ...Typography.variant('body'),
                         color: theme.colors.text.secondary,
                     }}

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import type { RepositoryCheckpointTurnMetadata } from '@happier-dev/protocol';
 import type { SessionAttributedFile } from '@/scm/scmAttribution';
@@ -24,6 +24,8 @@ vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub, createUseLocalSettingMock } = await import('@/dev/testkit/mocks/storage');
     return createStorageModuleStub({ useLocalSetting: createUseLocalSettingMock() });
 });
+const { ChangedFileEvidenceDisclosure, checkpointAttributionDescription, sessionAttributionDescriptions } = await import('./ChangedFileEvidenceDisclosure');
+const { OverlayPortalProvider, OverlayPortalHost } = await import('@/components/ui/popover/OverlayPortal');
 
 const entry: SessionAttributedFile = {
     file: { fileName: 'a.ts', filePath: '', fullPath: 'a.ts', status: 'modified', isIncluded: false, linesAdded: 2, linesRemoved: 1 },
@@ -38,8 +40,16 @@ const entry: SessionAttributedFile = {
 };
 
 describe('ChangedFileEvidenceDisclosure', () => {
+    beforeEach(() => {
+        // Native portal placement waits for the OS layout frame before accepting input.
+        vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+            queueMicrotask(() => callback(0));
+            return 0;
+        });
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
     it('names repeated disclosure buttons with their file paths', async () => {
-        const { ChangedFileEvidenceDisclosure } = await import('./ChangedFileEvidenceDisclosure');
         const secondEntry: SessionAttributedFile = {
             ...entry,
             file: { ...entry.file, fileName: 'b.ts', filePath: 'src/b.ts', fullPath: 'src/b.ts' },
@@ -59,7 +69,6 @@ describe('ChangedFileEvidenceDisclosure', () => {
         expect(new Set(labels).size).toBe(2);
     });
     it('qualifies process-local negative observations without claiming exclusivity', async () => {
-        const { checkpointAttributionDescription } = await import('./ChangedFileEvidenceDisclosure');
         const metadata: RepositoryCheckpointTurnMetadata = { version: 1, scopeId: 'private-scope', baseRefSource: 'turn_start', contentConfidence: 'exact', attributionScope: 'unknown', receipts: [] };
         expect(checkpointAttributionDescription(metadata)).toBe('changedFileEvidence.overlap.unknown');
         expect(checkpointAttributionDescription({ ...metadata, attributionScope: 'no_happier_checkpoint_overlap_observed' })).toBe('changedFileEvidence.overlap.not_observed');
@@ -67,7 +76,6 @@ describe('ChangedFileEvidenceDisclosure', () => {
         expect(checkpointAttributionDescription(null)).toBeNull();
     });
     it('qualifies a Session scope without claiming exclusivity and adds overlap only when it was observed', async () => {
-        const { sessionAttributionDescriptions } = await import('./ChangedFileEvidenceDisclosure');
         expect(sessionAttributionDescriptions({
             attribution: { confidence: 'session_likely', reason: 'checkpoint_no_happier_overlap_observed' },
             checkpointOverlap: 'not_observed',
@@ -86,8 +94,6 @@ describe('ChangedFileEvidenceDisclosure', () => {
     });
 
     it('keeps exact content independent of uncertain attribution and progressively reveals retained sources', async () => {
-        const { ChangedFileEvidenceDisclosure } = await import('./ChangedFileEvidenceDisclosure');
-        const { OverlayPortalProvider, OverlayPortalHost } = await import('@/components/ui/popover/OverlayPortal');
         const focus = vi.fn();
         const screen = await renderScreen(<OverlayPortalProvider><ChangedFileEvidenceDisclosure entry={entry} /><OverlayPortalHost /></OverlayPortalProvider>, {
             createNodeMock: () => ({
@@ -110,8 +116,6 @@ describe('ChangedFileEvidenceDisclosure', () => {
     });
 
     it('discloses when retained evidence was bounded', async () => {
-        const { ChangedFileEvidenceDisclosure } = await import('./ChangedFileEvidenceDisclosure');
-        const { OverlayPortalProvider, OverlayPortalHost } = await import('@/components/ui/popover/OverlayPortal');
         const truncatedEntry: SessionAttributedFile = {
             ...entry,
             content: { source: 'scm_checkpoint', confidence: 'best_effort' },

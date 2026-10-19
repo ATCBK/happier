@@ -124,6 +124,8 @@ type ChangedFilesReviewProps = {
         /** Drawn from Review's own coverage, so the scope's count and the header's count are one number. */
         renderBarLeading: (coverage: ChangedFilesReviewCoverage) => React.ReactNode;
         barTrailing?: React.ReactNode;
+        /** A region the bar's own toggle opens (review comments), directly under the bar and above the files. */
+        belowBar?: React.ReactNode;
         /** The caller's rows, leading the bar's ⋯ menu before Review's display choices. */
         menuSections?: readonly ScmComparisonMenuSection[];
         /** Narrow screens recompose the same toolbar into their standard navigation header. */
@@ -1491,6 +1493,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                 ) : null}
             </HorizontalScrollableRow>
             )}
+            {comparisonChrome?.belowBar ?? null}
             <View style={{ flex: 1, minHeight: 0, flexDirection: indexInRail && showIndex ? 'row' : 'column' }}>
             {indexInRail && showIndex ? (
                 <View testID="scm-comparison-rail" style={chromeStyles.rail}>

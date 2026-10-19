@@ -85,7 +85,7 @@ describe('SourceControlPublishRepositorySection', () => {
             owner: 'acme', ownerKind: 'org', label: 'acme', supportedVisibilities: ['private', 'public'], supportedRemoteUrlKinds: ['https'],
         }));
         const published = vi.fn(async (): Promise<ScmHostingRepositoryPublishResponse> => ({ success: false,
-            errorCode: SCM_OPERATION_ERROR_CODES.REMOTE_PERMISSION_DENIED, error: 'Permission boundary refusal' }));
+            errorCode: SCM_OPERATION_ERROR_CODES.REMOTE_REJECTED, error: 'Permission boundary refusal' }));
         const section = (currentTargets: typeof targets) => <SourceControlPublishRepositorySection theme={createSourceControlUpdateThemeFixture()}
             snapshot={createSnapshot()} writeEnabled publishTargets={ScmHostingRepositoryDescribePublishTargetsResponseSchema.parse({
                 success: true, defaultRepositoryName: 'repo', auth: { state: 'authenticated', profileKind: 'connected_account' }, targets: currentTargets,

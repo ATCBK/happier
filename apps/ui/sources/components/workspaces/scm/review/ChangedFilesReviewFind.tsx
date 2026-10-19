@@ -53,7 +53,7 @@ export function ChangedFilesReviewFindSurface(props: Readonly<{
     };
     const controller: FindController = {
         get query() { return model.query; }, get options() { return model.options; }, get status() { return model.status; },
-        capabilities: model.capabilities, setQuery: model.setQuery, setOptions: model.setOptions, step: model.step, stop: model.stop, close,
+        capabilities: model.capabilities, setQuery: model.setQuery, setOptions: model.setOptions, step: model.step, stop: model.stop, refold: model.refold, close,
     };
     const open = () => {
         focusReturn.capture(model.getSnapshot().open);

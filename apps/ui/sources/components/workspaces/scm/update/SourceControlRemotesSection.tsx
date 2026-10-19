@@ -14,6 +14,7 @@ import {
     SourceControlUpdateSection,
     type SourceControlUpdateTheme,
 } from './SourceControlUpdateControls';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 type RemoteAddRequest = Readonly<{
     name: string;
@@ -85,7 +86,7 @@ export function SourceControlRemotesSection(props: Readonly<{
     }, [updateFetchUrl, updateName, updatePushUrl]);
 
     const showFailure = React.useCallback((fallback: string, response: ScmMutationResponse) => {
-        if (response.outcome || response.success) return;
+        if (response.outcome || response.success || isScmActionNotRun(response)) return;
         Modal.alert(t('common.error'), response.error || fallback);
     }, []);
 
@@ -131,15 +132,6 @@ export function SourceControlRemotesSection(props: Readonly<{
 
     const removeRemote = React.useCallback((remote: ScmRemoteInfo) => {
         void (async () => {
-            const confirmed = await Modal.confirm(
-                t('files.sourceControlOperations.update.remotes.removeConfirmTitle'),
-                t('files.sourceControlOperations.update.remotes.removeConfirmBody', { name: remote.name }),
-                {
-                    confirmText: t('files.sourceControlOperations.update.remotes.remove'),
-                    cancelText: t('common.cancel'),
-                },
-            );
-            if (!confirmed) return;
             setBusy(true);
             try {
                 const response = await props.onRemoveRemote(remote.name);

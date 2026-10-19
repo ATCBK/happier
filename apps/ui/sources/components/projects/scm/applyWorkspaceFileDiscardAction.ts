@@ -3,6 +3,7 @@ import type { ScmCommitStrategy } from '@/scm/settings/commitStrategy';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { machineScmChangeDiscard } from '@/sync/ops/scm/machineScm';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 import { storage } from '@/sync/domains/state/storage';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -47,13 +48,18 @@ export async function applyWorkspaceFileDiscardAction(input: Readonly<{
         state: storage.getState(),
         scope: input.scope,
         operation: 'discard',
-        run: async () => {
+        // The pane shows the discard as work in progress once the confirmed Action is dispatched, not behind its dialog.
+        deferRunning: true,
+        run: async (markRunning) => {
             const response = await machineScmChangeDiscard(input.machineId, {
                 cwd: input.rootPath,
                 entries: [{ path: input.file.fullPath, kind: input.file.status }],
             }, {
                 serverId: input.scope.serverId,
+                onDispatched: markRunning,
             });
+
+            if (isScmActionNotRun(response)) return;
 
             if (!response.success) {
                 const shownDaemonUnavailable = tryShowDaemonUnavailableAlertForScmOperationFailure({

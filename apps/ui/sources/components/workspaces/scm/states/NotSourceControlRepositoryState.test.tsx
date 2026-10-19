@@ -28,8 +28,7 @@ describe('NotSourceControlRepositoryState', () => {
         modalState.alert.mockReset();
     });
 
-    it('confirms before running repository initialization', async () => {
-        modalState.confirm.mockResolvedValue(true);
+    it('initializes the repository without a dialog of its own', async () => {
         const onInitializeRepository = vi.fn(async () => ({ success: true }));
         const onRefresh = vi.fn(async () => {});
         const { NotSourceControlRepositoryState } = await import('./NotSourceControlRepositoryState');
@@ -43,7 +42,7 @@ describe('NotSourceControlRepositoryState', () => {
 
         await screen.pressByTestIdAsync('scm-not-repository-action');
 
-        expect(modalState.confirm).toHaveBeenCalledTimes(1);
+        expect(modalState.confirm).not.toHaveBeenCalled();
         expect(onInitializeRepository).toHaveBeenCalledTimes(1);
         expect(onRefresh).toHaveBeenCalledTimes(1);
     });

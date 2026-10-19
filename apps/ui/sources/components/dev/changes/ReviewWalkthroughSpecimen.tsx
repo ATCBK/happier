@@ -365,7 +365,7 @@ function FinishedCard(props: Readonly<{ resumable: boolean; phone: boolean; heav
         comparisonId: SPECIMEN_COMPARISON.id,
         summary: 'Claude and Codex reviewed the settings change: one real bug in the phone sheet, two things to tidy.',
         overviewMarkdown: 'Claude and Codex reviewed the settings change.',
-        findings: props.heavy ? HEAVY_FINDINGS : [HIGH, DOCS, MEMO, TESTS, NIT],
+        findings: props.heavy ? [...HEAVY_FINDINGS] : [HIGH, DOCS, MEMO, TESTS, NIT],
         questions: [],
         assumptions: [],
         generatedAtMs: new Date(2026, 9, 3, 11, 4).getTime(),
@@ -400,6 +400,7 @@ function OtherRunResults(props: Readonly<{ phone: boolean }>) {
             { id: 'callers', title: 'Callers of the size key', details: 'SettingsModal.tsx and SettingsSheet.tsx; both now use the route key.' },
             { id: 'tests', title: 'Tests still keyed by size', details: 'SettingsModal.test.tsx:65 and :88.' },
         ],
+        generatedAtMs: new Date(2026, 9, 3, 10, 12).getTime(),
     }), []);
     return (
         <SessionTranscriptSourceProvider source={source}>
