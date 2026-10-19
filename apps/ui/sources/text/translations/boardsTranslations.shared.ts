@@ -37,7 +37,7 @@ export type BoardsTranslations = Readonly<{
         machine: string;
     }>;
     card: Readonly<{
-        untitled: string;
+        missing: string;
         unavailable: string;
         unavailableBody: string;
         notLoaded: string;
@@ -173,7 +173,7 @@ export const en: BoardsTranslations = {
         machine: 'Machine',
     },
     card: {
-        untitled: 'Unavailable item',
+        missing: 'Deleted or not shared with you',
         unavailable: 'Unavailable',
         unavailableBody: 'Its Home is not connected on this device. It stays on the board.',
         notLoaded: 'Not loaded yet',

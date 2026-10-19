@@ -217,7 +217,7 @@ describe('board cards', () => {
             availability: 'not_loaded', title: 'common.loading', status: { word: 'common.loading' },
         });
         expect(buildBoardCards([member(ref, false)], facts)[0]).toMatchObject({
-            availability: 'home_unavailable', title: 'boards.card.untitled', status: { word: 'boards.card.unavailable' },
+            availability: 'home_unavailable', title: 'boards.kinds.session', status: { word: 'boards.card.unavailable' },
         });
     });
 
@@ -232,7 +232,7 @@ describe('board cards', () => {
         expect(project(members, facts)[0]?.availability).toBe('not_loaded');
         const settled = { ...facts, missingEntityReason: () => 'source answered without this item' };
         expect(project(members, settled)[0]).toMatchObject({ availability: 'content_unavailable',
-            unavailableReason: 'source answered without this item', status: { word: 'boards.card.unavailable' }, body: { kind: 'none' } });
+            unavailableReason: 'source answered without this item', status: { bucket: 'offline', word: 'boards.card.unavailable' }, body: { kind: 'none' } });
         const row = createSessionListRenderableSessionFixture({ id: ref.qualifiedId.id });
         expect(project(members, { ...settled, session: () => row })[0]?.availability).toBe('ready');
     });

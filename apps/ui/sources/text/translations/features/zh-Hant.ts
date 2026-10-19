@@ -1183,7 +1183,7 @@ const zhHant: BoardsTranslations = {
         machine: '裝置',
     },
     card: {
-        untitled: '無法使用的項目',
+        missing: '已被刪除，或未與你分享',
         unavailable: '無法使用',
         unavailableBody: '它的 Home 未在此裝置上連線。它會保留在面板上。',
         notLoaded: '尚未載入',

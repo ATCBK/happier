@@ -117,6 +117,21 @@ describe('Board body facts', () => {
             availability: 'ready', title: 'Checkout UI retry states', status: { bucket, tone, word },
             body: { kind: 'session', serverId: 'home-a', sessionId: word } });
         const screen = await renderScreen(<>
+    it('says a settled unavailable item once: the kind as its title, one status word and one reason, with no placeholder or repeated kind', async () => {
+        const card = buildBoardCards([{ key: 'gone', ref: { kind: 'session', qualifiedId: { serverId: 'home-a', id: 's-gone' } },
+            picked: true, sourced: false, available: true }], {
+            nowMs: Date.now(), session: () => null, machine: () => null, workflowRun: () => null, workflow: () => null,
+            machineSessionCounts: new Map(), accountScopedHome: () => true,
+            missingEntityReason: () => 'boards.card.missing',
+        })[0]!;
+        const text = (await renderScreen(<BoardCardView card={card} />)).getTextContent();
+        expect(text).toContain('boards.kinds.session');
+        expect(text.split('boards.kinds.session')).toHaveLength(2);
+        expect(text.split('boards.card.unavailable')).toHaveLength(2);
+        expect(text.split('boards.card.missing')).toHaveLength(2);
+        expect(text).not.toContain('boards.card.untitled');
+        expect(text).not.toContain('boards.card.notLoaded');
+    });
             <BoardCardView card={session('Permission required', 'attention', 'needs_you')} showStatusWord={false} />
             <BoardCardView card={session('Idle', 'neutral', 'idle')} showStatusWord={false} />
         </>);

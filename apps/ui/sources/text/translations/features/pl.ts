@@ -1198,7 +1198,7 @@ const pl: BoardsTranslations = {
         machine: 'Maszyna',
     },
     card: {
-        untitled: 'Niedostępny element',
+        missing: 'Usunięte lub niedostępne dla ciebie',
         unavailable: 'Niedostępne',
         unavailableBody: 'Jego Home nie jest połączony na tym urządzeniu. Element zostaje na tablicy.',
         notLoaded: 'Jeszcze nie wczytano',

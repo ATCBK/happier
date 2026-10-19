@@ -353,7 +353,7 @@ function useBoardFacts(membership: BoardMembership, homes: BoardHomes, enabled =
             missingReasons.set(member.key, t(sessionSourceStates[index] === 'retired' ? 'errors.sessionNotFound' : 'boards.card.notLoaded'));
         });
         machineMembers.forEach((member, index) => {
-            if (!machineByKey.get(member.key) && machineSourceStates[index] === 'settled') missingReasons.set(member.key, t('boards.card.notLoaded'));
+            if (!machineByKey.get(member.key) && machineSourceStates[index] === 'settled') missingReasons.set(member.key, t('boards.card.missing'));
         });
         const activeServerId = homes.activeServerId;
         const facts: BoardCardFacts = {
@@ -379,12 +379,12 @@ function useBoardFacts(membership: BoardMembership, homes: BoardHomes, enabled =
                     return library.status === 'failed' || library.loadMoreFailed
                         ? library.failure?.message ?? t('boards.card.notLoaded')
                         : library.deletedDefinitionId === ref.qualifiedId.id || readBoardPagedEntitySourceState(library) === 'settled'
-                            ? t('boards.card.notLoaded') : null;
+                            ? t('boards.card.missing') : null;
                 }
                 if (ref.kind === 'workflow_run' && !runById.get(ref.qualifiedId.id)?.summary) {
                     return runWindow.status === 'failed' || runWindow.loadMoreFailed
                         ? runWindow.failure?.message ?? t('boards.card.notLoaded')
-                        : readBoardPagedEntitySourceState(runWindow) === 'settled' ? t('boards.card.notLoaded') : null;
+                        : readBoardPagedEntitySourceState(runWindow) === 'settled' ? t('boards.card.missing') : null;
                 }
                 return missingReasons.get(buildWorkBoardItemKeyV1(ref)) ?? null;
             },

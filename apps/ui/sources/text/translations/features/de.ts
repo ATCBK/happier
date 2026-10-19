@@ -1182,7 +1182,7 @@ const de: BoardsTranslations = {
         machine: 'Rechner',
     },
     card: {
-        untitled: 'Nicht verfügbares Element',
+        missing: 'Gelöscht oder nicht mit dir geteilt',
         unavailable: 'Nicht verfügbar',
         unavailableBody: 'Das zugehörige Home ist auf diesem Gerät nicht verbunden. Das Element bleibt auf dem Board.',
         notLoaded: 'Noch nicht geladen',

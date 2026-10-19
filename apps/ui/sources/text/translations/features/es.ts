@@ -1188,7 +1188,7 @@ const es: BoardsTranslations = {
         machine: 'Máquina',
     },
     card: {
-        untitled: 'Elemento no disponible',
+        missing: 'Eliminado o no compartido contigo',
         unavailable: 'No disponible',
         unavailableBody: 'Su Home no está conectada en este dispositivo. Se queda en el tablero.',
         notLoaded: 'Aún no se ha cargado',

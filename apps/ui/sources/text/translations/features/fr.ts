@@ -1188,7 +1188,7 @@ const fr: BoardsTranslations = {
         machine: 'Machine',
     },
     card: {
-        untitled: 'Élément indisponible',
+        missing: 'Supprimé ou non partagé avec toi',
         unavailable: 'Indisponible',
         unavailableBody: 'Son Home n\'est pas connecté sur cet appareil. Il reste sur le tableau.',
         notLoaded: 'Pas encore chargé',

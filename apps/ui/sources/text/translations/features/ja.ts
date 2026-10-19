@@ -1188,7 +1188,7 @@ const ja: BoardsTranslations = {
         machine: 'マシン',
     },
     card: {
-        untitled: '利用できない項目',
+        missing: '削除されたか、共有されていません',
         unavailable: '利用できません',
         unavailableBody: 'この項目の Home はこのデバイスに接続されていません。ボードには残ります。',
         notLoaded: 'まだ読み込まれていません',

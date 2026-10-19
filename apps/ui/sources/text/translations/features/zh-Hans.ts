@@ -1183,7 +1183,7 @@ const zhHans: BoardsTranslations = {
         machine: '设备',
     },
     card: {
-        untitled: '不可用的项目',
+        missing: '已被删除，或未与你共享',
         unavailable: '不可用',
         unavailableBody: '它的 Home 未在此设备上连接。它会保留在面板上。',
         notLoaded: '尚未加载',

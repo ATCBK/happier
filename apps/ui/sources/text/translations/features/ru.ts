@@ -1210,7 +1210,7 @@ const ru: BoardsTranslations = {
         machine: 'Машина',
     },
     card: {
-        untitled: 'Недоступный элемент',
+        missing: 'Удалено или не доступно тебе',
         unavailable: 'Недоступно',
         unavailableBody: 'Его Home не подключён на этом устройстве. Элемент остаётся на доске.',
         notLoaded: 'Ещё не загружено',

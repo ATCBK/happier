@@ -167,11 +167,12 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
                     {card.status.word}
                 </Text>}
             </View>
-            <View style={styles.metaRow}>
+            {/* A settled unavailable card is already titled by its kind; the line would only repeat it. */}
+            {unavailable && !loading ? null : <View style={styles.metaRow}>
                 {card.body.kind === 'session'
                     ? <SessionContext serverId={card.body.serverId} sessionId={card.body.sessionId} />
                     : <Text numberOfLines={1} style={styles.kind}>{t(`boards.kinds.${card.ref.kind}`)}</Text>}
-            </View>
+            </View>}
             {body ? <Text style={[styles.body, unavailable ? styles.quiet : null]}>{body}</Text> : null}
             {groupedWord ? <Text testID={`board-card:${card.key}:needs`} style={[styles.body, workStatusWordStyle(card.status.tone)]}>{groupedWord}</Text> : null}
         </View>

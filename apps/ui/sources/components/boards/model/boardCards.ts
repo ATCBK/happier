@@ -128,8 +128,9 @@ function notLoaded(member: BoardMember, availability: Exclude<BoardCardAvailabil
         ref: member.ref,
         picked: member.picked,
         availability,
-        // Only a still-arriving item is loading; settled misses and unavailable Homes have quiet titles.
-        title: availability === 'not_loaded' ? t('common.loading') : t('boards.card.untitled'),
+        // Only a still-arriving item is loading; a settled miss or an unavailable Home is named by its kind, and
+        // the status and one reason line say why. No placeholder title repeats them.
+        title: availability === 'not_loaded' ? t('common.loading') : t(`boards.kinds.${member.ref.kind}`),
         // Not work state: the item cannot be read here. It sits with Offline and never claims trouble.
         status: unavailableStatus(availability),
         body: { kind: 'none' },
@@ -138,7 +139,7 @@ function notLoaded(member: BoardMember, availability: Exclude<BoardCardAvailabil
 
 function unavailableStatus(availability: Exclude<BoardCardAvailability, 'ready'>): WorkStatusPresentation {
     return {
-        bucket: availability === 'home_unavailable' ? 'offline' : 'idle', tone: 'neutral',
+        bucket: availability === 'not_loaded' ? 'idle' : 'offline', tone: 'neutral',
         word: availability === 'not_loaded' ? t('common.loading') : t('boards.card.unavailable'),
     };
 }
@@ -185,7 +186,7 @@ function readBoardWorkStatus(member: BoardMember, facts: BoardCardFacts): WorkSt
         case 'workflow': {
             const workflow = facts.workflow(member.ref);
             if (!workflow) return missingEntity(member, facts).status;
-            if (workflow.unavailableReason) return { bucket: 'idle', tone: 'neutral', word: t('boards.card.unavailable') };
+            if (workflow.unavailableReason) return unavailableStatus('content_unavailable');
             const lastRun = workflow.summary?.lastRun ?? null;
             const lastRunWord = lastRun ? describeWorkflowRunState(lastRun.state).label : null;
             return resolveWorkStatusTone({ kind: 'workflow', facts: {
@@ -254,7 +255,7 @@ function buildCard(member: BoardMember, facts: BoardCardFacts): BoardCard {
                 availability: 'content_unavailable',
                 title: workflow.title,
                 unavailableReason: workflow.unavailableReason,
-                status: { bucket: 'idle', tone: 'neutral', word: t('boards.card.unavailable') },
+                status: unavailableStatus('content_unavailable'),
                 body: { kind: 'none' },
             };
             const lastRun = workflow.summary?.lastRun ?? null;

@@ -1188,7 +1188,7 @@ const ca: BoardsTranslations = {
         machine: 'Màquina',
     },
     card: {
-        untitled: 'Element no disponible',
+        missing: 'Eliminat o no compartit amb tu',
         unavailable: 'No disponible',
         unavailableBody: 'La seva Home no està connectada en aquest dispositiu. Es queda al tauler.',
         notLoaded: 'Encara no s\'ha carregat',
