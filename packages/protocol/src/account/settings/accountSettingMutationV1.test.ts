@@ -27,6 +27,23 @@ function connectedAccountServiceConfigurationsV1Entry(
 }
 
 describe('AccountSettingMutationV1', () => {
+  it('stores an adjustable autonomous exchange check-in without changing delegation depth', () => {
+    expect(accountSettingsParse({}).coordinationAutonomousCheckIn).toEqual({ afterTurns: 5 });
+    for (const afterTurns of [null, 1, 10_000]) {
+      const changed = applyAccountSettingMutationV1({ workDepthLimit: 4 }, {
+        operations: [{ op: 'set', key: 'coordinationAutonomousCheckIn', value: { afterTurns } }],
+      });
+      expect(changed).toEqual({ status: 'applied', raw: {
+        workDepthLimit: 4, coordinationAutonomousCheckIn: { afterTurns },
+      } });
+    }
+    for (const value of [{ afterTurns: 0 }, { afterTurns: -1 }, { afterTurns: 1.5 },
+      { afterTurns: '5' }, { afterTurns: 5, other: true }]) {
+      expect(applyAccountSettingMutationV1({}, {
+        operations: [{ op: 'set', key: 'coordinationAutonomousCheckIn', value }],
+      })).toEqual({ status: 'invalid', reason: 'invalidValue' });
+    }
+  });
   it('preserves a retained Replay budget below the writable floor during an unrelated preference change', () => {
     // This value is retained by the real QA Account; new Replay writes must
     // still meet the seed renderer's structural floor.

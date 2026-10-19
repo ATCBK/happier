@@ -209,6 +209,24 @@ describe('normalizeTransferredAccountSettingsHistoryV1', () => {
 });
 
 describe('applyAccountSettingsHistoryRestoreV1', () => {
+  it('normalizes admitted stored preferences while refusing malformed policy', () => {
+    const origins = { 'acme.plugin': { serverIdentityId: 'srv_home', materializationRef: {
+      machineId: 'machine-one', materializationId: 'materialization-one', pluginId: 'acme.plugin',
+    } } };
+    const history = { sessionReplayMaxSeedChars: 1024, machineAdministrationSelectionsV1: { v: 1,
+      targetsByKey: { agents: { serverIdentityId: 'srv_home', machineId: 'machine-one' } }, pluginExecutionOriginsByPluginId: origins } };
+    expect(applyAccountSettingsHistoryRestoreV1({}, history)).toEqual({ status: 'applied', raw: {
+      schemaVersion: ACCOUNT_SETTINGS_SUPPORTED_SCHEMA_VERSION, sessionReplayMaxSeedChars: 120000,
+      machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: origins },
+    } });
+    for (const malformed of [
+      { sessionAgentSpawnPolicyV1: { allowCrossMachine: 'yes' } },
+      { machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: {
+        'acme.plugin': { serverIdentityId: 'not-an-origin' },
+      } } },
+      { sessionReplayMaxSeedChars: '1024' },
+    ]) expect(applyAccountSettingsHistoryRestoreV1({}, malformed)).toEqual({ status: 'invalid', reason: 'invalidValue' });
+  });
   it('cannot reinstate active Profile entities or retired preference aliases from either history baseline', () => {
     const aliases = { viewInline: true, expandTodos: false, usePickerSearch: true,
       compactSessionView: false, compactSessionViewMinimal: false, reviewPromptAnswered: true,
