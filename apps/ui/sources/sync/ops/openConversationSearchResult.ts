@@ -30,6 +30,7 @@ export async function openConversationSearchResult(input: Readonly<{
         return await openExternalSessionCandidate({ candidate: target.candidate, agentId: target.agentId, source,
             actionsAllowed: true, offline: !machine || !isMachineReachable(accountLifetime.scope, machine), isSelectionCurrent: () => accountLifetime.isCurrent(),
             accountCurrentness: accountLifetime, state: input.state, onLinkingChange: input.onLinkingChange ?? (() => {}),
+            signal: controller.signal,
             resolveCurrentTarget: () => accountLifetime.isCurrent() ? target : null,
             find: { query: target.query, sourceItemId: target.sourceItemId }, openSession: input.openSession,
         }) === 'opened';

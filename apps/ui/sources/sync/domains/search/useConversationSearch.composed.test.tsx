@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
@@ -17,9 +19,10 @@ installHomeGovernanceBoundaries(homes);
 // Only the daemon's serialized Socket response is substituted; hook, store,
 // Account lifetime, search operation, transport and strict candidate codec stay real.
 const scans: Array<{ machineId: string; signal: AbortSignal; cursor?: string; page: ReturnType<typeof createDeferred<unknown>> }> = [];
-const indexedPages: Array<{ cursor?: string; page: ReturnType<typeof createDeferred<unknown>> }> = [];
+const indexedPages: Array<{ cursor?: string; corpora?: readonly string[]; page: ReturnType<typeof createDeferred<unknown>> }> = [];
 let memoryEnabled = false;
 let memoryStatusAvailable = true;
+let documentSearchSupported = false;
 const readyIndex = MemoryStatusV1Schema.parse({
     v: 1, enabled: true, indexMode: 'deep', hintsIndexReady: false, deepIndexReady: true,
     activeIndexReady: true, activeIndexSearchable: true, embeddingsEnabled: false,
@@ -33,12 +36,12 @@ installSessionActionRpcBoundary((request, context) => {
     }
     if (request.method.endsWith(`:${RPC_METHODS.DAEMON_MEMORY_STATUS}`)) {
         if (!memoryStatusAvailable) throw Object.assign(new Error('Memory readiness is unavailable'), { code: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
-        return readyIndex;
+        return { ...readyIndex, documentSearchSupported };
     }
     if (request.method.endsWith(`:${RPC_METHODS.DAEMON_MEMORY_SEARCH}`)) {
         const payload = MemorySearchQueryV1Schema.parse(request.params);
         const page = createDeferred<unknown>();
-        indexedPages.push({ cursor: payload.cursor, page });
+        indexedPages.push({ cursor: payload.cursor, corpora: payload.corpora, page });
         return page.promise;
     }
     expect(request.method.endsWith(`:${RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST}`)).toBe(true);
@@ -74,6 +77,7 @@ beforeEach(async () => {
     indexedPages.length = 0;
     memoryEnabled = false;
     memoryStatusAvailable = true;
+    documentSearchSupported = false;
     input = { query: { v: 1, query: 'amber orchard', scope: { type: 'global' }, mode: 'auto', corpora: ['external_transcripts'] },
         machineIds: ['selected'], mode: 'standard', accountLifetime: lifetime,
         providers: { homeSessions: false, daemonEnabled: true },
@@ -97,6 +101,131 @@ async function start() {
 }
 
 describe('conversation search through real Account/store wiring', () => {
+    it('cancels a stalled scan while its retained view is hidden and retries when presented again', async () => {
+        let presented = true;
+        hook = await renderHook(useConversationSearch, { initialProps: input,
+            wrapper: ({ children }) => React.createElement(PluginSurfaceFocusEligibilityProvider, { active: presented, children }),
+        });
+        await vi.waitFor(() => expect(scans).toHaveLength(1));
+        presented = false;
+        await hook.rerender(input);
+        expect(scans[0]!.signal.aborted).toBe(true);
+        expect(hook.getCurrent().loading).toBe(false);
+        presented = true;
+        await hook.rerender(input);
+        await vi.waitFor(() => expect(scans).toHaveLength(2));
+        await act(async () => { scans[1]!.page.resolve(completedPage()); });
+        await vi.waitFor(() => expect(hook!.getCurrent().loading).toBe(false));
+        expect(hook.getCurrent().result?.hits).toHaveLength(1);
+    });
+
+    it('refreshes empty-query source availability when the exact machine becomes reachable', async () => {
+        const { isMachineReachable, recordMachineRequestFailed, recordMachineRequestSucceeded,
+            clearMachineRequestReachabilityForMachine } = await import('@/sync/domains/machines/reachability/machineReachability');
+        input = { ...input, query: { ...input.query, query: '' }, mode: 'indexed' };
+        const scope = input.accountLifetime!.scope;
+        const observation = { ...scope, machineId: 'selected' };
+        recordMachineRequestFailed(observation);
+        try {
+            hook = await renderHook(useConversationSearch, { initialProps: input });
+            await vi.waitFor(() => expect(hook!.getCurrent().result?.machines).toMatchObject([
+                { machineId: 'selected', status: 'offline', standardSearchEnabled: false },
+            ]));
+            await act(async () => { recordMachineRequestSucceeded(observation); });
+            expect(isMachineReachable(scope, createMachineFixture({ id: 'selected', activeAt: Date.now() }))).toBe(true);
+            await vi.waitFor(() => expect(hook!.getCurrent().result?.machines).toMatchObject([
+                { machineId: 'selected', standardSearchEnabled: true },
+            ]));
+            expect(scans).toHaveLength(0);
+        } finally { clearMachineRequestReachabilityForMachine(scope, 'selected'); }
+    });
+
+    it('merges a changed-file pass by native candidate identity even when its matched message changes', async () => {
+        await start();
+        const candidate = { remoteSessionId: 'native-hit', candidateKey: 'project-a-native-hit', updatedAtMs: 10,
+            match: { snippet: 'amber orchard', sourceItemId: 'first-message', messageIndex: 0 } };
+        await act(async () => scans[0].page.resolve(ExternalSessionsCandidatesListResponseSchema.parse({
+            ok: true, candidates: [candidate], nextCursor: 'changed-pass', contentCoverage: 'partial',
+        })));
+        await vi.waitFor(() => expect(hook!.getCurrent().loading).toBe(false));
+        let pending!: Promise<void>;
+        await act(async () => { pending = hook!.getCurrent().loadMore(hook!.getCurrent().result!.continuations![0]); });
+        await vi.waitFor(() => expect(scans).toHaveLength(2));
+        expect(scans[1].cursor).toBe('changed-pass');
+        await act(async () => {
+            scans[1].page.resolve(ExternalSessionsCandidatesListResponseSchema.parse({ ok: true, contentCoverage: 'complete',
+                candidates: [{ ...candidate, updatedAtMs: 20,
+                    match: { snippet: 'amber orchard changed', sourceItemId: 'second-message', messageIndex: 1 } },
+                    { ...candidate, candidateKey: 'project-b-native-hit' }],
+            }));
+            await pending;
+        });
+        const hits = hook!.getCurrent().result!.hits;
+        expect(hits).toHaveLength(2);
+        expect(hits.filter(row => row.mode === 'standard' && row.candidate.candidateKey === candidate.candidateKey))
+            .toMatchObject([{ candidate: { updatedAtMs: 20, match: { sourceItemId: 'second-message' } } }]);
+    });
+    it('keeps a typed failed source beside successful hits and retries only that source through the page owner', async () => {
+        input = { ...input, machineIds: ['selected', 'unrelated'] };
+        hook = await renderHook(useConversationSearch, { initialProps: input });
+        await vi.waitFor(() => expect(scans).toHaveLength(2));
+        await act(async () => {
+            scans.find(scan => scan.machineId === 'selected')!.page.resolve(ExternalSessionsCandidatesListResponseSchema.parse({
+                ok: false, errorCode: 'agent_error', error: 'private native path', retryable: true,
+            }));
+            scans.find(scan => scan.machineId === 'unrelated')!.page.resolve(completedPage());
+        });
+        await vi.waitFor(() => expect(hook!.getCurrent().loading).toBe(false));
+        const result = hook!.getCurrent().result!;
+        expect(result).toMatchObject({ hits: [{ machineId: 'unrelated' }], failures: [{
+            machineId: 'selected', agentId: 'claude', sourceKey: 'native', errorCode: 'agent_error', retryable: true,
+        }] });
+        const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
+        const schema = getActionSpec('search.conversations').outputSchema!;
+        expect(schema.parse(result)).toEqual(result);
+        expect(schema.safeParse({ ...result, failures: [{ ...result.failures![0], retryable: 'true' }] }).success).toBe(false);
+        expect(schema.safeParse({ ...result, unexpected: true }).success).toBe(false);
+        let pending!: Promise<void>;
+        await act(async () => { pending = hook!.getCurrent().loadMore(result.failures![0]); });
+        await vi.waitFor(() => expect(scans).toHaveLength(3));
+        expect(scans[2]).toMatchObject({ machineId: 'selected', cursor: undefined });
+        expect(hook!.getCurrent().result!.hits).toEqual(result.hits);
+        await act(async () => { scans[2].page.reject(new Error('Native transport failed')); await pending; });
+        expect(hook!.getCurrent().result).toMatchObject({ failures: [{ machineId: 'selected', sourceKey: 'native',
+            errorCode: 'internal_error', retryable: true }], hits: result.hits });
+        await act(async () => { pending = hook!.getCurrent().loadMore(hook!.getCurrent().result!.failures![0]); });
+        await vi.waitFor(() => expect(scans).toHaveLength(4));
+        expect(scans[3]).toMatchObject({ machineId: 'selected', cursor: undefined });
+        await act(async () => { scans[3].page.resolve(completedPage()); await pending; });
+        expect(hook!.getCurrent().result).toMatchObject({ failures: [], hits: expect.arrayContaining(result.hits) });
+        expect(hook!.getCurrent().result!.hits).toHaveLength(2);
+    });
+    it('retains document coverage when a conversation continuation does not search documents again', async () => {
+        memoryEnabled = true;
+        documentSearchSupported = true;
+        input = { ...input, mode: 'indexed', source: undefined,
+            query: { ...input.query, corpora: ['sessions', 'documents'] } };
+        hook = await renderHook(useConversationSearch, { initialProps: input });
+        await vi.waitFor(() => expect(indexedPages).toHaveLength(2));
+        const conversation = indexedPages.find(page => page.corpora?.includes('sessions'))!;
+        const documents = indexedPages.find(page => page.corpora?.includes('documents'))!;
+        await act(async () => {
+            conversation.page.resolve(MemorySearchResultV1Schema.parse({ v: 1, ok: true, hits: [],
+                hasMore: true, nextCursor: 'conversation-more' }));
+            documents.page.resolve(MemorySearchResultV1Schema.parse({ v: 1, ok: true, hits: [], documents: { state: 'ready' } }));
+        });
+        await vi.waitFor(() => expect(hook!.getCurrent().loading).toBe(false));
+        expect(hook!.getCurrent().result!.machines[0].documents).toBe('ready');
+        let pending!: Promise<void>;
+        await act(async () => { pending = hook!.getCurrent().loadMore(hook!.getCurrent().result!.continuations![0]); });
+        await vi.waitFor(() => expect(indexedPages).toHaveLength(3));
+        expect(indexedPages[2]).toMatchObject({ cursor: 'conversation-more', corpora: ['sessions'] });
+        await act(async () => {
+            indexedPages[2].page.resolve(MemorySearchResultV1Schema.parse({ v: 1, ok: true, hits: [], hasMore: false }));
+            await pending;
+        });
+        expect(hook!.getCurrent().result!.machines[0].documents).toBe('ready');
+    });
     it.each([true, false])('retains the indexed producer cursor after a failed memory page and resumes the same index (readiness available: %s)', async available => {
         memoryEnabled = true;
         memoryStatusAvailable = available;
@@ -261,17 +390,24 @@ describe('conversation search through real Account/store wiring', () => {
         } }));
     });
 
-    it('keeps all-Machine searches order-insensitive while reacting to membership changes', async () => {
+    it('keeps all-Machine hits and cursors when background inventory membership and presence change', async () => {
         input = { ...input, machineIds: undefined };
         hook = await renderHook(useConversationSearch, { initialProps: input });
         await vi.waitFor(() => expect(scans).toHaveLength(2));
         await changeInventory(rows => [...rows].reverse());
         expect(scans.every(scan => !scan.signal.aborted)).toBe(true);
         expect(scans).toHaveLength(2);
-        await changeInventory(rows => rows.filter(row => row.id === 'selected'));
-        expect(scans[0].signal.aborted).toBe(true);
-        expect(scans[1].signal.aborted).toBe(true);
-        await vi.waitFor(() => expect(scans).toHaveLength(3));
+        await act(async () => {
+            for (const scan of scans) scan.page.resolve(ExternalSessionsCandidatesListResponseSchema.parse({
+                ...completedPage(), contentCoverage: 'partial', nextCursor: 'remaining',
+            }));
+        });
+        await vi.waitFor(() => expect(hook!.getCurrent().loading).toBe(false));
+        const result = hook!.getCurrent().result;
+        await changeInventory(rows => rows.filter(row => row.id === 'selected').map(row => ({ ...row, active: false })));
+        expect(hook!.getCurrent().result).toBe(result);
+        expect(scans.every(scan => !scan.signal.aborted)).toBe(true);
+        expect(scans).toHaveLength(2);
     });
 
     it('retires the in-flight scan when the real Account lifetime ends', async () => {
@@ -299,26 +435,24 @@ describe('conversation search through real Account/store wiring', () => {
             result: { hits: [{ candidate: { remoteSessionId: 'native-hit' } }] } }));
     });
 
-    it('restarts for selected availability, query and source changes; query changes clear Stop', async () => {
+    it('keeps selected presence changes out of query identity; explicit query and source changes still restart', async () => {
         await start();
         await changeInventory(rows => rows.map(row => row.id === 'selected' ? { ...row, active: false } : row));
-        expect(scans[0].signal.aborted).toBe(true);
-        // Presence grace still admits this just-active Machine; the activity
-        // transition invalidates the old request without inventing offline policy.
-        await vi.waitFor(() => expect(scans).toHaveLength(2));
+        expect(scans[0].signal.aborted).toBe(false);
+        expect(scans).toHaveLength(1);
         await changeInventory(rows => rows.map(row => ({ ...row, active: true })));
-        await vi.waitFor(() => expect(scans).toHaveLength(3));
+        expect(scans).toHaveLength(1);
         await act(async () => hook!.getCurrent().cancel());
         input = { ...input, query: { ...input.query, query: 'silver meadow' } };
         await hook!.rerender(input);
-        await vi.waitFor(() => expect(scans).toHaveLength(4));
+        await vi.waitFor(() => expect(scans).toHaveLength(2));
         input = { ...input, source: { ...input.source!, sourceKey: 'other-native' } };
         await hook!.rerender(input);
-        await vi.waitFor(() => expect(scans).toHaveLength(5));
-        expect(scans[3].signal.aborted).toBe(true);
+        await vi.waitFor(() => expect(scans).toHaveLength(3));
+        expect(scans[1].signal.aborted).toBe(true);
     });
 
-    it('retains published hits when Stop interrupts Search more and inventory changes', async () => {
+    it.each(['unmount', 'Account retirement'])('retains published hits through Stop, resumes the same page and aborts its fresh request on %s', async retirement => {
         await start();
         await act(async () => scans[0].page.resolve(ExternalSessionsCandidatesListResponseSchema.parse({
             ...completedPage(), contentCoverage: 'partial', nextCursor: 'remaining',
@@ -334,5 +468,17 @@ describe('conversation search through real Account/store wiring', () => {
         expect(hook!.getCurrent()).toMatchObject({ loading: false, cancelled: true,
             result: { hits: [{ candidate: { remoteSessionId: 'native-hit' } }], continuations: [continuation] } });
         expect(scans).toHaveLength(2);
+        let resumed!: Promise<void>;
+        await act(async () => { resumed = hook!.getCurrent().loadMore(continuation); });
+        await vi.waitFor(() => expect(scans).toHaveLength(3));
+        expect(scans[2].cursor).toBe(continuation.cursor);
+        expect(scans[2].signal.aborted).toBe(false);
+        expect(hook!.getCurrent()).toMatchObject({ loading: true, cancelled: false,
+            result: { hits: [{ candidate: { remoteSessionId: 'native-hit' } }] } });
+        if (retirement === 'unmount') await hook!.unmount();
+        else await act(async () => connection.dispose());
+        expect(scans[2].signal.aborted).toBe(true);
+        await act(async () => { scans[2].page.resolve(completedPage()); await resumed; });
+        if (retirement !== 'unmount') expect(hook!.getCurrent()).toMatchObject({ loading: false, result: null });
     });
 });

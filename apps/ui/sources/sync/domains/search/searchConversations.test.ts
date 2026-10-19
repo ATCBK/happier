@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
 import type { MemorySearchHitV1 } from '@happier-dev/protocol/memory/memorySearch';
+import { MemorySearchQueryV1Schema } from '@happier-dev/protocol/memory/memorySearch';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import type { ConversationSearchHit } from './searchConversations';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -24,7 +26,7 @@ const requests = installSessionActionRpcBoundary(request => {
     return rpc({ machineId, method, payload: request.params });
 });
 await loadSyncSingletonForTests();
-const { searchConversations, hasConversationSearchScanFallback } = await import('./searchConversations');
+const { searchConversations, hasConversationSearchScanFallback, mergeConversationSearchHits } = await import('./searchConversations');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 const hit = (sessionId: string, time: number, score = 0.5): MemorySearchHitV1 => ({
     sessionId, seqFrom: 1, seqTo: 2, createdAtFromMs: time, createdAtToMs: time, summary: 'quartz match', score,
@@ -57,6 +59,99 @@ beforeEach(async () => {
 });
 afterEach(async () => { await connection?.dispose(); connection = undefined; });
 describe('conversation search fan-out', () => {
+    it('keeps native identity scoped to its Machine and Agent and preserves distinct candidates within the owning source', () => {
+        const row = { machineId: 'one', mode: 'standard', agentId: 'codex', sourceKey: 'first', source: { kind: 'codexHome', home: 'user' },
+            candidate: { remoteSessionId: 'native', candidateKey: 'first-candidate', updatedAtMs: 10,
+                match: { sourceItemId: 'message', snippet: 'quartz', messageIndex: 0 } } } satisfies ConversationSearchHit;
+        const second = { ...row, sourceKey: 'second', candidate: { ...row.candidate, candidateKey: 'second-candidate', updatedAtMs: 20 } };
+        const otherCandidate = { ...row, candidate: { ...row.candidate, candidateKey: 'different-project-candidate' } };
+        expect(mergeConversationSearchHits([row, second, otherCandidate, { ...row, machineId: 'two' }, { ...row, agentId: 'claude' }]))
+            .toEqual([row, otherCandidate, { ...row, machineId: 'two' }, { ...row, agentId: 'claude' }]);
+        const sources = [row, second].map(value => ({ machineId: value.machineId, agentId: value.agentId,
+            sourceKey: value.sourceKey, source: value.source, contentSearch: true }));
+        // A continuation may discover the first source's copy after a newer
+        // second-source hit was already visible. Configured ownership still wins.
+        expect(mergeConversationSearchHits([second, row], sources)).toEqual([row]);
+    });
+    it('assigns a native conversation to its first source while retaining source continuations and unique conversations', async () => {
+        const sources = ['user', 'connectedService'].map(sourceKey => ({ agentId: 'codex', sourceKey,
+            source: { kind: 'codexHome' as const, home: sourceKey,
+                ...(sourceKey === 'connectedService' ? { connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work' } : {}) }, contentSearch: true }));
+        list.mockImplementation(async request => ({ ok: true, contentCoverage: 'partial', nextCursor: `${request.source.home}-cursor`,
+            candidates: [
+                { remoteSessionId: 'same-native-session', candidateKey: `${request.source.home}-candidate`, updatedAtMs: request.source.home === 'user' ? 10 : 20,
+                    match: { snippet: 'quartz', sourceItemId: `${request.source.home}-message`, messageIndex: 0 } },
+                { remoteSessionId: `${request.source.home}-only`, updatedAtMs: 5,
+                    match: { snippet: 'quartz', sourceItemId: 'message', messageIndex: 0 } },
+            ] }));
+        const result = await searchConversations({ ...input, machines: [input.machines[0]], mode: 'standard',
+            query: { ...input.query, corpora: ['external_transcripts'] }, readSources: async () => sources,
+            authorize: async rows => [...rows].reverse() });
+        expect(result.hits).toHaveLength(3);
+        expect(result.hits[0]).toMatchObject({ sourceKey: 'user', candidate: { remoteSessionId: 'same-native-session' } });
+        expect(result.continuations).toEqual([
+            { machineId: 'one', sourceKey: 'user', cursor: 'user-cursor' },
+            { machineId: 'one', sourceKey: 'connectedService', cursor: 'connectedService-cursor' },
+        ]);
+        expect(result.machines).toMatchObject([{ status: 'partial' }]);
+    });
+    it('still merges an indexed and scanned copy of the same native match in either recency order', () => {
+        const indexed = { machineId: 'one', mode: 'indexed', hit: {
+            type: 'external_transcript', source: { type: 'external_transcript', agentId: 'claude', sourceKey: 'local', nativeSessionId: 'native' },
+            sourceItemId: 'message', createdAtFromMs: 10, createdAtToMs: 10, summary: 'quartz', score: 1,
+        } } satisfies ConversationSearchHit;
+        const scanned = { machineId: 'one', mode: 'standard', agentId: 'claude', sourceKey: 'local', source: { kind: 'claudeConfig' },
+            candidate: { remoteSessionId: 'native', candidateKey: 'project-native', updatedAtMs: 20,
+                match: { sourceItemId: 'message', snippet: 'quartz', messageIndex: 0 } },
+        } satisfies ConversationSearchHit;
+        expect(mergeConversationSearchHits([indexed, scanned])).toEqual([scanned]);
+        const newerIndexed = { ...indexed, hit: { ...indexed.hit, createdAtToMs: 30 } };
+        expect(mergeConversationSearchHits([scanned, newerIndexed])).toEqual([newerIndexed]);
+    });
+    it('keeps a failed source beside a successful source on the same Machine and scopes its Retry', async () => {
+        const sources = ['failed', 'healthy'].map(sourceKey => ({ agentId: 'claude', sourceKey,
+            source: { kind: 'claudeConfig' as const, configDir: `/native/${sourceKey}` }, contentSearch: true }));
+        list.mockImplementation(async request => request.source.configDir === '/native/failed'
+            ? { ok: false, errorCode: 'agent_error', retryable: true, error: 'private source path' }
+            : { ok: true, candidates: [{ remoteSessionId: 'healthy-hit', updatedAtMs: 1,
+                match: { snippet: 'quartz', sourceItemId: 'message', messageIndex: 0 } }], contentCoverage: 'complete' });
+        const request = { ...input, machines: [input.machines[0]], mode: 'standard' as const,
+            query: { ...input.query, corpora: ['external_transcripts' as const] }, readSources: async () => sources };
+        const result = await searchConversations(request);
+        expect(result).toMatchObject({ hits: [{ sourceKey: 'healthy' }], failures: [{ machineId: 'one', agentId: 'claude',
+            sourceKey: 'failed', errorCode: 'agent_error', retryable: true }], machines: [{ status: 'partial' }] });
+        list.mockClear().mockResolvedValue({ ok: true, candidates: [], contentCoverage: 'complete' });
+        const retried = await searchConversations({ ...request, retrySource: result.failures![0] });
+        expect(retried.failures).toBeUndefined();
+        expect(retried.completedStandardSources).toEqual([{ machineId: 'one', agentId: 'claude', sourceKey: 'failed' }]);
+        expect(list.mock.calls.map(([call]) => call.source.configDir)).toEqual(['/native/failed']);
+    });
+    it('publishes indexed Session hits while fresh document admission is pending and retains them on document failure', async () => {
+        let releaseDocuments!: () => void;
+        const documents = new Promise<void>(resolve => { releaseDocuments = resolve; });
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return { ...DEFAULT_MEMORY_SETTINGS, enabled: true };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_STATUS) return { ...status, documentSearchSupported: true };
+            const query = MemorySearchQueryV1Schema.parse(call.payload);
+            if (query.corpora?.includes('documents')) {
+                await documents;
+                throw new Error('Document admission transport unavailable');
+            }
+            return { v: 1, ok: true, hits: [hit('known-session', 10)] };
+        });
+        const onProgress = vi.fn();
+        const pending = searchConversations({ ...input, machines: [input.machines[0]],
+            query: { ...input.query, corpora: ['sessions', 'documents'] }, onProgress });
+        try {
+            await vi.waitFor(() => expect(onProgress.mock.calls.some(([page]) => page.hits.some(
+                (row: { hit: { sessionId?: string } }) => row.hit.sessionId === 'known-session',
+            ))).toBe(true));
+            expect(onProgress.mock.calls.at(-1)?.[0].machines).toMatchObject([{ documents: 'pending', status: 'partial' }]);
+        } finally { releaseDocuments(); }
+        const result = await pending;
+        expect(result.hits).toMatchObject([{ hit: { sessionId: 'known-session' } }]);
+        expect(result.machines).toMatchObject([{ documents: 'unavailable', status: 'partial' }]);
+    });
     it('keeps an explicit native scan reachable when the ready memory index fails', async () => {
         rpc.mockImplementation(async call => {
             if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return { ...DEFAULT_MEMORY_SETTINGS, enabled: true,
