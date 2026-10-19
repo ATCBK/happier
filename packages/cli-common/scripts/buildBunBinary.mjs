@@ -49,6 +49,13 @@ const result = await Bun.build({
       build.onResolve({ filter: /^sharp$/ }, (args) => ({
         path: createRequire(args.importer).resolve('sharp'),
       }));
+      // Sharp's platform shims call require.resolve('@img/sharp-libvips-*/binary')
+      // only as a guarded hint. Bun would embed every installed platform's libvips;
+      // the selected one already ships as a sidecar beside the executable.
+      build.onResolve({ filter: /^@img\/sharp-libvips-[^/]+\/binary$/ }, (args) => {
+        if (!/[/\\]node_modules[/\\]@img[/\\]sharp-[^/\\]+[/\\]/.test(args.importer)) return;
+        return { path: args.path, external: true };
+      });
       build.onResolve({ filter: /\.node$/ }, (args) => {
         if (!/[/\\]node_modules[/\\]@img[/\\]sharp-[^/\\]+[/\\]/.test(args.importer)
           || !args.path.startsWith('./lib/')) return;

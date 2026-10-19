@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -41,6 +41,41 @@ describe("sharpRuntime", () => {
         const selected = spawnSync(executablePath, [], { cwd: root, encoding: "utf8", env: { PATH: "", SELECT_OPTIONAL_ADDON: "1" } });
         expect(selected.status).not.toBe(0);
         expect(selected.stderr).toContain("sharp-wasm32-0.35.5.node");
+    });
+
+    it.skipIf(!bunCommand)("does not embed libvips libraries named by Sharp's platform resolution hint", async () => {
+        const root = await mkdtemp(join(tmpdir(), "happier-sharp-libvips-hint-"));
+        tempDirs.push(root);
+        const libvipsMarker = "happier-libvips-embedding-probe-7f3c9a";
+        const libvipsPackageDir = join(root, "node_modules", "@img", "sharp-libvips-linux-x64");
+        await mkdir(join(libvipsPackageDir, "lib"), { recursive: true });
+        await writeFile(join(libvipsPackageDir, "package.json"), JSON.stringify({
+            name: "@img/sharp-libvips-linux-x64",
+            exports: { "./binary": "./lib/libvips-cpp.so.8.18.7" },
+        }));
+        await writeFile(join(libvipsPackageDir, "lib", "libvips-cpp.so.8.18.7"), libvipsMarker);
+        const shimDir = join(root, "node_modules", "@img", "sharp-linux-x64");
+        await mkdir(shimDir, { recursive: true });
+        // Mirrors Sharp 0.35's platform shim; the libvips library ships as a sidecar instead.
+        await writeFile(join(shimDir, "index.cjs"), "try { require.resolve('@img/sharp-libvips-linux-x64/binary'); } catch {}\nmodule.exports = 'shim-loaded';\n");
+        const entrypoint = join(root, "entrypoint.ts");
+        await writeFile(entrypoint, "process.stdout.write(require('./node_modules/@img/sharp-linux-x64/index.cjs'));\n");
+        const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
+        const target = resolveCurrentBinaryTarget({ availableTargets: SERVER_BINARY_TARGETS });
+        const executablePath = join(root, `libvips-hint-probe${target.exeExt}`);
+
+        await compileBunBinary({
+            entrypoint,
+            bunTarget: target.bunTarget,
+            outfile: executablePath,
+            bunCommand,
+            buildRunnerEntrypoint: join(repoRoot, "packages/cli-common/scripts/buildBunBinary.mjs"),
+        });
+
+        expect((await readFile(executablePath)).includes(libvipsMarker)).toBe(false);
+        const launched = spawnSync(executablePath, [], { cwd: root, encoding: "utf8", env: { PATH: "" } });
+        expect(launched.status, launched.stderr).toBe(0);
+        expect(launched.stdout).toBe("shim-loaded");
     });
 
     it.skipIf(!bunCommand).each(["server", "cli"] as const)("loads packaged Sharp native sidecars for %s in a standalone Bun executable", async (role) => {
