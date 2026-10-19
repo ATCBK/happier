@@ -26,6 +26,7 @@ type PendingInactiveSessionActivationResult =
         | 'authorization-stale'
         | 'target-mismatch'
         | 'snapshot-stale'
+        | 'spawn-retryable'
         | 'spawn-ambiguous';
     }>
   | Readonly<{
@@ -242,6 +243,11 @@ async function activateAtAdmittedHome(params: PendingInactiveSessionActivationPa
     || (result.type === 'success' && result.sessionId !== params.sessionId)
   ) {
     return { status: 'not-needed', reason: 'spawn-ambiguous' };
+  }
+  if (result.type === 'error'
+    && result.errorCode === SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED
+    && result.runtimeFailureReason === 'transport_unavailable') {
+    return { status: 'not-needed', reason: 'spawn-retryable' };
   }
   if (result.type === 'error' && result.errorCode === SPAWN_SESSION_ERROR_CODES.SESSION_DIRECTORY_MISSING) {
     return await rejectTerminal('session-directory-missing', failure, result.errorCode, result.runtimeFailureReason);

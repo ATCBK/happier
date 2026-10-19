@@ -79,7 +79,7 @@ function createSession(active: boolean) {
 }
 
 describe('activatePendingInactiveSession', () => {
-  it('retains the exact typed spawn refusal without copying its private message', async () => {
+  it('retains a retryable transport spawn refusal as waiting without copying its private message', async () => {
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSession(false));
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
     const result = await activatePendingInactiveSession({ credentials: tokenOnlyCredentials, machineId: 'machine-1',
@@ -87,10 +87,8 @@ describe('activatePendingInactiveSession', () => {
       spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
         runtimeFailureReason: 'transport_unavailable',
         errorMessage: 'secret credential and transcript' }) });
-    expect(result).toMatchObject({ status: 'rejected', reason: 'spawn-rejected',
-      failureDetails: { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED', runtimeReason: 'transport_unavailable' } });
-    expect(reportPendingSessionActivationFailure).toHaveBeenCalledWith(expect.objectContaining({
-      failureCode: 'runtime_start_failed', failureDetails: { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED', runtimeReason: 'transport_unavailable' } }));
+    expect(result).toEqual({ status: 'not-needed', reason: 'spawn-retryable' });
+    expect(reportPendingSessionActivationFailure).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain('secret');
   });
   it('records a rejected Guard-stopped wake with its native cause, then folds actual runner restoration without changing resume options', async () => {
