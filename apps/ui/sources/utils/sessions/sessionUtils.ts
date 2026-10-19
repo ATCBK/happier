@@ -635,6 +635,16 @@ export function getSessionName(session: SessionDisplayNameSource, serverId?: str
 }
 
 /**
+ * `getSessionName`, or null when nothing names the Session ("Untitled session"): for surfaces that
+ * say their own generic word (a notification, a warning) rather than the untitled one. The name
+ * itself is never decided anywhere else.
+ */
+export function readSessionNameIfNamed(session: SessionDisplayNameSource, serverId?: string | null): string | null {
+    const name = getSessionName(session, serverId);
+    return isUntitledSessionName(name) ? null : name;
+}
+
+/**
  * Generates a deterministic avatar ID from machine ID and path.
  * This ensures the same machine + path combination always gets the same avatar.
  */

@@ -22,7 +22,21 @@ function stopping(stopAt: number): Session {
             sessionGuardStateV1: { v: 1, kind: 'stopping', stopAt, rule: 'idle_sessions' } } as Session['metadata'] });
 }
 
+function stoppingNamed(stopAt: number): Session {
+    return createSessionFixture({ id: 'named', active: true, serverId: 'home-a',
+        metadata: { path: '/w', host: 'leeroy-mbp', homeDir: '/u', machineId: 'm', name: 'Nightly sweep',
+            sessionGuardStateV1: { v: 1, kind: 'stopping', stopAt, rule: 'idle_sessions' } } as Session['metadata'] });
+}
+
 describe('GuardStopWarningDesktopBanners', () => {
+    it('names a Session the way the list and header do, not only by its summary', async () => {
+        storage.setState({ sessions: { named: stoppingNamed(Date.now() + 5 * 60_000) } } as never);
+        const screen = await renderScreen(<GuardStopWarningDesktopBanners />);
+        await act(async () => { await Promise.resolve(); });
+        expect(os.send).toHaveBeenCalledWith(expect.objectContaining({ title: 'Stopping “Nightly sweep” in 5 minutes' }));
+        await screen.unmount?.();
+    });
+
     it('announces a coming guard stop once on this computer, naming the session and when', async () => {
         const stopAt = Date.now() + 5 * 60_000;
         storage.setState({ sessions: { tidy: stopping(stopAt) } } as never);

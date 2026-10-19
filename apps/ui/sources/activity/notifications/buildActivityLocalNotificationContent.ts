@@ -6,7 +6,7 @@ import { summarizeToolInputForNotification, type AgentRequestKind } from '@happi
 import { buildActivityPreviewText, normalizeActivityPreviewText } from '@/activity/attention/buildActivityPreviewText';
 import type { Message } from "@happier-dev/session-core/messages";
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { getSessionName, isUntitledSessionName } from '@/utils/sessions/sessionUtils';
+import { readSessionNameIfNamed } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
 import type { ActivityLocalNotificationEvent } from './runtime/activityLocalNotificationBus';
 
@@ -28,8 +28,7 @@ type ActivityLocalNotificationContent = Readonly<{
 
 function resolveSessionNotificationTitle(session: Session | null | undefined): string {
     // The name every surface shows; only a Session nothing names falls back to the generic title.
-    const name = session ? getSessionName(session) : null;
-    return name && !isUntitledSessionName(name) ? name : t('notifications.activity.defaultSessionTitle');
+    return (session ? readSessionNameIfNamed(session) : null) ?? t('notifications.activity.defaultSessionTitle');
 }
 
 function summarizeAgentRequestBody(requestKind: AgentRequestKind, toolName: string, toolArgs: unknown, includeMessageText: boolean): string {
