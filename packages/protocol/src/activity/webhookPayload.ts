@@ -14,6 +14,8 @@ import { getActionSpec } from '../actions/actionSpecs.js';
 import { MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS } from '../actions/specs/machineTerminal.js';
 import { FollowEventV1Schema } from '../sessions/follow/sessionFollowPolicyV1.js';
 import { SessionFollowSourceMessageV1Schema, SessionFollowSourceRequestsV1Schema } from '../sessions/follow/sessionFollowSourceOccurrenceV1.js';
+import { ExecutionRunFollowOriginalV1Schema, WorkflowRunFollowOriginalV1Schema } from '../sessions/follow/sessionFollowInputV1.js';
+import { DiscussionMessageRefV1Schema } from '../discussions/messageRefs.js';
 
 const followUpdateFields = { event: z.lazy(() => FollowEventV1Schema) };
 const FollowUpdateOriginalV1Schema = lazyZodSchema(() => z.union([
@@ -25,6 +27,22 @@ export const SessionFollowUpdateNotificationV1Schema = lazyZodSchema(() => z.str
   topic: z.literal('follow_update'), sessionId: z.string().check(z.minLength(1)), follow: FollowUpdateOriginalV1Schema,
 }));
 export type SessionFollowUpdateNotificationV1 = z.infer<typeof SessionFollowUpdateNotificationV1Schema>;
+/** Run notices carry their own retained original, never a parent Session occurrence. */
+export const RunFollowUpdateNotificationV1Schema = lazyZodSchema(() => z.strictObject({
+  topic: z.literal('follow_update'), follow: z.strictObject({
+    original: z.union([ExecutionRunFollowOriginalV1Schema, WorkflowRunFollowOriginalV1Schema]),
+    event: z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }),
+  }),
+}));
+export type RunFollowUpdateNotificationV1 = z.infer<typeof RunFollowUpdateNotificationV1Schema>;
+export const DiscussionFollowUpdateNotificationV1Schema = lazyZodSchema(() => z.strictObject({
+  topic: z.literal('follow_update'), follow: z.strictObject({ original: DiscussionMessageRefV1Schema,
+    event: z.strictObject({ kind: z.enum(['person_wrote', 'message']) }) }),
+}));
+export type DiscussionFollowUpdateNotificationV1 = z.infer<typeof DiscussionFollowUpdateNotificationV1Schema>;
+export const SourceFollowUpdateNotificationV1Schema = lazyZodSchema(() => z.union([
+  RunFollowUpdateNotificationV1Schema, DiscussionFollowUpdateNotificationV1Schema,
+]));
 
 const UsageResetNotificationEvidenceV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ProviderAccountUsagePaceWindowV1Schema, {
   observedAtMs: z.number().check(z.int(), z.nonnegative()), previousObservedAtMs: z.number().check(z.int(), z.nonnegative()),
@@ -305,9 +323,20 @@ export const ActivityWebhookPayloadV1Schema = lazyZodSchema(() => z.discriminate
   WorkflowRunUpdateWebhookPayloadV1Schema,
   z.strictObject({ v: z._default(z.literal(1), 1), channelId: z.string().check(z.trim(), z.minLength(1)),
     createdAt: z.number().check(z.int(), z.nonnegative()), topic: z.literal('follow_update'),
-    content: WorkflowActivityWebhookContentV1Schema, follow: FollowUpdateOriginalV1Schema,
-    navigation: z.strictObject({ sessionId: z.string().check(z.minLength(1)) }),
-  }),
+    content: WorkflowActivityWebhookContentV1Schema,
+    follow: z.union([FollowUpdateOriginalV1Schema, RunFollowUpdateNotificationV1Schema.shape.follow,
+      DiscussionFollowUpdateNotificationV1Schema.shape.follow]),
+    navigation: z.union([z.strictObject({ sessionId: z.string().check(z.minLength(1)) }),
+      z.strictObject({ message: DiscussionMessageRefV1Schema }),
+      z.strictObject({ source: z.union([ExecutionRunFollowOriginalV1Schema.shape.source, WorkflowRunFollowOriginalV1Schema.shape.source]) })]),
+  }).check(z.superRefine((payload, ctx) => {
+    if ('original' in payload.follow ? 'kind' in payload.follow.original
+      ? !('message' in payload.navigation) || !sameStrictJsonValue(payload.follow.original, payload.navigation.message)
+      : !('source' in payload.navigation) || !sameStrictJsonValue(payload.follow.original.source, payload.navigation.source)
+      : !('sessionId' in payload.navigation)) {
+      ctx.addIssue({ code: 'custom', path: ['navigation'], message: 'Navigation must match the Follow original' });
+    }
+  })),
 ]));
 
 export type ActivityWebhookPayloadV1 = z.infer<typeof ActivityWebhookPayloadV1Schema>;
@@ -331,7 +360,7 @@ export function buildActivityWebhookPayload(params: Readonly<{
   }> | null;
   metadata?: Readonly<Record<string, unknown>> | undefined;
   notificationOpen?: Readonly<{ kind: 'session'; sessionId: string }> | Readonly<{ kind: 'workflow_run'; runId: string }>;
-  follow?: SessionFollowUpdateNotificationV1['follow'];
+  follow?: SessionFollowUpdateNotificationV1['follow'] | RunFollowUpdateNotificationV1['follow'] | DiscussionFollowUpdateNotificationV1['follow'];
 }>): ActivityWebhookPayloadV1 {
   const common = {
     v: 1,
@@ -345,7 +374,9 @@ export function buildActivityWebhookPayload(params: Readonly<{
   } as const;
   if (params.topic === 'follow_update') {
     return ActivityWebhookPayloadV1Schema.parse({ ...common, follow: params.follow,
-      navigation: { sessionId: params.session?.sessionId } });
+      navigation: params.follow && 'original' in params.follow ? 'kind' in params.follow.original
+        ? { message: params.follow.original } : { source: params.follow.original.source }
+        : { sessionId: params.session?.sessionId } });
   }
   if (params.topic === 'workflow_run_update') {
     return ActivityWebhookPayloadV1Schema.parse({

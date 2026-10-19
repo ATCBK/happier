@@ -1881,10 +1881,16 @@ export async function bootstrapMachineSyncRuntime(
         const rejected = results.find(result => result.status === 'rejected');
         if (rejected?.status === 'rejected') throw rejected.reason;
       });
+      const stopFollowAccountChanges = connectedApiMachine.onSessionFollowRulesChanged(async change => {
+        if (!change || followLifetime.signal.aborted) return;
+        await params.dispatchSessionFollowOccurrence?.({ accountFollowSourcesChanged: change.full ? {} : {
+          workflowRunIds: change.workflowRunIds, discussionIds: change.discussionIds } });
+      });
       const priorFollowLifetimeCleanup = machineConnectionStateCleanup;
       machineConnectionStateCleanup = () => {
         followLifetime.abort();
         stopFollowSessionChanges();
+        stopFollowAccountChanges();
         priorFollowLifetimeCleanup?.();
       };
       const activateRequesterSession = async (
@@ -2278,6 +2284,9 @@ export async function bootstrapMachineSyncRuntime(
       if (params.isShuttingDown()) return;
       await recoverPendingSessionActivationsAfterConnect().catch((error) => {
         logger.warn('[DAEMON RUN] Pending session activation reconnect scan failed; waiting custody retained', error);
+      });
+      await params.dispatchSessionFollowOccurrence?.({ accountFollowSourcesChanged: {} }).catch(error => {
+        logger.warn('[DAEMON RUN] Personal Run Follow reconnect read remains pending', serializeAxiosErrorForLog(error));
       });
       if (params.isShuttingDown()) return;
       await workflowRecoveryTriggers?.onConnected().catch((error) => {

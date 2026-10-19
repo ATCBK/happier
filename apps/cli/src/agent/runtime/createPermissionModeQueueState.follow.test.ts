@@ -98,12 +98,15 @@ describe('protected Follow queue intake', () => {
 describe('protected Follow queue to host context', () => {
   it.each(['represented', 'account-receipt', 'two-originals', 'selected-prefix-gap', 'selected-prefix-one-fits', 'omitted', 'wake', 'withdrawn', 'local-command',
     'request-live-after-version-change', 'request-live-encrypted', 'request-answered', 'request-replaced',
-    'request-other-turn', 'request-withdrawn', 'request-sidechain', 'request-answered-at-dispatch'] as const)('keeps exact accepted-input custody when Follow is %s', async (scenario) => {
+    'request-other-turn', 'request-withdrawn', 'request-sidechain', 'request-answered-at-dispatch', 'run-execution', 'run-workflow',
+    'run-execution-quiet', 'run-workflow-quiet', 'run-execution-withdrawn'] as const)('keeps exact accepted-input custody when Follow is %s', async (scenario) => {
     const observePendingSessionFollow = vi.fn<ApiSessionClient['observePendingSessionFollow']>(async () => ({
       ok: true, v: 1, sessionId: 'destination', publisherGeneration: '1', currentSourceSessionIds: [], observations: [],
     }));
     const acknowledgeSessionFollow = vi.fn<ApiSessionClient['acknowledgeSessionFollow']>(async input => ({
-      ok: true, v: 1, destinationSessionId: 'destination', sourceSessionId: input.sourceSessionId, delivered: input.consumed,
+      ok: true, v: 1, destinationSessionId: 'destination', ...('original' in input
+        ? { localInputId: input.localInputId, original: input.original }
+        : { sourceSessionId: input.sourceSessionId, delivered: input.consumed }),
     }));
     const settlements: unknown[] = [];
     const harness = createFollowHarness({ observePendingSessionFollow, acknowledgeSessionFollow,
@@ -112,11 +115,15 @@ describe('protected Follow queue to host context', () => {
       observeProviderInputSettlement: async input => { settlements.push(input); return true; },
     });
     const requestScenario = scenario.startsWith('request-');
-    const refused = scenario === 'withdrawn' || scenario === 'request-answered' || scenario === 'request-replaced'
+    const runScenario = scenario.startsWith('run-');
+    const refused = scenario === 'withdrawn' || scenario === 'run-execution-withdrawn' || scenario === 'request-answered' || scenario === 'request-replaced'
       || scenario === 'request-other-turn' || scenario === 'request-withdrawn' || scenario === 'request-sidechain'
       || scenario === 'request-answered-at-dispatch';
-    const standalone = scenario === 'wake' || scenario === 'withdrawn' || requestScenario;
-    const follow = requestScenario ? harness.emitDelivery(SessionFollowInputV1Schema.parse({ v: 1, delivery: 'wake',
+    const standalone = scenario === 'wake' || scenario === 'withdrawn' || requestScenario || runScenario && !scenario.endsWith('-quiet');
+    const follow = runScenario ? harness.emitDelivery(SessionFollowInputV1Schema.parse({ v: 1, delivery: scenario.endsWith('-quiet') ? 'next_turn' : 'wake',
+      original: scenario.startsWith('run-execution') ? { source: { kind: 'execution_run', sessionId: 'source', runId: 'run-original' }, terminalEventId: 'terminal-original' }
+        : { source: { kind: 'workflow_run', runId: 'run-original' }, revision: 4 }, event: { kind: 'failed_or_stopped' } }))
+      : requestScenario ? harness.emitDelivery(SessionFollowInputV1Schema.parse({ v: 1, delivery: 'wake',
       original: { sourceSessionId: 'source', sourceRequests: { agentStateVersion: 4,
         requests: [{ requestId: 'question', createdAt: 3, turnId: 'source-turn' }] } },
       requestEvents: [{ requestId: 'question', event: { kind: 'needs_you', type: 'decision' } }] }))
@@ -124,8 +131,10 @@ describe('protected Follow queue to host context', () => {
     const second = scenario === 'two-originals' || scenario === 'selected-prefix-gap' || scenario === 'selected-prefix-one-fits'
       ? harness.emitFollow('important', true, 'follow-second', 5) : null;
     observePendingSessionFollow.mockImplementation(async () => ({ ok: true, v: 1, sessionId: 'destination', publisherGeneration: '1', currentSourceSessionIds: ['source'],
-      observations: scenario === 'withdrawn' ? [] : [{ localInputId: 'follow-input', delivery: follow },
+      observations: scenario === 'withdrawn' || scenario === 'run-execution-withdrawn' ? [] : [{ localInputId: 'follow-input', delivery: follow },
         ...(second ? [{ localInputId: 'follow-second', delivery: second }] : [])].map(({ localInputId, delivery }) => {
+        if ('source' in delivery.original) return { kind: 'admitted_run_input' as const, localInputId,
+          destinationSessionId: 'destination', delivery };
         if (!('sourceMessage' in delivery.original)) return { kind: 'admitted_input' as const, localInputId,
           sourceSessionId: 'source', destinationSessionId: 'destination', delivery,
           delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 3, turn: null },
@@ -235,7 +244,8 @@ describe('protected Follow queue to host context', () => {
         expect(acknowledgeSessionFollow.mock.calls.map(([ack]) => ({ localInputId: 'localInputId' in ack ? ack.localInputId : null,
           consumedSeq: ack.consumed.transcriptSeq }))).toEqual([{ localInputId: 'follow-input', consumedSeq: 4 }]);
       } else {
-        if (!requestScenario) expect(sends[0].prompt).toContain('retained source update');
+        if (runScenario) expect(sends[0].prompt).toContain('run-original');
+        else if (!requestScenario) expect(sends[0].prompt).toContain('retained source update');
         expect(sends[0].meta?.localIds).toEqual(standalone ? ['follow-input']
           : scenario === 'two-originals' ? ['human-input', 'follow-input', 'follow-second'] : ['human-input', 'follow-input']);
         if (scenario === 'two-originals') expect(sends[0].prompt).toContain('retained source update 5');

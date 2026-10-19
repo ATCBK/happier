@@ -115,10 +115,19 @@ export function buildActivityNotificationContent(
     : event.sessionTitle;
   const includePreview = options.previewBehavior === undefined || options.previewBehavior === 'include_preview';
   if (event.topic === 'follow_update') {
+    if ('original' in event.follow) {
+      const original = event.follow.original;
+      if ('kind' in original) return { title: event.follow.event.kind === 'person_wrote'
+        ? 'A person wrote in the discussion' : 'Discussion has a new message', body: '', data: { followOriginal: original,
+          discussionId: original.discussion.discussionId, discussionMessageId: original.messageId } };
+      return { title: event.follow.event.kind === 'finished' ? 'Run finished' : 'Run failed or stopped', body: '',
+        data: { followOriginal: original, ...(original.source.kind === 'workflow_run' ? { runId: original.source.runId }
+          : { sessionId: original.source.sessionId, executionRunId: original.source.runId }) } };
+    }
     const descriptions = { finished: 'Session finished', failed_or_stopped: 'Session failed or stopped',
       stalled: 'Session stalled', update_posted: 'Session posted an update', person_wrote: 'A person wrote in the session',
       goal_changed: 'Session goal changed', message: 'Session has a new message', needs_you: 'Session needs you' };
-    return { title: descriptions[event.follow.event.kind], body: '', data: { sessionId: event.sessionId,
+    return { title: descriptions[event.follow.event.kind], body: '', data: { sessionId: 'sessionId' in event ? event.sessionId : undefined,
       ...(event.follow.sourceMessage ? { activityEventLocalId: event.follow.sourceMessage.localId } : {}),
       ...(event.follow.sourceRequests?.requests.length === 1 ? { requestId: event.follow.sourceRequests.requests[0]!.requestId } : {}),
     } };

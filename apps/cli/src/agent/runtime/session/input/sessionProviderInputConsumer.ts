@@ -805,7 +805,6 @@ async function waitForNextInput<Mode, Message>(
   const metadataWaitRetryBackoffMs =
     opts.metadataWaitRetryBackoffMs ?? DEFAULT_SESSION_METADATA_WAIT_RETRY_BACKOFF_MS;
   const refreshBeforeQueuedBatch = opts.refreshBeforeQueuedBatch !== false;
-  let timedMaterializationRejoinConsumed = false;
 
   while (true) {
     const controller = new AbortController();
@@ -907,10 +906,11 @@ async function waitForNextInput<Mode, Message>(
       }
 
       let winner: WakeWinner | Readonly<{ kind: 'retry' }>;
-      if (materializationRetryAfterMs === null || timedMaterializationRejoinConsumed) {
+      if (materializationRetryAfterMs === null) {
         winner = await armedWake;
       } else {
-        timedMaterializationRejoinConsumed = true;
+        // The Pending owner retains this claim until settlement. Its retry hint
+        // remains live after repeated uncertainty, even without another wake.
         winner = await Promise.race([
           armedWake,
           waitForSessionMetadataRetryBackoff({

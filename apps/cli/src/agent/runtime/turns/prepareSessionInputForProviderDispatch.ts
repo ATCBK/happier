@@ -106,7 +106,9 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
       },
     } } : {}),
   });
-  const renderPrompt = (optionalContext: Pick<Parameters<typeof renderSessionInputContextPromptV1>[0], 'sessionFollowUpdates' | 'workerUpdates'> = {}) => {
+  const renderPrompt = (optionalContext: Pick<Parameters<typeof renderSessionInputContextPromptV1>[0], 'sessionFollowUpdates' | 'workerUpdates'> & {
+    runFollowDeliveries?: PermissionModeQueuedPrompt['followDeliveries'];
+  } = {}) => {
     const rendered = renderSessionInputContextPromptV1({
       provenanceBlock: input.prompt.inputContextBlock ?? '',
       ...context.promptContext,
@@ -115,9 +117,13 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
         ...(input.prompt.returnedAnswer ? [{ reply: input.prompt.returnedAnswer, text: input.transformedUserText }] : [])],
       transformedUserText: input.providerNativeCommand || input.prompt.returnedAnswer ? '' : input.transformedUserText,
     });
-    finalPrompt = input.providerNativeCommand
+    const runFollowNotices = (optionalContext.runFollowDeliveries ?? []).flatMap(({ delivery }) => 'source' in delivery.original
+      ? [`<happier_run_follow>${JSON.stringify({ original: delivery.original,
+        ...('event' in delivery ? { event: delivery.event } : {}) }).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e')}</happier_run_follow>\nRead the original Run result.`] : []);
+    const nativePrompt = input.providerNativeCommand
       ? [input.transformedUserText, rendered].filter(Boolean).join('\n\n')
       : rendered;
+    finalPrompt = [nativePrompt, ...runFollowNotices].filter(Boolean).join('\n');
     return finalPrompt;
   };
   const requiredPrompt = renderPrompt();

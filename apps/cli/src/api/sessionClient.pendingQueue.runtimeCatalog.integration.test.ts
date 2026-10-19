@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios, { AxiosError } from 'axios';
 import { runPermissionModePromptLoop } from '@/agent/runtime/runPermissionModePromptLoop';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
 import { createSessionFollowContextReconciler } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
 import { createSessionFollowSourceHydrator } from '@/agent/runtime/session/follow/sessionFollowSourceHydrator';
 import { createSessionFollowSourceMaterialResolver } from '@/agent/runtime/session/follow/sessionFollowSourceMaterialResolver';
@@ -1544,6 +1546,79 @@ describe('ApiSessionClient pending queue materialization', () => {
             updatedAt: 1_001,
         });
         expect(onUserMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['recover', 'cancel'] as const)('rejoins the same Pending claim through repeated settlement uncertainty until %s', async (outcome) => {
+        const localId = 'retained-first-input';
+        const session = createMockSession({ encryptionMode: 'plain', pendingCount: 1, pendingVersion: 1 });
+        const request = SessionInputRequestV1Schema.parse({
+            v: 1, producer: 'happierApp', caller: { kind: 'host' },
+            permission: { requestedPermissionCeiling: 'default' },
+        });
+        const receipt = SessionInputAdmissionReceiptV1Schema.parse({
+            v: 1, issuer: 'authenticatedAccount', actorAccountId: 'owner', sessionRelationship: 'owner',
+        });
+        const settlementLocalIds: string[] = [];
+        let available = false;
+        const sessionSocket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+            if (event === 'pending-materialize-next') return {
+                ok: true, didMaterialize: true, didWrite: false, localId,
+                pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1,
+                deliveryState: { mode: 'provider', unresolved: true },
+                message: { id: null, seq: null, localId, messageRole: 'user', createdAt: 1, updatedAt: 1,
+                    providerAction: 'send', inputAdmissionReceipt: receipt,
+                    content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'retained prompt' },
+                        localId, meta: { happierInputRequestV1: request } } } },
+            };
+            if (event === 'session-pending-admission-settlement-v1') {
+                settlementLocalIds.push((payload as { localId: string }).localId);
+                return { v: 1, result: available ? { status: 'accepted', localId }
+                    : { status: 'outcomeUnknown', localId, code: 'session_input_settlement_outcome_unknown' } };
+            }
+            return { ok: true };
+        } });
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket: createApiSessionSocketStub() });
+        const client = createClient(session);
+        await waitForPendingInputContract(client);
+        const queue = new MessageQueue2<{ id: string }>(() => 'mode');
+        client.onUserMessage(message => {
+            queue.pushImmediate(message.content.text, { id: 'mode' });
+        });
+        const consumer = createSessionProviderInputConsumer({
+            messageQueue: queue,
+            session: {
+                waitForMetadataUpdate: signal => client.waitForMetadataUpdate(signal),
+                materializeNextPendingMessageSafely: options => client.materializeNextPendingMessageSafely(options),
+                getMetadataSnapshot: () => client.getMetadataSnapshot(),
+                hasPendingProviderInput: () => client.hasPendingProviderInput(),
+                reconcilePendingProviderInputCustodyBeforeMaterialization: () => client.reconcilePendingProviderInputCustodyBeforeMaterialization(),
+            },
+            reconcileWhenEmpty: 'skip',
+        });
+        const controller = new AbortController();
+        vi.useFakeTimers();
+        const delivered: unknown[] = [];
+        const waiting = consumer.waitForNextInput({ abortSignal: controller.signal });
+        void waiting.then(value => { delivered.push(value); });
+        try {
+            await vi.advanceTimersByTimeAsync(0);
+            await vi.advanceTimersByTimeAsync(500);
+            expect(delivered).toEqual([]);
+            available = true;
+            if (outcome === 'cancel') controller.abort();
+            await vi.advanceTimersByTimeAsync(500);
+            expect(delivered).toEqual(outcome === 'recover'
+                ? [expect.objectContaining({ message: 'retained prompt' })] : [null]);
+            expect(new Set(settlementLocalIds)).toEqual(new Set([localId]));
+            expect(settlementLocalIds.length).toBeGreaterThan(2);
+            const completedSettlements = settlementLocalIds.length;
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(settlementLocalIds).toHaveLength(completedSettlements);
+        } finally {
+            controller.abort();
+            await waiting;
+            vi.useRealTimers();
+        }
     });
 
     it('does not redrive materialization over HTTP after a connected socket RPC becomes ambiguous', async () => {

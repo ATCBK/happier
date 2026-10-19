@@ -2071,8 +2071,8 @@ export async function runHostSessionRuntime(
         for (const item of workerItems) if (!await item.recheckAdmission(recheckSignal)) return false;
         return !recheckSignal.aborted;
       },
-      acknowledgeAccepted: (input) => {
-        follow?.acknowledgeAccepted(input);
+      acknowledgeAccepted: (input, pendingSettlement) => {
+        follow?.acknowledgeAccepted(input, pendingSettlement);
         for (const item of workerItems) item.acknowledgeAccepted();
       },
     };
@@ -2193,10 +2193,10 @@ export async function runHostSessionRuntime(
   });
   permissionHandler.setPermissionMode(initialPermissionMode);
 
-  const acceptedEffectByPendingLocalId = new Map<string, Array<() => void>>();
+  const acceptedEffectByPendingLocalId = new Map<string, Array<(pendingSettlement?: Promise<void>) => void>>();
   const registerProviderAcceptedEffect = (
     localId: string,
-    onAccepted: (() => void) | null,
+    onAccepted: ((pendingSettlement?: Promise<void>) => void) | null,
   ): void => {
     if (!onAccepted) {
       acceptedEffectByPendingLocalId.delete(localId);
@@ -2206,13 +2206,13 @@ export async function runHostSessionRuntime(
     if (effects) effects.push(onAccepted);
     else acceptedEffectByPendingLocalId.set(localId, [onAccepted]);
   };
-  const observeAcceptedEffect = (localId: string): void => {
+  const observeAcceptedEffect = (localId: string, pendingSettlement?: Promise<void>): void => {
     const effects = acceptedEffectByPendingLocalId.get(localId);
     if (!effects) return;
     acceptedEffectByPendingLocalId.delete(localId);
     for (const effect of effects) {
       try {
-        effect();
+        effect(pendingSettlement);
       } catch {
         // Acceptance is authoritative; one settlement cannot invalidate another.
       }

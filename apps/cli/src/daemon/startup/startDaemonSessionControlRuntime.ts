@@ -13299,7 +13299,7 @@ export async function startDaemonSessionControlRuntime(
               throw new Error(
                 'connected_account_purpose_binding_owner_unavailable',
               );
-            await assertSessionAccountCurrent(parentSessionId, context);
+            await assertSessionAccountCurrent(parentSessionId, context, undefined, signal);
             const lease = await withSessionAccountHome(context, async () =>
               activate(input),
             );
@@ -16722,7 +16722,7 @@ export async function startDaemonSessionControlRuntime(
     dispatcher: ReturnType<typeof createSessionFollowOccurrenceDispatcher> }> | null = null;
   const dispatchSessionFollowOccurrence = async (request: import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowOccurrenceDispatch): Promise<import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowReceiverRangeResult | SessionActivityChangedResult | void> => {
     if (isRuntimePublicationQuiescing()) return;
-    const sessionId = 'sourceSessionIdChanged' in request ? null : 'observations' in request ? request.destinationSessionId
+    const sessionId = 'sourceSessionIdChanged' in request || 'accountFollowSourcesChanged' in request ? null : 'observations' in request ? request.destinationSessionId
       : request.destinationSessionId ?? ('original' in request.occurrence
         ? request.occurrence.original.source.kind === 'execution_run' ? request.occurrence.original.source.sessionId : request.contextSessionId ?? null
         : request.occurrence.sourceSessionId);
@@ -16755,6 +16755,7 @@ export async function startDaemonSessionControlRuntime(
           })(dispatch),
         });
         try {
+          if ('accountFollowSourcesChanged' in request) return await dispatcher.dispatchAccountSourceRange(request.accountFollowSourcesChanged);
           if ('sourceSessionIdChanged' in request) return { coveredEvents: [], receiverSessionIds: await dispatcher.readReceiverSessionIds() };
           if ('observations' in request) return await dispatcher.dispatchReceiverRange(request);
           if (request.destinationSessionId !== undefined) await dispatcher.dispatchReceiver({ occurrence: request.occurrence, destinationSessionId: request.destinationSessionId });
@@ -16801,7 +16802,11 @@ export async function startDaemonSessionControlRuntime(
         });
         sourceFollow = { machine, dispatcher, personalSettingsLifetime, isCurrent };
       }
-      if ('sourceSessionIdChanged' in request) return { coveredEvents: [], receiverSessionIds: await sourceFollow.dispatcher.readReceiverSessionIds() };
+      if ('accountFollowSourcesChanged' in request) return await sourceFollow.dispatcher.dispatchAccountSourceRange(request.accountFollowSourcesChanged);
+      if ('sourceSessionIdChanged' in request) {
+        await sourceFollow.dispatcher.dispatchAccountSourceRange({ sourceSessionId: request.sourceSessionIdChanged });
+        return { coveredEvents: [], receiverSessionIds: await sourceFollow.dispatcher.readReceiverSessionIds() };
+      }
       if ('observations' in request) return await sourceFollow.dispatcher.dispatchReceiverRange(request);
       if (request.destinationSessionId !== undefined) await sourceFollow.dispatcher.dispatchReceiver({ occurrence: request.occurrence, destinationSessionId: request.destinationSessionId });
       else return await sourceFollow.dispatcher.dispatch(request.occurrence);

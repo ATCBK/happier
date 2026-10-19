@@ -2,7 +2,7 @@ import { isSessionPersonallyTrackedForViewerV1 } from '@happier-dev/protocol/ses
 import { resolveSessionPersonalEventEligibilityV1, resolveSessionPersonalFollowEventV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
 import { resolveEffectiveAccountFollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import type { FollowEventV1, FollowPolicyV1, ResolveFollowDeliveryV1Params } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
-import { SessionFollowUpdateNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
+import { SessionFollowUpdateNotificationV1Schema, SourceFollowUpdateNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
 
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import type { ActivityNotificationEvent } from './activityNotificationEvent';
@@ -22,11 +22,19 @@ export async function resolveSessionActivityNotificationAdmission(params: Readon
   admittedRulePolicies?: readonly FollowPolicyV1[];
 }>): Promise<Readonly<{ eligible: boolean; homeOwnsPush?: true; follow?: ResolveFollowDeliveryV1Params }>> {
   const { event } = params;
+  if (event.topic === 'follow_update' && 'original' in event.follow) {
+    // The exact source and own Account Follow were admitted by the source route;
+    // channel selection stays at the same canonical policy owner.
+    return SourceFollowUpdateNotificationV1Schema.safeParse(event).success && params.admittedRulePolicies?.length
+      ? { eligible: true, follow: { policies: params.admittedRulePolicies, event: event.follow.event } }
+      : { eligible: false };
+  }
   if (event.topic !== 'ready' && event.topic !== 'permission_request' && event.topic !== 'user_action_request' && event.topic !== 'follow_update') {
     return { eligible: true };
   }
   if (event.topic === 'follow_update' && !SessionFollowUpdateNotificationV1Schema.safeParse(event).success) return { eligible: false };
   if (!params.fetchSessionNotificationContext) return { eligible: false };
+  if (!('sessionId' in event)) return { eligible: false };
   const session = await params.fetchSessionNotificationContext(event.sessionId);
   if (!session || session.id !== event.sessionId || !session.viewer || !session.effectiveAccess) return { eligible: false };
   const access = session.effectiveAccess;

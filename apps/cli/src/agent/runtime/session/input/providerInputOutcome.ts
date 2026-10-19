@@ -221,7 +221,7 @@ export type DurableProviderInputAcceptanceV1 = 'accepted' | 'not_accepted' | 'un
 export type SessionProviderInputOutcomeTarget = Readonly<{
     sessionId: string;
     hasPendingProviderInput(localId: string): boolean;
-    observeProviderInputSettlement(outcome: SessionProviderInputOutcome): void;
+    observeProviderInputSettlement(outcome: SessionProviderInputOutcome): void | Promise<boolean | void>;
 }>;
 
 function readNonBlank(value: unknown): string | null {
@@ -358,7 +358,7 @@ export function createSessionProviderInputOutcomeNormalizer(params: Readonly<{
         selection: ProviderBoundModelRef;
     }> | null;
     discardAppliedModel?(localId: string): void;
-    observeAcceptedEffect?(localId: string): void;
+    observeAcceptedEffect?(localId: string, pendingSettlement?: Promise<void>): void;
     discardAcceptedEffect?(localId: string): void;
 }>): (outcome: HostProviderInputOutcomeEvidence) => void {
     const decisiveOutcomeBySessionAndLocalId = new Map<
@@ -404,15 +404,23 @@ export function createSessionProviderInputOutcomeNormalizer(params: Readonly<{
         }
         if (outcome.kind === 'accepted') {
             const appliedModel = params.takeAppliedModel?.(outcome.localId) ?? null;
+            let settlement: void | Promise<boolean | void>;
             try {
-                target.observeProviderInputSettlement(
+                settlement = target.observeProviderInputSettlement(
                     appliedModel ? { ...outcome, appliedModel } : outcome,
                 );
-            } finally {
-                // Acceptance is one authoritative provider fact with independent consumers.
-                // A broken Pending observer must not leave replay carry-over live and duplicate it.
+            } catch (error) {
                 params.observeAcceptedEffect?.(outcome.localId);
+                throw error;
             }
+            // Native acceptance retires replay custody immediately. Follow
+            // receives the existing Pending write to join before its own ACK;
+            // the server still verifies durability if that write fails.
+            if (settlement) params.observeAcceptedEffect?.(outcome.localId, settlement.then(
+                () => undefined,
+                () => undefined,
+            ));
+            else params.observeAcceptedEffect?.(outcome.localId);
             return;
         }
         target.observeProviderInputSettlement(outcome);

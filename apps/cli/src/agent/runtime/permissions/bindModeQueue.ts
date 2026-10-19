@@ -107,7 +107,7 @@ export type InFlightSteerController = Readonly<{
   /** Register a localId-correlated host effect consumed by canonical provider acceptance. */
   registerProviderAcceptedEffect: (
     localId: string,
-    onAccepted: (() => void) | null,
+    onAccepted: ((pendingSettlement?: Promise<void>) => void) | null,
   ) => void;
   /** Collect destination-owned Follow context at the steer provider-effect boundary. */
   prepareHostContext?: (input: Readonly<{
@@ -737,13 +737,13 @@ export function registerPermissionModeMessageQueueBinding(opts: {
               steer.registerProviderAcceptedEffect(
                 localId,
                 settleReplaySeedOnProviderAcceptance || preparedSessionFollowContext
-                  ? () => {
+                  ? (pendingSettlement) => {
                       if (settleReplaySeedOnProviderAcceptance) confirmProviderPromptAccepted();
                       preparedSessionFollowContext?.acknowledgeAccepted({
                         kind: 'admitted_input',
                         localInputId: localId,
                         userMessageSeq,
-                      });
+                      }, pendingSettlement);
                     }
                   : null,
               );

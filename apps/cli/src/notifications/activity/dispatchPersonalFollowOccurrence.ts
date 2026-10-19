@@ -1,6 +1,11 @@
 import type { SessionFollowRuleSourceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
 import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
-import { SessionFollowUpdateNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
+import { SessionFollowUpdateNotificationV1Schema, SourceFollowUpdateNotificationV1Schema,
+  type DiscussionFollowUpdateNotificationV1 } from '@happier-dev/protocol/activity/webhookPayload';
+import type { SessionFollowRunOccurrence } from '@/daemon/sessions/sessionActivityChangedContract';
+import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
@@ -9,9 +14,10 @@ import type { SessionActivityChangedResult } from '@/daemon/sessions/sessionActi
 
 type WithoutPublisher<T> = T extends unknown ? Omit<T, 'sourcePublisher'> : never;
 
-export type PersonalFollowOccurrenceDispatch = Readonly<{
-  sourceSessionId: string;
-  occurrence: WithoutPublisher<SessionFollowRuleSourceOccurrenceV1>;
+export type PersonalFollowOccurrenceDispatch = Readonly<({
+  sourceSessionId: string; occurrence: WithoutPublisher<SessionFollowRuleSourceOccurrenceV1>;
+} | { sourceSessionId?: never; occurrence: SessionFollowRunOccurrence
+    | { discussion: DiscussionFollowUpdateNotificationV1['follow'] & { seq: number } }; acceptDelivery: () => Promise<boolean> }) & {
   /** The Account's authorized private evaluator has already selected this route and applied receiver mute. */
   policies: readonly FollowPolicyV1[];
   signal: AbortSignal;
@@ -20,15 +26,16 @@ export type PersonalFollowOccurrenceDispatch = Readonly<{
 export type PersonalFollowOccurrenceDispatchResult = Readonly<{
   attemptedChannels: number;
   deliveredChannels: number;
+  inboxRepresented?: true;
 }> & SessionActivityChangedResult;
 
-/** Thin Account-scoped delivery port; never evaluates a rule or claims a durable Inbox/cursor acceptance. */
+/** Thin Account adapter; Follow selects routes and Activity owns channel/notice custody. */
 export function createPersonalFollowOccurrenceDispatcher(params: Readonly<{
   operationContext: SavedSecretOperationContextV1;
   /** Reuses the caller's original-source/publisher/request and admitted-route currentness. */
   isCurrent: (input: PersonalFollowOccurrenceDispatch) => boolean | Promise<boolean>;
 }> & Pick<Parameters<typeof dispatchActivityNotificationAsync>[0],
-  'expoPushSender' | 'pluginNotifications' | 'fetchSessionNotificationContext' | 'readAccountSessionDeliveryMutedScopes' | 'webhookNetwork' | 'nowMs'>) {
+  'expoPushSender' | 'pluginNotifications' | 'fetchSessionNotificationContext' | 'readAccountSessionDeliveryMutedScopes' | 'webhookNetwork' | 'nowMs' | 'usageNoticeArtifactStore'>) {
   return async (input: PersonalFollowOccurrenceDispatch): Promise<PersonalFollowOccurrenceDispatchResult> => {
     const isCurrent = async () => !input.signal.aborted && await params.operationContext.isCurrent() && await params.isCurrent(input);
     const assertCurrent = async () => {
@@ -36,6 +43,20 @@ export function createPersonalFollowOccurrenceDispatcher(params: Readonly<{
       if (!await isCurrent()) throw new Error('personal_follow_scope_retired');
     };
     await assertCurrent();
+    if ('original' in input.occurrence || 'discussion' in input.occurrence) {
+      const accountId = readAccountIdFromToken(params.operationContext.credentials.token);
+      if (!accountId) throw new Error('personal_follow_account_unavailable');
+      return await runWithServerHttpBaseUrl(params.operationContext.serverHttpBaseUrl, () => dispatchActivityNotificationAsync({
+        ...params, settings: params.operationContext.readSnapshot()?.settings, isCurrent,
+        admittedRulePolicies: input.policies,
+        acceptSourceFollowDelivery: 'acceptDelivery' in input ? input.acceptDelivery : undefined,
+        usageNoticeArtifactStore: params.usageNoticeArtifactStore ?? {
+          accountId, store: createCredentialedAccountArtifactStore(params.operationContext.credentials),
+        },
+        event: SourceFollowUpdateNotificationV1Schema.parse({ topic: 'follow_update', follow: 'discussion' in input.occurrence
+          ? { original: input.occurrence.discussion.original, event: input.occurrence.discussion.event } : input.occurrence }),
+      }));
+    }
     if (input.sourceSessionId !== input.occurrence.sourceSessionId) throw new Error('personal_follow_source_mismatch');
     const occurrence = input.occurrence;
     // Requests and successful terminal updates already have an original rich

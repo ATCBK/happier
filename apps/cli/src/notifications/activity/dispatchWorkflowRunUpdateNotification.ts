@@ -1,4 +1,7 @@
 import type { AccountSettings, WorkflowRunUpdateKindV1 } from '@happier-dev/protocol';
+import axios from 'axios';
+import { resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
+import { GetOtherAccountFollowResponseV1Schema, SessionFollowErrorResponseSchema } from '@happier-dev/protocol/sessions/follow/api';
 import type { NotificationChannelCatalogSnapshotV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { createSavedSecretMaterializerFromSnapshotV1, type SavedSecretMaterializerV1 } from '@/settings/secrets/savedSecretCatalog';
 
@@ -48,6 +51,8 @@ export function createWorkflowRunCommittedNotificationHandler(params: Readonly<{
   getSettingsSnapshot?: () => SettingsSnapshot | null;
   expoPushSender?: ExpoPushActivityNotificationSender | null;
   dispatch?: typeof dispatchActivityNotificationAsync;
+  /** The source Account's captured Home; explicit Run Follow owns its personal terminal delivery. */
+  followSource?: Readonly<{ token: string; serverHttpBaseUrl: string }>;
 }> = {}): (transition: CommittedWorkflowTransition) => Promise<void> {
   const getSettingsSnapshot: () => SettingsSnapshot | null = params.getSettingsSnapshot ?? getActiveAccountSettingsSnapshot;
   const dispatch = params.dispatch ?? dispatchActivityNotificationAsync;
@@ -55,6 +60,21 @@ export function createWorkflowRunCommittedNotificationHandler(params: Readonly<{
     const updateKind = reviewEntry === true ? 'review_required' : updateKindForResult(result);
     if (!updateKind) return;
     try {
+      if (params.followSource && (result.state === 'succeeded' || result.state === 'failed' || result.state === 'interrupted')) {
+        const route = resolveSessionFollowActionRequest('follow.get', { receiver: { kind: 'account' },
+          source: { kind: 'workflow_run', runId: run.id } });
+        const response = await axios.get(`${params.followSource.serverHttpBaseUrl}${route.path}`, {
+          headers: { Authorization: `Bearer ${params.followSource.token}` }, validateStatus: () => true,
+        });
+        const follow = response.status === 200 ? GetOtherAccountFollowResponseV1Schema.safeParse(response.data) : null;
+        const failure = SessionFollowErrorResponseSchema.safeParse(response.data);
+        const featureUnavailable = response.status === 404 && failure.success && failure.data.error === 'feature_unavailable';
+        // Unavailable configuration is pending; it cannot revive the implicit
+        // report path over a person's explicit policy or Unfollow.
+        // A definitively disabled Follow feature leaves the incumbent
+        // Workflow report available. Unknown/denied source reads stay closed.
+        if (!featureUnavailable && (!follow?.success || follow.data.follow !== null)) return;
+      }
       const snapshot = getSettingsSnapshot();
       const active = getActiveAccountSettingsSnapshot();
       const incumbent = snapshot === active && active?.scopeKey

@@ -225,7 +225,7 @@ export type SessionLoopLifecycleParams = Readonly<{
   capabilitySelection?: Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'readSkillRules' | 'initialSkillRules' | 'readMcpRules' | 'initialMcpRules' | 'subscribeAccountSettings'>;
   registerProviderAcceptedEffect: (
     localId: string,
-    onAccepted: (() => void) | null,
+    onAccepted: ((pendingSettlement?: Promise<void>) => void) | null,
   ) => void;
   terminalRemoteModeLoop?: HostSessionTerminalRemoteModeLoop | null;
   messageBuffer: MessageBuffer;

@@ -660,7 +660,7 @@ export function createSessionClientInteractionApi(
                 },
             });
             // The bound socket request may have committed its exact frozen claim even when
-            // its acknowledgement was lost. Rejoin that claim once after a short delay;
+            // its acknowledgement was lost. Rejoin that claim after the requested delay;
             // failures before a current socket request remain connection-event driven.
             return {
                 didMaterialize: false,

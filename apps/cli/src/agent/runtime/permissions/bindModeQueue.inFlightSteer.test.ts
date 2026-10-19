@@ -1133,7 +1133,7 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
         acknowledgeAccepted,
       };
     });
-    let accept: (() => void) | null = null;
+    let accept: ((pendingSettlement?: Promise<void>) => void) | null = null;
     const steerText = vi.fn(async () => {});
 
     registerPermissionModeMessageQueueBinding({
@@ -1144,7 +1144,7 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
       inFlightSteer: {
         isTurnInFlight: () => true,
         supportsInFlightSteer: () => true,
-        registerProviderAcceptedEffect: (_localId: string, onAccepted: (() => void) | null) => {
+        registerProviderAcceptedEffect: (_localId: string, onAccepted: ((pendingSettlement?: Promise<void>) => void) | null) => {
           accept = onAccepted;
         },
         prepareHostContext,
@@ -1166,12 +1166,13 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     expect(sentPrompt.endsWith('steer with context')).toBe(true);
     expect(acknowledgeAccepted).not.toHaveBeenCalled();
     expect(accept).toBeTypeOf('function');
-    (accept as unknown as () => void)();
+    const pendingSettlement = Promise.resolve();
+    (accept as unknown as (settlement: Promise<void>) => void)(pendingSettlement);
     expect(acknowledgeAccepted).toHaveBeenCalledWith({
       kind: 'admitted_input',
       localInputId: 'steer-follow',
       userMessageSeq: null,
-    });
+    }, pendingSettlement);
   });
 
   it('keeps a steered replay seed live until exact provider acceptance', async () => {

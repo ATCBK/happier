@@ -269,7 +269,6 @@ vi.mock('./rpc/RpcHandlerManager', () => ({
 vi.mock('./changes', () => ({ fetchChanges: vi.fn() }));
 vi.mock('@/persistence', () => ({ readAccountChangesCursor: vi.fn(async () => 0), writeAccountChangesCursor: vi.fn(async () => {}) }));
 vi.mock('./client/loopbackUrl', () => ({ resolveLoopbackHttpUrl: (value: string) => value }));
-vi.mock('@/utils/time', () => ({ backoff: async <T>(fn: () => Promise<T>) => await fn() }));
 vi.mock('@/api/connection/createLoopbackReadinessProbe', () => ({
     createLoopbackReadinessProbe: createLoopbackReadinessProbeMock,
 }));

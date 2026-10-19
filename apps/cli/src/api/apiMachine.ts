@@ -507,6 +507,8 @@ function readSocketConnectErrorDiagnostic(error: unknown): Readonly<{
     };
 }
 
+type SessionFollowSourceInvalidation = Readonly<{ full: boolean; workflowRunIds: readonly string[]; discussionIds?: readonly string[] }>;
+
 function isMachineReplacedSocketError(error: unknown): boolean {
     const record = asRecord(error);
     const data = asRecord(record?.data);
@@ -574,7 +576,7 @@ export class ApiMachineClient {
     private accountChangesObserverTransportGeneration: number | null = null;
     private updateListeners = new Set<(update: Update) => boolean | void>();
     private accountSettingsVersionHintListeners = new Set<(hint: AccountSettingsVersionHintNotification) => void | Promise<void>>();
-    private readonly sessionFollowRulesChangedListeners = new Set<() => void>();
+    private readonly sessionFollowRulesChangedListeners = new Set<(change?: SessionFollowSourceInvalidation) => void | Promise<void>>();
     private accountProjectRowsChangeListeners = new Set<(change: AccountProjectRowsChangeNotification) => void | Promise<void>>();
     private automationEventSourcesInvalidationListeners = new Set<() => void | Promise<void>>();
     private pendingSessionActivationHintListeners = new Set<(
@@ -2199,13 +2201,13 @@ export class ApiMachineClient {
     }
 
     /** Content-free invalidation on the already-consumed Account feed; no second socket or cursor. */
-    onSessionFollowRulesChanged(listener: () => void): () => void {
+    onSessionFollowRulesChanged(listener: (change?: SessionFollowSourceInvalidation) => void | Promise<void>): () => void {
         this.sessionFollowRulesChangedListeners.add(listener);
         return () => { this.sessionFollowRulesChangedListeners.delete(listener); };
     }
 
-    private notifySessionFollowRulesChanged(): void {
-        for (const listener of this.sessionFollowRulesChangedListeners) listener();
+    private async notifySessionFollowRulesChanged(change: SessionFollowSourceInvalidation): Promise<void> {
+        for (const listener of this.sessionFollowRulesChangedListeners) await listener(change);
     }
 
     onAccountProjectRowsChanged(listener: (change: AccountProjectRowsChangeNotification) => void | Promise<void>): () => void {
@@ -4915,8 +4917,13 @@ export class ApiMachineClient {
         }
 
         const changes = result.response.changes;
-        if (opts.reason !== 'live' || changes.some(change => change.kind === 'account'
-            && asRecord(change.hint)?.sessionFollows === true)) this.notifySessionFollowRulesChanged();
+        const followSourcesFull = opts.reason !== 'live' || changes.length >= CHANGES_PAGE_LIMIT || changes.some(change => change.kind === 'account'
+            && asRecord(change.hint)?.sessionFollows === true);
+        const workflowRunIds = changes.flatMap(change => change.kind === 'account' && change.entityId.startsWith('workflow-run:')
+            ? [change.entityId.slice('workflow-run:'.length)] : []);
+        const discussionIds = changes.flatMap(change => change.kind === 'discussion' ? [change.entityId] : []);
+        if (followSourcesFull || workflowRunIds.length || discussionIds.length)
+            await this.notifySessionFollowRulesChanged({ full: followSourcesFull, workflowRunIds, discussionIds });
         if (opts.reason !== 'live' || changes.length >= CHANGES_PAGE_LIMIT || changes.some((change) => change.kind === 'session')) {
             publishSessionFollowWakeInvalidation();
         }

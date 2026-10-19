@@ -237,7 +237,8 @@ describe('Session Follow context reconciler', () => {
       // transcript intake after the accepted Pending is no longer presented.
       expect(await reconcile({ signal })).toBeNull();
       expect(representationCount).toBe(1);
-      expect(acknowledgements).toHaveLength(1);
+      expect(acknowledgements).toHaveLength(2);
+      expect(acknowledgements[1]).toEqual(acknowledgements[0]);
       expect(acknowledgements[0]).toMatchObject({ localInputId: 'accepted-follow',
         acceptance: { localInputId: 'accepted-follow', userMessageSeq: 17 } });
     } finally { material.dispose(); }
@@ -364,7 +365,11 @@ describe('Session Follow context reconciler', () => {
   });
 
 
-  it.each(['message', 'request'] as const)('binds a represented public original (%s) to its own admitted input without private rule references', async kind => {
+  it.each([
+    { kind: 'message', retirePreparation: false },
+    { kind: 'request', retirePreparation: false },
+    { kind: 'message', retirePreparation: true },
+  ] as const)('binds a represented public original ($kind, retired preparation $retirePreparation) to its own admitted input without private rule references', async ({ kind, retirePreparation }) => {
     const delivery = SessionFollowInputV1Schema.parse(kind === 'message' ? { v: 1, delivery: 'next_turn',
       original: { sourceSessionId: 'source', sourceMessage: { localId: 'original', seq: 4 } }, event: { kind: 'update_posted' } }
       : { v: 1, delivery: 'wake', original: { sourceSessionId: 'source', sourceRequests: {
@@ -402,8 +407,9 @@ describe('Session Follow context reconciler', () => {
           content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Retained original report' } } } }] : [], hasMore: false });
       } } });
     try {
+      const preparation = new AbortController();
       const prepared = await createSessionFollowContextReconciler({ session, hydrateObservation, maxFollowContextUtf8Bytes: 8192 })({
-        signal: new AbortController().signal,
+        signal: preparation.signal,
         followDeliveries: [{ delivery, localInputId: 'rule-input', userMessageSeq: 17 }],
       });
       expect(prepared?.representedFollowLocalInputIds).toEqual(['rule-input']);
@@ -414,9 +420,14 @@ describe('Session Follow context reconciler', () => {
       expect(acknowledgements).toEqual([]);
       prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'rule-input', userMessageSeq: 18 });
       expect(acknowledgements).toEqual([]);
-      prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'rule-input', userMessageSeq: 17 });
-      expect(acknowledgements).toMatchObject([{ localInputId: 'rule-input',
-        acceptance: { localInputId: 'rule-input', userMessageSeq: 17 }, consumed: observed }]);
+      let release!: () => void;
+      const pendingSettlement = retirePreparation ? new Promise<void>(resolve => { release = resolve; }) : undefined;
+      prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'rule-input', userMessageSeq: 17 }, pendingSettlement);
+      // Acceptance is captured before cancellation; the already accepted ACK
+      // must survive retirement while its Pending write is still settling.
+      if (retirePreparation) { preparation.abort(); release(); }
+      await vi.waitFor(() => expect(acknowledgements).toMatchObject([{ localInputId: 'rule-input',
+        acceptance: { localInputId: 'rule-input', userMessageSeq: 17 }, consumed: observed }]));
       expect(acknowledgements[0]).not.toHaveProperty('rule');
       expect(acknowledgements[0]).not.toHaveProperty('policy');
     } finally { material.dispose(); }

@@ -709,7 +709,7 @@ export async function runPermissionModePromptLoop(opts: {
    */
   registerProviderAcceptedEffect: (
     localId: string,
-    onAccepted: (() => void) | null,
+    onAccepted: ((pendingSettlement?: Promise<void>) => void) | null,
   ) => void;
   /** Host lifecycle freezes protected cause facts immediately before runtime begin. */
   onBeforeTurnBegin?: (
@@ -1690,6 +1690,9 @@ export async function runPermissionModePromptLoop(opts: {
             ? { sessionFollowUpdates: preparedHostContext.updates, workerUpdates: preparedHostContext.workerUpdates }
             : {}),
           ...(contextOnlyWorkerUpdate && !providerNativeCommand ? { workerUpdates: [contextOnlyWorkerUpdate, ...(preparedHostContext?.workerUpdates ?? [])] } : {}),
+          // Only exact originals re-admitted by the Follow owner earn native
+          // representation, including quiet originals joining a real input.
+          runFollowDeliveries: representedFollowDeliveries,
         });
 
         if (localIds.length > 0 && opts.readActiveModelSelection && opts.onProviderPromptDispatchPrepared) {
@@ -1737,12 +1740,12 @@ export async function runPermissionModePromptLoop(opts: {
         opts.runtime.beginTurnLifecycle();
         beganTurn = true;
         startActiveTurnPendingPump();
-        const acknowledgeHostContextAccepted = (): void => {
+        const acknowledgeHostContextAccepted = (pendingSettlement?: Promise<void>): void => {
           if (!localId) return;
           if (hostContextOnly && hostContextOnly.kind !== 'session_follow') hostContextOnly.acknowledgeAccepted();
           preparedHostContext?.acknowledgeAccepted(message.message.hostContextOnly
             ? { kind: 'context_only_wake', eventLocalId: localId }
-            : { kind: 'admitted_input', localInputId: localId, userMessageSeq });
+            : { kind: 'admitted_input', localInputId: localId, userMessageSeq }, pendingSettlement);
         };
         if (localId) {
           const sessionSystemPromptDelivery = shouldApplyFreshSessionSystemPrompt || preparedNativePlan
@@ -1752,9 +1755,9 @@ export async function runPermissionModePromptLoop(opts: {
           opts.registerProviderAcceptedEffect(
             localId,
             pendingReplaySeedSettlement || preparedHostContext || hostContextOnly || sessionSystemPromptDelivery
-              ? () => {
+              ? (pendingSettlement) => {
                   if (pendingReplaySeedSettlement) confirmProviderAccepted();
-                  acknowledgeHostContextAccepted();
+                  acknowledgeHostContextAccepted(pendingSettlement);
                   if (sessionSystemPromptDelivery && pendingSessionSystemPromptDelivery === sessionSystemPromptDelivery) {
                     lastDeliveredSessionSystemPrompt = sessionSystemPromptDelivery;
                     pendingSessionSystemPromptDelivery = null;
@@ -1766,9 +1769,9 @@ export async function runPermissionModePromptLoop(opts: {
         }
         for (const follow of representedFollowDeliveries) {
           if (follow.localInputId === localId) continue;
-          opts.registerProviderAcceptedEffect(follow.localInputId, () => {
+          opts.registerProviderAcceptedEffect(follow.localInputId, (pendingSettlement) => {
             preparedHostContext?.acknowledgeAccepted({ kind: 'admitted_input',
-              localInputId: follow.localInputId, userMessageSeq: follow.userMessageSeq });
+              localInputId: follow.localInputId, userMessageSeq: follow.userMessageSeq }, pendingSettlement);
           });
         }
         // Invoking the runtime is the effect boundary. From here onward a thrown transport or

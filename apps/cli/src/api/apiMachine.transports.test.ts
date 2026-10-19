@@ -87,7 +87,6 @@ vi.mock('@/persistence', () => ({
 }));
 vi.mock('./client/loopbackUrl', () => ({ resolveLoopbackHttpUrl: (value: string) => value }));
 vi.mock('@/utils/proxy/socketIoProxy', () => ({ getSocketIoProxyOptions: () => ({}) }));
-vi.mock('@/utils/time', () => ({ backoff: async <T>(fn: () => Promise<T>) => await fn() }));
 vi.mock('@/api/connection/createLoopbackReadinessProbe', () => ({
   createLoopbackReadinessProbe: () => async () => ({ status: 'ready' as const }),
 }));
