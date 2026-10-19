@@ -17,7 +17,7 @@ import { resolveResourceGrantAccessFromFacts, resolveResourceGrantAudienceFromFa
     projectResourceRecipientCensus, validateResourceRecipientEnvelopeCommit, applyResourceRecipientKeyEnvelopesInTx,
     mayManageResourceGrants, validateResourceGrantPrincipalInTx, readResourceGrantPrincipalAudienceInTx,
     type ResourceStoredRecipientEnvelope, type ResourceRecipientEnvelopeStorageAdapter } from '@/app/teams/resourceGrantAccess';
-import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { ACCOUNT_DISPLAY_PROFILE_SELECT, resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
 import { isPublicSessionShareActive } from "@/app/share/publicSessionSharePublication";
 import { ArtifactHeaderMetadataV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
@@ -109,6 +109,9 @@ export async function acquireArtifactPublicationLocksInTx(tx: Tx, artifactId: st
     if ((await readAudience()).some(accountId => !captured.has(accountId))) {
         throw new TransactionReplayRequiredError("transaction-account-audience-changed");
     }
+    beforeAccountChangePublication(tx, accountIds, async () => {
+        assertAccountChangePublicationAudienceInTx(tx, await readAudience());
+    });
 }
 
 export interface ArtifactForCaller {
