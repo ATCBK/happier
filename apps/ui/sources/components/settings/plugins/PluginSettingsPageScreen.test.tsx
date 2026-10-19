@@ -5,6 +5,7 @@ import {
     normalizePluginUiSettingsPageBindingV1,
     type PluginUiHostApiRequestEnvelopeV1,
 } from '@happier-dev/protocol/plugins/ui';
+import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 
 import { createMachineFixture, renderScreen as renderScreenWithProviders, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -193,15 +194,23 @@ let settingsConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> 
 function composeSettingsProjection(raw: PluginUiProjectionModel | null,
     phase = appShellState.phase, interactionEnabled = appShellState.interactionEnabled) {
     if (!raw) return null;
+    const sourceCustody = { kind: 'bundled_first_party' as const,
+        packagedRuntime: { kind: 'cli_version_root' as const, versionRootId: 'settings-page-fixture-root' } };
+    const originFor = (pluginId: string) => PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_account_a',
+        sourceRef: { machineId: 'machine-1', pluginId, sourceCustody } });
     const packages = Object.fromEntries(Object.values(raw.settingsPagesById).map(page => [page.pluginId, {
         id: page.pluginId, displayName: page.pluginId, version: '1.0.0', enabled: true,
         source: { kind: 'bundled' as const, locator: page.pluginId }, occurrenceId: `${page.pluginId}-occurrence-4`,
-        sourceCustody: { kind: 'bundled_first_party' as const,
-            packagedRuntime: { kind: 'cli_version_root' as const, versionRootId: 'settings-page-fixture-root' } },
+        sourceCustody, executionOrigin: originFor(page.pluginId),
+    }]));
+    const pages = Object.fromEntries(Object.values(raw.settingsPagesById).map(page => [page.id, {
+        ...page, occurrenceId: `${page.pluginId}-occurrence-4`, executionOrigin: originFor(page.pluginId),
     }]));
     return unionPluginUiProjections([{ machineId: 'machine-1', serverId: 'server-1', serverIdentityId: 'srv_account_a',
         phase, interactionEnabled,
-        projection: { ...raw, generation: 4, installedPackagesById: packages } }]).pluginUiProjection;
+        selectableExecutionOrigins: phase === 'current' && interactionEnabled
+            ? Object.keys(packages).map(originFor) : [],
+        projection: { ...raw, generation: 4, installedPackagesById: packages, settingsPagesById: pages } }]).pluginUiProjection;
 }
 
 function SettingsProjectionFixture({ children }: React.PropsWithChildren) {
@@ -227,7 +236,7 @@ beforeEach(async () => {
         } });
     const lifetime = captureActiveServerAccountScopeLifetime();
     if (!lifetime || settingsConnection.home.id !== 'server-1') throw new Error('Settings fixture must have its actual applied Home');
-    const machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: 0 });
+    const machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
     storage.setState({ profileScope: lifetime.scope, settingsScope: lifetime.scope, endpointStatus: 'online', isDataReady: true,
         machines: { 'machine-1': machine }, machineListByServerId: { 'server-1': [machine] },
         machineListStatusByServerId: { 'server-1': 'idle' } });
@@ -761,6 +770,7 @@ function SettingsTargetNavigationScope(props: React.PropsWithChildren): React.Re
             ? Object.values(projection.settingsPagesById)
             : [],
         targetKind: 'app',
+        accountLifetime: captureActiveServerAccountScopeLifetime(),
     });
     const openSettingsPage = usePluginSettingsPageDestinationHandler({
         projection,

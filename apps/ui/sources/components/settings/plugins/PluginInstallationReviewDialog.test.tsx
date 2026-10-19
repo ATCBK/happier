@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
@@ -37,6 +39,10 @@ installSettingsViewCommonModuleMocks({
         });
     },
 });
+
+// Transform the real dialog during collection; its cold dependency graph is
+// setup work, outside the decision and focus interaction budgets below.
+await import('./PluginInstallationReviewDialog');
 
 describe('PluginInstallationReviewDialog', () => {
     const review = createPluginInstallationReviewFixture({
@@ -100,6 +106,10 @@ describe('PluginInstallationReviewDialog', () => {
             'settings.plugins.installReview.cancel',
             'settings.plugins.installReview.confirm',
         ]) {
+            const focusTarget = document.createElement('button');
+            document.body.appendChild(focusTarget);
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+            focusTarget.focus();
             const control = screen.findByTestId(testID);
             expect(control?.props.style({ pressed: false, focused: true })).toEqual(expect.arrayContaining([
                 expect.objectContaining({
@@ -108,6 +118,7 @@ describe('PluginInstallationReviewDialog', () => {
                     outlineColor: expect.any(String),
                 }),
             ]));
+            focusTarget.remove();
         }
     });
 

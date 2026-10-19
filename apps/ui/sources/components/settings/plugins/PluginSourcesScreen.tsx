@@ -4,6 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { RegistrySourcesView } from '@/registries/RegistrySourcesView';
+import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
 import { t } from '@/text';
 
 /**
@@ -11,10 +12,12 @@ import { t } from '@/text';
  * page body for plugin sources — built-in, added by a plugin, and the ones the person added.
  */
 export const PluginSourcesScreen = React.memo(function PluginSourcesScreen() {
+    // The phone's floating tab bar overlays the page: the registries view (list, and the details pane's footer) sits above it.
+    const chromeClearance = useFloatingChromeClearance();
     return (
         <View style={styles.page} testID="settings.plugins.sources">
-            <SettingsPageHeader description={t('settingsPlugins.sourceAdministration.subtitle')} />
-            <View style={styles.body}>
+            <SettingsPageHeader columnWidth="pane" description={t('settingsPlugins.sourceAdministration.subtitle')} />
+            <View style={[styles.body, chromeClearance > 0 ? { paddingBottom: chromeClearance } : null]}>
                 <RegistrySourcesView kind="plugin" testID="settings.plugins.sources.registries" />
             </View>
         </View>

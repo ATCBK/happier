@@ -61,7 +61,7 @@ describe('Account plugin erase native resource review at the real Action and HTT
         storage.getState().applySettings({ ...storage.getState().settings, ...settings }, 1);
         const modal = { prompt: vi.fn<IModal['prompt']>(async () => null), alert: vi.fn<IModal['alert']>(),
             confirm: vi.fn<IModal['confirm']>(async () => true) };
-        modal.confirm.mockResolvedValueOnce(true).mockImplementationOnce(async () => {
+        modal.confirm.mockImplementation(async () => {
             if (choice === 'retired') storage.getState().activateProfileScope({ ...scope, accountId: 'account-next' });
             return choice !== 'cancel';
         });
@@ -76,8 +76,10 @@ describe('Account plugin erase native resource review at the real Action and HTT
             expect(captureActiveServerAccountScopeLifetime()?.isCurrent()).toBe(true);
             await controller.eraseKnownPlugin('example.compute');
             expect(requests, JSON.stringify({ alerts: modal.alert.mock.calls })).not.toHaveLength(0);
-            expect(modal.confirm).toHaveBeenCalledTimes(2);
-            expect(modal.confirm.mock.calls[1]?.[1]).toContain('native-1');
+            // The Account Action's approval is explicitly waived above. The
+            // only remaining confirmation is the native-resource review.
+            expect(modal.confirm).toHaveBeenCalledOnce();
+            expect(modal.confirm.mock.calls[0]?.[1]).toContain('native-1');
             expect(requests).toEqual([
                 { pluginId: 'example.compute' },
                 ...(choice === 'manual' ? [{ pluginId: 'example.compute', managedResourceDispositions: [{

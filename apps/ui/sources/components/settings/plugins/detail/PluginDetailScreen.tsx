@@ -35,7 +35,8 @@ import {
     type InstalledPluginActionId,
     type PluginSettingsScreenState,
 } from '../model/usePluginSettingsScreenState';
-import { buildPluginsHomeRoute, usePluginsSurfaceHost } from '../model/pluginsSurfaceRoutes';
+import { buildPluginsHomeRoute } from '../model/pluginsSurfaceRoutes';
+import { usePluginsSurfaceHost } from '../model/usePluginsSurfaceHost';
 import {
     projectInstalledPluginLifecycleCapabilities,
     type InstalledPluginEntry,

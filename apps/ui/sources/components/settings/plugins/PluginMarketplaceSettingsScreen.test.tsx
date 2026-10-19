@@ -4,14 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NavigationContext } from '@react-navigation/native';
 
 import type { PluginDiagnosticRecordV1 } from '@happier-dev/protocol';
-import type { PluginInstallationReview } from '@happier-dev/protocol/marketplace/internal';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import type { InstalledPluginCapabilityEntryV1 } from '@happier-dev/protocol/capabilities';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import {
     clearDaemonMergedProjectionCacheForTests,
     loadDaemonMergedProjectionCacheEntry,
 } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { readNewSessionDraftFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
-import { flattenTestStyle, renderHook } from '@/dev/testkit';
+import { flattenTestStyle, renderHook, standardCleanup } from '@/dev/testkit';
 import {
     createMachineAdministrationTargetSelectionMock,
     installMachineAdministrationTargetSelectionBoundary,
@@ -72,6 +77,8 @@ type InstalledPluginEntry = Readonly<{
         mode: string;
         manifestVersion: string;
         installedPath?: string | null;
+        updatePolicy?: InstalledPluginCapabilityEntryV1['install']['updatePolicy'];
+        trust?: InstalledPluginCapabilityEntryV1['install']['trust'];
     }>;
     compatibility: Readonly<{
         status: string;
@@ -137,6 +144,9 @@ const endpointConnectivityState = vi.hoisted(() => ({
     status: 'online' as 'online' | 'offline',
 }));
 const invokeWithAlertsMock = vi.hoisted(() => vi.fn());
+// The external Home Action response is the lifecycle boundary. Admission,
+// Account capture, confirmation and mounted execution remain production code.
+const lifecycleActionBoundary = vi.hoisted(() => vi.fn());
 const refreshMachineCapabilitiesMock = vi.hoisted(() => vi.fn());
 const machineNpmRegistryProfilesGetMock = vi.hoisted(() => vi.fn());
 const machineNpmRegistryProfilesMutateMock = vi.hoisted(() => vi.fn());
@@ -263,7 +273,10 @@ function setMachineAdministrationTargetFixture(params: Readonly<{
         name: 'Server A',
         serverUrl: 'https://server-a.example.test',
         serverIdentityId: 'srv_identity-a',
-        legacyServerIds: [],
+        // The canonical Home harness adopts the URL-derived device id. Keep
+        // that real predecessor alias on this presentation fixture so genuine
+        // credential writes resolve to the same portable Home identity.
+        legacyServerIds: ['server-a.example.test'],
     };
     machineAdministrationFixture.profiles = serverId === activeProfile.id
         && target.serverIdentityId === activeProfile.serverIdentityId
@@ -275,7 +288,7 @@ function setMachineAdministrationTargetFixture(params: Readonly<{
                 name: 'Server B',
                 serverUrl: 'https://server-b.example.test',
                 serverIdentityId: target.serverIdentityId,
-                legacyServerIds: [],
+                legacyServerIds: ['server-b.example.test'],
             },
         ];
     machineAdministrationFixture.activeMachines = [
@@ -463,64 +476,6 @@ function createMachineCapabilitiesLoadingState(installedPlugins: readonly Instal
 
 
 
-function createCommunityInstallReviewResult(pendingChangeId: string, action: 'install' | 'update' = 'install') {
-    return {
-        action,
-        pluginId: 'community-plugin',
-        change: {
-            kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
-            pendingChangeId,
-            review: {
-                pluginId: 'community-plugin',
-                displayName: 'Community Plugin',
-                version: '2.0.0',
-                packageIdentity: { name: '@acme/community-plugin', version: '2.0.0' },
-                publisherIdentity: { status: 'unverified', id: 'acme', displayName: 'Acme' },
-                source: {
-                    kind: 'npm',
-                    locator: '@acme/community-plugin@2.0.0',
-                    integrity: 'sha512-exact',
-                    integrityBasis: 'expected',
-                },
-                updateChannel: {
-                    kind: 'npm',
-                    packageName: '@acme/community-plugin',
-                    registryOrigin: 'https://registry.npmjs.org',
-                    marketplaceSource: {
-                        id: 'marketplace:community-npm',
-                        kind: 'community-npm',
-                        sourceUrl: 'https://registry.npmjs.org/-/v1/search?text=keywords:happier-plugin&size=100',
-                    },
-                },
-                signature: { status: 'notProvided' },
-                provenance: { status: 'notProvided' },
-                curation: { status: 'unreviewed', sourceId: 'marketplace:community-npm' },
-                executableRealms: ['daemon'],
-                contributions: [{ family: 'actions', count: 1 }],
-                uiArtifacts: { status: 'none', contributionIds: [] },
-                requiredHostAccess: [{
-                    id: 'network',
-                    capability: 'network',
-                    reason: 'Connect to the review service',
-                    authorizationClass: 'cooperativeDisclosure',
-                    normalizedScope: { targets: [{ kind: 'fixedOrigin', origin: 'https://review.example.test' }] },
-                }],
-                optionalHostAccess: [{
-                    id: 'sessions',
-                    capability: 'sessions',
-                    reason: 'Read selected sessions',
-                    authorizationClass: 'hostResourceSelection',
-                    normalizedScope: { access: ['read'] },
-                }],
-                rawCredentialAccess: [],
-                requestInterceptors: [],
-                compatibility: { happier: '^0.2.0', runtimeApiVersion: 1 },
-                updatePolicy: 'allowed',
-            },
-        },
-    };
-}
-
 function flushAsync(): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -551,22 +506,6 @@ function closestAccessibleAnnouncementAncestor(node: ReactTestInstance | null): 
         current = current.parent;
     }
     return null;
-}
-
-function findPendingChangeAction(
-    screen: Awaited<ReturnType<typeof renderSettingsView>>,
-    pendingChangeId: string,
-    actionId: 'review' | 'reject',
-): Readonly<{ id: string; title: string; subtitle?: string; disabled: boolean; onPress: () => void }> | undefined {
-    return screen.findAllByType('ItemRowActions' as never)
-        .flatMap((node: Readonly<{ props: Readonly<{ overflowTriggerTestID?: string; actions?: readonly Readonly<{ id: string; title: string; subtitle?: string; disabled: boolean; onPress: () => void }>[] }> }>) => (
-            node.props.overflowTriggerTestID === `settings.plugins.management.pendingChanges.${pendingChangeId}.actions.overflow`
-                ? node.props.actions ?? []
-                : []
-        ))
-        .find((action: Readonly<{ id: string }>) => action.id === actionId) as
-        | Readonly<{ id: string; title: string; subtitle?: string; disabled: boolean; onPress: () => void }>
-        | undefined;
 }
 
 type DiscoverListingAction = Readonly<{
@@ -849,6 +788,7 @@ vi.mock('@/sync/store/hooks', async () => ({
     useMachineListStatusByServerId: () => machineAdministrationFixture.machineListStatusByServerId,
     useIsDataReady: () => true,
     useActiveServerAccountScope: () => activeAccountScopeState.current,
+    useActiveServerAccountScopeLifetime: () => activeAccountScopeState.current ? activeAccountLifetime : null,
     useProfile: () => ({ id: 'prof_1', firstName: '', connectedServices: [] }),
     useSetting: () => machineAdministrationFixture.selections,
     // The administration-target owner persists a sole-candidate initialization
@@ -1112,10 +1052,13 @@ vi.mock('@happier-dev/agents', async (importOriginal) => {
     };
 });
 
-afterEach(() => {
+afterEach(async () => {
+    // Retire mounted readers before clearing their HTTP/credential boundaries.
+    standardCleanup();
     clearDaemonMergedProjectionCacheForTests();
     resetSessionDraftRepositoryForTests();
     activeAccountScopeState.current = null;
+    await lifecycleHomes.reset();
     getActiveServerIdMock.mockReset();
     useMachineCapabilitiesCacheMock.mockReset();
     getMachineCapabilitiesCacheStateMock.mockReset();
@@ -1144,15 +1087,46 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
     clearDaemonMergedProjectionCacheForTests();
     setMachineAdministrationTargetFixture();
+    getActiveServerIdMock.mockReturnValue('server-a');
     // Device credential IO is the boundary; singular and plural scope readers
     // retain the real decoder, Account binding, and retirement lifecycle.
     vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async serverUrl =>
         machineAdministrationFixture.profiles.some(profile => profile.serverUrl === serverUrl)
-            ? { token: createAccountTokenForTests(activeAccountLifetime.scope.accountId) }
+            ? { token: createAccountTokenForTests(activeAccountLifetime.scope.accountId, { currentAccount: true }) }
             : null);
+    await lifecycleHomes.reset();
+    lifecycleActionBoundary.mockReset();
+    lifecycleActionBoundary.mockImplementation(async ({ actionId, input }: { actionId: string; input: { pluginId?: string; id?: string; targetDir?: string } }) => ({
+        ok: true, result: actionId === 'plugins.scaffold'
+            ? { ok: true, kind: 'plugins_scaffold', plugin: { pluginId: input.id }, createdPaths: { targetDir: input.targetDir } }
+            : { ok: true, kind: actionId.replaceAll('.', '_'),
+                action: actionId === 'plugins.trust.forget' ? 'forgetTrust'
+                    : actionId === 'plugins.update_policy.set' ? 'setUpdatePolicy' : actionId.slice('plugins.'.length),
+                pluginId: input.pluginId, change: { kind: 'committed' } },
+    }));
+    for (const [name, serverUrl, serverIdentityId] of [
+        ['Server A', 'https://server-a.example.test', 'srv_identity-a'],
+        ['Server B', 'https://server-b.example.test', 'srv_identity-b'],
+    ] as const) {
+        const homeId = await lifecycleHomes.addHome({ name, serverUrl, serverIdentityId,
+            accountId: 'account-a', currentAccount: true, active: false });
+        lifecycleHomes.answer(homeId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: Object.fromEntries(lifecycleActionIds.map(id => [id, ['ui']])) },
+        } } } });
+        lifecycleHomes.answer(homeId, '/v1/machines', { body: ['machine-1', 'machine-2'].map(id => ExternalActionMachineBootstrapV1Schema.parse({
+            id, kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
+            installationId: `${id}-installation`, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
+            access: { custodian: { accountId: 'account-a', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+        })) });
+        for (const actionId of lifecycleActionIds) lifecycleHomes.answer(homeId, `/v1/actions/${actionId}`, { select: async body => {
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(body);
+            const execution = await lifecycleActionBoundary({ actionId, ...request });
+            return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId, requestId: request.requestId, execution }) };
+        } });
+    }
     useMachineCliDetectionTargetMock.mockReturnValue({ daemonStateVersion: 1, isOnline: true });
     getMachineCapabilitiesCacheStateMock.mockImplementation(() => {
         const latestResult = useMachineCapabilitiesCacheMock.mock.results.at(-1)?.value as
@@ -1224,10 +1198,13 @@ beforeEach(() => {
 });
 
 // Load real screen owners after boundary setup, outside behavior deadlines.
-const [{ TokenStorage }, { createAccountTokenForTests }] = await Promise.all([
+const [{ TokenStorage }, { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance }] = await Promise.all([
     import('@/auth/storage/tokenStorage'),
     import('@/dev/testkit/harness/homeGovernanceHarness'),
 ]);
+const lifecycleActionIds = ['plugins.enable', 'plugins.disable', 'plugins.rollback', 'plugins.uninstall', 'plugins.trust.forget', 'plugins.update_policy.set', 'plugins.scaffold'] as const;
+const lifecycleHomes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(lifecycleHomes);
 const { Switch: NativeSwitch } = await import('react-native');
 const { PluginDevelopmentScreen } = await import('./development/PluginDevelopmentScreen');
 const { PluginSettingsHomeScreen } = await import('./PluginSettingsHomeScreen');
@@ -1612,27 +1589,24 @@ describe('PluginSettingsHomeScreen', () => {
         // Submitting the complete scaffold form is the creation decision; no
         // redundant confirmation sits between the author and the daemon.
         expect(modalConfirmMock).not.toHaveBeenCalled();
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            machineId: 'machine-1',
-            serverId: 'server-a',
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'create',
-                params: {
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.scaffold')).toEqual([
+            expect.objectContaining({ input: expect.objectContaining({
+                target: { kind: 'machine', machineId: 'machine-1' },
+                input: {
+                    machineId: 'machine-1',
                     targetDir: '/workspace/plugins/new-plugin',
-                    displayName: 'New Plugin',
-                    pluginId: 'acme.new-plugin',
+                    name: 'New Plugin',
+                    id: 'acme.new-plugin',
                     ui: 'reactNative',
                 },
-            },
-        }));
+            }) }),
+        ]);
 
 
         // The author sees every canonical scaffold surface, including the
         // declarative default shared with the CLI.
         expect(createForm.getFields().find((field) => field.path === 'ui')?.options?.map((option) => option.value)).toEqual(['declarative', 'hostedWeb', 'reactNative']);
 
-        invokeWithAlertsMock.mockClear();
         await act(async () => {
             screen.pressByTestId('settings.plugins.management.development.action.create');
             await flushAsync();
@@ -1643,18 +1617,15 @@ describe('PluginSettingsHomeScreen', () => {
         const plainForm = modalShowMock.mock.calls.at(-1)?.[0]?.props?.form as import('@/components/plugins/actions/actionInputForm').ActionInputForm;
         plainForm.replaceInput({ targetDir: '/workspace/plugins/plain-plugin', displayName: 'Plain Plugin', pluginId: 'acme.plain-plugin', ui: 'declarative' });
         await act(async () => { await plainForm.submit(); await flushAsync(); });
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'create',
-                params: {
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.scaffold').at(-1)).toMatchObject({
+            input: { input: {
+                    machineId: 'machine-1',
                     targetDir: '/workspace/plugins/plain-plugin',
-                    displayName: 'Plain Plugin',
-                    pluginId: 'acme.plain-plugin',
+                    name: 'Plain Plugin',
+                    id: 'acme.plain-plugin',
                     ui: 'declarative',
-                },
-            },
-        }));
+            } },
+        });
     });
 
     it('re-resolves Edit with Agent through the selected daemon before opening an ordinary New Session', async () => {
@@ -1845,17 +1816,8 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([]),
             refresh: vi.fn(),
         });
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: {
-                ok: true,
-                result: {
-                    action: 'create',
-                    pluginId: 'acme.agent-plugin',
-                    sourceRootPath: '/workspace/plugins/agent-plugin',
-                },
-            },
-        });
+        lifecycleActionBoundary.mockResolvedValue({ ok: true, result: { ok: true, kind: 'plugins_scaffold',
+            plugin: { pluginId: 'acme.agent-plugin' }, createdPaths: { targetDir: '/workspace/plugins/agent-plugin' } } });
 
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
@@ -1872,20 +1834,18 @@ describe('PluginSettingsHomeScreen', () => {
         agentForm.replaceInput({ targetDir: '/workspace/plugins/agent-plugin', displayName: 'Agent Plugin', pluginId: 'acme.agent-plugin', ui: 'reactNative' });
         await act(async () => { await agentForm.submit(); await flushAsync(); });
 
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            machineId: 'machine-1',
-            serverId: 'server-a',
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'create',
-                params: {
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.scaffold')).toEqual([
+            expect.objectContaining({ input: expect.objectContaining({
+                target: { kind: 'machine', machineId: 'machine-1' },
+                input: {
+                    machineId: 'machine-1',
                     targetDir: '/workspace/plugins/agent-plugin',
-                    displayName: 'Agent Plugin',
-                    pluginId: 'acme.agent-plugin',
+                    name: 'Agent Plugin',
+                    id: 'acme.agent-plugin',
                     ui: 'reactNative',
                 },
-            },
-        }));
+            }) }),
+        ]);
         const route = routerPushSpy.mock.calls.at(-1)?.[0] as Readonly<{
             pathname: string;
             params: Readonly<{ draftId: string }>;
@@ -1910,12 +1870,9 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([]),
             refresh: vi.fn(),
         });
-        invokeWithAlertsMock.mockImplementationOnce(async () => {
+        lifecycleActionBoundary.mockImplementationOnce(async () => {
             await deferred.promise;
-            return {
-                supported: true,
-                response: { ok: false, error: { code: 'scaffold_failed', message: 'Could not create scaffold' } },
-            };
+            return { ok: false, errorCode: 'scaffold_failed', error: 'Could not create scaffold' };
         });
 
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
@@ -1957,19 +1914,10 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([]),
             refresh: vi.fn(),
         });
-        invokeWithAlertsMock.mockImplementationOnce(async () => {
+        lifecycleActionBoundary.mockImplementationOnce(async () => {
             await deferred.promise;
-            return {
-                supported: true,
-                response: {
-                    ok: true,
-                    result: {
-                        action: 'create',
-                        pluginId: 'acme.stale-plugin',
-                        sourceRootPath: '/workspace/canonical/stale-plugin',
-                    },
-                },
-            };
+            return { ok: true, result: { ok: true, kind: 'plugins_scaffold',
+                plugin: { pluginId: 'acme.stale-plugin' }, createdPaths: { targetDir: '/workspace/canonical/stale-plugin' } } };
         });
 
         const RerenderableDevelopmentScreen = PluginDevelopmentScreen as unknown as React.ComponentType<{ scopeToken: string }>;
@@ -2018,25 +1966,8 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([]),
             refresh: vi.fn(),
         });
-        invokeWithAlertsMock
-            .mockResolvedValueOnce({
-                supported: true,
-                response: {
-                    ok: true,
-                    result: {
-                        action: 'create',
-                        pluginId: 'acme.created-plugin',
-                        sourceRootPath: '/workspace/canonical/created-plugin',
-                    },
-                },
-            })
-            .mockResolvedValueOnce({
-                supported: true,
-                response: {
-                    ok: true,
-                    result: { action: 'develop', kind: 'committed' },
-                },
-            });
+        lifecycleActionBoundary.mockResolvedValueOnce({ ok: true, result: { ok: true, kind: 'plugins_scaffold',
+            plugin: { pluginId: 'acme.created-plugin' }, createdPaths: { targetDir: '/workspace/canonical/created-plugin' } } });
 
         const screen = await renderInAppPanes(React.createElement(PluginDevelopmentScreen));
         await act(async () => { await flushAsync(); await flushAsync(); });
@@ -2060,492 +1991,25 @@ describe('PluginSettingsHomeScreen', () => {
 
     });
 
-    it('lists a pending change this app never started and lets the present user decide it', async () => {
-        // The flagship agent-authored loop: an Agent prepares a plugin change
-        // through its Action, the daemon issues a pending id, and nothing in
-        // this app ever saw that id. Without this section the change is
-        // invisible and expires unanswered, because approving project trust
-        // is not delegable to an Agent.
-        const refresh = vi.fn();
-        const sourceRootPath = '/workspace/plugins/agent-authored';
+    it('keeps daemon trust reviews out of Plugins because Inbox owns the decision', async () => {
         useMachineCapabilitiesCacheMock.mockReturnValue({
             state: createMachineCapabilitiesState([], [], [{
-                kind: 'reviewRequired', reviewKind: 'projectTrust',
+                kind: 'reviewRequired',
+                reviewKind: 'projectTrust',
                 pendingChangeId: 'pending-agent-1',
-                review: { source: { kind: 'path', locator: sourceRootPath } },
+                review: { source: { kind: 'path', locator: '/workspace/plugins/agent-authored' } },
             }]),
-            refresh,
-        });
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: {
-                ok: true,
-                result: {
-                    action: 'changeStatus',
-                    pendingChangeId: 'pending-agent-1',
-                    status: {
-                        kind: 'reviewRequired', reviewKind: 'projectTrust',
-                        pendingChangeId: 'pending-agent-1',
-                        review: { source: { kind: 'path', locator: sourceRootPath } },
-                    },
-                },
-            },
-        });
-        machineRpcWithServerScopeMock
-            .mockResolvedValueOnce({
-                kind: 'committed',
-                pluginId: 'community-plugin',
-                desiredGeneration: 'generation-1',
-                appliedGeneration: 'generation-1',
-                pendingSurfaces: [],
-            });
-        modalConfirmMock.mockResolvedValueOnce(true);
-
-        const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-
-        // Listed on the plugin settings surface itself, not behind a tab: a
-        // decision waiting on this user is attention, not one view's content.
-        expect(screen.findRow('settings.plugins.management.pendingChanges.pending-agent-1')).toBeTruthy();
-
-        const approve = findPendingChangeAction(screen, 'pending-agent-1', 'review');
-        expect(approve?.disabled).toBe(false);
-        await act(async () => {
-            approve?.onPress();
-            await flushAsync();
-            await flushAsync();
-            await flushAsync();
-            await flushAsync();
-        });
-
-        // The listed row is a projection that can be minutes old, so the change
-        // is re-read at its owner before the user is asked anything.
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'changeStatus',
-                params: { pendingChangeId: 'pending-agent-1' },
-            },
-        }));
-        expect(modalConfirmMock).toHaveBeenCalledWith(
-            'settingsPlugins.developmentTrustProjectSourceTitle',
-            expect.stringContaining(sourceRootPath),
-            expect.objectContaining({ confirmText: 'settingsPlugins.developmentTrustProjectSourceConfirm' }),
-        );
-        // Same canonical decision seam the CLI and this screen's own flows use.
-        // Remembered project trust is the only code-trust decision.
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledOnce();
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-            method: 'daemon.plugins.install.review.decide',
-            payload: {
-                v: 1,
-                pendingChangeId: 'pending-agent-1',
-                decision: 'installAndTrust', optionalSelections: [],
-            },
-        }));
-        expect(refresh).toHaveBeenCalledTimes(1);
-    });
-
-    it('labels pending decision actions truthfully before any review has been seen', async () => {
-        const refresh = vi.fn();
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: createMachineCapabilitiesState([], [], [
-                createCommunityInstallReviewResult('pending-agent-8').change,
-            ]),
-            refresh,
-        });
-
-        const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-
-        expect(screen.findRow('settings.plugins.management.pendingChanges.pending-agent-8')).toBeTruthy();
-        // The row action opens the full install-and-trust review; nothing has
-        // been approved yet, so it must not be labeled as an approval.
-        const review = findPendingChangeAction(screen, 'pending-agent-8', 'review');
-        expect(review?.title).toBe('settingsPlugins.pendingChangeReviewAction');
-        expect(review?.subtitle).toBe('settingsPlugins.pendingChangesReviewHint');
-        // Reject discards the change without ever opening the review, so its
-        // copy must not claim that it shows one.
-        const reject = findPendingChangeAction(screen, 'pending-agent-8', 'reject');
-        expect(reject?.title).toBe('approvals.reject');
-        expect(reject?.subtitle).toBe('settingsPlugins.pendingChangeRejectHint');
-    });
-
-    it('shows the exact app-to-daemon decision failure after an install review closes', async () => {
-        const pendingChangeId = 'pending-agent-visible-failure';
-        const reviewRequired = createCommunityInstallReviewResult(pendingChangeId).change;
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: createMachineCapabilitiesState([], [], [reviewRequired]),
             refresh: vi.fn(),
         });
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: {
-                ok: true,
-                result: {
-                    action: 'changeStatus',
-                    pendingChangeId,
-                    status: reviewRequired,
-                },
-            },
-        });
-        machineRpcWithServerScopeMock.mockRejectedValueOnce(
-            new Error('Machine RPC direct HTTP response failed'),
-        );
 
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
             await flushAsync();
-            await flushAsync();
-        });
-        const reviewAction = findPendingChangeAction(screen, pendingChangeId, 'review');
-        expect(reviewAction).not.toBeNull();
-        await act(async () => {
-            reviewAction?.onPress();
-            await flushAsync();
-            await flushAsync();
-            await flushAsync();
-            await flushAsync();
-            await flushAsync();
         });
 
-        expect(invokeWithAlertsMock).toHaveBeenCalled();
-        await vi.waitFor(() => expect(modalShowMock).toHaveBeenCalledWith(expect.objectContaining({
-            chrome: expect.objectContaining({ testID: 'settings.plugins.installReview' }),
-        })), { timeout: 5_000 });
-        await vi.waitFor(() => expect(machineRpcWithServerScopeMock).toHaveBeenCalled(), { timeout: 5_000 });
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-            machineId: 'machine-1',
-            serverId: 'server-a',
-            method: 'daemon.plugins.install.review.decide',
-            payload: expect.objectContaining({ pendingChangeId, decision: 'installAndTrust' }),
-        }));
-        expect(modalAlertMock).toHaveBeenCalledWith(
-            'common.error',
-            'Machine RPC direct HTTP response failed',
-        );
+        expect(screen.findRow('settings.plugins.management.pendingChanges.pending-agent-1')).toBeNull();
+        expect(machineRpcWithServerScopeMock.mock.calls.some(([input]) => (input as { method?: string }).method === 'daemon.plugins.install.review.decide')).toBe(false);
     });
-
-    it('rejects a pending change through the same daemon change owner', async () => {
-        const refresh = vi.fn();
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: createMachineCapabilitiesState([], [], [
-                createCommunityInstallReviewResult('pending-agent-2').change,
-            ]),
-            refresh,
-        });
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: {
-                ok: true,
-                result: {
-                    action: 'changeStatus',
-                    pendingChangeId: 'pending-agent-2',
-                    status: createCommunityInstallReviewResult('pending-agent-2').change,
-                },
-            },
-        });
-        machineRpcWithServerScopeMock.mockResolvedValueOnce({ kind: 'cancelled' });
-        modalConfirmMock.mockResolvedValueOnce(true);
-
-        const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-
-        expect(screen.findRow('settings.plugins.management.pendingChanges.pending-agent-2')).toBeTruthy();
-        await act(async () => {
-            findPendingChangeAction(screen, 'pending-agent-2', 'reject')?.onPress();
-            await flushAsync();
-            await flushAsync();
-            await flushAsync();
-        });
-
-        // A rejection is a consequential machine-scoped operation: the exact
-        // server and machine it discards the change on are named before the
-        // user confirms, the same facts every other confirmation on this
-        // screen carries.
-        expect(modalConfirmMock).toHaveBeenCalledWith(
-            'approvals.reject',
-            'settingsPlugins.pendingChangeConfirmRejectBody(machine=machine-1,server=Server A)',
-            expect.objectContaining({ confirmText: 'approvals.reject', cancelText: 'common.cancel', destructive: true }),
-        );
-        // A rejection never fabricates approval evidence: it is the daemon's
-        // own cancel decision, carrying no actor evidence at all.
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(1);
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-            method: 'daemon.plugins.install.review.decide',
-            payload: { v: 1, pendingChangeId: 'pending-agent-2', decision: 'cancel' },
-        }));
-        expect(modalShowMock).not.toHaveBeenCalled();
-        expect(modalAlertMock).not.toHaveBeenCalledWith('common.success', expect.anything());
-        expect(screen.findByTestId('settings.plugins.pending.operationSettlement')?.props.accessibilityLiveRegion).toBe('polite');
-    });
-
-    it('renders the change owner\'s own answer when a listed change is no longer decidable', async () => {
-        const refresh = vi.fn();
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: createMachineCapabilitiesState([], [], [
-                createCommunityInstallReviewResult('pending-agent-3').change,
-            ]),
-            refresh,
-        });
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: {
-                ok: true,
-                result: {
-                    action: 'changeStatus',
-                    pendingChangeId: 'pending-agent-3',
-                    status: { kind: 'expired' },
-                },
-            },
-        });
-
-        const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-        await act(async () => {
-            findPendingChangeAction(screen, 'pending-agent-3', 'review')?.onPress();
-            await flushAsync();
-            await flushAsync();
-        });
-
-        // A stale row must never become an approval. The owner said the change
-        // is gone, so nothing is decided and the user is told the truth.
-        expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
-        expect(modalAlertMock).toHaveBeenCalledWith('common.error', 'settingsPlugins.pendingChangeExpired');
-        expect(refresh).toHaveBeenCalledTimes(1);
-    });
-
-    it('presents a rejoin whose change the owner already committed as applied, not as a failure', async () => {
-        const refresh = vi.fn();
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: createMachineCapabilitiesState([], [], [
-                createCommunityInstallReviewResult('pending-agent-4').change,
-            ]),
-            refresh,
-        });
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: {
-                ok: true,
-                result: {
-                    action: 'changeStatus',
-                    pendingChangeId: 'pending-agent-4',
-                    status: {
-                        kind: 'terminal',
-                        pendingChangeId: 'pending-agent-4',
-                        result: { kind: 'committed', pluginId: 'community-plugin' },
-                    },
-                },
-            },
-        });
-
-        const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-        await act(async () => {
-            findPendingChangeAction(screen, 'pending-agent-4', 'review')?.onPress();
-            await flushAsync();
-            await flushAsync();
-        });
-
-        // The change owner answered `committed` — possibly decided by another
-        // client while this rejoin was in flight. The applied state is the
-        // success answer; re-presenting it as a failure would be untrue.
-        expect(modalAlertMock).not.toHaveBeenCalledWith('common.success', expect.anything());
-        const settlement = screen.findByTestId('settings.plugins.pending.operationSettlement');
-        expect(settlement?.props.accessibilityLiveRegion).toBe('polite');
-        expect(screen.getTextContent()).toContain('settingsPlugins.pendingChangeCommitted');
-        expect(modalAlertMock).not.toHaveBeenCalledWith('common.error', expect.anything());
-        expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
-        expect(refresh).toHaveBeenCalledWith({ bypassCache: true });
-    });
-
-    it('reconciles an ambiguous approve decision against the exact original target instead of reporting failure', async () => {
-        const initialState = createMachineCapabilitiesState([], [], [
-            createCommunityInstallReviewResult('pending-agent-5').change,
-        ]);
-        let authoritativeState: MachineCapabilitiesState = initialState;
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: initialState,
-            refresh: vi.fn(),
-        });
-        getMachineCapabilitiesCacheStateMock.mockImplementation(() => authoritativeState);
-        prefetchMachineCapabilitiesMock.mockImplementationOnce(async () => {
-            authoritativeState = createMachineCapabilitiesState([
-                createInstalledPlugin({
-                    pluginId: 'community-plugin',
-                    title: 'Community Plugin',
-                    version: '2.0.0',
-                }),
-            ]);
-        });
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: {
-                ok: true,
-                result: {
-                    action: 'changeStatus',
-                    pendingChangeId: 'pending-agent-5',
-                    status: createCommunityInstallReviewResult('pending-agent-5').change,
-                },
-            },
-        });
-        machineRpcWithServerScopeMock.mockResolvedValueOnce({ kind: 'outcomeUnknown', pluginId: 'community-plugin' });
-
-        const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-        await act(async () => {
-            findPendingChangeAction(screen, 'pending-agent-5', 'review')?.onPress();
-            await flushAsync();
-            await flushAsync();
-            await flushAsync();
-        });
-
-        // Approving is commit-intended: the daemon may have applied the change
-        // after the decision left this device. The answer is reconciled on the
-        // exact original target only — the same path an ordinary install or
-        // update already uses — and a proven landing is a success, never the
-        // old false "was not applied" failure.
-        const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
-        await waitForHomeGovernance(() => expect(prefetchMachineCapabilitiesMock).toHaveBeenCalledWith(expect.objectContaining({
-            machineId: 'machine-1',
-            serverId: 'server-a',
-            request: expect.objectContaining({ bypassCache: true }),
-        })));
-        expect(modalAlertMock).not.toHaveBeenCalledWith('common.success', expect.anything());
-        expect(screen.findByTestId('settings.plugins.pending.operationSettlement')?.props.accessibilityLiveRegion).toBe('polite');
-        expect(modalAlertMock).not.toHaveBeenCalledWith('common.error', 'settingsPlugins.pendingChangeFailed');
-    });
-
-    it('presents the truthful unresolved copy when an ambiguous approve cannot be proven on the exact target', async () => {
-        const installedPlugin = createInstalledPlugin({
-            pluginId: 'community-plugin',
-            title: 'Community Plugin',
-            version: '1.0.0',
-        });
-        const capabilityState = createMachineCapabilitiesState([installedPlugin], [], [
-            createCommunityInstallReviewResult('pending-agent-6').change,
-        ]);
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: capabilityState,
-            refresh: vi.fn(),
-        });
-        // The authoritative re-read answers with the unchanged 1.0.0 record, so
-        // the reviewed 2.0.0 commit cannot be proven.
-        getMachineCapabilitiesCacheStateMock.mockReturnValue(capabilityState);
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: {
-                ok: true,
-                result: {
-                    action: 'changeStatus',
-                    pendingChangeId: 'pending-agent-6',
-                    status: createCommunityInstallReviewResult('pending-agent-6').change,
-                },
-            },
-        });
-        machineRpcWithServerScopeMock.mockResolvedValueOnce({ kind: 'outcomeUnknown', pluginId: 'community-plugin' });
-
-        const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-        await act(async () => {
-            findPendingChangeAction(screen, 'pending-agent-6', 'review')?.onPress();
-            await flushAsync();
-            await flushAsync();
-            await flushAsync();
-        });
-
-        // Unprovable is not failed: the change may have committed, so the user
-        // gets the truthful unresolved answer naming the exact target instead
-        // of a failure that invites deciding the same change again.
-        expect(modalAlertMock).toHaveBeenCalledWith(
-            'settingsPlugins.pluginChangeOutcomeUnknownTitle',
-            'settingsPlugins.pluginChangeOutcomeUnknownBody(action=settingsPlugins.installAndTrust,name=Community Plugin,machine=machine-1,server=Server A)',
-        );
-        expect(modalAlertMock).not.toHaveBeenCalledWith('common.error', 'settingsPlugins.pendingChangeFailed');
-    });
-
-    it('reconciles a terminal outcome-unknown rejoin against the exact target before the unresolved copy', async () => {
-        const installedPlugin = createInstalledPlugin({
-            pluginId: 'community-plugin',
-            title: 'Community Plugin',
-            version: '1.0.0',
-        });
-        const capabilityState = createMachineCapabilitiesState([installedPlugin], [], [
-            createCommunityInstallReviewResult('pending-agent-7').change,
-        ]);
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: capabilityState,
-            refresh: vi.fn(),
-        });
-        getMachineCapabilitiesCacheStateMock.mockReturnValue(capabilityState);
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: {
-                ok: true,
-                result: {
-                    action: 'changeStatus',
-                    pendingChangeId: 'pending-agent-7',
-                    status: {
-                        kind: 'terminal',
-                        pendingChangeId: 'pending-agent-7',
-                        result: { kind: 'outcomeUnknown', pluginId: 'community-plugin' },
-                    },
-                },
-            },
-        });
-
-        const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-        await act(async () => {
-            findPendingChangeAction(screen, 'pending-agent-7', 'review')?.onPress();
-            await flushAsync();
-            await flushAsync();
-            await flushAsync();
-        });
-
-        // A terminal outcome-unknown answer is not "was not applied": the exact
-        // original target is re-read first, and the unresolved copy is the
-        // truthful presentation when the landing still cannot be proven.
-        expect(prefetchMachineCapabilitiesMock).toHaveBeenCalledWith(expect.objectContaining({
-            machineId: 'machine-1',
-            serverId: 'server-a',
-            request: expect.objectContaining({ bypassCache: true }),
-        }));
-        expect(modalAlertMock).toHaveBeenCalledWith(
-            'settingsPlugins.pluginChangeOutcomeUnknownTitle',
-            'settingsPlugins.pluginChangeOutcomeUnknownBody(action=settingsPlugins.installAndTrust,name=community-plugin,machine=machine-1,server=Server A)',
-        );
-        expect(modalAlertMock).not.toHaveBeenCalledWith(
-            'common.error',
-            'settingsPlugins.pendingChangeFailed',
-        );
-    });
-
-
     it('cancels the inline development source draft without trusting or installing it', async () => {
         useMachineCapabilitiesCacheMock.mockReturnValue({
             state: createMachineCapabilitiesState([]), refresh: vi.fn(),
@@ -3053,10 +2517,9 @@ describe('PluginSettingsHomeScreen', () => {
                 ],
             },
         });
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: { ok: true, result: { action: 'disable', pluginId: 'com.acme.installed-plugin', change: { kind: 'committed' } } },
-        });
+        lifecycleActionBoundary.mockResolvedValue({ ok: true, result: {
+            ok: true, kind: 'plugins_disable', action: 'disable', pluginId: 'com.acme.installed-plugin', change: { kind: 'committed' },
+        } });
 
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: 'com.acme.installed-plugin' }));
 
@@ -3089,15 +2552,12 @@ describe('PluginSettingsHomeScreen', () => {
             await flushAsync();
         });
 
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            machineId: 'machine-1',
-            serverId: 'server-a',
-            request: expect.objectContaining({
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'disable',
-                params: expect.objectContaining({ pluginId: 'com.acme.installed-plugin' }),
-            }),
-        }));
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.disable')).toEqual([
+            expect.objectContaining({ serverUrl: 'https://server-a.example.test', input: expect.objectContaining({
+                target: { kind: 'machine', machineId: 'machine-1' },
+                input: { machineId: 'machine-1', pluginId: 'com.acme.installed-plugin' },
+            }) }),
+        ]);
         expect(refresh).toHaveBeenCalledWith({ bypassCache: true });
         expect(publishMachineContributionRegistryProjectionInvalidationMock).toHaveBeenCalledWith({
             machineId: 'machine-1',
@@ -3177,13 +2637,14 @@ describe('PluginSettingsHomeScreen', () => {
         });
         expect(modalConfirmMock).not.toHaveBeenCalled();
         expect(invokeWithAlertsMock).not.toHaveBeenCalled();
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.rollback')).toHaveLength(0);
     });
 
     it.each([
-        ['rollback', 'settingsPlugins.rollback'],
-        ['uninstall', 'settingsPlugins.uninstall'],
-        ['forgetTrust', 'settingsPlugins.forgetTrust'],
-    ] as const)('confirms the destructive %s action and invokes only the private plugin capability', async (method, confirmationTitle) => {
+        ['rollback', 'plugins.rollback'],
+        ['uninstall', 'plugins.uninstall'],
+        ['forgetTrust', 'plugins.trust.forget'],
+    ] as const)('admits %s through Action policy and delivers the exact plugin and Machine', async (method, actionId) => {
         const installedPlugin = createInstalledPlugin({
             pluginId: 'installed-plugin',
             title: 'Installed Plugin',
@@ -3194,17 +2655,9 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([installedPlugin]),
             refresh: vi.fn(),
         });
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: {
-                ok: true,
-                result: {
-                    action: method,
-                    pluginId: installedPlugin.pluginId,
-                    change: { kind: 'committed' },
-                },
-            },
-        });
+        lifecycleActionBoundary.mockResolvedValue({ ok: true, result: {
+            ok: true, kind: actionId.replaceAll('.', '_'), action: method, pluginId: installedPlugin.pluginId, change: { kind: 'committed' },
+        } });
 
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
             pluginId: installedPlugin.pluginId,
@@ -3213,38 +2666,136 @@ describe('PluginSettingsHomeScreen', () => {
             await flushAsync();
         });
 
-        modalConfirmMock.mockResolvedValueOnce(false);
         await act(async () => {
             pressDetailLifecycleAction(screen, installedPlugin.pluginId, method);
             await flushAsync();
         });
-        // A plugin change lands on ONE machine reached through ONE server. The
-        // confirmation must name that target: the same wording on a different
-        // selected machine is a different, irreversible action.
-        expect(modalConfirmMock).toHaveBeenCalledWith(
-            confirmationTitle,
-            `settingsPlugins.pluginChangeConfirmBody(action=${confirmationTitle},name=Installed Plugin,machine=machine-1,server=Server A)`,
-            expect.objectContaining({
-                confirmText: confirmationTitle,
-                cancelText: 'common.cancel',
-            }),
-        );
+        expect(lifecycleHomes.requestsFor(`/v1/actions/${actionId}`)).toEqual([
+            expect.objectContaining({ serverUrl: 'https://server-a.example.test', input: expect.objectContaining({
+                target: { kind: 'machine', machineId: 'machine-1' },
+                input: { machineId: 'machine-1', pluginId: installedPlugin.pluginId },
+            }) }),
+        ]);
+        // Waiving the Account's default approval reaches the effect directly;
+        // the caller cannot insert an independent confirmation decision.
+        expect(modalConfirmMock).not.toHaveBeenCalled();
         expect(invokeWithAlertsMock).not.toHaveBeenCalled();
+    });
 
-        modalConfirmMock.mockResolvedValueOnce(true);
+    it.each([
+        ['uninstall', 'plugins.uninstall', 'approval_rejected'],
+        ['forgetTrust', 'plugins.trust.forget', 'approval_canceled'],
+    ] as const)('keeps an admitted %s Action decline quiet', async (method, actionId, errorCode) => {
+        const approvalId = 'daemon-uninstall-review';
+        const daemonReplyReady = createDeferred();
+        let daemonReplyError: unknown;
+        if (method === 'uninstall') {
+            // A Machine-placed Action returns its daemon-owned approval, not a
+            // second app-side confirmation. Keep another Home active to prove
+            // that review and the mounted continuation retain the exact Home.
+            setMachineAdministrationTargetFixture({ serverIdentityId: 'srv_identity-b', serverId: 'server-b', machineId: 'machine-2' });
+            const home = lifecycleHomes.findByServerUrl('https://server-b.example.test');
+            if (!home) throw new Error('Expected the lifecycle Home fixture');
+            await lifecycleHomes.requireUiApproval(home.serverId, actionId);
+            // Validate the daemon fixture before entering the transport: a
+            // schema failure is setup evidence, never lost-ACK evidence.
+            const approvalTemplate = ApprovalRequestV2Schema.parse({
+                v: 2, status: 'open', createdAtMs: Date.now(), updatedAtMs: Date.now(),
+                createdBy: { surface: 'system' }, requestedSurface: 'ui',
+                executionOriginV1: {
+                    v: 1, authority: 'present_user', surface: 'ui', caller: { kind: 'host' },
+                    serverId: 'server-b', serverIdentityId: 'srv_identity-b', accountId: 'account-a',
+                    machineId: 'machine-2', target: { kind: 'machine', machineId: 'machine-2' },
+                    actionId, requestId: 'daemon-uninstall-request',
+                },
+                approval: getActionSpec(actionId).approval, actionId,
+                actionArgs: { machineId: 'machine-2', pluginId: 'installed-plugin' },
+                summary: 'Uninstall Installed Plugin',
+            });
+            lifecycleHomes.answer(home.serverId, `/v1/actions/${actionId}`, { select: async body => {
+                try {
+                    const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+                    const request = ApprovalRequestV2Schema.parse({ ...approvalTemplate, actionArgs: envelope.input,
+                        executionOriginV1: { ...approvalTemplate.executionOriginV1,
+                            target: envelope.target, requestId: envelope.requestId },
+                    });
+                    const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+                    const account = await captureLazyActionAccountContext('server-b');
+                    try {
+                        await account.createArtifactDocument({ artifactId: approvalId,
+                            header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) });
+                    } finally { account.dispose(); }
+                    return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId,
+                        requestId: envelope.requestId, execution: { ok: true, result: {
+                            kind: 'approval_request_created', actionId, artifactId: approvalId,
+                        } },
+                    }) };
+                } catch (error) {
+                    daemonReplyError = error;
+                    throw error;
+                } finally { daemonReplyReady.resolve(); }
+            } });
+        }
+        const refresh = vi.fn();
+        useMachineCapabilitiesCacheMock.mockReturnValue({ state: createMachineCapabilitiesState([
+            createInstalledPlugin({ pluginId: 'installed-plugin', title: 'Installed Plugin', version: '1.0.0' }),
+        ]), refresh });
+        // The real Action path decodes the Home's decline. Confirmation policy
+        // stays with the Action/daemon owner, not this caller.
+        lifecycleActionBoundary.mockResolvedValueOnce({ ok: false, errorCode, error: errorCode });
+        const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: 'installed-plugin' }));
+        await act(async () => { await flushAsync(); await flushAsync(); });
+        const control = () => screen.findAll(node => node.props?.testID === `settings.plugins.detail.installed-plugin.action.${method}`
+            && typeof node.props.onPress === 'function')[0];
+        await waitForHomeGovernance(() => {
+            expect(control()).toBeTruthy();
+            expect(control()?.props.disabled).not.toBe(true);
+        });
         await act(async () => {
-            pressDetailLifecycleAction(screen, installedPlugin.pluginId, method);
+            pressDetailLifecycleAction(screen, 'installed-plugin', method);
             await flushAsync();
         });
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            machineId: 'machine-1',
-            serverId: 'server-a',
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method,
-                params: { pluginId: installedPlugin.pluginId },
-            },
-        }));
+        await waitForHomeGovernance(() => expect(lifecycleHomes.requestsFor(`/v1/actions/${actionId}`)).toEqual([
+            expect.objectContaining({ serverUrl: method === 'uninstall' ? 'https://server-b.example.test' : 'https://server-a.example.test', input: expect.objectContaining({
+                target: { kind: 'machine', machineId: method === 'uninstall' ? 'machine-2' : 'machine-1' },
+                input: { machineId: method === 'uninstall' ? 'machine-2' : 'machine-1', pluginId: 'installed-plugin' },
+            }) }),
+        ]));
+        if (method === 'uninstall') {
+            await daemonReplyReady.promise;
+            expect(daemonReplyError).toBeUndefined();
+            const home = lifecycleHomes.findByServerUrl('https://server-b.example.test');
+            if (!home) throw new Error('Expected the lifecycle Home fixture');
+            expect(lifecycleHomes.artifacts(home.serverId).readPlainBody(approvalId),
+                JSON.stringify({ alerts: modalAlertMock.mock.calls, paths: lifecycleHomes.requests.map(request => request.path) }))
+                .not.toBeNull();
+            await act(async () => { await flushAsync(); await flushAsync(); });
+            // Registration starts the exact-Home Artifact reader. Navigation is
+            // synchronous with that registration, so observing this GET proves
+            // the mounted owner has already had its opportunity to open review.
+            expect(lifecycleHomes.requestsFor(`/v1/artifacts/${approvalId}`),
+                JSON.stringify({ alerts: modalAlertMock.mock.calls, paths: lifecycleHomes.requests.map(request => request.path) }))
+                .toContainEqual(expect.objectContaining({ serverUrl: 'https://server-b.example.test' }));
+            expect(routerPushSpy).toHaveBeenCalledWith(`/inbox/approvals/${approvalId}?serverId=srv_identity-b`);
+            expect(getActiveServerIdMock()).toBe('server-a');
+            expect(control()?.props.disabled).toBe(true);
+            const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+            expect(await createDefaultActionExecutor().execute('approval.request.decide', {
+                artifactId: approvalId, decision: 'reject',
+            }, { serverId: 'server-b', surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } }))
+                .toMatchObject({ ok: true });
+            expect(ApprovalRequestV2Schema.parse(JSON.parse(
+                lifecycleHomes.artifacts(home.serverId).readPlainBody(approvalId) ?? 'null',
+            )).status).toBe('rejected');
+        }
+        await act(async () => { await flushAsync(); await flushAsync(); });
+        await waitForHomeGovernance(() => expect(control()?.props.disabled).not.toBe(true));
+        expect(modalConfirmMock).not.toHaveBeenCalled();
+        expect(lifecycleHomes.requestsFor(`/v1/actions/${actionId}`)).toHaveLength(1);
+        expect(invokeWithAlertsMock).not.toHaveBeenCalled();
+        expect(refresh).not.toHaveBeenCalled();
+        expect(modalAlertMock).not.toHaveBeenCalled();
+        expect(screen.getTextContent()).not.toContain('common.done');
     });
 
     it('does not refresh plugin truth after a destructive lifecycle capability failure', async () => {
@@ -3258,16 +2809,7 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([installedPlugin]),
             refresh,
         });
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: {
-                ok: false,
-                error: {
-                    code: 'plugin-not-found',
-                    message: 'Installed plugin was not found',
-                },
-            },
-        });
+        lifecycleActionBoundary.mockResolvedValue({ ok: false, errorCode: 'plugin-not-found', error: 'Installed plugin was not found' });
 
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
             pluginId: installedPlugin.pluginId,
@@ -3278,15 +2820,62 @@ describe('PluginSettingsHomeScreen', () => {
             await flushAsync();
         });
 
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'uninstall',
-                params: { pluginId: installedPlugin.pluginId },
-            },
-        }));
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.uninstall')).toHaveLength(1);
         expect(refresh).not.toHaveBeenCalled();
         expect(publishMachineContributionRegistryProjectionInvalidationMock).not.toHaveBeenCalled();
+    });
+
+    it('keeps update policy on the selected Home while another Home stays active', async () => {
+        setMachineAdministrationTargetFixture({ serverIdentityId: 'srv_identity-b', serverId: 'server-b', machineId: 'machine-2' });
+        const installedPlugin = createInstalledPlugin({
+            pluginId: 'acme.policy', title: 'Policy plugin', version: '1.0.0',
+            install: { mode: 'managed_install', manifestVersion: '1', updatePolicy: 'allowed', trust: {
+                pluginId: 'acme.policy', state: 'trusted', approvedAtMs: 1,
+                distribution: { kind: 'npm', registryOrigin: 'https://registry.npmjs.org', packageName: '@acme/policy' },
+            } },
+        });
+        const refresh = vi.fn();
+        useMachineCapabilitiesCacheMock.mockReturnValue({ state: createMachineCapabilitiesState([installedPlugin]), refresh });
+        const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: installedPlugin.pluginId }));
+        await act(async () => { await flushAsync(); await flushAsync(); });
+        await act(async () => {
+            screen.pressByTestId('settings.plugins.detail.acme.policy.updatePolicy:pinned');
+            await flushAsync();
+        });
+        expect(getActiveServerIdMock()).toBe('server-a');
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.update_policy.set')).toEqual([
+            expect.objectContaining({ serverUrl: 'https://server-b.example.test', input: expect.objectContaining({
+                target: { kind: 'machine', machineId: 'machine-2' },
+                input: { machineId: 'machine-2', pluginId: 'acme.policy', policy: 'pinned' },
+            }) }),
+        ]);
+        expect(refresh).toHaveBeenCalledWith({ bypassCache: true });
+        expect(invokeWithAlertsMock).not.toHaveBeenCalled();
+    });
+
+    it('does not refresh or report success when an admitted update-policy effect refuses the change', async () => {
+        const installedPlugin = createInstalledPlugin({
+            pluginId: 'acme.policy', title: 'Policy plugin', version: '1.0.0',
+            install: { mode: 'managed_install', manifestVersion: '1', updatePolicy: 'allowed', trust: {
+                pluginId: 'acme.policy', state: 'trusted', approvedAtMs: 1,
+                distribution: { kind: 'npm', registryOrigin: 'https://registry.npmjs.org', packageName: '@acme/policy' },
+            } },
+        });
+        const refresh = vi.fn();
+        useMachineCapabilitiesCacheMock.mockReturnValue({ state: createMachineCapabilitiesState([installedPlugin]), refresh });
+        lifecycleActionBoundary.mockResolvedValue({ ok: true, result: { ok: false, kind: 'plugins_update_policy_set',
+            action: 'setUpdatePolicy', pluginId: installedPlugin.pluginId,
+            change: { kind: 'failed', code: 'plugin-not-found', message: 'Installed plugin was not found' } } });
+        const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: installedPlugin.pluginId }));
+        await act(async () => { await flushAsync(); await flushAsync(); });
+        await act(async () => {
+            screen.pressByTestId('settings.plugins.detail.acme.policy.updatePolicy:pinned');
+            await flushAsync();
+        });
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.update_policy.set')).toHaveLength(1);
+        expect(refresh).not.toHaveBeenCalled();
+        expect(modalAlertMock).toHaveBeenCalledWith('common.error', expect.any(String));
+        expect(screen.getTextContent()).not.toContain('common.done');
     });
 
     it.each([
@@ -3316,16 +2905,8 @@ describe('PluginSettingsHomeScreen', () => {
             prefetchMachineCapabilitiesMock.mockImplementationOnce(async () => {
                 authoritativeState = createMachineCapabilitiesState(createInstalledAfter(installedPlugin));
             });
-            invokeWithAlertsMock.mockResolvedValueOnce({
-                supported: true,
-                response: {
-                    ok: false,
-                    error: {
-                        code: 'outcomeUnknown',
-                        message: 'The daemon may have committed the requested mutation',
-                    },
-                },
-            });
+            lifecycleActionBoundary.mockResolvedValueOnce({ ok: false, errorCode: 'outcomeUnknown',
+                error: 'The daemon may have committed the requested mutation' });
 
             const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
                 pluginId: installedPlugin.pluginId,
@@ -3337,7 +2918,7 @@ describe('PluginSettingsHomeScreen', () => {
                 await flushAsync();
             });
 
-            expect(invokeWithAlertsMock).toHaveBeenCalledTimes(1);
+            expect(lifecycleActionBoundary).toHaveBeenCalledTimes(1);
             expect(prefetchMachineCapabilitiesMock).toHaveBeenCalledWith(expect.objectContaining({
                 machineId: 'machine-1',
                 serverId: 'server-a',
@@ -3355,7 +2936,8 @@ describe('PluginSettingsHomeScreen', () => {
         },
     );
 
-    it('reconciles commit-intended transport loss from authoritative truth without retrying uninstall', async () => {
+    it.each(['transport loss', 'empty 502 acknowledgement'] as const)(
+        'reconciles commit-intended %s from authoritative truth without retrying uninstall', async failure => {
         const installedPlugin = createInstalledPlugin({
             pluginId: 'installed-plugin',
             title: 'Installed Plugin',
@@ -3371,7 +2953,15 @@ describe('PluginSettingsHomeScreen', () => {
         prefetchMachineCapabilitiesMock.mockImplementationOnce(async () => {
             authoritativeState = createMachineCapabilitiesState([]);
         });
-        invokeWithAlertsMock.mockResolvedValueOnce({ supported: false, reason: 'error' });
+        if (failure === 'transport loss') {
+            lifecycleActionBoundary.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+        } else {
+            const home = lifecycleHomes.findByServerUrl('https://server-a.example.test');
+            if (!home) throw new Error('Expected the lifecycle Home fixture');
+            // The real Action route loses the daemon acknowledgement after
+            // dispatch and answers with no response body, not an error envelope.
+            lifecycleHomes.answer(home.serverId, '/v1/actions/plugins.uninstall', { status: 502 });
+        }
 
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
             pluginId: installedPlugin.pluginId,
@@ -3383,8 +2973,12 @@ describe('PluginSettingsHomeScreen', () => {
             await flushAsync();
         });
 
-        expect(invokeWithAlertsMock).toHaveBeenCalledTimes(1);
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.uninstall')).toHaveLength(1);
         expect(prefetchMachineCapabilitiesMock).toHaveBeenCalledTimes(1);
+        expect(publishMachineContributionRegistryProjectionInvalidationMock).toHaveBeenCalledWith({
+            machineId: 'machine-1', serverId: 'server-a',
+        });
+        expect(modalAlertMock).not.toHaveBeenCalledWith('common.error', expect.anything());
         expect(modalAlertMock).not.toHaveBeenCalledWith('common.success', expect.anything());
         expect(screen.findByTestId('settings.plugins.installed.operationSettlement')?.props.accessibilityLiveRegion).toBe('polite');
     });
@@ -3405,16 +2999,8 @@ describe('PluginSettingsHomeScreen', () => {
         prefetchMachineCapabilitiesMock.mockImplementationOnce(async () => {
             authoritativeState = { status: 'not-supported' };
         });
-        invokeWithAlertsMock.mockResolvedValueOnce({
-            supported: true,
-            response: {
-                ok: false,
-                error: {
-                    code: 'outcomeUnknown',
-                    message: 'The daemon may have committed the requested mutation',
-                },
-            },
-        });
+        lifecycleActionBoundary.mockResolvedValueOnce({ ok: false, errorCode: 'outcomeUnknown',
+            error: 'The daemon may have committed the requested mutation' });
 
         const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, {
             pluginId: installedPlugin.pluginId,
@@ -3465,16 +3051,8 @@ describe('PluginSettingsHomeScreen', () => {
             await refreshStarted.promise;
             machineOneState = createMachineCapabilitiesState([]);
         });
-        invokeWithAlertsMock.mockResolvedValueOnce({
-            supported: true,
-            response: {
-                ok: false,
-                error: {
-                    code: 'outcomeUnknown',
-                    message: 'The daemon may have committed the requested mutation',
-                },
-            },
-        });
+        lifecycleActionBoundary.mockResolvedValueOnce({ ok: false, errorCode: 'outcomeUnknown',
+            error: 'The daemon may have committed the requested mutation' });
 
         const RerenderablePluginDetailScreen = PluginDetailScreen as unknown as React.ComponentType<{
             pluginId: string;
@@ -3511,12 +3089,13 @@ describe('PluginSettingsHomeScreen', () => {
             await flushAsync();
         });
 
-        expect(invokeWithAlertsMock).toHaveBeenCalledTimes(1);
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.uninstall')).toHaveLength(1);
         expect(modalAlertMock).not.toHaveBeenCalledWith('common.success', 'common.done');
         expect(publishMachineContributionRegistryProjectionInvalidationMock).not.toHaveBeenCalled();
     });
 
     it('renders and edits hooks-only generic plugin settings from settingsById without leaking redacted values', async () => {
+        activeAccountScopeState.current = activeAccountLifetime.scope;
         const installedPlugin = createInstalledPlugin({
             pluginId: 'acme.hooks',
             title: 'Acme hooks',
@@ -3722,7 +3301,7 @@ describe('PluginSettingsHomeScreen', () => {
         const endpointInput = screen.findRow('settings.plugins.detail.acme.hooks.settings.acme.hooks.settings.endpoint.input');
         const tokenInput = screen.findRow('settings.plugins.detail.acme.hooks.settings.acme.hooks.settings.apiToken.input');
         const notesInput = screen.findRow('settings.plugins.detail.acme.hooks.settings.acme.hooks.settings.notes.input');
-        expect(endpointInput?.props.value).toBe('https://api.example.test');
+        await waitForHomeGovernance(() => expect(endpointInput?.props.value).toBe('https://api.example.test'));
         expect(tokenInput?.props.value).toBe('');
         expect(tokenInput?.props.secureTextEntry).toBe(true);
         expect(notesInput?.props.multiline).toBe(true);
@@ -4016,19 +3595,11 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([installedPlugin]),
             refresh: vi.fn(),
         });
-        invokeWithAlertsMock.mockImplementation(async ({ machineId }: Readonly<{ machineId: string }>) => {
+        lifecycleActionBoundary.mockImplementation(async ({ target }: { target: { machineId: string } }) => {
+            const machineId = target.machineId;
             await (machineId === 'machine-1' ? machineOneAction.promise : machineTwoAction.promise);
-            return {
-                supported: true,
-                response: {
-                    ok: true,
-                    result: {
-                        action: 'rollback',
-                        pluginId: installedPlugin.pluginId,
-                        change: { kind: 'committed' },
-                    },
-                },
-            };
+            return { ok: true, result: { ok: true, kind: 'plugins_rollback', action: 'rollback',
+                pluginId: installedPlugin.pluginId, change: { kind: 'committed' } } };
         });
 
         const RerenderablePluginDetailScreen = PluginDetailScreen as unknown as React.ComponentType<{
@@ -4101,12 +3672,10 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([installedPlugin]),
             refresh: vi.fn(),
         });
-        invokeWithAlertsMock.mockImplementation(async () => {
+        lifecycleActionBoundary.mockImplementation(async () => {
             await action.promise;
-            return {
-                supported: true,
-                response: { ok: true, result: { ok: true } },
-            };
+            return { ok: true, result: { ok: true, kind: 'plugins_disable', action: 'disable',
+                pluginId: installedPlugin.pluginId, change: { kind: 'committed' } } };
         });
 
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
@@ -4126,7 +3695,8 @@ describe('PluginSettingsHomeScreen', () => {
             actionBeforeBusyRender?.toggle();
             actionBeforeBusyRender?.toggle();
         });
-        expect(invokeWithAlertsMock).toHaveBeenCalledTimes(1);
+        await act(async () => { await flushAsync(); });
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.disable')).toHaveLength(1);
         expect(findDisableAction()?.disabled).toBe(true);
 
         action.resolve();
@@ -4318,139 +3888,7 @@ describe('PluginSettingsHomeScreen', () => {
 
 
 
-    it('reconciles an outcome-unknown exact marketplace update after the private review decision', async () => {
-        const installedPlugin = createInstalledPlugin({
-            pluginId: 'community-plugin',
-            title: 'Community Plugin',
-            version: '1.0.0',
-        });
-        const initialState = createMachineCapabilitiesState([installedPlugin]);
-        let authoritativeState: MachineCapabilitiesState = initialState;
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: initialState,
-            refresh: vi.fn(),
-        });
-        getMachineCapabilitiesCacheStateMock.mockImplementation(() => authoritativeState);
-        prefetchMachineCapabilitiesMock.mockImplementationOnce(async () => {
-            authoritativeState = createMachineCapabilitiesState([{
-                ...installedPlugin,
-                version: '2.0.0',
-            }]);
-        });
-        invokeWithAlertsMock.mockResolvedValueOnce({
-            supported: true,
-            response: {
-                ok: true,
-                result: createCommunityInstallReviewResult('pending-update-1', 'update'),
-            },
-        });
-        machineRpcWithServerScopeMock.mockResolvedValueOnce({
-            kind: 'outcomeUnknown',
-            pluginId: 'community-plugin',
-        });
-
-        const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: 'community-plugin' }));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-
-        // Update starts from the installed record itself (its page's `⋯`
-        // menu); Discover never advertised a lifecycle row for something
-        // already installed.
-        const updateAction = findDetailMenuAction(screen, 'community-plugin', 'update');
-        expect(updateAction).not.toBeNull();
-        expect(updateAction?.disabled).not.toBe(true);
-        await act(async () => {
-            updateAction?.onSelect();
-            await flushAsync();
-        });
-
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            request: {
-                id: MARKETPLACE_CAPABILITY_ID,
-                method: 'update',
-                params: {
-                    pluginId: 'community-plugin',
-                },
-            },
-            alerts: expect.objectContaining({ successMessage: null }),
-        }));
-        expect(modalShowMock).toHaveBeenCalledWith(expect.objectContaining({
-            chrome: expect.objectContaining({
-                testID: 'settings.plugins.installReview',
-            }),
-            props: expect.objectContaining({
-                review: expect.objectContaining({
-                    pluginId: 'community-plugin',
-                    packageIdentity: { name: '@acme/community-plugin', version: '2.0.0' },
-                }),
-            }),
-        }));
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
-            method: 'daemon.plugins.install.review.decide',
-            payload: expect.objectContaining({
-                v: 1,
-                pendingChangeId: 'pending-update-1',
-                decision: 'installAndTrust',
-            }),
-        }));
-        expect(prefetchMachineCapabilitiesMock).toHaveBeenCalledWith(expect.objectContaining({
-            machineId: 'machine-1',
-            serverId: 'server-a',
-            request: expect.objectContaining({ bypassCache: true }),
-        }));
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(1);
-        expect(modalAlertMock).not.toHaveBeenCalledWith('common.success', expect.anything());
-        expect(screen.findByTestId('settings.plugins.installed.operationSettlement')?.props.accessibilityLiveRegion).toBe('polite');
-    });
-
-    it('reconciles an ambiguous update against the installed record the update owner advanced, not the catalog version', async () => {
-        const installedPlugin = createInstalledPlugin({
-            pluginId: 'community-plugin',
-            title: 'Community Plugin',
-            version: '1.0.0',
-        });
-        const initialState = createMachineCapabilitiesState([installedPlugin]);
-        let authoritativeState: MachineCapabilitiesState = initialState;
-        useMachineCapabilitiesCacheMock.mockReturnValue({
-            state: initialState,
-            refresh: vi.fn(),
-        });
-        getMachineCapabilitiesCacheStateMock.mockImplementation(() => authoritativeState);
-        // The canonical update owner selected the newest compatible version, which
-        // is not the version this catalog listing advertises.
-        prefetchMachineCapabilitiesMock.mockImplementationOnce(async () => {
-            authoritativeState = createMachineCapabilitiesState([{
-                ...installedPlugin,
-                version: '1.4.0',
-            }]);
-        });
-        invokeWithAlertsMock.mockResolvedValueOnce({ supported: false, reason: 'error' });
-
-        const screen = await renderInAppPanes(React.createElement(PluginDetailScreen, { pluginId: 'community-plugin' }));
-        await act(async () => {
-            await flushAsync();
-            await flushAsync();
-        });
-        const updateAction = findDetailMenuAction(screen, 'community-plugin', 'update');
-        expect(updateAction).not.toBeNull();
-        await act(async () => {
-            updateAction?.onSelect();
-            await flushAsync();
-        });
-        expect(invokeWithAlertsMock).toHaveBeenCalledWith(expect.objectContaining({
-            request: expect.objectContaining({ method: 'update', params: { pluginId: 'community-plugin' } }),
-        }));
-
-        expect(modalAlertMock).not.toHaveBeenCalledWith('common.success', expect.anything());
-        expect(screen.findByTestId('settings.plugins.installed.operationSettlement')?.props.accessibilityLiveRegion).toBe('polite');
-        expect(modalAlertMock).not.toHaveBeenCalledWith('common.error', expect.anything());
-    });
-
-
-
-    it('routes installed-row enable and disable through the host capability', async () => {
+    it('routes installed-row enable and disable through admitted public Actions', async () => {
         const enabledPlugin = createInstalledPlugin({
             pluginId: 'existing-plugin',
             title: 'Existing Plugin',
@@ -4494,10 +3932,10 @@ describe('PluginSettingsHomeScreen', () => {
             state: createMachineCapabilitiesState([enabledPlugin, disabledPlugin]),
             refresh,
         });
-        invokeWithAlertsMock.mockResolvedValue({
-            supported: true,
-            response: { ok: true, result: { action: 'disable', pluginId: 'existing-plugin', change: { kind: 'committed' } } },
-        });
+        lifecycleActionBoundary.mockImplementation(async ({ actionId, input }: { actionId: string; input: { pluginId: string } }) => ({
+            ok: true, result: { ok: true, kind: actionId.replaceAll('.', '_'), action: actionId.slice('plugins.'.length),
+                pluginId: input.pluginId, change: { kind: 'committed' } },
+        }));
 
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         await act(async () => {
@@ -4516,28 +3954,22 @@ describe('PluginSettingsHomeScreen', () => {
             disableAction?.toggle();
             await flushAsync();
         });
+        await waitForHomeGovernance(() => expect(refresh).toHaveBeenCalledTimes(1));
+        await waitForHomeGovernance(() => expect(findInstalledRowToggle(screen, 'disabled-plugin'))
+            .toMatchObject({ action: 'enable', disabled: false }));
 
         await act(async () => {
-            enableAction?.toggle();
+            findInstalledRowToggle(screen, 'disabled-plugin')?.toggle();
             await flushAsync();
         });
+        await waitForHomeGovernance(() => expect(refresh).toHaveBeenCalledTimes(2));
 
-        expect(invokeWithAlertsMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
-            request: expect.objectContaining({
-                method: 'disable',
-                params: expect.objectContaining({
-                    pluginId: 'existing-plugin',
-                }),
-            }),
-        }));
-        expect(invokeWithAlertsMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
-            request: expect.objectContaining({
-                method: 'enable',
-                params: expect.objectContaining({
-                    pluginId: 'disabled-plugin',
-                }),
-            }),
-        }));
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.disable')).toEqual([
+            expect.objectContaining({ input: expect.objectContaining({ input: { machineId: 'machine-1', pluginId: 'existing-plugin' } }) }),
+        ]);
+        expect(lifecycleHomes.requestsFor('/v1/actions/plugins.enable')).toEqual([
+            expect.objectContaining({ input: expect.objectContaining({ input: { machineId: 'machine-1', pluginId: 'disabled-plugin' } }) }),
+        ]);
         expect(refresh).toHaveBeenCalledTimes(2);
         expect(refresh).toHaveBeenNthCalledWith(1, { bypassCache: true });
         expect(refresh).toHaveBeenNthCalledWith(2, { bypassCache: true });
@@ -4589,12 +4021,10 @@ describe('PluginSettingsHomeScreen', () => {
                 diagnostics: [],
             },
         });
-        invokeWithAlertsMock.mockImplementation(async () => {
+        lifecycleActionBoundary.mockImplementation(async () => {
             await deferred.promise;
-            return {
-                supported: true,
-                response: { ok: true, result: { action: 'disable', pluginId: 'installed-plugin', change: { kind: 'committed' } } },
-            };
+            return { ok: true, result: { ok: true, kind: 'plugins_disable', action: 'disable',
+                pluginId: 'installed-plugin', change: { kind: 'committed' } } };
         });
 
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));

@@ -1,17 +1,19 @@
 import * as React from 'react';
-import { act, create } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { DaemonNpmRegistryProfilesGetResponseV1Schema } from '@happier-dev/protocol/rpc/npmRegistryProfiles';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-// Only the daemon RPC adapters and the modal host are boundaries here; the
-// registry profile administration and the source registry owner stay real.
+// Home HTTP, the daemon's Socket transport and modal presentation are the
+// boundaries. Account Registry Actions and profile administration stay real.
 const mocks = vi.hoisted(() => ({
     profilesGet: vi.fn(),
-    profilesMutate: vi.fn(),
-    sourcesGet: vi.fn(),
-    sourcesMutate: vi.fn(),
     show: vi.fn(),
     prompt: vi.fn(),
     alert: vi.fn(),
@@ -26,18 +28,30 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
     theme: { colors: { accent: { blue: 'blue' } } },
 }));
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
-vi.mock('@/sync/ops/machineNpmRegistryProfiles', () => ({
-    machineNpmRegistryProfilesGet: mocks.profilesGet,
-    machineNpmRegistryProfilesMutate: mocks.profilesMutate,
-}));
-vi.mock('@/sync/ops/machineMarketplaceSources', () => ({
-    machineMarketplaceSourceRegistryGet: mocks.sourcesGet,
-    machineMarketplaceSourceRegistryMutate: mocks.sourcesMutate,
-}));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
     spies: { show: mocks.show, prompt: mocks.prompt, alert: mocks.alert },
 }).module);
-import { PluginRegistryProfileSelectionDialog } from './PluginRegistryProfileSelectionDialog';
+const account = createProviderSettingsAccountHarness();
+installDisconnectedServerSocketBoundary(socket => {
+    socket.connect = vi.fn<typeof socket.connect>(() => {
+        socket.connected = true;
+        for (const listener of socket.listeners('connect')) listener();
+        return socket;
+    });
+    socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event: string, payload: unknown) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+        if (!payload || typeof payload !== 'object' || !('method' in payload)
+            || payload.method !== `machine-a:${RPC_METHODS.DAEMON_NPM_REGISTRY_PROFILES_GET}`) {
+            throw new Error('Unexpected registry profile Socket request');
+        }
+        return { ok: true, result: await mocks.profilesGet() };
+    });
+});
+const { PluginRegistryProfileSelectionDialog } = await import('./PluginRegistryProfileSelectionDialog');
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+let catalog: ReturnType<typeof createPromptLibraryCatalogBoundary>;
 
 const TEAM_SOURCE = {
     id: 'marketplace:team', title: 'Team catalog', sourceUrl: 'https://team.example.test/index.json',
@@ -48,33 +62,18 @@ const OTHER_SOURCE = {
     enabled: true, origin: 'user' as const, addedAtMs: 1, updatedAtMs: 1,
 };
 
-function registry(registryProfileId: string | null) {
-    return {
-        t: 'happier_marketplace_source_registry_v1' as const,
-        schemaVersion: 1 as const,
-        sources: [{ ...TEAM_SOURCE, ...(registryProfileId ? { registryProfileId } : {}) }, OTHER_SOURCE],
-    };
-}
-
-const executionTarget = {
-    kind: 'resolved',
-    target: { serverIdentityId: 'identity-a', machineId: 'machine-a' },
-    serverId: 'server-a',
-    profile: { id: 'server-a', name: 'Server A', serverUrl: 'https://server-a.example.test', serverIdentityId: 'identity-a', createdAt: 1, updatedAt: 1, lastUsedAt: 1 },
-    machine: { id: 'machine-a', seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1, metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 },
-} as const;
-
 async function flush(): Promise<void> {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
 
 async function renderDialog() {
+    const { resolveFreshMachineAdministrationExecutionTarget } = await import('@/sync/domains/machines/administration/useTargetSelection');
+    const executionTarget = resolveFreshMachineAdministrationExecutionTarget({ serverIdentityId: 'srv_plugin_registry', machineId: 'machine-a' });
+    if (!executionTarget) throw new Error('Registry selection needs its actual admitted Machine');
     const onResolve = vi.fn();
     const onClose = vi.fn();
     let chrome: Readonly<{ footer?: React.ReactElement }> | null = null;
-    let tree!: ReturnType<typeof create>;
-    await act(async () => {
-        tree = create(
+    const tree = await renderScreen(
             <PluginRegistryProfileSelectionDialog
                 requirement={{ registryOrigin: 'https://npm.acme.example', packageName: '@acme/private', registryProfileId: null }}
                 pluginName="Private Plugin"
@@ -84,57 +83,78 @@ async function renderDialog() {
                 targetSelection={{
                     selectedTarget: executionTarget.target,
                     canExecute: true,
-                    resolveExecutionTarget: () => executionTarget as never,
+                    resolveExecutionTarget: () => executionTarget,
                 }}
                 sourceRegistry={{
-                    scopeKey: 'identity-a:machine-a',
-                    executionTarget: executionTarget as never,
-                    resolveCurrentExecutionTarget: () => executionTarget as never,
+                    scopeKey: 'srv_plugin_registry:machine-a',
+                    executionTarget,
+                    resolveCurrentExecutionTarget: () => executionTarget,
                 }}
                 onResolve={onResolve}
                 onClose={onClose}
                 setChrome={(next: unknown) => { chrome = next as typeof chrome; }}
             />,
-        );
-    });
+    );
     await flush();
     await flush();
     return { tree, onResolve, onClose, footer: () => chrome?.footer ?? null };
 }
 
 describe('PluginRegistryProfileSelectionDialog', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         for (const mock of Object.values(mocks)) mock.mockReset();
-        mocks.profilesGet.mockResolvedValue({
+        mocks.profilesGet.mockResolvedValue(DaemonNpmRegistryProfilesGetResponseV1Schema.parse({
             status: 'success',
             snapshot: {
                 protocolVersion: 1, revision: 2, pausedSources: [],
                 profiles: [{
                     profileId: 'registry_acme', displayName: 'Acme', origin: 'https://npm.acme.example', scopes: ['@acme'],
                     useAsDefault: false, allowPrivateNetwork: false, hasCredentials: true,
-                    authenticationState: 'authenticated', availability: 'available', lastSuccessfulCheckAtMs: 1, updatedAtMs: 1,
+                    authenticationState: 'configured', availability: 'available', lastSuccessfulCheckAtMs: 1, updatedAtMs: 1,
                 }],
             },
-        });
-        mocks.sourcesGet.mockResolvedValue(registry(null));
-        mocks.sourcesMutate.mockResolvedValue({ status: 'success', registry: registry('registry_acme') });
+        }));
         mocks.show.mockReturnValue('npm-registry-profile-editor');
+        catalog = createPromptLibraryCatalogBoundary({ records: [{
+            key: 'registry-sources', value: { v: 2, disabledSourceIds: [], sources: [TEAM_SOURCE, OTHER_SOURCE].map(source => ({
+                id: source.id, title: source.title, url: source.sourceUrl, enabled: true,
+                format: 'happier-catalog' as const, kinds: ['plugin' as const], addedAt: 1,
+            })) },
+        }], revision: 4 });
+        const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
+        await account.restore({ accountId: 'plugin-registry', serverIdentityId: 'srv_plugin_registry', machines: [machine] });
+        const root = '/v1/account/entity-rows/prompt-library';
+        account.home.answer(account.serverId, `GET ${root}`, { select: async () => {
+            const response = await catalog.handle(root);
+            if (!response) throw new Error('Expected Registry catalog read route');
+            return { status: response.status, body: await response.json() };
+        } });
+        account.home.answer(account.serverId, `POST ${root}/registry-sources`, { select: async input => {
+            const response = await catalog.handle(`${root}/registry-sources`, { method: 'POST', body: JSON.stringify(input) });
+            if (!response) throw new Error('Expected Registry catalog mutation route');
+            return { status: response.status, body: await response.json() };
+        } });
     });
+    afterEach(async () => { standardCleanup(); await account.reset(); });
 
     it('binds the listing source to a chosen profile through the source registry owner', async () => {
         const { tree } = await renderDialog();
 
         // Only the source the install resolves through is offered for binding.
-        const menus = tree.root.findAllByType(DropdownMenu);
+        const bindingMenus = () => tree.findAllByType(DropdownMenu).filter(node =>
+            String(node.props.testID).startsWith('settings.plugins.registries.marketplaceBinding.'));
+        await waitForHomeGovernance(() => expect(bindingMenus()).toHaveLength(1));
+        const menus = bindingMenus();
         expect(menus.map((node) => node.props.testID)).toEqual(['settings.plugins.registries.marketplaceBinding.marketplace:team']);
         expect(menus[0]!.props.selectedId).toBe('');
 
         await act(async () => { menus[0]!.props.onSelect('registry_acme'); });
         await flush();
 
-        expect(mocks.sourcesMutate).toHaveBeenCalledWith('machine-a', {
-            kind: 'setRegistryProfile', sourceId: 'marketplace:team', registryProfileId: 'registry_acme',
-        }, { serverId: 'server-a' });
+        await waitForHomeGovernance(() => expect(catalog.read('registry-sources').value).toMatchObject({ sources: [
+            expect.objectContaining({ id: 'marketplace:team', npmRegistryProfileId: 'registry_acme' }),
+            expect.objectContaining({ id: 'marketplace:other' }),
+        ] }));
         // The binding shown is the owner's settled answer, not a local guess.
         expect(tree.root.findByProps({ testID: 'settings.plugins.registries.marketplaceBinding.marketplace:team' }).props.selectedId)
             .toBe('registry_acme');

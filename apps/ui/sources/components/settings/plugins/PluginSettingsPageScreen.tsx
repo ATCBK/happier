@@ -16,6 +16,7 @@ import { PluginPageBackStepProvider } from '@/components/plugins/shared/PluginPa
 import { PluginPageIdentityHeaderProvider } from '@/components/plugins/shared/PluginPageIdentityHeader';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { PluginMachineExecutionOriginSelectorView } from '@/components/settings/machines/PluginMachineExecutionOriginSelector';
+import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
 import { isPluginSurfaceMachineBound, usePluginSurfaceExecutionOrigin } from '@/components/plugins/surfaces/pluginSurfaceExecutionOrigin';
 import { PageNavigationContextActionsProvider } from '@/components/ui/layout/NavigationHeaderActions';
 import { PageFrame } from '@/components/ui/layout/PageFrame';
@@ -73,10 +74,11 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
         entry: destination?.page,
         enabled: needsMachineExecution,
     });
+    const phoneTitleChrome = useNavigationTitleChromeShowsTitle();
     const executionChip = React.useMemo(() => needsMachineExecution ? <PluginMachineExecutionOriginSelectorView
-        selection={pageExecution.selection} presentation="chip"
+        selection={pageExecution.selection} presentation="chip" compact={phoneTitleChrome}
         groupTitle={t('settingsPlugins.executionOriginTitle')} testIDPrefix="plugin-page-execution" /> : null,
-    [needsMachineExecution, pageExecution.selection]);
+    [needsMachineExecution, pageExecution.selection, phoneTitleChrome]);
     // The page's name before its destination resolves is still its plugin's, never another page's.
     const identityTitle = destination?.title
         ?? (props.pluginId ? appShell.pluginUiProjection?.installedPackagesById[props.pluginId]?.displayName : undefined)

@@ -486,6 +486,13 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
         const controller = installLifetime.controller;
         return () => controller.abort();
     }, [installLifetime]);
+    const reconciliationLifetime = React.useMemo(() => ({ controller: new AbortController() }), [installLifetime, params.focused]);
+    React.useEffect(() => {
+        if (params.focused === false) { reconciliationLifetime.controller.abort(); return; }
+        if (reconciliationLifetime.controller.signal.aborted) reconciliationLifetime.controller = new AbortController();
+        const controller = reconciliationLifetime.controller;
+        return () => controller.abort();
+    }, [params.focused, reconciliationLifetime]);
     /**
      * The machine's configured marketplace sources, read through the one
      * registry owner this screen shares with the Sources & registries
@@ -619,19 +626,20 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                 machineId: params.target.machine.id,
                 serverId: params.target.serverId,
                 cacheKeySalt: daemonCacheFreshnessKey,
+                signal: reconciliationLifetime.controller.signal,
                 request: {
                     ...capabilityRequest,
                     bypassCache: true,
                 },
             });
         } catch {
-            if (params.isAuthorityCurrent()) {
+            if (!reconciliationLifetime.controller.signal.aborted && params.isAuthorityCurrent()) {
                 refreshPluginTruth();
                 showUnresolvedOutcome();
             }
             return;
         }
-        if (!params.isAuthorityCurrent()) return;
+        if (reconciliationLifetime.controller.signal.aborted || !params.isAuthorityCurrent()) return;
 
         const refreshedState = getMachineCapabilitiesCacheState(
             params.target.machine.id,
@@ -660,7 +668,7 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
         } else {
             showUnresolvedOutcome();
         }
-    }, [capabilityRequest, daemonCacheFreshnessKey, refreshPluginTruth]);
+    }, [capabilityRequest, daemonCacheFreshnessKey, reconciliationLifetime, refreshPluginTruth]);
     /** Source chips are the enabled Account union, including built-ins. */
     const discoverSources = React.useMemo(() => marketplaceSourceRegistryAdministration.sources
         .filter(source => source.enabled)

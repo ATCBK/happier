@@ -56,8 +56,8 @@ import {
     buildPluginDetailRoute,
     buildPluginListingRoute,
     PLUGINS_HOME_TITLE_KEY,
-    usePluginsSurfaceHost,
 } from './model/pluginsSurfaceRoutes';
+import { usePluginsSurfaceHost } from './model/usePluginsSurfaceHost';
 import { PluginReadOnlySnapshotNotice } from './PluginReadOnlySnapshotNotice';
 import { NativeAppPluginPanelsSettingsEntry } from './NativeAppPluginPanelsSettingsEntry';
 import { PluginAppPagesSettingsEntry } from './PluginAppPagesSettingsEntry';
@@ -191,7 +191,8 @@ export const PluginSettingsHomeScreen = React.memo(function PluginSettingsHomeSc
         if (activeView === 'installed' && openItem?.kind === 'listing') closePane();
     }, [activeView, closePane, openItem]);
 
-    const installedCount = state.installedPluginsRead ? state.installedPlugins.length : null;
+    // The count belongs to the list beside it: with no machine chosen that list says to choose one.
+    const installedCount = state.installedPluginsRead && !noTarget ? state.installedPlugins.length : null;
     const views = createPluginSettingsViews((key) => t(key)).map((view) => (
         view.id === 'installed' && installedCount !== null ? { ...view, label: `${view.label} ${installedCount}` } : view
     ));
