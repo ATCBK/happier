@@ -341,7 +341,7 @@ import {
 } from '@happier-dev/agents';
 import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/personal/viewer';
 import { isSessionPersonallyTrackedForViewer } from './domains/session/readState/sessionViewer';
-import { updateSessionMetadataWithRetry as updateSessionMetadataWithRetryRpc, type SessionMetadataUpdateRequest, type UpdateMetadataAck } from './domains/session/metadata/updateSessionMetadataWithRetry';
+import { updateSessionMetadataWithRetry as updateSessionMetadataWithRetryRpc, type SessionMetadataUpdateRequest, type SessionMetadataTeamCredentialBinding, type UpdateMetadataAck } from './domains/session/metadata/updateSessionMetadataWithRetry';
 import type { ArtifactBodyInput, ArtifactHeader, DecryptedArtifact } from './domains/artifacts/artifactTypes';
 import type {
     AutomationDefinition,
@@ -5295,6 +5295,7 @@ class Sync {
             maxAttempts?: number;
             sessionExpectation?:
                 SessionMetadataInactiveModelIntentExpectationV1;
+            teamCredentialBinding?: SessionMetadataTeamCredentialBinding;
             mutationIntent?: 'rename_session';
             expectedMetadataRevision?: number;
             onMetadataCommitted?: (revision: number) => void;
@@ -5684,6 +5685,7 @@ class Sync {
             },
             updater,
             sessionExpectation: options?.sessionExpectation,
+            teamCredentialBinding: options?.teamCredentialBinding,
             mutationIntent: options?.mutationIntent,
             expectedMetadataRevision: options?.expectedMetadataRevision,
             onMetadataCommitted: options?.onMetadataCommitted,
@@ -8038,6 +8040,7 @@ class Sync {
             maxAttempts?: number;
             sessionExpectation?:
                 SessionMetadataInactiveModelIntentExpectationV1;
+            teamCredentialBinding?: SessionMetadataTeamCredentialBinding;
             mutationIntent?: 'rename_session';
             expectedMetadataRevision?: number;
             onMetadataCommitted?: (revision: number) => void;
@@ -11960,7 +11963,8 @@ class Sync {
       }): Promise<ResumeViaChangesOutcome> {
           const CHANGES_PAGE_LIMIT = this.syncTuning.changesPageLimit;
           const embedScope = this.embedSessionScope;
-          const afterCursor = this.changesCursor ?? '0';
+          // Only a Session-scoped embed reads a from-zero page; a full device without a cursor adopts the current one.
+          const afterCursor = embedScope ? this.changesCursor ?? '0' : this.changesCursor;
           const shouldContinue = () => (opts.shouldContinue?.() ?? true)
               && (!embedScope || this.embedSessionScope === embedScope && embedScope.isCurrent());
           const appliedTransportTarget = this.getAppliedTransportTarget();
