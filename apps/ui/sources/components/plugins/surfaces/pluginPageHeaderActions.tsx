@@ -7,6 +7,7 @@ import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessL
 import { usePluginSurfaceInteractionAvailable } from '@/components/plugins/shared/pluginSurfaceInteractionAvailability';
 import type { PluginAccountHostedArtifactPublicationResult } from '@/sync/domains/plugins/availability/accountHostedArtifactPublication';
 import { t } from '@/text';
+import { splitHappierPagePrimaryOperation } from '@happier-dev/plugin-ui/presentation';
 
 /** The host's `renderNavigationActions` for a plugin page header or Collection toolbar. */
 export function renderPluginNavigationActions(actions: React.ReactNode) {
@@ -110,8 +111,23 @@ function PluginPageHeaderActions(
   const live = usePluginSurfaceInteractionAvailable();
   const routeActions = useClaimedStackHeaderActions({ release: !live });
   const hosting = React.useContext(PluginArtifactHostingStatusContext);
-  return chromeShowsTitle ? (
-    <NavigationHeaderActions primary={null} actions={props.actions} />
+  // The page's one filled action stays on the header's trailing side; the rest fold into overflow.
+  const phone = React.useMemo(() => {
+    if (!chromeShowsTitle) return null;
+    const { primary, rest } = splitHappierPagePrimaryOperation(props.actions);
+    return {
+      primary: primary === null ? null : {
+        title: primary.title,
+        onPress: async () => { await primary.onPress(); },
+        ...(primary.disabled ? { disabled: true } : {}),
+        ...(primary.pending ? { loading: true } : {}),
+        ...(primary.testID === undefined ? {} : { testID: primary.testID }),
+      },
+      rest,
+    };
+  }, [chromeShowsTitle, props.actions]);
+  return phone !== null ? (
+    <NavigationHeaderActions primary={phone.primary} actions={phone.rest} />
   ) : (
     <>
       {hosting ? <PluginArtifactHostingChip status={hosting} /> : null}

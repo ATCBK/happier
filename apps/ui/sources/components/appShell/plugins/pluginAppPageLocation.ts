@@ -59,6 +59,13 @@ export type PluginAppPageLocationOwner = Readonly<{
      */
     consumeBack: () => boolean;
     /**
+     * Whether a Back press would spend a declared step right now: the same fact `consumeBack` decides on,
+     * readable without spending it, so the page chrome can say who answers Back.
+     */
+    hasBackStep: () => boolean;
+    /** Notified whenever {@link hasBackStep} may have changed. Returns its unsubscribe. */
+    subscribeBackStep: (listener: () => void) => () => void;
+    /**
      * Retire a declared Back step because the page's location changed for a
      * reason this owner did not produce. Idempotent.
      */
@@ -88,6 +95,20 @@ function refusal(code: PluginUiHostApiErrorCodeV1, reason: string): PluginUiJson
     return createPluginSurfaceHostApiError(code, [reason]);
 }
 
+/**
+ * The route writes a segment's percent-escapes and the router later hands the same segment back decoded, so
+ * the rendered location and the one this owner settled on name the same place when they differ only by that
+ * decoding. Anything else is a location the page did not produce.
+ */
+function sameLocation(rendered: string, settled: string): boolean {
+    if (rendered === settled) return true;
+    try {
+        return decodeURIComponent(rendered) === decodeURIComponent(settled);
+    } catch {
+        return false;
+    }
+}
+
 export function createPluginAppPageLocationOwner<Route = string>(
     input: CreatePluginAppPageLocationOwnerInput<Route>,
 ): PluginAppPageLocationOwner {
@@ -97,10 +118,21 @@ export function createPluginAppPageLocationOwner<Route = string>(
     let declaredBackLocation: string | null = null;
     let settledSubPath: string | null = null;
     let disposed = false;
+    const listeners = new Set<() => void>();
+    const notify = (): void => { for (const listener of [...listeners]) listener(); };
 
     const clear = (): void => {
         declaredBackLocation = null;
         settledSubPath = null;
+        notify();
+    };
+    // Compare against the location this owner last settled on, not the one already rendered: a replacement in
+    // flight is where the user is going, and a step equal to it would be a Back that visibly does nothing.
+    const hasBackStep = (): boolean => {
+        const target = declaredBackLocation;
+        if (disposed || target === null || !input.isCurrent()) return false;
+        const at = settledSubPath ?? input.currentSubPath();
+        return at !== null && target !== at;
     };
 
     const handleReplaceRequest: PluginSurfaceHostApiMethodHandler = (
@@ -135,6 +167,7 @@ export function createPluginAppPageLocationOwner<Route = string>(
         // still settles, and it still (re)declares the Back step, because the
         // page's state changed even though its location did not.
         if (subPath !== at) input.replaceLocation(input.routePathFor(subPath));
+        notify();
         return { subPath };
     };
 
@@ -142,19 +175,19 @@ export function createPluginAppPageLocationOwner<Route = string>(
         handleReplaceRequest,
         consumeBack: (): boolean => {
             const target = declaredBackLocation;
-            if (disposed || target === null || !input.isCurrent()) return false;
-            // Compare against the location this owner last settled on, not the
-            // one already rendered: a replacement in flight is where the user
-            // is going, and a step equal to it would be a Back that visibly
-            // does nothing.
-            const at = settledSubPath ?? input.currentSubPath();
-            if (at === null || target === at) return false;
+            if (!hasBackStep() || target === null) return false;
             settledSubPath = target;
             input.replaceLocation(input.routePathFor(target));
+            notify();
             return true;
         },
+        hasBackStep,
+        subscribeBackStep: (listener: () => void): (() => void) => {
+            listeners.add(listener);
+            return () => { listeners.delete(listener); };
+        },
         retireForeignLocationChange: (currentSubPath: string | null): void => {
-            if (currentSubPath !== null && currentSubPath === settledSubPath) return;
+            if (currentSubPath !== null && settledSubPath !== null && sameLocation(currentSubPath, settledSubPath)) return;
             clear();
         },
         dispose: (): void => {

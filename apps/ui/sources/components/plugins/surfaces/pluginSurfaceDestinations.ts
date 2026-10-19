@@ -14,6 +14,7 @@ import { resolvePluginDisplayString } from '@/components/plugins/surfaces/resolv
 import type { PluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import { canRenderPluginUiProjectionEntry, type PluginUiPolicyEvaluationContext } from '@/sync/domains/plugins/ui/policy';
 import type {
+    PluginUiDestinationProjection,
     PluginUiPhysicalSurfacePlacementProjection,
     PluginUiSurfacePlacementProjection,
 } from '@/sync/domains/plugins/ui/projection';
@@ -218,7 +219,7 @@ export function resolvePluginSurfaceDestinationRankHint(
  * placement the policy defers is disabled rather than silently interactive.
  */
 export function resolvePluginSurfaceDestinationDisabledReason(
-    placement: PluginUiSurfacePlacementProjection,
+    placement: PluginUiDestinationProjection,
     policyContext: PluginUiPolicyEvaluationContext | undefined,
 ): string | null {
     // Resolving execution does not deny navigation to the declared page. Its

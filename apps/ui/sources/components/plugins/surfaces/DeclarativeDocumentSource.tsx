@@ -95,6 +95,8 @@ export type DeclarativeDocumentSourceInput = Readonly<{
 export type DeclarativeDocumentSourceResult = Readonly<{
     /** Static or atomically adopted dynamic last-known-good model. */
     model: RecordValue;
+    /** Identity of the exact adopted whole-document bytes shown by this model. */
+    digest?: string;
     /** True only when the latest Resource bytes fail the document contract. */
     invalidDocument: boolean;
     /** Invalid bytes or the mounted Resource owner's current read/watch error. */
@@ -110,7 +112,7 @@ export type DeclarativeDocumentSourceResult = Readonly<{
     /** The mounted Resource owner's bounded transport/protocol failure, if any. */
     resourceError?: PluginUiResourceError;
     /** Re-read through the mounted L1 Resource owner. */
-    retry: () => void;
+    retry: () => Promise<void>;
 }>;
 
 function resolveDeclarativeDocumentSourcePresentation(input: Readonly<{
@@ -568,6 +570,7 @@ export function useDeclarativeDocumentSource(input: DeclarativeDocumentSourceInp
     });
     return React.useMemo(() => Object.freeze({
         model: currentState.model,
+        digest: currentState.digest,
         invalidDocument: currentState.invalidDocument,
         sourceError: currentState.invalidDocument || resource.error !== undefined,
         presentation,
@@ -579,6 +582,7 @@ export function useDeclarativeDocumentSource(input: DeclarativeDocumentSourceInp
     }), [
         currentState.invalidDocument,
         currentState.model,
+        currentState.digest,
         presentation,
         refresh,
         resource.error,

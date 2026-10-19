@@ -22,6 +22,7 @@ import {
 
 import { createDeferred, createMachineFixture, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import * as projectionCurrentness from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
+import * as executionOriginSelection from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
 import {
     selectCurrentAppShellPluginExecutionOrigins,
     selectCurrentAppShellPluginUiCurrentness,
@@ -29,11 +30,14 @@ import {
     settleAppShellPluginRuntimeUpdate,
     resolveAppShellPluginProjectionTargets,
     useAppShellPluginUiProjection,
+    AppShellPluginUiProjectionValueProvider,
+    type AppShellPluginUiProjectionValue,
 } from './AppShellPluginUiProjection';
+import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import { selectPluginSurfacePlacementsForBinding } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import { resolveAdmittedPluginSettingsPage } from '@/components/settings/catalog/runtime/pluginSettingsPageCatalog';
 import { resolvePluginAppPages, selectPluginAppPagePlacements } from './pluginAppPages';
-import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
+import { readPluginUiContributionOrigin, readPluginUiContributionSupplies } from '@/sync/domains/plugins/ui/projectionUnion';
 import {
     getQualifiedConnectedServiceRegistryEntry,
     getConnectedServiceRegistrySnapshot,
@@ -64,7 +68,7 @@ import { storage as persistentStorage } from '@/sync/domains/state/storageStore'
 import { normalizeAccountSettingsForLocalStorage } from '@/sync/domains/settings/accountSettingsNormalization';
 import { clearPluginMachineExecutionOriginPreference, setPluginMachineExecutionOriginPreference } from '@/sync/domains/machines/administration/selectionPreferences';
 import { usePluginSurfaceExecutionOrigin } from '@/components/plugins/surfaces/pluginSurfaceExecutionOrigin';
-import type { PluginUiPageHeaderActionProjection } from '@/sync/domains/plugins/ui/projection';
+import type { PluginUiPageHeaderActionProjection, PluginUiPhysicalSurfacePlacementProjection } from '@/sync/domains/plugins/ui/projection';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import {
     getServerProfileById,
@@ -107,6 +111,39 @@ describe('app-shell projection bootstrap targets', () => {
     });
 });
 
+describe('AppShell declaration subscriptions', () => {
+    it('keeps declaration-only consumers renderless across executable diagnostics and publishes changed declarations', async () => {
+        let renders = 0;
+        let seen: AppShellPluginUiProjectionValue['pluginUiProjection'] = null;
+        const Probe = React.memo(function DeclarationProbe() {
+            renders += 1;
+            seen = useAppShellPluginUiProjection().pluginUiProjection;
+            return null;
+        });
+        const value: AppShellPluginUiProjectionValue = {
+            pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null,
+            phase: 'current', interactionEnabled: true, machineId: null, serverId: null,
+            platform: 'web', accountLifetime: null, connectedAccountProjectionRevision: 1,
+            reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' },
+            reloadClientExecutables: () => {},
+        };
+        const render = (next: AppShellPluginUiProjectionValue) => (
+            <AppShellPluginUiProjectionValueProvider value={next}><Probe /></AppShellPluginUiProjectionValueProvider>
+        );
+        const screen = await renderScreen(render(value));
+        onTestFinished(() => screen.unmount());
+        expect(seen).toBe(value.pluginUiProjection);
+        const settledRenders = renders;
+        await screen.update(render({ ...value, connectedAccountProjectionRevision: 2,
+            clientExecutableActivation: { status: 'establishing' } }));
+        expect(renders).toBe(settledRenders);
+        const nextProjection = { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 2 };
+        await screen.update(render({ ...value, pluginUiProjection: nextProjection }));
+        expect(seen).toBe(nextProjection);
+        expect(renders).toBeGreaterThan(settledRenders);
+    });
+});
+
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 type MachineContributionRegistryProjectionModule = typeof import(
@@ -137,9 +174,12 @@ const storageState = {
         return Object.values(persistentStorage.getState().machines);
     },
     set machines(inputs: readonly InventoryMachine[]) {
-        const machines = inputs.map((input): Machine => ({
-            ...createLiveMachine(input.id), ...input, metadata: null,
-        }));
+        const machines = inputs.map((input): Machine => {
+            const machine = createLiveMachine(input.id);
+            if (!machine.metadata) throw new Error('Live Machine fixture must have opened metadata');
+            return { ...machine, ...input, metadata: input.metadata === null
+                ? null : { ...machine.metadata, ...input.metadata } };
+        });
         const serverId = this.activeServer.serverId;
         persistentStorage.setState((state) => ({
             machines: Object.fromEntries(machines.map((machine) => [machine.id, machine])),
@@ -305,7 +345,7 @@ type AppScopeArtifactFixture = Readonly<{
 }>;
 
 function createLiveMachine(machineId: string): Machine {
-    return createMachineFixture({ id: machineId, activeAt: Date.now(), metadata: null });
+    return createMachineFixture({ id: machineId, activeAt: Date.now() });
 }
 
 /**
@@ -537,7 +577,8 @@ function ProjectionProbe() {
 function SourceExecutionProbe(props: Readonly<{ pluginId: string }>) {
     const { pluginUiProjection } = useAppShellPluginUiProjection();
     const execution = usePluginSurfaceExecutionOrigin({ pluginId: props.pluginId, projection: pluginUiProjection,
-        entry: Object.values(pluginUiProjection?.surfacePlacementsById ?? {}).find(entry => entry.pluginId === props.pluginId), enabled: true });
+        entry: Object.values<PluginUiPhysicalSurfacePlacementProjection>(pluginUiProjection?.surfacePlacementsById ?? {})
+            .find(entry => entry.pluginId === props.pluginId), enabled: true });
     return React.createElement('SourceExecutionProbe', { execution });
 }
 
@@ -823,6 +864,49 @@ function pluginUiProjectionWithClientAction(input: Readonly<{
 }
 
 describe('AppShellPluginUiProjectionProvider', () => {
+    it('does not rerender retained origin consumers for unchanged parent inputs', async () => {
+        const pluginId = 'acme.retained-origin';
+        const origin = installSelectedAppScopePluginFixture({ machineId: 'machine-retained', pluginId });
+        projectionDescribeSpy.mockResolvedValue({ supported: true,
+            projection: pluginUiProjectionWithAppTab({ generation: 3, pluginId, origin }) });
+        const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
+        // Observe the real hook without replacing Administration's decisions.
+        const selection = vi.spyOn(executionOriginSelection, 'usePluginMachineExecutionOriginSelection');
+        onTestFinished(() => selection.mockRestore());
+        const screen = await renderScreen(<AppShellPluginUiProjectionProvider>{null}</AppShellPluginUiProjectionProvider>);
+        await flushHookEffects({ cycles: 5 });
+        const reads = () => selection.mock.calls.filter(([input]) => input.pluginId === pluginId).length;
+        expect(reads()).toBeGreaterThan(0);
+        const settled = reads();
+        for (let index = 0; index < 3; index++) {
+            await screen.update(<AppShellPluginUiProjectionProvider>{null}</AppShellPluginUiProjectionProvider>);
+        }
+        expect(reads()).toBe(settled);
+        // A choice report changes the union's selected stamp, but not its
+        // candidate supplies. It must settle without feeding a fresh facts
+        // object back through the same selector on every parent publication.
+        await act(async () => {
+            persistentStorage.setState(state => ({ settings: { ...state.settings,
+                machineAdministrationTargetsLocalV1: clearPluginMachineExecutionOriginPreference(
+                    state.settings.machineAdministrationTargetsLocalV1, pluginId),
+            } }));
+        });
+        await flushHookEffects({ cycles: 5 });
+        const afterChoice = reads();
+        expect(afterChoice - settled).toBeLessThanOrEqual(2);
+        const latest = selection.mock.calls.filter(([input]) => input.pluginId === pluginId).at(-1)![0];
+        const beforeChoice = selection.mock.calls.filter(([input]) => input.pluginId === pluginId)[settled - 1]![0];
+        expect(latest.sourceCandidates).toBe(beforeChoice.sourceCandidates);
+        expect(latest.machineRejections).toBe(beforeChoice.machineRejections);
+        expect(latest.declaredDefaultOrigins).toBe(beforeChoice.declaredDefaultOrigins);
+        // Memoization must not suppress the owning hook's actual inventory invalidation.
+        await act(async () => { storageState.machines = []; });
+        expect(reads()).toBeGreaterThan(afterChoice);
+        const result = selection.mock.results.filter((_, index) => selection.mock.calls[index]?.[0].pluginId === pluginId).at(-1);
+        expect(result?.value.canExecute).toBe(false);
+        await screen.unmount();
+    });
+
     it('withholds same-server same-plugin selection and currentness reports from the retired Account', () => {
         const accountA = accountLifetimeFixture({ accountId: 'account-a' });
         const accountB = accountLifetimeFixture({ accountId: 'account-b' });
@@ -1044,7 +1128,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await screen.unmount();
     });
 
-    it('opens native Browse through the mounted App page registration with equivalent unselected replicas', async () => {
+    it('opens native Browse through the mounted App page registration with automatically selected replicas', async () => {
         const pluginId = 'happier.triage';
         storageState.machines = ['machine-1', 'machine-2'].map(id => ({ id, active: true, activeAt: Date.now(), metadata: { host: id } }));
         const origin = installSelectedAppScopePluginFixture({ machineId: 'machine-1', pluginId,
@@ -1080,7 +1164,11 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await flushHookEffects({ cycles: 10 });
         expect(session.binding).not.toBeNull();
         expect(browsePlacements).toHaveLength(1);
-        expect(readPluginUiContributionOrigin(browsePlacements[0])).toBeNull();
+        // No explicit pin is required: Administration auto-picks a qualified
+        // supply on this Home (2026-10-16 owner ruling).
+        expect(readPluginUiContributionOrigin(browsePlacements[0])).toMatchObject({
+            machineId: 'machine-1', executionOrigin: origin, interactionEnabled: true,
+        });
         const host = createPluginSurfaceOpenSurfaceHandler(session.binding!.openSurface);
         await act(async () => {
             await expect(host({ version: 1, requestId: 'native-browse', method: 'openSurface',
@@ -2914,7 +3002,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         };
         expect(readPlacements().map((placement) => placement.descriptorId)).toEqual(['panel-a', 'panel-b']);
         expect(readPlacements().every(placement => placement.hostCompatibility === 'compatible')).toBe(true);
-        expect(readPluginUiContributionOrigin(readPlacements()[0])?.executionOrigin).toBeNull();
+        expect(readPluginUiContributionOrigin(readPlacements()[0])).toBeNull();
 
         await act(async () => {
             persistentStorage.setState((state) => ({
@@ -2934,7 +3022,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await flushHookEffects({ cycles: 6 });
 
         expect(readPlacements().map((placement) => placement.descriptorId)).toEqual(['panel-a', 'panel-b']);
-        expect(readPluginUiContributionOrigin(readPlacements()[0])?.executionOrigin).toBeNull();
+        expect(readPluginUiContributionOrigin(readPlacements()[0])).toBeNull();
 
         await screen.unmount();
     });
@@ -2976,7 +3064,11 @@ describe('AppShellPluginUiProjectionProvider', () => {
             screen.tree.findByType('ProjectionProbe' as never).props.value.pluginUiProjection,
             { container: 'rightSidebarTab', targetKind: 'app' },
         );
-        expect(readPluginUiContributionOrigin(readPlacements()[0])).toBeNull();
+        const automaticOrigin = readPluginUiContributionOrigin(readPlacements()[0]);
+        expect(automaticOrigin).toMatchObject({ machineId: 'machine-a', executionOrigin: {
+            serverIdentityId: APP_SCOPE_FIXTURE.serverIdentityId,
+            sourceRef: { machineId: 'machine-a', pluginId, sourceCustody },
+        } });
         await act(async () => { persistentStorage.setState({ settings: normalizeAccountSettingsForLocalStorage({
             raw: retainedSettings, mode: 'plain', settingsSecretsKey: null,
             localSettings: persistentStorage.getState().settings,
@@ -2984,7 +3076,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await flushHookEffects({ cycles: 8 });
         // Retired Account source pins are inert. The answering device's local
         // choice selects the current admitted development source instead.
-        expect(readPluginUiContributionOrigin(readPlacements()[0])).toBeNull();
+        expect(readPluginUiContributionOrigin(readPlacements()[0])).toEqual(automaticOrigin);
         await act(async () => { persistentStorage.setState(state => ({ settings: { ...state.settings,
             machineAdministrationTargetsLocalV1: setPluginMachineExecutionOriginPreference(state.settings.machineAdministrationTargetsLocalV1, pluginId, selectedSource),
         } })); });
@@ -3008,7 +3100,11 @@ describe('AppShellPluginUiProjectionProvider', () => {
         // D1 keeps the admitted UI declaration visible independently of the
         // Run-on preference. That declaration is not permission to execute on
         // its supplier when the deliberately chosen Machine is absent.
-        expect(readPluginUiContributionOrigin(readColdPlacement())?.machineId).toBe('machine-a');
+        expect(readColdPlacement()).toBeDefined();
+        expect(readPluginUiContributionOrigin(readColdPlacement())).toBeNull();
+        expect(readPluginUiContributionSupplies(readColdPlacement())).toMatchObject([
+            { machineId: 'machine-a', phase: 'current' },
+        ]);
         const readExecution = () => coldScreen.tree.findByType('SourceExecutionProbe' as never).props.execution as ReturnType<typeof usePluginSurfaceExecutionOrigin>;
         expect(readExecution().selection.canExecute).toBe(false);
         expect(readExecution().selection.resolveExecutionOrigin()).toBeNull();
@@ -3031,7 +3127,11 @@ describe('AppShellPluginUiProjectionProvider', () => {
             machineAdministrationTargetsLocalV1: setPluginMachineExecutionOriginPreference(state.settings.machineAdministrationTargetsLocalV1, pluginId, selectedSource),
         } })); });
         await flushHookEffects({ cycles: 8 });
-        expect(readPluginUiContributionOrigin(readColdPlacement())?.machineId).toBe('machine-a');
+        expect(readColdPlacement()).toBeDefined();
+        expect(readPluginUiContributionOrigin(readColdPlacement())).toBeNull();
+        expect(readPluginUiContributionSupplies(readColdPlacement())).toMatchObject([
+            { machineId: 'machine-a', phase: 'current' },
+        ]);
         expect(readExecution().selection.canExecute).toBe(false);
         expect(readExecution().selection.resolveExecutionOrigin()).toBeNull();
         await act(async () => { storageState.machines = [createLiveMachine('machine-a'), createLiveMachine('machine-b')]; });

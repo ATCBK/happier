@@ -111,7 +111,7 @@ export type CreatePluginSurfaceFeedbackHandlersInput = Readonly<{
     interactionRequester?: InteractionTransientRequesterV1;
     /** Host-owned currentness: a retired mount must not reach the user. */
     isCurrent?: () => boolean;
-    resolveActionApproval?: (reference: PluginUiMountedActionReferenceV1) => boolean | null;
+    resolveActionPolicy?: (reference: PluginUiMountedActionReferenceV1) => Readonly<{ enabled: boolean; approvalRequired: boolean }> | null;
 }>;
 
 export type PluginSurfaceFeedbackHandlers = Readonly<{
@@ -253,11 +253,12 @@ export function createPluginSurfaceFeedbackHandlers(
         if (payload?.action !== undefined) {
             const action = PluginUiMountedActionReferenceV1Schema.safeParse(payload.action);
             if (!action.success) return invalidPayload('plugin_surface_confirm_action_invalid');
-            const required = input.resolveActionApproval?.(action.data);
-            if (required === undefined || required === null) {
+            const policy = input.resolveActionPolicy?.(action.data);
+            if (!policy) {
                 return createPluginSurfaceHostApiError('unavailable', ['plugin_surface_confirm_action_unavailable']);
             }
-            if (!required) return { confirmed: true };
+            if (!policy.enabled) return createPluginSurfaceHostApiError('denied', ['plugin_action_disabled']);
+            if (!policy.approvalRequired) return { confirmed: true };
         }
         if (!interactions) {
             return createPluginSurfaceHostApiError(
@@ -287,6 +288,12 @@ export function createPluginSurfaceFeedbackHandlers(
                     ['plugin_surface_confirm_unavailable'],
                 )
                 : staleSurface();
+        }
+        if (payload?.action !== undefined && outcome.status === 'approved') {
+            const action = PluginUiMountedActionReferenceV1Schema.safeParse(payload.action);
+            const policy = action.success ? input.resolveActionPolicy?.(action.data) : null;
+            if (!policy) return createPluginSurfaceHostApiError('unavailable', ['plugin_surface_confirm_action_unavailable']);
+            if (!policy.enabled) return createPluginSurfaceHostApiError('denied', ['plugin_action_disabled']);
         }
         return { confirmed: outcome.status === 'approved' };
     };

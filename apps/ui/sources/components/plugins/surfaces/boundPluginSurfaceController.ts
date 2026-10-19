@@ -18,6 +18,7 @@ import type {
     PluginUiResourceBindingCapabilityV1,
 } from '@happier-dev/protocol';
 import { PluginInvocableActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import {
     PLUGIN_UI_HOST_METHODS_V1,
     PluginUiExecuteActionRequestV1Schema,
@@ -26,6 +27,7 @@ import {
     PluginUiJsonValueV1Schema,
     PluginUiPublishCurrentUiContextRequestV1Schema,
     normalizePluginUiSemanticCommandV1,
+    reconstructPluginUiSelectedActionInput,
     type PluginUiChannelV1,
     type PluginUiApplyComposerRequestV1,
     type PluginUiHostMethodV1,
@@ -87,6 +89,8 @@ import {
     serializePluginActionInputSelectionFacts,
 } from './pluginActionInputSelectionHostApi';
 import { createPluginOpenNewSessionHostApiHandler } from './pluginOpenNewSessionHostApi';
+import { createPluginContributedActionController } from '@/components/plugins/actions/pluginContributedActionController';
+import { presentActionInputForm } from '@/components/plugins/actions/presentActionInputForm';
 import { createPluginSurfaceSessionHandlers } from './pluginSurfaceSessionState';
 import { createPluginSurfaceStoredImageOwner, type PluginStoredImageReadTransport } from './pluginSurfaceStoredImage';
 import { createPluginSurfaceLiveStreamOwner } from './pluginSurfaceLiveStream';
@@ -937,13 +941,13 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     const isMethodAvailable = (method: PluginUiHostMethodV1): boolean => (
         method === 'context' || method === 'openSurface' || method === 'openConnectedAccounts'
         || (isInteractionCurrent() && ((canAdmitHostReads && (method === 'readResource' || method === 'watchResource'))
-            || !isDaemonOwnedPluginSurfaceMethod(method) || isDaemonInteractionEnabled()))
+            || !isDaemonOwnedPluginSurfaceMethod(method) || isDaemonInteractionEnabled(false)))
     );
     // Keep host-Action target stamping compatible with the incumbent cold
     // offline facade. Reconnects change daemon-owned method availability live;
     // they do not retrospectively lend an initially offline host Action a
     // detached execution target.
-    const daemonBoundAtConstruction = isDaemonInteractionEnabled() ? daemon : null;
+    const daemonBoundAtConstruction = isDaemonInteractionEnabled(false) ? daemon : null;
     const resourceCapability = input.facts.resourceCapability;
     const canReadResource = resourceCapability?.readable === true;
     // A dynamic capability without a readable snapshot is not a usable
@@ -1038,6 +1042,16 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     // daemon-backed Resource work. Replacements abort obsolete work rather than
     // merely withholding its eventual delivery.
     const targetedContributions = input.facts.targetedContributions;
+    const actionInputHost = {
+        machineId: daemon?.machineId,
+        machineDisplayName: input.facts.machineDisplayName ?? null,
+        serverId: daemon?.serverId ?? null,
+        targetPluginId: input.facts.pluginId,
+        ...(surfaceContext.sessionId ? { sessionId: surfaceContext.sessionId } : {}),
+        accountLifetime,
+        signal: mountLifetime.signal,
+        isCurrent,
+    };
     const selectActionInput = daemon
         ? createPluginActionInputSelectionHostApiHandler({
             ...(input.facts.pluginProjectionById
@@ -1054,16 +1068,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             ...(input.facts.resolveContributedAction
                 ? { resolveContributedAction: input.facts.resolveContributedAction }
                 : {}),
-            host: {
-                machineId: daemon.machineId,
-                machineDisplayName: input.facts.machineDisplayName ?? null,
-                serverId: daemon.serverId ?? null,
-                targetPluginId: input.facts.pluginId,
-                ...(surfaceContext.sessionId ? { sessionId: surfaceContext.sessionId } : {}),
-                accountLifetime,
-                signal: mountLifetime.signal,
-                isCurrent,
-            },
+            host: actionInputHost,
             isCurrent,
         })
         : null;
@@ -1153,7 +1158,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     // The one sentence for a Machine-owned part that cannot run now: it names this mount's Run-on
     // Machine and the next step. Every host method that refuses for that reason reuses it.
     const isMachineUnavailable = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): boolean => {
-        if (isDaemonInteractionEnabled()) return false;
+        if (isDaemonInteractionEnabled(false)) return false;
         if (request?.method === 'executeAction') {
             // Account/local host Actions share caller custody, but Machine
             // readiness is not their lifecycle.
@@ -1278,7 +1283,57 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             ? { disposeMountedHostApiHandlers: disposeHostApiMountedHandlers }
             : {}),
     });
-    const dispatchAction = createBoundPluginSurfaceActionDispatcher({ surfaceContext, hostApi });
+    const dispatchStructuredAction = createBoundPluginSurfaceActionDispatcher({ surfaceContext, hostApi });
+    const pluginProjectionById = input.facts.pluginProjectionById;
+    const actionInputController = daemon && pluginProjectionById
+        ? createPluginContributedActionController({
+            resolveCurrent: () => ({
+                pluginProjectionById,
+                pluginUiProjection: input.facts.pluginUiProjection,
+                resolveContributedAction: input.facts.resolveContributedAction,
+                host: actionInputHost,
+            }),
+        })
+        : null;
+    // Declarative controls have no author-owned form. Omitted input borrows
+    // the declared Action's existing no-invoke form owner; explicit input and
+    // SDK executeAction requests keep their structured execution semantics.
+    const dispatchAction: BoundPluginSurfaceController['dispatchAction'] = async (action, actionInput) => {
+        const declared = typeof action === 'string' ? undefined
+            : pluginProjectionById?.[action.pluginId]?.actions.find(candidate => candidate.id === action.localId);
+        if (actionInput !== undefined || typeof action === 'string'
+            || !declared?.inputHints?.fields.length || !actionInputController) {
+            return await dispatchStructuredAction(action, actionInput);
+        }
+        if (!isInteractionCurrent() || !isDaemonInteractionEnabled()) {
+            return createPluginSurfaceHostApiError('unavailable', ['plugin_mounted_caller_unavailable']);
+        }
+        if (!declared.occurrenceId) {
+            return createPluginSurfaceHostApiError('unavailable', ['action_retired']);
+        }
+        const selected = await actionInputController.selectExactBoundActionInput({
+            action,
+            expectedOccurrenceId: declared.occurrenceId,
+            invocationSurface: 'ui',
+        });
+        if (selected.kind === 'unavailable') {
+            return createPluginSurfaceHostApiError('unavailable', [selected.reason]);
+        }
+        if (selected.kind === 'form') {
+            presentActionInputForm({ form: selected.form, signal: mountLifetime.signal,
+                actionId: buildQualifiedPluginContributionKey(action),
+                pickerContext: { machineId: actionInputHost.machineId, serverId: actionInputHost.serverId,
+                    sessionId: actionInputHost.sessionId, ...(accountLifetime ? { accountLifetime } : {}) } });
+        }
+        const result = selected.kind === 'form' ? await selected.result : selected.result;
+        if (result.kind === 'cancelled') return null;
+        if (result.kind === 'unavailable') {
+            return createPluginSurfaceHostApiError('unavailable', [result.reason]);
+        }
+        const structured = reconstructPluginUiSelectedActionInput(result);
+        if (!structured) return createPluginSurfaceHostApiError('invalid_payload', ['select_action_input_result_invalid']);
+        return await dispatchStructuredAction(action, structured);
+    };
     const applyComposer = createBoundPluginSurfaceComposerApplyDispatcher({ surfaceContext, hostApi });
     const openSurface = createBoundPluginSurfaceOpenDispatcher({ surfaceContext, hostApi });
     const widgetAreaDispatch = createBoundPluginSurfaceWidgetAreaDispatcher({ surfaceContext, hostApi: {
@@ -1352,6 +1407,8 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     const binding = input.binding;
     const machineDisplayNameRef = React.useRef(facts.machineDisplayName);
     machineDisplayNameRef.current = facts.machineDisplayName;
+    const executionOriginSelectionKindRef = React.useRef(facts.executionOriginSelectionKind);
+    executionOriginSelectionKindRef.current = facts.executionOriginSelectionKind;
     const interactionEnabledRef = React.useRef(facts.interactionEnabled);
     interactionEnabledRef.current = facts.interactionEnabled;
     const isInteractionEnabled = React.useCallback(() => interactionEnabledRef.current, []);
@@ -1364,7 +1421,8 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     );
     const executionOriginCurrentRef = React.useRef(binding?.isExecutionOriginCurrent);
     executionOriginCurrentRef.current = binding?.isExecutionOriginCurrent;
-    const isExecutionOriginCurrent = React.useCallback(() => executionOriginCurrentRef.current?.() !== false, []);
+    const isExecutionOriginCurrent = React.useCallback<NonNullable<BoundPluginSurfaceBinding['isExecutionOriginCurrent']>>(
+        options => executionOriginCurrentRef.current?.(options) !== false, []);
     // A widget mount's frame says the Machine sentence once; any other mount has no frame to lend it to.
     const lendMachineNotice = React.useContext(WidgetFrameBodyNoticeContext);
     const lendMachineNoticeRef = React.useRef(lendMachineNotice);
@@ -1402,6 +1460,7 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     const controller = React.useMemo(
         () => createBoundPluginSurfaceController({
             facts: { ...facts, get machineDisplayName() { return machineDisplayNameRef.current; },
+                get executionOriginSelectionKind() { return executionOriginSelectionKindRef.current; },
                 isDaemonInteractionEnabled, isDaemonConnectionPending, isInteractionEnabled, onMachineUnavailable,
                 resolveContributedAction: hasContributedActionResolver ? resolveContributedAction : undefined },
             binding: { ...binding, isExecutionOriginCurrent },

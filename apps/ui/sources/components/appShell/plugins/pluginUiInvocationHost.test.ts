@@ -68,7 +68,7 @@ beforeEach(() => {
         }
         expect(DaemonPluginActionSchemasReadRequestSchema.parse(params.payload)).toEqual({
             machineId: 'machine-1',
-            expectedOccurrenceId: 'acme-voice-client-action-occurrence-12',
+            expectedOccurrenceId: CLIENT_ACTION_OCCURRENCE_ID,
             qualifiedActionId: `${CLIENT_ACTION_PLUGIN_ID}/${CLIENT_ACTION_LOCAL_ID}`,
         });
         expect(params.serverId).toBe(CLIENT_ACTION_ORIGIN.serverIdentityId);
@@ -95,7 +95,7 @@ const DAEMON_ACTION: PluginProjectedActionV2 = {
 
 const CLIENT_ACTION_PLUGIN_ID = 'acme.voice-client-action';
 const CLIENT_ACTION_LOCAL_ID = 'open-client-destination';
-const CLIENT_ACTION_GENERATION = 12;
+const CLIENT_ACTION_OCCURRENCE_ID = 'acme-voice-client-action-occurrence-12';
 const CLIENT_ACTION_TARGET = Object.freeze({
     artifactId: 'voice-client-action-bundle',
     exportName: 'activate',
@@ -111,9 +111,9 @@ const CLIENT_ACTION_ORIGIN = Object.freeze({
 }) satisfies PluginMachineExecutionOriginV1;
 const CLIENT_ACTION_AUTHORIZATION = Object.freeze({
     generation: Object.freeze({
-        targetGeneration: String(CLIENT_ACTION_GENERATION),
-        desiredGeneration: String(CLIENT_ACTION_GENERATION),
-        appliedGeneration: String(CLIENT_ACTION_GENERATION),
+        targetGeneration: CLIENT_ACTION_OCCURRENCE_ID,
+        desiredGeneration: CLIENT_ACTION_OCCURRENCE_ID,
+        appliedGeneration: CLIENT_ACTION_OCCURRENCE_ID,
     }),
     resourceSelections: Object.freeze([]),
     scopedGrants: Object.freeze([]),
@@ -141,9 +141,8 @@ function createClientActionFixture() {
     const action = PluginProjectedActionV2Schema.parse({
         ...declaration,
         pluginId: CLIENT_ACTION_PLUGIN_ID,
-        occurrenceId: 'acme-voice-client-action-occurrence-12',
-        serverIdentityId: CLIENT_ACTION_ORIGIN.serverIdentityId,
-        materializationRef: CLIENT_ACTION_ORIGIN.materializationRef,
+        occurrenceId: CLIENT_ACTION_OCCURRENCE_ID,
+        executionOrigin: CLIENT_ACTION_ORIGIN,
         available: true,
         authorization: CLIENT_ACTION_AUTHORIZATION,
     });

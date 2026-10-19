@@ -2,6 +2,7 @@ import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginR
 import { buildQualifiedPluginContributionKey, createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
 import { DaemonPluginUiArtifactByteIdentityV1Schema, type PluginProjectedDragSourceEntryV1, type PluginProjectedDropTargetEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginContributionClientPlatform } from '@happier-dev/protocol/plugins/contributions/catalog';
+import type { PluginProjectedWorkItemsEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { VoiceProviderContribution } from '@happier-dev/protocol/plugins/contributions/voice';
 import {
     PluginUiArtifactsManifestEntryV2Schema,
@@ -55,7 +56,7 @@ export type PluginUiClientExecutableArtifactAnchor =
     }>
     | Readonly<{
         artifactOwnerKind: 'clientContribution';
-        clientContribution: Readonly<{ family: 'dragSources' | 'dropTargets'; contribution: Readonly<{ pluginId: string; localId: string }> }>;
+        clientContribution: Readonly<{ family: 'dragSources' | 'dropTargets' | 'workItems'; contribution: Readonly<{ pluginId: string; localId: string }> }>;
     }>
     | Readonly<{
         artifactOwnerKind: 'voiceProvider';
@@ -104,7 +105,7 @@ type ProjectedExecutableOrigin = Readonly<{
 }>;
 
 type ResolvedProjectedClientExecutableContribution = Readonly<{
-    family: 'actions' | 'voiceProviders' | 'dragSources' | 'dropTargets';
+    family: 'actions' | 'voiceProviders' | 'dragSources' | 'dropTargets' | 'workItems';
     localId: string;
     pluginId: string;
     occurrenceId: string;
@@ -125,7 +126,7 @@ type ResolvedProjectedClientExecutableContribution = Readonly<{
     artifactAnchor: PluginUiClientExecutableArtifactAnchor;
     artifactSelectionOwner?: 'accountRelease' | 'daemonProjection';
     action?: PluginUiProjectionModel['actionsById'][string];
-    entityDeclaration?: PluginProjectedDragSourceEntryV1['definition'] | PluginProjectedDropTargetEntryV1['definition'];
+    entityDeclaration?: PluginProjectedDragSourceEntryV1['definition'] | PluginProjectedDropTargetEntryV1['definition'] | PluginProjectedWorkItemsEntryV1['definition'];
     voiceProvider?: PluginUiProjectedClientExecutableVoiceProvider;
 }>;
 
@@ -278,7 +279,7 @@ function readActionCandidate(input: Readonly<{
 
 /** The same artifact/currentness admission serves every client callback family. */
 function readClientContributionCandidate(input: Readonly<{
-    family: 'actions' | 'dragSources' | 'dropTargets';
+    family: 'actions' | 'dragSources' | 'dropTargets' | 'workItems';
     entry: UnknownRecord & Readonly<{ pluginId: string; occurrenceId?: string }>;
     localId: string;
     contributionId: string;
@@ -286,7 +287,7 @@ function readClientContributionCandidate(input: Readonly<{
     source: PluginUiClientExecutableProjectionSource;
     platform: PluginContributionClientPlatform;
     action?: PluginUiProjectionModel['actionsById'][string];
-    entityDeclaration?: PluginProjectedDragSourceEntryV1['definition'] | PluginProjectedDropTargetEntryV1['definition'];
+    entityDeclaration?: PluginProjectedDragSourceEntryV1['definition'] | PluginProjectedDropTargetEntryV1['definition'] | PluginProjectedWorkItemsEntryV1['definition'];
 }>): ResolvedProjectedClientExecutableContribution | null {
     const { entry, localId, contributionId, client } = input;
     if (!entry.occurrenceId) return null;
@@ -500,8 +501,9 @@ export function resolveProjectedPluginUiClientExecutables(input: Readonly<{
 }>): readonly PluginUiProjectedClientExecutableTarget[] {
     const candidates: ResolvedProjectedClientExecutableContribution[] = [];
     if (input.actionProjection) {
-        for (const family of ['dragSources', 'dropTargets'] as const) {
-            const entries = family === 'dragSources' ? input.actionProjection.projection.dragSourcesById : input.actionProjection.projection.dropTargetsById;
+        for (const family of ['dragSources', 'dropTargets', 'workItems'] as const) {
+            const entries = family === 'dragSources' ? input.actionProjection.projection.dragSourcesById
+                : family === 'workItems' ? input.actionProjection.projection.workItemsById : input.actionProjection.projection.dropTargetsById;
             for (const entry of Object.values(entries ?? {})) {
                 if (!entry.definition.platforms.includes(input.platform)) continue;
                 const candidate = readClientContributionCandidate({ family, entry, localId: entry.definition.id,
@@ -568,7 +570,7 @@ export function resolveProjectedPluginUiClientExecutables(input: Readonly<{
                 candidate.voiceProvider ? [candidate.voiceProvider] : []
             )));
             const contributes = Object.freeze({
-                ...Object.fromEntries((['dragSources', 'dropTargets'] as const).map(family => [family,
+                ...Object.fromEntries((['dragSources', 'dropTargets', 'workItems'] as const).map(family => [family,
                     Object.freeze(contributions.flatMap(candidate => candidate.family === family && candidate.entityDeclaration ? [candidate.entityDeclaration] : []))])),
                 ...(actions.length > 0 ? { actions } : {}),
                 ...(voiceProviders.length > 0

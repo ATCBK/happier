@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { MessageActionAvailableSnapshotV1Schema } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
 
 // The machine RPC is the system boundary: Action schemas are read per Action
 // from the daemon, never carried by the projection.
@@ -346,9 +347,9 @@ const CLIENT_REGISTERED_ARTIFACT_GRAPH = PluginUiArtifactsManifestEntryV2Schema.
 });
 const CLIENT_REGISTERED_AUTHORIZATION = Object.freeze({
     generation: Object.freeze({
-        targetGeneration: String(GENERATION),
-        desiredGeneration: String(GENERATION),
-        appliedGeneration: String(GENERATION),
+        targetGeneration: 'client-registered-occurrence',
+        desiredGeneration: 'client-registered-occurrence',
+        appliedGeneration: 'client-registered-occurrence',
     }),
     resourceSelections: Object.freeze([]),
     scopedGrants: Object.freeze([]),
@@ -1443,6 +1444,74 @@ describe('plugin contributed Action controller', () => {
             } finally {
                 await fixture.composition.unload();
             }
+        },
+    );
+
+    it.each([
+        { placement: 'message.menu', resolution: 'available' },
+        { placement: 'commandPalette', resolution: 'available' },
+        { placement: 'message.menu', resolution: 'stale' },
+        { placement: 'message.menu', resolution: 'mismatched' },
+    ] as const)(
+        'discloses selected-message context only from a current message: $placement / $resolution',
+        async ({ placement, resolution }) => {
+            const messageAction = MessageActionAvailableSnapshotV1Schema.parse({
+                sessionId: SESSION_ID, messageId: 'message-a', observedRevision: 'revision-a',
+                role: 'agent', contentCategory: 'text', seq: 12,
+                visibleText: 'Selected answer\nwith details', structuredPresentationSummary: null,
+                provenanceCategory: 'owner',
+            });
+            const reference = { v: 1 as const, sessionId: SESSION_ID,
+                messageId: messageAction.messageId, observedRevision: messageAction.observedRevision };
+            const received: unknown[] = [];
+            const fixture = createRegisteredClientActionFixture((_input, context) => {
+                received.push(context);
+                return { received: true };
+            }, { scopes: ['message'], placementBindings: ['message.menu', 'commandPalette'] });
+            const initial = snapshot([action({ id: CLIENT_REGISTERED_LOCAL_ID,
+                scopes: ['message'], placementBindings: ['message.menu', 'commandPalette'] })], { pluginId: CLIENT_REGISTERED_PLUGIN_ID });
+            const current: PluginContributedActionCurrentSnapshot = {
+                ...initial, pluginUiProjection: fixture.projection,
+                resolveContributedAction: () => fixture.action,
+                host: { ...initial.host, messageActionReference: reference },
+            };
+            // Only the machine transport is replaced; controller, executable
+            // registration, policy, serialization and client context stay real.
+            const answerSchemas = machineRpcWithServerScopeMock.getMockImplementation()!;
+            machineRpcWithServerScopeMock.mockImplementation(async (request) => (
+                request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE
+                    ? resolution === 'stale' ? { ok: false, code: 'plugin_message_action_unavailable' }
+                        : { ok: true, result: resolution === 'mismatched' ? { ...messageAction, messageId: 'another-message' } : messageAction }
+                    : answerSchemas(request)
+            ));
+            await fixture.composition.unload();
+            try {
+                await fixture.composition.reconcile([fixture.activation]);
+                const controller = createPluginContributedActionController({ resolveCurrent: () => current });
+                const [entry] = controller.list({ placement, scope: 'message' });
+                if (!entry) throw new Error('expected registered message client Action');
+                if (resolution !== 'available') {
+                    await expect(controller.open(entry)).resolves.toMatchObject({ kind: 'direct', outcome: { ok: false } });
+                    expect(received).toEqual([]);
+                    return;
+                }
+                await expect(controller.open(entry)).resolves.toMatchObject({
+                    kind: 'direct', outcome: { ok: true, result: { received: true } },
+                });
+                expect(received).toHaveLength(1);
+                if (placement === 'message.menu') {
+                    expect(received[0]).toHaveProperty('messageAction', messageAction);
+                    expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+                        payload: expect.objectContaining({ messageActionReference: reference,
+                            resolveClientMessageContext: true,
+                            invocation: { kind: 'hostPresentedMessage', currentMessageIntent: reference } }),
+                    }));
+                } else {
+                    expect(received[0]).not.toHaveProperty('messageAction');
+                    expect(machineRpcWithServerScopeMock.mock.calls.some(([request]) =>
+                        request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE)).toBe(false);
+                }
+            } finally { await fixture.composition.unload(); }
         },
     );
 

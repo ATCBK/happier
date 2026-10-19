@@ -2,7 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import { renderScreen } from '@/dev/testkit';
+import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 
 import type { ActionInputForm } from './actionInputForm';
 
@@ -74,6 +74,28 @@ function submittingForm(): ActionInputForm {
 }
 
 describe('ActionInputFormModal', () => {
+    it('renders an external plugin declared default and submits an explicit switch override', async () => {
+        const { createActionInputForm } = await import('./actionInputForm');
+        const { ActionInputFormModal } = await import('./ActionInputFormModal');
+        const submit = vi.fn(async (_candidate: Readonly<Record<string, unknown>>) => ({ ok: true }));
+        const form = createActionInputForm({
+            presentation: {
+                title: 'External plugin settings',
+                description: null,
+                inputHints: { fields: [{ path: 'enabled', title: 'Enabled', widget: 'boolean', defaultValue: true }] },
+            },
+            submit,
+        });
+        const screen = await renderScreen(<ActionInputFormModal form={form} onClose={vi.fn()} setChrome={vi.fn()} />);
+        const control = () => screen.findAllByType('Pressable')
+            .find((node) => (node.props.role ?? node.props.accessibilityRole) === 'switch');
+        expect(control()?.props.accessibilityState?.checked).toBe(true);
+        await pressTestInstanceAsync(control());
+        expect(control()?.props.accessibilityState?.checked).toBe(false);
+        await act(async () => { await form.submit(); });
+        expect(submit.mock.calls[0]?.[0]).toEqual({ enabled: false });
+    });
+
     it('keeps the cancellation action reachable while its canonical form owner is pending', async () => {
         const { ActionInputFormModal } = await import('./ActionInputFormModal');
         const setChrome = vi.fn();

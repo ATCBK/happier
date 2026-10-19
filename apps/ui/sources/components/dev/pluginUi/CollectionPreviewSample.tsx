@@ -4,6 +4,7 @@ import {
     Badge,
     Button,
     Collection,
+    CollectionToolbar,
     Heading,
     Icon,
     Row,
@@ -148,6 +149,9 @@ export function CollectionPreviewSample(): React.ReactElement {
     const [presentation, setPresentation] = React.useState<'table' | 'board' | 'grid'>('table');
     // The first window still reading: no rows yet, so each view holds its geometry with skeletons.
     const [reading, setReading] = React.useState(false);
+    const [stale, setStale] = React.useState(false);
+    const [lens, setLens] = React.useState('my-work');
+    const [order, setOrder] = React.useState('newest');
     const model = useHappierCollection({
         items: reading ? NO_ENTRIES : ENTRIES,
         keyOf,
@@ -170,28 +174,15 @@ export function CollectionPreviewSample(): React.ReactElement {
         <View testID="dev-collection-preview" style={{ height: 760 }}>
             <Row gap="medium" style={{ paddingBottom: 12 }}>
                 <Select
-                    label="View"
-                    presentation="segmented"
-                    value={presentation}
-                    options={[
-                        { value: 'table', label: 'List' },
-                        { value: 'board', label: 'Board' },
-                        { value: 'grid', label: 'Grid' },
-                    ]}
-                    onChange={(value) => {
-                        if (value === 'table' || value === 'board' || value === 'grid') setPresentation(value);
-                    }}
-                    testID="dev-collection-view"
-                />
-                <Select
                     label="Data"
                     presentation="segmented"
-                    value={reading ? 'reading' : 'loaded'}
+                    value={reading ? 'reading' : stale ? 'stale' : 'loaded'}
                     options={[
                         { value: 'loaded', label: 'Loaded' },
+                        { value: 'stale', label: 'Stale' },
                         { value: 'reading', label: 'Reading' },
                     ]}
-                    onChange={(value) => { setReading(value === 'reading'); }}
+                    onChange={(value) => { setReading(value === 'reading'); setStale(value === 'stale'); }}
                     testID="dev-collection-data"
                 />
             </Row>
@@ -208,6 +199,65 @@ export function CollectionPreviewSample(): React.ReactElement {
                 windowStatement={['12 loaded', 'complete for GitHub, GitLab, Sentry, PostHog', 'Azure DevOps has more']}
                 search={{ label: 'Search PRs & Issues', value: query, onValueChange: setQuery, tokens: searchTokens, testID: 'dev-collection-search' }}
                 testID="dev-collection"
+                // The shared toolbar, as a plugin page composes it: one row on a wide page, folded on a phone.
+                header={(slots) => (
+                    <CollectionToolbar
+                        slots={slots}
+                        lens={(
+                            <Select
+                                label="View"
+                                presentation="menu"
+                                value={lens}
+                                options={[{ value: 'my-work', label: 'My work' }, { value: 'everything', label: 'Everything' }]}
+                                onChange={(value) => { if (typeof value === 'string') setLens(value); }}
+                            />
+                        )}
+                        refine={{
+                            label: 'Filters',
+                            activeCount: tokens.length,
+                            render: () => (
+                                <Select
+                                    label="Order"
+                                    presentation="menu"
+                                    value={order}
+                                    options={[{ value: 'newest', label: 'Newest' }, { value: 'oldest', label: 'Oldest' }]}
+                                    onChange={(value) => { if (typeof value === 'string') setOrder(value); }}
+                                />
+                            ),
+                            sheet: {
+                                groups: [{
+                                    id: 'order',
+                                    accessibilityLabel: 'Order',
+                                    items: [
+                                        { id: 'newest', label: 'Newest', kind: 'radio', radioGroupId: 'order' },
+                                        { id: 'oldest', label: 'Oldest', kind: 'radio', radioGroupId: 'order' },
+                                    ],
+                                }],
+                                radioGroups: [{ id: 'order', accessibilityLabel: 'Order', selectedId: order }],
+                                onSelect: setOrder,
+                                showResultsLabel: 'Show results',
+                            },
+                        }}
+                        freshness={stale
+                            ? { tone: 'warning', indicator: true, label: 'Showing the last known list' }
+                            : { tone: 'muted', indicator: false, label: 'Up to date' }}
+                        refresh={{ label: 'Refresh', onPress: () => { setStale(false); } }}
+                        more={{ label: 'More', items: [{ id: 'sources', label: 'Manage sources' }], onSelect: () => undefined }}
+                        views={{
+                            label: 'Arrangement',
+                            value: presentation,
+                            options: [
+                                { value: 'table', label: 'List', icon: 'list' },
+                                { value: 'board', label: 'Board', icon: 'board' },
+                                { value: 'grid', label: 'Grid' },
+                            ],
+                            onChange: (value) => {
+                                if (value === 'table' || value === 'board' || value === 'grid') setPresentation(value);
+                            },
+                        }}
+                        testID="dev-collection-toolbar"
+                    />
+                )}
                 renderDetail={() => (opened === null ? null : (
                     <Stack gap="medium" style={{ padding: 24 }}>
                         <Row justify="space-between" align="center">

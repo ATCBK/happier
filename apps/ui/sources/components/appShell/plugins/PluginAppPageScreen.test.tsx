@@ -975,6 +975,34 @@ describe('plugin app page host route (EU-5b)', () => {
         expect(reactNativeSurfaceProps).toHaveLength(0);
     });
 
+    it('preserves the catalog refusal when a direct-linked page cannot be described', async () => {
+        const { PluginAppPageScreen } = await import('./PluginAppPageScreen');
+        const { AppShellPluginUiProjectionValueProvider } = await import('./AppShellPluginUiProjection');
+        const projection = unionPluginUiProjections([{
+            machineId: 'machine-1',
+            serverId: 'server-1',
+            projection: null,
+            phase: 'unavailable',
+            unavailableReasonCode: 'plugin_daemon_unsupported',
+            interactionEnabled: false,
+        }]);
+        const screen = await renderScreen(
+            <AppShellPluginUiProjectionValueProvider value={{
+                ...projection, pluginBrowserProjection: null, platform: 'web',
+                accountLifetime: captureActiveServerAccountScopeLifetime(),
+                clientExecutableActivation: { status: 'ready' },
+                reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {},
+            }}>
+                <PluginAppPageScreen pluginId={NOTES_PLUGIN_ID} localId="notes" subPath="" />
+            </AppShellPluginUiProjectionValueProvider>,
+        );
+
+        expect(screen.findByTestId('plugin-app-page-unavailable')).toBeTruthy();
+        expect(screen.findByTestId('plugin-app-page-unavailable-diagnostic-plugin_daemon_unsupported')).toBeTruthy();
+        expect(screen.findByTestId('plugin-app-page-unavailable-action')).toBeNull();
+        expect(reactNativeSurfaceProps).toHaveLength(0);
+    });
+
     it('presents a page-bound openSurface header Action through the canonical page destination handler', async () => {
         await renderPage({
             projection: daemonProjection({
@@ -1774,7 +1802,7 @@ describe('plugin app page host route (EU-5b)', () => {
         });
 
         expect(screen.findByTestId('plugin-app-page-unavailable')).toBeTruthy();
-        expect(screen.getTextContent()).toContain('pluginRuntime.unavailableGeneric');
+        expect(screen.getTextContent()).toContain('pluginRuntime.disabledByPolicy');
         expect(screen.getTextContent()).not.toContain('plugin_disabled');
         expect(reactNativeSurfaceProps).toHaveLength(0);
     });

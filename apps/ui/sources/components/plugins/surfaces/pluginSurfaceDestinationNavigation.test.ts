@@ -296,6 +296,45 @@ describe('plugin surface destination navigation', () => {
         }));
     });
 
+    it('admits an installed Settings route before choosing its execution origin', () => {
+        const page = { ...settingsPage(), occurrenceId: undefined, hostOrigin: null };
+        const input = {
+            placements: [], settingsPages: [page], targetKind: 'app',
+            accountLifetime: { ...retiredAccountLifetime, isCurrent: () => true },
+        } as const;
+        const request = { destination: { pluginId: page.pluginId, localId: page.descriptorId } };
+        expect(resolvePluginSurfaceDestinationOpen({ ...input, request })).toMatchObject({
+            ok: true, placement: page, authority: null,
+        });
+        // This is route admission only; Settings still rejects launch-input custody.
+        expect(resolvePluginSurfaceDestinationOpen({ ...input, request: { ...request, input: {} } })).toMatchObject({
+            ok: false, reason: 'plugin_surface_open_launch_input_unsupported',
+        });
+        expect(resolvePluginSurfaceDestinationOpen({ ...input, request, accountLifetime: retiredAccountLifetime })).toMatchObject({
+            ok: false, reason: 'plugin_surface_open_origin_unavailable',
+        });
+    });
+
+    it.each(['appPage', 'settingsPage'] as const)('admits a resolving input-less %s route but refuses unavailable supply', (container) => {
+        const page = { ...(container === 'appPage' ? placement({ container }) : settingsPage()), occurrenceId: undefined, hostOrigin: null,
+            availability: { state: 'resolving', reason: 'origin_resolving', diagnostics: [] } as const };
+        const input = {
+            placements: [],
+            ...(page.contributionKind === 'settingsPage' ? { settingsPages: [page] } : { placements: [page] }),
+            targetKind: 'app', accountLifetime: { ...retiredAccountLifetime, isCurrent: () => true },
+            request: { destination: page.binding.destination },
+        } as const;
+        expect(resolvePluginSurfaceDestinationOpen(input)).toMatchObject({ ok: true, authority: null });
+        const refusedPage = { ...page, availability: { state: 'fallback', reason: 'feature_disabled', diagnostics: [] } as const };
+        expect(resolvePluginSurfaceDestinationOpen({ ...input,
+            ...(refusedPage.contributionKind === 'settingsPage' ? { settingsPages: [refusedPage] } : { placements: [refusedPage] }),
+        })).toMatchObject({ ok: false, reason: 'feature_disabled' });
+        expect(resolvePluginSurfaceDestinationOpen({ ...input, request: { ...input.request, instanceKey: 'other' } }))
+            .toMatchObject({ ok: false, code: 'invalid_payload' });
+        expect(resolvePluginSurfaceDestinationOpen({ ...input, request: { ...input.request, input: {} } }))
+            .toMatchObject({ ok: false });
+    });
+
     it('does not route an unavailable exact Settings page through an incumbent fallback', async () => {
         const page = settingsPage({
             availability: { state: 'fallback', reason: 'feature_disabled', diagnostics: ['feature_disabled'] },

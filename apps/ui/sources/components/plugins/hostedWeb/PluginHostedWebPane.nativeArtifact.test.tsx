@@ -310,7 +310,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
             nativeArtifactAdoption: PluginUiArtifactAdoption<'hostedWebNative', PluginNativeArtifactResourceHandle>,
             mountInstanceKey: string,
         ) => (
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={surfaceContext}
                 pluginUiProjection={projection}
@@ -362,7 +362,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         const native = createHandle();
         const { PluginHostedWebPane } = await import('./PluginHostedWebPane');
         const screen = await renderScreen(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={{ ...surfaceContext, sessionId: 'session-1' }}
                 pluginUiProjection={projection}
@@ -390,7 +390,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         expect(initialPathAndQuery).not.toContain('happierSubPath');
 
         await screen.update(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={surfaceContext}
                 pluginUiProjection={projection}
@@ -407,7 +407,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         const native = createHandle();
         const { PluginHostedWebPane } = await import('./PluginHostedWebPane');
         await renderScreen(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={{ ...surfaceContext, platform: 'android' }}
                 pluginUiProjection={projection}
@@ -425,7 +425,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         const native = createHandle();
         const { PluginHostedWebPane } = await import('./PluginHostedWebPane');
         await renderScreen(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={{ ...surfaceContext, platform: 'desktop' }}
                 pluginUiProjection={projection}
@@ -449,7 +449,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         const native = createHandle({ frameOrigin });
         const { PluginHostedWebPane } = await import('./PluginHostedWebPane');
         await renderScreen(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={{ ...surfaceContext, platform: 'desktop' }}
                 pluginUiProjection={projection}
@@ -467,7 +467,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         const native = createHandle();
         const { PluginHostedWebPane } = await import('./PluginHostedWebPane');
         await renderScreen(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={{ ...surfaceContext, platform: 'desktop' }}
                 pluginUiProjection={projection}
@@ -495,7 +495,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         const retryNativeArtifact = vi.fn();
         const { PluginHostedWebPane } = await import('./PluginHostedWebPane');
         const screen = await renderScreen(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={surfaceContext}
                 pluginUiProjection={projection}
@@ -542,7 +542,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         const onFailure = vi.fn();
         const { PluginHostedWebPane } = await import('./PluginHostedWebPane');
         await renderScreen(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={surfaceContext}
                 pluginUiProjection={projection}
@@ -746,7 +746,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         const native = createHandle();
         const { PluginHostedWebPane } = await import('./PluginHostedWebPane');
         const screen = await renderScreen(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={surfaceContext}
                 pluginUiProjection={projection}
@@ -773,7 +773,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         const second = createHandle();
         const { PluginHostedWebPane } = await import('./PluginHostedWebPane');
         const screen = await renderScreen(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={surfaceContext}
                 pluginUiProjection={projection}
@@ -785,7 +785,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         expect(staleUnavailable).toBeTypeOf('function');
 
         await screen.update(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={surfaceContext}
                 pluginUiProjection={projection}
@@ -808,7 +808,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
         const native = createHandle();
         const { PluginHostedWebPane } = await import('./PluginHostedWebPane');
         const screen = await renderScreen(
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={surfaceContext}
                 pluginUiProjection={projection}
@@ -858,7 +858,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
             },
         };
         const element = (launchInput: PluginUiLaunchInputV1 | undefined) => (
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={bridgeSurface}
                 pluginUiProjection={bridgeProjection}
@@ -917,7 +917,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
             },
         };
         const element = (diagnostics: string[]) => (
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={{
                     ...surfaceContext,
@@ -983,7 +983,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
             handleRequest: () => Promise<null>,
             translation: string,
         ) => (
-            <PluginHostedWebPane mountLifetime={mountLifetime}
+            <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                 contributionId="hostedWeb:acme.preview:preview-web"
                 surfaceContext={{ ...surfaceContext, sessionId: 'session-1' }}
                 pluginUiProjection={bridgeProjection}
@@ -1068,7 +1068,7 @@ describe('PluginHostedWebPane native Artifact consumer', () => {
                 sessionId: 'session-1',
             } as const;
             await renderScreen(
-                <PluginHostedWebPane mountLifetime={mountLifetime}
+                <PluginHostedWebPane mountLifetime={mountLifetime} interactionEnabled
                     contributionId="hostedWeb:acme.preview:preview-web"
                     surfaceContext={bridgeSurface}
                     pluginUiProjection={bridgeProjection}

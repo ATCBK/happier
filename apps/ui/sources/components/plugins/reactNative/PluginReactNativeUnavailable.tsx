@@ -5,6 +5,8 @@ import { SurfaceStateCard, type SurfaceStateAction } from '@/components/ui/surfa
 import { resolvePluginSurfaceStatePresentation } from '@/sync/domains/surfaces/copy';
 import { t } from '@/text';
 
+import { useOfflineSurfaceNotice } from '../shared/pluginSurfaceInteractionAvailability';
+
 type PluginReactNativeUnavailableProps = Readonly<{
     diagnostics?: readonly string[];
     /** Retries only the caller's current ephemeral mount attempt. */
@@ -15,6 +17,14 @@ type PluginReactNativeUnavailableProps = Readonly<{
     retrying?: boolean;
     /** Respects the selected surface's reduced-motion fact for the loading glyph. */
     animationEnabled?: boolean;
+    /** The plugin's display name, so a whole-page card says which plugin failed. */
+    subjectName?: string;
+    /**
+     * The surface's runtime is not reachable (its machine is offline or a chosen source has not answered), so
+     * nothing could load. The card then says that cause, through the one cold-state owner, instead of a generic
+     * "couldn't open".
+     */
+    offline?: boolean;
 }>;
 
 export function PluginReactNativeUnavailable(props: PluginReactNativeUnavailableProps): React.ReactElement {
@@ -22,6 +32,7 @@ export function PluginReactNativeUnavailable(props: PluginReactNativeUnavailable
         (props.diagnostics ?? []).filter((diagnostic) => diagnostic.trim().length > 0),
     )];
     const pending = props.retrying === true;
+    const offlineNotice = useOfflineSurfaceNotice(false, props.subjectName ?? '');
     const presentation = resolvePluginSurfaceStatePresentation({
         state: pending
             ? 'loading'
@@ -29,6 +40,7 @@ export function PluginReactNativeUnavailable(props: PluginReactNativeUnavailable
                 ? 'failedRetry'
                 : 'unavailable',
         reasonCode: diagnostics[0],
+        subjectName: props.subjectName,
         ...(pending ? {} : { title: t('pluginReactNative.unavailable') }),
     });
     const card = presentation.card;
@@ -42,12 +54,13 @@ export function PluginReactNativeUnavailable(props: PluginReactNativeUnavailable
             onRetry: props.onRetry,
             manageAction: props.recoveryAction,
         });
+    const offline = props.offline === true && !pending;
     return (
         <SurfaceStateCard
             testID="plugin-rn-ui-unavailable"
-            kind={card.kind}
-            title={card.title}
-            reason={card.reason}
+            kind={offline ? offlineNotice.kind : card.kind}
+            title={offline ? offlineNotice.title : card.title}
+            reason={offline ? offlineNotice.reason : card.reason}
             action={action}
             accessibilitySemantics={card.accessibilitySemantics}
             animationEnabled={props.animationEnabled}

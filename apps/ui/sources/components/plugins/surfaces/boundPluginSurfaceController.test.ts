@@ -2303,6 +2303,109 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         });
     });
 
+    it('refuses an uncommitted declarative Action before presenting an input form or dispatching', async () => {
+        const action = {
+            id: 'launch', occurrenceId: null, title: 'Launch a worker',
+            description: null, icon: null, scopes: ['session'], surfaces: ['ui', 'plugin'],
+            placementBindings: [], slash: null, priority: null, dangerLevel: 'safe',
+            confirmation: null, available: true,
+            inputHints: { fields: [{ path: 'name', title: 'Name', widget: 'text', required: true }] },
+        } satisfies PluginProjectionEntry['actions'][number];
+        const plugin = {
+            pluginId: FACTS.pluginId, immutableGenerationId: FACTS.occurrenceId,
+            title: 'Worker tools', description: null, version: '1.0.0', enabled: true,
+            generation: 12, generationLabel: '12', status: null, provenance: null,
+            diagnostics: [], actions: [action], resources: [], editableSettingsGroups: [],
+        } satisfies PluginProjectionEntry;
+        const { Modal } = await import('@/modal');
+        const show = vi.spyOn(Modal, 'show').mockImplementation(() => 'unexpected-action-input');
+        const executeContributedAction = vi.fn(async () => ({
+            supported: true as const, result: { ok: true as const, result: { launched: true } },
+        }));
+        const controller = createBoundPluginSurfaceController({
+            facts: { ...FACTS, sessionId: 'session-worker', pluginProjectionById: { [FACTS.pluginId]: plugin },
+                resolveContributedAction: identity => ({ ...resolveDaemonTargetAction(identity),
+                    surfaces: ['ui', 'plugin'], inputHints: action.inputHints }) },
+            binding: { executeContributedAction },
+        });
+        try {
+            await expect(controller.dispatchAction({ pluginId: FACTS.pluginId, localId: action.id }))
+                .resolves.toEqual({ code: 'unavailable', diagnostics: ['action_retired'] });
+            expect(show).not.toHaveBeenCalled();
+            expect(executeContributedAction).not.toHaveBeenCalled();
+        } finally {
+            controller.dispose();
+            show.mockRestore();
+        }
+    });
+
+    it.each(['submit', 'cancel', 'retire'] as const)('collects omitted declarative Action input before mounted dispatch (%s)', async (settlement) => {
+        const action = {
+            id: 'launch', occurrenceId: 'daemon-action-occurrence-a', title: 'Launch a worker',
+            description: null, icon: null, scopes: ['session'], surfaces: ['ui'],
+            placementBindings: [], slash: null, priority: null, dangerLevel: 'safe',
+            confirmation: null, available: true,
+            inputHints: { fields: [{ path: 'name', title: 'Name', widget: 'text', required: true }] },
+        } satisfies PluginProjectionEntry['actions'][number];
+        const plugin = {
+            pluginId: FACTS.pluginId, immutableGenerationId: FACTS.occurrenceId,
+            title: 'Worker tools', description: null, version: '1.0.0', enabled: true,
+            generation: 12, generationLabel: '12', status: null, provenance: null,
+            diagnostics: [], actions: [action], resources: [], editableSettingsGroups: [],
+        } satisfies PluginProjectionEntry;
+        const rpc = await import('@/sync/ops/machineContributionRegistryProjection');
+        // The daemon's exact schema read and the app-shell modal are system boundaries.
+        const readSchemas = vi.spyOn(rpc, 'machinePluginActionSchemasRead').mockResolvedValue({
+            supported: true, result: DaemonPluginActionSchemasReadResponseSchema.parse({
+                ok: true, inputSchema: { type: 'object', additionalProperties: false,
+                    properties: { name: { type: 'string', minLength: 1 } }, required: ['name'] },
+            }),
+        });
+        const { Modal } = await import('@/modal');
+        type Form = import('@/components/plugins/actions/pluginContributedActionController').PluginContributedActionSelectionForm;
+        let form: Form | undefined;
+        const show = vi.spyOn(Modal, 'show').mockImplementation(config => {
+            form = (config.props as Readonly<{ form: Form }>).form;
+            return 'declarative-worker-input';
+        });
+        const hide = vi.spyOn(Modal, 'hide').mockImplementation(() => {});
+        const executeContributedAction = vi.fn(async () => ({
+            supported: true as const, result: { ok: true as const, result: { launched: true } },
+        }));
+        const controller = createBoundPluginSurfaceController({
+            facts: { ...FACTS, sessionId: 'session-worker', pluginProjectionById: { [FACTS.pluginId]: plugin },
+                resolveContributedAction: identity => ({ ...resolveDaemonTargetAction(identity),
+                    inputHints: action.inputHints }) },
+            binding: { executeContributedAction },
+        });
+        try {
+            const pending = controller.dispatchAction({ pluginId: FACTS.pluginId, localId: action.id });
+            await vi.waitFor(() => expect(form).toBeDefined());
+            expect(form!.getFields().map(field => field.path)).toEqual(['name']);
+            expect(executeContributedAction).not.toHaveBeenCalled();
+            if (settlement === 'submit') {
+                form!.replaceInput({ name: 'Research' });
+                await form!.submit();
+                await expect(pending).resolves.toEqual({ launched: true });
+                expect(executeContributedAction).toHaveBeenCalledWith('machine_1', expect.objectContaining({
+                    input: { name: 'Research' }, sessionId: 'session-worker',
+                    invocation: { kind: 'mountedPluginSurface', mountedBinding: expect.objectContaining({
+                        occurrenceId: FACTS.occurrenceId, materializationRef: FACTS.executionOrigin.materializationRef,
+                    }) },
+                }));
+            } else {
+                if (settlement === 'cancel') form!.cancel();
+                else controller.dispose();
+                await pending;
+                expect(executeContributedAction).not.toHaveBeenCalled();
+                expect(form!.isRetired()).toBe(true);
+            }
+        } finally {
+            controller.dispose();
+            readSchemas.mockRestore(); show.mockRestore(); hide.mockRestore();
+        }
+    });
+
     it('routes declarative composerApply through the mounted Host API with the host-owned Composer ref', async () => {
         const applyComposer = vi.fn(async () => ({ status: 'applied' as const, revision: 8 }));
         const controller = createBoundPluginSurfaceController({

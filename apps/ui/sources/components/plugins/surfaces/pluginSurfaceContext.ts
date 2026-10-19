@@ -267,6 +267,9 @@ export function createPluginSurfaceContext(input: Readonly<{
     translations: Readonly<Record<string, string>>;
     /** Exact target-scoped snapshot; an admitted empty `points` array is valid. */
     targetedContributions?: SurfaceContext['targetedContributions'];
+    pendingApproval?: SurfaceContext['pendingApproval'];
+    machineConnectionPending?: SurfaceContext['machineConnectionPending'];
+    machineExecutionReady?: SurfaceContext['machineExecutionReady'];
 }>): SurfaceContext {
     return Object.freeze({
         mount: input.mount,
@@ -287,6 +290,9 @@ export function createPluginSurfaceContext(input: Readonly<{
         theme: input.environment.theme,
         translations: input.translations,
         ...(input.targetedContributions ? { targetedContributions: input.targetedContributions } : {}),
+        ...(input.pendingApproval === undefined ? {} : { pendingApproval: input.pendingApproval }),
+        ...(input.machineConnectionPending === undefined ? {} : { machineConnectionPending: input.machineConnectionPending }),
+        ...(input.machineExecutionReady === undefined ? {} : { machineExecutionReady: input.machineExecutionReady }),
     });
 }
 

@@ -315,7 +315,7 @@ describe('PluginSurfaceInteractionBoundary.web', () => {
         expect(resolvePluginSurfaceSourceCause({ kind: 'selectionRequired', candidates: [] })).toBe('required');
         // A chosen source the resolver admitted is not offline: until its view answers, it is connecting.
         expect(resolvePluginSurfaceSourceCause({
-            kind: 'selected', selectionSource: 'stored',
+            kind: 'selected', selectionSource: 'pinned',
             origin: {} as never, candidate: {} as never,
         })).toBe('connecting');
         expect(resolvePluginSurfaceSourceCause({ kind: 'conflict', candidates: [], reasons: ['different_versions'] })).toBe('required');

@@ -24,6 +24,7 @@ import {
     resolveHappierDiffViewerRequest,
     type HappierDiffViewerRequest,
     type HappierImageSize,
+    type HappierMarkdownRenderInput,
     type HappierMaterialRole,
     type HappierSceneRenderRequest,
     type HappierSurfaceProps,
@@ -372,10 +373,13 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
     renderKeyboardStickyFooter(input: Readonly<{ openedOffset: number; children: React.ReactNode }>) {
         return <KeyboardStickyFooter offset={input.openedOffset}>{input.children}</KeyboardStickyFooter>;
     },
-    localDateTimePicker: resolveAppLocalDateTimePicker(),
+    // The web picker reaches this host through shared collection controls while
+    // its module is still loading. Resolve its binding when a host is consumed.
+    get localDateTimePicker() { return resolveAppLocalDateTimePicker(); },
     renderMaterialSurface: renderThemeMaterialSurface,
-    renderMarkdown(input: Readonly<{ value: string; selectable: boolean; testID?: string }>) {
-        return <MarkdownView markdown={input.value} selectable={input.selectable} testID={input.testID} />;
+    renderMarkdown(input: HappierMarkdownRenderInput) {
+        // Plugin Markdown sits inside interface chrome (a detail step, a page section): the document scale.
+        return <MarkdownView markdown={input.value} selectable={input.selectable} testID={input.testID} inlineReferences={input.inlineReferences} profile="document" />;
     },
     renderCodeBlock(input: Readonly<{ code: string; language?: string; selectable: boolean; testID?: string }>) {
         return (
@@ -401,10 +405,12 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
         presentation?: 'popover' | 'menu' | 'dropdown' | 'context';
         width?: 'anchor' | 'content';
         autoFocusOnOpen?: boolean;
+        sheet?: Readonly<{ title: string; footer?: React.ReactNode }>;
         onRequestClose(): void;
         content(controls: Readonly<{
             requestClose(reason: 'selection' | 'escape'): void;
             maxHeight: number;
+            presentation?: 'sheet';
         }>): React.ReactNode;
     }>) {
         const presentation = resolvePluginUiPopoverPresentation(input);
@@ -422,8 +428,18 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
                 portal={presentation.portal}
                 maxWidthCap={presentation.maxWidthCap}
                 onRequestClose={input.onRequestClose}
+                // A requested sheet is the shared phone bottom sheet (its title, close and pinned footer).
+                {...(input.sheet === undefined ? {} : {
+                    phonePresentation: 'sheet' as const,
+                    accessibilityLabel: input.sheet.title,
+                    sheetFooter: input.sheet.footer,
+                })}
             >
-                {(render) => input.content({ requestClose: render.requestClose, maxHeight: render.maxHeight })}
+                {(render) => input.content({
+                    requestClose: render.requestClose,
+                    maxHeight: render.maxHeight,
+                    ...(render.presentation === 'sheet' ? { presentation: 'sheet' as const } : {}),
+                })}
             </Popover>
         );
     },

@@ -555,6 +555,9 @@ export function PluginHostedWebPane(props: Readonly<{
         translations: Readonly<Record<string, string>>;
         /** Exact daemon-admitted target snapshot; an empty snapshot is valid. */
         targetedContributions?: SurfaceContext['targetedContributions'];
+        pendingApproval?: SurfaceContext['pendingApproval'];
+        machineConnectionPending?: SurfaceContext['machineConnectionPending'];
+        machineExecutionReady?: SurfaceContext['machineExecutionReady'];
     }>;
     /**
      * The mounted host's single Account-scoped Data bridge factory. The pane
@@ -900,6 +903,9 @@ export function PluginHostedWebPane(props: Readonly<{
                 environment: surfaceEnvironment,
                 translations: binding.translations,
                 targetedContributions: binding.targetedContributions,
+                pendingApproval: binding.pendingApproval,
+                machineConnectionPending: binding.machineConnectionPending,
+                machineExecutionReady: binding.machineExecutionReady,
             }),
         });
     }, [
@@ -1357,6 +1363,7 @@ export function PluginHostedWebPane(props: Readonly<{
     return (
         <PluginSurfaceInteractionBoundary
             surfaceId={surface.surfaceId}
+            hasContent={inlineDocument !== undefined}
             snapshotTitle={frameTitle}
             enabled={interactionEnabled}
             focusEligible={props.focusEligible}

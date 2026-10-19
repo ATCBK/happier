@@ -14,6 +14,8 @@ import type {
     PluginUiSurfacePlacementProjection,
 } from '@/sync/domains/plugins/ui/projection';
 import { selectPluginSurfacePlacementsForBinding } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
+import { buildPluginAppPageRoutePath } from './pluginAppPageRoute';
+export { buildPluginAppPageRoutePath, PLUGIN_APP_PAGE_ROUTE_PREFIX } from './pluginAppPageRoute';
 
 /**
  * The host-owned plugin page catalog (EU-5b, §3.7).
@@ -34,9 +36,6 @@ export const PLUGIN_APP_PAGE_BINDING_SLOT = Object.freeze({
     container: 'appPage' as const,
     targetKind: 'app' as const,
 });
-
-/** The host route prefix pages live under. Never author-selected. */
-export const PLUGIN_APP_PAGE_ROUTE_PREFIX = '/plugins';
 
 export type PluginAppPage = PluginSurfaceDestination & Readonly<{
     /** Declaration-owned purpose, resolved before the executable page loads. */
@@ -84,27 +83,6 @@ export function readPluginAppPageSubPathFromPathname(page: PluginAppPage, pathna
     } catch {
         return null;
     }
-}
-
-/**
- * Build a page route. Every segment is encoded, so a page id or location
- * containing `/`, `?` or `#` cannot break out of the namespace the host built.
- *
- * `subPath` is normalized by the Protocol owner first; an illegal location
- * (relative segment, over-long) yields the page ROOT rather than a guessed
- * route — callers that must distinguish reject it before they get here.
- */
-export function buildPluginAppPageRoutePath(input: Readonly<{
-    pluginId: string;
-    localId: string;
-    subPath?: string;
-}>): string {
-    const root = `${PLUGIN_APP_PAGE_ROUTE_PREFIX}/${encodeURIComponent(input.pluginId)}/${encodeURIComponent(input.localId)}`;
-    const normalized = input.subPath === undefined ? '' : (normalizePluginUiSubPathV1(input.subPath) ?? '');
-    if (normalized.length === 0) {
-        return root;
-    }
-    return `${root}/${normalized.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 /**

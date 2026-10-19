@@ -21,6 +21,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { resolvePluginUiClientExecutablePlatform } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import { clearPluginAccountAvailabilityProjection, readPluginAccountAvailability, replacePluginAccountAvailabilityProjection, useActivePluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/projection';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type { PluginAccountAvailabilitySnapshot } from '@/sync/domains/plugins/availability/reader';
 import { dispatchPluginSurfaceAction } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
 import { createPluginUiProjectedActionResolver, normalizePluginInstalledUiDeclarations } from '@/sync/domains/plugins/ui/projection';
@@ -74,9 +75,9 @@ const origin = { serverIdentityId, materializationRef: { machineId: 'machine-liv
 // This is a foreign plugin executable fixture, loaded and evaluated by the
 // production CommonJS owner. Its pending work crosses no mocked internal owner.
 const pluginBoundary: { pending: ReturnType<typeof createDeferred<string>>; cleanups: number; signal: AbortSignal | null;
-    activationGate: ReturnType<typeof createDeferred<void>> | null; enteredActivation: boolean;
+    activationGate: ReturnType<typeof createDeferred<void>> | null; enteredActivation: boolean; evaluations: number;
     peerCleanupGate: ReturnType<typeof createDeferred<void>> | null; peerCleanupEntered: boolean; peerCleanupFinished: boolean } = {
-    pending: createDeferred<string>(), cleanups: 0, signal: null, activationGate: null, enteredActivation: false,
+    pending: createDeferred<string>(), cleanups: 0, signal: null, activationGate: null, enteredActivation: false, evaluations: 0,
     peerCleanupGate: null, peerCleanupEntered: false, peerCleanupFinished: false,
 };
 const fixtureGlobal = globalThis as typeof globalThis & { executableContinuityFixture?: typeof pluginBoundary };
@@ -103,6 +104,7 @@ async function mountClientExecutableFixture(options: { waitForAdmission?: boolea
     pluginBoundary.cleanups = 0;
     pluginBoundary.signal = null;
     pluginBoundary.enteredActivation = false;
+    pluginBoundary.evaluations = 0;
     pluginBoundary.peerCleanupEntered = false;
     pluginBoundary.peerCleanupFinished = false;
     connection = await restoreServerAccountForTest({ serverUrl: 'https://executable-continuity.test', serverIdentityId, accountId: 'account-continuity',
@@ -111,6 +113,10 @@ async function mountClientExecutableFixture(options: { waitForAdmission?: boolea
             if (path === '/health') return Response.json({ status: 'ok' });
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version: 1, updatedAt: 1 }));
+            // Real Sync owns census admission after restoration. An unserved
+            // list would turn these hydrated fixture rows into stale supplies.
+            if (path === '/v1/machines') return Response.json(['machine-live', 'machine-peer'].map(id =>
+                createPlainMachineRowFixture({ id, accountId: 'account-continuity' })));
             return Response.json({ error: 'not_found' }, { status: 404 });
         } });
     const lifetime = captureActiveServerAccountScopeLifetime();
@@ -124,7 +130,8 @@ async function mountClientExecutableFixture(options: { waitForAdmission?: boolea
             machineAdministrationTargetsLocalV1: { [`plugin.runOn:${pluginId}`]: { serverIdentityId, machineId: machine.id } } } });
 
     fixtureGlobal.executableContinuityFixture = pluginBoundary;
-    daemon.bytes = new TextEncoder().encode(`exports.activate = async function(api) {
+    daemon.bytes = new TextEncoder().encode(`globalThis.executableContinuityFixture.evaluations += 1;
+    exports.activate = async function(api) {
         globalThis.executableContinuityFixture.enteredActivation = true;
         api.actions.register('hold', async function(input, context) {
             globalThis.executableContinuityFixture.signal = context.signal;
@@ -430,17 +437,40 @@ it('retains a pending client Action and its exact admission across equivalent Av
     await expect(pendingAction).resolves.toEqual({ ok: true, result: 'finished' });
 });
 
-it('cancels an unfinished real executable activation before it can publish after exact Machine withdrawal', async () => {
+it('keeps one preparing client artifact evaluation across equivalent Availability publications', async () => {
+    pluginBoundary.activationGate = createDeferred<void>();
+    const { lifetime, materialization, snapshot, composition, address } = await mountClientExecutableFixture({ waitForAdmission: false });
+    await vi.waitFor(async () => {
+        await flushHookEffects();
+        expect(pluginBoundary.enteredActivation).toBe(true);
+    });
+    expect(pluginBoundary.evaluations).toBe(1);
+    const refreshedMaterialization = { ...materialization, observedAt: 2 };
+    const refreshed: PluginAccountAvailabilitySnapshot = { ...snapshot, availabilityCursor: 2, materializations: [refreshedMaterialization],
+        snapshots: [{ serverIdentityId, machineId: materialization.machineId, materializations: [refreshedMaterialization] }] };
+    await act(async () => { replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: refreshed }); });
+    await flushHookEffects({ cycles: 12 });
+    pluginBoundary.activationGate.resolve();
+    await vi.waitFor(async () => {
+        await flushHookEffects();
+        expect(composition.read(address)).not.toBeNull();
+    });
+    expect(pluginBoundary.evaluations).toBe(1);
+});
+
+it.each(['Machine', 'Account'] as const)('cancels an unfinished real executable activation before it can publish after exact %s withdrawal', async (withdrawal) => {
     pluginBoundary.activationGate = createDeferred<void>();
     const { lifetime, machine, composition, address } = await mountClientExecutableFixture({ waitForAdmission: false });
     await vi.waitFor(() => expect(pluginBoundary.enteredActivation).toBe(true));
     expect(composition.read(address)).toBeNull();
-    await act(async () => storage.setState({ machines: { [machine.id]: { ...machine, active: false, activeAt: 0 } },
-        machineListByServerId: { [lifetime.scope.serverId]: [{ ...machine, active: false, activeAt: 0 }] } }));
+    await act(async () => storage.setState(withdrawal === 'Machine'
+        ? { machines: { [machine.id]: { ...machine, active: false, activeAt: 0 } },
+            machineListByServerId: { [lifetime.scope.serverId]: [{ ...machine, active: false, activeAt: 0 }] } }
+        : { profileScope: null }));
     await flushHookEffects();
     pluginBoundary.activationGate.resolve();
     await flushHookEffects({ cycles: 12 });
-    expect(lifetime.isCurrent()).toBe(true);
+    expect(lifetime.isCurrent()).toBe(withdrawal === 'Machine');
     expect(composition.read(address)).toBeNull();
 });
 

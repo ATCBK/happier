@@ -207,6 +207,7 @@ import { useNavigationBackControl } from '@/components/ui/layout/NavigationBackC
 import { useNavigationChromeShowsBack } from '@/components/ui/layout/navigationTitleChrome';
 import { usePluginPageBackStepArmed } from '@/components/plugins/shared/PluginPageBackStep';
 import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/PageHeader';
+import { useNavigationTitleChromePublisher } from '@/components/ui/layout/navigationTitleChrome';
 import { PluginArtifactHostingStatusProvider, renderPluginNavigationActions } from './pluginPageHeaderActions';
 import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
 import {
@@ -1613,6 +1614,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
     // `PageHeader` reads it: whether the navigation already shows the title, its back control and
     // the content column.
     const chromeShowsTitle = useNavigationTitleChromeShowsTitle();
+    const setChromeTitle = useNavigationTitleChromePublisher()?.setTitle;
     const BackControl = useNavigationBackControl();
     const columnMaxWidthPx = useLayoutMaxWidth();
     // The header's own Back answers a page-internal step before it leaves the page, so a pushed detail draws none of its own.
@@ -1625,7 +1627,8 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         columnMaxWidthPx,
         renderNavigationActions: renderPluginNavigationActions,
         navigationBackSpendsStep,
-    }), [BackControl, chromeShowsTitle, columnMaxWidthPx, navigationBackSpendsStep]);
+        ...(setChromeTitle === undefined ? {} : { publishTitle: setChromeTitle }),
+    }), [BackControl, chromeShowsTitle, columnMaxWidthPx, navigationBackSpendsStep, setChromeTitle]);
     // The page's app details pane, when this mount sits in a page that has one: a plugin `DetailsPane` (and a
     // `Collection` opening its items) renders there.
     const detailsPaneBinding = useDetailsPaneSlotBinding();
@@ -2389,21 +2392,13 @@ function PluginSurfaceHostMount(props: Readonly<(
     // The raw V2 Action map is the sole target source for the bound surface.
     // This closure is an exact lookup over that producer-owned snapshot, not a
     // second action registry or a synthesized legacy descriptor.
-    // A daemon refresh rebuilds the raw V2 object graph even when its Action
-    // authority is unchanged. The resolver is controller-facing, so retain it
-    // across that equivalent producer snapshot; a changed raw map remains the
-    // one fact that replaces the bound controller and its facade.
+    // The bound controller reads this lookup through its existing current
+    // resolver ref. Replacing the immutable map therefore needs neither a
+    // catalog-wide content key nor a replacement controller/facade.
     const mountedProjectedActions = mountedPluginUiProjection?.actionsById;
-    const mountedProjectedActionsKey = React.useMemo(
-        () => stableJsonStringify(mountedProjectedActions ?? {}),
-        [mountedProjectedActions],
-    );
     const resolveContributedAction = React.useMemo(
-        () => createPluginUiProjectedActionResolver(mountedPluginUiProjection?.actionsById),
-        // `mountedProjectedActionsKey` includes every producer-owned Action
-        // descriptor exposed by this exact projection.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        [mountedProjectedActionsKey],
+        () => createPluginUiProjectedActionResolver(mountedProjectedActions),
+        [mountedProjectedActions],
     );
     const projectionInteractionEnabled = selectedEmbeddedRenderer
         ? props.projectionInteractionEnabled !== false
@@ -3056,6 +3051,7 @@ function PluginSurfaceHostMount(props: Readonly<(
             throw new Error('mounted_composer_handler_owner_unavailable');
         }
         const handlers = createComposerPresentationHostHandlers({
+            scope: accountLifetime?.scope,
             owner: mountedComposerOwner,
             transactionApplier: mountedComposerTransactionApplier,
             ...(mountedComposerMediaExecutionTarget
@@ -3069,6 +3065,7 @@ function PluginSurfaceHostMount(props: Readonly<(
             dispose: handlers.dispose,
         });
     }, [
+        accountLifetime,
         mountedComposerMediaExecutionTarget,
         mountedComposerOwner,
         mountedComposerPublisherCapable,

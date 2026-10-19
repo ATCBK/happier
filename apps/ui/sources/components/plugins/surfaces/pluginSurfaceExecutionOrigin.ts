@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
-import { type PluginUiResourceBindingCapabilityV1 } from '@happier-dev/protocol';
 
 import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
 import { useActivePluginAccountAvailabilityReleaseClassifier } from '@/sync/domains/plugins/availability/projection';
@@ -11,6 +10,7 @@ import { readPluginUiContributionSupplies, readPluginUiExecutionOriginCandidates
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getPluginExecutionOriginCandidateOrigin, type PluginExecutionOriginContextualTarget } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { resolvePluginUiProjectionContributionId } from '@/sync/domains/plugins/ui/projectionRefs';
+import { readSelectedPluginUiResourceCapability } from '@/sync/domains/plugins/ui/resourceCapability';
 import { readRequiredPluginSurfaceHostMethods } from './boundPluginSurfaceController';
 
 function record(value: unknown): Readonly<Record<string, unknown>> | null {
@@ -20,36 +20,41 @@ function record(value: unknown): Readonly<Record<string, unknown>> | null {
 /** Declared machine-backed capabilities, not execution availability or a selector policy. */
 export function isPluginSurfaceMachineBound(params: Readonly<{
     pluginId: string;
-    renderer: Readonly<Record<string, unknown>>;
+    surface: Readonly<{
+        renderer: Readonly<Record<string, unknown>>;
+        runtime?: unknown;
+        headerActions?: unknown;
+    }>;
     projection: PluginUiProjectionModel | null | undefined;
-    headerActions?: unknown;
-    resourceCapability?: PluginUiResourceBindingCapabilityV1;
 }>): boolean {
-    const family = params.renderer.kind === 'reactNative' ? 'reactNativeBundle'
-        : params.renderer.kind === 'hostedWeb' ? 'hostedWeb' : null;
+    const { renderer } = params.surface;
+    const family = renderer.kind === 'reactNative' ? 'reactNativeBundle'
+        : renderer.kind === 'hostedWeb' ? 'hostedWeb' : null;
     const artifacts = family === 'reactNativeBundle' ? params.projection?.reactNativeBundlesById
         : family === 'hostedWeb' ? params.projection?.hostedWebById : null;
     const artifactId = family ? resolvePluginUiProjectionContributionId({ family, pluginId: params.pluginId,
-        contributionId: params.renderer.contributionId, entriesById: artifacts ?? {} }) : null;
+        contributionId: renderer.contributionId, entriesById: artifacts ?? {} }) : null;
     const artifact = artifactId ? artifacts?.[artifactId] : null;
-    const methods = readRequiredPluginSurfaceHostMethods(params.renderer.requiredHostMethods
-        ?? record(params.renderer.model)?.requiredHostMethods ?? artifact?.requiredHostMethods);
+    const methods = readRequiredPluginSurfaceHostMethods(renderer.requiredHostMethods
+        ?? record(renderer.model)?.requiredHostMethods ?? artifact?.requiredHostMethods);
     if (methods === null) return false;
+    const declaredExecution = params.projection?.installedPackagesById[params.pluginId]?.declaredExecution;
     // Mounted contribution points are read from the selected daemon even when
     // its renderer can also present Account data without required host methods.
-    if (params.projection?.installedPackagesById[params.pluginId]?.declaresContributionPoints === true) return true;
+    if (declaredExecution?.contributionPoints === true
+        || params.projection?.installedPackagesById[params.pluginId]?.declaresContributionPoints === true) return true;
     // The same Resource methods also serve Account-owned borrowed host reads.
     // Only the selected member's declared daemon Resource capability implies a target.
     // requiredHostMethods is the renderer's compatibility minimum, not an
     // inventory of the selected member's declared daemon Resource reads.
-    if (params.resourceCapability?.readable === true) return true;
+    if (readSelectedPluginUiResourceCapability(params.surface).readable) return true;
     if (methods.some(method => method === 'readStoredImage' || method === 'watchLiveStream'
         || method === 'statOpenableContent' || method === 'readOpenableContent'
         || method === 'selectActionInput')) return true;
     const actions = Object.values(params.projection?.actionsById ?? {});
-    if (methods.includes('executeAction') && actions.some(action => action.pluginId === params.pluginId
-        && action.execution.target === 'daemon')) return true;
-    return Array.isArray(params.headerActions) && params.headerActions.some(action => {
+    if (methods.includes('executeAction') && (declaredExecution?.daemonActions === true
+        || actions.some(action => action.pluginId === params.pluginId && action.execution.target === 'daemon'))) return true;
+    return Array.isArray(params.surface.headerActions) && params.surface.headerActions.some(action => {
         const command = record(record(action)?.command);
         const identity = PluginContributionIdentityV1Schema.safeParse(command?.action);
         return command?.kind === 'executeAction' && identity.success
@@ -140,6 +145,7 @@ export function usePluginSurfaceExecutionOrigin(params: Readonly<{
         const projection = readCurrentAppShellPluginUiProjection();
         const entry = params.entry && projection
             ? projection.surfacePlacementsById[params.entry.id] ?? projection.settingsPagesById[params.entry.id]
+                ?? projection.composerControlsById[params.entry.id] ?? projection.composerRegionsById[params.entry.id]
             : null;
         return readPluginUiContributionSupplies(entry).some(supply => (
                 supply.executionOrigin && arePluginMachineExecutionOriginsEqual(supply.executionOrigin, fresh.origin)

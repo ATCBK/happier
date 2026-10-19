@@ -37,6 +37,7 @@ import {
     type PluginUiProjectionUnion,
     type PluginUiProjectionUnionMember,
     type PluginUiProjectionUnionOriginSelections,
+    type PluginUiExecutionOriginCandidateFacts,
 } from '@/sync/domains/plugins/ui/projectionUnion';
 import {
     useActivePluginAccountAvailabilityReader,
@@ -429,7 +430,6 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
     // F7 has one release classifier: Account Availability. It is passed
     // directly into Administration's canonical exact-origin selection hook;
     // AppShell never infers release/content validity from a projection.
-    const classifyRelease = useActivePluginAccountAvailabilityReleaseClassifier();
     const executionOriginMaterializations = React.useMemo<readonly PluginMachineMaterializationV1[]>(() => {
         const admission = availabilityReader?.readMaterializations();
         return admission?.kind === 'available' ? admission.materializations : [];
@@ -620,6 +620,24 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
     const pluginUiProjection = React.useMemo(() => mergeInstalledPluginUiProjections(
         accountUiProjection ? [accountUiProjection] : [], projectionUnion.pluginUiProjection, undefined, explicitOriginsByPluginId,
     ), [accountUiProjection, explicitOriginsByPluginId, projectionUnion.pluginUiProjection]);
+    const candidateFactsState = React.useRef<Readonly<{
+        accountLifetime: typeof accountLifetime;
+        byPluginId: ReadonlyMap<string, PluginUiExecutionOriginCandidateFacts>;
+    }>>({ accountLifetime, byPluginId: new Map() });
+    const candidateFactsByPluginId = React.useMemo(() => {
+        const previous = candidateFactsState.current.accountLifetime === accountLifetime
+            ? candidateFactsState.current.byPluginId : new Map<string, PluginUiExecutionOriginCandidateFacts>();
+        const next = new Map(executionOriginPluginIds.map(pluginId => [pluginId, readPluginUiExecutionOriginCandidates({
+            projection: pluginUiProjection, pluginId, members: unionMembers, previous: previous.get(pluginId),
+        })] as const));
+        candidateFactsState.current = { accountLifetime, byPluginId: next };
+        return next;
+    }, [accountLifetime, executionOriginPluginIdsKey, pluginUiProjection, unionMembers]);
+    // Reporters consume their own stable facts. Fresh invocation reads still
+    // see the current complete supply set through this single producer ref.
+    const unionMembersRef = React.useRef(unionMembers);
+    unionMembersRef.current = unionMembers;
+    const readUnionMembers = React.useCallback(() => unionMembersRef.current, []);
     const hasCurrentAccountUi = accountUiProjection !== null && isCurrentAccountLifetime(accountLifetime);
     const interactionEnabled = hasCurrentAccountUi || projectionUnion.interactionEnabled;
     const phase = hasCurrentAccountUi ? 'current' : projectionUnion.phase;
@@ -939,9 +957,8 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
                     key={`${currentAccountLifetimeKey}:${pluginId}`}
                     pluginId={pluginId}
                     accountLifetime={accountLifetime}
-                    classifyRelease={classifyRelease}
-                    projection={pluginUiProjection}
-                    members={unionMembers}
+                    facts={candidateFactsByPluginId.get(pluginId)!}
+                    readMembers={readUnionMembers}
                     onOrigin={publishPluginExecutionOrigin}
                 />
             ))}
@@ -1047,12 +1064,11 @@ const AppShellPluginUiMachineProjection = React.memo(function AppShellPluginUiMa
  * or fallback path. It publishes the selected origin and selectable candidate
  * origins from that same owner; the union never reclassifies candidate facts.
  */
-function AppShellPluginExecutionOriginSelection(props: Readonly<{
+const AppShellPluginExecutionOriginSelection = React.memo(function AppShellPluginExecutionOriginSelection(props: Readonly<{
     pluginId: string;
     accountLifetime: ActiveServerAccountScopeLifetime | null;
-    classifyRelease: ReturnType<typeof useActivePluginAccountAvailabilityReleaseClassifier>;
-    projection: PluginUiProjectionModel | null;
-    members: readonly PluginUiProjectionUnionMember[];
+    facts: PluginUiExecutionOriginCandidateFacts;
+    readMembers: () => readonly PluginUiProjectionUnionMember[];
     onOrigin: (
         pluginId: string,
         accountLifetime: ActiveServerAccountScopeLifetime | null,
@@ -1061,18 +1077,15 @@ function AppShellPluginExecutionOriginSelection(props: Readonly<{
         hasStoredTarget: boolean,
     ) => void;
 }>): null {
-    const membersRef = React.useRef(props.members);
-    membersRef.current = props.members;
-    const facts = React.useMemo(() => readPluginUiExecutionOriginCandidates({ projection: props.projection, pluginId: props.pluginId, members: props.members }),
-        [props.pluginId, props.projection, props.members]);
+    const classifyRelease = useActivePluginAccountAvailabilityReleaseClassifier(props.pluginId);
     const selection = usePluginMachineExecutionOriginSelection({
         pluginId: props.pluginId,
         includeMachineCandidates: false,
-        classifyRelease: props.classifyRelease,
-        ...facts,
-        readSourceCandidates: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId, members: membersRef.current }).sourceCandidates,
-        readMachineRejections: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId, members: membersRef.current }).machineRejections,
-        readDeclaredDefaultOrigins: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId, members: membersRef.current }).declaredDefaultOrigins,
+        classifyRelease,
+        ...props.facts,
+        readSourceCandidates: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId, members: props.readMembers() }).sourceCandidates,
+        readMachineRejections: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId, members: props.readMembers() }).machineRejections,
+        readDeclaredDefaultOrigins: () => readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: props.pluginId, members: props.readMembers() }).declaredDefaultOrigins,
     });
     // Retain exact user intent while its machine/source is unavailable. Losing
     // that preference here would let the union bind a different sole supplier.
@@ -1086,7 +1099,7 @@ function AppShellPluginExecutionOriginSelection(props: Readonly<{
         props.onOrigin(props.pluginId, props.accountLifetime, origin, selectableOrigins, hasStoredTarget);
     }, [origin, selectableOrigins, hasStoredTarget, props.accountLifetime, props.onOrigin, props.pluginId]);
     return null;
-}
+});
 
 /**
  * The app-scope union, rebuilt only when a member actually changed.

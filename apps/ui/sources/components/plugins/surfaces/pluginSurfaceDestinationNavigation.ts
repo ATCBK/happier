@@ -25,7 +25,8 @@ import {
     createPluginSurfaceLaunchInputStore,
     type PluginSurfaceLaunchInputStore,
 } from './pluginSurfaceLaunchInputStore';
-import { canRenderPluginUiProjectionEntry, type PluginUiPolicyEvaluationContext } from '@/sync/domains/plugins/ui/policy';
+import type { PluginUiPolicyEvaluationContext } from '@/sync/domains/plugins/ui/policy';
+import { resolvePluginSurfaceDestinationDisabledReason } from './pluginSurfaceDestinations';
 import type {
     PluginUiDestinationProjection,
     PluginUiSettingsPageProjection,
@@ -57,7 +58,7 @@ export type PluginSurfaceDestinationOpenResolution<
      * destinations; only their incumbent container owners differ.
      */
     placement: TDestination;
-    /** Input-less App page navigation can precede execution-origin selection. */
+    /** Input-less page navigation can precede execution-origin selection. */
     authority: PluginSurfaceLaunchAuthority | null;
 }>;
 
@@ -260,11 +261,16 @@ export function resolvePluginSurfaceDestinationOpen(input: Omit<
     ) {
         return unavailable('plugin_surface_open_destination_platform_unavailable');
     }
-    if (placement.availability.state !== 'available') {
-        return unavailable(placement.availability.reason);
+    const routeOnly = (placement.binding.container === 'appPage' || placement.binding.container === 'settingsPage')
+        && input.request.input === undefined
+        && input.accountLifetime?.isCurrent() === true;
+    const disabledReason = resolvePluginSurfaceDestinationDisabledReason(placement, input.policyContext);
+    if (disabledReason) {
+        return unavailable(disabledReason === 'policy_deferred'
+            ? 'plugin_surface_open_destination_policy_unavailable' : disabledReason);
     }
-    if (!canRenderPluginUiProjectionEntry(placement, input.policyContext)) {
-        return unavailable('plugin_surface_open_destination_policy_unavailable');
+    if (placement.availability.state !== 'available' && !routeOnly) {
+        return unavailable(placement.availability.reason);
     }
     // Only the route owner has a bounded plugin-local sub-path grammar. A
     // pane/cockpit/details adapter must reject it rather than silently losing
@@ -301,12 +307,9 @@ export function resolvePluginSurfaceDestinationOpen(input: Omit<
         accountLifetime: input.accountLifetime ?? null,
         scoped: input.scopedLaunchFacts,
     });
-    // An installed App page is a route even before Administration selects its
-    // producer. Match ordinary catalog navigation without granting execution
-    // or launch-input custody; every other container still needs that authority.
-    const routeOnly = placement.binding.container === 'appPage'
-        && input.request.input === undefined
-        && input.accountLifetime?.isCurrent() === true;
+    // Installed App and Settings pages are routes before Administration selects
+    // their producer. Match ordinary catalog navigation so their selection and
+    // recovery controls remain reachable, without granting execution or input custody.
     if (!authority && !routeOnly) {
         return unavailable('plugin_surface_open_origin_unavailable');
     }

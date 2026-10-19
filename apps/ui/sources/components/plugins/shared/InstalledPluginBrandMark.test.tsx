@@ -56,7 +56,7 @@ describe('InstalledPluginBrandMark', () => {
             height: 32,
         }));
         expect(image?.props.style.backgroundColor).toBeUndefined();
-        expect(image?.props.style.tintColor).toBeUndefined();
+        expect(image?.props.tintColor).toBeUndefined();
         expect(screen.getTextContent()).not.toContain('Acme Brand');
     });
 
@@ -121,9 +121,7 @@ describe('InstalledPluginBrandMark', () => {
         expect(image?.props.source).toEqual({
             uri: `data:image/png;base64,${Buffer.from(createValidPluginBrandPngFixture()).toString('base64')}`,
         });
-        expect(image?.props.style).toEqual(expect.objectContaining({
-            tintColor: darkTheme.colors.text.primary,
-        }));
+        expect(image?.props.tintColor).toBe(darkTheme.colors.text.primary);
         expect(image?.props.style.backgroundColor).toBeUndefined();
     });
 });

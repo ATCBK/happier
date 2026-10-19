@@ -134,6 +134,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { RetainedPanelSurface } from '@/components/ui/panels/RetainedPanelSurface';
 import { createWidgetSnapshotCaptureSlot, WidgetSnapshotCaptureContext } from '@/components/widgets/definitions/widgetSnapshotCapture';
 import { buildWidgetSnapshotPreview } from '@/components/widgets/definitions/WidgetSnapshotConfirmPanel';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -3616,15 +3617,23 @@ describe('PluginSurfacePlacementHost', () => {
         }
     });
 
-    it('does not traverse unchanged Action authority on an unrelated host redraw and reads a replacement snapshot', async () => {
+    it('does not traverse unused Action payloads on host redraws or replacement snapshots', async () => {
         const projection = declarativeDocumentProjection();
         const placement = declarativeDocumentPlacement();
         let traversals = 0;
-        const measuredActions = () => new Proxy(projection.actionsById, {
-            ownKeys(target) {
-                // Measure the real input traversal; the serializer and authority resolver stay real.
-                traversals += 1;
-                return Reflect.ownKeys(target);
+        const measuredActions = () => ({
+            ...projection.actionsById,
+            'acme.unrelated/unused': {
+                ...projectedDaemonUiAction({ pluginId: 'acme.unrelated', localId: 'unused',
+                    machineId: 'machine_1', materializationId: 'unrelated-installation' }),
+                inputHints: new Proxy({ fields: [] }, {
+                    ownKeys(target) {
+                        // Origin census may enumerate the catalog, but an
+                        // unused Action's form payload is not a render input.
+                        traversals += 1;
+                        return Reflect.ownKeys(target);
+                    },
+                }),
             },
         });
         let currentProjection = { ...projection, actionsById: measuredActions() };
@@ -3636,12 +3645,15 @@ describe('PluginSurfacePlacementHost', () => {
         try {
             await flushHookEffects();
             const initialTraversals = traversals;
-            expect(initialTraversals).toBeGreaterThan(0);
+            // The controller resolves one requested qualified Action through
+            // its current resolver ref. Mount/replacement does not need the
+            // content of an unrelated Action's form hints.
+            expect(initialTraversals).toBe(0);
             await screen.update(host(false));
             expect(traversals).toBe(initialTraversals);
             currentProjection = { ...projection, actionsById: measuredActions() };
             await screen.update(host(true));
-            expect(traversals).toBeGreaterThan(initialTraversals);
+            expect(traversals).toBe(initialTraversals);
             expect(screen.getTextContent()).toContain('Static dashboard');
         } finally {
             await screen.unmount();
@@ -8072,6 +8084,64 @@ describe('PluginSurfacePlacementHost', () => {
 
         await screen.unmount();
         expect(offlineProps.renderContext?.signal.aborted).toBe(true);
+    });
+
+    it.each(['session', 'project'] as const)('keeps a retained %s plugin tab RN adapter and subscription current until real unmount', async targetKind => {
+        await pluginSurfaceAccountLifetime.setScope({ serverId: 'server_1', accountId: 'account-a' }, { serverIdentityId: 'srv_server_1' });
+        reactNativeSurfaceProps.length = 0;
+        reactNativeSurfaceRuntime.enabled = true;
+        reactNativeSurfaceRuntime.module = Object.freeze({ renderSurface: () => React.createElement('View', { testID: 'retained-plugin-tab' }) });
+        const occurrenceId = `retained-${targetKind}-plugin-tab`;
+        const placement = {
+            ...surfacePlacementFixture({
+                binding: {
+                    pluginId: 'acme.browser', destinationId: 'native-panel', rendererId: 'native-panel', container: 'rightPane',
+                    target: targetKind === 'session'
+                        ? { kind: 'session', sessionIdPath: '/session/id' }
+                        : { kind: 'project', projectIdPath: '/project/id' },
+                },
+                renderer: { kind: 'reactNative', contributionId: 'native-panel' }, occurrenceId,
+            }),
+            generatedV2: true,
+        } satisfies PluginUiSurfacePlacementProjection;
+        const projection = withExactGeneratedMountedTarget({
+            projection: generatedReactNativeProjection, pluginId: 'acme.browser', occurrenceId, projectionGeneration: 91,
+            displayName: 'External plugin', version: '3.2.1',
+        }).projection;
+        const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
+        const panel = (active: boolean) => (
+            <RetainedPanelSurface isActive={active} mode={targetKind === 'session' ? 'absolute-overlay' : 'flow'}>
+                <PluginSurfacePlacementHost placement={placement} machineId="machine_1" serverId="server_1"
+                    sessionId={targetKind === 'session' ? 'session_1' : undefined}
+                    projectId={targetKind === 'project' ? 'project_1' : undefined}
+                    pluginUiProjection={projection} platform="web"
+                    reactNativeLoaderBackend={{ backendId: 'commonJs', available: true }} />
+            </RetainedPanelSurface>
+        );
+        const screen = await renderScreen(panel(true));
+        await vi.waitFor(() => expect(screen.findByTestId('retained-plugin-tab'), surfaceFixtureDiagnostics(screen, 'acme.browser')).toBeTruthy());
+        const context = (reactNativeSurfaceProps.at(-1) as { renderContext: RenderContext }).renderContext;
+        const observed = vi.fn();
+        const subscription = await context.hostApi.watchContext(observed);
+        await screen.update(panel(false));
+        expect(context.signal.aborted).toBe(false);
+        pluginSurfaceConnectivity.endpointStatus = 'offline';
+        pluginSurfaceConnectivity.machineOnline = false;
+        await act(async () => { applyPluginSurfaceConnectivity(); });
+        await vi.waitFor(() => expect(observed).toHaveBeenCalledWith(expect.objectContaining({ machineExecutionReady: false })));
+        await screen.update(panel(true));
+        const revealed = (reactNativeSurfaceProps.at(-1) as { renderContext: RenderContext }).renderContext;
+        expect(revealed.signal).toBe(context.signal);
+        expect(revealed.hostApi).toBe(context.hostApi);
+        await expect(context.hostApi.context()).resolves.toMatchObject({ machineExecutionReady: false });
+        pluginSurfaceConnectivity.endpointStatus = 'online';
+        pluginSurfaceConnectivity.machineOnline = true;
+        await act(async () => { applyPluginSurfaceConnectivity(); });
+        await vi.waitFor(() => expect(observed).toHaveBeenCalledWith(expect.objectContaining({ machineExecutionReady: true })));
+        await screen.unmount();
+        expect(context.signal.aborted).toBe(true);
+        await expect(context.hostApi.context()).rejects.toMatchObject({ code: 'stale_surface' });
+        subscription.dispose();
     });
 
     it('admits a cold retained RN page by structural Action support while invocation stays unavailable', async () => {
@@ -12953,7 +13023,10 @@ describe('installed Session widget through the mounted plugin controller', () =>
         reactNativeSurfaceRuntime.enabled = true;
         reactNativeSurfaceRuntime.module = { renderSurface: defineUiSurface(SharedWidget) };
         reactNativeSurfaceProps.length = 0;
-        const first = await renderScreen(renderWidget('shared-widget-first'));
+        // Project Widgets and Session Board both retain WidgetSurface below
+        // their pane. Exercise the real widget host beneath that same boundary.
+        const retainedWidget = (active: boolean) => <RetainedPanelSurface isActive={active}>{renderWidget('shared-widget-first')}</RetainedPanelSurface>;
+        const first = await renderScreen(retainedWidget(true));
         await vi.waitFor(() => expect(reactNativeSurfaceProps.length, JSON.stringify(first.findAll(node =>
             typeof node.props.testID === 'string').map(node => node.props.testID))).toBeGreaterThan(0));
         await flushHookEffects();
@@ -12968,6 +13041,14 @@ describe('installed Session widget through the mounted plugin controller', () =>
         expect(firstScope).not.toBeNull();
         const dispose = vi.fn();
         const firstLease = firstScope!.acquire('latest', () => ({ value: { rows: ['current'] }, dispose }));
+        await first.update(retainedWidget(false));
+        expect(firstProps.renderContext.signal.aborted).toBe(false);
+        const hiddenLease = firstScope!.acquire('latest', () => { throw new Error('Hidden widget must retain its shared scope'); });
+        expect(hiddenLease?.value).toBe(firstLease?.value);
+        hiddenLease?.release();
+        await first.update(retainedWidget(true));
+        expect((reactNativeSurfaceProps.at(-1) as MountedProps).renderContext.signal).toBe(firstProps.renderContext.signal);
+        await expect(firstProps.renderContext.hostApi.context()).resolves.toMatchObject({ mount: { kind: 'embedded', role: 'widget' } });
         const second = await renderScreen(renderWidget('shared-widget-second'));
         await flushHookEffects();
         expect(second.getTextContent()).toContain('Shared provider ready');

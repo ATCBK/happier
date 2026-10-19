@@ -25,42 +25,23 @@ type PluginSessionPartMount = Readonly<{
     focusEligible: boolean;
 }>;
 
-const PluginSessionPartMountContext = React.createContext<PluginSessionPartMount | null>(null);
-
-/** Provided by the same-realm plugin mount around the plugin's tree. */
-export function PluginSessionPartMountScope(props: Readonly<{
-    accountLifetime: ActiveServerAccountScopeLifetime | null;
-    presented: boolean;
-    focusEligible: boolean;
-    children: React.ReactNode;
-}>) {
-    const value = React.useMemo(
-        () => ({ accountLifetime: props.accountLifetime, presented: props.presented, focusEligible: props.focusEligible }),
-        [props.accountLifetime, props.presented, props.focusEligible],
-    );
-    return (
-        <PluginSessionPartMountContext.Provider value={value}>
-            {props.children}
-        </PluginSessionPartMountContext.Provider>
-    );
-}
-
 /**
  * The presentation-host renderer behind plugin-ui's `SessionProvider`, `SessionTranscript`,
  * `SessionComposer` and `SessionChat` (plan 05 §4.4). A module constant, so installing it never
- * changes the presentation host's identity.
+ * changes the presentation host's identity. The renderer receives exact mount facts explicitly:
+ * public Details/header slots may render its parts outside the mount's React ancestry.
  */
-export function renderPluginSessionPart(input: PluginUiSessionPartPresentation): React.ReactNode {
+export function renderPluginSessionPart(input: PluginUiSessionPartPresentation, mount: PluginSessionPartMount): React.ReactNode {
     switch (input.part) {
         case 'provider':
             return (
-                <PluginSessionController sessionId={input.sessionId} readOnly={input.readOnly} presented={input.presented}>
+                <PluginSessionController mount={mount} sessionId={input.sessionId} readOnly={input.readOnly} presented={input.presented}>
                     {input.children}
                 </PluginSessionController>
             );
         case 'chat':
             return (
-                <PluginSessionController sessionId={input.sessionId} readOnly={input.readOnly} presented={input.presented}>
+                <PluginSessionController mount={mount} sessionId={input.sessionId} readOnly={input.readOnly} presented={input.presented}>
                     <EmbeddedSessionStandardLayout {...(input.testID ? { testID: input.testID } : {})} />
                 </PluginSessionController>
             );
@@ -83,12 +64,13 @@ const PLUGIN_SESSION_READ_ONLY_PRESENTATION: SessionViewEmbeddedPresentation = O
 });
 
 function PluginSessionController(props: Readonly<{
+    mount: PluginSessionPartMount;
     sessionId: string;
     readOnly: boolean;
     presented?: boolean;
     children: React.ReactNode;
 }>) {
-    const mount = React.useContext(PluginSessionPartMountContext);
+    const mount = props.mount;
     // The Session's Home comes only from the mount's account scope; an author supplies nothing
     // beyond the id, so a Session on another Home is simply not found there.
     const serverId = mount?.accountLifetime?.scope.serverId?.trim() || null;

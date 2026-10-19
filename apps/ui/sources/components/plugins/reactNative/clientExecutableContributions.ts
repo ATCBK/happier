@@ -6,6 +6,8 @@ import { derivePluginClientContributionRegistrationRights, type PluginContributi
 import type { PluginProjectedActionV2, PluginProjectedDragSourceEntryV1, PluginProjectedDropTargetEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginClientApi } from '@happier-dev/plugin-sdk';
 import type { PluginDragSourceRuntime, PluginDropTargetRuntime } from '@happier-dev/plugin-sdk';
+import type { PluginProjectedWorkItemsEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
 import type { PluginClientActionHandler } from '@happier-dev/plugin-sdk/actions';
 import {
     createPluginRegistrationScope,
@@ -28,6 +30,9 @@ import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugin
 import { isPluginProjectedActionExecutable } from '@/sync/domains/plugins/ui/projection';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { readPluginUiContributionOrigin, readPluginUiProjectionEntryExecutionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+
+type PluginWorkItemsRuntime = Parameters<PluginClientApi['workItems']['register']>[1];
 
 export type PluginUiClientExecutableTarget = Readonly<{
     artifactId: string;
@@ -82,6 +87,7 @@ export type PluginUiClientActionRegistration = Readonly<{
     registration: PluginUiClientExecutableRegistration;
     pluginVersion: string;
     handler: PluginClientActionHandler;
+    authorization: NonNullable<PluginProjectedActionV2['authorization']>;
 }>;
 
 export type PluginUiClientExecutableRegistrationScope = Readonly<{
@@ -308,6 +314,12 @@ export function createPluginUiClientExecutableRegistrationIndex(): PluginUiClien
         }
         let committed = false;
         let unwound = false;
+        const retirement = new AbortController();
+        const mergedLifetime = mergeAbortSignals([input.lifecycle.signal, retirement.signal]);
+        const lifecycle: PluginUiClientExecutableRegistrationLifecycle = Object.freeze({
+            signal: mergedLifetime.signal,
+            isCurrent: () => !unwound && isLifecycleCurrent(input.lifecycle),
+        });
         let registrations: readonly PluginRuntimeRegistration[] = Object.freeze([]);
         let ownedKeys: readonly string[] = Object.freeze([]);
 
@@ -327,7 +339,7 @@ export function createPluginUiClientExecutableRegistrationIndex(): PluginUiClien
         return Object.freeze({
             api: registrationScope.api,
             registrations: () => registrations,
-            isCurrent: () => !unwound && isLifecycleCurrent(input.lifecycle),
+            isCurrent: () => isLifecycleCurrent(lifecycle),
             commit: () => {
                 if (committed || unwound) {
                     throw new Error('client_executable_registration_scope_closed');
@@ -376,7 +388,7 @@ export function createPluginUiClientExecutableRegistrationIndex(): PluginUiClien
                                 : { pluginVersion: exact.pluginVersion }),
                             ...(input.accountLifetime === undefined ? {} : { accountLifetime: input.accountLifetime }),
                             ...(input.authority === undefined ? {} : { authority: input.authority }),
-                            lifecycle: input.lifecycle,
+                            lifecycle,
                         }),
                     })] as const));
                 }
@@ -397,6 +409,8 @@ export function createPluginUiClientExecutableRegistrationIndex(): PluginUiClien
                     unwound = true;
                     // This stays before every asynchronous boundary.
                     withdraw();
+                    retirement.abort();
+                    mergedLifetime.dispose();
                 }
                 return registrationScope.dispose();
             },
@@ -452,7 +466,7 @@ export type PluginUiClientExecutableAdmission = Pick<PluginUiClientExecutableAct
 export type PluginUiClientExecutableComposition = Readonly<{
     /** Withdraw obsolete exact targets before successor Artifact preparation awaits. */
     retain(admissions: readonly PluginUiClientExecutableAdmission[]): Promise<void>;
-    /** The committed activation must still own its exact controller and index target. */
+    /** A preparing or committed activation still owns its exact controller and index target. */
     isCurrentActivation(activation: PluginUiClientExecutableActivation): boolean;
     reconcile(
         activations: readonly PluginUiClientExecutableActivation[],
@@ -1080,6 +1094,17 @@ export function resolvePluginUiClientActionRegistration(input: Readonly<{
         registration,
         pluginVersion,
         handler: registration.registration.value as unknown as PluginClientActionHandler,
+        // The daemon supplies desired occurrence and access facts. Application
+        // in the client realm is proven by this exact committed SDK registration,
+        // independently of whether the plugin's daemon entrypoint was demanded.
+        authorization: Object.freeze({
+            ...action.authorization,
+            generation: Object.freeze({
+                ...action.authorization.generation,
+                appliedGeneration: registration.occurrenceId,
+                targetGenerationMode: 'current' as const,
+            }),
+        }),
     });
 }
 
@@ -1098,10 +1123,10 @@ export function usePluginUiClientExecutableRegistrationRevision(
     );
 }
 
-type ProjectedEntityContribution = (PluginProjectedDragSourceEntryV1 | PluginProjectedDropTargetEntryV1) & Partial<PluginMachineExecutionOriginV1>;
+type ProjectedEntityContribution = (PluginProjectedDragSourceEntryV1 | PluginProjectedDropTargetEntryV1 | PluginProjectedWorkItemsEntryV1) & Partial<PluginMachineExecutionOriginV1>;
 
 function resolvePluginUiClientEntityRegistration(input: Readonly<{
-    family: 'dragSources' | 'dropTargets';
+    family: 'dragSources' | 'dropTargets' | 'workItems';
     contribution: ProjectedEntityContribution;
     platform: PluginContributionClientPlatform;
     reader?: PluginUiClientExecutableRegistrationReader;
@@ -1130,6 +1155,63 @@ function resolvePluginUiClientEntityRegistration(input: Readonly<{
 export type PluginUiClientDragSourceRegistration = Readonly<{
     registration: PluginUiClientExecutableRegistration; pluginVersion: string; runtime: PluginDragSourceRuntime;
 }>;
+
+export type PluginUiClientWorkItemsRegistration = Readonly<{
+    registration: PluginUiClientExecutableRegistration; pluginVersion: string; runtime: PluginWorkItemsRuntime;
+}>;
+
+/** Reads and watches stay inside the exact admitted client activation lifetime. */
+export function resolvePluginUiClientWorkItemsRegistration(input: Readonly<{
+    source: PluginProjectedWorkItemsEntryV1 & Partial<PluginMachineExecutionOriginV1>;
+    platform: PluginContributionClientPlatform; reader?: PluginUiClientExecutableRegistrationReader;
+}>): PluginUiClientWorkItemsRegistration | null {
+    const registration = resolvePluginUiClientEntityRegistration({ ...input, family: 'workItems', contribution: input.source });
+    if (registration?.registration.family !== 'workItems') return null;
+    const captured = registration.registration.value;
+    const assertCurrent = () => {
+        throwIfAborted(registration.lifecycle.signal);
+        if (!registration.lifecycle.isCurrent()) throw new Error('Work items registration is no longer current');
+    };
+    const assertHome = (serverId: string) => {
+        if (!areServerProfileIdentifiersEquivalent(registration.authority?.serverId, serverId)) {
+            throw new Error('Work items read must use its admitted Home');
+        }
+    };
+    const invoke = async <T>(serverId: string, signal: AbortSignal, run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+        assertCurrent();
+        assertHome(serverId);
+        const merged = mergeAbortSignals([signal, registration.lifecycle.signal]);
+        try {
+            throwIfAborted(merged.signal);
+            const result = await run(merged.signal);
+            throwIfAborted(merged.signal);
+            assertCurrent();
+            return result;
+        } finally { merged.dispose(); }
+    };
+    const findLinked = captured.findLinked;
+    const watch = captured.watch;
+    const runtime = Object.freeze<PluginWorkItemsRuntime>({
+        resolve: (request, context) => invoke(request.serverId, context.signal, signal => captured.resolve(request, { signal })),
+        ...(findLinked ? { findLinked: (request: Parameters<typeof findLinked>[0], context: Parameters<typeof findLinked>[1]) => invoke(request.serverId, context.signal, signal => findLinked(request, { signal })) } : {}),
+        ...(watch ? { watch: (request: Parameters<typeof watch>[0], onChange: () => void) => {
+            assertCurrent();
+            assertHome(request.serverId);
+            let stopped = false;
+            const cleanup = watch(request, () => { if (!stopped && registration.lifecycle.isCurrent() && !registration.lifecycle.signal.aborted) onChange(); });
+            const stop = () => {
+                if (stopped) return;
+                stopped = true;
+                registration.lifecycle.signal.removeEventListener('abort', stop);
+                cleanup();
+            };
+            registration.lifecycle.signal.addEventListener('abort', stop, { once: true });
+            if (registration.lifecycle.signal.aborted || !registration.lifecycle.isCurrent()) stop();
+            return stop;
+        } } : {}),
+    });
+    return Object.freeze({ registration, pluginVersion: input.source.pluginVersion, runtime });
+}
 export function resolvePluginUiClientDragSourceRegistration(input: Readonly<{
     source: PluginProjectedDragSourceEntryV1 & Partial<PluginMachineExecutionOriginV1>;
     platform: PluginContributionClientPlatform; reader?: PluginUiClientExecutableRegistrationReader;

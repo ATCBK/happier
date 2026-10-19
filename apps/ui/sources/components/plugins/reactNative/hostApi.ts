@@ -874,6 +874,22 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
         throwHostApiError('unsupported_method', [`host_api_method_not_installed:${method}`]);
     }
 
+    function assertComposerScopeSupported(ref: Parameters<PluginUiHostApi['readComposer']>[0]): void {
+        if (ref.kind === 'discussion') assertInstalled('readDiscussionComposer');
+    }
+
+    async function readComposer(ref: Parameters<PluginUiHostApi['readComposer']>[0], options?: PluginCancellationOptions) {
+        assertActive(options?.signal);
+        const payload = PluginUiReadComposerRequestV1Schema.safeParse({ ref });
+        if (!payload.success) throwHostApiError('invalid_payload');
+        assertComposerScopeSupported(payload.data.ref);
+        const method = payload.data.ref.kind === 'discussion' ? 'readDiscussionComposer' : 'readComposer';
+        assertInstalled(method);
+        return readCanonicalComposer(await transport.request(
+            method, payload.data, options?.signal ? { signal: options.signal } : undefined,
+        ));
+    }
+
     /**
      * Admission for the two fire-and-forget members (`publishCurrentUiContext`,
      * `diagnostic`). They return nothing, acknowledge nothing and are called
@@ -1236,23 +1252,17 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
             );
             return readCanonicalActiveComposer(result);
         },
-        readComposer: async (ref, options) => {
-            assertActive(options?.signal);
-            assertInstalled('readComposer');
-            const payload = PluginUiReadComposerRequestV1Schema.safeParse({ ref });
-            if (!payload.success) throwHostApiError('invalid_payload');
-            const result = await transport.request(
-                'readComposer',
-                payload.data,
-                options?.signal ? { signal: options.signal } : undefined,
-            );
-            return readCanonicalComposer(result);
+        readComposer,
+        readDiscussionComposer: async (ref, options) => {
+            if (ref.kind !== 'discussion') throwHostApiError('invalid_payload');
+            return readComposer(ref, options);
         },
         watchComposer: async (ref, listener, options) => {
             assertActive(options?.signal);
             assertInstalled('watchComposer');
             const payload = PluginUiWatchComposerRequestV1Schema.safeParse({ ref });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             subscriptionSequence += 1;
             const subscription = await transport.watchComposer({
                 subscriptionId: `${params.requestIdPrefix}:composer:${subscriptionSequence}`,
@@ -1269,6 +1279,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
             assertInstalled('applyComposer');
             const payload = PluginUiApplyComposerRequestV1Schema.safeParse({ ref, transaction });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             return readCanonicalComposerTransaction(await transport.request(
                 'applyComposer',
                 PluginUiJsonValueV1Schema.parse(payload.data),
@@ -1280,6 +1291,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
             assertInstalled('focusComposer');
             const payload = PluginUiFocusComposerRequestV1Schema.safeParse({ ref });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             return readCanonicalComposerFocus(await transport.request(
                 'focusComposer',
                 payload.data,
@@ -1291,6 +1303,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
             assertInstalled('setComposerDecorations');
             const payload = PluginUiSetComposerDecorationsRequestV1Schema.safeParse({ ref, key, decorations });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             return readCanonicalComposerDecorations(await transport.request(
                 'setComposerDecorations',
                 payload.data,
@@ -1305,6 +1318,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
                 request: lockRequest,
             });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             subscriptionSequence += 1;
             const subscription = await transport.acquireComposerInputLock({
                 subscriptionId: `${params.requestIdPrefix}:composer-lock:${subscriptionSequence}`,
@@ -1324,6 +1338,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
                 request: mediaRequest,
             });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             const result = await transport.request(
                 'pickComposerMedia',
                 payload.data,

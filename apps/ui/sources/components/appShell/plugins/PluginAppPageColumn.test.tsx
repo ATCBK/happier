@@ -86,7 +86,7 @@ async function renderColumn(model: PluginUiProjectionModel) {
             }}
         >
             <AppShellPeekProvider enabled currentId="plugin:acme.triage:triage" columnShown>
-                <PluginAppPageColumn destinationId="plugin:acme.triage:triage" />
+                <PluginAppPageColumn destinationId="plugin:acme.triage:triage" peeked={false} />
                 <ColumnPeekTrigger />
             </AppShellPeekProvider>
         </AppShellPluginUiProjectionValueProvider>,

@@ -63,6 +63,15 @@ const { createPluginActionCurrentIntentHandler } = await import('./pluginSurface
 const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
 const { PluginProjectedActionV2Schema, normalizeActionsSettingsV1 } = await import('@happier-dev/protocol');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { createDirectTriageActionsTransport } = await import('../../../../../../packages/plugins/triage/src/ui/actions/actionsCommand');
+const { TRIAGE_ADMINISTER_ACTION_ACTION_LOCAL_ID_V1 } = await import('../../../../../../packages/plugins/triage/src/actions/actionsCatalogProtocol');
+const { TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1 } = await import('../../../../../../packages/plugins/triage/src/settings/actions');
+const { createTestkitAccountKv } = await import('../../../../../../packages/plugins/triage/src/settings/testkit/accountKv.test-support');
+const { createDirectTriageUnlinkTransport } = await import('../../../../../../packages/plugins/triage/src/sessions/cockpit/unlinkLinkedEntry');
+const { TRIAGE_UNLINK_ENTRY_FROM_SESSION_ACTION_LOCAL_ID_V1 } = await import('../../../../../../packages/plugins/triage/src/actions/entrySessionProtocol');
+const { createTestkitCorpusCollections } = await import('../../../../../../packages/plugins/triage/src/corpus/testkit/corpusCollections.test-support');
+const { testkitEntryRef } = await import('../../../../../../packages/plugins/triage/src/corpus/testkit/observations.test-support');
+const { linkEntryToSession } = await import('../../../../../../packages/plugins/triage/src/sessions/entrySessionLinks');
 
 const surfaceContext: PluginUiSurfaceContextV1 = {
     pluginId: 'acme.preview',
@@ -92,9 +101,9 @@ const canonicalSurface = createPluginSurfaceContextFixture({
  * only `@/modal`, the platform dialog boundary, is substituted, and it answers
  * with a real user decision.
  */
-function createMountedSurface(isCurrent?: () => boolean, dangerLevel: 'safe' | 'writesLocal' = 'writesLocal') {
+function createMountedSurface(isCurrent?: () => boolean, dangerLevel: 'safe' | 'writesLocal' = 'writesLocal', actionLocalId = 'update', lifetimeSignal?: AbortSignal) {
     const action = PluginProjectedActionV2Schema.parse({
-        pluginId: surfaceContext.pluginId, id: 'update', occurrenceId: 'occurrence-1', title: 'Update preview',
+        pluginId: surfaceContext.pluginId, id: actionLocalId, occurrenceId: 'occurrence-1', title: 'Update preview',
         dangerLevel, scopes: ['global'], surfaces: ['ui'],
         ...(dangerLevel === 'safe' ? {} : { confirmation: { title: 'Update preview?', body: 'This changes local state.' } }),
         available: true, execution: { target: 'daemon' },
@@ -109,6 +118,7 @@ function createMountedSurface(isCurrent?: () => boolean, dangerLevel: 'safe' | '
             invocationId: 'surface_1',
         },
         ...(isCurrent ? { isCurrent } : {}),
+        ...(lifetimeSignal ? { resourceLifetimeSignal: lifetimeSignal } : {}),
     });
     const adapter = createCanonicalPluginReactNativeHostApiAdapter({
         surface: canonicalSurface,
@@ -124,11 +134,12 @@ function createMountedSurface(isCurrent?: () => boolean, dangerLevel: 'safe' | '
  * Let the request cross the adapter, the mounted host API and the confirmation
  * owner so the dialog is actually on screen before a test answers it.
  */
-async function openedDialog(): Promise<void> {
-    for (let attempt = 0; attempt < 10 && !modalHarness.shown(); attempt += 1) {
+async function openedDialog(previous?: ReturnType<typeof modalHarness.readConfig>): Promise<void> {
+    const opened = () => modalHarness.shown() && modalHarness.readConfig() !== previous;
+    for (let attempt = 0; attempt < 10 && !opened(); attempt += 1) {
         await new Promise((resolve) => { setTimeout(resolve, 0); });
     }
-    if (!modalHarness.shown()) throw new Error('the confirmation dialog never opened');
+    if (!opened()) throw new Error('the confirmation dialog never opened');
 }
 
 beforeEach(() => {
@@ -144,6 +155,183 @@ afterEach(() => {
 });
 
 describe('mounted plugin surface feedback and confirmation (§3.4, UI-T21)', () => {
+    it('asks again after a declined Unlink and keeps the retry independent of the old dialog', async () => {
+        const storage = getStorage();
+        const previous = storage.getState();
+        const localId = TRIAGE_UNLINK_ENTRY_FROM_SESSION_ACTION_LOCAL_ID_V1;
+        const actionId = `acme.preview/actions/${localId}`;
+        const lifetime = new AbortController();
+        const firstOperation = new AbortController();
+        const { host, adapter } = createMountedSurface(undefined, 'safe', localId, lifetime.signal);
+        const account = createTestkitCorpusCollections();
+        const transport = createDirectTriageUnlinkTransport(account.collections, adapter.api);
+        try {
+            storage.setState(state => ({ ...state, settings: { ...state.settings,
+                actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                    actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } },
+                }),
+            } }));
+            const target = { sessionId: 'session-1', entryRef: testkitEntryRef() };
+            const linked = await linkEntryToSession({ collections: account.collections, ...target,
+                display: { locator: { v: 1, displayPath: 'test#42' }, scopeLabel: 'test' }, nowMs: 1 });
+            if (linked.status !== 'linked') throw new Error('Could not seed the real link owner');
+            const declined = transport.unlink(target, { signal: firstOperation.signal });
+            await openedDialog();
+            const oldDialog = modalHarness.readConfig();
+            oldDialog.props.onCancel();
+            await expect(declined).resolves.toBeNull();
+            expect(await account.collections.sessionLinks.get(linked.linkTag)).not.toBeNull();
+
+            const retry = transport.unlink(target);
+            let settled = false;
+            void retry.then(() => { settled = true; }, () => { settled = true; });
+            await openedDialog(oldDialog);
+            // An exiting dialog can still deliver dismissal/unmount callbacks;
+            // retiring the first operation must not withdraw the new question.
+            oldDialog.onRequestClose();
+            oldDialog.onHostUnmount();
+            firstOperation.abort();
+            await new Promise(resolve => { setTimeout(resolve, 0); });
+            expect(settled).toBe(false);
+            expect(await account.collections.sessionLinks.get(linked.linkTag)).not.toBeNull();
+            expect(lifetime.signal.aborted).toBe(false);
+            modalHarness.readConfig().props.onConfirm();
+            await expect(retry).resolves.toEqual({ v: 1, status: 'unlinked' });
+            expect(await account.collections.sessionLinks.get(linked.linkTag)).toBeNull();
+        } finally {
+            adapter.dispose();
+            host.dispose?.();
+            storage.setState(previous);
+        }
+    });
+    it('refuses a direct writer when its bound mount lifetime has ended', async () => {
+        const controller = new AbortController();
+        const { host, adapter } = createMountedSurface(undefined, 'safe', 'update', controller.signal);
+        const writes: string[] = [];
+        try {
+            controller.abort();
+            const writing = (async () => {
+                if (await adapter.api.admitAction('update')) writes.push('saved');
+            })();
+            await expect(writing).rejects.toMatchObject({ code: 'unavailable' });
+            expect(writes).toEqual([]);
+            expect(modalHarness.shown()).toBe(false);
+        } finally {
+            adapter.dispose();
+            host.dispose?.();
+        }
+    });
+    it.each(['off', 'ui_off', 'ask_first', 'allowed', 'default', 'decline', 'neighbour_off', 'agent_off'] as const)(
+        'admits the real Account catalog writer without a daemon: %s', async (mode) => {
+            const storage = getStorage();
+            const previous = storage.getState();
+            const localId = TRIAGE_ADMINISTER_ACTION_ACTION_LOCAL_ID_V1;
+            const actionId = `acme.preview/actions/${localId}`;
+            const { host, adapter } = createMountedSurface(undefined, 'safe', localId);
+            const account = createTestkitAccountKv();
+            const transport = createDirectTriageActionsTransport(account.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1), adapter.api);
+            try {
+                storage.setState(state => ({ ...state, settings: { ...state.settings, actionsSettingsV1: normalizeActionsSettingsV1({
+                    v: 1,
+                    actions: mode === 'neighbour_off' ? { 'acme.preview/actions/other': { enabled: false } } : {
+                        [actionId]: mode === 'off' ? { enabled: false }
+                            : mode === 'ui_off' ? { disabledSurfaces: ['ui'] }
+                            : mode === 'agent_off' ? { disabledSurfaces: ['agent'] }
+                            : mode === 'ask_first' || mode === 'decline' ? { approvalRequiredSurfaces: ['ui'] } : {},
+                    },
+                    ...(mode === 'allowed' || mode === 'off' || mode === 'ui_off' ? { approvalWaivedSurfaces: { [actionId]: ['ui'] } } : {}),
+                }) } }));
+                const before = await transport.read();
+                const writing = transport.administer({ v: 1, kind: 'delete', actionId: before.actions[0]!.actionId, expectedRevision: before.revision });
+                if (mode === 'off' || mode === 'ui_off') {
+                    await expect(writing).rejects.toMatchObject({ code: 'denied' });
+                } else {
+                    if (mode === 'ask_first' || mode === 'decline') {
+                        await openedDialog();
+                        expect(account.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toBeUndefined();
+                        if (mode === 'decline') modalHarness.readConfig().props.onCancel();
+                        else modalHarness.readConfig().props.onConfirm();
+                    }
+                    if (mode === 'decline') await expect(writing).resolves.toBeNull();
+                    else await expect(writing).resolves.toMatchObject({ status: 'applied' });
+                }
+                const written = mode !== 'off' && mode !== 'ui_off' && mode !== 'decline';
+                expect(account.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1) !== undefined).toBe(written);
+                if (written) expect((await transport.read()).actions[0]?.enabled).toBe(false);
+                if (mode !== 'ask_first' && mode !== 'decline') expect(modalHarness.shown()).toBe(false);
+            } finally {
+                adapter.dispose();
+                host.dispose?.();
+                storage.setState(previous);
+            }
+        },
+    );
+    it.each(['off_after_question', 'abort', 'retire'] as const)('keeps the Account writer inert after %s', async (mode) => {
+        const storage = getStorage();
+        const previous = storage.getState();
+        const localId = TRIAGE_ADMINISTER_ACTION_ACTION_LOCAL_ID_V1;
+        const actionId = `acme.preview/actions/${localId}`;
+        const { host, adapter } = createMountedSurface(undefined, 'safe', localId);
+        const account = createTestkitAccountKv();
+        const transport = createDirectTriageActionsTransport(account.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1), adapter.api);
+        const controller = new AbortController();
+        try {
+            storage.setState(state => ({ ...state, settings: { ...state.settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } },
+            }) } }));
+            const before = await transport.read();
+            const writing = transport.administer({ v: 1, kind: 'delete', actionId: before.actions[0]!.actionId, expectedRevision: before.revision }, { signal: controller.signal });
+            // Observe rejection immediately as well, so an abort cannot become an unhandled promise.
+            const rejected = expect(writing).rejects.toMatchObject({ code: mode === 'off_after_question' ? 'denied' : mode === 'retire' ? 'stale_surface' : 'unavailable' });
+            await openedDialog();
+            if (mode === 'abort') controller.abort();
+            else if (mode === 'retire') host.dispose?.();
+            else {
+                storage.setState(state => ({ ...state, settings: { ...state.settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                    actions: { [actionId]: { enabled: false } },
+                }) } }));
+                modalHarness.readConfig().props.onConfirm();
+            }
+            await rejected;
+            expect(account.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toBeUndefined();
+        } finally {
+            adapter.dispose();
+            host.dispose?.();
+            storage.setState(previous);
+        }
+    });
+
+    it.each([
+        { mode: 'Action off', actionId: 'acme.preview/actions/update', override: { enabled: false }, admitted: false },
+        { mode: 'UI audience off', actionId: 'acme.preview/actions/update', override: { disabledSurfaces: ['ui'] }, admitted: false },
+        { mode: 'neighbour off', actionId: 'acme.preview/actions/other', override: { enabled: false }, admitted: true },
+        { mode: 'other audience off', actionId: 'acme.preview/actions/update', override: { disabledSurfaces: ['agent'] }, admitted: true },
+    ])('refuses a disabled Action before a waived daemonless direct write: $mode', async ({ actionId, override, admitted }) => {
+        const storage = getStorage();
+        const previous = storage.getState();
+        const { host, adapter } = createMountedSurface();
+        const writes: string[] = [];
+        try {
+            storage.setState(state => ({ ...state, settings: { ...state.settings,
+                actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                    actions: { [actionId]: override },
+                    approvalWaivedSurfaces: { 'acme.preview/actions/update': ['ui'] },
+                }),
+            } }));
+            const result = (async () => {
+                if (await adapter.api.confirm('Update?', { action: 'update' })) writes.push('saved');
+            })();
+            if (admitted) await result;
+            else await expect(result).rejects.toMatchObject({ code: 'denied' });
+            expect(writes).toEqual(admitted ? ['saved'] : []);
+            expect(modalHarness.shown()).toBe(false);
+        } finally {
+            adapter.dispose();
+            host.dispose?.();
+            storage.setState(previous);
+        }
+    });
+
     it('refuses an Action-bound direct write when its declaration is unavailable', async () => {
         const { adapter } = createMountedSurface();
         await expect(adapter.api.confirm('Update?', { action: 'missing' })).rejects.toMatchObject({ code: 'unavailable' });

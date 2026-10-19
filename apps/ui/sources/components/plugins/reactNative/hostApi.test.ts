@@ -62,6 +62,47 @@ function readProductionSource(relativePath: string): string {
 }
 
 describe('canonical React Native plugin Host API adapter', () => {
+    it('routes Discussion Composer reads through the advertised optional operation', async () => {
+        const methods: string[] = [];
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({
+            surface: createPluginSurfaceContextFixture({ mount: canonicalRightPaneMount }),
+            requestSurface: surface, requestIdPrefix: 'rn-discussion-composer',
+            installedMethods: ['readComposer', 'readDiscussionComposer'],
+            handleRequest: async request => {
+                methods.push(request.method);
+                return { status: 'unavailable', reason: 'scopeClosed' };
+            },
+        });
+        const ref = { kind: 'discussion', discussionId: 'discussion-1' } as const;
+        try {
+            await expect(adapter.api.readComposer(ref)).resolves.toMatchObject({ status: 'unavailable' });
+            await expect(adapter.api.readDiscussionComposer(ref)).resolves.toMatchObject({ status: 'unavailable' });
+            expect(methods).toEqual(['readDiscussionComposer', 'readDiscussionComposer']);
+        } finally { adapter.dispose(); }
+    });
+
+    it('refuses Discussion operations before dispatch on an older native host while Session reads still work', async () => {
+        const methods: string[] = [];
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({
+            surface: createPluginSurfaceContextFixture({ mount: canonicalRightPaneMount }),
+            requestSurface: surface, requestIdPrefix: 'rn-old-discussion-composer',
+            installedMethods: ['readComposer', 'applyComposer'],
+            handleRequest: async request => {
+                methods.push(request.method);
+                return { status: 'unavailable', reason: 'scopeClosed' };
+            },
+        });
+        const ref = { kind: 'discussion', discussionId: 'discussion-1' } as const;
+        try {
+            await expect(adapter.api.readComposer(ref)).rejects.toMatchObject({ code: 'unsupported_method' });
+            await expect(adapter.api.applyComposer(ref, { expectedRevision: 0, operations: [{ kind: 'text.clear' }] }))
+                .rejects.toMatchObject({ code: 'unsupported_method' });
+            await expect(adapter.api.readComposer({ kind: 'session', sessionId: 'session-1' }))
+                .resolves.toMatchObject({ status: 'unavailable' });
+            expect(methods).toEqual(['readComposer']);
+        } finally { adapter.dispose(); }
+    });
+
     it('transports host reads through the same mounted read ceiling without dropping their identity', async () => {
         const reference = { hostRead: 'usage.query' as const, input: { queries: [] } };
         const owner = createPluginSurfaceHostApi({ surfaceContext: surface, handlers: {

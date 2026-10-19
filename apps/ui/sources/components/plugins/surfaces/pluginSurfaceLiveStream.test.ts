@@ -18,6 +18,7 @@ function request(reference: PluginLiveStreamReferenceV1, subscriptionId = 'view-
 function owner(decision: 'approve' | 'reject' = 'reject', pendingDecision?: Promise<'approve' | 'reject'>) {
     let approval: ApprovalRequest | undefined;
     const requests: ApprovalRequest[] = [];
+    const admissions: unknown[] = [];
     const deps = {
         approvalsCreate: async (input) => { approval = input.request; requests.push(approval); return { artifactId: `approval-${requests.length}` }; },
         approvalsUpdate: async (input) => { approval = input.request; return { ok: true as const }; },
@@ -31,13 +32,19 @@ function owner(decision: 'approve' | 'reject' = 'reject', pendingDecision?: Prom
         callerSourceCustody: { kind: 'development', registeredRootId: 'viewer-root' },
         callerBinding: { pluginId: surface.pluginId, contributionLocalId: 'viewer', occurrenceId: 'viewer-1',
             materializationRef: { pluginId: surface.pluginId, machineId: 'machine-1', materializationId: 'viewer-materialization' } },
-        hostAction: { execute: executor.execute, context: { serverId: 'home-1', runtimeAccountId: 'account-1' } },
+        // The mounted controller stamps this from its admitted daemon binding.
+        hostAction: { execute: executor.execute, context: { serverId: 'home-1', runtimeAccountId: 'account-1',
+            executionRunTargetMachineId: 'machine-1' } },
     });
     const lifetime = new AbortController();
     const viewing = createPluginSurfaceLiveStreamOwner({ pluginId: surface.pluginId, occurrenceId: 'viewer-1',
         machineId: 'machine-1', serverId: 'home-1', lifetimeSignal: lifetime.signal, isCurrent: () => !lifetime.signal.aborted,
-        executeAction: actionHost.handleRequest });
-    return { viewing, lifetime, requests };
+        executeAction: async (request, options) => {
+            const admission = await actionHost.handleRequest(request, options);
+            admissions.push(admission);
+            return admission;
+        } });
+    return { viewing, lifetime, requests, admissions };
 }
 beforeEach(() => { rpc.mockReset().mockResolvedValue({ ok: true, source }); });
 describe('mounted live stream viewing', () => {
@@ -61,9 +68,10 @@ describe('mounted live stream viewing', () => {
         viewing.dispose();
     });
     it('approves each host viewing separately while owned plugin capture needs no extra approval', async () => {
-        const { viewing, requests } = owner('approve');
+        const { viewing, requests, admissions } = owner('approve');
         for (const id of ['view-1', 'view-2']) {
-            expect(await viewing.watchLiveStream(request({ kind: 'host', sourceId: source.sourceId }, id))).toEqual({ kind: 'ready', subscriptionId: id });
+            const result = await viewing.watchLiveStream(request({ kind: 'host', sourceId: source.sourceId }, id));
+            expect(result, JSON.stringify(admissions)).toEqual({ kind: 'ready', subscriptionId: id });
         }
         expect(requests).toHaveLength(2);
         rpc.mockResolvedValue({ ok: true, source: { ...source, requiresApproval: false } });

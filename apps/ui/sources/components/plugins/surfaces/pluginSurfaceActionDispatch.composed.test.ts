@@ -97,6 +97,14 @@ import { createActionOperationStore } from '../../../../../cli/src/daemon/action
 import { createUiAccountActionTransport } from '@/sync/ops/actions/accountActionTransport';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { NotificationsNotifyMeResultV1Schema } from '@happier-dev/protocol/account/notifications/notifyMeV1';
+import { DocCollaborationActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
+import { captureDocPassageV1 } from '@happier-dev/protocol/artifacts/artifactPassageV1';
+import { DiscussionReadResultV1Schema } from '@happier-dev/protocol/discussions/actions';
+import { answerDiscussionThreadForTests, createAccountTokenForTests, createHomeGovernanceHarness,
+    installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
+import { externalAuthoringPlugin, readExternalDoc, commentOnExternalDoc, proposeExternalDocEdit,
+    requestExternalDocAcceptance, requestExternalDocDecline } from '../../../../../../packages/plugin-ui/fixtures/external-authoring/src/index';
 
 // The dispatcher and serializer stay real. The server-scoped RPC is the
 // system boundary that terminates this UI-side transport path.
@@ -4009,5 +4017,142 @@ describe('composed React Native host API to canonical plugin-surface dispatcher'
             message: 'Reconnect the integration account before continuing.',
             diagnostics: [{ code: 'plugin_action_surface_unavailable', severity: 'error' }],
         });
+    });
+});
+
+/** Reuse the real physical carrier owners; only the browser realm hop is synthetic. */
+async function externalDocCarrier(transport: 'hosted-web' | 'react-native',
+    host: ReturnType<typeof createPluginSurfaceActionHostApi>, isCurrent: () => boolean, mode: 'plain' | 'e2ee') {
+    const pluginId = externalAuthoringPlugin.manifest.id;
+    const requestSurface = { ...COMPOSED_SURFACE, pluginId, contributionId: 'external-authoring-semantic' };
+    const surface = createPluginSurfaceContextFixture({ accountEncryptionMode: mode, target: { kind: 'app' },
+        mount: { kind: 'destination', destination: { pluginId, localId: requestSurface.contributionId }, container: 'appPage' },
+        targetedContributions: { target: { pluginId, occurrenceId: 'external-doc-occurrence', sourceCustody: TARGET_SOURCE_CUSTODY }, points: [] } });
+    if (transport === 'react-native') {
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({ surface, requestSurface,
+            requestIdPrefix: 'external-doc-rn', handleRequest: host.handleRequest,
+            installedMethods: host.installedMethods, isCurrent });
+        return { api: adapter.api, retire: () => { adapter.dispose(); }, dispose: () => { adapter.dispose(); } };
+    }
+    const previousWindow = Reflect.get(globalThis, 'window');
+    const listeners = new Set<(event: unknown) => void>();
+    let bridge: ReturnType<typeof createPluginHostedWebHostApiBridgeHandler>;
+    const deliver = (data: unknown) => queueMicrotask(() => {
+        for (const listener of listeners) listener({ data, origin: COMPOSED_HOST_ORIGIN, source: parent });
+    });
+    const parent = { postMessage(message: unknown, origin: string) {
+        if (origin !== COMPOSED_HOST_ORIGIN) return;
+        const envelope = PluginHostedWebBridgeEnvelopeV1Schema.parse(message);
+        void Promise.resolve(bridge(envelope)).then(deliver);
+    } };
+    bridge = createPluginHostedWebHostApiBridgeHandler({ surface: requestSurface, identity: COMPOSED_IDENTITY,
+        requestIdPrefix: 'external-doc-hosted', handleRequest: host.handleRequest, isCurrent,
+        canonicalHostApi: { identity: COMPOSED_IDENTITY, surface: PluginUiJsonValueV1Schema.parse(surface),
+            methods: host.installedMethods }, postToFrame: deliver,
+        bootstrap: { frameOrigin: new URL(composedRealmHref()).origin } });
+    // A real frame has its own realm. The SDK retains its bootstrap on that realm,
+    // so reusing globalThis here would acquire another test frame's retired client.
+    Reflect.set(globalThis, 'window', { parent, location: { href: composedRealmHref() },
+        addEventListener: (_kind: string, listener: (event: unknown) => void) => { listeners.add(listener); },
+        removeEventListener: (_kind: string, listener: (event: unknown) => void) => { listeners.delete(listener); } });
+    const api = await createPluginUiHostApiClient();
+    return { api, retire: () => { bridge.dispose(); }, dispose: async () => {
+        bridge.dispose();
+        await new Promise<void>(resolve => queueMicrotask(resolve));
+        if (previousWindow === undefined) Reflect.deleteProperty(globalThis, 'window');
+        else Reflect.set(globalThis, 'window', previousWindow);
+    } };
+}
+
+describe('external author Doc collaboration through physical SDK carriers', () => {
+    it.each([['hosted-web', 'plain'], ['react-native', 'e2ee']] as const)(
+        'reads, comments and proposes through %s with %s content without acquiring person authority', async (transport, mode) => {
+        const homes = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(homes);
+        await homes.reset();
+        const serverId = await homes.addHome({ name: 'External Doc review', serverUrl: `https://external-doc-${transport}.test`,
+            accountId: 'alice', currentAccount: true, accountEncryptionMode: mode,
+            ...(mode === 'e2ee' ? { credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }),
+                secret: Buffer.from(new Uint8Array(32).fill(24)).toString('base64url') } } : {}) });
+        const network = answerDiscussionThreadForTests(homes, serverId, { mode, loseCreate: false, loseFirstRejoin: false });
+        const [{ captureLazyActionAccountContext }, { createUiArtifactAction }, { executeDiscussionActionInAccountContext },
+            { createFrontDoorActionExecute }] = await Promise.all([
+            import('@/sync/ops/actions/actionAccountContext'), import('@/sync/ops/actions/artifactActionDeps'),
+            import('@/sync/api/discussions/discussionActions'), import('@/sync/ops/actions/frontDoorRuntimeActionExecutor'),
+        ]);
+        const account = await captureLazyActionAccountContext(serverId);
+        const source = 'Keep this. Review this passage. Keep that.';
+        const created = await account.createArtifactDocument({ header: { kind: 'artifact.legacy', title: 'Author review' }, body: source });
+        const ref = { kind: 'doc' as const, serverId, artifactId: created.artifactId };
+        let enabled = true;
+        const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+            'doc.comment.reply': ['plugin'], 'doc.edit.propose': ['plugin'], 'doc.edit.accept': ['plugin'], 'doc.edit.decline': ['plugin'],
+        } });
+        const executor = createFrontDoorActionExecute(createActionExecutor(createActionExecutorBoundaryFixture({
+            isActionEnabled: () => enabled,
+            isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, actionsSettings, context),
+            artifactAction: createUiArtifactAction(account),
+            discussionAction: args => executeDiscussionActionInAccountContext(account, 'available', args),
+        })));
+        const lifetime = new AbortController();
+        let current = true;
+        const pluginId = externalAuthoringPlugin.manifest.id;
+        const host = createPluginSurfaceActionHostApi({ surfaceContext: { ...COMPOSED_SURFACE, pluginId, contributionId: 'external-authoring-semantic' },
+            callerBinding: mountedCallerBinding({ pluginId, contributionLocalId: 'external-authoring-semantic', occurrenceId: 'external-doc-occurrence' }),
+            callerSourceCustody: TARGET_SOURCE_CUSTODY, resourceLifetimeSignal: lifetime.signal, isCurrent: () => current,
+            hostAction: { execute: executor, context: { serverId, runtimeAccountId: 'alice', actionsSettings,
+                // A mounted plugin must not inherit this host's present person or bypass.
+                authority: 'present_user', bypassApprovals: true } } });
+        const carrier = await externalDocCarrier(transport, host, () => current, mode);
+        try {
+            const read = DocCollaborationActionOutputSchemasV1['doc.read'].parse(await readExternalDoc(carrier.api, { ref }));
+            expect(read.artifact.body).toBe(source);
+            expect(read.artifact.revision).toEqual(created.revision);
+            const target = captureDocPassageV1({ ref: read.ref, revision: read.artifact.revision, source,
+                range: { start: 11, end: 30 } });
+            const comment = DocCollaborationActionOutputSchemasV1['doc.comment.reply'].parse(await commentOnExternalDoc(carrier.api, {
+                target, localId: 'external-comment', content: { v: 1, parts: [{ t: 'text', text: 'Please clarify this passage.' }] },
+            }));
+            const proposalInput = { target, discussionRef: comment.message.messageRef.discussion,
+                replyTo: comment.message.messageRef, localId: 'external-proposal', baseRevision: target.revision,
+                before: target.quote, after: 'Reviewed replacement.', reason: 'Explain the point directly.' };
+            const proposal = DocCollaborationActionOutputSchemasV1['doc.edit.propose'].parse(await proposeExternalDocEdit(carrier.api, proposalInput));
+            expect(proposal.message.content).toMatchObject({ kind: 'doc_edit_proposal', proposal: { before: target.quote,
+                after: proposalInput.after, target } });
+            expect(proposal.message.docEditProposalDispositionV1).toEqual({ state: 'open' });
+            expect(await proposeExternalDocEdit(carrier.api, proposalInput)).toEqual(proposal);
+            const reopened = DiscussionReadResultV1Schema.parse(await carrier.api.executeAction('discussion.read', {
+                discussionId: comment.message.discussionId,
+            }));
+            expect(reopened.messages.find(message => message.id === proposal.message.id)).toEqual(proposal.message);
+            expect(network.messages).toHaveLength(2);
+            if (mode === 'e2ee') {
+                const wire = JSON.stringify(homes.requestsFor('/v1/discussions').map(request => request.input));
+                expect(wire).not.toContain(target.quote);
+                expect(wire).not.toContain(proposalInput.after);
+            }
+            expect((await readExternalDoc(carrier.api, { ref }))).toEqual(read);
+            const beforeDecision = homes.requests.length;
+            const proposalRef = proposal.message.messageRef;
+            for (const decide of [() => requestExternalDocAcceptance(carrier.api, { proposalRef, expectedRevision: created.revision }),
+                () => requestExternalDocDecline(carrier.api, { proposalRef })]) {
+                expect(await settleComposed(decide())).toMatchObject({ settled: 'rejected', diagnostics: ['present_user_required'] });
+            }
+            expect(homes.requests.slice(beforeDecision).some(request => request.path.includes('doc-edit-proposals'))).toBe(false);
+            const cancellation = new AbortController(); cancellation.abort();
+            const beforeCancellation = homes.requests.length;
+            expect(await settleComposed(commentOnExternalDoc(carrier.api, { target, localId: 'cancelled',
+                content: { v: 1, parts: [{ t: 'text', text: 'Do not publish.' }] } }, { signal: cancellation.signal })))
+                .toMatchObject({ settled: 'rejected' });
+            expect(homes.requests).toHaveLength(beforeCancellation);
+            enabled = false;
+            expect(await settleComposed(readExternalDoc(carrier.api, { ref }))).toMatchObject({ settled: 'rejected' });
+            enabled = true;
+            current = false; lifetime.abort(); carrier.retire();
+            expect(await settleComposed(readExternalDoc(carrier.api, { ref }))).toMatchObject({ settled: 'rejected',
+                code: transport === 'hosted-web' ? 'host_api_handler_disposed' : 'stale_surface' });
+            expect(network.messages).toHaveLength(2);
+            expect(homes.artifacts(serverId).read(created.artifactId)?.bodyVersion).toBe(created.revision.bodyVersion);
+        } finally { await carrier.dispose(); host.dispose?.(); account.dispose(); await homes.reset(); }
     });
 });

@@ -47,6 +47,8 @@ export const PLUGIN_UI_THEME_COLOR_TOKEN_IDS = Object.freeze({
     focus: 'border.focus',
     accent: 'control.button.primary.background',
     onAccent: 'control.button.primary.foreground',
+    // Charts and meters share Usage's signature accent, so a plugin's unnamed series and Usage read as one palette.
+    dataAccent: 'text.link',
     success: 'state.success.foreground',
     warning: 'state.warning.foreground',
     // "Needs you": Brand's attention amber (the host's one attention owner), never the system warning.
@@ -199,6 +201,7 @@ export function projectPluginUiTheme(theme: Theme, spinner?: PluginUiThemeV1['sp
             focus: theme.colors.border.focus,
             accent: theme.colors.button.primary.background,
             onAccent: theme.colors.button.primary.tint,
+            dataAccent: theme.colors.text.link,
             success: theme.colors.state.success.foreground,
             warning: theme.colors.state.warning.foreground,
             attention: theme.colors.state.attention.foreground,
@@ -272,7 +275,7 @@ export function projectPluginUiHostPalette(theme: Theme): HappierUiPalette {
         navigationSelected: colors.surface.elevated,
         navigationHover: colors.surface.pressed,
         inset: colors.surface.inset,
-        skeleton: colors.surface.ripple,
+        skeleton: colors.surface.skeleton,
         versionControlAdded: colors.versionControl.added.foreground,
         versionControlRemoved: colors.versionControl.removed.foreground,
         searchFieldRadiusPx: theme.borderRadius.lg,

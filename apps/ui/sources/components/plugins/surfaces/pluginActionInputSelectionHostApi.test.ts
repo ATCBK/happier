@@ -6,12 +6,18 @@ import {
     type PluginUiProjectionModel,
 } from '@/sync/domains/plugins/ui/projection';
 import { setPreferredLanguageFromSettings } from '@/text';
-import type { PluginProjectedActionV2 } from '@happier-dev/protocol';
+import { normalizeInputHintsText } from '@happier-dev/protocol/inputs/inputFields';
+import { ingestPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest';
+import { EMAIL_SETUP_INPUT_SCHEMA } from '../../../../../../packages/plugins/channel-email/src/config';
+import { EMAIL_CHANNEL_ACTION_IDS } from '../../../../../../packages/plugins/channel-email/src/constants';
+import emittedEmailManifest from '../../../../../../apps/cli/assets/bundled-plugin-manifests/channel-email.json';
+import type { PluginLocalizedStringV2, PluginProjectedActionV2 } from '@happier-dev/protocol';
 import type { SessionServerStartSpawnDraftV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import type {
     PluginUiTargetedContributionOperationV1,
     PluginUiTargetedContributionsV1,
 } from '@happier-dev/protocol/plugins/ui';
+import { PluginUiSelectActionInputResultV1Schema } from '@happier-dev/protocol/plugins/ui';
 
 import {
     createPluginActionInputSelectionHostApiHandler,
@@ -20,19 +26,34 @@ import {
 // Only the daemon RPC boundary is substituted; schema reading and form admission remain real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+    const { QualifiedConnectedAccountRefJsonSchema } = await import('@happier-dev/protocol/connect/qualified-connected-account-persistence');
     return {
         machineRpcWithServerScope: async (request: Readonly<{
             method: string;
             payload: Readonly<{ qualifiedActionId: string; expectedOccurrenceId: string }>;
         }>) => request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ
+            && request.payload.qualifiedActionId === 'acme.setup/email/setup-v1'
+            ? { ok: true, inputSchema: EMAIL_SETUP_INPUT_SCHEMA.jsonSchema }
+            : request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_FORM_CONNECTED_ACCOUNT_OPTIONS_RESOLVE
+                && request.payload.qualifiedActionId === 'acme.setup/email/setup-v1'
+                ? { ok: true, options: [{ label: 'Mailbox', value: {
+                    service: { pluginId: 'acme.setup', localId: 'mailbox' }, accountId: 'mailbox-1',
+                } }] }
+            : request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ
             && request.payload.qualifiedActionId === 'acme.setup/connection/prepare-v1'
             && request.payload.expectedOccurrenceId === 'setup-generation-a'
             ? { ok: true, inputSchema: {
                 type: 'object',
-                properties: { repository: { type: 'string' } },
+                properties: { repository: { type: 'string' }, credentialRef: QualifiedConnectedAccountRefJsonSchema },
                 required: ['repository'],
                 additionalProperties: false,
             } }
+            : request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_FORM_CONNECTED_ACCOUNT_OPTIONS_RESOLVE
+                && request.payload.qualifiedActionId === 'acme.setup/connection/prepare-v1'
+                && request.payload.expectedOccurrenceId === 'setup-generation-a'
+                ? { ok: true, options: [{ label: 'Mailbox', value: {
+                    service: { pluginId: 'acme.setup', localId: 'mailbox' }, accountId: 'mailbox-1',
+                } }] }
             : { ok: false, code: 'plugin_action_schemas_unavailable' },
     };
 });
@@ -174,6 +195,102 @@ function request() {
 }
 
 describe('plugin Action input selection Host API producer', () => {
+    it.each(['development', 'managed'] as const)('initializes the published Email setup and reopens an explicit false draft for a %s contributor', async (custodyKind) => {
+        const selectedOperation: PluginUiTargetedContributionOperationV1 = {
+            ...operation,
+            action: { pluginId: 'acme.setup', localId: 'email/setup-v1' },
+            contributor: {
+                ...operation.contributor,
+                sourceCustody: custodyKind === 'development'
+                    ? { kind: 'development', registeredRootId: 'setup-root' }
+                    : { kind: 'managed', immutableGenerationId: 'setup-generation-a', installSource: 'archive' },
+            },
+        };
+        const initialTargeted = targetedContributions();
+        const targeted: PluginUiTargetedContributionsV1 = {
+            ...initialTargeted,
+            points: [{ ...initialTargeted.points[0]!, protocols: [{
+                ...initialTargeted.points[0]!.protocols[0]!,
+                contributions: [{
+                    ...initialTargeted.points[0]!.protocols[0]!.contributions[0]!,
+                    contributor: selectedOperation.contributor, operations: [selectedOperation],
+                }],
+            }] }],
+        };
+        const projected = projection();
+        const plugin = projected['acme.setup']!;
+        // The daemon discovers this published declaration, not the authored
+        // setupHints module. Keep that producer seam in the real form path.
+        const admittedManifest = ingestPluginManifestV2(emittedEmailManifest);
+        if (!admittedManifest.ok) throw new Error(JSON.stringify(admittedManifest.diagnostics));
+        const setupAction = admittedManifest.manifest.contributes.actions?.find(action => action.id === EMAIL_CHANNEL_ACTION_IDS.setup);
+        if (!setupAction?.inputHints) throw new Error('Expected the published setup Action.');
+        const hints = normalizeInputHintsText<PluginLocalizedStringV2>(setupAction.inputHints, value => typeof value === 'string' ? value : value.fallback);
+        const account = { service: { pluginId: 'acme.setup', localId: 'mailbox' }, accountId: 'mailbox-1' };
+        const draft = {
+            mailbox: 'wilson@test.local',
+            trustStrategy: { kind: 'authenticationResults', authservId: 'mx.seed1.test.local' },
+            allowedDomains: ['test.local'], quotedHistory: 'stripKnown', stripSignatures: false, bodyFormat: 'markdown',
+        };
+        const present = vi.fn(({ form }: Parameters<NonNullable<Parameters<typeof createPluginActionInputSelectionHostApiHandler>[0]['present']>>[0]) => {
+            expect(form.getInput()).toEqual(present.mock.calls.length === 1 ? { stripSignatures: true } : draft);
+            form.replaceInput({ ...draft, credentialRef: account });
+            void form.submit();
+        });
+        const handler = createPluginActionInputSelectionHostApiHandler({
+            pluginProjectionById: { ...projected, 'acme.setup': { ...plugin, actions: [{
+                ...plugin.actions[0]!, id: selectedOperation.action.localId, inputHints: hints,
+            }] } },
+            targetedContributions: targeted,
+            host: { machineId: 'machine-a', serverId: 'server-a', targetPluginId: 'acme.caller', accountLifetime },
+            isCurrent: () => true,
+            present,
+        });
+        const firstSelection = await handler({ ...request(), payload: { operation: selectedOperation } });
+        expect(firstSelection).toMatchObject({ kind: 'submitted', input: draft });
+        const selected = PluginUiSelectActionInputResultV1Schema.parse(firstSelection);
+        if (selected.kind !== 'submitted') throw new Error('Expected the initial setup selection.');
+        await expect(handler({ ...request(), payload: { operation: selectedOperation, draft: selected.input } })).resolves.toMatchObject({
+            kind: 'submitted', input: draft,
+            connectedAccount: { kind: 'selected', fieldPath: 'credentialRef', ref: account },
+        });
+        expect(present).toHaveBeenCalledTimes(2);
+        for (const invalidDraft of [
+            { ...draft, trustStrategy: { kind: 'unsupported', authservId: 'mx.seed1.test.local' } },
+            { ...draft, credentialRef: account },
+        ]) {
+            await expect(handler({ ...request(), payload: { operation: selectedOperation, draft: invalidDraft } })).resolves.toEqual({
+                code: 'invalid_payload', diagnostics: ['invalid_draft'],
+            });
+        }
+        expect(present).toHaveBeenCalledTimes(2);
+    });
+
+    it('presents a targeted provider setup form through real schema and Connected Account RPC adapters', async () => {
+        const projected = projection();
+        const plugin = projected['acme.setup']!;
+        const pluginProjectionById = { ...projected, 'acme.setup': { ...plugin, actions: plugin.actions.map(action => ({
+            ...action, inputHints: { fields: [...action.inputHints!.fields, {
+                path: 'credentialRef', title: 'Account', widget: 'select' as const, connectedAccountOptions: true as const, required: true,
+            }] },
+        })) } };
+        const account = { service: { pluginId: 'acme.setup', localId: 'mailbox' }, accountId: 'mailbox-1' };
+        const handler = createPluginActionInputSelectionHostApiHandler({
+            pluginProjectionById, targetedContributions: targetedContributions(),
+            host: { machineId: 'machine-a', serverId: 'server-a', targetPluginId: 'acme.caller', accountLifetime },
+            isCurrent: () => true,
+            present: ({ form }) => {
+                form.replaceInput({ repository: 'happier-dev/happier', credentialRef: account });
+                void form.submit();
+            },
+        });
+        await expect(handler(request())).resolves.toMatchObject({
+            kind: 'submitted', action: operation.action, input: { repository: 'happier-dev/happier' },
+            connectedAccount: { kind: 'selected', fieldPath: 'credentialRef', ref: account },
+            presentation: { connectedAccountLabel: 'Mailbox' },
+        });
+    });
+
     it('presents the incumbent form and returns normalized input without invocation', async () => {
         const present = vi.fn(({ form }) => {
             void form.submit();
