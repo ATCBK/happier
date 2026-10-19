@@ -1,9 +1,11 @@
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type {
+  TriageEntryLocatorV1,
   TriageGetResultV1,
   TriageScanContinuationV1,
   TriageScanResultV1,
   TriageSourceEntryLocalRefV1,
+  TriageSourceFailureV1,
 } from '@happier-dev/triage-protocol/v1';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
 import { vi } from 'vitest';
@@ -40,7 +42,6 @@ import {
   GITHUB_AUTHENTICATED_USER_RESPONSE,
   GITHUB_FIXTURE_OWNER,
   GITHUB_FIXTURE_REPOSITORY,
-  GITHUB_FIXTURE_REPOSITORY_ID,
   GITHUB_PULL_REQUEST_RESPONSE,
   GITHUB_SEARCH_PULL_REQUEST_ITEM,
   githubSearchResponse,
@@ -74,6 +75,7 @@ import { scanGitlabTriageSource } from '../../../plugins/scm-gitlab/src/triage/s
 
 import bitbucketCurrentUser from '../../../plugins/scm-bitbucket/src/triage/fixtures/currentUser.json' with { type: 'json' };
 import bitbucketPageOne from '../../../plugins/scm-bitbucket/src/triage/fixtures/pullRequestsPageOne.json' with { type: 'json' };
+import bitbucketPageTwo from '../../../plugins/scm-bitbucket/src/triage/fixtures/pullRequestsPageTwo.json' with { type: 'json' };
 import bitbucketPullRequest from '../../../plugins/scm-bitbucket/src/triage/fixtures/pullRequestSelf.json' with { type: 'json' };
 import bitbucketRepositories from '../../../plugins/scm-bitbucket/src/triage/fixtures/workspaceRepositoriesPage.json' with { type: 'json' };
 import bitbucketWorkspaces from '../../../plugins/scm-bitbucket/src/triage/fixtures/userWorkspacesPage.json' with { type: 'json' };
@@ -113,11 +115,13 @@ type ScanPage = Readonly<{
 export type TriageSourceAdapterConformanceCase = Readonly<{
   name: string;
   expectedFirstPageEntryIds: readonly string[];
+  expectedNextPageEntryIds?: readonly string[];
+  expectedProviderFailure: Pick<TriageSourceFailureV1, 'class' | 'code' | 'retryNotBeforeMs'>;
   discover: () => Promise<number>;
   firstPage: () => Promise<ScanPage>;
   nextPage: (continuation: TriageScanContinuationV1) => Promise<ScanPage>;
-  detail: (localRef: TriageSourceEntryLocalRefV1) => Promise<TriageGetResultV1>;
-  providerError: () => Promise<
+  detail: (localRef: TriageSourceEntryLocalRefV1, lastKnownLocator: TriageEntryLocatorV1) => Promise<TriageGetResultV1>;
+  providerError: (localRef: TriageSourceEntryLocalRefV1, lastKnownLocator: TriageEntryLocatorV1) => Promise<
     Extract<TriageScanResultV1, { kind: 'failed' }>
     | Extract<TriageGetResultV1, { kind: 'unresolved' }>
   >;
@@ -184,6 +188,7 @@ function githubCase(): TriageSourceAdapterConformanceCase {
   return {
     name: 'GitHub',
     expectedFirstPageEntryIds: ['1284'],
+    expectedProviderFailure: { class: 'transient', code: 'github_server_error' },
     async discover() {
       const discovery = createStubGithubTransport({
         listing: githubListing(),
@@ -212,17 +217,17 @@ function githubCase(): TriageSourceAdapterConformanceCase {
       }, transport.context, { now: fixedClock(1_700_000_000_000) });
       return { result, requestWitness: transport.requests.at(before)?.url ?? '' };
     },
-    async detail(localRef) {
+    async detail(localRef, lastKnownLocator) {
       const detail = createStubGithubTransport({
         respond: (request) => request.url.endsWith('/pulls/1284')
           ? { status: 200, body: GITHUB_PULL_REQUEST_RESPONSE }
           : undefined,
       });
-      return getGithubTriageEntry({ v: 1, instance: githubInstance(), localRef }, detail.context, {
+      return getGithubTriageEntry({ v: 1, instance: githubInstance(), localRef, lastKnownLocator }, detail.context, {
         now: fixedClock(1_700_000_000_000),
       });
     },
-    async providerError() {
+    async providerError(localRef, lastKnownLocator) {
       const failed = createStubGithubTransport({
         respond: (request) => request.url.endsWith('/pulls/1284')
           ? { status: 503, body: { message: 'provider failure' } }
@@ -231,11 +236,8 @@ function githubCase(): TriageSourceAdapterConformanceCase {
       const result = await getGithubTriageEntry({
         v: 1,
         instance: githubInstance(),
-        localRef: {
-          kindId: 'pull-request',
-          collisionScope: `github:${GITHUB_FIXTURE_REPOSITORY_ID}`,
-          entryId: '1284',
-        },
+        localRef,
+        lastKnownLocator,
       }, failed.context, { now: fixedClock(1_700_000_000_000) });
       if (result.kind !== 'unresolved') throw new Error('expected GitHub provider failure');
       return result;
@@ -329,6 +331,7 @@ function sentryCase(): TriageSourceAdapterConformanceCase {
   return {
     name: 'Sentry',
     expectedFirstPageEntryIds: ['5501001', '5501002'],
+    expectedProviderFailure: { class: 'transient', code: 'sentry-upstream-unavailable' },
     async discover() {
       const discovery = sentryContext([sentryRecordedOnOrigin(organizationsCloudPage)]);
       const result = await listSentryInstances({ v: 1 }, discovery.value);
@@ -352,9 +355,9 @@ function sentryCase(): TriageSourceAdapterConformanceCase {
       }, context.value);
       return { result, requestWitness: context.urls[before] ?? '' };
     },
-    async detail(localRef) {
+    async detail(localRef, lastKnownLocator) {
       const detail = sentryContext([sentryRecordedOnOrigin(issueDetail)]);
-      return getSentrySourceEntry({ v: 1, instance: sentryInstance(), localRef }, detail.value);
+      return getSentrySourceEntry({ v: 1, instance: sentryInstance(), localRef, lastKnownLocator }, detail.value);
     },
     async providerError() {
       const failed = sentryContext([{
@@ -455,6 +458,7 @@ function posthogCase(): TriageSourceAdapterConformanceCase {
   let context = posthogContext([]);
   return {
     name: 'PostHog',
+    expectedProviderFailure: { class: 'transient', code: 'posthog/server-error' },
     expectedFirstPageEntryIds: [
       '00000000-0000-4000-8000-000000000001',
       '00000000-0000-4000-8000-000000000002',
@@ -483,9 +487,9 @@ function posthogCase(): TriageSourceAdapterConformanceCase {
       }, context.value);
       return { result, requestWitness: context.urls[before] ?? '' };
     },
-    async detail(localRef) {
+    async detail(localRef, lastKnownLocator) {
       const detail = posthogContext([crudIssueRead, queryIssueDetail]);
-      return getPosthogSourceEntry({ v: 1, instance: posthogInstance(), localRef }, detail.value);
+      return getPosthogSourceEntry({ v: 1, instance: posthogInstance(), localRef, lastKnownLocator }, detail.value);
     },
     async providerError() {
       const failed = posthogContext([{}], [503]);
@@ -537,7 +541,16 @@ function gitlabHarness(routes: Readonly<Record<string, GitlabRoute>>) {
     };
   });
   const connectedAccounts = {
-    listAccounts: vi.fn(async () => ({ status: 'complete' as const, accounts: [] })),
+    listAccounts: vi.fn(async () => ({
+      status: 'complete' as const,
+      accounts: [{
+        account: GITLAB_ACCOUNT,
+        displayName: 'GitLab conformance',
+        state: 'connected' as const,
+        connectedAccountOrigins: ['https://gitlab.com'],
+        connectedAccountBases: ['https://gitlab.com'],
+      }],
+    })),
     materializeListedAccount: vi.fn(async () => ({
       kind: 'httpHeaders' as const,
       headers: { Authorization: 'Bearer conformance' },
@@ -556,19 +569,9 @@ function gitlabCase(): TriageSourceAdapterConformanceCase {
   return {
     name: 'GitLab',
     expectedFirstPageEntryIds: ['7', '8'],
+    expectedProviderFailure: { class: 'transient', code: 'server-error' },
     async discover() {
-      const connectedAccounts = {
-        listAccounts: vi.fn(async () => ({
-          status: 'complete' as const,
-          accounts: [{
-            account: GITLAB_ACCOUNT,
-            displayName: 'GitLab conformance',
-            state: 'connected' as const,
-            connectedAccountOrigins: ['https://gitlab.com'],
-          }],
-        })),
-        materializeListedAccount: vi.fn(),
-      } as unknown as GitlabConnectedAccounts;
+      const { connectedAccounts } = gitlabHarness({});
       const result = await listGitlabTriageInstances({
         connectedAccounts,
         signal: new AbortController().signal,
@@ -603,13 +606,13 @@ function gitlabCase(): TriageSourceAdapterConformanceCase {
         requestWitness: seam.requested.find((url) => !url.endsWith('/api/v4/user')) ?? '',
       };
     },
-    async detail(localRef) {
+    async detail(localRef, lastKnownLocator) {
       const detail = gitlabHarness({
         '/api/v4/user': { body: GITLAB_VIEWER },
-        '/api/v4/projects/3/merge_requests/7': { body: mergeRequestList[0] },
+        '/api/v4/projects/example-group%2Fexample-subgroup%2Fexample-project/merge_requests/7': { body: mergeRequestList[0] },
       });
       return getGitlabTriageEntry({
-        get: { v: 1, instance: gitlabInstance(), localRef },
+        get: { v: 1, instance: gitlabInstance(), localRef, lastKnownLocator },
         connectedAccounts: detail.connectedAccounts,
         fetcher: detail.fetcher,
         signal: new AbortController().signal,
@@ -617,7 +620,11 @@ function gitlabCase(): TriageSourceAdapterConformanceCase {
       });
     },
     async providerError() {
-      const failed = gitlabHarness({ '/api/v4/user': { status: 503, body: { message: 'down' } } });
+      const failed = gitlabHarness({
+        '/api/v4/user': { body: GITLAB_VIEWER },
+        '/api/v4/merge_requests': { status: 503, body: { message: 'down' } },
+        '/api/v4/issues': { status: 503, body: { message: 'down' } },
+      });
       const result = await scanGitlabTriageSource({
         scan: { v: 1, instance: gitlabInstance(), page: { kind: 'initial', limit: 2 } },
         connectedAccounts: failed.connectedAccounts,
@@ -661,7 +668,12 @@ function bitbucketRoute(overrides: Readonly<Record<string, BitbucketStubReply>> 
       return { body: { pagelen: 10, page: 1, values: [] } };
     }
     if (url.includes('/2.0/repositories/')) return { body: bitbucketRepositories };
-    if (url.includes('/pullrequests/')) return { body: bitbucketPageOne };
+    if (url.includes('/workspaces/') && url.includes('/pullrequests/')) {
+      if (new URL(url).searchParams.get('page') === '2') return { body: bitbucketPageTwo };
+      const next = new URL(url);
+      next.searchParams.set('page', '2');
+      return { body: { ...bitbucketPageOne, next: next.toString() } };
+    }
     return undefined;
   };
 }
@@ -677,6 +689,8 @@ function bitbucketCase(): TriageSourceAdapterConformanceCase {
   return {
     name: 'Bitbucket',
     expectedFirstPageEntryIds: ['42', '41'],
+    expectedNextPageEntryIds: ['17'],
+    expectedProviderFailure: { class: 'transient', code: 'server-error' },
     async discover() {
       const current = bitbucketBoundary();
       const result = await listBitbucketSourceInstances(current.runtime);
@@ -687,7 +701,9 @@ function bitbucketCase(): TriageSourceAdapterConformanceCase {
       const result = await scanBitbucketSource(boundary.runtime, {
         v: 1,
         instance: bitbucketInstance(),
-        page: { kind: 'initial', limit: 32 },
+        // A short provider page consumes two rows of the ten-row native-page budget,
+        // leaving too little room for another native page in this invocation.
+        page: { kind: 'initial', limit: 10 },
       });
       return { result, requestWitness: boundary.requests.at(-1)?.url ?? '' };
     },
@@ -700,9 +716,9 @@ function bitbucketCase(): TriageSourceAdapterConformanceCase {
       });
       return { result, requestWitness: boundary.requests.at(-1)?.url ?? '' };
     },
-    async detail(localRef) {
+    async detail(localRef, lastKnownLocator) {
       const detail = bitbucketBoundary();
-      return getBitbucketSourceEntry(detail.runtime, { v: 1, instance: bitbucketInstance(), localRef });
+      return getBitbucketSourceEntry(detail.runtime, { v: 1, instance: bitbucketInstance(), localRef, lastKnownLocator });
     },
     async providerError() {
       const failed = bitbucketBoundary({ '/2.0/user': { status: 503, body: { error: { message: 'down' } } } });
@@ -850,6 +866,9 @@ function azureCase(): TriageSourceAdapterConformanceCase {
   let boundary = azureBoundary(azureScanResponder);
   return {
     name: 'Azure DevOps',
+    expectedProviderFailure: {
+      class: 'rateLimit', code: 'azure-devops/rate-limited', retryNotBeforeMs: 1_760_000_030_000,
+    },
     expectedFirstPageEntryIds: Array.from(
       { length: AZURE_NATIVE_PAGE_SIZE },
       (_, index) => String(100 + index),
@@ -890,7 +909,7 @@ function azureCase(): TriageSourceAdapterConformanceCase {
         requestWitness: boundary.urls.find((url) => url.includes('searchCriteria.')) ?? '',
       };
     },
-    async detail(localRef) {
+    async detail(localRef, lastKnownLocator) {
       const detail = azureBoundary((request) => {
         if (request.url.includes('_apis/connectionData')) return { body: AZURE_CONNECTION_DATA };
         if (request.url.includes('/pullrequests/')) return { body: azurePullRequest(Number(localRef.entryId)) };
@@ -898,7 +917,7 @@ function azureCase(): TriageSourceAdapterConformanceCase {
       });
       return runAzureTriageGet({
         services: detail.services,
-        request: { v: 1, instance: azureInstance(), localRef },
+        request: { v: 1, instance: azureInstance(), localRef, lastKnownLocator },
         signal: new AbortController().signal,
       });
     },
