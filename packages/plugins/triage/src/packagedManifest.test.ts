@@ -186,15 +186,21 @@ describe('packaged PRs & Issues manifest', () => {
             ]));
     });
 
-    it('remains the target of the source contribution point rather than a contributor to one', () => {
-        // Triage owns the point; sources are what carry
-        // `targetedPluginContributions`. An empty one here is correct, and
-        // asserting it keeps a later lane from "fixing" it by making the
-        // aggregate contribute to itself.
+    it('owns the source contribution point and contributes the built-in personal task source', () => {
+        // The aggregate owns the point; personal Account tasks use the same
+        // admitted source contract as external trackers, not a bypass.
         const contributes = readPackagedManifest().contributes as PackagedManifest['contributes']
             & Readonly<{ targetedPluginContributions: readonly unknown[] }>;
 
         expect(contributes.pluginContributionPoints).toHaveLength(1);
-        expect(contributes.targetedPluginContributions).toEqual([]);
+        expect(contributes.targetedPluginContributions).toMatchObject([{
+            id: 'internal',
+            target: { pluginId: PLUGIN_MANIFEST.id, pointId: 'sources' },
+            operations: {
+                listInstances: 'internal/tasks/list-instances-v1',
+                scan: 'internal/tasks/scan-v1',
+                get: 'internal/tasks/get-v1',
+            },
+        }]);
     });
 });
