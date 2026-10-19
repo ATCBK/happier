@@ -140,11 +140,14 @@ export const BackendTargetKeyV2Schema = lazyZodSchema(() => z
 export type BackendTargetKeyV2 = z.infer<typeof BackendTargetKeyV2Schema>;
 
 export function buildBackendTargetKeyV2(target: BackendTargetRefV2 | AgentExecutionTargetV1): BackendTargetKeyV2 {
-  const parsedAgentTarget = AgentExecutionTargetV1Schema.safeParse(target);
-  if (parsedAgentTarget.success) {
+  // Route by the declared discriminant before admission. Probing the Agent
+  // schema with a backend ref asks its neutral identity parser to normalize
+  // undefined, constructing discarded strict-JSON and Protocol errors.
+  if (target?.kind === 'agent') {
+    const parsedAgentTarget = AgentExecutionTargetV1Schema.parse(target);
     return BackendTargetKeyV2Schema.parse(
-      `agent:${buildQualifiedPluginContributionKey(parsedAgentTarget.data.identity)}${parsedAgentTarget.data.definitionId === undefined
-        ? '' : `:definition:${encodeURIComponent(parsedAgentTarget.data.definitionId)}`}`,
+      `agent:${buildQualifiedPluginContributionKey(parsedAgentTarget.identity)}${parsedAgentTarget.definitionId === undefined
+        ? '' : `:definition:${encodeURIComponent(parsedAgentTarget.definitionId)}`}`,
     );
   }
   const parsedTarget = BackendTargetRefV2Schema.parse(target);
@@ -209,7 +212,7 @@ export function normalizeBackendTargetKeyV2Input(input: unknown): unknown {
   }
 }
 
-export const BackendTargetKeyV2InputSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeBackendTargetKeyV2Input), BackendTargetKeyV2Schema));
+export const BackendTargetKeyV2InputSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeBackendTargetKeyV2Input), BackendTargetKeyV2Schema));
 
 export const BackendTargetRefV2InputSchema = lazyZodSchema(() => z.union([
   BackendTargetRefV2Schema,
@@ -354,8 +357,10 @@ export function formatBackendTargetKeyV2(target: PersistedBackendTargetRefV2): B
 
 /** Normalize persisted routing references and current Agent identities at their owner. */
 export function resolveBackendTargetKeyV2(input: BackendTargetRefV2Input): BackendTargetKeyV2 {
-  const canonicalTarget = PersistedBackendTargetRefV2Schema.safeParse(input);
-  if (canonicalTarget.success) return buildBackendTargetKeyV2(canonicalTarget.data);
+  if (typeof input !== 'string') {
+    return buildBackendTargetKeyV2(input.kind === 'backend' || input.kind === 'agent'
+      ? input : readBackendTargetRefV2(input));
+  }
   const canonicalKey = BackendTargetKeyV2Schema.safeParse(input);
   if (canonicalKey.success) {
     if (typeof input === 'string' && input.startsWith('backend:')) {
@@ -373,7 +378,16 @@ export function resolveBackendTargetKeyV2(input: BackendTargetRefV2Input): Backe
  */
 export function readBackendTargetKeyV2(input: unknown): BackendTargetKeyV2 | null {
   try {
-    return resolveBackendTargetKeyV2(BackendTargetRefV2InputSchema.parse(input));
+    // Select the existing validator by carrier kind. Union probing asks the
+    // neutral Agent identity adapter to admit missing identity for valid keys
+    // and historical refs, allocating discarded ProtocolValidationErrors.
+    if (typeof input === 'string') {
+      const canonicalKey = BackendTargetKeyV2Schema.safeParse(input);
+      return resolveBackendTargetKeyV2(canonicalKey.success ? canonicalKey.data : BackendTargetKeySchema.parse(input));
+    }
+    const kind = input !== null && typeof input === 'object' && 'kind' in input ? input.kind : null;
+    return resolveBackendTargetKeyV2(kind === 'backend' ? BackendTargetRefV2Schema.parse(input)
+      : kind === 'agent' ? PersistedAgentTargetRefV1Schema.parse(input) : BackendTargetRefSchema.parse(input));
   } catch (error) {
     if (!(error instanceof z.core.$ZodError)) throw error;
     return null;

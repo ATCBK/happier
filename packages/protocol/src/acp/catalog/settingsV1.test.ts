@@ -12,6 +12,16 @@ describe('AcpCatalogSettingsV1Schema', () => {
     env: {}, createdAt: 1, updatedAt: 2,
   };
 
+  it('reads prior catalog runtime shapes without inventing native permission mappings', () => {
+    const { command, args, ...fields } = predecessorDefinition;
+    for (const runtime of [undefined, { stderrRules: { suppress: [{ includes: ['quiet'] }] } }]) {
+      const definition = { ...fields, launch: { kind: 'command', command, args }, ...(runtime ? { runtime } : {}) };
+      const parsed = AcpBackendDefinitionV1Schema.parse(definition);
+      expect(parsed.runtime).toEqual(runtime);
+      expect(parsed.runtime?.permissionModeMapping).toBeUndefined();
+    }
+  });
+
   it('retains canonical registry provenance and upstream through the Account-row reader', () => {
     const { command, args, ...fields } = predecessorDefinition;
     const origin = { kind: 'registry' as const,

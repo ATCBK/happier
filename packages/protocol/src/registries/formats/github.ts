@@ -8,7 +8,7 @@ import type { RegistryFetchContextV1, RegistrySkillFormatAdapterV1, RegistryHttp
 export function readGitHubRepositoryV1(url: string): Readonly<{ owner: string; repo: string; url: string;ref?:string;path?:string }> | null {
   const match = /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+?)(?:\.git)?(?:\/(?:tree|blob)\/([^/?#]+)(?:\/([^?#]*))?)?\/?$/.exec(url);
   return match ? { owner: match[1]!, repo: match[2]!, url: `https://github.com/${match[1]}/${match[2]}`,
-    ...(match[3]?{ref:decodeURIComponent(match[3]),path:decodeURIComponent(match[4]??'').replace(/\/SKILL\.md$/,'')}: {}) } : null;
+    ...(match[3]?{ref:decodeURIComponent(match[3]),path:decodeURIComponent(match[4]??'').replace(/\/+$/,'').replace(/(?:^|\/)SKILL\.md$/,'')}: {}) } : null;
 }
 export function registryRelativePathV1(path: string): string {
   if (path.startsWith('/') || path.includes('\\') || path.split('/').some(p => p === '..' || p === '.' || p.includes('\0'))) throw new RegistryFetchErrorV1({state:'invalid_source'});

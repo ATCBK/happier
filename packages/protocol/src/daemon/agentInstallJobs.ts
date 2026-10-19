@@ -17,7 +17,7 @@ export const AgentInstallJobProgressSchema = lazyZodSchema(() => z.strictObject(
 }));
 export const AgentInstallJobFailureCodeSchema = lazyZodSchema(() => z.enum([
   'consent_required', 'unsupported_platform', 'install_not_available',
-  'download_failed', 'verification_failed', 'timeout', 'cancelled',
+  'download_failed', 'rate_limited', 'verification_failed', 'timeout', 'cancelled',
   'install_failed', 'update_not_available', 'not_managed', 'in_use',
 ]));
 export const AgentInstallJobOutcomeSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [

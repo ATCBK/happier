@@ -1,5 +1,5 @@
 import { describe,expect,it } from 'vitest';
-import { githubRegistryAdapterV1 } from './github.js';
+import { githubRegistryAdapterV1, readGitHubRepositoryV1 } from './github.js';
 import { createRegistryHostV1 } from '../registryHostV1.js';
 import { computeGitBlobShaV1,computeGitTreeShaV1 } from '../registryGitTreeV1.js';
 import { RegistryFetchResponseV1Schema } from '../registryRpcV1.js';
@@ -12,6 +12,19 @@ const files=[{path:'SKILL.md',unixMode:0o644 as const,bytes:new TextEncoder().en
 const source:RegistrySourceDescriptorV1={id:'repo',title:'Repo',format:'git',kinds:['skill'],url:'https://github.com/a/b',enabled:true,addedAt:0,origin:{kind:'user'},removable:true};
 
 describe('GitHub registry producer and pinned strict consumer',()=>{
+  it.each([
+    ['https://github.com/anthropics/skills/tree/main/skills/pdf', 'main', 'skills/pdf'],
+    ['https://github.com/anthropics/skills/blob/main/skills/pdf/SKILL.md', 'main', 'skills/pdf'],
+    ['https://github.com/anthropics/skills/blob/main/SKILL.md', 'main', ''],
+    ['https://github.com/anthropics/skills/tree/release%2Fv1/skills/pdf/', 'release/v1', 'skills/pdf'],
+  ])('resolves the skill folder and ref from %s', (url, ref, path) => {
+    expect(readGitHubRepositoryV1(url)).toEqual({ owner: 'anthropics', repo: 'skills',
+      url: 'https://github.com/anthropics/skills', ref, path });
+  });
+  it('keeps a repository URL at its default branch and root', () => {
+    expect(readGitHubRepositoryV1('https://github.com/anthropics/skills')).toEqual({
+      owner: 'anthropics', repo: 'skills', url: 'https://github.com/anthropics/skills' });
+  });
   it('uses the real git tree vector with executable mode',()=>{
     // git hash-object -t tree --stdin over raw entries: 100644 SKILL.md, 100755 run.sh.
     expect(computeGitTreeShaV1(files)).toBe('2ef8a059432b65b1b0063b902bc61fa79b70a706');

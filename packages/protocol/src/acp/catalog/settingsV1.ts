@@ -4,6 +4,7 @@ import { createStoredReadSchema, defineStoredReadProjection } from '../../json/s
 
 import { ValueRefV1Schema, type ValueRefV1 } from '../../valueRefs/valueRefV1.js';
 import { PluginAgentAcpStderrRulesV2Schema } from '../../plugins/contributions/agentAcpStderrRules.js';
+import { PluginAgentAcpPermissionModeMappingV2Schema } from '../../plugins/contributions/agentAcpPermissionModeMapping.js';
 import { PinnedArchiveAssetsByPlatformSchema, PinnedArchivePlatformSchema } from '../../installables/sourceKind.js';
 import { RegistryProvenanceV1Schema } from '../../registries/registryItemsV1.js';
 import { RegistryUpstreamV1Schema } from '../../registries/registryUpstreamV1.js';
@@ -49,7 +50,8 @@ export const AcpBackendCapabilitiesV1Schema = lazyZodSchema(() => z.object({
 export type AcpBackendCapabilitiesV1 = z.infer<typeof AcpBackendCapabilitiesV1Schema>;
 
 export const AcpConfiguredRuntimeV1Schema = lazyZodSchema(() => z.strictObject({
-  stderrRules: PluginAgentAcpStderrRulesV2Schema,
+  stderrRules: z.optional(PluginAgentAcpStderrRulesV2Schema),
+  permissionModeMapping: z.optional(PluginAgentAcpPermissionModeMappingV2Schema),
 }));
 export type AcpConfiguredRuntimeV1 = z.infer<typeof AcpConfiguredRuntimeV1Schema>;
 
@@ -119,10 +121,10 @@ export function foldStoredAcpBackendLaunchV1(raw: unknown): unknown {
   return { ...fields, launch: { kind: 'command', command, ...(args === undefined ? {} : { args }) } };
 }
 
-defineStoredReadProjection(AcpBackendDefinitionV1Schema, () => z.pipe(z.transform(foldStoredAcpBackendLaunchV1), createStoredReadSchema(lazyZodSchema(() => z.extend(AcpBackendDefinitionV1Schema, {})))));
+defineStoredReadProjection(AcpBackendDefinitionV1Schema, () => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(foldStoredAcpBackendLaunchV1), createStoredReadSchema(lazyZodSchema(() => z.extend(AcpBackendDefinitionV1Schema, {})))));
 export const AcpBackendDefinitionV1StoredSchema = createStoredReadSchema(AcpBackendDefinitionV1Schema);
 
-export const AcpCatalogSettingsV1Schema = lazyZodSchema(() => z.pipe(z.transform((raw) => {
+export const AcpCatalogSettingsV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
     return raw;
   }), z

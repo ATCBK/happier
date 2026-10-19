@@ -4,12 +4,13 @@ import { listSavedSecretReferenceCarrierPathsV1, parseSavedSecretRefV1 } from '.
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { PluginAgentAcpStderrRulesV2Schema, type PluginAgentAcpStderrRulesV2 } from '../../plugins/contributions/agentAcpStderrRules.js';
+import type { PluginContributionIdentityV1 } from '../../plugins/contributionIdentity.js';
 import { AcpBackendAuthConfigV1Schema, AcpBackendDefinitionV1Schema, foldStoredAcpBackendLaunchV1, type AcpBackendDefinitionV1 } from './settingsV1.js';
 import { AcpCatalogRecordV1Schema, listAcpCatalogSavedSecretRefsV1, type AcpCatalogDiagnosticV1, type AcpCatalogRecordV1 } from './catalogRowsV1.js';
 
 // Observed predecessor 37a6541578749067b49d4579be8c752c9591b8c8. These selectors
 // are read only at this ingress; current runtime authority is declarative rules.
-const predecessorDefinition = z.pipe(z.transform(foldStoredAcpBackendLaunchV1), createStoredReadSchema(lazyZodSchema(() => z.extend(AcpBackendDefinitionV1Schema, {
+const predecessorDefinition = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(foldStoredAcpBackendLaunchV1), createStoredReadSchema(lazyZodSchema(() => z.extend(AcpBackendDefinitionV1Schema, {
   auth: z.optional(z.extend(AcpBackendAuthConfigV1Schema, {
     statusCommand: z.optional(z.array(z.string())),
     parser: z.optional(z.enum(['unknown', 'exitCodeOnly', 'stdoutNonEmpty', 'kiroWhoamiJson'])),
@@ -35,6 +36,12 @@ export type AcpCatalogTransferSourceV2Result = (AcpCatalogTransferSourceInventor
   | (AcpCatalogTransferSourceInventoryV2 & Readonly<{ status: 'partial'; reason: 'incomplete-inventory'; diagnostics: readonly AcpCatalogDiagnosticV1[] }>)
   | Readonly<{ status: 'not-required' }>
   | Readonly<{ status: 'unavailable'; reason: 'invalid-stored-content' | 'unsupported-source-version' | 'saved-secret-unavailable' }>;
+
+/** Cold admitted facts consumed by retained transport-profile translation, never activation authority. */
+export type AcpCatalogTransferAgentDeclarationV2 = Readonly<{
+  identity: PluginContributionIdentityV1;
+  acpStderrRules?: PluginAgentAcpStderrRulesV2 | null;
+}>;
 
 /** Original source inventory for the Secret owner, not executable catalog authority or a promotion. */
 export function readAcpCatalogTransferSourceV2(input: Readonly<{
@@ -97,7 +104,7 @@ export function readAcpCatalogTransferSourceV2(input: Readonly<{
 /** Read-only projection. Only complete ready results may transfer authority; mappings come from the Secret owner. */
 export function prepareAcpCatalogTransferV2(input: Readonly<{
   rawSettings: unknown; sourceSettingsVersion: number; savedSecretRefs?: ReadonlyMap<string, string>;
-  kiroStderrRules?: PluginAgentAcpStderrRulesV2;
+  agentDeclarations?: readonly AcpCatalogTransferAgentDeclarationV2[];
 }>): AcpCatalogTransferV2Result {
   const source = readAcpCatalogTransferSourceV2(input);
   if (source.status !== 'ready' && source.status !== 'partial') return source;
@@ -118,9 +125,11 @@ export function prepareAcpCatalogTransferV2(input: Readonly<{
     }
     let runtime = current.runtime;
     if (transportProfile === 'kiro') {
-      const rules = PluginAgentAcpStderrRulesV2Schema.safeParse(input.kiroStderrRules);
+      const declaration = input.agentDeclarations?.find(candidate =>
+        candidate.identity.pluginId === 'happier.agent.kiro' && candidate.identity.localId === 'kiro');
+      const rules = PluginAgentAcpStderrRulesV2Schema.safeParse(declaration?.acpStderrRules);
       if (!rules.success) return { status: 'unavailable', reason: 'transport-contribution-unavailable' };
-      runtime = { stderrRules: rules.data };
+      runtime = { ...runtime, stderrRules: rules.data };
     }
     let currentAuth: AcpBackendDefinitionV1['auth'];
     let compatibility = current.compatibility;

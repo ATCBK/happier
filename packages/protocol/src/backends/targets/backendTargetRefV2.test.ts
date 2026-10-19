@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z as zodMiniCore0 } from 'zod/mini';
 
 import * as protocol from '../../index.js';
@@ -6,6 +6,45 @@ import { normalizeLegacyContinueWithReplayRpcParamsInput } from './compat/contin
 import { backendTargetKeysMatch, buildBackendTargetKeyV2, BackendTargetKeyV2InputSchema, PersistedBackendTargetRefV2Schema, parseBackendTargetKeyV2, readBackendTargetKeyV2, resolveBackendTargetKeyV2 } from './backendTargetRefV2.js';
 
 describe('BackendTargetRefV2 compatibility', () => {
+  it('normalizes valid routing targets and keys without throwing strict JSON errors for a nonmatching arm', () => {
+    const NativeError = globalThis.Error;
+    let strictJsonErrors = 0;
+    let protocolErrors = 0;
+    // Observe the language exception boundary; every Protocol parser remains real.
+    vi.stubGlobal('Error', class extends NativeError {
+      constructor(message?: string, options?: ErrorOptions) {
+        super(message, options);
+        if (message?.includes('must contain strict JSON data')) strictJsonErrors += 1;
+        if (message === 'Protocol schema validation failed') protocolErrors += 1;
+      }
+    });
+    try {
+      for (const target of [
+        { kind: 'backend' as const, backendId: 'claude' },
+        { kind: 'backend' as const, backendId: 'acme.review/reviewer' },
+        { kind: 'backend' as const, backendId: 'review', configuredBackendId: 'review' },
+        'agent:acme.review/reviewer',
+        'agent:happier.agent.custom-acp/custom-acp:definition:review',
+        'backend:claude',
+        'acpBackend:review',
+        { kind: 'configuredAcpBackend' as const, backendId: 'review' },
+      ]) {
+        expect(readBackendTargetKeyV2(target)).not.toBeNull();
+      }
+      expect(strictJsonErrors).toBe(0);
+      expect(protocolErrors).toBe(0);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('reads a backend reference after the nonmatching Agent identity candidate is refused', () => {
+    // QA-PROBE-19 caught strict-JSON probing inside buildBackendTargetKeyV2's
+    // Agent candidate. A backend ref has no identity; the backend arm must win.
+    expect(readBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' }))
+      .toBe('agent:happier.agent.claude/claude');
+    expect(readBackendTargetKeyV2({ kind: 'backend', backendId: 'review-agent', configuredBackendId: 'review-agent' }))
+      .toBe('agent:happier.agent.custom-acp/custom-acp:definition:review-agent');
+  });
+
   it('refuses an abstract configured Agent key at strict target resolution', () => {
     expect(() => resolveBackendTargetKeyV2('backend:custom-acp')).toThrow(zodMiniCore0.core.$ZodError);
   });

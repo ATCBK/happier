@@ -9,6 +9,48 @@ const source=(id:string):RegistrySourceDescriptorV1=>({id,title:id,format:'git',
 const tree={sha:'tree',tree:[{path:'review/SKILL.md',type:'blob',mode:'100644',sha:'blob',size:3},{path:'review',type:'tree',mode:'040000',sha:'subtree'}]};
 
 describe('registry link operation',()=>{
+  it.each([
+    ['tree/main/skills/pdf', 'skills/pdf', 'main'],
+    ['blob/main/skills/pdf/SKILL.md', 'skills/pdf', 'main'],
+    ['blob/main/SKILL.md', '', 'main'],
+    ['tree/release%2Fv1/skills/pdf/', 'skills/pdf', 'release%2Fv1'],
+  ])('reads the selected GitHub skill despite a repository-root marketplace: %s', async (suffix, path, ref) => {
+    const url = `https://github.com/anthropics/skills/${suffix}`;
+    const prefix = path ? path + '/' : '';
+    const requests: string[] = [];
+    const markdown = '---\nname: pdf\ndescription: PDF tools\n---\nInstructions';
+    const file = { path: 'SKILL.md', unixMode: 0o644 as const, bytes: new TextEncoder().encode(markdown) };
+    const http: RegistryHttpV1 = {
+      getJson: async target => {
+        requests.push(target);
+        if (target === 'https://raw.githubusercontent.com/anthropics/skills/HEAD/.claude-plugin/marketplace.json'
+          || target === 'https://raw.githubusercontent.com/anthropics/skills/main/.claude-plugin/marketplace.json') {
+          return { ok: true, fetchedAt: 1, value: { plugins: [{ name: 'documents', source: './' }] } };
+        }
+        if (target.endsWith('/marketplace.json')) return { ok: false, status: { state: 'invalid_source' } };
+        if (target.includes('/commits/')) return { ok: true, fetchedAt: 1, value: { sha: commit } };
+        if (target.includes('/git/trees/')) return { ok: true, fetchedAt: 1, value: { sha: computeGitTreeShaV1([file]), tree: [
+          ...(path ? [{ path, type: 'tree', mode: '040000', sha: computeGitTreeShaV1([file]) },
+            { path: 'skills/other/SKILL.md', type: 'blob', mode: '100644', sha: '3'.repeat(40), size: 1 }] : []),
+          { path: prefix + 'SKILL.md', type: 'blob', mode: '100644', sha: computeGitBlobShaV1(file.bytes), size: file.bytes.length },
+        ] } };
+        return { ok: true, fetchedAt: 1, value: { name: 'skills' } };
+      },
+      getText: async target => {
+        expect(target).toBe(`https://raw.githubusercontent.com/anthropics/skills/${commit}/${prefix}SKILL.md`);
+        return { ok: true, fetchedAt: 1, value: markdown };
+      },
+      getBytes: async () => ({ ok: true, fetchedAt: 1, value: file.bytes }),
+    };
+    const host = createRegistryHostV1({ host: 'node', http, readSources: async () => [] });
+    const items = await host.readLinkSkills(url);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ summary: { title: 'pdf', version: commit }, payload: { kind: 'skill', skill: {
+      ref: { repo: 'https://github.com/anthropics/skills', path, commit },
+    } } });
+    expect(await host.fetchLinkSkillFiles(url, items[0]!)).toEqual([file]);
+    expect(requests).toContain(`https://api.github.com/repos/anthropics/skills/commits/${ref}`);
+  });
   it.each(['rate_limited','auth_failed'] as const)('preserves %s during detection without continuing quota requests',async state=>{
     const requests:string[]=[];
     const fail=async(url:string)=>{requests.push(url);return {ok:false as const,status:{state}};};
@@ -100,6 +142,30 @@ describe('registry final transport failure classification',()=>{
     const original=new Error('programmer failure');const failed=async()=>{throw original;};
     const host=createRegistryHostV1({host:'native',http:{getJson:failed,getText:failed,getBytes:failed},readSources:async()=>[source('healthy')]});
     await expect(host.execute('registries.items.list',{kind:'skill'})).rejects.toBe(original);
+  });
+});
+
+describe('registry source admission', () => {
+  it.each(['git', 'happier-catalog'] as const)('returns an existing %s source for a canonical-equivalent URL before fetching or writing', async format => {
+    const existing: RegistrySourceDescriptorV1 = { ...source('existing'), format,
+      kinds: format === 'happier-catalog' ? ['plugin'] : ['skill'],
+      url: format === 'happier-catalog' ? 'https://catalog.example/index.json' : 'https://github.com/acme/skills' };
+    const forbidden = async () => { throw new Error('An existing source must not fetch or write'); };
+    const host = createRegistryHostV1({ host: 'node', readSources: async () => [existing],
+      http: { getJson: forbidden, getText: forbidden, getBytes: forbidden }, mutateSources: forbidden });
+    expect(await host.execute('registries.sources.create', {
+      url: format === 'happier-catalog' ? ' https://CATALOG.example/index.json/ ' : 'https://GitHub.com/acme/skills.git/',
+      title: 'Must not replace the saved title',
+    })).toEqual({ source: existing, existing: true });
+  });
+
+  it('refuses removal or rename of a built-in before persistence', async () => {
+    const sources = listRegistrySourcesV1({ record: { v: 2, sources: [], disabledSourceIds: [] }, pluginSources: [] });
+    const forbidden = async () => { throw new Error('Built-in authority must not fetch or write'); };
+    const host = createRegistryHostV1({ host: 'node', readSources: async () => sources,
+      http: { getJson: forbidden, getText: forbidden, getBytes: forbidden }, mutateSources: forbidden });
+    await expect(host.execute('registries.sources.delete', { sourceId: 'builtin:skills-sh' })).rejects.toThrow('not_removable');
+    await expect(host.execute('registries.sources.update', { sourceId: 'builtin:skills-sh', title: 'Mine' })).rejects.toThrow('not_editable');
   });
 });
 

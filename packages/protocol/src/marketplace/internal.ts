@@ -1,11 +1,4 @@
 export {
-  HOST_PRIVATE_PLUGIN_INSTALL_DECISION_RPC_METHOD,
-  HostPrivatePluginInstallDecisionV1Schema,
-  HostPrivatePluginInstallOptionalSelectionV1Schema,
-  type HostPrivatePluginInstallDecisionV1,
-} from './pluginInstallDecisionV1.js';
-
-export {
   COMMUNITY_NPM_MARKETPLACE_SOURCE_ID_V1,
   ExpectedMarketplaceListingV1Schema,
   projectExpectedMarketplaceListing,
