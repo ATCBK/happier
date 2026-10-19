@@ -6,7 +6,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
-import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import type { ConnectedAccountDaemonControlResponse, ConnectedAccountPeerOperationTransport } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
 import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 
@@ -17,9 +17,10 @@ installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary(socket => {
     socket.connected = true;
     vi.spyOn(socket, 'timeout').mockReturnValue(socket);
-    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (_event: string, payload: SocketRpcRequestPayload) => ({
-        ok: true, result: await runControlMock(payload),
-    }));
+    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, payload: SocketRpcRequestPayload) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+        return { ok: true, result: await runControlMock(payload) };
+    });
 });
 let serverId: string;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
@@ -63,6 +64,26 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
         await homes.reset();
         clearMachineRequestReachabilityForTest();
         vi.restoreAllMocks();
+    });
+
+    it('retires a stalled daemon admission on unmount and allows the next mounted owner to retry', async () => {
+        const { useConnectedServiceLegacyOperationAdmission } = await import('./useConnectedServiceLegacyOperationAdmission');
+        runControlMock.mockImplementationOnce(() => new Promise(() => {}));
+        const first = await renderHook(() => useConnectedServiceLegacyOperationAdmission());
+        let pendingStatus = 'pending';
+        let failure: unknown;
+        const pending = first.getCurrent()('github', 'quota_read');
+        const settled = pending.then(() => { pendingStatus = 'resolved'; }, error => { pendingStatus = 'cancelled'; failure = error; });
+        await vi.waitFor(() => expect(runControlMock).toHaveBeenCalledTimes(1));
+        expect(runControlMock.mock.calls[0]?.[0]).toMatchObject({ method: 'machine-a:daemon.connectedAccounts.control.command' });
+        expect(pendingStatus).toBe('pending');
+        await first.unmount();
+        await vi.waitFor(() => expect(pendingStatus).toBe('cancelled'));
+        await settled;
+        expect(failure).toMatchObject({ name: 'AbortError' });
+        runControlMock.mockResolvedValue(described(github, { kind: 'legacy', peerClass: 'revisioned_v2_v3', serviceId: 'github' }));
+        const second = await renderHook(() => useConnectedServiceLegacyOperationAdmission());
+        await expect(second.getCurrent()('github', 'quota_read')).resolves.toBeUndefined();
     });
 
     it('moves automatic admission to reachable supply and rejects when no executable Machine remains', async () => {

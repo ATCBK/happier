@@ -31,6 +31,7 @@ export function useConnectedAccountOperationAdmission(): (
     service: PluginContributionIdentityV1,
     expectedTransport: ConnectedAccountExpectedOperationTransport,
     operation: BuiltInLegacyConnectedAccountOperation,
+    signal?: AbortSignal,
 ) => Promise<void> {
     const activeServer = useActiveServerSnapshot();
     const machines = useAllMachines();
@@ -40,11 +41,18 @@ export function useConnectedAccountOperationAdmission(): (
         (candidate) => candidate.active === true,
     ) ?? machines[0] ?? null;
     const machineId = machine?.id ?? '';
+    const lifetime = React.useMemo(() => ({ controller: new AbortController() }), [activeServerGeneration, machineId, serverId]);
+    React.useEffect(() => {
+        if (lifetime.controller.signal.aborted) lifetime.controller = new AbortController();
+        const controller = lifetime.controller;
+        return () => controller.abort();
+    }, [lifetime]);
 
     return React.useCallback(async (
         service: PluginContributionIdentityV1,
         expectedTransport: ConnectedAccountExpectedOperationTransport,
         operation: BuiltInLegacyConnectedAccountOperation,
+        signal?: AbortSignal,
     ) => {
         if (!serverId || !machineId) {
             throw admissionError(
@@ -54,6 +62,7 @@ export function useConnectedAccountOperationAdmission(): (
         const result = await runConnectedAccountControlCommand({
             serverId,
             machineId,
+            signal: signal ?? lifetime.controller.signal,
             expectedActiveServer: {
                 serverId,
                 generation: activeServerGeneration,
@@ -65,18 +74,20 @@ export function useConnectedAccountOperationAdmission(): (
             },
         });
         assertConnectedAccountOperationTransportV1(result, service, expectedTransport);
-    }, [activeServerGeneration, machineId, serverId]);
+    }, [activeServerGeneration, lifetime, machineId, serverId]);
 }
 
 export function useConnectedServiceLegacyOperationAdmission(): (
     serviceId: ConnectedServiceId,
     operation: BuiltInLegacyConnectedAccountOperation,
+    signal?: AbortSignal,
 ) => Promise<void> {
     const assertOperationAllowed = useConnectedAccountOperationAdmission();
 
     return React.useCallback(async (
         serviceId: ConnectedServiceId,
         operation: BuiltInLegacyConnectedAccountOperation,
+        signal?: AbortSignal,
     ) => {
         const service = resolveQualifiedService(serviceId);
         if (!service) {
@@ -88,6 +99,7 @@ export function useConnectedServiceLegacyOperationAdmission(): (
             service,
             { kind: 'legacy', serviceId },
             operation,
+            signal,
         );
     }, [assertOperationAllowed]);
 }
