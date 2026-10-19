@@ -33,19 +33,35 @@ describe('useAllMachines', () => {
             keyBasis: { dataEncryptionKey: 'fixture-envelope', metadataVersion: 1, daemonStateVersion: 2 } });
         try {
             storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] } });
-            const hook = await renderHook(() => useLaunchSelectionMachines());
+            const hook = await renderHook(() => ({ machines: useLaunchSelectionMachines(), lists: useMachineListByServerId(true, 'launch') }));
             const held = hook.getCurrent();
             const caughtUp = { ...machine, daemonStateVersion: 2 };
             await act(async () => storage.setState({ machines: { [machine.id]: caughtUp }, machineListByServerId: { [serverId]: [caughtUp] } }));
             expect(hook.getCurrent()).not.toBe(held);
-            expect(hook.getCurrent()[0]).toBe(caughtUp);
+            expect(hook.getCurrent().machines[0]).toEqual(caughtUp);
+            expect(hook.getCurrent().lists[serverId]?.[0]).toEqual(caughtUp);
+            const ready = hook.getCurrent();
+            const pending = { ...caughtUp, keyBasis: { ...caughtUp.keyBasis!, daemonStateVersion: 3 } };
+            await act(async () => storage.setState({ machines: { [machine.id]: pending }, machineListByServerId: { [serverId]: [pending] } }));
+            expect(hook.getCurrent()).not.toBe(ready);
+            expect(hook.getCurrent().machines[0]).toEqual(pending);
+            expect(hook.getCurrent().lists[serverId]?.[0]).toEqual(pending);
+            const waiting = hook.getCurrent();
+            const opened = { ...pending, daemonStateVersion: 3 };
+            await act(async () => storage.setState({ machines: { [machine.id]: opened }, machineListByServerId: { [serverId]: [opened] } }));
+            expect(hook.getCurrent()).not.toBe(waiting);
+            expect(hook.getCurrent().machines[0]).toEqual(opened);
+            expect(hook.getCurrent().lists[serverId]?.[0]).toEqual(opened);
             await hook.unmount();
         } finally { storage.setState(previousState); }
     });
     it('keeps visible launch inputs stable across resource versions while observing launch changes', async () => {
         const previousState = storage.getState();
         const serverId = getActiveServerSnapshot().serverId;
-        const machine = createMachineFixture({ activeAt: Date.now(), daemonStateVersion: 1,
+        const now = 1_800_000_000_000;
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+        const machine = createMachineFixture({ activeAt: now, daemonStateVersion: 1,
+            keyBasis: { dataEncryptionKey: 'owner-envelope', metadataVersion: 1, daemonStateVersion: 1 },
             daemonState: { contributionRegistryProjectionRevision: 1 } });
         let renders = 0;
         try {
@@ -59,28 +75,47 @@ describe('useAllMachines', () => {
             const full = await renderHook(() => useMachineListByServerId());
             let latest = machine;
             for (let tick = 1; tick <= 5; tick += 1) {
-                latest = { ...latest, seq: latest.seq + 1, daemonStateVersion: tick + 1,
+                const at = now + tick * readMachineOnlineGraceMsFromEnv() / 2;
+                clock.mockReturnValue(at);
+                latest = { ...latest, seq: latest.seq + 1, daemonStateVersion: tick + 1, activeAt: at, updatedAt: at,
+                    keyBasis: { ...latest.keyBasis!, daemonStateVersion: tick + 1 },
                     daemonState: { ...latest.daemonState, resources: MachinePublishedResourceSummaryV1Schema.parse({
                         v: 1, vitals: { state: 'unavailable', since: tick, reason: 'reader_failed' }, attention: { level: 'calm', reasons: [] },
                     }) } };
                 await act(async () => storage.getState().applyMachines([latest], false, { sourceServerId: serverId }));
+                expect(hook.getCurrent()).toBe(held);
+                // The real writer retains its current row on a heartbeat. A launch projection
+                // held across the preceding resource replacement must follow that row too.
+                latest = { ...latest, activeAt: at + 1, updatedAt: at + 1 };
+                await act(async () => storage.getState().applyMachines([latest], false, { sourceServerId: serverId }));
+                expect(held.machines[0]?.activeAt).toBe(at + 1);
+                expect(held.lists[serverId]?.[0]?.activeAt).toBe(at + 1);
             }
             expect(renders - before).toBe(0);
             expect(hook.getCurrent()).toBe(held);
             expect(full.getCurrent()[serverId]?.[0]?.daemonStateVersion).toBe(latest.daemonStateVersion);
             for (const change of [
+                { keyBasis: { ...latest.keyBasis!, dataEncryptionKey: 'new-owner-envelope' } },
+                { dataEncryptionKey: 'new-recipient-envelope' },
+                { access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'use' as const,
+                    resourceMode: 'e2ee' as const, accessState: 'key_pending' as const } },
                 { metadata: { ...latest.metadata!, homeDir: '/new-home' }, metadataVersion: latest.metadataVersion + 1 },
                 { daemonState: { ...latest.daemonState, contributionRegistryProjectionRevision: 2 } },
                 { availability: { kind: 'locked' as const, reason: 'encryption_material_unavailable' as const } },
             ]) {
                 latest = { ...latest, ...change, daemonStateVersion: latest.daemonStateVersion + 1 };
                 await act(async () => storage.getState().applyMachines([latest], false, { sourceServerId: serverId }));
-                expect(hook.getCurrent().machines[0]).toBe(storage.getState().machines[machine.id]);
-                expect(hook.getCurrent().lists[serverId]?.[0]).toBe(storage.getState().machines[machine.id]);
+                expect(hook.getCurrent().machines[0]).toEqual(storage.getState().machines[machine.id]);
+                expect(hook.getCurrent().lists[serverId]?.[0]).toEqual(storage.getState().machines[machine.id]);
             }
+            const beforeRecovery = hook.getCurrent();
+            clock.mockReturnValue(latest.activeAt + readMachineOnlineGraceMsFromEnv() + 1);
+            await act(async () => storage.getState().applyMachines([{ ...latest, activeAt: Date.now(), updatedAt: Date.now() }], false,
+                { sourceServerId: serverId }));
+            expect(hook.getCurrent()).not.toBe(beforeRecovery);
             await full.unmount();
             await hook.unmount();
-        } finally { storage.setState(previousState); }
+        } finally { clock.mockRestore(); storage.setState(previousState); }
     });
     it('retains hidden launch inventory across resource publications and catches up on presentation', async () => {
         const previousState = storage.getState();
@@ -108,7 +143,7 @@ describe('useAllMachines', () => {
             expect(renders - before).toBe(0);
             expect(hook.getCurrent()).toBe(held);
             await hook.rerender({ presented: true });
-            expect(hook.getCurrent().machines[0]).toBe(latest);
+            expect(hook.getCurrent().machines[0]).toEqual(latest);
             expect(hook.getCurrent().lists[serverId]?.[0]).toBe(latest);
             await hook.rerender({ presented: false });
             await act(async () => storage.setState({ profileScope: null, machines: {}, machineListByServerId: {} }));
@@ -139,8 +174,8 @@ describe('useAllMachines', () => {
             const replacement = { ...machine, metadata: { ...machine.metadata!, homeDir: '/new-home' } };
             await act(async () => storage.setState({ machines: { [machine.id]: replacement },
                 machineListByServerId: { [serverId]: [replacement] } }));
-            expect(first.getCurrent()[0]).toBe(replacement);
-            expect(second.getCurrent()[0]).toBe(replacement);
+            expect(first.getCurrent()[0]).toEqual(replacement);
+            expect(second.getCurrent()[0]).toEqual(replacement);
             await first.unmount();
             await second.unmount();
         } finally {

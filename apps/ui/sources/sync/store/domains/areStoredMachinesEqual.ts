@@ -1,6 +1,7 @@
 import type { Machine } from '../../domains/state/storageTypes';
 import { areSessionValuesDeepEqual } from './areStoredSessionsEqual';
 import { hasCurrentMachineContent } from '../../domains/machines/resolveServerScopedMachines';
+import { isMachineOnline } from '@/utils/sessions/machineUtils';
 
 export function hasMachineDaemonStateAdvanced(
     previous: Machine | null | undefined,
@@ -63,13 +64,20 @@ export function areStoredMachineSemanticsEqual(
 
 /** Resource publications do not change launch choices. Content/key readiness still does. */
 export function areMachineLaunchInputsEqual(previous: Machine, next: Machine): boolean {
+    const nowMs = Date.now();
     return areStoredMachineValuesEqual(previous, next, false, false)
-        // Consumers also admit by heartbeat freshness. Keep the actual changed
-        // presence input; the store already reconciles heartbeat-only updates.
-        && previous.activeAt === next.activeAt
+        && isMachineOnline(previous, nowMs) === isMachineOnline(next, nowMs)
         && previous.isShared === next.isShared
         && previous.installationPublicKey === next.installationPublicKey
         && hasCurrentMachineContent(previous) === hasCurrentMachineContent(next);
+}
+
+function areMachineLaunchKeyBasesEqual(previous: Machine['keyBasis'], next: Machine['keyBasis']): boolean {
+    if (!previous || !next) return previous === next;
+    // Daemon revisions also advance for resources. Content readiness is checked
+    // separately; the owner envelope and metadata revision still affect launch.
+    return previous.dataEncryptionKey === next.dataEncryptionKey
+        && previous.metadataVersion === next.metadataVersion;
 }
 
 function areDaemonLaunchInputsEqual(previous: unknown, next: unknown): boolean {
@@ -111,7 +119,9 @@ function areStoredMachineValuesEqual(
         && areSessionValuesDeepEqual(previous.operationProtocolCapabilities ?? null, next.operationProtocolCapabilities ?? null)
         && (previous.storageMode ?? null) === (next.storageMode ?? null)
         && (previous.dataEncryptionKey ?? null) === (next.dataEncryptionKey ?? null)
-        && areSessionValuesDeepEqual(previous.keyBasis ?? null, next.keyBasis ?? null)
+        && (includeResources
+            ? areSessionValuesDeepEqual(previous.keyBasis ?? null, next.keyBasis ?? null)
+            : areMachineLaunchKeyBasesEqual(previous.keyBasis, next.keyBasis))
         && areSessionValuesDeepEqual(previous.access ?? null, next.access ?? null)
         && areSessionValuesDeepEqual(previous.availability ?? null, next.availability ?? null)
         && areSessionValuesDeepEqual(previous.metadata ?? null, next.metadata ?? null)

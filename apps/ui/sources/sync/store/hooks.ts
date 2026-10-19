@@ -2306,7 +2306,7 @@ export function useMachinePresenceCounts(): MachinePresenceCounts {
 /** Park presentation-only inventory while retaining the draft's selection.
  * Account withdrawal/replacement still refreshes the snapshot while hidden.
  */
-function usePresentedMachineInventory<T>(select: (state: StorageState) => T, presented: boolean, reconcile?: (previous: T, next: T) => T): T {
+function usePresentedMachineInventory<T>(select: (state: StorageState) => T, presented: boolean, reconcile?: (previous: T | undefined, next: T) => T): T {
   const selector = React.useMemo(() => {
     let held: { value: T; serverId: string | undefined; accountId: string | undefined } | null = null;
     return (state: StorageState): T => {
@@ -2314,7 +2314,7 @@ function usePresentedMachineInventory<T>(select: (state: StorageState) => T, pre
       const sameScope = held !== null && held.serverId === scope?.serverId && held.accountId === scope?.accountId;
       if (presented || !sameScope) {
         const next = select(state);
-        held = { value: sameScope && held && reconcile ? reconcile(held.value, next) : next,
+        held = { value: reconcile ? reconcile(sameScope && held ? held.value : undefined, next) : next,
           serverId: scope?.serverId, accountId: scope?.accountId };
       }
       return held!.value;
@@ -2324,20 +2324,42 @@ function usePresentedMachineInventory<T>(select: (state: StorageState) => T, pre
 }
 
 export function useLaunchSelectionMachines(presented = true): Machine[] {
-  return usePresentedMachineInventory(resolveVisibleMachinesForActiveServerFromState, presented, reconcileLaunchSelectionMachines);
+  const reconcile = React.useMemo(createLaunchSelectionReconciler, []);
+  return usePresentedMachineInventory(resolveVisibleMachinesForActiveServerFromState, presented, reconcile);
 }
 
-function reconcileLaunchSelectionMachines(previous: Machine[], next: Machine[]): Machine[] {
-  const reconciled = next.map((machine, index) => previous[index] && areMachineLaunchInputsEqual(previous[index], machine)
-    ? previous[index] : machine);
-  return previous.length === reconciled.length && reconciled.every((machine, index) => machine === previous[index]) ? previous : reconciled;
+function createLaunchSelectionReconciler() {
+  const sources = new WeakMap<Machine, { current: Machine }>();
+  return (previous: Machine[] | undefined, next: Machine[]): Machine[] => {
+    const reconciled = next.map((machine, index) => {
+      const held = previous?.[index];
+      const source = held && sources.get(held);
+      if (held && source && areMachineLaunchInputsEqual(held, machine)) {
+        source.current = machine;
+        return held;
+      }
+      // Semantic launch inputs are retained, while presence follows the writer's
+      // current row, including heartbeat mutations after a resource replacement.
+      const current = { current: machine };
+      const projected: Machine = { ...machine,
+        get activeAt() { return current.current.activeAt; },
+        get updatedAt() { return current.current.updatedAt; },
+      };
+      sources.set(projected, current);
+      return projected;
+    });
+    return previous && previous.length === reconciled.length && reconciled.every((machine, index) => machine === previous[index]) ? previous : reconciled;
+  };
 }
 
-function reconcileLaunchMachineLists(previous: Record<string, Machine[] | null>, next: Record<string, Machine[] | null>): Record<string, Machine[] | null> {
-  const entries = Object.entries(next).map(([key, machines]) => [key, machines && previous[key]
-    ? reconcileLaunchSelectionMachines(previous[key], machines) : machines] as const);
-  return entries.length === Object.keys(previous).length && entries.every(([key, machines]) => Object.hasOwn(previous, key) && machines === previous[key])
-    ? previous : Object.fromEntries(entries);
+function createLaunchMachineListsReconciler() {
+  const reconcileMachines = createLaunchSelectionReconciler();
+  return (previous: Record<string, Machine[] | null> | undefined, next: Record<string, Machine[] | null>): Record<string, Machine[] | null> => {
+    const entries = Object.entries(next).map(([key, machines]) => [key, machines
+      ? reconcileMachines(previous?.[key] ?? undefined, machines) : machines] as const);
+    return previous && entries.length === Object.keys(previous).length && entries.every(([key, machines]) => Object.hasOwn(previous, key) && machines === previous[key])
+      ? previous : Object.fromEntries(entries);
+  };
 }
 
 export function useMachineRecordValues(enabled = true): Machine[] {
@@ -2377,8 +2399,9 @@ const selectMachineListByServerId = (state: StorageState) => state.machineListBy
 
 /** Launch projections retain identity across resource-only publications; live resources have their own hooks. */
 export function useMachineListByServerId(presented = true, purpose: 'full' | 'launch' = 'full'): Record<string, Machine[] | null> {
+  const reconcile = React.useMemo(createLaunchMachineListsReconciler, []);
   const machineListByServerIdRaw = usePresentedMachineInventory(selectMachineListByServerId, presented,
-    purpose === 'launch' ? reconcileLaunchMachineLists : undefined);
+    purpose === 'launch' ? reconcile : undefined);
   const machineListByServerId = machineListByServerIdRaw ?? EMPTY_MACHINE_LIST_BY_SERVER_ID;
   return React.useMemo(() => {
     const source: Record<string, Machine[] | null> =

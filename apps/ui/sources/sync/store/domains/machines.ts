@@ -157,6 +157,10 @@ function retainMachinePresenceForHeartbeat(
 
 function retainMachineForPresenceOnly(previous: Machine | undefined, next: Machine): Machine {
     if (!previous || !areStoredMachineSemanticsEqual(previous, next)) return next;
+    // Preserve the stale observation on recovery, just as the presence slice
+    // does, so retained launch readers can observe the reachability edge.
+    const nowMs = Date.now();
+    if (isMachineOnline(previous, nowMs) !== isMachineOnline(next, nowMs)) return next;
     previous.updatedAt = next.updatedAt;
     previous.activeAt = next.activeAt;
     return previous;
