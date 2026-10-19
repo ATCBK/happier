@@ -46,7 +46,71 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
         else process.env.HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY = previousStoragePolicy;
     });
 
-    it('orders a surviving owner editing a retired member\'s Pending row before physical erasure', async () => {
+    it.each(['owned-discussion', 'foreign-discussion', 'authored-session'] as const)(
+        'physically erases an Account with %s cleanup outside its status audience', async shape => {
+            const suffix = randomUUID();
+            const accountId = `erased-${suffix}`;
+            const ownerId = `owner-${suffix}`;
+            const recipientId = `recipient-${suffix}`;
+            await db.account.createMany({ data: [
+                { id: accountId, encryptionMode: 'plain', status: 'disabled' },
+                { id: ownerId, encryptionMode: 'plain' },
+                { id: recipientId, encryptionMode: 'plain' },
+            ] });
+            let discussionId: string | undefined;
+            let sessionId: string | undefined;
+            try {
+                if (shape === 'authored-session') {
+                    const session = await db.session.create({ data: {
+                        accountId: ownerId, tag: suffix, encryptionMode: 'plain', metadata: '{}',
+                    } });
+                    sessionId = session.id;
+                    // A previously delegated access but no longer has any access itself.
+                    await db.sessionShare.create({ data: { sessionId, sharedByUserId: accountId,
+                        sharedWithUserId: recipientId, accessLevel: 'view' } });
+                } else {
+                    const discussion = await db.discussion.create({ data: {
+                        ownerAccountId: shape === 'owned-discussion' ? accountId : ownerId,
+                        encryptionMode: 'plain', dataEncryptionKey: new Uint8Array(),
+                        creationLocalId: suffix, creationEqualityEvidenceV1: {},
+                        titleContent: { t: 'plain', v: 'Retained discussion' }, lastMessageAt: new Date(),
+                    } });
+                    discussionId = discussion.id;
+                    await db.discussionAccountGrant.create({ data: { discussionId, accountId: recipientId,
+                        createdByAccountId: accountId, accessLevel: 'view' } });
+                    if (shape === 'foreign-discussion') await db.discussionAccountGrant.create({ data: {
+                        discussionId, accountId, createdByAccountId: ownerId, accessLevel: 'edit',
+                    } });
+                }
+                expect(await deleteAccountForErasure({ accountId })).toEqual({ status: 'deleted' });
+                expect(await db.account.findUnique({ where: { id: accountId } })).toBeNull();
+                if (sessionId) {
+                    expect(await db.session.findUniqueOrThrow({ where: { id: sessionId }, select: { accountId: true } }))
+                        .toEqual({ accountId: ownerId });
+                    expect(await db.sessionShare.findUniqueOrThrow({ where: {
+                        sessionId_sharedWithUserId: { sessionId, sharedWithUserId: recipientId },
+                    }, select: { sharedByUserId: true, accessLevel: true } }))
+                        .toEqual({ sharedByUserId: ownerId, accessLevel: 'view' });
+                } else if (shape === 'owned-discussion') {
+                    expect(await db.discussion.findUnique({ where: { id: discussionId } })).toBeNull();
+                } else {
+                    expect(await db.discussion.findUniqueOrThrow({ where: { id: discussionId }, select: { ownerAccountId: true } }))
+                        .toEqual({ ownerAccountId: ownerId });
+                    expect(await db.discussionAccountGrant.findMany({ where: { discussionId },
+                        select: { accountId: true, createdByAccountId: true, accessLevel: true } }))
+                        .toEqual([{ accountId: recipientId, createdByAccountId: ownerId, accessLevel: 'view' }]);
+                }
+                expect(await db.accountChange.count({ where: { accountId: recipientId,
+                    kind: sessionId ? 'session' : 'discussion', entityId: sessionId ?? discussionId } })).toBeGreaterThan(0);
+            } finally {
+                if (discussionId) await db.discussion.deleteMany({ where: { id: discussionId } });
+                if (sessionId) await db.session.deleteMany({ where: { id: sessionId } });
+                await db.account.deleteMany({ where: { id: { in: [accountId, ownerId, recipientId] } } });
+            }
+        },
+    );
+
+    it.each(['received-session', 'owned-discussion'] as const)('admits a surviving %s recipient before physical erasure', async shape => {
         const fixtureId = randomUUID();
         const erasedAccountId = `a-erased-${fixtureId}`;
         const ownerAccountId = `z-surviving-${fixtureId}`;
@@ -63,13 +127,20 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
         const erasedSession = await db.session.create({ data: {
             accountId: erasedAccountId, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}',
         } });
-        await db.sessionShare.create({ data: {
+        if (shape === 'received-session') await db.sessionShare.create({ data: {
             sessionId: sharedSession.id, sharedByUserId: ownerAccountId,
             sharedWithUserId: erasedAccountId, accessLevel: 'edit',
         } });
+        const erasedDiscussion = shape === 'owned-discussion' ? await db.discussion.create({ data: {
+            ownerAccountId: erasedAccountId, encryptionMode: 'plain', dataEncryptionKey: new Uint8Array(),
+            creationLocalId: fixtureId, creationEqualityEvidenceV1: {},
+            titleContent: { t: 'plain', v: 'Shared before retirement' }, lastMessageAt: new Date(),
+            accountGrants: { create: { accountId: ownerAccountId, createdByAccountId: erasedAccountId, accessLevel: 'view' } },
+        } }) : null;
+        const authorAccountId = shape === 'received-session' ? erasedAccountId : ownerAccountId;
         const localId = randomUUID();
         await db.sessionPendingMessage.create({ data: {
-            sessionId: sharedSession.id, localId, authorAccountId: erasedAccountId,
+            sessionId: sharedSession.id, localId, authorAccountId,
             messageRole: 'user', position: 1, requestedAction: { v: 1, kind: 'enqueue' },
             content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Retained draft' } } },
         } });
@@ -96,7 +167,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
             // Retired members still own attribution rows touched by Account FK
             // actions. They must remain in admission even though publication
             // and content disclosure exclude inactive recipients.
-            expect(census.accountIds).toEqual([erasedAccountId, ownerAccountId]);
+            expect(census.accountIds).toEqual(shape === 'received-session' ? [erasedAccountId, ownerAccountId] : [ownerAccountId]);
             await Promise.race([resourceLocked.promise, holderOutcomes.then(() => {
                 throw new Error('Session resource barrier ended before acquisition');
             })]);
@@ -113,7 +184,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
             // Before erasure starts, the only Account-lock holder is the real
             // Pending editor. NOWAIT observes its protection of the inactive
             // author specifically, not an incidental surviving-owner fence.
-            await expect(db.$transaction(tx => tx.$queryRawUnsafe(
+            if (shape === 'received-session') await expect(db.$transaction(tx => tx.$queryRawUnsafe(
                 'SELECT "id" FROM "Account" WHERE "id" = $1 FOR UPDATE NOWAIT', erasedAccountId,
             ))).rejects.toMatchObject({ meta: { code: '55P03' } });
 
@@ -128,15 +199,16 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
 
             // No grant-removal or attribution cascade can become visible while
             // the other Account's complete entry cohort is holding erasure out.
-            expect(await db.sessionShare.count({ where: { sessionId: sharedSession.id, sharedWithUserId: erasedAccountId } })).toBe(1);
+            expect(await db.sessionShare.count({ where: { sessionId: sharedSession.id, sharedWithUserId: erasedAccountId } }))
+                .toBe(shape === 'received-session' ? 1 : 0);
             expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: sharedSession.id, localId } },
-                select: { authorAccountId: true } })).toEqual({ authorAccountId: erasedAccountId });
+                select: { authorAccountId: true } })).toEqual({ authorAccountId });
 
             releaseResource.resolve();
             const [writerOutcome] = await writerOutcomes;
             const [erasureOutcome] = await erasureOutcomes;
             console.info('account-erasure-shared-pending-order', {
-                resourcePid, writerPid: writer.pid, writerBlockers: writer.blockers,
+                shape, resourcePid, writerPid: writer.pid, writerBlockers: writer.blockers,
                 erasurePid: erasure.pid, erasureBlockers: erasure.blockers,
                 writerStatus: writerOutcome.status, erasureStatus: erasureOutcome.status, retries: 0,
                 writerResult: writerOutcome.status === 'fulfilled' ? writerOutcome.value : undefined,
@@ -151,7 +223,14 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
             expect(await db.session.findUniqueOrThrow({ where: { id: sharedSession.id }, select: { accountId: true } }))
                 .toEqual({ accountId: ownerAccountId });
             expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: sharedSession.id, localId } },
-                select: { authorAccountId: true, content: true } })).toEqual({ authorAccountId: null, content: editedContent });
+                select: { authorAccountId: true, content: true } })).toEqual({
+                authorAccountId: shape === 'received-session' ? null : ownerAccountId, content: editedContent,
+            });
+            if (erasedDiscussion) {
+                expect(await db.discussion.findUnique({ where: { id: erasedDiscussion.id } })).toBeNull();
+                expect(await db.accountChange.count({ where: { accountId: ownerAccountId,
+                    kind: 'discussion', entityId: erasedDiscussion.id } })).toBeGreaterThan(0);
+            }
             expect(await db.sessionShare.count({ where: { sessionId: sharedSession.id, sharedWithUserId: erasedAccountId } })).toBe(0);
             expect(await db.accountChange.count({ where: { accountId: ownerAccountId, entityId: sharedSession.id } })).toBeGreaterThan(0);
         } finally {
@@ -159,6 +238,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
             await holderOutcomes;
             await writerOutcomes;
             await erasureOutcomes;
+            if (erasedDiscussion) await db.discussion.deleteMany({ where: { id: erasedDiscussion.id } });
             await db.session.deleteMany({ where: { id: { in: [sharedSession.id, erasedSession.id] } } });
             await db.account.deleteMany({ where: { id: { in: [erasedAccountId, ownerAccountId] } } });
         }

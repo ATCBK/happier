@@ -590,12 +590,17 @@ export async function reconcileDiscussionGrantAudienceForTeamsInTx(tx: Tx, input
     }
 }
 
+/** Discovery and physical cleanup consume the same retained grant predicates. */
+export function readDiscussionAccessGrantsForAccountErasureInTx(tx: Tx, accountId: string) {
+    return tx.discussion.findMany({ where: { OR: [
+        { ownerAccountId: accountId }, { accountGrants: { some: { OR: [{ accountId }, { createdByAccountId: accountId }] } } },
+        { teamGrants: { some: { createdByAccountId: accountId } } }, { groupGrants: { some: { createdByAccountId: accountId } } },
+    ] }, select: { id: true, ownerAccountId: true } });
+}
+
 /** Account erasure preserves other people's grants while retiring its own authority and private state. */
 export async function eraseDiscussionAccessGrantsForAccountInTx(tx: Tx, input: Readonly<{ accountId: string }>): Promise<void> {
-    const rows = await tx.discussion.findMany({ where: { OR: [
-        { ownerAccountId: input.accountId }, { accountGrants: { some: { OR: [{ accountId: input.accountId }, { createdByAccountId: input.accountId }] } } },
-        { teamGrants: { some: { createdByAccountId: input.accountId } } }, { groupGrants: { some: { createdByAccountId: input.accountId } } },
-    ] }, select: { id: true, ownerAccountId: true } });
+    const rows = await readDiscussionAccessGrantsForAccountErasureInTx(tx, input.accountId);
     for (const row of rows) {
         const previousAudience = await resolveDiscussionAudienceInTx(tx, row.id);
         if (row.ownerAccountId === input.accountId) {

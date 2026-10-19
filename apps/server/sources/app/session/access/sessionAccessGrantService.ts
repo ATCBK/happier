@@ -1086,6 +1086,23 @@ export async function setSessionAccessContextInTx(
     return { ok: true, changed: true, primaryTeamId: params.primaryTeamId };
 }
 
+/** Entry discovery and cleanup share the authored-or-received retained-share predicate. */
+export function readSessionAccessGrantsForAccountErasureInTx(tx: Tx, accountId: string) {
+    return tx.sessionShare.findMany({
+        where: {
+            OR: [{ sharedByUserId: accountId }, { sharedWithUserId: accountId }],
+            session: { accountId: { not: accountId } },
+        },
+        select: {
+            id: true,
+            sessionId: true,
+            sharedWithUserId: true,
+            session: { select: { accountId: true } },
+        },
+        orderBy: [{ sessionId: "asc" }, { id: "asc" }],
+    });
+}
+
 /**
  * Removes an erased Account's received grants and preserves the grants it merely
  * authored on surviving Sessions. The physical Account-erasure owner supplies the
@@ -1101,19 +1118,7 @@ export async function eraseSessionAccessGrantsForAccountInTx(
     tx: Tx,
     params: Readonly<{ accountId: string }>,
 ): Promise<void> {
-    const readShares = () => tx.sessionShare.findMany({
-        where: {
-            OR: [{ sharedByUserId: params.accountId }, { sharedWithUserId: params.accountId }],
-            session: { accountId: { not: params.accountId } },
-        },
-        select: {
-            id: true,
-            sessionId: true,
-            sharedWithUserId: true,
-            session: { select: { accountId: true } },
-        },
-        orderBy: [{ sessionId: "asc" }, { id: "asc" }],
-    });
+    const readShares = () => readSessionAccessGrantsForAccountErasureInTx(tx, params.accountId);
     const capturedShares = await readShares();
     if (capturedShares.length === 0) return;
     // Retirement has closed new grants received or authored by this Account.

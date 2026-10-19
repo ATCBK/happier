@@ -24,7 +24,8 @@ import { publishHomeGovernanceChangedInTx, readHomeGovernanceChangeAccountIdsInT
 /** Admit the complete lifecycle projection audience before its resource writes. */
 export async function acquireAccountLifecycleAdmissionInTx(
     tx: Tx,
-    input: Readonly<{ accountId: string; additionalAccountIds?: readonly string[] }>,
+    input: Readonly<{ accountId: string; additionalAccountIds?: readonly string[];
+        additionalSessionIds?: readonly string[]; includeLifecyclePublications?: boolean }>,
 ): Promise<void> {
     const [homeAudience, teamAudience] = await Promise.all([
         readHomeGovernanceChangeAccountIdsInTx(tx),
@@ -34,6 +35,8 @@ export async function acquireAccountLifecycleAdmissionInTx(
         accountId: input.accountId,
         additionalAccountIds: [input.accountId, ...(input.additionalAccountIds ?? []), ...homeAudience, ...teamAudience],
         intent: "exclusive",
+        additionalSessionIds: input.additionalSessionIds,
+        includeLifecyclePublications: input.includeLifecyclePublications,
     });
     const captured = new Set([input.accountId, ...(input.additionalAccountIds ?? []), ...homeAudience, ...teamAudience]);
     const [currentHomeAudience, currentTeamAudience] = await Promise.all([

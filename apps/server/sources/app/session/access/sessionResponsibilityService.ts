@@ -262,6 +262,12 @@ export async function clearSessionResponsibilityIfNoReadAccessInTx(params: Reado
     return { clearedAccountId: responsibleAccountId };
 }
 
+/** Retained responsibility rows are cleanup resources even after access is lost. */
+export async function readSessionResponsibilityRemovalSessionIdsInTx(tx: Tx, accountId: string): Promise<string[]> {
+    return (await tx.session.findMany({ where: { responsibleAccountId: accountId }, select: { id: true } }))
+        .map(session => session.id);
+}
+
 /**
  * Clears current responsibility as part of the Home Account removal transaction.
  * The caller owns permanent Account deletion or loss of active Account status in
@@ -273,22 +279,19 @@ export async function clearSessionResponsibilitiesForAccountRemovalInTx(
     tx: Tx,
     params: Readonly<{ accountId: string }>,
 ): Promise<void> {
-    const sessions = await tx.session.findMany({
-        where: { responsibleAccountId: params.accountId },
-        select: { id: true },
-    });
-    if (sessions.length === 0) return;
+    const sessionIds = await readSessionResponsibilityRemovalSessionIdsInTx(tx, params.accountId);
+    if (sessionIds.length === 0) return;
 
-    await acquireSessionAccountCursorLocksInTx(tx, sessions.map(session => session.id));
+    await acquireSessionAccountCursorLocksInTx(tx, sessionIds);
     await tx.session.updateMany({
         where: { responsibleAccountId: params.accountId },
         data: { responsibleAccountId: null },
     });
-    for (const session of sessions) {
-        const accountIds = await resolveCurrentSessionRecipientAccountIdsInTx(tx, { sessionId: session.id });
+    for (const sessionId of sessionIds) {
+        const accountIds = await resolveCurrentSessionRecipientAccountIdsInTx(tx, { sessionId });
         await markCurrentSessionReadersChanged({
             tx,
-            sessionId: session.id,
+            sessionId,
             accountIds: accountIds.filter(accountId => accountId !== params.accountId),
             hint: { responsibleAccountId: null, responsibleAccount: null },
         });

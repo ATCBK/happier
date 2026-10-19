@@ -22,11 +22,14 @@ import { cleanupPluginWebhooksForAccountDeletionTxV1 } from "@/app/plugins/webho
 import { deleteDefaultAccountPetPrivateObject } from "@/app/pets/accountPetLibraryRuntime";
 import { deleteSessionWithRecipientsInTx } from "@/app/session/delete/deleteOwnedSession";
 import { SessionDeleteConditionLostError } from "@/app/session/delete/deleteSessionTree";
-import { eraseSessionAccessGrantsForAccountInTx } from "@/app/session/access/sessionAccessGrantService";
-import { eraseDiscussionAccessGrantsForAccountInTx } from "@/app/discussions/accessService";
+import { eraseSessionAccessGrantsForAccountInTx, readSessionAccessGrantsForAccountErasureInTx } from "@/app/session/access/sessionAccessGrantService";
+import { eraseDiscussionAccessGrantsForAccountInTx, readDiscussionAccessGrantsForAccountErasureInTx } from "@/app/discussions/accessService";
+import { resolveDiscussionAudienceInTx } from "@/app/discussions/access";
 import { assertTeamOwnershipAllowsAccountErasureInTx } from "@/app/teams/memberships/erasurePrecondition";
 import { publishAccountTeamMembershipsChangedInTx } from "@/app/teams/teamChanges";
-import { clearSessionResponsibilitiesForAccountRemovalInTx } from "@/app/session/access/sessionResponsibilityService";
+import { clearSessionResponsibilitiesForAccountRemovalInTx, readSessionResponsibilityRemovalSessionIdsInTx } from "@/app/session/access/sessionResponsibilityService";
+import { getWorkflowPublicationAudienceInTx } from "@/app/workflows/workflowPublicationAudience";
+import { readAutomationMachineAssignmentRemovalPublicationAudienceInTx } from "@/app/automations/automationMachineAssignmentRemoval";
 import { erasePrematerializedEphemeralRunnerActivationsForAccountInTx } from "@/app/ephemeralRunner/activationLifecycle";
 import {
     buildPluginAccountStoragePhysicalKey,
@@ -35,7 +38,7 @@ import {
 import { applyUserKvMutationsInTx, type KVMutation } from "@/app/kv/kvMutate";
 import { deletePublicFile, deletePrivateFile } from "@/storage/blob/files";
 import { hasPendingArtifactBlobUploadInTx, isPrivateArtifactBlobUpload } from "@/app/artifacts/artifactBlobService";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getActivePrismaRuntime } from "@/storage/prisma";
 
 import { retirePluginCollectionCandidatePreparationStagesTx } from "./collections/candidatePreparationLifecycle";
@@ -597,6 +600,43 @@ async function deleteAccountErasureBlobLocators(
         && artifactResults.every((result) => result.status === 'fulfilled');
 }
 
+/** Cleanup discovery belongs to its domain owners, not the ordinary status census. */
+async function readAccountErasureScopeInTx(tx: Tx, accountId: string) {
+    const [shares, discussions, ownedSessions, responsibilitySessionIds] = await Promise.all([
+        readSessionAccessGrantsForAccountErasureInTx(tx, accountId),
+        readDiscussionAccessGrantsForAccountErasureInTx(tx, accountId),
+        tx.session.findMany({ where: { accountId }, select: { id: true } }),
+        readSessionResponsibilityRemovalSessionIdsInTx(tx, accountId),
+    ]);
+    const ownedSessionIds = ownedSessions.map(session => session.id);
+    // Deleting an owned Session retires its scoped Automations through their
+    // real owner, including review, Run, Follow and managed-wake projections.
+    const scopedAutomations = await tx.automation.findMany({ where: {
+        accountId, scopeSessionId: { in: ownedSessionIds }, deletedAt: null,
+    }, select: { id: true } });
+    const automationIds = scopedAutomations.map(automation => automation.id);
+    const [discussionAudiences, workflowAudience, runners] = await Promise.all([
+        Promise.all(discussions.map(discussion => resolveDiscussionAudienceInTx(tx, discussion.id))),
+        getWorkflowPublicationAudienceInTx(tx, { accountId, automationIds,
+            runWhere: { accountId, automationId: { in: automationIds } } }),
+        tx.ephemeralRunnerActivation.findMany({ where: {
+            sessionId: { in: ownedSessionIds }, state: 'materialized',
+        }, select: { creatorAccountId: true, machineId: true } }),
+    ]);
+    const runnerAudiences = await Promise.all(runners.flatMap(runner => runner.machineId
+        ? [readAutomationMachineAssignmentRemovalPublicationAudienceInTx(tx, {
+            accountId: runner.creatorAccountId, machineId: runner.machineId,
+        })] : []));
+    return {
+        sessionIds: [...new Set([...ownedSessionIds, ...shares.map(share => share.sessionId),
+            ...responsibilitySessionIds, ...workflowAudience.sessionIds,
+            ...runnerAudiences.flatMap(audience => audience.sessionIds)])].sort(),
+        discussionIds: discussions.map(discussion => discussion.id).sort(),
+        accountIds: [...new Set([accountId, ...discussionAudiences.flat(), ...workflowAudience.accountIds,
+            ...runners.map(runner => runner.creatorAccountId), ...runnerAudiences.flatMap(audience => audience.accountIds)])].sort(),
+    };
+}
+
 /**
  * Sole physical Account-deletion composition. Existing domain owners remove
  * restrictive custody in the same fenced transaction as the Account row,
@@ -612,10 +652,27 @@ export async function deleteAccountForErasure(input: Readonly<{
     managedResourceDispositions?: readonly ManagedResourceDispositionV1[];
 }>): Promise<DeleteAccountForErasureResult> {
     const actor: AccountErasureActor = input.actor ?? { kind: "self" };
-    const fenceAccounts = (tx: Tx, erasureActor: AccountErasureActor) => acquireAccountLifecycleAdmissionInTx(tx, {
-        accountId: input.accountId,
-        additionalAccountIds: erasureActor.kind === "home_administration" ? [erasureActor.actorAccountId] : [],
-    });
+    const fenceAccounts = async (tx: Tx, erasureActor: AccountErasureActor) => {
+        const captured = await readAccountErasureScopeInTx(tx, input.accountId);
+        await acquireAccountLifecycleAdmissionInTx(tx, {
+            accountId: input.accountId,
+            additionalAccountIds: [...captured.accountIds,
+                ...(erasureActor.kind === "home_administration" ? [erasureActor.actorAccountId] : [])],
+            additionalSessionIds: captured.sessionIds,
+            includeLifecyclePublications: true,
+        });
+        // A wait may expose a newly authored/received grant or cleanup resource.
+        // Replay complete admission; never extend its sorted cohort afterward.
+        const current = await readAccountErasureScopeInTx(tx, input.accountId);
+        const grew = (ids: readonly string[], previous: readonly string[]) => {
+            const admitted = new Set(previous);
+            return ids.some(id => !admitted.has(id));
+        };
+        if (grew(current.sessionIds, captured.sessionIds) || grew(current.discussionIds, captured.discussionIds)
+            || grew(current.accountIds, captured.accountIds)) {
+            throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
+    };
     const capturePreflight = async (tx: Tx, serializable: boolean) => {
         await fenceAccounts(tx, actor);
         const fence = await acquireAccountEncryptionTransitionFenceInTx(
