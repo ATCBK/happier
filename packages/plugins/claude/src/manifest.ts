@@ -581,6 +581,7 @@ export const CLAUDE_PLUGIN = definePlugin({
       description: 'Creates one Claude agent team in the current Session.',
       scopes: ['session'],
       surfaces: ['ui', 'agent', 'cli', 'mcp'],
+      hostAccess: ['claude-session-runtime-control'],
       placementBindings: ['primary'],
       inputSchema: {
         type: 'object',
@@ -607,6 +608,7 @@ export const CLAUDE_PLUGIN = definePlugin({
       description: 'Launches one Claude teammate in the current Session.',
       scopes: ['session'],
       surfaces: ['ui', 'agent', 'cli', 'mcp'],
+      hostAccess: ['claude-session-runtime-control'],
       placementBindings: ['primary'],
       inputSchema: {
         type: 'object',

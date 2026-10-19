@@ -1,12 +1,14 @@
 import fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, deriveSessionCreationTagV1, formatQualifiedPluginActionId } from '@happier-dev/protocol';
+import { PLUGIN_MANIFEST } from '@happier-dev/plugins-claude/manifest';
 
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { loadCurrentBundledPluginLocatorResult } from '@/plugins/projection/registry/builtIn/locators';
 import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
@@ -65,10 +67,12 @@ describe('Claude native team Action surface parity', () => {
         let fixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
         try {
             const bundled = loadCurrentBundledPluginLocatorResult();
-            // Keep the complete real Claude contribution graph; unrelated
-            // plugins' app-preseed UI artifacts are outside this Action seam.
+            // Source admission consumes the authored manifest through the real
+            // normalizer. Bundled projection drift has its own canonical gate.
+            // Unrelated app-preseed UI artifacts are outside this Action seam.
             const contributes = createResolvedContributionRegistry(projectLoadedPluginContributes({
-                loadResult: { loadedPlugins: bundled.loadedPlugins.filter(plugin => plugin.pluginId === pluginId), diagnosticsByPluginId: {} },
+                loadResult: { loadedPlugins: bundled.loadedPlugins.filter(plugin => plugin.pluginId === pluginId)
+                    .map(plugin => ({ ...plugin, manifest: normalizePluginManifestV2(PLUGIN_MANIFEST) })), diagnosticsByPluginId: {} },
                 provenance: 'first_party',
             }));
             fixture = await runWithServerHttpBaseUrl(origin, () => createAdmittedPluginRuntimeFixture({
@@ -115,6 +119,9 @@ describe('Claude native team Action surface parity', () => {
                 actionId: `${pluginId}/subagent-team-launch`, input: { teamId: 'forbidden' },
                 context: { surface: 'cli', invocationSurface: 'plugin', defaultSessionId: sessionId },
             })).toMatchObject({ matched: true, result: { ok: false, errorCode: 'plugin_action_unavailable', actionHandlerInvocation: 'notStarted' } });
+            expect(await executor.execute('action.invoke', {
+                action: { pluginId, localId: 'subagent-team-launch' }, input: { teamId: 'unbound' },
+            }, { surface })).toMatchObject({ ok: false, errorCode: 'plugin_action_execution_failed' });
             expect(admissions).toHaveLength(2);
         } finally {
             await fixture?.dispose();

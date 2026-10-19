@@ -18,6 +18,7 @@ describe('Claude plugin manifest', () => {
       const action = PLUGIN_MANIFEST.contributes.actions.find((entry) => entry.id === id);
       expect(action).toMatchObject({
         surfaces: ['ui', 'agent', 'cli', 'mcp'],
+        hostAccess: ['claude-session-runtime-control'],
         inputSchema: { type: 'object', additionalProperties: false },
         inputHints: { fields: expect.arrayContaining([
           expect.objectContaining({ path: 'teamId', required: true, widget: 'text' }),
