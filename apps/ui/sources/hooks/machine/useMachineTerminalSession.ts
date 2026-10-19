@@ -386,6 +386,7 @@ export function useMachineTerminalSession(params: Readonly<{
 
     React.useEffect(() => {
         let canceled = false;
+        let streaming = false;
         const interest = new AbortController();
         const retire = () => {
             canceled = true;
@@ -479,8 +480,6 @@ export function useMachineTerminalSession(params: Readonly<{
                 setError(errorCode);
                 return;
             }
-            resetAutoRetryState();
-
             const replayMode: TerminalStreamCursor['mode'] = byteStreamEnabled
                 ? 'byte-offset'
                 : 'legacy-event-cursor';
@@ -609,6 +608,7 @@ export function useMachineTerminalSession(params: Readonly<{
                 },
             });
             terminalStreamRuntimeRef.current = runtime;
+            streaming = true;
             let idleCount = 0;
             while (!canceled) {
                 if (terminalStreamDoneRef.current) {
@@ -631,18 +631,22 @@ export function useMachineTerminalSession(params: Readonly<{
                     rendererId: embeddedTerminalRendererId,
                     surfaceEpoch: connectionNonce,
                 });
-                if (canceled) return;
+                if (canceled || terminalStreamRuntimeRef.current !== runtime) return;
 
                 if (!read.ok) {
                     if (handleWithdrawalRef.current(read.code)) return;
                     clearActiveTerminalStream();
-                    if (isRecoverableTerminalSessionErrorCode(read.code) && scheduleAutoRetry()) {
+                    const recoverable = isRecoverableTerminalRpcError({ ok: false, errorCode: read.code }, 'stream');
+                    if ((recoverable || isRecoverableTerminalSessionErrorCode(read.code)) && scheduleAutoRetry()) {
                         return;
                     }
                     setStatus('error');
-                    setError(read.code);
+                    setError(recoverable ? 'terminal_rpc_target_unavailable' : read.code);
                     return;
                 }
+                // A successful ensure does not prove that its stream can be
+                // read. Reset recovery only after transport actually recovers.
+                if (autoRetryAttemptRef.current > 0) resetAutoRetryState();
 
                 if (read.mode === 'legacy-event-cursor') {
                     terminalCreditStateRef.current = null;
@@ -763,11 +767,14 @@ export function useMachineTerminalSession(params: Readonly<{
             if (canceled) return;
             if (handleWithdrawalRef.current(readTerminalStreamInputErrorCode(e))) return;
             clearActiveTerminalStream();
-            if (isRecoverableTerminalRpcError(e) && scheduleAutoRetry()) {
+            const recoverable = isRecoverableTerminalRpcError(e, streaming ? 'stream' : 'admission');
+            if (recoverable && scheduleAutoRetry()) {
                 return;
             }
             setStatus('error');
-            setError(e instanceof Error ? e.message : 'terminal_error');
+            setError(recoverable
+                ? 'terminal_rpc_target_unavailable'
+                : e instanceof Error ? e.message : 'terminal_error');
         });
 
         return () => {
@@ -818,7 +825,10 @@ export function useMachineTerminalSession(params: Readonly<{
             if (!params.closeOnUnmount || params.readOnly || params.attachedTerminalId !== undefined || !params.machineId || !terminalIdRef.current) return;
             const scope = attachmentScopeRef.current;
             void machineTerminalClose(params.machineId, { terminalId: terminalIdRef.current }, {
-                serverId: scope?.serverId ?? params.serverId, accountId: scope?.accountId });
+                serverId: scope?.serverId ?? params.serverId, accountId: scope?.accountId }).catch(() => {
+                // The pane is disposed. A lost close receipt cannot recover its
+                // transport or authorize another close from this retired view.
+            });
         };
     }, [params.attachedTerminalId, params.closeOnUnmount, params.machineId, params.readOnly, params.serverId]);
 
