@@ -9,7 +9,7 @@ import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { executeScmActionOperation, type ExecuteScmActionOperationParams } from './executeScmActionOperation';
 import { configuration } from '@/configuration';
-import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
+import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 import { captureScmComparison, deleteCapturedScmComparison } from '@/scm/comparisons/captureScmComparison';
 import { removeTempDir } from '@/testkit/fs/tempDir';
 

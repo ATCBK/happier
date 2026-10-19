@@ -78,6 +78,50 @@ function executableOperation(
 
 function createGitOperationAccounts(): readonly ScmBackendContractLeafAccount[] {
     return [
+        executableOperation({ group: 'read', leaf: 'ignoredPaths' },
+            (input) => requireMethod(input.backend.ignoredPaths)({ context: input.context, request: { cwd: input.fixture.rootPath } }),
+            async (input) => {
+                writeFileSync(join(input.fixture.rootPath, 'untracked.txt'), 'visible\n');
+                const result = await requireMethod(input.backend.ignoredPaths)({ context: input.context,
+                    request: { cwd: input.fixture.rootPath } });
+                assertSupportedResult(result);
+                expect(result.paths).toContain(input.fixture.ignoredPath);
+                expect(result.paths).not.toContain(input.fixture.trackedPath);
+                expect(result.paths).not.toContain('untracked.txt');
+            }),
+        executableOperation({ group: 'worktree', leaf: 'retire' },
+            (input) => requireMethod(input.backend.worktreeRetire)({ context: input.context,
+                request: { worktreePath: join(input.fixture.rootPath, 'missing'), targetPath: join(input.fixture.rootPath, 'retained'), entryId: 'contract' } }),
+            async (input) => {
+                const source = join(input.fixture.rootPath, 'contract-worktree');
+                const target = join(input.fixture.rootPath, 'contract-retained');
+                git(input, 'worktree', 'add', '-b', 'contract-retention', source);
+                writeFileSync(join(source, input.fixture.trackedPath), 'retained dirty change\n');
+                const result = await requireMethod(input.backend.worktreeRetire)({ context: input.context,
+                    request: { worktreePath: source, targetPath: target, entryId: 'contract' } });
+                assertSupportedResult(result);
+                git(input, 'worktree', 'prune', '--expire', 'now');
+                expect(git(input, 'worktree', 'list', '--porcelain')).toContain('locked happier-trash:contract');
+                expect(readFileSync(join(target, input.fixture.trackedPath), 'utf8')).toBe('retained dirty change\n');
+                expect(runScmExecutable(target, 'git', ['branch', '--show-current'])).toBe('contract-retention');
+            }),
+        executableOperation({ group: 'worktree', leaf: 'reinstate' },
+            (input) => requireMethod(input.backend.worktreeReinstate)({ context: input.context,
+                request: { worktreePath: join(input.fixture.rootPath, 'missing'), targetPath: join(input.fixture.rootPath, 'restored'), entryId: 'contract' } }),
+            async (input) => {
+                const source = join(input.fixture.rootPath, 'contract-worktree');
+                const target = join(input.fixture.rootPath, 'contract-retained');
+                git(input, 'worktree', 'add', '-b', 'contract-retention', source);
+                writeFileSync(join(source, input.fixture.trackedPath), 'retained dirty change\n');
+                assertSupportedResult(await requireMethod(input.backend.worktreeRetire)({ context: input.context,
+                    request: { worktreePath: source, targetPath: target, entryId: 'contract' } }));
+                const result = await requireMethod(input.backend.worktreeReinstate)({ context: input.context,
+                    request: { worktreePath: target, targetPath: source, entryId: 'contract' } });
+                assertSupportedResult(result);
+                expect(git(input, 'worktree', 'list', '--porcelain')).not.toContain('locked happier-trash:contract');
+                expect(readFileSync(join(source, input.fixture.trackedPath), 'utf8')).toBe('retained dirty change\n');
+                expect(runScmExecutable(source, 'git', ['branch', '--show-current'])).toBe('contract-retention');
+            }),
         executableOperation({ group: 'read', leaf: 'historyEntries' },
             (input) => requireMethod(input.backend.historyEntries)({ context: input.context,
                 request: { cwd: input.fixture.rootPath, folder: '', paths: [input.fixture.trackedPath] } }),

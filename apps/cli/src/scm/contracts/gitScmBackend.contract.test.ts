@@ -5,7 +5,7 @@ import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRu
 import { resolveDefaultScmBackendRegistry } from '../scmBackendCatalog';
 import { createPluginScmBackendRegistryFromRuntimeRegistry } from '../pluginBackends/runtimeRegistry';
 import type { ScmBackend } from '../types';
-import { runScmBackendContractSuite } from './scmBackendContractHarness';
+import { runScmBackendContractSuite } from '@/testkit/scm/scmBackendContractHarness';
 
 describe('git SCM backend contract', () => {
     let backend: ScmBackend | null = null;
@@ -22,7 +22,7 @@ describe('git SCM backend contract', () => {
         if (!backend) {
             const catalog = createPluginScmBackendRegistryFromRuntimeRegistry(runtimeFixture.registry);
             const registrations = runtimeFixture.registry.scmBackendRegistrations
-                ?? [...runtimeFixture.registry.scmBackendsById.values()];
+                ?? [...(runtimeFixture.registry.scmBackendsById?.values() ?? [])];
             throw new Error(`Git backend is not registered: ${JSON.stringify({
                 registeredIds: registrations.map((entry) => `${entry.pluginId}/${entry.registration.id}`),
                 catalogIds: catalog.backends.map((candidate) => candidate.id),

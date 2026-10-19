@@ -17,7 +17,7 @@ describe('SCM command owned stdout files', () => {
             expect(await readFile(outputPath, 'utf8')).toBe('Owned bytes');
             const incompatiblePath = join(cwd, 'incompatible');
             expect(await runScmCommand({ bin: 'git', cwd, args: ['--version'], stdoutFilePath: incompatiblePath,
-                stdoutConsumer: () => undefined })).toMatchObject({ success: false });
+                stdoutConsumer: () => 'continue' })).toMatchObject({ success: false });
             await expect(stat(incompatiblePath)).rejects.toMatchObject({ code: 'ENOENT' });
         });
     });

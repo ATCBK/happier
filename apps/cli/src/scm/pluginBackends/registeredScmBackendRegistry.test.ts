@@ -27,7 +27,7 @@ import { createGitBackend, createGitScmBackendRuntimeRegistration } from '../../
 import { GIT_PLUGIN, GIT_SCM_BACKEND_CONTRIBUTION } from '../../../../../packages/plugins/scm-git/src/manifest';
 import type { ScmBackend } from '../types';
 import { createScmBackendRegistry } from '../registry';
-import { createLocalScmRepositoryFixture, runScmExecutable } from '../contracts/scmBackendContractFixtures';
+import { createLocalScmRepositoryFixture, runScmExecutable } from '@/testkit/scm/scmBackendContractFixtures';
 
 const TEST_LAST_ACTIVITY_AT_MS = Date.UTC(2026, 4, 13, 4, 0, 0);
 

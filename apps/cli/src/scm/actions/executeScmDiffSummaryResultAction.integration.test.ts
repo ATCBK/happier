@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios, { AxiosHeaders } from 'axios';
-import { createActionExecutor, getActionSpec, ScmDiffSummaryGenerateOutputSchema, ExecutionRunGetResponseSchema, ProviderBoundModelRefSchema, type ActionExecutorContext, type ActionExecutorDeps, type ScmActionExecute } from '@happier-dev/protocol';
+import { createActionExecutor, getActionSpec, ScmDiffSummaryGenerateOutputSchema, ExecutionRunGetResponseSchema, ExecutionRunStartRequestSchema, ProviderBoundModelRefSchema, type ActionExecutorContext, type ActionExecutorDeps, type ScmActionExecute } from '@happier-dev/protocol';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { executeScmActionOperation as executeScmOperation } from './executeScmActionOperation';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
@@ -41,12 +42,39 @@ const run = {
 } as const;
 
 function createScmResultActionExecutor(scmActionExecute: NonNullable<ActionExecutorDeps['scmActionExecute']>,
-  transports: Partial<Pick<ActionExecutorDeps, 'executionRunGet' | 'sessionSendMessage'>> = {}) {
+  transports: Partial<Pick<ActionExecutorDeps, 'executionRunGet' | 'executionRunEnsure' | 'sessionSendMessage'>> = {}) {
   // This machine-transport fixture supplies the real SCM route; unrelated transport boundaries are not exercised.
-  return createActionExecutor({ scmActionExecute, ...transports } as unknown as ActionExecutorDeps);
+  return createActionExecutor({ ...createUnavailableActionTransportDeps(), scmActionExecute, ...transports });
 }
 
 describe('saved SCM result Action boundary', () => {
+  it.each(['scm.diffSummary.refine', 'scm.diffSummary.addOutputs', 'scm.diffSummary.discuss'] as const)(
+    'admits %s to the recoverable original through Pending without awaiting native provisioning', async actionId => {
+      const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output });
+      const admissions: string[] = [];
+      const executor = createScmResultActionExecutor(({ actionId, input, context, executeCanonicalAction }) =>
+        executeScmActionOperation({ actionId, input, actionContext: context, executeCanonicalAction,
+          workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots', roots: [cwd] } }), {
+        // These are the remote Run and Session transport boundaries. The Action executor,
+        // saved-result owner, lifecycle projection and input bookkeeping remain real.
+        executionRunGet: async () => ({ run: { ...run, status: 'failed', interaction: undefined,
+          lifecycle: { v: 1, state: 'recoverable' }, error: { code: 'execution_run_host_lost', message: 'Host lost' } } }),
+        executionRunEnsure: async () => { throw new Error('Pending owns recovery after admission'); },
+        sessionSendMessage: async request => {
+          expect(request.recipient).toEqual({ kind: 'execution_run', runId: run.runId });
+          admissions.push(request.localId!);
+          return { status: 'accepted', localId: request.localId };
+        },
+      });
+      const response = await executor.execute(actionId, { cwd, resultId: saved.resultId, expectedRevision: 0,
+        ...(actionId === 'scm.diffSummary.refine' ? { output: 'walkthrough', instructions: 'Shorten it.' }
+          : actionId === 'scm.diffSummary.addOutputs' ? { outputs: ['summary'] } : { message: 'Explain it.' }),
+      }, { surface: 'cli', bypassApprovals: true });
+      expect(response).toMatchObject({ ok: true, result: { success: true, runId: run.runId } });
+      expect(admissions).toHaveLength(1);
+      expect(await scmDiffSummaryResultStore.readInput({ cwd, resultId: saved.resultId, inputIds: admissions })).not.toBeNull();
+    });
+
   it.each(['rejected', 'outcomeUnknown', 'transportFailure', 'invalidParameters'] as const)('preserves the actual %s follow-up admission outcome', async outcome => {
     const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output });
     let attemptedInputId = '';
@@ -54,7 +82,8 @@ describe('saved SCM result Action boundary', () => {
       input: { cwd, resultId: saved.resultId, expectedRevision: 0, output: 'walkthrough', instructions: 'Shorten the explanation.' },
       workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots', roots: [cwd] },
       executeCanonicalAction: async (actionId, request) => {
-        if (actionId === 'execution.run.get') return { ok: true, result: { run } };
+        if (actionId === 'execution.run.get') return { ok: true, result: { run: { ...run, status: 'failed',
+          interaction: undefined, lifecycle: { v: 1, state: 'recoverable' } } } };
         attemptedInputId = String((request as { localId: string }).localId);
         return outcome === 'invalidParameters' ? { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' }
         : outcome === 'transportFailure'
@@ -63,7 +92,9 @@ describe('saved SCM result Action boundary', () => {
             : { status: outcome, localId: 'uncertain-input', code: 'machine_admission_pending_custody_unconfirmed' } };
       },
     });
-    getActionSpec('scm.diffSummary.refine').outputSchema.parse(response);
+    const outputSchema = getActionSpec('scm.diffSummary.refine').outputSchema;
+    if (!outputSchema) throw new Error('Missing SCM refinement output schema');
+    outputSchema.parse(response);
     expect(response).toMatchObject({ success: false, errorCode: outcome === 'rejected' ? 'session_input_target_unavailable'
       : outcome === 'invalidParameters' ? 'invalid_parameters' : 'admission_unknown',
       error: outcome === 'transportFailure' ? expect.stringContaining('execution_run_target_unavailable')
@@ -244,9 +275,10 @@ describe('saved SCM result Action boundary', () => {
     expect(sent?.message).toContain('"changeRefs":["c1"]');
     if (operation === 'explain') {
       expect(sent?.message).toContain('"reviewExplanations"');
-      const pending = await scmDiffSummaryResultStore.readInput({ cwd, resultId: created.resultId, inputIds: [sent!.localId] });
+      if (!sent?.localId) throw new Error('Expected a retained explanation input');
+      const pending = await scmDiffSummaryResultStore.readInput({ cwd, resultId: created.resultId, inputIds: [sent.localId] });
       expect(pending?.reviewExplanation).toMatchObject({ targets, requestedBy: { kind: 'user' }, requestedAtMs: expect.any(Number) });
-      expect(await scmDiffSummaryResultStore.publish({ cwd, resultId: created.resultId, inputId: sent!.localId,
+      expect(await scmDiffSummaryResultStore.publish({ cwd, resultId: created.resultId, inputId: sent.localId,
         modelOutput: { reviewExplanations: [{ stopId: 'stop', markdown: 'Separate explanation' }] } }))
         .toMatchObject({ success: true, result: { output: { outputs: { walkthrough: { value: { stops: [{
           explanationMarkdown: 'Current manual reasoning', reviewExplanations: [{ markdown: 'Separate explanation' }],
@@ -256,7 +288,8 @@ describe('saved SCM result Action boundary', () => {
       expect(sent?.message).toContain('after L2');
     } else if (operation === 'refine') {
       expect(sent?.message).toContain('Prose language: fr');
-      expect(await scmDiffSummaryResultStore.publish({ cwd, resultId: created.resultId, inputId: sent!.localId,
+      if (!sent?.localId) throw new Error('Expected a retained refinement input');
+      expect(await scmDiffSummaryResultStore.publish({ cwd, resultId: created.resultId, inputId: sent.localId,
         modelOutput: { walkthrough: { title: 'Parcours', intro: '', otherChangeRefs: [], stops: [{ id: 'stop',
           title: 'Préserver l’état', explanationMarkdown: 'Explication affinée', changeRefs: ['c1'] }] } } }))
         .toMatchObject({ success: true, result: { output: { outputs: { summary: output.outputs?.summary,
@@ -279,7 +312,7 @@ describe('saved SCM result Action boundary', () => {
       executeCanonicalAction: async (id, input) => {
         if (id === 'execution.run.get') return originalAvailable ? { ok: true, result: { run } } : { ok: false, errorCode: 'execution_run_not_found', error: 'Gone' };
         if (id !== 'execution.run.start') throw new Error('Fallback must admit one canonical generator');
-        const parsed = getActionSpec('execution.run.start').inputSchema.safeParse(input);
+        const parsed = ExecutionRunStartRequestSchema.safeParse(input);
         if (!parsed.success) { startParseIssues = parsed.error.issues; throw parsed.error; }
         starts.push(parsed.data);
         await scmDiffSummaryResultStore.bindRun({ cwd, resultId: created.resultId, expectedRevision: 0, runId: 'replacement', seededFromRunId: 'saved-generator' });
@@ -322,7 +355,7 @@ describe('saved SCM result Action boundary', () => {
         executeCanonicalAction: async (id, input) => {
           if (id === 'execution.run.get') return { ok: true, result: { run: original } };
           if (id !== 'execution.run.start') throw new Error('Expected canonical replacement admission');
-          starts.push(getActionSpec('execution.run.start').inputSchema.parse(input));
+          starts.push(ExecutionRunStartRequestSchema.parse(input));
           await scmDiffSummaryResultStore.bindRun({ cwd, resultId: saved.resultId, expectedRevision: 0, runId: 'replacement' });
           return { ok: true, result: { runId: 'replacement', callId: 'call', sidechainId: 'sidechain' } };
         },
@@ -361,7 +394,7 @@ describe('saved SCM result Action boundary', () => {
           resolvedSelection: { source: 'inherited', modelId: 'chosen-model', modelSelection, connectedServices: originalBindings },
         } } } : { ok: false, errorCode: 'execution_run_not_found', error: 'Gone' };
         if (id !== 'execution.run.start') throw new Error('Expected canonical replacement admission');
-        starts.push(getActionSpec('execution.run.start').inputSchema.parse(input));
+        starts.push(ExecutionRunStartRequestSchema.parse(input));
         await scmDiffSummaryResultStore.bindRun({ cwd, resultId: saved.resultId, expectedRevision: 0, runId: 'replacement' });
         return { ok: true, result: { runId: 'replacement', callId: 'call', sidechainId: 'sidechain' } };
       },

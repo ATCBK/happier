@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { access, readFile, readdir, realpath, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, join, parse, resolve } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import type { ScmBackendRegistry } from '../registry';
@@ -65,28 +65,28 @@ export type WorkspaceTargetMaterializationReceiptV1 = Readonly<{
     removalTargetName?: string;
 }>;
 
-const WorkerCopyCreationSchema = z.object({
-    serverId: z.string().min(1).refine(value => value === value.trim()),
-    relationshipId: z.string().min(1).refine(value => value === value.trim()),
-    sourceWorkspaceRefId: z.string().min(1).refine(value => value === value.trim()),
-    targetWorkspaceRefId: z.string().min(1).refine(value => value === value.trim()),
-}).strict().refine(value => value.sourceWorkspaceRefId !== value.targetWorkspaceRefId);
+const WorkerCopyCreationSchema = z.strictObject({
+    serverId: z.string().check(z.minLength(1), z.refine(value => value === value.trim())),
+    relationshipId: z.string().check(z.minLength(1), z.refine(value => value === value.trim())),
+    sourceWorkspaceRefId: z.string().check(z.minLength(1), z.refine(value => value === value.trim())),
+    targetWorkspaceRefId: z.string().check(z.minLength(1), z.refine(value => value === value.trim())),
+}).check(z.refine(value => value.sourceWorkspaceRefId !== value.targetWorkspaceRefId));
 
-const CommittedTargetSchema = z.object({
-    canonicalRoot: z.string().refine(value => value === resolve(value)),
-    rootFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
-}).strict();
-const RemovalTargetNameSchema = z.string().regex(/^\.happier-sync-backup\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu);
-const MaterializationReceiptSchema = z.object({
+const CommittedTargetSchema = z.strictObject({
+    canonicalRoot: z.string().check(z.refine(value => value === resolve(value))),
+    rootFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/u)),
+});
+const RemovalTargetNameSchema = z.string().check(z.regex(/^\.happier-sync-backup\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu));
+const MaterializationReceiptSchema = z.strictObject({
     v: z.literal(1),
-    previousTargetName: z.string().nullable(),
-    originalTargetIdentity: WorkspaceSyncRootObjectIdentityV1Schema.nullable(),
-    promotedTargetIdentity: WorkspaceSyncRootObjectIdentityV1Schema.nullable(),
-    expectedBackupIdentity: WorkspaceSyncRootObjectIdentityV1Schema.nullable(),
-    workerCopyCreation: WorkerCopyCreationSchema.optional(),
-    committed: CommittedTargetSchema.optional(),
-    removalTargetName: RemovalTargetNameSchema.optional(),
-}).strict();
+    previousTargetName: z.nullable(z.string()),
+    originalTargetIdentity: z.nullable(WorkspaceSyncRootObjectIdentityV1Schema),
+    promotedTargetIdentity: z.nullable(WorkspaceSyncRootObjectIdentityV1Schema),
+    expectedBackupIdentity: z.nullable(WorkspaceSyncRootObjectIdentityV1Schema),
+    workerCopyCreation: z.optional(WorkerCopyCreationSchema),
+    committed: z.optional(CommittedTargetSchema),
+    removalTargetName: z.optional(RemovalTargetNameSchema),
+});
 const StoredMaterializationReceiptSchema = createStoredReadSchema(MaterializationReceiptSchema);
 
 export type WorkspaceExportMaterializationCustody = Readonly<{

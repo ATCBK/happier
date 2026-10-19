@@ -6,13 +6,13 @@ import {
     getCapabilityLeaf,
     listCapabilityLeaves,
     type ScmBackendCapabilityLeafPath,
-} from './scmBackendContractAssertions';
+} from '@/testkit/scm/scmBackendContractAssertions';
 import {
     assertScmBackendContractLeafCoverage,
     scmCapabilityPathKey,
-} from './scmBackendContractCoverage';
-import { shouldRunScmBackendLeafAccount } from './scmBackendContractHarness';
-import { createScmBackendCapabilityLeafAccounts } from './scmBackendContractLeafAccounts';
+} from '@/testkit/scm/scmBackendContractCoverage';
+import { shouldRunScmBackendLeafAccount } from '@/testkit/scm/scmBackendContractHarness';
+import { createScmBackendCapabilityLeafAccounts } from '@/testkit/scm/scmBackendContractLeafAccounts';
 
 function pathKey(path: ScmBackendCapabilityLeafPath): string {
     return scmCapabilityPathKey(path);

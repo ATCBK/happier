@@ -1,11 +1,11 @@
 import { access, copyFile, mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { resolveWorkspaceStagingMarkerFilePath, type WorkspaceStagingRoot } from './createWorkspaceStagingRoot';
 
-const workspaceStagingBlobDigestSchema = z.string().regex(/^(sha256):([a-f0-9]{64})$/);
+const workspaceStagingBlobDigestSchema = z.string().check(z.regex(/^(sha256):([a-f0-9]{64})$/));
 
 export type StagedWorkspaceFileBlob = Readonly<{
     digest: string;

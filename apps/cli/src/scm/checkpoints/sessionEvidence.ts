@@ -1,6 +1,6 @@
 import { readFile, readdir, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { TurnChangeSetSchema } from '@happier-dev/protocol/sessions/changes/schemas';
 import type { RepositoryCheckpointCommitEvidence, TurnChangeSet } from '@happier-dev/protocol';
@@ -14,8 +14,8 @@ import { buildRepositoryCheckpointScopePrefix, encodeRepositoryCheckpointScope, 
 import type { RepositoryCheckpointCaptureResult, RepositoryCheckpointRef } from './types';
 
 const InitialEvidenceSchema = z.discriminatedUnion('state', [
-    z.object({ state: z.literal('available'), ref: z.string(), originalRef: z.string(), commitSha: z.string(), treeSha: z.string() }).strict(),
-    z.object({ state: z.literal('unavailable'), reason: z.string(), recoverable: z.literal(true).optional() }).strict(),
+    z.strictObject({ state: z.literal('available'), ref: z.string(), originalRef: z.string(), commitSha: z.string(), treeSha: z.string() }),
+    z.strictObject({ state: z.literal('unavailable'), reason: z.string(), recoverable: z.optional(z.literal(true)) }),
 ]);
 export type RepositoryCheckpointInitialEvidence = z.infer<typeof InitialEvidenceSchema>;
 

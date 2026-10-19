@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { FileChangeKind, ScmComparison, ScmComparisonSource } from '@happier-dev/protocol';
 import type { GitComparisonFile } from './readGitComparisonFiles';
 
@@ -12,24 +12,24 @@ export type ReadPullRequestComparisonPage = (input: Readonly<{
 
 // Projection of the source Action's validated changedFiles response. Source admission,
 // credentials, native pagination limits and continuation integrity remain source-owned.
-const PageSchema = z.object({
+const PageSchema = z.looseObject({
   kind: z.literal('changedFiles'),
-  rows: z.array(z.object({ path: z.string().min(1), previousPath: z.string().optional(), status: z.string(),
-    diffAvailable: z.boolean(), evidence: z.discriminatedUnion('state', [
+  rows: z.array(z.looseObject({ path: z.string().check(z.minLength(1)), previousPath: z.optional(z.string()), status: z.string(),
+    diffAvailable: z.boolean(), evidence: z.optional(z.discriminatedUnion('state', [
       z.object({ state: z.literal('available'), patch: z.string() }),
       z.object({ state: z.literal('truncated'), patch: z.string(), reason: z.string() }),
       z.object({ state: z.literal('unavailable'), reason: z.string() }),
-    ]).optional(), truncated: z.boolean().optional() }).passthrough()),
-  omittedRowCount: z.number().int().nonnegative(), projectionTruncated: z.boolean(),
-  incomplete: z.enum(['ceiling', 'pagination']).optional(), continuation: z.string().min(1).optional(),
-  comparison: z.object({ beforeOid: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/),
-    baseOid: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/), headOid: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/),
-    locator: z.object({ providerId: z.string().min(1), repository: z.string().min(1), number: z.number().int().positive() }).strict().optional(),
-    totalFileCount: z.number().int().nonnegative(), enumeratedFileCount: z.number().int().nonnegative(),
+    ])), truncated: z.optional(z.boolean()) })),
+  omittedRowCount: z.number().check(z.int(), z.nonnegative()), projectionTruncated: z.boolean(),
+  incomplete: z.optional(z.enum(['ceiling', 'pagination'])), continuation: z.optional(z.string().check(z.minLength(1))),
+  comparison: z.looseObject({ beforeOid: z.string().check(z.regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/)),
+    baseOid: z.string().check(z.regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/)), headOid: z.string().check(z.regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/)),
+    locator: z.optional(z.strictObject({ providerId: z.string().check(z.minLength(1)), repository: z.string().check(z.minLength(1)), number: z.number().check(z.int(), z.positive()) })),
+    totalFileCount: z.number().check(z.int(), z.nonnegative()), enumeratedFileCount: z.number().check(z.int(), z.nonnegative()),
     freshness: z.enum(['current', 'stale', 'unverified']), inventory: z.enum(['complete', 'incomplete']),
-    content: z.enum(['complete', 'incomplete']), reasons: z.array(z.string()), failure: z.unknown().optional(),
-  }).passthrough(),
-}).passthrough();
+    content: z.enum(['complete', 'incomplete']), reasons: z.array(z.string()), failure: z.optional(z.unknown()),
+  }),
+});
 
 type HostedFile = GitComparisonFile;
 type HostedComparison = Readonly<{ before?: string; after?: string; pullRequest?: ScmComparison['pullRequest']; files: readonly HostedFile[];

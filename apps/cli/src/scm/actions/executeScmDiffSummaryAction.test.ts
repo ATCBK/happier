@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rm, writeFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import axios from 'axios';
 import { ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, accountSettingsParse, buildBackendTargetKeyV2, type ScmComparisonSource } from '@happier-dev/protocol';
 import { getAgentStaticModels } from '@happier-dev/agents';
 
-import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
+import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 import { gitCheckpointAdapter, resolveGitCheckpointBackendContext } from '@/scm/checkpoints/gitCheckpointAdapter';
 import { buildRepositoryCheckpointRefs } from '@/scm/checkpoints/refs';
 import { retainRepositoryCheckpointTurnEvidence } from '@/scm/checkpoints/sessionEvidence';
@@ -21,12 +22,14 @@ import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/execut
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { ConnectedAccountCatalogRecordV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
+import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 
 const BACKEND_TARGET = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
 
 describe('executeScmDiffSummaryAction', () => {
     const directories: string[] = [];
     afterEach(async () => {
+        vi.restoreAllMocks();
         vi.unstubAllEnvs();
         await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
     });
@@ -155,13 +158,27 @@ describe('executeScmDiffSummaryAction', () => {
         ) });
         const executeCanonicalAction = vi.fn(async (_actionId: string, _input: unknown) => ({ ok: true as const,
             result: { runId: 'connected-default-run', callId: 'call', sidechainId: 'sidechain' } }));
+        const purposeRecord = ConnectedAccountCatalogRecordV1Schema.parse({ key: 'purposes', value: { v: 1, bindings: [{
+            purpose: purpose.purpose, target: { kind: 'account', account: { service: purpose.serviceRefs[0], accountId: 'connected-summary' } },
+        }] } });
+        // Explicit catalog admission reobserves Home even before a change hint.
+        vi.spyOn(axios, 'get').mockImplementation(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+                mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+            if (path === '/v1/account/entity-rows/connected-accounts/purposes') return { status: 200, data: {
+                status: 'present', revision: 1, content: { t: 'plain', v: purposeRecord } } };
+            if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+            if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+            const history = emptyAccountSettingsHistoryCaptureResponse(path);
+            if (history) return history;
+            throw new Error(`Unexpected connected summary Account read: ${path}`);
+        });
         try {
             setActiveAccountSettingsSnapshot({ source: 'network', settings, settingsVersion: 1, loadedAtMs: 1,
                 settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials),
                 connectedPurposeCatalog: { status: 'ready', revision: 1,
-                    record: ConnectedAccountCatalogRecordV1Schema.parse({ key: 'purposes', value: { v: 1, bindings: [{
-                        purpose: purpose.purpose, target: { kind: 'account', account: { service: purpose.serviceRefs[0], accountId: 'connected-summary' } },
-                    }] } }) } });
+                    record: purposeRecord } });
             // The Machine route has no Session backend target, so the default must come from the catalog.
             const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath, source: { kind: 'workingTree' } },
                 machineId: 'machine', backendTarget: null, credentials, executeCanonicalAction });
@@ -213,7 +230,8 @@ describe('executeScmDiffSummaryAction', () => {
             const admitted = ExecutionRunStartRequestSchema.parse(executeCanonicalAction.mock.calls[0]?.[1]);
             expect(admitted.modelId).toEqual(expect.any(String));
             expect(admitted.modelId).not.toBe('default');
-            expect(getAgentStaticModels(admitted.backendTarget?.backendId ?? '', { catalogOnly: true })
+            if (admitted.backendTarget?.kind !== 'backend') throw new Error('Expected a backend target');
+            expect(getAgentStaticModels(admitted.backendTarget.backendId, { catalogOnly: true })
                 .find(model => model.id === admitted.modelId)?.costTier).toBe('low');
             expect(await scmDiffSummaryResultStore.readStoredScope({ cwd: fixture.rootPath, resultId: generated.resultId! }))
                 .toEqual({ cwd: fixture.rootPath });

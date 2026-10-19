@@ -7,7 +7,7 @@ import { SCM_WORKTREE_REMOVE_AUTHORIZATION_TOKEN } from '@happier-dev/protocol/s
 import { admitScmCommitPolicy } from '@happier-dev/protocol/scm';
 import { expect } from 'vitest';
 
-import type { ScmBackend, ScmBackendContext } from '../types';
+import type { ScmBackend, ScmBackendContext } from '@/scm/types';
 import {
     assertSnapshotHasOnlyTrackedContractPaths,
     assertNotUnsupportedResult,

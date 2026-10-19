@@ -17,7 +17,7 @@ import { createScmBackendRegistry } from '@/scm/registry';
 import { createRegisteredScmBackendAdapter } from '@/scm/pluginBackends/registeredScmBackendAdapter';
 import { createGitScmBackendRuntimeRegistration } from '../../../../../packages/plugins/scm-git/src/backend';
 import { createScmHostingProviderRuntimeServicesForTest } from '../../../../../packages/plugins/scm-git/src/testkit/scmRuntime.test-support';
-import { createBareGitRemoteFixture, createLocalScmRepositoryFixture, runScmExecutable } from '@/scm/contracts/scmBackendContractFixtures';
+import { createBareGitRemoteFixture, createLocalScmRepositoryFixture, runScmExecutable } from '@/testkit/scm/scmBackendContractFixtures';
 import { executeScmActionOperation } from './executeScmActionOperation';
 
 describe('SCM Action execution at the Git backend', () => {
@@ -97,7 +97,7 @@ describe('SCM Action execution at the Git backend', () => {
     const sessionId = 'c111111111111111111111111';
     const machineId = 'machine-action-test';
     const serverApiUrl = 'https://scm-action-approval.test';
-    const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account-action-test' })).toString('base64url')}.signature` };
+    const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account-action-test' })).toString('base64url')}.signature`, encryption: null };
     const session = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadataLayoutVersion: 1, share: null,
       metadata: JSON.stringify({ v: 1, agentPresentation: { agentId: 'codex' } }),
       ownerMetadata: { t: 'plain', v: { v: 1, workspace: { path: fixture.rootPath, machineId } } } });

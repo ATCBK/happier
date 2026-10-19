@@ -17,6 +17,7 @@ import {
 } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
+import { isSpawnWorkingDirectoryMissing } from '@/processes/spawnFailure/classifySpawnFailure';
 
 export type ScmExecResult = BackendCommandRunResult;
 
@@ -149,7 +150,8 @@ export function runScmCommand(input: {
         } catch (error) {
             if (stdoutDescriptor !== undefined) closeSync(stdoutDescriptor);
             resolvePromise({ success: false, stdout: '',
-                stderr: error instanceof Error ? error.message : String(error), exitCode: -1 });
+                stderr: error instanceof Error ? error.message : String(error), exitCode: -1,
+                ...(isSpawnWorkingDirectoryMissing(input.cwd) ? { workingDirectoryMissing: true as const } : {}) });
             return;
         }
 
@@ -334,6 +336,7 @@ export function runScmCommand(input: {
                 exitCode: -1,
                 timedOut,
                 outputLimitExceeded,
+                ...(isSpawnWorkingDirectoryMissing(input.cwd) ? { workingDirectoryMissing: true as const } : {}),
             });
         });
 

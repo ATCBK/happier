@@ -1,3 +1,4 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import { randomUUID } from 'node:crypto';
 import { ExecutionRunGetResponseSchema, ExecutionRunStartResponseSchema, ExecutionRunSendResponseSchema, readExecutionRunStartRunCreation } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { SessionMessageSendResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -159,7 +160,7 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
     const started = await execute('execution.run.start', {
       ...runTarget, ...(!sessionId ? { machineId, cwd: scope.cwd } : {}),
       localInputId: initialInputId,
-      kind: 'scm_diff_summary.v1', intent: 'scm_diff_summary', ...engine,
+      kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, intent: 'scm_diff_summary', ...engine,
       ...(connectedServices !== undefined ? { connectedServices } : {}),
       permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
       intentInput: { cwd: scope.cwd, ...(sessionId ? { sessionId } : {}), source: result.output.comparison.source, comparisonId: result.output.comparison.id,
@@ -185,6 +186,8 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
   }
   if (!previousRunId || (!affordances.canSend && !affordances.canResume)) return { success: false,
     errorCode: 'discussion_unavailable', error: 'The generator cannot continue. Start a new conversation explicitly.' };
+  // Pending admits the exact recipient before its existing target reconciler
+  // resumes a retained runtime. Native provisioning is not input admission.
   const inputId = randomUUID();
   const begun = await store.beginInput({ ...scope, inputId, expectedRevision: input.expectedRevision, outputs, ...(stopIds ? { stopIds } : {}),
     ...(explanationRequest ? { reviewExplanation: explanationRequest } : {}) });

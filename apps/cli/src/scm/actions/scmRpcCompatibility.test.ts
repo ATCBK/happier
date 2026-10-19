@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { projectScmLegacyRpcResponse } from './scmRpcCompatibility';
 
 // Reader fields observed in ../0.2 packages/protocol/src/scmWorktrees.ts,
