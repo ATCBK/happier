@@ -77,6 +77,7 @@ export function createAppSessionTranscriptActions(sessionId: string, serverId: s
             }, context));
         },
         abort: async () => { requireActionSuccess(await execute('session.turn.cancel', { sessionId }, context)); },
+        refreshRequests: async () => { await sync.refreshSessions(); },
         submitMessage: async (text, options) => {
             // Keep the app submit owner's message-mode, wake and option-chip
             // origin semantics. Its effect runs only after Action admission.

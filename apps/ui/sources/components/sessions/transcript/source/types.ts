@@ -24,6 +24,8 @@ export type SessionTranscriptActions = Readonly<{
     respondToPermission(params: Omit<SessionPermissionRespondRpcParamsV1, 'answers'>): Promise<void>;
     answerUserAction(params: Pick<SessionPermissionRespondRpcParamsV1, 'id'> & Required<Pick<SessionPermissionRespondRpcParamsV1, 'answers'>>): Promise<void>;
     abort(): Promise<void>;
+    /** Re-reads the Session's pending requests from their authority; absent where the source has none. */
+    refreshRequests?(): Promise<void>;
     submitMessage(text: string, options?: SessionTranscriptSubmitOptions): Promise<void>;
 }>;
 

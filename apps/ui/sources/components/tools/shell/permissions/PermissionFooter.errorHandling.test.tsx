@@ -2,6 +2,8 @@ import React from 'react';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { pressTestInstanceAsync } from '@/dev/testkit';
+import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
+import { HappyError } from '@/utils/errors/errors';
 import { installPermissionShellCommonModuleMocks, createPermissionShellRenderer } from './permissionShellTestHelpers';
 
 
@@ -13,7 +15,8 @@ const ops = vi.hoisted(() => ({
     deny: vi.fn(async (..._args: unknown[]) => {}),
     abort: vi.fn(async (..._args: unknown[]) => {}),
 }));
-const renderScreen = createPermissionShellRenderer(ops);
+const refreshRequests = vi.hoisted(() => vi.fn(async () => {}));
+const renderScreen = createPermissionShellRenderer({ ...ops, refreshRequests });
 
 
 const logMock = vi.hoisted(() => ({
@@ -49,10 +52,10 @@ vi.mock('@/agents/catalog/permissionUiCopy', () => ({
     }),
 }));
 
-async function renderPendingFooter() {
+async function renderPendingFooter(permissionId = 'p1') {
     const { PermissionFooter } = await import('../permissions/PermissionFooter');
     return renderScreen(React.createElement(PermissionFooter, {
-        permission: { id: 'p1', status: 'pending' },
+        permission: { id: permissionId, status: 'pending' },
         sessionId: 's1',
         toolName: 'Bash',
         toolInput: { command: 'pwd' },
@@ -70,6 +73,10 @@ function findActionError(screen: Awaited<ReturnType<typeof renderScreen>>) {
     return screen.tree.root.findAllByProps({ testID: 'permission-footer.action-error' });
 }
 
+function makeUnknown() {
+    return new HappyError('The outcome is unknown', false, { code: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+}
+
 describe('PermissionFooter action error handling', () => {
     beforeEach(() => {
         ops.approve.mockReset();
@@ -77,6 +84,8 @@ describe('PermissionFooter action error handling', () => {
         ops.deny.mockReset();
         ops.abort.mockReset();
         logMock.log.mockReset();
+        refreshRequests.mockReset();
+        refreshRequests.mockResolvedValue(undefined);
     });
 
     it('shows retryable feedback and resets allow loading when approval fails', async () => {
@@ -141,5 +150,59 @@ describe('PermissionFooter action error handling', () => {
 
         expect(ops.deny).toHaveBeenCalledTimes(2);
         expect(findActionError(screen)).toHaveLength(0);
+    });
+
+    describe('when the result of an answer is lost (RPC_OUTCOME_UNKNOWN)', () => {
+        // The Action front door rethrows the typed RPC code on `code`; a raw RPC rejection carries `rpcErrorCode`.
+        const outcomeUnknownShapes = {
+            'Action front door': () => new HappyError('The outcome is unknown', false, { code: RPC_ERROR_CODES.OUTCOME_UNKNOWN }),
+            'raw RPC rejection': () => new RpcError('The outcome is unknown', RPC_ERROR_CODES.OUTCOME_UNKNOWN),
+        };
+
+        it.each(Object.entries(outcomeUnknownShapes))('withholds both decisions instead of inviting a resend (%s)', async (label, makeError) => {
+            ops.approve.mockRejectedValueOnce(makeError());
+            const screen = await renderPendingFooter(`p-unknown-withheld-${label}`);
+            const allowButton = findButton(screen, 'permission-footer.allow');
+
+            await pressTestInstanceAsync(allowButton, 'allow button');
+
+            expect(screen.tree.root.findAllByProps({ testID: 'permission-footer.answer-unconfirmed' })).not.toHaveLength(0);
+            expect(findActionError(screen)).toHaveLength(0);
+            expect(findButton(screen, 'permission-footer.allow').props.disabled).toBe(true);
+            expect(findButton(screen, 'permission-footer.deny').props.disabled).toBe(true);
+            expect(findButton(screen, 'permission-footer.stop').props.disabled).toBe(true);
+
+            await pressTestInstanceAsync(allowButton, 'allow button resend');
+            await pressTestInstanceAsync(findButton(screen, 'permission-footer.deny'), 'deny button');
+            expect(ops.approve).toHaveBeenCalledTimes(1);
+            expect(ops.deny).not.toHaveBeenCalled();
+        });
+
+        it('shows the same state in a second footer for the request and fresh controls for a new request', async () => {
+            ops.approve.mockRejectedValueOnce(makeUnknown());
+            const first = await renderPendingFooter('p-unknown-shared');
+            await pressTestInstanceAsync(findButton(first, 'permission-footer.allow'), 'allow button');
+
+            const second = await renderPendingFooter('p-unknown-shared');
+            expect(findButton(second, 'permission-footer.allow').props.disabled).toBe(true);
+
+            const other = await renderPendingFooter('p-unknown-other');
+            expect(findButton(other, 'permission-footer.allow').props.disabled).toBe(false);
+        });
+
+        it('checks the request again and offers answering only after the re-read confirms it is still pending', async () => {
+            ops.approve.mockRejectedValueOnce(makeUnknown()).mockResolvedValueOnce(undefined);
+            const screen = await renderPendingFooter('p-unknown-recheck');
+            await pressTestInstanceAsync(findButton(screen, 'permission-footer.allow'), 'allow button');
+
+            refreshRequests.mockRejectedValueOnce(new Error('offline'));
+            await pressTestInstanceAsync(findButton(screen, 'permission-footer.check-again'), 'check again (offline)');
+            expect(findButton(screen, 'permission-footer.allow').props.disabled).toBe(true);
+
+            await pressTestInstanceAsync(findButton(screen, 'permission-footer.check-again'), 'check again');
+            expect(refreshRequests).toHaveBeenCalledTimes(2);
+            expect(screen.tree.root.findAllByProps({ testID: 'permission-footer.answer-unconfirmed' })).toHaveLength(0);
+            expect(findButton(screen, 'permission-footer.allow').props.disabled).toBe(false);
+        });
     });
 });
