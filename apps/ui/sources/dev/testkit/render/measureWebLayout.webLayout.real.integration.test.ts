@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { installWebLayoutBridge, measureWebLayout } from './measureWebLayout';
 
@@ -19,6 +21,37 @@ function createChangingLayout() {
 }
 
 describe('real browser layout convergence', () => {
+    it('preserves the document input modality and theme variables for the loaded global keyboard ring', async () => {
+        const { container, field } = createChangingLayout();
+        field.tabIndex = 0;
+        const html = document.documentElement;
+        const previousModality = html.getAttribute('data-happier-input-modality');
+        const previousStyle = html.getAttribute('style');
+        const theme = document.createElement('style');
+        theme.textContent = readFileSync(resolve(process.cwd(), 'sources/theme.css'), 'utf8');
+        document.head.append(theme);
+        html.style.setProperty('--colors-border-focus', '#0a84ff');
+        try {
+            html.setAttribute('data-happier-input-modality', 'pointer');
+            const pointer = await measureWebLayout(container, {
+                viewport: { width: 390, height: 300 }, focusedTestId: 'field',
+            });
+            expect(pointer.rect('field').outlineStyle).toBe('none');
+            html.setAttribute('data-happier-input-modality', 'keyboard');
+            const keyboard = await measureWebLayout(container, {
+                viewport: { width: 390, height: 300 }, focusedTestId: 'field',
+            });
+            expect(keyboard.rect('field').outlineStyle).toBe('solid');
+            expect(keyboard.rect('field').outlineWidth).toBe(2);
+        } finally {
+            theme.remove();
+            if (previousModality === null) html.removeAttribute('data-happier-input-modality');
+            else html.setAttribute('data-happier-input-modality', previousModality);
+            if (previousStyle === null) html.removeAttribute('style');
+            else html.setAttribute('style', previousStyle);
+        }
+    });
+
     it('measures the final browser geometry after the layout feedback settles', async () => {
         const { container, field } = createChangingLayout();
         let pass = 0;
