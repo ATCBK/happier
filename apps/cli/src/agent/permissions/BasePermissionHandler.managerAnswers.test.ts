@@ -246,9 +246,9 @@ describe('manager answers at the registered question RPC owner', () => {
             ? { id: 'question', structuredAnswersV1: answer.answers } : answer, context)).resolves.toBeUndefined();
         expect(session.agentState.requests!.question).toBeUndefined();
         expect(session.agentState.completedRequests!.question).toMatchObject({ status: 'approved',
-            answeredBy: { kind: 'person' }, permissionDecisionActorV1: context.authorization!.actor });
+            answeredBy: { kind: 'person', accountId: context.authorization!.actor.accountId }, permissionDecisionActorV1: context.authorization!.actor });
         expect(deliveries).toEqual([expect.objectContaining({ completedRequest: expect.objectContaining({
-            answeredBy: { kind: 'person' }, structuredAnswersV1: answer.answers,
+            answeredBy: { kind: 'person', accountId: context.authorization!.actor.accountId }, structuredAnswersV1: answer.answers,
         }) })]);
         const { AgentStateSchema } = await import('@happier-dev/session-core/state');
         const { createReducer, runAgentStatePermissionsPhase } = await import('@happier-dev/session-core/reducer');
