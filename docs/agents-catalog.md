@@ -110,6 +110,18 @@ target reader maps the 0.2 `{ kind: 'configuredAcpBackend', backendId }` selecti
 to this contribution and the same definition id; new requests and writes use the
 strict current target.
 
+Configured definitions can declare `runtime.permissionModeMapping`, using the
+same strict permission-intent mapping schema as authored ACP contributions.
+The Account launch owner projects it through
+`configuredAcpRuntimeConfiguration` into the existing ACP definition; catalog
+edits and transfers preserve it. `runtime.stderrRules` remains optional and
+independent, so a mapping does not require unrelated stderr rules. Older
+definitions still parse without either field. A retained detached input requires
+a concrete native mapping for its resolved intent and refuses before prompting
+when that mapping is absent or null; a default native mode or capability hint
+does not establish permission semantics. This is a 0.3 development-source
+extension of the existing Account catalog, not another policy or runtime owner.
+
 Custom ACP currently declares no Connected Account purposes. In 0.3 development,
 Connected Account discovery and launch options therefore return no compatible
 services for a configured definition; explicitly supplying a binding is refused
@@ -216,7 +228,12 @@ failed read or envelope admission must retain its unavailable reason rather than
 publish an empty success.
 
 Retained authored transport semantics use the existing typed ACP `stderrRules`
-contribution seam. The predecessor Kiro recipe's status command/parser is retained
+contribution seam. The CLI reads these facts from the current Agent catalog;
+the UI reads the admitted bundled Agent declaration published by the canonical
+generator. Neither imports an Agent package to translate a retained recipe.
+Missing declarations or rules leave transport translation unavailable rather than
+changing optional bundled-plugin membership. The predecessor Kiro recipe's status
+command/parser is retained
 as closed compatibility data, not promoted into a new executable authentication
 runner. Private SavedSecret references remain under the shared reference and
 resource mutation owner. Consumer cutover and composed runtime validation are
@@ -431,6 +448,20 @@ consume that same environment and include the selected profile identity in their
 In development source, every discovery method validates supplied Connected Account bindings;
 malformed input returns `connected-service-preflight-failed` before credential resolution.
 
+In development source, an Agent's optional `preflightSessionControls.prepareLaunchEnvironment`
+reuses its native account preparation after the host admits the exact selected-account operation.
+It receives only that operation's Connected Accounts service and sanitized launch environment;
+ordinary catalog callbacks continue to receive environment presence facts. The host removes
+prepared assets before retiring account materialization. Its complete prepared environment also
+retains explicit key removals; the daemon cannot reintroduce a removed native home. OpenCode uses the same qualified-account
+preparer for this path and Session launch, so pre-start discovery sees its native account config.
+Explicit CLI model probes, including configured ACP definitions, run on the selected Machine.
+
+OpenCode server-mode model discovery reads the managed native server's provider inventory through
+the same client and model normalizer as bound Sessions. Standalone CLI model listings are no longer
+a second discovery source. Runtime-id and equivalent concrete Agent-target probes share one cached
+observation; selected accounts, profiles, runtime variants and configured definitions retain their
+separate scopes. OpenCode ACP discovery uses the host's native Session-controls snapshot instead.
 
 In development source, a declared stdio ACP preflight command also supplies model, mode and
 config-option discovery through the same host process and authentication owner. These reads
@@ -438,6 +469,10 @@ use the initial `session/new` snapshot immediately; command discovery alone wait
 matching `available_commands_update`. Model and mode choices fall back to config options when
 legacy arrays are empty or malformed, using the existing ACP control normalizers. Explicit Agent-owned
 control callbacks override this shared ACP behavior.
+An Agent choosing ACP at runtime can use the optional host
+`probeDeclaredAcpSessionControls` method to consume that same normalized snapshot. Codex uses
+this path for ACP and its native `model/list` reader for App Server; a host without the optional
+method leaves ACP discovery unavailable rather than substituting App Server's catalog.
 Declared control hooks own readiness of their selected executable; mode and config-option discovery
 does not require a separate interactive CLI when those hooks exist. Native probes without a declared
 hook retain their CLI readiness check. The host closes the temporary native session when supported
@@ -541,6 +576,13 @@ until the next prompt. A fresh V1 Session seeds only its initial native default 
 visible-primary Agent inventory; a resumed Session does not guess that default or treat staged
 intent as accepted current state. V1's local TUI selection is not an ongoing server observation.
 
+OpenCode prompt admission retains its authoritative native user-message identity while its
+storage write is pending. Native idle may project the exact-parent response during that write,
+but successful turn completion waits for admission to settle. An idle already observed at that
+boundary rejoins the existing completion owner, including when the native prompt response has
+no body. Cancellation and native failure keep their existing interruption paths. This is a
+development-source correction; loaded-runtime replay is separate evidence.
+
 In development source, OpenCode publishes native commands through the SDK `available-commands`
 event and the host's existing slash-command metadata owner. Known names use the native command
 endpoint with their arguments preserved; unknown slash text remains an ordinary prompt. Native
@@ -591,7 +633,8 @@ The supported 0.2 predecessor also sends the scalar `runtimeKindOverride`. The h
 unchanged through the existing preflight input and cache scope. Agent-owned mode readers interpret
 it without rewriting generic account settings. Codex gives the current descriptor precedence,
 then a valid predecessor scalar, then the account default; its variant and actual probe use that
-same decision. OpenCode's existing CLI catalog is mode-independent and needs no extra mode branch.
+same decision. OpenCode uses its existing backend-mode resolver for both the probe variant and
+native discovery, selecting the managed server or declared ACP Session-controls owner consistently.
 
 The shared runtime model publisher treats a complete Agent snapshot, including an empty list, as
 replacement membership. Canonical and legacy ACP metadata are observations of that same catalog;
@@ -1210,6 +1253,23 @@ Agent software acquisition has one owner:
 that installer and the existing update owner, rather than implementing another installer.
 It resolves the Agent's `runtimeSpec` from the contribution registry, so declared install
 paths apply to installed plugin Agents as well as bundled Agents.
+
+An Agent's `cli.install.managed` GitHub recipe may declare `releaseTag` to pin
+its supported native release. In current 0.3 development source, managed acquisition
+reads that tag's public GitHub release assets and SHA-256 digests through the shared
+release reader, then downloads the exact asset without a REST API lookup. Missing
+or ambiguous integrity metadata fails closed; an unavailable declared tag never
+falls back to latest. Managed update-version checks derive the version from the
+declared pin without network access. Omission retains
+latest-release behavior. Independently owned native and package-manager installs
+retain their own latest-version source. Bundled and installed Agent plugins
+share this contract.
+
+REST responses reporting an exhausted GitHub rate limit retain a typed
+`rate_limited` install-job failure and the reported reset time in its diagnostic
+message. Agent update inventory reuses its existing cache until that reset time;
+refreshing the inventory cannot bypass the exhausted budget. This source change
+requires a daemon reload; it does not introduce a GitHub token requirement.
 
 A job installs the Agent CLI, its declared executable managed dependencies, and then checks
 that the CLI runs and reports a version. Progress includes step transitions and transferred

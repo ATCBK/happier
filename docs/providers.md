@@ -227,6 +227,14 @@ Rows carry their source as data; the picker shows "· via <source>" only where a
 heading cannot (a name present under more than one source, or a Provider/Team row
 in Favorites), so identical names are never merged.
 
+Machine model projection uses the existing Provider operation wall budget for
+DNS, managed-purpose lookup and cold catalog demand. Each source resolves
+independently; a failed source is identified in `refreshFailures` while successful
+sources keep their rows. Refresh reuses the admitted connection facts and reads
+new runtime observations without repeating purpose or parser admission. Provider
+Actions let this owner settle its result instead of imposing a competing RPC
+acknowledgement cutoff; transport setup and caller cancellation keep their owners.
+
 Agent Models management reads exact Account favorite refs and Agent defaults.
 Its default-model control uses `providers.defaults.set`, not another Settings
 writer or a running-Session transition. Agent effort/options keep their existing
@@ -251,7 +259,11 @@ selection is the arm, `resolveArmedSubmitPresentation` names it on the send cont
 `armedRouteContinuation`. The transition owner retains live model picks as intent
 without applying them, including their metadata echoes. Send asks that same owner
 to apply the selection; only a restart-required result enters the existing
-provider-binding restart, then sends through the ordinary path. A
+provider-binding restart, then sends through the ordinary path. A replacement
+runner alone does not arm an unchanged model selection: the disposition owner
+compares intent with coherent applied history while the replacement's metadata
+catches up. That history does not authorize active-model or context claims;
+those still require the exact current runner's proof. A
 same-Agent change carries nothing over as text (`session.agentTransition` rejects a
 same-Agent target); it resumes the same session. Mid-turn the send is refused like an
 Agent switch, and `session.model.unarm` restores the applied route without sending. A saved custom
@@ -278,6 +290,12 @@ remainders return null identities. Custom connections can have a connection iden
 without a contributed Provider key. This projection carries no endpoint or credential.
 
 When a caller names a model id but omits the connection, the Session itself completes the tuple: an active Session from the Provider binding actually applied to its running runner, an inactive Session from its persisted canonical intent. That completion has three outcomes, not two. Absent state means native. Valid state means the connection it names. State that is **present but unreadable** means unknown, and the operation is refused with `model_selection_session_provider_state_unreadable` before any transition RPC, metadata CAS, or prompt admission — a corrupted binding or intent is never reported as an explicit native selection.
+
+In development source, ordinary message Actions and Workflow Session sends share
+`resolveSessionMessageModel` for native Automatic/reset input. It resolves that
+reset before ambient Provider completion and emits no per-message structured
+model reference. An explicitly named Provider's literal `default` model remains
+a concrete Provider selection.
 
 ## Attached child selection (0.3 development)
 
@@ -308,8 +326,11 @@ reference when known, and explicit-default/model options. Choosing
 child Agent's Account default at host admission, independently of the parent.
 This differs from `modelSelection: null`, which explicitly requests native
 settings. A new attempt is permitted only with `noRunCreated` evidence; a missing
-or ambiguous start receipt is not a chooser retry. The UI data hook is
-`useExecutionRunChildChoice`; visible chooser composition remains an integration step.
+or ambiguous start receipt is not a chooser retry. The launcher mounts
+`ExecutionRunChildChoiceCard` through `useExecutionRunChildChoice` for conversation
+and bounded Run refusals, offering the child Agent's default, an exact model, or
+cancel. This is implemented development source; target-specific handling of
+multiple refused Review Agents and composed live acceptance remain unverified.
 
 The running composer's explicit un-arm control uses `session.model.unarm` through
 `useSessionModelUnarm`. The Session transition coordinator restores its actually
@@ -363,6 +384,12 @@ Compatibility and Connected Account suppression use the qualified contributed id
 provider-local scalar id. Legacy built-in scalar declarations are normalized once at Protocol ingress;
 they cannot suppress or authorize another plugin's same-named binding.
 
+In 0.3 development, when Provider suppression removes every selected native
+Connected Account binding, launch preparation carries explicit none rather than
+an empty native-auth intent. An originally empty selection retains its existing
+Account-defaulting semantics; unsuppressed bindings and suppression diagnostics
+are preserved.
+
 Codex integrations use the OpenAI Responses protocol unless a separately tested adapter is introduced. Emitted Codex `model_providers` fields are allowlisted for the verified Codex version; unsupported or newly documented fields are never emitted accidentally.
 
 ## Credentials and endpoint safety
@@ -395,7 +422,9 @@ The spawn/probe order is security-sensitive:
 
 The endpoint/security fingerprints must exist before an endpoint-bound grant can be validated. No path may authorize by connection id alone and derive the endpoint afterwards.
 
-Session admission runs that whole sequence before it does any irreversible setup work. Daemon and foreground admission both reach the complete Provider decision — feature gate, Agent/target compatibility, malformed settings, a changed binding, the cold catalog rejection, and the `agent.resolvePrerequisites` hook — before the requested workspace is created, runner bootstrap material is written, or the Agent Session is opened. A prerequisite hook therefore receives the requested workspace path as a value and must not assume that directory already exists on disk.
+Daemon and foreground Session admission complete the Provider authorization decision — feature gate, Agent/target compatibility, malformed settings, a changed binding, the cold catalog rejection, and the `agent.resolvePrerequisites` hook — before the requested workspace is created, runner bootstrap material is written, or the Agent Session is opened. A prerequisite hook therefore receives the requested workspace path as a value and must not assume that directory already exists on disk.
+
+In 0.3 development, a managed Session binding is materialized after canonical Session acknowledgement, through the runner's existing managed-binding producer and custody. That producer allows the host to enter Session initialization without an early materialization handoff. For a fresh daemon child, the producer also supplies the admitted binding metadata; existing metadata must still match the selected connection. The returned handoff must match the selected connection, model and materialization before the host publishes the active target. A binding without a late-admission producer retains its early handoff requirement. Foreground late-environment admission keeps its own producer, and native open never substitutes native authentication when managed preparation fails.
 
 Provider data must never mutate the daemon's global `process.env`. Agent adapters materialize provider settings into the existing scoped child-spawn environment/configuration choke point.
 
@@ -452,6 +481,16 @@ remain single-vendor. Gateway vendor slots use the connection's existing
 gateway use clears its slot only while that exact pool still owns it; replacing
 a slot preserves other vendors. An empty saved configuration is allowed, but
 does not authorize an unbound runtime.
+
+In 0.3 development source, model rows can carry `gatewaySlots`, the qualified
+purpose and configured pool/account target for each slot that serves that model.
+The managed CPX model endpoint projects its consumer-admitted purposes from the
+pinned SDK registry's exact model support. The existing catalog probe and merge
+retain those facts; connection assembly joins them to the resolved configured
+bindings before the strict model projection publishes them. A shared model can
+carry several slots. Missing facts remain unclassified, including manual rows;
+model names and downstream protocols never supply vendor identity. These are
+grouping facts, not account entitlement or credential-selection authority.
 
 Pool gateway choices and vendor-slot writes use the captured Account catalog
 without selecting a machine. Each gateway needs its own admitted declaration;
@@ -535,6 +574,15 @@ another Account. Launch preparation does not trigger a cold upstream catalog
 refresh before admission: an unavailable dynamic observation requires a normal
 picker/probe and retry. Direct materialization rechecks its source before final
 commit as well as its existing authorization ticket.
+
+In 0.3 development source, Session-owned Run admission and personal-Provider
+materialization reach that owner over the existing authenticated runner-to-daemon
+service, borrowing the Run's retained executable registry rather than acquiring
+a daemon registry inside the runner. The snapshot retains preparation cleanup;
+the runner receives only the scoped launch environment, binding and exact
+diagnostic-redaction values. Incompatible and unverified inherited routes retain
+their existing child-choice result. This is a source contract, not loaded-runtime
+certification.
 
 Issued credentials for the same Account can have a different cache scope from
 the daemon's token. The trusted credential/context producer supplies the Account
