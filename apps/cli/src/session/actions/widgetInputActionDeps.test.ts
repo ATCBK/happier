@@ -4,7 +4,7 @@ import { createCliWidgetAreaActionDepsV1 } from './widgetAreaActionDeps';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { buildWidgetDefinitionArtifactHeaderV1, createWidgetDefinitionArtifactPortV1, type WidgetDefinitionV1 } from '@happier-dev/protocol/widgets';
 import { readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
-import { createWorkBoardArtifactBoundary } from '@happier-dev/protocol/boards/workBoardArtifactV1.testkit';
+import { createWorkBoardArtifactBoundary } from '../../../../../packages/protocol/src/boards/workBoardArtifactV1.testkit';
 import { createWorkBoardArtifactPortV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
 
 describe('Widget Action input transport authority', () => {
