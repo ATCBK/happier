@@ -28,6 +28,16 @@ describe('built-in approval decisions through the canonical owner', () => {
         // Typed copy that already names the problem carries no code to show.
         expect(presentApprovalFailure({ errorCode: 'approval_stale', error: 'x' }, 'x')).toEqual({ reason: t('approvals.staleFailure'), code: null });
     });
+    it.each([
+        'database_connection_unavailable',
+        'database_transaction_conflict_exhausted',
+        'project_requester_home_unavailable',
+    ])('reads the transient availability failure %s as a busy server that changed nothing, keeping the code for details', (errorCode) => {
+        expect(presentApprovalFailure({ errorCode, error: errorCode }, errorCode))
+            .toEqual({ reason: t('approvals.transientFailure'), code: errorCode });
+        expect(presentApprovalFailure(new HappyError('transport detail', false, { code: errorCode })))
+            .toEqual({ reason: t('approvals.transientFailure'), code: errorCode });
+    });
     it('retains the exact typed failure code in the shared decision failure presentation', () => {
         expect(presentApprovalFailure(new HappyError('private transport detail', false,
             { code: 'approval_origin_unavailable' }))).toEqual({ reason: t('approvals.decisionError'), code: 'approval_origin_unavailable' });

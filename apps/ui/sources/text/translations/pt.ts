@@ -2065,6 +2065,7 @@ const ptValues = {
     decisionError: "Falha ao atualizar a aprovação.",
     decisionAuthorityError: "Este início de sessão não permite aprovar pedidos. Inicia sessão neste Home com a chave de recuperação da tua conta, ou aprova noutro dispositivo com uma sessão de conta.",
     staleFailure: "Este pedido já não está atualizado, por isso não foi executado. Revê o pedido mais recente na caixa de entrada.",
+    transientFailure: "O servidor estava ocupado, então nada foi alterado. Tente novamente.",
     failureGeneric: 'A ação aprovada falhou',
     failureNotRun: 'Pedido não executado',
     failureFileWrite: 'Não foi possível escrever o ficheiro',

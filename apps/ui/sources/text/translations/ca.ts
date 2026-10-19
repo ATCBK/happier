@@ -1864,6 +1864,7 @@ const caValues = {
         decisionError: 'No s\'ha pogut actualitzar l\'aprovació.',
         decisionAuthorityError: 'Aquest inici de sessió no permet aprovar sol·licituds. Inicia sessió en aquest Home amb la clau de recuperació del teu compte, o aprova des d’un altre dispositiu amb una sessió de compte.',
         staleFailure: "Aquesta sol·licitud ja no és vigent, així que no s'ha executat. Revisa la sol·licitud més recent a la safata d'entrada.",
+        transientFailure: "El servidor estava ocupat, així que no s'ha canviat res. Torna-ho a provar.",
         failureGeneric: "L'acció aprovada ha fallat",
         failureNotRun: 'Sol·licitud no executada',
         failureFileWrite: "No s'ha pogut escriure el fitxer",

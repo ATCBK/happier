@@ -1865,6 +1865,7 @@ const frValues = {
     decisionError: "Échec de la mise à jour de l’approbation.",
     decisionAuthorityError: "Cette connexion ne permet pas d’approuver les demandes. Connecte-toi à ce Home avec la clé de récupération de ton compte, ou approuve depuis un autre appareil connecté à ton compte.",
     staleFailure: "Cette demande n'est plus à jour, donc elle n'a pas été exécutée. Consulte la dernière demande dans la boîte de réception.",
+    transientFailure: "Le serveur était occupé, donc rien n'a été modifié. Réessayez.",
     failureGeneric: "L'action approuvée a échoué",
     failureNotRun: 'Demande non exécutée',
     failureFileWrite: "Impossible d'écrire le fichier",

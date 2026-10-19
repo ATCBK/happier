@@ -1650,6 +1650,7 @@ export const de: TranslationStructure = {
         decisionError: 'Freigabe konnte nicht aktualisiert werden.',
         decisionAuthorityError: 'Diese Anmeldung kann Anfragen nicht genehmigen. Melde dich mit dem Wiederherstellungsschlüssel deines Kontos bei diesem Home an oder genehmige die Anfrage auf einem anderen Gerät mit einer Kontoanmeldung.',
         staleFailure: "Diese Anfrage ist nicht mehr aktuell und wurde daher nicht ausgeführt. Prüfe die neueste Anfrage im Posteingang.",
+        transientFailure: "Der Server war ausgelastet, daher wurde nichts geändert. Versuche es erneut.",
         failureGeneric: 'Die freigegebene Aktion ist fehlgeschlagen',
         failureNotRun: 'Anfrage nicht ausgeführt',
         failureFileWrite: 'Datei konnte nicht geschrieben werden',

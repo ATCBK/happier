@@ -2012,6 +2012,7 @@ const jaValues = {
     decisionError: "承認を更新できませんでした。",
     decisionAuthorityError: "このログインではリクエストを承認できません。アカウントの復旧キーでこのHomeにログインするか、アカウントでログイン済みの別の端末から承認してください。",
     staleFailure: "この依頼は最新ではないため、実行されませんでした。受信トレイで最新の依頼を確認してください。",
+    transientFailure: "サーバーがビジー状態だったため、何も変更されていません。もう一度お試しください。",
     failureGeneric: '承認した操作に失敗しました',
     failureNotRun: 'リクエストは実行されませんでした',
     failureFileWrite: 'ファイルを書き込めませんでした',

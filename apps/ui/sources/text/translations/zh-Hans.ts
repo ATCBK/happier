@@ -1843,6 +1843,7 @@ const zhHansValues = {
     decisionError: "更新审批失败。",
     decisionAuthorityError: "此登录方式无法批准请求。请使用账户恢复密钥登录此 Home，或在已登录账户的另一台设备上批准。",
     staleFailure: "此请求已不是最新状态，因此未执行。请在收件箱中查看最新请求。",
+    transientFailure: "服务器正忙，因此未做任何更改。请重试。",
     failureGeneric: '已批准的操作失败了',
     failureNotRun: '请求未执行',
     failureFileWrite: '无法写入文件',
