@@ -13,20 +13,32 @@ import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixture
 import { createPassThroughModule } from '@/dev/testkit/mocks/components';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
-import { createStorageModuleMock } from '@/dev/testkit/mocks/storage';
+import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
 import { createExpoVectorIconsMock } from '@/dev/testkit/mocks/icons';
+import { createMachineAdministrationTargetSelectionMock } from '@/dev/testkit/mocks/machineAdministrationTargetSelection';
 import {
     flushHookEffects,
+    createMachineFixture,
+    renderHook,
     renderScreen,
     standardCleanup,
 } from '@/dev/testkit';
 import { installSessionSettingsEntryModuleMocks } from '../sessionSettingsEntryTestHelpers';
-import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
 import { storage } from '@/sync/domains/state/storageStore';
+import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
+import { localSettingsParse } from '@/sync/domains/settings/localSettings';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
+import { setRuntimeFetch, type RuntimeFetch } from '@/utils/system/runtimeFetch';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { applyConnectedAccountCatalogSnapshot, beginConnectedAccountCatalogLoad, resetConnectedAccountCatalogSnapshotsForTests } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 
 const initialAgentSettingsStorage = storage.getState();
+let activeStorageScope: Readonly<{ dispose(): void }> | null = null;
+let purposes = createConnectedPurposeCatalogHttpBoundary();
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -66,39 +78,22 @@ const machineProjectionRevisionState = vi.hoisted(() => ({
     listeners: new Set<() => void>(),
 }));
 const machinePluginSessionHooksRpcMock = vi.hoisted(() => vi.fn());
-const administrationTargetState = vi.hoisted(() => ({
-    selectedTarget: {
-        serverIdentityId: 'server1',
-        machineId: 'm1',
-    } as { serverIdentityId: string; machineId: string } | null,
-    selectTargetCalls: [] as Readonly<{ serverIdentityId: string; machineId: string }>[],
-    executionTarget: {
-        target: {
-            serverIdentityId: 'server1',
-            machineId: 'm1',
-        },
-        serverId: 'server1',
-        machine: {
-            id: 'm1',
-            metadata: { displayName: 'Machine One', host: 'm1', homeDir: '/Users/m1' },
-            daemonStateVersion: 0,
-        },
-    } as {
-        target: { serverIdentityId: string; machineId: string };
-        serverId: string;
-        machine: {
-            id: string;
-            metadata: { displayName: string; host: string; homeDir: string };
-            daemonStateVersion: number;
-        };
-    } | null,
-}));
+const administrationMachines = [
+    { machineId: 'm1', displayName: 'Machine One', homeDir: '/Users/m1', daemonStateVersion: 0, serverIdentityId: 'server1', serverId: 'server1' },
+    { machineId: 'm2', displayName: 'Machine Two', homeDir: '/Users/m2', daemonStateVersion: 0, serverIdentityId: 'server1', serverId: 'server1' },
+    { machineId: 'm3', displayName: 'Machine Three', homeDir: '/Users/m3', daemonStateVersion: 0, serverIdentityId: 'server2', serverId: 'server2' },
+];
+const administrationSelection = createMachineAdministrationTargetSelectionMock({
+    serverId: 'server1', serverIdentityId: 'server1', machines: administrationMachines,
+});
 
-const machineCapabilitiesInvokeMock = vi.fn(async () => ({
+const machineCapabilitiesInvokeMock = vi.hoisted(() => vi.fn(async () => ({
     supported: true,
     response: { ok: true, result: { plan: null } },
-}));
+})));
 const applySettingsMock = vi.hoisted(() => vi.fn());
+const observedActionResults = vi.hoisted(() => [] as unknown[]);
+const settingsWriteSpy = vi.fn();
 const mutateAccountSettingsOnceMock = vi.hoisted(() => vi.fn());
 const tauriDesktopState = vi.hoisted(() => ({ value: true }));
 const paneApi = {
@@ -120,7 +115,6 @@ const paneApi = {
     closeDetailsTab: vi.fn(),
     setActiveDetailsTab: vi.fn(),
 };
-const useCapabilityInstallabilityMock = vi.fn();
 let machinesState = [
     { id: 'm1', metadata: { displayName: 'Machine One', host: 'm1', homeDir: '/Users/m1' } },
     { id: 'm2', metadata: { displayName: 'Machine Two', host: 'm2', homeDir: '/Users/m2' } },
@@ -490,86 +484,6 @@ installSessionSettingsEntryModuleMocks({
         };
     },
     textModule: () => createTextModuleMock({ translate: (key) => key }),
-    storageModule: (importOriginal) =>
-        createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                // Test boundary fixture: this route reads a small subset of the storage contract.
-                useSettings: (() => settingsState) as any,
-                useAllMachines: (() => machinesState) as any,
-                useMachineListByServerId: (() => machineListByServerIdState) as any,
-                useMachineListStatusByServerId: (() => machineListStatusByServerIdState) as any,
-                useLocalSetting: ((key: string) => {
-                    if (key === 'bottomPaneHeightPx') return 320;
-                    if (key === 'bottomPaneHeightBasisPx') return 900;
-                    return undefined;
-                }) as any,
-                useLocalSettingMutable: ((key: string) => {
-                    if (key === 'bottomPaneHeightPx') return [320, vi.fn()] as const;
-                    if (key === 'bottomPaneHeightBasisPx') return [900, vi.fn()] as const;
-                    if (key === 'contextSelectionsV1') {
-                        return [
-                            settingsState.contextSelectionsV1,
-                            (next: any) => {
-                                settingsState.contextSelectionsV1 = next;
-                            },
-                        ] as const;
-                    }
-                    return [undefined, vi.fn()] as const;
-                }) as any,
-                useSettingMutable: ((key: string) => {
-                    if (key === 'contextSelectionsV1') {
-                        return [
-                            settingsState.contextSelectionsV1,
-                            (next: any) => {
-                                settingsState.contextSelectionsV1 = next;
-                            },
-                        ] as const;
-                    }
-                    return [undefined, vi.fn()] as const;
-                }) as any,
-                useSetting: createUseSettingMock({ fallback: (key) => {
-                    if (key === 'serverSelectionGroups') return {};
-                    if (key === 'serverSelectionActiveTargetKind') return 'server';
-                    if (key === 'serverSelectionActiveTargetId') return 'server1';
-                    if (key === 'externalSessionsSettingsV1') {
-                        return settingsState.externalSessionsSettingsV1;
-                    }
-                    return undefined;
-                } }),
-                useProfile: () => ({
-                    id: 'profile-1',
-                    timestamp: 0,
-                    firstName: null,
-                    lastName: null,
-                    username: null,
-                    avatar: null,
-                    linkedProviders: [],
-                    connectedServices: [],
-                    connectedServiceCredentialRevisionsV1: [],
-                    connectedAccountsV4: [],
-                    connectedAccountGroupsV4: [],
-                    connectedServicesV2: [
-                        {
-                            serviceId: 'anthropic',
-                            profiles: [{
-                                profileId: 'work',
-                                status: 'needs_reauth',
-                                providerEmail: null,
-                                providerAccountId: null,
-                                kind: 'token',
-                                expiresAt: null,
-                                lastUsedAt: null,
-                                health: null,
-                            }],
-                            groups: [],
-                        },
-                    ],
-                }),
-                useMachine: () => null,
-            },
-        }),
-    featureEnabled: () => true,
 });
 
 vi.mock('@expo/vector-icons', () => createExpoVectorIconsMock());
@@ -626,8 +540,10 @@ vi.mock('@/components/ui/text/Text', () => ({
     TextInput: 'TextInput',
 }));
 
-vi.mock('@/utils/platform/desktopHost', () => ({
+vi.mock('@/utils/platform/desktopHost', async importOriginal => ({
+    ...await importOriginal<typeof import('@/utils/platform/desktopHost')>(),
     isDesktopHost: () => tauriDesktopState.value,
+    desktopHostKind: () => tauriDesktopState.value ? 'tauri' : null,
 }));
 
 vi.mock('@/sync/sync', () => ({
@@ -637,25 +553,39 @@ vi.mock('@/sync/sync', () => ({
     },
 }));
 
-// The Agent purpose section observes the Home's entitled Team credential
-// catalog (a Home query); no Team resource is offered in this suite.
-vi.mock('@/hooks/teams/useHomeTeamCredentialModelCatalog', () => ({
-    useHomeTeamCredentialModelCatalog: () => ({
-        resources: [], teamNameById: {}, homeNameByTeamId: {}, currentResourceKeys: new Set(), current: true, condition: null,
-    }),
-}));
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+    const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
+    const create = createFrontDoorActionExecuteForVitest(original);
+    return { ...original, createFrontDoorActionExecute: (...args: Parameters<typeof create>) => {
+        const execute = create(...args);
+        return Object.assign(async (...input: Parameters<typeof execute>) => {
+            try {
+                const result = await execute(...input);
+                observedActionResults.push(result);
+                return result;
+            } catch (error) {
+                observedActionResults.push(error instanceof Error ? error.stack : String(error));
+                throw error;
+            }
+        }, { prepare: execute.prepare });
+    } };
+});
 
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useAccountSettingsScope: () => null,
+vi.mock('@/sync/store/settingsWriters', async importOriginal => ({
+    ...await importOriginal<typeof import('@/sync/store/settingsWriters')>(),
     useApplySettings: () => applySettingsMock,
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createPartialServerProfilesModuleMock(importOriginal, {
+        profiles: [{ id: 'server1', serverIdentityId: 'server1', serverUrl: 'http://localhost:3000', name: 'server1' }],
+        overrides: {
     getServerProfilesGeneration: () => 0,
     subscribeServerProfiles: () => () => undefined,
     getActiveServerSnapshot: () => activeServerSnapshot,
     loadHomeViewState: () => null,
-    listServerProfiles: () => [{ id: 'server1', serverUrl: 'http://localhost:3000', webappUrl: 'http://localhost:8081', name: 'server1' }],
     getServerProfileById: (serverId: string) => {
         const serverIdentityId = serverIdentityByProfileId[serverId] ?? serverId;
         return {
@@ -668,8 +598,8 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
             lastUsedAt: 0,
         };
     },
-    resolveServerProfileScopeIdForIdentifier: (serverId: string) => (
-        serverIdentityByProfileId[serverId] ?? serverId
+    resolveServerProfileScopeIdForIdentifier: (serverId: string | null | undefined) => (
+        serverId ? serverIdentityByProfileId[serverId] ?? serverId : ''
     ),
     // Mirrors the real owner: two identifiers are the same profile when one is the
     // other or both resolve to the same profile — including a device-local profile
@@ -679,7 +609,8 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
         || serverIdentityByProfileId[String(left ?? '')] === right
         || serverIdentityByProfileId[String(right ?? '')] === left
     ),
-}));
+    } });
+});
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => activeServerSnapshot,
@@ -710,8 +641,7 @@ vi.mock('@/sync/domains/server/selection/serverSelectionResolution', () => ({
 }));
 
 vi.mock('@/sync/ops/machineContributionRegistryProjection', () => ({
-    machineContributionRegistryProjectionDescribe: (...args: unknown[]) =>
-        machineContributionRegistryProjectionDescribeMock(...args),
+    machineContributionRegistryProjectionDescribe: (...args: unknown[]) => machineContributionRegistryProjectionDescribeMock(...args),
     getMachineContributionRegistryProjectionRevision: () => machineProjectionRevisionState.revision,
     subscribeMachineContributionRegistryProjectionInvalidation: (_scope: unknown, listener: () => void) => {
         machineProjectionRevisionState.listeners.add(listener);
@@ -738,54 +668,16 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 }));
 
 
-vi.mock('@/hooks/machine/useCapabilityInstallability', () => ({
-    useCapabilityInstallability: (...args: any[]) => useCapabilityInstallabilityMock(...args),
-}));
-
 vi.mock('@/sync/domains/machines/administration/useTargetSelection', () => ({
-    useMachineAdministrationTargetSelection: () => {
-        const [, rerender] = React.useState(0);
+    useMachineAdministrationTargetPickerRows: () => administrationSelection.module.useMachineAdministrationTargetPickerRows(),
+    resolveFreshMachineAdministrationExecutionTarget: (target: Parameters<typeof administrationSelection.module.resolveFreshMachineAdministrationExecutionTarget>[0]) =>
+        administrationSelection.module.resolveFreshMachineAdministrationExecutionTarget(target),
+    useMachineAdministrationTargetSelection: (key: string) => {
+        const selection = administrationSelection.module.useMachineAdministrationTargetSelection(key);
         return {
-            selectedTarget: administrationTargetState.selectedTarget,
-            selectedTargetServerMatchesActiveAccount:
-                administrationTargetState.selectedTarget?.serverIdentityId
+            ...selection,
+            selectedTargetServerMatchesActiveAccount: selection.selectedTarget?.serverIdentityId
                 === (serverIdentityByProfileId[activeServerSnapshot.serverId] ?? activeServerSnapshot.serverId),
-            resolveExecutionTarget: () => administrationTargetState.executionTarget,
-            pickerRows: [],
-            candidates: [
-                { target: { serverIdentityId: 'server1', machineId: 'm1' } },
-                { target: { serverIdentityId: 'server1', machineId: 'm2' } },
-                { target: { serverIdentityId: 'server2', machineId: 'm3' } },
-            ],
-            selectTarget: (target: { serverIdentityId: string; machineId: string }) => {
-                const machineNames: Record<string, string> = {
-                    m1: 'Machine One',
-                    m2: 'Machine Two',
-                    m3: 'Machine Three',
-                };
-                const displayName = machineNames[target.machineId] ?? target.machineId;
-                administrationTargetState.selectTargetCalls.push(target);
-                administrationTargetState.selectedTarget = target;
-                administrationTargetState.executionTarget = {
-                    target,
-                    serverId: target.serverIdentityId,
-                    machine: {
-                        id: target.machineId,
-                        metadata: {
-                            displayName,
-                            host: target.machineId,
-                            homeDir: `/Users/${target.machineId}`,
-                        },
-                        daemonStateVersion: 0,
-                    },
-                };
-                rerender((current) => current + 1);
-            },
-            clearTarget: () => {
-                administrationTargetState.selectedTarget = null;
-                administrationTargetState.executionTarget = null;
-                rerender((current) => current + 1);
-            },
         };
     },
 }));
@@ -944,7 +836,7 @@ vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
     getPermissionModeLabelForAgentType: () => 'Ask',
     getPermissionModeOptionsForAgentType: () => [
         { value: 'default', label: 'Default', description: 'Use the global default', icon: 'list' },
-        { value: 'ask', label: 'Ask', description: 'Ask each time', icon: 'question' },
+        { value: 'read-only', label: 'Read only', description: 'Inspect without edits', icon: 'eye' },
     ],
 }));
 
@@ -986,6 +878,39 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
 
 
 async function renderPluginAgentSettingsScreen() {
+    storage.setState({
+        settings: settingsParse({ ...settingsDefaults, ...settingsState }),
+        localSettings: localSettingsParse({ bottomPaneHeightPx: 320, bottomPaneHeightBasisPx: 900,
+            contextSelectionsV1: settingsState.contextSelectionsV1,
+            serverSelectionGroups: {}, serverSelectionActiveTargetKind: 'server', serverSelectionActiveTargetId: 'server1' }),
+        profile: { ...profileDefaults, id: 'account:server1', connectedServicesV2: [{
+            serviceId: 'anthropic', profiles: [{ profileId: 'work', status: 'needs_reauth', providerEmail: null,
+                providerAccountId: null, kind: 'token', expiresAt: null, lastUsedAt: null, health: null }], groups: [],
+        }] },
+    });
+    for (const [serverId, rows] of Object.entries(machineListByServerIdState)) {
+        const machines = rows.flatMap(row => {
+            const source = machinesState.find(machine => machine.id === row.id);
+            return source ? [createMachineFixture({ id: source.id, activeAt: Date.now(),
+                metadata: { ...createMachineFixture().metadata!, ...source.metadata } })] : [];
+        });
+        storage.getState().applyMachines(machines, true, { sourceServerId: serverId, sourceAccountId: `account:${serverId}` });
+        if (Object.entries(machineListStatusByServerIdState).find(([id]) => id === serverId)?.[1].status === 'ready') {
+            storage.getState().markMachineListSettled(serverId);
+        }
+    }
+    purposes = createConnectedPurposeCatalogHttpBoundary({
+        initialValue: settingsState.connectedAccountPurposeBindingsV1,
+        settingsRequest: async (input, init) => {
+            const body = AccountSettingsV2UpdateRequestSchema.parse(JSON.parse(String(init?.body)));
+            if (body.content?.t !== 'plain') throw new Error('Expected Plain Account Settings');
+            settingsWriteSpy(body.content.v);
+            return Response.json({ success: true, version: 8 });
+        },
+    });
+    applyConnectedAccountCatalogSnapshot({ serverId: 'server1', accountId: 'account:server1' }, 'purposes', {
+        status: 'ready', revision: 1, record: { key: 'purposes', value: purposes.value },
+    }, true);
     const Screen = (await import('@/app/(app)/settings/agents/[agentId]')).default;
     return renderScreen(React.createElement(Screen));
 }
@@ -1032,21 +957,19 @@ function findSegmentedChoice(screen: RenderedAgentScreen, title: string) {
 }
 
 function setAdministrationExecutionTarget(machineId: string, serverId: string) {
-    const displayName = ({
-        m1: 'Machine One',
-        m2: 'Machine Two',
-        m3: 'Machine Three',
-    } as Record<string, string>)[machineId] ?? machineId;
-    administrationTargetState.selectedTarget = { serverIdentityId: serverId, machineId };
-    administrationTargetState.executionTarget = {
-        target: { serverIdentityId: serverId, machineId },
-        serverId,
-        machine: {
-            id: machineId,
-            metadata: { displayName, host: machineId, homeDir: `/Users/${machineId}` },
-            daemonStateVersion: 0,
-        },
-    };
+    const machine = administrationMachines.find(row => row.machineId === machineId);
+    administrationSelection.controller.setMachines([
+        ...administrationMachines,
+        ...(!administrationMachines.some(row => row.machineId === machineId && row.serverIdentityId === serverId)
+            ? [{ machineId, displayName: machine?.displayName ?? machineId, homeDir: '/Users/' + machineId,
+                daemonStateVersion: 0, serverIdentityId: serverId, serverId }]
+            : []),
+    ]);
+    administrationSelection.controller.select(machineId, serverId);
+}
+
+function selectAdministrationTarget(target: Readonly<{ machineId: string; serverIdentityId: string }>) {
+    administrationSelection.controller.select(target.machineId, target.serverIdentityId);
 }
 
 function buildCanonicalBackendTargetKey(backendId: string): string {
@@ -1061,18 +984,44 @@ describe('PluginAgentSettingsScreen', () => {
     afterEach(() => {
         clearProjectedAgentUiBehaviorDescriptors();
         standardCleanup();
+        activeStorageScope?.dispose();
+        activeStorageScope = null;
         storage.setState(initialAgentSettingsStorage, true);
     });
 
-    beforeEach(() => {
-        storage.setState({ settingsVersion: 7, settingsScope: null });
+    beforeEach(async () => {
+        resetConnectedAccountCatalogEngineForTests();
+        resetConnectedAccountCatalogSnapshotsForTests();
+        const scope = { serverId: 'server1', accountId: 'account:server1' };
+        activeStorageScope = await activateStorageAccountScope(scope);
+        storage.setState({ settingsVersion: 7, settingsScope: scope });
+        settingsWriteSpy.mockReset();
+        observedActionResults.length = 0;
+        const request: RuntimeFetch = async (input, init) => {
+            const purposeResponse = await purposes.handle(input, init);
+            if (purposeResponse) return purposeResponse;
+            const path = new URL(String(input)).pathname;
+            if (path === '/health') return new Response(null, { status: 200 });
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === '/v2/account/settings' && init?.method === 'POST') {
+                const body = AccountSettingsV2UpdateRequestSchema.parse(JSON.parse(String(init.body)));
+                if (body.content?.t !== 'plain') throw new Error('Expected a Plain Account Settings write');
+                settingsWriteSpy(body.content.v);
+                return Response.json({ success: true, version: 8 });
+            }
+            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: settingsState }, version: 7 });
+            return Response.json({}, { status: 404 });
+        };
+        purposes = createConnectedPurposeCatalogHttpBoundary({ settingsRequest: request });
+        setRuntimeFetch(request);
         clearDaemonMergedProjectionCacheForTests();
         mockProviderId = 'codex';
         mockAgentPluginId = null;
         mockRecoveryMachineId = null;
         mockRecoveryServerIdentityId = null;
         mockInstallIntent = null;
-        administrationTargetState.selectTargetCalls = [];
+        administrationSelection.controller.reset();
         setAdministrationExecutionTarget('m1', 'server1');
         shouldThrowOnAppPaneScope = false;
         tauriDesktopState.value = true;
@@ -1143,8 +1092,6 @@ describe('PluginAgentSettingsScreen', () => {
         };
         serverIdentityByProfileId = { server1: 'server1' };
         activeServerSubscribers = new Set();
-        useCapabilityInstallabilityMock.mockReset();
-        useCapabilityInstallabilityMock.mockReturnValue({ kind: 'installable' });
         routerPushSpy.mockReset();
         mockAgentCatalogProjection.mockReset();
         mockAgentCatalogProjection.mockImplementation((agentId: string, params?: Record<string, unknown>) => {
@@ -1210,26 +1157,20 @@ describe('PluginAgentSettingsScreen', () => {
         });
     });
 
-    it('uses the canonical Administration exact target for projection, CLI detection, and install', async () => {
+    it('uses the canonical Administration exact target for its daemon projection', async () => {
         setAdministrationExecutionTarget('m2', 'server-selected');
         machineContributionRegistryProjectionDescribeMock.mockResolvedValue({
             supported: true,
             projection: PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE,
         });
 
-        const screen = await renderPluginAgentSettingsScreen();
+        await renderPluginAgentSettingsScreen();
         await act(async () => {});
         await flushHookEffects();
 
-        expect(screen.findByType('MachineAdministrationTargetSelector')).toBeTruthy();
         expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('m2', expect.objectContaining({
             serverId: 'server-selected',
         }));
-        const installer = screen.findByType('AgentCliInstallItem');
-        expect(installer.props).toMatchObject({
-            machineId: 'm2',
-            serverId: 'server-selected',
-        });
     });
 
     it('keeps Account Settings identity independent from the Administration daemon target for a built-in Agent', async () => {
@@ -1270,13 +1211,10 @@ describe('PluginAgentSettingsScreen', () => {
             serverId: 'admin-identity-b',
         };
         expect(settingsSection.props.isDaemonTargetCurrent(daemonTarget)).toBe(true);
-        administrationTargetState.executionTarget = {
-            ...administrationTargetState.executionTarget!,
-            machine: {
-                ...administrationTargetState.executionTarget!.machine,
-                daemonStateVersion: 1,
-            },
-        };
+        administrationSelection.controller.setMachines([{
+            machineId: 'm2', displayName: 'Machine Two', serverIdentityId: 'admin-identity-b',
+            serverId: 'admin-identity-b', daemonStateVersion: 1,
+        }]);
         expect(settingsSection.props.isDaemonTargetCurrent(daemonTarget)).toBe(false);
 
         const { AgentContributedSettingsSection } = await import('@/components/settings/agents/AgentSettingsScreen');
@@ -1367,7 +1305,7 @@ describe('PluginAgentSettingsScreen', () => {
 
         const permissionChoice = findSegmentedChoice(screen, 'settingsSession.permissions.defaultPermissionModeTitle');
         expect(permissionChoice?.props.disabled).toBe(true);
-        permissionChoice?.props.onChange('ask');
+        permissionChoice?.props.onChange('read-only');
 
         const sourceChoice = findSegmentedChoice(screen, 'settingsAgents.cliSourcePreference.title');
         expect(sourceChoice?.props.disabled).toBe(true);
@@ -1384,10 +1322,7 @@ describe('PluginAgentSettingsScreen', () => {
         });
 
         expect(applySettingsMock).not.toHaveBeenCalled();
-        expect(screen.findByType('AgentCliInstallItem').props).toMatchObject({
-            machineId: 'm3',
-            serverId: 'server2',
-        });
+        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('m3', expect.objectContaining({ serverId: 'server2' }));
     });
 
     it('uses daemon merged projection inputs when resolving a plugin provider settings screen', async () => {
@@ -1421,9 +1356,8 @@ describe('PluginAgentSettingsScreen', () => {
 
         machineContributionRegistryProjectionDescribeMock.mockClear();
 
-        const targetSelector = screen.findByType('MachineAdministrationTargetSelector');
         await act(async () => {
-            targetSelector.props.selection.selectTarget({
+            selectAdministrationTarget({
                 serverIdentityId: 'server2',
                 machineId: 'm3',
             });
@@ -1447,7 +1381,6 @@ describe('PluginAgentSettingsScreen', () => {
             loading: true,
         });
         expect(screen.getTextContent()).not.toContain('settingsAgents.notFoundTitle');
-        expect(screen.findByType('MachineAdministrationTargetSelector')).toBeTruthy();
     });
 
     it('keeps the same-target last-known Agent detail visible while projection refresh fails', async () => {
@@ -1482,9 +1415,8 @@ describe('PluginAgentSettingsScreen', () => {
         await act(async () => {});
         await flushHookEffects();
 
-        const targetSelector = screen.findByType('MachineAdministrationTargetSelector' as any);
         await act(async () => {
-            targetSelector.props.selection.selectTarget({
+            selectAdministrationTarget({
                 serverIdentityId: 'server1',
                 machineId: 'm2',
             });
@@ -1522,9 +1454,8 @@ describe('PluginAgentSettingsScreen', () => {
         await act(async () => {});
         await flushHookEffects();
 
-        const targetSelector = screen.findByType('MachineAdministrationTargetSelector' as any);
         await act(async () => {
-            targetSelector.props.selection.selectTarget({
+            selectAdministrationTarget({
                 serverIdentityId: 'server1',
                 machineId: 'm2',
             });
@@ -1570,15 +1501,9 @@ describe('PluginAgentSettingsScreen', () => {
         expect(machinePluginSessionHooksRpcMock).not.toHaveBeenCalled();
     });
 
-    /**
-     * The screen is scoped to ONE execution target and compares against that
-     * machine's daemon projection, so the Agent declaration it compares with
-     * has to come from the same machine. An installed Agent held at different
-     * versions on two machines otherwise turns the silence of a machine that
-     * legitimately contributes no External Sessions Agent into an error banner
-     * borrowed from whichever machine sorts first.
-     */
-    it('reads the External Sessions expectation from the selected machine declaration', async () => {
+    // An installed Agent without the current UI declaration can retain durable
+    // hooks. Its selected-machine inventory must still report a failed read.
+    it('reads the selected machine’s hook inventory without assuming an absent UI declaration means no durable hooks', async () => {
         mockProviderId = 'acme.review.provider';
         machineContributionRegistryProjectionDescribeMock.mockResolvedValue({
             supported: true,
@@ -1638,24 +1563,23 @@ describe('PluginAgentSettingsScreen', () => {
         await act(async () => {});
         await flushHookEffects();
 
-        // Positive twin: on the machine that DOES declare External Sessions, a
-        // daemon projecting no Agent for it is a genuine error.
+        // The declared machine's unavailable inventory is reported honestly.
         expect(screen.findByTestId(
             'settings-external-sessions-inventory-status',
         )?.props.title).toBe('externalSessions.settingsIntegrationInventoryErrorTitle');
 
-        const targetSelector = screen.findByType('MachineAdministrationTargetSelector' as any);
         await act(async () => {
-            targetSelector.props.selection.selectTarget({
+            selectAdministrationTarget({
                 serverIdentityId: 'server1',
                 machineId: 'm2',
             });
         });
         await flushHookEffects();
 
+        expect(machinePluginSessionHooksRpcMock).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'm2' }));
         expect(screen.findByTestId(
             'settings-external-sessions-inventory-status',
-        )?.props.title).not.toBe('externalSessions.settingsIntegrationInventoryErrorTitle');
+        )?.props.title).toBe('externalSessions.settingsIntegrationInventoryErrorTitle');
     });
 
     it('shows only persisted enabled auto-link policies for the selected machine and Agent and removes them offline', async () => {
@@ -1762,6 +1686,7 @@ describe('PluginAgentSettingsScreen', () => {
         expect(machinePluginSessionHooksRpcMock).toHaveBeenCalledWith({
             machineId: 'm1',
             serverId: 'server1',
+            signal: expect.any(AbortSignal),
             method: 'daemon.plugins.sessionHooks.status.get',
             payload: {
                 machineId: 'm1',
@@ -1835,6 +1760,7 @@ describe('PluginAgentSettingsScreen', () => {
         expect(machinePluginSessionHooksRpcMock).toHaveBeenCalledWith({
             machineId: 'm1',
             serverId: 'server1',
+            signal: expect.any(AbortSignal),
             method: 'daemon.plugins.sessionHooks.status.get',
             payload: {
                 machineId: 'm1',
@@ -1869,9 +1795,8 @@ describe('PluginAgentSettingsScreen', () => {
             resolveReload = resolve;
         }));
 
-        const targetSelector = screen.findByType('MachineAdministrationTargetSelector' as any);
         await act(async () => {
-            targetSelector.props.selection.selectTarget({
+            selectAdministrationTarget({
                 serverIdentityId: 'server2',
                 machineId: 'm3',
             });
@@ -1908,11 +1833,10 @@ describe('PluginAgentSettingsScreen', () => {
         await act(async () => {});
         await flushHookEffects();
 
-        const targetSelector = screen.findByType('MachineAdministrationTargetSelector' as any);
         machineContributionRegistryProjectionDescribeMock.mockClear();
 
         await act(async () => {
-            targetSelector.props.selection.selectTarget({
+            selectAdministrationTarget({
                 serverIdentityId: 'server1',
                 machineId: 'm2',
             });
@@ -1924,7 +1848,7 @@ describe('PluginAgentSettingsScreen', () => {
         }));
     });
 
-    it('renders the full provider settings/auth surface from daemon-projected runtime and CLI metadata', async () => {
+    it('renders provider Account settings from daemon-projected runtime and CLI metadata without inventory facts', async () => {
         mockProviderId = 'acme.review.provider';
         machineContributionRegistryProjectionDescribeMock.mockResolvedValue({
             supported: true,
@@ -1935,8 +1859,6 @@ describe('PluginAgentSettingsScreen', () => {
         await act(async () => {});
         await flushHookEffects();
 
-        expect(screen.findByTestId('settings-provider-auth-status')).toBeTruthy();
-        expect(screen.findAllByType('AgentCliInstallItem' as any)).toHaveLength(1);
         const items = screen.findAllByType('Item' as any);
         expect(findAgentHeader(screen)?.props.title).toBe('Acme Review Provider');
         expect(items.some((node: any) => node.props?.title === 'settingsAgents.notAvailable')).toBe(false);
@@ -2004,7 +1926,6 @@ describe('PluginAgentSettingsScreen', () => {
         const settingsSection = screen.findByType(PluginDetailGenericSettingsSection);
         expect(settingsSection.props).toMatchObject({ pluginId: 'acme.headless' });
         expect(settingsSection.props.projection.editableSettingsGroups).toHaveLength(1);
-        expect(screen.findByType('MachineAdministrationTargetSelector')).toBeTruthy();
     });
 
     it('renders qualified Connected Account purposes on the no-CLI Agent screen', async () => {
@@ -2058,52 +1979,14 @@ describe('PluginAgentSettingsScreen', () => {
         expect(findEnabledSwitch(screen)).toBeUndefined();
     });
 
-    it('surfaces provider CLI install via capability installer item', async () => {
-        const screen = await renderPluginAgentSettingsScreen();
-        expect(mockAgentCatalogProjection).toHaveBeenCalledWith(
-            'codex',
-            expect.objectContaining({
-                enabledAgentIds: [],
-            }),
-        );
-        const installer = screen.findByType('AgentCliInstallItem' as any);
-        expect(installer.props.machineId).toBe('m1');
-        expect(installer.props.serverId).toBe('server1');
-        expect(installer.props.capabilityId).toBe('cli.codex');
-        expect(installer.props.installed).toBe(false);
-        expect(installer.props.managedInstalled).toBe(false);
-        expect(installer.props.installability).toMatchObject({ kind: 'installable' });
-    });
-
-    it('targets the exact selected machine for Voice runtime update and re-probes after success', async () => {
+    it('addresses the recovery handoff to its exact portable target', async () => {
         mockRecoveryMachineId = 'm2';
         mockRecoveryServerIdentityId = 'server1';
         mockInstallIntent = 'update';
-
-        const screen = await renderPluginAgentSettingsScreen();
+        await renderPluginAgentSettingsScreen();
         await flushHookEffects();
-
-        // The route handoff named the portable Administration identity and the exact machine.
-        expect(administrationTargetState.selectTargetCalls).toEqual([
-            { serverIdentityId: 'server1', machineId: 'm2' },
-        ]);
-
-        const installer = screen.findByType('AgentCliInstallItem' as any);
-        expect(installer.props).toMatchObject({
-            machineId: 'm2',
-            serverId: 'server1',
-            capabilityId: 'cli.codex',
-            intent: 'update',
-        });
-
-        act(() => installer.props.onManagedUpdateConfirmed());
-        expect(applySettingsMock).toHaveBeenCalledWith({
-            backendCliSourcePreferenceByTargetKey: {
-                [buildCanonicalBackendTargetKey('codex')]: 'managed-first',
-            },
-        });
-
-        act(() => installer.props.onInstalled());
+        expect(administrationSelection.controller.selectedTargets).toEqual([{ serverIdentityId: 'server1', machineId: 'm2' }]);
+        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('m2', expect.objectContaining({ serverId: 'server1' }));
     });
 
     it('rejects a device-local profile id in the recovery handoff as non-portable selection authority', async () => {
@@ -2118,15 +2001,14 @@ describe('PluginAgentSettingsScreen', () => {
         mockRecoveryServerIdentityId = 'legacy-profile-9';
         mockInstallIntent = 'update';
 
-        const screen = await renderPluginAgentSettingsScreen();
+        await renderPluginAgentSettingsScreen();
         await flushHookEffects();
 
-        expect(administrationTargetState.selectTargetCalls).toEqual([]);
-        const installer = screen.findByType('AgentCliInstallItem' as any);
-        expect(installer.props.intent).toBeUndefined();
+        expect(administrationSelection.controller.selectedTargets).toEqual([]);
+        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('m1', expect.objectContaining({ serverId: 'server1' }));
     });
 
-    it('uses the route plugin id to select the exact installed Agent display, installer, and operation', async () => {
+    it('uses the route plugin id for the exact installed Agent display and qualified hook operation', async () => {
         mockProviderId = 'claude';
         mockAgentPluginId = 'acme.voice';
         mockAgentCatalogProjection.mockReturnValue(null);
@@ -2155,14 +2037,10 @@ describe('PluginAgentSettingsScreen', () => {
         await flushHookEffects();
 
         expect(findAgentHeader(screen)?.props.title).toBe('Acme Voice Claude');
-        const installer = screen.findByType('AgentCliInstallItem' as any);
-        expect(installer.props).toMatchObject({
-            capabilityId: 'cli.acme.voice.claude',
-            providerTitle: 'Acme Voice Claude',
-        });
         expect(machinePluginSessionHooksRpcMock).toHaveBeenCalledWith({
             machineId: 'm1',
             serverId: 'server1',
+            signal: expect.any(AbortSignal),
             method: 'daemon.plugins.sessionHooks.status.get',
             payload: {
                 machineId: 'm1',
@@ -2194,41 +2072,8 @@ describe('PluginAgentSettingsScreen', () => {
 
         const textNodes = screen.findAllByType('Text' as any);
         expect(textNodes.some((node: any) => node.props?.children === 'settingsAgents.notFoundTitle')).toBe(true);
-        expect(screen.findAllByType('AgentCliInstallItem' as any)).toHaveLength(0);
+        expect(screen.findByTestId('settings.agents.detail.machines')).toBeNull();
         expect(machinePluginSessionHooksRpcMock).not.toHaveBeenCalled();
-    });
-
-    it('uses provider capability ids for provider settings when the binary detect key differs', async () => {
-        mockProviderId = 'antigravity';
-
-        const screen = await renderPluginAgentSettingsScreen();
-
-        expect(useCapabilityInstallabilityMock).toHaveBeenLastCalledWith(expect.objectContaining({
-            capabilityId: 'cli.antigravity',
-        }));
-        const installer = screen.findByType('AgentCliInstallItem' as any);
-        expect(installer.props.capabilityId).toBe('cli.antigravity');
-    });
-
-    it('keeps provider CLI install available on web while hiding desktop-only auth actions', async () => {
-        tauriDesktopState.value = false;
-
-        const screen = await renderPluginAgentSettingsScreen();
-
-        expect(screen.findAllByType('AgentCliInstallItem' as any)).toHaveLength(1);
-        expect(screen.findAllByType('AgentAuthenticationTerminalPane' as any)).toHaveLength(0);
-        expect(screen.findByTestId('settings-provider-auth-status')).toBeTruthy();
-        expect(findAccessoryByTestId(screen, 'settings-provider-auth-check-now')).toBeNull();
-        expect(findAccessoryByTestId(screen, 'settings-provider-auth-login')).toBeNull();
-    });
-
-    it('renders the canonical Administration target selector instead of a route-owned machine picker', async () => {
-        const screen = await renderPluginAgentSettingsScreen();
-        const targetSelector = screen.findByType('MachineAdministrationTargetSelector' as any);
-        expect(targetSelector.props.selection.selectedTarget).toEqual({
-            serverIdentityId: 'server1',
-            machineId: 'm1',
-        });
     });
 
     it('keeps the canonical target when active-server machine lists are incomplete', async () => {
@@ -2245,51 +2090,18 @@ describe('PluginAgentSettingsScreen', () => {
         };
 
         const screen = await renderPluginAgentSettingsScreen();
-        const targetSelector = screen.findByType('MachineAdministrationTargetSelector' as any);
-        expect(targetSelector.props.selection.selectedTarget).toEqual({
+        expect(administrationSelection.module.resolveFreshMachineAdministrationExecutionTarget({ serverIdentityId: 'server1', machineId: 'm1' })?.target).toEqual({
             serverIdentityId: 'server1',
             machineId: 'm1',
         });
 
-        expect(useCapabilityInstallabilityMock).toHaveBeenLastCalledWith(expect.objectContaining({
-            machineId: 'm1',
-            serverId: 'server1',
-        }));
-    });
-
-    it('uses the canonical target selection for CLI detection and installability', async () => {
-        const screen = await renderPluginAgentSettingsScreen();
-        const targetSelector = screen.findByType('MachineAdministrationTargetSelector' as any);
-        await act(async () => {
-            targetSelector.props.selection.selectTarget({
-                serverIdentityId: 'server1',
-                machineId: 'm2',
-            });
-        });
-        await flushHookEffects();
-
-        expect(useCapabilityInstallabilityMock).toHaveBeenLastCalledWith(expect.objectContaining({
-            machineId: 'm2',
-            serverId: 'server1',
-        }));
-    });
-
-    it('marks the installer row as managed-installed when the detected CLI resolves inside Happier tools', async () => {
-
-        const screen = await renderPluginAgentSettingsScreen();
-        const installer = screen.findByType('AgentCliInstallItem' as any);
-        expect(installer.props.installed).toBe(true);
-        expect(installer.props.managedInstalled).toBe(true);
+        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('m1', expect.objectContaining({ serverId: 'server1' }));
     });
 
     it('does not retarget Agent operations when the active server changes', async () => {
         const screen = await renderPluginAgentSettingsScreen();
 
-        expect(useCapabilityInstallabilityMock).toHaveBeenLastCalledWith(expect.objectContaining({
-            machineId: 'm1',
-            capabilityId: 'cli.codex',
-            serverId: 'server1',
-        }));
+        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('m1', expect.objectContaining({ serverId: 'server1' }));
 
         await act(async () => {
             activeServerSnapshot = {
@@ -2301,24 +2113,23 @@ describe('PluginAgentSettingsScreen', () => {
         });
         await flushHookEffects();
 
-        const targetSelector = screen.findByType('MachineAdministrationTargetSelector' as any);
-        expect(targetSelector.props.selection.selectedTarget).toEqual({
+        expect(administrationSelection.module.resolveFreshMachineAdministrationExecutionTarget({ serverIdentityId: 'server1', machineId: 'm1' })?.target).toEqual({
             serverIdentityId: 'server1',
             machineId: 'm1',
         });
 
-        expect(useCapabilityInstallabilityMock).toHaveBeenLastCalledWith(expect.objectContaining({
-            machineId: 'm1',
-            capabilityId: 'cli.codex',
-            serverId: 'server1',
-        }));
+        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('m1', expect.objectContaining({ serverId: 'server1' }));
 
     });
 
     it('keeps account-level settings usable with no machine selected and asks for a machine only where one matters', async () => {
-        administrationTargetState.selectedTarget = null;
-        administrationTargetState.executionTarget = null;
-        // With no machine there is no daemon projection, so no CLI declaration either.
+        administrationSelection.controller.select(null);
+        const { useAgentsAdministrationTargetSelection, useAgentsMachineScope } = await import('@/components/settings/agents/collection/useAgentAdministrationCatalog');
+        const scope = await renderHook(() => useAgentsMachineScope(useAgentsAdministrationTargetSelection()));
+        expect(scope.getCurrent().projectionScope).toBeNull();
+        expect(scope.getCurrent().executionTarget).toBeNull();
+        // There is no selected-target projection or CLI declaration. The
+        // separate Account-wide Machine inventory remains visible.
         mockAgentCatalogProjection.mockImplementation((agentId: string) => (agentId === 'codex' ? {
             agentId,
             catalogAgentId: agentId,
@@ -2345,10 +2156,10 @@ describe('PluginAgentSettingsScreen', () => {
         await act(async () => {
             permissionChoice?.props.onChange('yolo');
         });
-        expect(applySettingsMock).toHaveBeenCalledWith({
+        await vi.waitFor(() => expect(settingsWriteSpy, JSON.stringify(observedActionResults)).toHaveBeenCalledWith(expect.objectContaining({
             sessionDefaultPermissionModeByTargetKey: { [buildCanonicalBackendTargetKey('codex')]: 'yolo' },
-        });
-        expect(screen.findByTestId('settings.agents.detail.noMachine')).toBeTruthy();
+        })));
+        expect(findAgentHeader(screen)).toBeTruthy();
         expect(machineContributionRegistryProjectionDescribeMock).not.toHaveBeenCalled();
     });
 
@@ -2376,7 +2187,7 @@ describe('PluginAgentSettingsScreen', () => {
 
         expect(screen.findByTestId('settings.agents.projection.status')).toBeNull();
         expect(findSegmentedChoice(screen, 'settingsSession.permissions.defaultPermissionModeTitle')).toBeTruthy();
-        expect(screen.findByTestId('settings.agents.detail.machineChecking')).toBeTruthy();
+        expect(findAgentHeader(screen)).toBeTruthy();
     });
 
     it('includes a permissions section to set the default permission mode for this backend', async () => {
@@ -2416,123 +2227,36 @@ describe('PluginAgentSettingsScreen', () => {
         });
         await flushHookEffects();
 
-        expect(applySettingsMock).toHaveBeenCalledWith({
+        await vi.waitFor(() => expect(settingsWriteSpy, JSON.stringify(observedActionResults)).toHaveBeenCalledWith(expect.objectContaining({
             backendEnabledByTargetKey: {
                 [buildCanonicalBackendTargetKey('antigravity-localharness')]: false,
                 [antigravityTargetKey]: true,
             },
-        });
+        })));
     });
 
     it('reads legacy built-in permission preferences from compatibility target keys and still writes the canonical backend key', async () => {
         const codexLegacyTargetKey = buildLegacyBuiltInTargetKey('codex');
         const codexTargetKey = buildCanonicalBackendTargetKey('codex');
         settingsState.sessionDefaultPermissionModeByTargetKey = {
-            [codexLegacyTargetKey]: 'ask',
+            [codexLegacyTargetKey]: 'read-only',
         };
 
         const screen = await renderPluginAgentSettingsScreen();
         const permissionChoice = findSegmentedChoice(screen, 'settingsSession.permissions.defaultPermissionModeTitle');
 
-        expect(permissionChoice?.props?.value).toBe('ask');
+        expect(permissionChoice?.props?.value).toBe('read-only');
 
         await act(async () => {
             permissionChoice?.props?.onChange('default');
         });
         await flushHookEffects();
 
-        expect(applySettingsMock).toHaveBeenCalledWith({
+        await vi.waitFor(() => expect(settingsWriteSpy, JSON.stringify(observedActionResults)).toHaveBeenCalledWith(expect.objectContaining({
             sessionDefaultPermissionModeByTargetKey: {
-                [codexLegacyTargetKey]: 'ask',
                 [codexTargetKey]: 'default',
             },
-        });
-    });
-
-    it('renders an authentication section when local CLI auth details are available', async () => {
-
-        const screen = await renderPluginAgentSettingsScreen();
-        expect(screen.findByTestId('settings-provider-auth-status')).toBeTruthy();
-        // Readiness states the sign-in in one row: state, account and method together.
-        expect(screen.findByTestId('settings-provider-auth-status')?.props.subtitle).toContain('alice@example.com');
-    });
-
-    it('renders a login action when local auth is supported but logged out', async () => {
-
-        const screen = await renderPluginAgentSettingsScreen();
-        expect(findAccessoryByTestId(screen, 'settings-provider-auth-login')).toBeTruthy();
-    });
-
-    it('uses the shared pane scope host for the provider auth terminal', async () => {
-
-        const screen = await renderPluginAgentSettingsScreen();
-        const hostBefore = screen.findByType('AppPaneScopeHost' as any);
-        expect(hostBefore.props.bottomPaneBuiltinAdapter.render()).toBeNull();
-        expect(hostBefore.props.scopeId).toBe('settings:provider:codex');
-
-        await act(async () => {
-            findAccessoryByTestId(screen, 'settings-provider-auth-login')?.props.onPress();
-        });
-        await flushHookEffects();
-
-        expect(paneApi.openBottom).toHaveBeenCalledWith({ tabId: 'agent-auth-terminal' });
-
-        await act(async () => {
-            paneApi.scopeState = {
-                bottom: {
-                    isOpen: true,
-                    activeTabId: 'agent-auth-terminal',
-                },
-            };
-        });
-        const rerenderedScreen = await renderPluginAgentSettingsScreen();
-
-        const hostAfter = rerenderedScreen.findByType('AppPaneScopeHost' as any);
-        const bottomPane = hostAfter.props.bottomPaneBuiltinAdapter.render();
-        expect(bottomPane).toBeTruthy();
-        expect(bottomPane.props.agentId).toBe('codex');
-    });
-
-    it('refreshes provider auth detection when the auth terminal pane closes', async () => {
-        paneApi.scopeState = {
-            bottom: {
-                isOpen: true,
-                activeTabId: 'agent-auth-terminal',
-            },
-        };
-
-        const screen = await renderPluginAgentSettingsScreen();
-        const host = screen.findByType('AppPaneScopeHost' as any);
-        const bottomPane = host.props.bottomPaneBuiltinAdapter.render();
-        expect(bottomPane).toBeTruthy();
-
-        await act(async () => {
-            bottomPane.props.onRequestClose();
-        });
-        await flushHookEffects();
-
-        expect(paneApi.closeBottom).toHaveBeenCalledTimes(1);
-    });
-
-    it('closes the auth terminal and refreshes provider auth detection when the auth terminal exits', async () => {
-        paneApi.scopeState = {
-            bottom: {
-                isOpen: true,
-                activeTabId: 'agent-auth-terminal',
-            },
-        };
-
-        const screen = await renderPluginAgentSettingsScreen();
-        const host = screen.findByType('AppPaneScopeHost' as any);
-        const bottomPane = host.props.bottomPaneBuiltinAdapter.render();
-        expect(bottomPane).toBeTruthy();
-
-        await act(async () => {
-            bottomPane.props.onTerminalExit();
-        });
-        await flushHookEffects();
-
-        expect(paneApi.closeBottom).toHaveBeenCalledTimes(1);
+        })));
     });
 
     it('renders and updates the backend CLI source preference when a managed install exists', async () => {
@@ -2540,17 +2264,18 @@ describe('PluginAgentSettingsScreen', () => {
         const sourceChoice = findSegmentedChoice(screen, 'settingsAgents.cliSourcePreference.title');
         expect(sourceChoice).toBeTruthy();
         expect(sourceChoice!.props.value).toBe('system-first');
+        expect(sourceChoice!.props.disabled).toBe(false);
 
         await act(async () => {
             sourceChoice!.props.onChange('managed-first');
         });
         await flushHookEffects();
 
-        expect(applySettingsMock).toHaveBeenCalledWith({
+        await vi.waitFor(() => expect(settingsWriteSpy, JSON.stringify(observedActionResults)).toHaveBeenCalledWith(expect.objectContaining({
             backendCliSourcePreferenceByTargetKey: {
                 [buildCanonicalBackendTargetKey('codex')]: 'managed-first',
             },
-        });
+        })));
     });
 
     it('reads legacy built-in CLI source preferences from compatibility target keys and still writes the canonical backend key', async () => {
@@ -2570,12 +2295,11 @@ describe('PluginAgentSettingsScreen', () => {
         });
         await flushHookEffects();
 
-        expect(applySettingsMock).toHaveBeenCalledWith({
+        await vi.waitFor(() => expect(settingsWriteSpy, JSON.stringify(observedActionResults)).toHaveBeenCalledWith(expect.objectContaining({
             backendCliSourcePreferenceByTargetKey: {
-                [codexLegacyTargetKey]: 'managed-first',
                 [codexTargetKey]: 'system-first',
             },
-        });
+        })));
     });
 
     it('redirects the custom ACP provider route back to the providers index', async () => {
@@ -2689,10 +2413,6 @@ describe('PluginAgentSettingsScreen', () => {
         await act(async () => {});
         await flushHookEffects();
 
-        expect(screen.findByTestId('settings-provider-detected-cli')?.props.row.subtitle)
-            .toBe('acme-review • machine.detectedCliUnknown');
-        expect(screen.findByType('AgentCliInstallItem' as any).props.capabilityId)
-            .toBe('cli.acme.review.provider');
         // Capabilities sit in a closed disclosure whose header summarizes them.
         const capabilitiesHeader = screen.findByTestId('settings.agents.detail.capabilities.header');
         expect(capabilitiesHeader?.props.detail).toBe('settingsAgents.resumeSupportTitle · settingsAgents.localControlTitle');
@@ -2760,7 +2480,6 @@ describe('PluginAgentSettingsScreen', () => {
         // The fallback screen really is the one rendering (identity row), and
         // the canonical External Sessions section is composed alongside it.
         expect(findAgentHeader(screen)?.props.title).toBe('Acme Transcripts');
-        expect(screen.findByType('MachineAdministrationTargetSelector')).toBeTruthy();
         expect(screen.findByTestId('settings-external-sessions-manage-all')).toBeTruthy();
         // The machine declares External Sessions while its daemon projects no
         // Agent for it, so the honest state is the same error the primary
@@ -2785,7 +2504,7 @@ describe('PluginAgentSettingsScreen', () => {
         expect(textNodes.some((node: any) => node.props?.children === 'Unknown')).toBe(false);
     });
 
-    it('shows a released service-keyed Agent default on the purpose chooser and folds it away on the next write', async () => {
+    it('does not resurrect a legacy Agent default after the canonical purpose catalog is explicitly empty', async () => {
         mockProviderId = 'acme.review.provider';
         // The shape the Connected Services page persisted before the purpose-binding store owned Agent defaults.
         settingsState.connectedServicesDefaultAuthByAgentIdV1 = {
@@ -2821,15 +2540,42 @@ describe('PluginAgentSettingsScreen', () => {
         await flushHookEffects();
 
         const chooser = screen.findByType('ConnectedAccountPurposeTargetChooser' as any);
-        expect(chooser.props.value).toEqual({
-            kind: 'account',
-            account: { service: { pluginId: 'acme.review', localId: 'account' }, accountId: 'legacy-work' },
-        });
+        expect(chooser.props.value).toBeNull();
         chooser.props.onChange(null);
-        expect(applySettingsMock).toHaveBeenCalledWith({
-            connectedAccountPurposeBindingsV1: { v: 1, bindings: [] },
+        await vi.waitFor(() => expect(settingsWriteSpy, JSON.stringify(observedActionResults)).toHaveBeenCalledWith(expect.objectContaining({
             connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} },
+        })));
+    });
+
+    it('keeps the last-known purpose selection available during refetch and withdraws it when authority is lost', async () => {
+        mockProviderId = 'acme.headless.provider';
+        mockAgentCatalogProjection.mockReturnValue({
+            agentId: 'acme.headless.provider',
+            identity: { pluginId: 'acme.headless', localId: 'provider' },
+            catalogAgentId: null, iconAgentId: null, title: 'Acme Headless Provider',
+            subtitle: null, iconName: 'stack-simple', isBuiltIn: false,
+            backendTargetKey: null, enabled: null, authPlugin: null, backendEntry: null,
+            connectedAccounts: [{ purpose: 'primary', service: { pluginId: 'acme.headless', localId: 'account' }, required: false }],
         });
+        settingsState.connectedAccountPurposeBindingsV1 = { v: 1, bindings: [{
+            purpose: { consumer: { pluginId: 'acme.headless', localId: 'provider' }, purpose: 'primary' },
+            target: { kind: 'account', account: { service: { pluginId: 'acme.headless', localId: 'account' }, accountId: 'work' } },
+        }] };
+        const screen = await renderPluginAgentSettingsScreen();
+        await flushHookEffects();
+        const chooser = () => screen.findByType('ConnectedAccountPurposeTargetChooser' as any);
+        expect(chooser().props.value).toMatchObject({ kind: 'account', account: { accountId: 'work' } });
+        expect(chooser().props.disabled).toBe(false);
+        const scope = { serverId: 'server1', accountId: 'account:server1' };
+        await act(async () => { beginConnectedAccountCatalogLoad(scope, 'purposes'); });
+        expect(chooser().props.value).toMatchObject({ kind: 'account', account: { accountId: 'work' } });
+        expect(chooser().props.disabled).toBe(false);
+        expect(chooser().props.disabledReason).toBeUndefined();
+        await act(async () => {
+            applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'unavailable', reason: 'unauthorized' }, true);
+        });
+        expect(chooser().props.value).toBeNull();
+        expect(chooser().props.disabled).toBe(true);
     });
 
     it('writes projected Agent account defaults through the qualified purpose binding owner', async () => {
@@ -2867,8 +2613,7 @@ describe('PluginAgentSettingsScreen', () => {
                 accountId: 'work',
             },
         });
-        expect(applySettingsMock).toHaveBeenCalledWith(expect.objectContaining({
-            connectedAccountPurposeBindingsV1: {
+        await vi.waitFor(() => expect(purposes.value, JSON.stringify(observedActionResults)).toMatchObject({
                 v: 1,
                 bindings: [{
                     purpose: {
@@ -2883,7 +2628,6 @@ describe('PluginAgentSettingsScreen', () => {
                         },
                     },
                 }],
-            },
         }));
     });
     it('writes a Team resource choice as the canonical Team selection, never a purpose target', async () => {
@@ -2921,8 +2665,7 @@ describe('PluginAgentSettingsScreen', () => {
         chooser.props.onChange(null, teamResource);
         // Lane 10 child 02 :271 / child 06 :506: the purpose target union stays
         // `account | group`; the Agent default persists the Team selection.
-        expect(applySettingsMock).toHaveBeenCalledWith(expect.objectContaining({
-            connectedAccountPurposeBindingsV1: {
+        await vi.waitFor(() => expect(purposes.value, JSON.stringify(observedActionResults)).toMatchObject({
                 v: 1,
                 bindings: [],
                 teamResourceSelections: [{
@@ -2932,11 +2675,15 @@ describe('PluginAgentSettingsScreen', () => {
                     },
                     ...teamResource,
                 }],
-            },
         }));
     });
 });
 const settingsState = {
+    actionsSettingsV1: { v: 1 as const, approvalWaivedSurfaces: {
+        'settings.set': ['ui' as const],
+        'connectedServices.purposes.default.set': ['ui' as const],
+        'connectedServices.accounts.purposeDefault.set': ['ui' as const],
+    } },
     backendEnabledByTargetKey: {},
     sessionDefaultPermissionModeByTargetKey: {},
     backendCliSourcePreferenceByTargetKey: {},
@@ -2948,3 +2695,7 @@ const settingsState = {
     connectedAccountPurposeBindingsV1: { v: 1 as const, bindings: [] as any[] },
     connectedServicesDefaultAuthByAgentIdV1: undefined as any,
 };
+
+// Load the real Action/catalog graph after the boundary factories above are configured,
+// during collection rather than spending the first test hook's budget on cold transforms.
+const { resetConnectedAccountCatalogEngineForTests } = await import('@/sync/engine/settings/connectedAccountCatalogEngine');
