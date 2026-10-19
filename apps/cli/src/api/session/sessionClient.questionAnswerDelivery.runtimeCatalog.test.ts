@@ -99,7 +99,7 @@ describe('Session-owned question answer return', () => {
         expect(pending[0]).toMatchObject({ requestedAction: { v: 1, kind: 'enqueue' },
             content: { t: 'plain', v: { content: { text: expect.stringContaining('Revision 3, preserving commas') },
             meta: { happierInputRequestV1: { actionRequestAttributionV1: cause, returnedAnswer: { requestSessionId: sessionId, requestLocalId: 'question',
-                outcome: 'answer', delivery: mode === 'wait' ? 'wake' : 'next_turn',
+                outcome: 'answer', delivery: 'wake',
                 senderSessionId: 'manager',
                 answeredBy: { kind: 'happierSession', sourceSessionId: 'manager' } } } } } } });
         const returnedContent = pending[0]?.content;
