@@ -6,6 +6,8 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHo
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installMachinesSettingsCommonModuleMocks } from './machinesSettingsTestHelpers';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { MachinePublishedResourceSummaryV1Schema } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
+import type { WidgetAreaPresetV1 } from '@happier-dev/protocol/widgets';
 import { recordMachineCollectionVisit } from './collection/machineCollectionVisit';
 
 (
@@ -254,6 +256,31 @@ describe('All machines (the Settings door index)', () => {
         (node) => node.props?.testID === 'settings.machines.thisComputer',
       ),
     ).toHaveLength(0);
+  });
+
+  it.each([true, false])('pins the dashboard from the page’s two-Home attention census (needs attention: %s)', async (needsAttention) => {
+    const calm = MachinePublishedResourceSummaryV1Schema.parse({ v: 1, vitals: { state: 'reporting' },
+      host: { logicalCores: 8, memoryTotalBytes: 2 ** 34, bootedAt: 1 },
+      attention: { level: 'calm', reasons: [] } });
+    const attention = MachinePublishedResourceSummaryV1Schema.parse({ ...calm, attention: {
+      level: 'needs_you', reasons: [{ key: 'disk', level: 'needs_you', since: 1, metric: 'disk', nextStep: 'free_up_space',
+        kind: 'disk_full', volumeId: 'data', volumeLabel: '/data' }],
+    } });
+    await setMachines([
+      { serverId: 'srv_a', serverName: 'Home A', status: 'idle', machines: [
+        { ...machine('machine-a1', 'Machine A1', 'a.local'), daemonState: { resources: calm } },
+      ] },
+      { serverId: 'srv_b', serverName: 'Home B', status: 'idle', machines: [
+        { ...machine('machine-b1', 'Machine B1', 'b.local'), daemonState: { resources: needsAttention ? attention : calm } },
+      ] },
+    ]);
+    const tree = await renderPage();
+    const document = tree.find(node => Array.isArray(node.props.binding?.presets));
+    const presets: readonly WidgetAreaPresetV1[] = document.props.binding.presets;
+    const group = presets[0]!.items.find(item => item.kind === 'group');
+    expect(group?.kind === 'group' ? group.context?.machine : undefined).toEqual({ kind: 'value', value: needsAttention
+      ? { serverId: 'srv_b', machineId: 'machine-b1' } : { serverId: 'srv_a', machineId: 'machine-a1' } });
+    expect(tree.findAll(node => node.props.testID === 'machines.needs-you.srv_b.machine-b1').length > 0).toBe(needsAttention);
   });
 
   it('says the fleet in one sentence and lists the machine that needs you, with its one action, above the table', async () => {
