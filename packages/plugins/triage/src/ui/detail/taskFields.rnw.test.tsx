@@ -8,15 +8,90 @@ import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/
 import type { PluginUiTargetedContributionsV1 } from '@happier-dev/plugin-sdk/ui';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
 import { TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
-  TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1, TriageSourceDescriptorV1Schema } from '@happier-dev/triage-protocol/v1';
+  TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1, TriageSourceDescriptorV1Schema, type TriageEntryRefV1 } from '@happier-dev/triage-protocol/v1';
 import { testkitEntryRef, testkitObservation } from '../../corpus/testkit/observations.test-support.js';
 import { foldTriageListWindow, TRIAGE_LIST_DEFAULT_LENS_V1 } from '../../projection/listWindow.js';
-import { TriageEditTaskActionInputV1Schema } from '../../actions/tasksProtocol.js';
-import { TriageEditTaskFields, useTriageTaskCommit } from './taskFields.js';
+import { TriageCreateTaskActionInputV1Schema, TriageEditTaskActionInputV1Schema } from '../../actions/tasksProtocol.js';
+import type { TriageMountedConfiguredSourceV1 } from '../configuration/useTriageConfiguredSources.js';
+import { TriageCreateTaskFields, TriageEditTaskFields, useTriageTaskCommit } from './taskFields.js';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const mounted: PluginUiTestkit[] = [];
 afterEach(async () => { for (const fixture of mounted.splice(0)) await fixture.dispose(); });
+
+function targetedTaskSource(source: TriageEntryRefV1['source'], kindId: string, role: 'create' | 'edit', readOnly = false): PluginUiTargetedContributionsV1 {
+  const protocol = { id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1 };
+  const contributor = { pluginId: source.pluginId, contributionId: source.localId,
+    occurrenceId: 'source-one', sourceCustody: { kind: 'development' as const, registeredRootId: 'task-source' } };
+  return {
+    target: { pluginId: 'happier.triage', occurrenceId: 'triage-one',
+      sourceCustody: { kind: 'development', registeredRootId: 'triage-source' } },
+    points: [{ pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocols: [{ protocol, contributions: [{
+      contributor, protocol,
+      descriptor: TriageSourceDescriptorV1Schema.parse({ ...createTriageSourceV1Fixture().descriptor,
+        kinds: [{ id: kindId, task: true, workflowSubject: 'issue', displayName: 'Issue',
+          taskCapabilities: { [role === 'create' ? 'createFields' : 'editFields']: ['title'] } }] }),
+      operations: readOnly ? [] : [{ point: { pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocol },
+        contributor, role, action: { pluginId: source.pluginId, localId: role } }], surfaces: [],
+    }] }] }],
+  };
+}
+
+it('keeps task creation unavailable until sources are read and distinguishes settled emptiness from failure', async () => {
+  let setReadiness!: React.Dispatch<React.SetStateAction<{ loaded: boolean; unavailableReason: string | null }>>;
+  let setSources!: React.Dispatch<React.SetStateAction<readonly TriageMountedConfiguredSourceV1[]>>;
+  const source = createTriageSourceV1Fixture();
+  const saved: ReturnType<typeof TriageCreateTaskActionInputV1Schema.parse>[] = [];
+  await act(async () => {
+    mounted.push(await createPluginUiTestkit({ identity: { instanceId: 'task-create', mountNonce: 'readiness' },
+      authorPlugin: { id: 'happier.triage', version: '0.0.0' },
+      surface: defineUiSurface(() => {
+        const [readiness, update] = React.useState<{ loaded: boolean; unavailableReason: string | null }>({ loaded: false, unavailableReason: null });
+        const [sources, updateSources] = React.useState<readonly TriageMountedConfiguredSourceV1[]>([]);
+        setReadiness = update;
+        setSources = updateSources;
+        return <TriageCreateTaskFields sources={sources} sourcesLoaded={readiness.loaded}
+          sourcesUnavailableReason={readiness.unavailableReason} disabled={false}
+          draft={{ title: 'Fix reconnect handling' }}
+          onApplied={async () => undefined} onClose={() => undefined} />;
+      }),
+      surfaceContext: createSurfaceContextFixture({ targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, 'issue', 'create') }),
+      adapter: createPluginUiRnwSemanticSurfaceAdapter({ overlays: true }),
+      handlers: { executeAction: ({ action, input }) => {
+        expect(action).toBe('tasks/create-v1');
+        saved.push(TriageCreateTaskActionInputV1Schema.parse(input));
+        return { kind: 'refused', reason: 'unavailable' };
+      } },
+    }));
+  });
+  const picker = () => document.querySelector<HTMLElement>('[aria-label="Where?"]');
+  expect(picker()?.getAttribute('aria-disabled')).toBe('true');
+  expect(document.querySelector('[role="progressbar"]')).not.toBeNull();
+  expect(document.querySelector('[role="form"]')).toBeNull();
+  await act(async () => { setReadiness({ loaded: true, unavailableReason: null }); });
+  expect(document.querySelector('[role="progressbar"]')).toBeNull();
+  expect(picker()?.getAttribute('aria-disabled')).toBe('true');
+  expect(document.body.textContent).toContain('Add a source that supports creating tasks');
+  await act(async () => { setSources([{ sourceInstanceId: source.configuredInstance.instance.sourceInstanceId,
+    configured: source.configuredInstance, displayLabel: 'Engineering' }]); });
+  expect(picker()?.getAttribute('aria-disabled')).not.toBe('true');
+  await act(async () => { picker()?.click(); });
+  const choice = document.querySelector<HTMLElement>('[role="menuitemradio"]');
+  expect(choice).not.toBeNull();
+  await act(async () => { choice?.click(); });
+  expect(document.querySelector('[role="form"]')).not.toBeNull();
+  await act(async () => { setReadiness({ loaded: true, unavailableReason: 'The Account is unavailable.' }); });
+  expect(document.body.textContent).toContain('The Account is unavailable.');
+  expect(document.querySelector('[role="form"]')).toBeNull();
+  expect(document.body.textContent).toContain('Close');
+  expect(saved).toEqual([]);
+  await act(async () => { setReadiness({ loaded: true, unavailableReason: null }); });
+  const fixture = mounted.at(-1)!;
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Create task' })); });
+  expect(saved).toHaveLength(1);
+  expect(saved[0]?.fields).toEqual({ title: 'Fix reconnect handling' });
+  expect(saved[0]?.sourceInstanceId).toBe(source.configuredInstance.instance.sourceInstanceId);
+});
 
 async function mountEditor(options: Readonly<{ readOnly?: boolean; uncertain?: boolean }> = {}) {
   const source = createTriageSourceV1Fixture();
@@ -25,20 +100,7 @@ async function mountEditor(options: Readonly<{ readOnly?: boolean; uncertain?: b
   const row = foldTriageListWindow({ observations: [{ ...observation, entryRef }], lanes: [],
     configuredSourcesStatus: 'complete', activeSourceInstanceIds: [observation.sourceInstanceId],
     lens: TRIAGE_LIST_DEFAULT_LENS_V1, assembledAtMs: 1_000 }).rows[0]!;
-  const protocol = { id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1 };
-  const contributor = { pluginId: entryRef.source.pluginId, contributionId: entryRef.source.localId,
-    occurrenceId: 'source-one', sourceCustody: { kind: 'development' as const, registeredRootId: 'task-source' } };
-  const targeted: PluginUiTargetedContributionsV1 = {
-    target: { pluginId: 'happier.triage', occurrenceId: 'triage-one',
-      sourceCustody: { kind: 'development', registeredRootId: 'triage-source' } },
-    points: [{ pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocols: [{ protocol, contributions: [{
-      contributor, protocol,
-      descriptor: TriageSourceDescriptorV1Schema.parse({ ...source.descriptor, kinds: [{ id: entryRef.kindId, task: true, workflowSubject: 'issue', displayName: 'Issue',
-        taskCapabilities: { editFields: ['title'] } }] }),
-      operations: options.readOnly ? [] : [{ point: { pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocol },
-        contributor, role: 'edit', action: { pluginId: entryRef.source.pluginId, localId: 'edit' } }], surfaces: [],
-    }] }] }],
-  };
+  const targeted = targetedTaskSource(entryRef.source, entryRef.kindId, 'edit', options.readOnly);
   const saved: ReturnType<typeof TriageEditTaskActionInputV1Schema.parse>[] = [];
   let rereads = 0;
   let fixture!: PluginUiTestkit;

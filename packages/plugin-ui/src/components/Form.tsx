@@ -408,10 +408,10 @@ function SelectMenu(props: SelectProps & Readonly<{ appearance: 'menu' | 'field'
         ? { triggerAppearance: 'control' as const }
         : { triggerAppearance: 'text' as const, triggerDisclosure: true })}
       triggerAccessibilityLabel={accessibilityLabel}
-      disabled={props.disabled}
+      disabled={props.disabled || items.length === 0}
       {...(props.testID === undefined ? {} : { testID: props.testID })}
       items={items}
-      {...(props.multiple
+      {...(props.multiple || items.length === 0
         ? {}
         : {
             radioGroups: [{

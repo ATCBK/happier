@@ -918,6 +918,31 @@ describe('standalone Select presentation', () => {
     { value: 'smart', label: 'Smart' },
   ] as const;
 
+  it.each(['menu', 'field'] as const)('keeps an empty %s Select disabled and recovers when choices arrive', async (presentation) => {
+    const onChange = vi.fn();
+    let updateOptions!: (options: typeof orderOptions | readonly []) => void;
+    function Harness() {
+      const [options, setOptions] = useState<typeof orderOptions | readonly []>([]);
+      updateOptions = setOptions;
+      return <Form.Select label="Order" presentation={presentation} options={options} onChange={onChange} />;
+    }
+    const mount = mountWithMenuHost(<Harness />);
+    const trigger = () => mount.container.querySelector<HTMLElement>('[aria-label="Order"]');
+    expect(trigger()?.getAttribute('aria-disabled')).toBe('true');
+    await act(async () => { trigger()?.click(); });
+    expect(mount.container.querySelector('[role="menu"]')).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    await act(async () => { updateOptions(orderOptions); });
+    expect(trigger()?.getAttribute('aria-disabled')).not.toBe('true');
+    await act(async () => { trigger()?.click(); });
+    expect(mount.container.querySelectorAll('[role="menuitemradio"]')).toHaveLength(orderOptions.length);
+    // A refreshed source may withdraw its last option while the menu is open.
+    await act(async () => { updateOptions([]); });
+    expect(trigger()?.getAttribute('aria-disabled')).toBe('true');
+    expect(mount.container.querySelector('[role="menuitemradio"]')).toBeNull();
+    mount.unmount();
+  });
+
   it('names a standalone inline Select visibly, and a Select inside a Field only once', () => {
     const standalone = mountForm(
       <Form.Select label="Order" value="newest" options={orderOptions} onChange={() => undefined} />,

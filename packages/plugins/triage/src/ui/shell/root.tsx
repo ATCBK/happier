@@ -2244,6 +2244,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     <Screen safeArea style={TRIAGE_FILL_STYLE_V1}>
       <Stack gap="small" style={TRIAGE_FILL_STYLE_V1}>
       {!creatingTask ? null : <TriageCreateTaskFields key={JSON.stringify(props.createDraft ?? {})} sources={configuredSources.sources}
+        sourcesLoaded={configuredSources.loaded} sourcesUnavailableReason={configuredSources.unavailableReason}
         {...(props.createDraft === undefined ? {} : { draft: props.createDraft })}
         disabled={listedStale || state.kind !== 'window'} onApplied={refresh} onClose={() => setCreatingTask(false)} />}
       {routeWriteFailure === null ? null : (

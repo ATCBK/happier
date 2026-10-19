@@ -323,7 +323,6 @@ const issueDogfoodPlugin = definePlugin({
         'applyComposer',
         'focusComposer',
         'acquireComposerInputLock',
-        'disposeHostResource',
       ],
     }],
   },

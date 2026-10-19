@@ -268,7 +268,7 @@ test('external Composer declaration projects every independent r1.0 family', asy
       },
     },
   );
-  assert.deepEqual(manifest.contributes.composerControls[0].state, {
+  assert.deepEqual(manifest.contributes.composerControls.find(({ id }) => id === 'issue-control')?.state, {
     resource: 'issue-control-state',
   });
 });

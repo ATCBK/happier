@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { isPluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import {
-  Banner, Button, Form, Item, ItemGroup, Select, Stack,
+  Banner, Button, EmptyState, ErrorState, Form, Item, ItemGroup, LoadingState, Select, Stack,
   usePluginHostApi, usePluginTranslation, useSurfaceContext,
 } from '@happier-dev/plugin-ui';
 import { TriageTaskWriteResultV1Schema, type TriageTaskWriteResultV1 } from '@happier-dev/triage-protocol/v1';
@@ -60,6 +60,8 @@ function TaskWriteNotice({ result }: Readonly<{ result: TriageTaskWriteResultV1 
 
 export function TriageCreateTaskFields(props: Readonly<{
   sources: readonly TriageMountedConfiguredSourceV1[];
+  sourcesLoaded: boolean;
+  sourcesUnavailableReason: string | null;
   draft?: Readonly<{ title?: string; body?: string }>;
   disabled: boolean;
   onApplied(): Promise<void>;
@@ -82,14 +84,22 @@ export function TriageCreateTaskFields(props: Readonly<{
     }));
   });
   const chosen = choices.find((choice) => choice.value === where);
+  const sourcesReady = props.sourcesLoaded && props.sourcesUnavailableReason === null;
+  const canChoose = sourcesReady && choices.some((choice) => !choice.disabled);
   const fields = chosen?.kind.taskCapabilities?.createFields ?? [];
   const unsupportedBody = typeof draft.body === 'string' && draft.body.length > 0 && !fields.includes('body');
   return <ItemGroup title={text('plugins.triage.tasks.create', 'Create task')}>
     <Item title={text('plugins.triage.tasks.where', 'Where?')} accessoryWraps accessory={
       <Select label={text('plugins.triage.tasks.where', 'Where?')} presentation="field" value={where}
-        options={choices} onChange={(value) => { if (typeof value === 'string') setWhere(value); }} />
+        disabled={props.disabled || !canChoose} options={choices}
+        onChange={(value) => { if (canChoose && !props.disabled && typeof value === 'string') setWhere(value); }} />
     } />
-    {chosen === undefined ? <Banner tone="info" title={text('plugins.triage.tasks.chooseSource', 'Choose where this task belongs.')} />
+    {props.sourcesUnavailableReason !== null ? <ErrorState kind="unavailable" layout="line"
+      title={text('plugins.triage.tasks.sourcesUnavailable', 'Task sources are unavailable')}
+      description={props.sourcesUnavailableReason} />
+      : !props.sourcesLoaded ? <LoadingState layout="line" title={text('plugins.triage.surface.sources.loading', 'Reading your sources…')} />
+      : !canChoose ? <EmptyState layout="line" title={text('plugins.triage.tasks.noCreateSource', 'Add a source that supports creating tasks in Sources.')} />
+      : chosen === undefined ? <Banner tone="info" title={text('plugins.triage.tasks.chooseSource', 'Choose where this task belongs.')} />
       : <Form value={draft} onChange={setDraft} disabled={props.disabled || chosen.disabled || unsupportedBody || write.result?.kind === 'uncertain' || write.result?.kind === 'applied'} busy={write.busy}
         onCancel={props.onClose}
         hints={{ submitLabel: text('plugins.triage.tasks.create', 'Create task'), fields: [
@@ -99,7 +109,7 @@ export function TriageCreateTaskFields(props: Readonly<{
         ] }}
         onSubmit={async (value) => {
           const title = typeof value.title === 'string' ? value.title.trim() : '';
-          if (title.length === 0 || chosen.disabled || props.disabled || unsupportedBody) return;
+          if (title.length === 0 || chosen.disabled || !sourcesReady || props.disabled || unsupportedBody) return;
           await write.commit(TRIAGE_TASKS_CREATE_ACTION_LOCAL_ID_V1, { v: 1,
             source: chosen.source.configured.instance.source, sourceInstanceId: chosen.source.sourceInstanceId,
             kindId: chosen.kind.id, fields: { title,
@@ -109,7 +119,7 @@ export function TriageCreateTaskFields(props: Readonly<{
         }} />}
     <TaskWriteNotice result={write.result} />
     {chosen === undefined || !unsupportedBody ? null : <TaskWriteNotice result={{ kind: 'refused', reason: 'unsupportedField' }} />}
-    {chosen !== undefined ? null : <Button title={text('plugins.triage.surface.close', 'Close')} variant="plain" onPress={props.onClose} />}
+    {chosen !== undefined && canChoose ? null : <Button title={text('plugins.triage.surface.close', 'Close')} variant="plain" onPress={props.onClose} />}
   </ItemGroup>;
 }
 
