@@ -102,6 +102,16 @@ result remains ambiguous during construction, the host publishes
 retry startup with the retained initial input. This applies to bundled and
 external Agent plugins without a provider-specific retry path.
 
+Bootstrap HTTP 5xx failures from Account-mode/currentness reads, Machine and
+Session admission, and Session/Machine access-key lookup or binding retain their
+Home status through the same canonical issue classifier and command reporter.
+After Session custody exists, construction publishes `preparation_pending` before
+cleanup; the runner preserves a nonzero exit for existing daemon recovery.
+Account-mode bootstrap does not reinterpret Home unavailability as missing keys.
+Authentication and definitive client refusals retain their existing disposition;
+native Provider HTTP failures are not classified as Home preparation failures.
+This is 0.3 development source; loaded-runtime recovery requires a separate replay.
+
 Metadata PATCH transport uses that mutation's caller lifetime and cancellation,
 including explicit Stop intent and terminal-control retirement. The generic
 Session HTTP read timeout does not shorten a metadata mutation. CLI and UI Stop
@@ -1582,7 +1592,9 @@ Native settlement failures may carry the closed, content-free
 `goalControlFailure.phase` receipt through the SDK, host router, Action result
 and UI Goal operation reader. CLI JSON failure envelopes retain the same facet
 under `error.goalControlFailure` in generic `actions invoke` and the shared
-friendly-command presenter. Each projection validates the same closed facet
+friendly-command presenter. The daemon's inactive native-control adapter retains
+the same receipt when a live Session method is unavailable, including before a
+native thread exists. Each projection validates the same closed facet
 and drops malformed diagnostics without discarding the refusal. The runner's
 existing RPC completion record logs that phase once; vendor error text, objective
 content and local paths are excluded from this diagnostic facet.

@@ -60,6 +60,7 @@ import { resolveAutomationWorkerAccountEncryption } from '@/daemon/automation/au
 import { findTranscriptEncryptedMessageByLocalIdV2 } from '@/api/session/transcriptMessageLookup';
 import { openSessionMessageContent } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { readHttpStatus } from '@/api/client/httpStatusError';
 import { resolveCliVoicePromptPreparation } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
 import { HomeReadPreparationError } from '@/agent/prompts/library/homeReadPreparationError';
 import { clearInitialGoalFromEnv, readInitialGoalFromEnv } from '@/daemon/spawn/initialGoal';
@@ -4051,6 +4052,7 @@ export async function runHostSessionRuntime(
     const metadataPublicationPending = error instanceof Error && 'code' in error
       && error.code === 'metadata_tuple_ambiguous';
     if (preparationFailurePublished && !metadataPublicationPending
+      && readHttpStatus(error) === null
       && !(error instanceof Error && error.cause instanceof HomeReadPreparationError)) return;
     throw error;
   }

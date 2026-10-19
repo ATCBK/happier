@@ -7200,9 +7200,10 @@ describe('runHostSessionRuntime', () => {
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
   });
 
-  it('retains initial input and publishes a retryable preparation issue when startup metadata cannot be confirmed', async () => {
+  it.each(['metadata', 'home-http'] as const)('retains initial input and publishes a retryable preparation issue when startup metadata cannot be confirmed (%s)', async source => {
     const harness = createHarness();
-    const failure = Object.assign(new Error('Session metadata tuple result is ambiguous'), {
+    const { createHttpStatusError } = await import('@/api/client/httpStatusError');
+    const failure = source === 'home-http' ? createHttpStatusError(500, 'Private Home failure') : Object.assign(new Error('Session metadata tuple result is ambiguous'), {
       code: 'metadata_tuple_ambiguous', retryable: false,
     });
     // The Session HTTP boundary has exhausted its reconciliation budget. Host

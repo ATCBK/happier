@@ -14,6 +14,7 @@ import { resolveConnectedServicesServerApiTimeoutMs } from './connectedServicesS
 import { logServerEndpointFailure } from './serverEndpointFailureLog';
 import { resolveServerHttpBaseUrl } from './serverHttpBaseUrl';
 import { readAccountEncryptionModeOnce } from './accountEncryptionMode';
+import { createHttpStatusError } from './httpStatusError';
 import { readObservedAccountEncryptionCurrentness } from './accountEncryptionCurrentnessObservation';
 import { fetchAccountEncryptionCurrentness } from './accountEncryptionCurrentness';
 export { AccountEncryptionCurrentnessUnavailableError, fetchAccountEncryptionCurrentness, fetchAccountEncryptionCurrentnessFromServer } from './accountEncryptionCurrentness';
@@ -399,6 +400,12 @@ export class ConnectedServiceCredentialHttpClient implements ConnectedServiceCre
           ...(signal ? { signal } : {}),
         }),
       });
+      // Most readers retain the existing unknown projection. Bootstrap readers
+      // opting into throwOnTransportError must retain a responding Home failure
+      // instead of treating it as missing Account encryption material.
+      if (result.kind === 'http_error') {
+        throw createHttpStatusError(result.status, 'Account encryption mode is unavailable');
+      }
       return result.kind === 'resolved' ? result.mode : 'unknown';
     } catch (error: unknown) {
       if (signal?.aborted) throw error;
