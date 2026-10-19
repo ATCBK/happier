@@ -69,6 +69,28 @@ async function waitForAllGone(pids, timeoutMs, isAlive) {
   }
 }
 
+// Roots currently held by the discovery fence below. A stopped process never acts on SIGTERM,
+// so if this owner exits mid-discovery the root would stay frozen and orphaned forever.
+const fencedRoots = new Set();
+let fenceExitGuardInstalled = false;
+
+function releaseFencedRootsOnExit() {
+  for (const proc of fencedRoots) {
+    if (proc.exitCode != null || proc.signalCode != null) continue;
+    bestEffortKillPid(proc.pid, 'SIGTERM', () => {});
+    bestEffortKillPid(proc.pid, 'SIGCONT', () => {});
+  }
+  fencedRoots.clear();
+}
+
+function holdFencedRoot(proc) {
+  if (!fenceExitGuardInstalled) {
+    fenceExitGuardInstalled = true;
+    process.on('exit', releaseFencedRootsOnExit);
+  }
+  fencedRoots.add(proc);
+}
+
 async function killProcessTree(proc, opts, enumerate = psList) {
   const pid = proc.pid;
   const rootHasExited = () => proc.exitCode != null || proc.signalCode != null;
@@ -92,7 +114,10 @@ async function killProcessTree(proc, opts, enumerate = psList) {
   // relationship that lets this owner find it.
   let rootObservedAlive = isAlive(pid);
   const rootStopped = process.platform !== 'win32' && rootObservedAlive;
-  if (rootStopped) kill(pid, 'SIGSTOP');
+  if (rootStopped) {
+    holdFencedRoot(proc);
+    kill(pid, 'SIGSTOP');
+  }
 
   let descendants;
   let discoveryFailed = false;
@@ -115,6 +140,7 @@ async function killProcessTree(proc, opts, enumerate = psList) {
   for (const targetPid of descendants) kill(targetPid, 'SIGTERM');
   if (rootStopped) kill(pid, 'SIGCONT');
   kill(pid, 'SIGTERM');
+  fencedRoots.delete(proc);
   await waitForAllGone(all, graceMs, isAlive);
 
   const remaining = all.filter((p) => isAlive(p));

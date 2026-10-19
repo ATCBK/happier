@@ -119,6 +119,28 @@ describe('killProcessTree', () => {
     }
   });
 
+  it.runIf(process.platform !== 'win32')('does not leave the root stopped when its owner exits during discovery', async () => {
+    const processTreePath = join(__dirname, '../../../../scripts/process_tree.cjs');
+    // Real owner process: it stops its detached root, then exits before discovery settles,
+    // like a provider runner that finishes shutdown while cleanup is still pending.
+    const owner = spawnInlineNodeTestProcess(`
+      const { spawn } = require('node:child_process');
+      const { killProcessTree } = require(${JSON.stringify(processTreePath)});
+      const root = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });
+      console.log(String(root.pid));
+      const pendingDiscovery = () => new Promise(() => { setTimeout(() => process.exit(0), 100); });
+      void killProcessTree(root, { graceMs: 25 }, pendingDiscovery);
+    `, { stdio: ['ignore', 'pipe', 'ignore'] });
+    const [output] = await once(owner.stdout!, 'data');
+    const rootPid = Number(String(output).trim());
+    try {
+      await once(owner, 'exit');
+      await expect(waitForProcessExit(rootPid, { timeoutMs: 3_000 })).resolves.toBe(true);
+    } finally {
+      try { process.kill(rootPid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+
   it('kills a process and its descendants (posix)', async () => {
     if (process.platform === 'win32') return;
 
