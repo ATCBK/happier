@@ -81,6 +81,7 @@ beforeEach(async () => {
             account: { findUnique: async () => ({ ...account, seq: mocks.accountSeq }) },
             simpleCache: { findUnique: async () => null },
             session: { findMany: async () => [] },
+            sessionFollowEdge: { findMany: async () => [] },
             automationTrigger: { findMany: async () => [] },
             automationRun: {
                 findUnique: vi.fn(async () => mocks.transactionAttempts === 1 ? null : winner),
@@ -138,12 +139,14 @@ it("selects exact-machine terminal custody, cancellation and interrupted uncerta
                     "outcome_uncertain",
                 ] },
                 workflowCustodyState: "pending",
-                workflowInvocations: { some: { lifecycle: "cancel_requested" } },
+                workflowInvocations: { some: { OR: [
+                    { lifecycle: "cancel_requested" },
+                    { parentRecordId: null, lifecycle: "cancelled" },
+                ] } },
             },
             {
                 state: "interrupted",
                 workflowCustodyState: "pending",
-                workflowInvocations: { some: { lifecycle: "outcome_uncertain" } },
             },
         ],
     });

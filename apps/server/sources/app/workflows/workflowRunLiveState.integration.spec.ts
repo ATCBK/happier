@@ -254,6 +254,8 @@ describe("workflow Run live state", () => {
             { state: "interrupted", lifecycle: "outcome_uncertain", attention: true },
             { state: "running", lifecycle: "waiting_for_review", attention: true },
             { state: "running", lifecycle: "waiting_for_approval", attention: true },
+            { state: "failed", lifecycle: "failed", attention: true },
+            { state: "succeeded", lifecycle: "completed", attention: false },
         ] as const;
         const expectedAttentionIds = new Set<string>();
         for (const [position, scenario] of cases.entries()) {

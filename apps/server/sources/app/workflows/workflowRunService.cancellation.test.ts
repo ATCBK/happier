@@ -80,6 +80,7 @@ beforeEach(() => {
             findMany: async () => [{ id: "old-machine", accountId: "account" }] },
         simpleCache: { findUnique: async () => null },
         automationTrigger: { findMany: async () => [] },
+        sessionFollowEdge: { findMany: async () => [] },
         automationRun: {
             findUnique: async () => runSnapshot(),
             findUniqueOrThrow: async () => runSnapshot(),

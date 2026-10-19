@@ -309,7 +309,7 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: 
             && pathnameRef.current === invocationPathname && lifetime?.isCurrent() === true;
         if (!isInvocationCurrent()) return;
         const admitted = await runNowControllerRef.current.runNow(row.automationId, 'existingSession', { isInvocationCurrent });
-        const route = createAdmittedWorkflowRunRoute(admitted?.workflowRun);
+        const route = createAdmittedWorkflowRunRoute(admitted?.workflowRun, lifetime?.scope.serverId);
         if (route !== null && isInvocationCurrent()) router.push(route as never);
     }, [router]);
     const [historyRowKey, setHistoryRowKey] = React.useState<string>();

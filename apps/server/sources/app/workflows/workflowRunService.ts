@@ -1236,7 +1236,13 @@ export async function listWorkflowRunsForRecovery(params: PageOptions & Readonly
                         {
                             state: { notIn: [...AUTOMATION_RUN_TERMINAL_STATES] },
                             workflowCustodyState: "pending",
-                            workflowInvocations: { some: { lifecycle: "cancel_requested" } },
+                            workflowInvocations: { some: { OR: [
+                                { lifecycle: "cancel_requested" },
+                                // Root/child facts commit before parent custody.
+                                // Keep cancellation reachable if the final parent
+                                // write failed after every active row settled.
+                                { parentRecordId: null, lifecycle: "cancelled" },
+                            ] } },
                         },
                         {
                             // Child settlement and root publication are separate

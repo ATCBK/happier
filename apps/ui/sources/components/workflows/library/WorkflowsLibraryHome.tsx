@@ -29,6 +29,7 @@ import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { restoreFocusToBestTarget } from '@/keyboard/focusReturn';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
 import {
     deleteWorkflowDefinition,
@@ -413,6 +414,7 @@ function useLibraryRowActions(row: LibraryRow): CollectionRowActions {
 
 function useLibraryRowCommands(summaries: ReadonlyMap<string, WorkflowLibraryRunSummary> | null, deletedDefinitionId: string | null): LibraryRowCommands {
     const router = useRouter();
+    const scope = useActiveServerAccountScope();
     const admitted = React.useRef(new Set<string>());
     const retirement = React.useRef<Readonly<{ dispose(): void }> | null>(null);
     const [deleting, setDeleting] = React.useState<ReadonlySet<string>>(() => new Set());
@@ -423,7 +425,7 @@ function useLibraryRowCommands(summaries: ReadonlyMap<string, WorkflowLibraryRun
         deleting,
         focusRequest,
         summaries,
-        openRun: (runId) => router.push(createWorkflowRunRoute(runId) as never),
+        openRun: (runId) => router.push(createWorkflowRunRoute(runId, scope?.serverId) as never),
         // A saved row holds an Artifact identity, not a reviewed machine or inputs: Run now opens the
         // exact revision in the editor, whose Run review admits the run.
         run: (definitionId) => router.push({ pathname: '/workflows/[id]', params: { id: definitionId, intent: 'run' } } as never),
@@ -478,7 +480,7 @@ function useLibraryRowCommands(summaries: ReadonlyMap<string, WorkflowLibraryRun
                 }
             })();
         },
-    }), [router, summaries, deleting, focusRequest, deletedDefinitionId]);
+    }), [router, scope?.serverId, summaries, deleting, focusRequest, deletedDefinitionId]);
 }
 
 async function exportDefinition(definitionId: string): Promise<void> {

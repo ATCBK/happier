@@ -33,6 +33,7 @@ import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/prompt
 import { randomUUID } from '@/platform/randomUUID';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { UsageCoachApplyResultSchema } from '@happier-dev/protocol/usage/coach/coachActions';
 import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { UsagePromptCompositionSchema } from '@happier-dev/protocol/usage/coach/usagePromptComposition';
@@ -983,6 +984,15 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
 
     it('composes retained completed-model evidence through usage query, exact Apply/Undo and intervening-edit refusal', async () => {
         vi.stubGlobal('fetch', homes.request);
+        const sessionBatch = createSessionReadBatchHttpBoundary(request => request.path === '/v2/sessions/read-batch' ? undefined
+            : homes.request(request.url, { method: request.method, headers: request.headers, signal: request.signal }));
+        homes.answer(serverId, 'POST /v2/sessions/read-batch', { select: async (body, request) => {
+            const url = new URL(request.url);
+            const response = await sessionBatch.handle({ url, path: url.pathname, home: serverId, accountId: 'account-a',
+                method: 'POST', headers: new Headers(request.init?.headers), signal: request.signal, body });
+            if (!response) throw new Error('Expected the canonical Session batch fixture to respond');
+            return { status: response.status, body: await response.json() };
+        } });
         const { resolveServerProfileScopeIdForIdentifier, areServerProfileIdentifiersEquivalent } = await import('@/sync/domains/server/serverProfiles');
         const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
         const accountScope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-a' };

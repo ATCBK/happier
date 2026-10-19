@@ -18,6 +18,7 @@ import { Typography } from '@/constants/Typography';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
+import { createWorkflowInvocationRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { subscribeVisibleWorkflowRunListInvalidation } from '@/sync/domains/workflows/workflowRunListInvalidation';
 import { formatWorkflowProblemMessage } from '@/components/workflows/presentation/workflowProblemPresentation';
 import type { WorkflowRunInvocationFact, WorkflowRunInvocations } from '@/sync/store/domains/workflowRuns';
@@ -66,7 +67,7 @@ function WorkflowTestStepState(props: StepProps): React.ReactElement | null {
         testID={`workflow-editor-test-${props.blockId}-status`} />;
 }
 
-function WorkflowTestStepOutput(props: StepProps): React.ReactElement | null {
+function WorkflowTestStepOutput(props: StepProps & Readonly<{ serverId: string | null }>): React.ReactElement | null {
     const router = useRouter();
     const fact = storage((state) => selectWorkflowTestStep(state.workflowRunInvocationsByRunId[workflowRunStoreKey(props.runId)], props.definition, props.blockId));
     if (!fact?.opened || fact.opened.index.contentRevision !== fact.contentRevision) return null;
@@ -84,7 +85,7 @@ function WorkflowTestStepOutput(props: StepProps): React.ReactElement | null {
         {output === undefined ? null : <WorkflowAgentDetail text={output} detailTestID={`workflow-editor-test-${props.blockId}-output`} />}
         <HappierPressable accessibilityRole="button" testID={`workflow-editor-test-${props.blockId}-open`}
             style={({ pressed }) => [workflowRunStyles.actionTarget, pressed ? workflowRunStyles.pressed : null]}
-            onPress={() => router.push({ pathname: '/workflows/runs/[runId]', params: { runId: props.runId, invocationId: fact.id } } as never)}>
+            onPress={() => router.push(createWorkflowInvocationRoute(props.runId, fact.id, props.serverId) as never)}>
             <Text style={workflowRunStyles.quietAction}>{t('workflows.run.openStepDetails')}</Text>
         </HappierPressable>
     </View>;
@@ -137,10 +138,10 @@ export function useWorkflowTestRunPresentation(input: Readonly<{ runId: string |
             </View>,
             step: (blockId: string) => ({
                 state: <WorkflowTestStepState runId={input.runId!} definition={input.definition!} blockId={blockId} />,
-                footer: <WorkflowTestStepOutput runId={input.runId!} definition={input.definition!} blockId={blockId} />,
+                footer: <WorkflowTestStepOutput runId={input.runId!} definition={input.definition!} blockId={blockId} serverId={lifetime?.scope.serverId ?? null} />,
             }),
         }),
-    }), [failure, input.editable, input.runId, input.definition, pending]);
+    }), [failure, input.editable, input.runId, input.definition, lifetime?.scope.serverId, pending]);
 }
 
 const styles = StyleSheet.create((theme) => ({

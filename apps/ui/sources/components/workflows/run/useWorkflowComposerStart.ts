@@ -14,6 +14,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { tLoose } from '@/text';
 import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { useMountedRef } from '@/hooks/ui/useMountedRef';
+import { listWorkflowPersonInputs } from '../presentation/workflowBuiltinInputPresentation';
 
 type BuiltinWorkflowEntry = (typeof BUILTIN_WORKFLOW_CATALOG_V1)[number];
 
@@ -50,7 +51,7 @@ export function useWorkflowComposerStart(params: Readonly<{
     onComplete?: WorkflowRunNowRequest['onComplete'];
     accountLifetime?: ActiveServerAccountScopeLifetime | null;
     prepareOrigin?: PendingStart['prepareOrigin'];
-    onStarted: (result: WorkflowRunStartResultV1) => void;
+    onStarted: (result: WorkflowRunStartResultV1, serverId: string) => void;
 }>): (workflow: string | WorkflowPluginSourceV1 | WorkflowStartSelection, options?: Readonly<{ retainedDraft?: string }>) => void {
     const [pending, setPending] = React.useState<PendingStart | null>(null);
     const runNow = useWorkflowRunNowController(pending?.lifetime ?? params.accountLifetime);
@@ -96,7 +97,7 @@ export function useWorkflowComposerStart(params: Readonly<{
         if (admitted === null || !isCurrent()) return;
         pendingRunIdRef.current = null;
         setPending(null);
-        onStartedRef.current(admitted);
+        onStartedRef.current(admitted, selected.lifetime.scope.serverId);
     }, [mounted, runNow]);
 
     const start = React.useCallback((
@@ -140,7 +141,8 @@ export function useWorkflowComposerStart(params: Readonly<{
         setPending((current) => current ? { ...current, rawTextValues } : current);
     }, []);
     const modalProps = React.useMemo<WorkflowRunComposerModalProps | null>(() => pending === null ? null : {
-        inputs: pending.entry.definition.inputs,
+        inputs: listWorkflowPersonInputs(pending.entry.source.kind === 'catalog' ? pending.entry.source.workflow : null,
+            pending.entry.definition.inputs),
         definition: pending.entry.definition,
         optionsConsumer: pending.entry.source.kind === 'catalog' ? { kind: 'workflow', workflow: pending.entry.source.workflow }
             : pending.entry.source.kind === 'saved' ? { kind: 'workflow', workflow: pending.entry.source.definitionId } : undefined,

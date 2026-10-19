@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveWorkflowBuiltinInputPresentation } from './workflowBuiltinInputPresentation';
+import { resolveBuiltinWorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/builtins/catalog';
+
+import { listWorkflowPersonInputs, resolveWorkflowBuiltinInputPresentation } from './workflowBuiltinInputPresentation';
 
 describe('built-in workflow input presentation', () => {
     it('gives collaboration inputs human-readable labels through the shared presentation owner', () => {
@@ -27,5 +29,13 @@ describe('built-in workflow input presentation', () => {
     it('keeps authored workflows outside built-in localization', () => {
         expect(resolveWorkflowBuiltinInputPresentation('plugin:example/custom')).toBeUndefined();
         expect(resolveWorkflowBuiltinInputPresentation(null)).toBeUndefined();
+    });
+    it('never asks a person for an input the Run\'s own trigger binds', () => {
+        const inputs = resolveBuiltinWorkflowDefinitionV1('keep-going')!.definition.inputs;
+        expect(inputs.map((input) => input.name)).toContain('triggerId');
+        expect(listWorkflowPersonInputs('builtin:keep-going', inputs).map((input) => input.name))
+            .toEqual(inputs.map((input) => input.name).filter((name) => name !== 'triggerId'));
+        const panel = resolveBuiltinWorkflowDefinitionV1('plan-with-a-panel')!.definition.inputs;
+        expect(listWorkflowPersonInputs('builtin:plan-with-a-panel', panel)).toEqual(panel);
     });
 });

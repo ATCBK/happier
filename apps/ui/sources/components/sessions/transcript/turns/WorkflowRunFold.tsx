@@ -117,8 +117,8 @@ export const WorkflowRunFold = React.memo(function WorkflowRunFold(
   const source = useSessionTranscriptSource();
   const runId = props.run.runId;
   const open = React.useMemo(() => source.navigate === null ? null : () => {
-    navigateWithBlurOnWeb(() => source.navigate?.(createWorkflowRunRoute(runId)));
-  }, [runId, source.navigate]);
+    navigateWithBlurOnWeb(() => source.navigate?.(createWorkflowRunRoute(runId, props.serverId ?? source.serverId)));
+  }, [props.serverId, runId, source.navigate, source.serverId]);
   const detail = row?.detail;
   const acceptedSource = detail?.acceptedContext.source;
   const catalogRef =

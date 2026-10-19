@@ -561,6 +561,7 @@ describe('editor workflow composer', () => {
         const scope = { serverId: getActiveServerSnapshot().serverId, accountId: 'account-a' };
         getStorage().setState({ profileScope: scope,
             settingsScope: scope, isDataReady: true, isSessionDraftsReady: true,
+            localSettings: { ...getStorage().getState().localSettings, workspaceLayoutV1: {} },
             machines: { [machine.id]: machine }, machineListByServerId: {} });
         runStart.mockReset();
         runStart.mockImplementation(async () => { throw new Error('Fixture Machine is offline'); });
@@ -740,6 +741,8 @@ describe('editor workflow composer', () => {
         ]);
         expect(home.requestsFor(storageRoute).filter(({ input }) => input && typeof input === 'object'
             && 'operation' in input && input.operation === 'invocations.get')).toHaveLength(0);
+        await screen.pressByTestIdAsync('workflow-editor-test-review-open');
+        expect(router.push).toHaveBeenLastCalledWith(`/workflows/runs/${startRequests()[0]!.runId}?invocationId=review&serverId=${encodeURIComponent(getStorage().getState().profileScope!.serverId)}`);
     });
 
     it('runs the reviewed saved draft with its granted Team without saving or substituting saved contents', async () => {
@@ -783,6 +786,8 @@ describe('editor workflow composer', () => {
             source: { kind: 'inline', sourceArtifactId: definitionId, visibleTeamId: 'team-a',
                 definition: { blocks: [{ document: { text: 'Reviewed unsaved contents' } }] } },
         });
+        const { router } = await import('expo-router');
+        expect(router.push).toHaveBeenLastCalledWith(`/workflows/runs/${startRequests()[0]!.runId}?serverId=${encodeURIComponent(getStorage().getState().profileScope!.serverId)}`);
         expect(definitionWrites()).toHaveLength(0);
     });
 
@@ -865,7 +870,7 @@ describe('editor workflow composer', () => {
         expect(getStorage().getState().workflowRunsById[workflowRunStoreKey(startedId!)]?.summary?.id).toBe(startedId);
         const { router } = await import('expo-router');
         const { createWorkflowRunRoute } = await import('@/sync/domains/workflows/workflowRunRoute');
-        expect(router.push).toHaveBeenLastCalledWith(createWorkflowRunRoute(startedId!));
+        expect(router.push).toHaveBeenLastCalledWith(createWorkflowRunRoute(startedId!, getStorage().getState().profileScope!.serverId));
     });
 
     it('opens the real native engine panel from the step composer and only edits authoring values', async () => {

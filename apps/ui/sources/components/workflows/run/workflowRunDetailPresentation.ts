@@ -10,6 +10,7 @@ import type {
     WorkflowRunSummaryV1,
 } from '@happier-dev/protocol';
 
+import type { TranslationKeyNoParams } from '@/text/i18n';
 import { t } from '@/text';
 import { formatWorkflowConversationProblem } from '@/components/workflows/presentation/workflowProblemPresentation';
 import type { WorkflowInvocationStructureEntry } from './workflowInvocationStructure';
@@ -124,7 +125,10 @@ export type WorkflowInvocationRecoveryPresentation = Readonly<{
         kind: 'reported_failure';
         blockKind: WorkflowProgressEnvelopeV1['blockKind'];
         code: string;
+        /** The message as its producer recorded it; step detail keeps it under Technical details. */
         message: string | null;
+        /** What the cause line and the recovery card say: a known transport code in words, else the message. */
+        headline: string | null;
         /** Source-owned sanitized issue, including the reported usage-limit resetAtMs. */
         runtimeIssue?: SessionRuntimeIssueV1 | null;
         reset?: string | null;
@@ -251,9 +255,12 @@ export function projectWorkflowInvocationRecovery(params: Readonly<{
     const failed = invocation?.lifecycle === 'failed' || invocation?.lifecycle === 'needs_attention'
         || invocation?.lifecycle === 'outcome_uncertain';
     const issue = presentSessionRuntimeIssue(failed ? params.progress?.reason?.runtimeIssueV1 : undefined);
+    const reportedMessage = issue.message ?? params.progress?.reason?.message ?? null;
     const failureCause: WorkflowInvocationRecoveryPresentation['failureCause'] = failed && params.progress?.reason
         ? { kind: 'reported_failure', blockKind: params.progress.blockKind, code: params.progress.reason.code,
-            message: issue.message ?? params.progress.reason.message ?? null, reset: issue.reset,
+            message: reportedMessage,
+            headline: issue.message ?? describeRecordedTransportFailure(params.progress.reason.code) ?? reportedMessage,
+            reset: issue.reset,
             runtimeIssue: params.progress.reason.runtimeIssueV1 ?? null,
             at: params.progress.timing?.finishedAt ?? null }
         : invocation?.lifecycle === 'failed'
@@ -304,6 +311,28 @@ export function projectWorkflowInvocationRecovery(params: Readonly<{
     };
 }
 
+/**
+ * A step's execution can fail on a transport error whose only record is the Node/HTTP client code and its
+ * raw sentence ("timeout of 30000ms exceeded"). These codes are a closed, well-known set, so the person
+ * reads what happened between the step and its Agent; the raw text stays in Technical details.
+ */
+const RECORDED_TRANSPORT_FAILURE_KEYS = {
+    ECONNABORTED: 'workflows.recovery.agentTimedOut',
+    ETIMEDOUT: 'workflows.recovery.agentTimedOut',
+    ECONNREFUSED: 'workflows.recovery.agentUnreachable',
+    ENOTFOUND: 'workflows.recovery.agentUnreachable',
+    EAI_AGAIN: 'workflows.recovery.agentUnreachable',
+    EHOSTUNREACH: 'workflows.recovery.agentUnreachable',
+    ECONNRESET: 'workflows.recovery.agentConnectionLost',
+    EPIPE: 'workflows.recovery.agentConnectionLost',
+} as const satisfies Readonly<Record<string, TranslationKeyNoParams>>;
+
+function describeRecordedTransportFailure(code: string): string | null {
+    const key = Object.hasOwn(RECORDED_TRANSPORT_FAILURE_KEYS, code)
+        ? RECORDED_TRANSPORT_FAILURE_KEYS[code as keyof typeof RECORDED_TRANSPORT_FAILURE_KEYS] : undefined;
+    return key === undefined ? null : t(key);
+}
+
 /** The page and its exact failure inspector consume one cause/recovery projection. */
 export type WorkflowRunFailurePresentation = Readonly<{
     invocationId: string;
@@ -321,7 +350,7 @@ export function formatWorkflowRunFailureCauseLine(
     failure: WorkflowRunFailurePresentation,
 ): string | null {
     const cause = failure.recovery.failureCause ?? null;
-    const headline = cause?.kind === 'reported_failure' ? cause.message
+    const headline = cause?.kind === 'reported_failure' ? cause.headline
         : cause?.kind === 'cause_not_recorded' ? t('workflows.recovery.causeNotRecorded') : null;
     if (headline === null || headline === undefined || headline === '') return null;
     const reset = cause?.kind === 'reported_failure' ? cause.reset ?? null : null;

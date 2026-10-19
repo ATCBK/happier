@@ -136,7 +136,7 @@ export function parseActivityInteraction(params: Readonly<{
     // A workflow Run is addressed by identity, so its route is derived here and
     // deliberately takes precedence over any `url` the payload carries.
     const route = workflowRun
-        ? createWorkflowRunRoute(workflowRun.runId)
+        ? createWorkflowRunRoute(workflowRun.runId, readServerId(params.data))
         : activitySurfaceRoute ?? resolveRoute(params.data);
     const resolvedPermissionAction =
         permissionAction && sessionId && requestId

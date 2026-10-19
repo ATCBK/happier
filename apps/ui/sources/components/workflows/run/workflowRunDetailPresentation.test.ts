@@ -152,6 +152,26 @@ describe('managed workflow Run presentation', () => {
             machine: { name: 'Build box', reachable: false, lastSeenAt: 0 } }).unavailableMachine)
             .toEqual({ name: 'Build box', lastSeenAt: null });
     });
+    it.each([
+        ['ECONNABORTED', 'timeout of 30000ms exceeded', 'workflows.recovery.agentTimedOut'],
+        ['ETIMEDOUT', 'connect ETIMEDOUT 10.0.0.4:443', 'workflows.recovery.agentTimedOut'],
+        ['ECONNREFUSED', 'connect ECONNREFUSED 127.0.0.1:3013', 'workflows.recovery.agentUnreachable'],
+        ['ECONNRESET', 'socket hang up', 'workflows.recovery.agentConnectionLost'],
+    ] as const)('says a recorded %s in words on the cause line and keeps the raw message for step detail', (code, message, key) => {
+        const run = createWorkflowRunSummaryFixture({ state: 'interrupted' });
+        const invocation = createWorkflowInvocationIndexFixture({ lifecycle: 'failed' });
+        const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
+            invocationPath: { blockId: 'a', scope: [] }, attempt: '0', logicalInvocationRecordId: invocation.id,
+            reason: { code, message } });
+        const recovery = projectWorkflowInvocationRecovery({ run, invocation, progress, machineHomeDirectory: null });
+        expect(recovery.failureCause).toMatchObject({ kind: 'reported_failure', code, message, headline: t(key) });
+        expect(formatWorkflowRunFailureCauseLine({ invocationId: invocation.id, step: { name: 'Draft', ordinal: '1' }, recovery }))
+            .toBe(`${t('workflows.run.stepNumber', { ordinal: '1' })} · ${t(key)}`);
+        // An unrecognized code keeps the message its producer recorded.
+        const other = projectWorkflowInvocationRecovery({ run, invocation, machineHomeDirectory: null,
+            progress: { ...progress, reason: { code: 'agent_failed', message: 'Agent exited before producing a result' } } });
+        expect(other.failureCause).toMatchObject({ headline: 'Agent exited before producing a result' });
+    });
     it('keeps Stop pending until physical custody settles, even after the parent is cancelled', () => {
         const coverage = { observedLeafCounts: { completed: 1, failed: 0, attention: 5 }, coverage: 'complete' as const, knownFailure: false };
         const run = createWorkflowRunSummaryFixture({ state: 'cancelled', workflowCustodyState: 'pending', stepProgress: { completed: 1, total: 5 } });

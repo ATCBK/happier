@@ -1,5 +1,7 @@
 import { t } from '@/text';
 
+import type { WorkflowInputDefinition } from '@happier-dev/protocol/workflows/workflowV1';
+
 import type { WorkflowRunInputPresentation } from '../run/WorkflowRunComposer';
 
 /**
@@ -62,4 +64,21 @@ export function resolveWorkflowBuiltinInputPresentation(workflowRef: string | nu
         default:
             return undefined;
     }
+}
+
+/**
+ * Built-in inputs that whatever starts the Run binds: Keep going's own session trigger passes its id.
+ * No person is asked for them, so no form, preview or "Asks for" line lists them.
+ */
+const STARTER_BOUND_BUILTIN_INPUTS: Readonly<Record<string, readonly string[]>> = {
+    'builtin:keep-going': ['triggerId'],
+};
+
+/** The inputs a person is asked for: everything except what the Run's own starter binds. */
+export function listWorkflowPersonInputs<T extends Pick<WorkflowInputDefinition, 'name'>>(
+    workflowRef: string | null | undefined,
+    inputs: readonly T[],
+): readonly T[] {
+    const bound = workflowRef == null ? undefined : STARTER_BOUND_BUILTIN_INPUTS[workflowRef];
+    return bound === undefined ? inputs : inputs.filter((input) => !bound.includes(input.name));
 }

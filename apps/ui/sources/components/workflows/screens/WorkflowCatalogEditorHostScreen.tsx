@@ -119,7 +119,7 @@ function CatalogDefinition(props: Readonly<{ plugin: WorkflowPluginSourceV1 | Bu
             refusal: 'inline' });
         if (accepted !== null && isCurrent()) {
             setOpen(false);
-            router.push(createWorkflowRunRoute(accepted.run.id, accountLifetime?.scope.serverId) as never);
+            router.push(createWorkflowRunRoute(accepted.run.id, lifetime?.scope.serverId) as never);
         }
     };
     const inputPresentation = resolveWorkflowBuiltinInputPresentation(builtin?.id);
