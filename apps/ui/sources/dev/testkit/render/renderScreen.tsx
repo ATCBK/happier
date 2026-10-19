@@ -59,6 +59,13 @@ function findAllHostsByTestId(root: ReactTestInstance, testID: string): ReactTes
     return findAllHostTestInstances(root, (node) => nodeMatchesTestId(node, testID));
 }
 
+function isInHiddenSubtree(node: ReactTestInstance): boolean {
+    for (let current: ReactTestInstance | null = node; current !== null; current = current.parent) {
+        if (typeof current.type === 'string' && current.props?.visible === false) return true;
+    }
+    return false;
+}
+
 function resolvePreferredTestIdMatch(root: ReactTestInstance, testID: string): ReactTestInstance | null {
     const matches = findAllByTestId(root, testID);
     if (matches.length === 0) {
@@ -66,7 +73,8 @@ function resolvePreferredTestIdMatch(root: ReactTestInstance, testID: string): R
     }
 
     const actionableMatch = [...matches].reverse().find((node) => (
-        typeof node.props?.onPress === 'function' || typeof node.props?.onClick === 'function'
+        !isInHiddenSubtree(node)
+        && (typeof node.props?.onPress === 'function' || typeof node.props?.onClick === 'function')
     ));
     if (actionableMatch) {
         return actionableMatch;
@@ -85,6 +93,7 @@ function resolveRequiredTestIdTarget(root: ReactTestInstance, testID: string): R
 }
 
 function invokePress(target: ReactTestInstance, testID: string): void {
+    if (isInHiddenSubtree(target)) throw new Error(`Node "${testID}" is hidden`);
     const handler = target.props?.onPress ?? target.props?.onClick;
     if (typeof handler !== 'function') {
         throw new Error(`Node "${testID}" does not expose onPress/onClick`);
@@ -103,6 +112,7 @@ function resolveRequiredInstance(
 }
 
 async function invokePressAsync(target: ReactTestInstance, testID: string): Promise<void> {
+    if (isInHiddenSubtree(target)) throw new Error(`Node "${testID}" is hidden`);
     const handler = target.props?.onPress ?? target.props?.onClick;
     if (typeof handler !== 'function') {
         throw new Error(`Node "${testID}" does not expose onPress/onClick`);

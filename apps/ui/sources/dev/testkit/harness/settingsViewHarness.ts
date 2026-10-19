@@ -48,7 +48,10 @@ export async function renderSettingsView(
 
     return {
         ...screen,
-        findRow: (testID) => screen.findByTestId(testID),
+        // Row metadata lives on Item/SettingRow; the painted host owns press,
+        // accessibility and resolved style and intentionally omits those props.
+        findRow: (testID) => screen.findAllByTestId(testID).find(node => node.props?.title !== undefined)
+            ?? screen.findByTestId(testID),
         findRowByTitle: (title) => findRowCandidateByTitle(screen, title, false),
         listRows: (prefix) => screen.findAll((node) => (
             typeof node.props?.testID === 'string' && node.props.testID.startsWith(prefix)

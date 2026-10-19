@@ -6,11 +6,48 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred } from '../hooks/createDeferred';
 import { standardCleanup } from '../cleanup/standardCleanup';
 
+vi.mock('react-test-renderer', async importOriginal => {
+    const actual = await importOriginal<typeof import('react-test-renderer')>();
+    return { ...actual, act: vi.fn(actual.act) };
+});
+
 afterEach(() => {
     standardCleanup();
 });
 
 describe('UI testkit render helpers', () => {
+    it('retires a created renderer when the SDK initial act rejects after mounting', async () => {
+        const sdk = await import('react-test-renderer');
+        const { renderWithAppProviders } = await import('./renderWithAppProviders');
+        const originalAct = (await vi.importActual<typeof import('react-test-renderer')>('react-test-renderer')).act;
+        const created = vi.spyOn(sdk.default, 'create');
+        const failure = new Error('Renderer SDK initial flush failed');
+        // React's renderer is the external SDK boundary. Keep the real tree and
+        // effect lifecycle; fail only its initial flush acknowledgement.
+        const asyncAct: (callback: () => Promise<void>) => Promise<undefined> = sdk.act;
+        const initialAct = vi.mocked(asyncAct).mockImplementationOnce(callback =>
+            Promise.resolve(originalAct(callback)).then(() => { throw failure; }));
+        const lifecycle: string[] = [];
+        function MountedOwner() {
+            React.useEffect(() => {
+                lifecycle.push('mounted');
+                return () => { lifecycle.push('retired'); };
+            }, []);
+            return React.createElement('View');
+        }
+        try {
+            await expect(renderWithAppProviders(React.createElement(MountedOwner))).rejects.toBe(failure);
+            expect(lifecycle).toEqual(['mounted']);
+            standardCleanup();
+            expect(lifecycle).toEqual(['mounted', 'retired']);
+        } finally {
+            initialAct.mockImplementation(originalAct);
+            const result = created.mock.results[0];
+            if (result?.type === 'return') await originalAct(async () => { result.value.unmount(); });
+            created.mockRestore();
+        }
+    });
+
     it('queries simple memo components through the screen and tree helpers', async () => {
         const { renderScreen } = await import('./renderScreen');
         const MemoControl = React.memo(function Control(props: { label: string }) {
@@ -112,6 +149,44 @@ describe('UI testkit render helpers', () => {
         await pressPromise;
         expect(events).toEqual(['started', 'completed']);
         expect(screen.findHostByTestId('settings.status')?.children).toEqual(['completed']);
+    });
+
+    it('presses the visible control while an outgoing modal retains the same test id', async () => {
+        const { renderScreen } = await import('./renderScreen');
+        const livePress = vi.fn();
+        const retiredPress = vi.fn();
+        const screen = await renderScreen(React.createElement(React.Fragment, null,
+            React.createElement('Pressable', { testID: 'start-run', onPress: livePress }),
+            React.createElement('View', { visible: false },
+                React.createElement('Pressable', { testID: 'start-run', onPress: retiredPress })),
+        ));
+
+        // Retained content stays queryable for custody and exit-motion assertions.
+        expect(screen.findAllHostsByTestId('start-run')).toHaveLength(2);
+        await act(async () => screen.pressByTestId('start-run'));
+        await screen.tree.pressByTestIdAsync('start-run');
+        expect(livePress).toHaveBeenCalledTimes(2);
+        expect(retiredPress).not.toHaveBeenCalled();
+
+        await screen.update(React.createElement('View', { visible: false },
+            React.createElement('Pressable', { testID: 'start-run', onPress: retiredPress })));
+        expect(screen.findByTestId('start-run')).not.toBeNull();
+        expect(() => screen.pressByTestId('start-run')).toThrow(/hidden/);
+        await expect(screen.pressByTestIdAsync('start-run')).rejects.toThrow(/hidden/);
+        expect(retiredPress).not.toHaveBeenCalled();
+    });
+
+    it('presses a rendered host when a composite uses visible as a domain fact', async () => {
+        const { renderScreen } = await import('./renderScreen');
+        const onPress = vi.fn();
+        function NavigationMarker(props: { visible: boolean; onPress: () => void }) {
+            return React.createElement('Pressable', { testID: 'navigation.marker', onPress: props.onPress });
+        }
+        const screen = await renderScreen(React.createElement(NavigationMarker, { visible: false, onPress }));
+
+        screen.pressByTestId('navigation.marker');
+        await screen.pressByTestIdAsync('navigation.marker');
+        expect(onPress).toHaveBeenCalledTimes(2);
     });
 
     it('queries rendered host instances without counting transparent composite wrappers', async () => {
@@ -365,6 +440,23 @@ describe('UI testkit render helpers', () => {
         screen.pressRowByTitle('Custom Backend');
         expect(onAddPress).toHaveBeenCalledTimes(1);
         expect(onBackendPress).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps settings row metadata distinct from its painted press target', async () => {
+        const { renderSettingsView } = await import('../harness/settingsViewHarness');
+        const onPress = vi.fn();
+        function SettingsRow(props: { testID: string; title: string; detail: string; onPress: () => void }) {
+            return React.createElement('Pressable', { testID: props.testID, onPress: props.onPress },
+                React.createElement('Text', null, props.title));
+        }
+        const screen = await renderSettingsView(React.createElement(SettingsRow, {
+            testID: 'settings.account', title: 'Account', detail: 'Connected', onPress,
+        }));
+
+        expect(screen.findRow('settings.account')?.props).toMatchObject({ title: 'Account', detail: 'Connected' });
+        expect(screen.findHostByTestId('settings.account')?.type).toBe('Pressable');
+        screen.pressRow('settings.account');
+        expect(onPress).toHaveBeenCalledOnce();
     });
 
     it('prefers the interactive row when a settings title is shared by a group and an item', async () => {
