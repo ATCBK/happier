@@ -20,8 +20,9 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { getConnectedAccountCatalogValue } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { getSavedSecretCatalogSnapshot, resolveSavedSecretReference, subscribeSavedSecretCatalogSnapshots } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
-import { deriveVoiceCredentialBindingIdentityV1, openSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol';
-import { resolveAccountVoiceCredential, resolveAccountVoiceCredentialSourceSelection, saveAndUseAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
+import { createRecipientContractDigestV1, deriveVoiceCredentialBindingIdentityV1, openSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol';
+import { resolveAccountVoiceCredential, resolveAccountVoiceCredentialSourceSelection } from '@/voice/credentials/accountVoiceCredential';
+import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
 import { VoiceCredentialItem } from '@/voice/credentials/CredentialItem';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { OverlayPortalHost } from '@/components/ui/popover';
@@ -30,7 +31,7 @@ import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegi
 import { getExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
 import { getCurrentBundledConversationRuntimeHost } from '@/voice/registry/bundledConversationRuntimeHost';
 import { BundledConversationSettingsSection } from './BundledConversationSettingsSection';
-import { createElevenLabsSettingsRuntimeTestHarness, createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
+import { createElevenLabsSettingsRuntimeTestHarness, createVoiceSettingsAccountTestHarness, withVoiceSettingsCredentialResource } from './voiceSettingsAccountTestHarness';
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
 
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -96,23 +97,15 @@ describe('BundledConversationSettingsSection', () => {
     storage.setState(initialStorage, true);
   });
   async function saveCredential() {
-    account.replaceSettings(saveAndUseAccountVoiceCredential({ settings: account.settings, contribution,
-      credentialSlotId: 'api_key', value: 'test-only-api-key', generateId: () => 'voice-test-secret', now: 1,
-      currentDeclaration: provider.entry.declaration, expectedSettingsVersion: storage.getState().settingsVersion ?? 1,
-      expectedSecretId: null, expectedSecretUpdatedAt: null,
-    }).settings);
+    const recipient = createBundledVoiceRecipientContract({ pluginId: provider.entry.pluginId,
+      declaration: provider.entry.declaration });
+    if (!recipient) throw new Error('Expected ElevenLabs recipient contract');
+    account.replaceSettings(await withVoiceSettingsCredentialResource(account, {
+      settings: account.settings, declaration: provider.entry.declaration, pluginId: provider.entry.pluginId,
+      resourceId: 'voice-test-secret', recipientContractDigest: createRecipientContractDigestV1(recipient),
+    }));
     await refreshSavedSecretCatalog(account.scope);
-    // Catalog readiness precedes retained-secret promotion. Admit the action
-    // only after that real Account resource and selected binding are settled.
-    await vi.waitFor(() => {
-      expect(account.resources).toHaveLength(1);
-      const binding = account.settings.voiceSettingsV1.credentialBindings.find(candidate =>
-        candidate.contribution.pluginId === contribution.pluginId && candidate.contribution.localId === contribution.localId);
-      expect(binding?.credentialBindings.account?.api_key).toMatch(/^happier:shared-secret:v1:/u);
-    });
-    await refreshSavedSecretCatalog(account.scope);
-    // Foreground materials are not the import/history completion receipt.
-    // Finish the real fixture transaction before capturing action authority.
+    // Capture action authority from the real current material catalog.
     await vi.waitFor(() => {
       expect(getSavedSecretCatalogSnapshot(account.scope)).toMatchObject({
         status: 'ready', stale: false, legacyImport: { status: 'complete' },
@@ -293,7 +286,7 @@ describe('BundledConversationSettingsSection', () => {
     ]));
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style === 'cancel')?.onPress?.());
     await flushHookEffects();
-    expect(screen.tree.findAllByType(WebPromptModal)).toHaveLength(0);
+    expect(screen.tree.findAllByType(WebPromptModal).filter(node => node.props.visible !== false)).toHaveLength(0);
     expect(account.settings.secrets).toHaveLength(0);
     expect(account.writes).toHaveLength(0);
     await act(async () => enterNew());
@@ -304,6 +297,11 @@ describe('BundledConversationSettingsSection', () => {
     await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0]).toBe(t('settingsVoice.local.voiceCredential.plainStorageTitle')));
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
     await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0]).toBe(t('settingsVoice.externalCredentials.recipientApprovalTitle')));
+    await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
+    const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
+    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0]).toBe(getActionSpec('secrets.shared.promote').title));
+    expect(account.resources).toHaveLength(0);
+    expect(account.promotions).toHaveLength(0);
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
     await vi.waitFor(() => expect(account.resources).toHaveLength(1));
     expect(account.promotions).toHaveLength(1);
@@ -403,7 +401,7 @@ describe('BundledConversationSettingsSection', () => {
     expect(account.writes).toHaveLength(0);
     expect(config()).toMatchObject({ agentId: 'agent-new' });
   });
-  it('merges a completed settings action into the latest canonical same-provider config', async () => {
+  it('preserves a changed provider config and reports an unconfirmed result instead of applying a stale action patch', async () => {
     await saveCredential();
     const metadata = observeAdmissionMetadata();
     const created = createDeferred<Response>();
@@ -425,9 +423,12 @@ describe('BundledConversationSettingsSection', () => {
       ...normalizeVoiceSettingsLocalDelta({ voice: next }, account.settings) }), { version: version + 1 });
     metadata.capture('same-provider-config-published');
     await act(async () => { metadata.capture('agent-response-resolved'); created.resolve(provider.response({ agent_id: 'agent-new' })); });
-    await vi.waitFor(() => expect(config(), metadata.describe()).toMatchObject({ agentId: 'agent-new', tts: { voiceId: 'voice-new' } }));
-    expect(account.writes).toHaveLength(1);
-    expect(account.persistedSettings.voice.providers[providerId]?.config).toMatchObject({ agentId: 'agent-new', tts: { voiceId: 'voice-new' } });
+    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.slice(0, 2), metadata.describe()).toEqual([
+      t('common.error'), t('settingsProviders.errors.mutationOutcomeUnknownDescription'),
+    ]));
+    expect(config()).toMatchObject({ agentId: '', tts: { voiceId: 'voice-new' } });
+    expect(account.writes).toHaveLength(0);
+    expect(account.persistedSettings.voice.providers[providerId]?.config).toMatchObject({ agentId: '', tts: { voiceId: 'voice-new' } });
   });
   it('fails closed instead of treating secret-shaped canonical data as a legacy import source', async () => {
     const voice = voiceSettingsParse({ providerId, providers: { [providerId]: { schemaVersion: 2, config: {

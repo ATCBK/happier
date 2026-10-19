@@ -20,7 +20,6 @@ import {
 } from '@/voice/settings/voiceSettingsRouteFocus';
 import { useVoiceSettingsMutable } from '@/voice/settings/useVoiceSettingsMutable';
 import { useVoiceConversationsReadinessInputs } from '@/voice/settings/useVoiceConversationsReadinessInputs';
-import { VoiceSettingsSearchPrerequisite } from '@/voice/settings/VoiceSettingsSearchPrerequisite';
 
 export function VoiceConversationsSettingsScreen() {
   const routeParams = useLocalSearchParams<{ focus?: string | string[] }>();
@@ -108,7 +107,6 @@ export function VoiceConversationsSettingsScreen() {
           </View>
           {/* Lab C1/C2: Language follows the service (and a realtime service's own fields), before Hear. */}
           <VoiceConversationLanguageSection voice={voice} setVoice={setVoice} popoverBoundaryRef={popoverBoundaryRef} />
-          <VoiceSettingsSearchPrerequisite intent="conversations" voice={voice} />
           <View testID="settings.voice.section.local" onLayout={onLocalSectionLayout}>
             <LocalDirectSection
               voice={voice}

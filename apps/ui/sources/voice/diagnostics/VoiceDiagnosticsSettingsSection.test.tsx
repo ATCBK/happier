@@ -72,7 +72,8 @@ vi.mock('@/utils/web/reactDomCjs', () => ({ requireReactDOM: () => ({ createPort
 vi.mock('socket.io-client', async (importOriginal) => (
   await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
-installSessionActionRpcBoundary(async request => {
+const statusSignals: AbortSignal[] = [];
+installSessionActionRpcBoundary(async (request, context) => {
   const separator = request.method.indexOf(':');
   const machineId = request.method.slice(0, separator);
   const method = request.method.slice(separator + 1);
@@ -82,6 +83,7 @@ installSessionActionRpcBoundary(async request => {
       VoiceSpeechDiagnosticsConfigureRequestV1Schema.parse(request.params).settings));
   }
   if (method === RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_STATUS) {
+    statusSignals.push(context.signal);
     if (testState.statusError) throw testState.statusError;
     return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse({ ...await status(machineId), settings: diagnostics,
       backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop') });
@@ -188,6 +190,7 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     resetVoiceDiagnosticsSessionPolicyForTests();
     configure.mockClear();
     status.mockClear();
+    statusSignals.length = 0;
     testState.artifacts = [];
     testState.deleteError = null;
     testState.configureError = null;
@@ -228,6 +231,28 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
       tLoose('settingsVoice.diagnostics.sttInput'),
       tLoose('settingsVoice.diagnostics.ttsOutput'),
     ]);
+  });
+
+  it('retires an unanswered diagnostics status read when the settings owner unmounts', async () => {
+    status.mockImplementationOnce(async () => await new Promise(() => {}));
+    const screen = await renderScreen(createSettingsSection({ voice: voiceSettingsParse({ diagnostics }), setVoice: commitVoiceSettings }));
+    await vi.waitFor(() => expect(statusSignals.length).toBeGreaterThan(0));
+    await screen.unmount();
+    await vi.waitFor(() => expect(statusSignals.every(signal => signal.aborted)).toBe(true));
+    const retry = await renderScreen(createSettingsSection({ voice: voiceSettingsParse({ diagnostics }), setVoice: commitVoiceSettings }));
+    await vi.waitFor(() => expect(retry.tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.location') }).props.subtitle).toBe('/private/m1'));
+    await retry.unmount();
+  });
+
+  it('rebinds diagnostics after the Account runtime retires without changing its machine', async () => {
+    const screen = await renderScreen(createSettingsSection({ voice: voiceSettingsParse({ diagnostics }), setVoice: commitVoiceSettings }));
+    const location = () => screen.tree.root.findAllByProps({ title: tLoose('settingsVoice.diagnostics.location') });
+    await vi.waitFor(() => expect(location()[0]?.props.subtitle).toBe('/private/m1'));
+    status.mockResolvedValueOnce({ ok: true, root: '/private/rebound', artifacts: [], health: testState.health });
+    const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    await act(async () => { retireActiveServerAccountScopeLifetime(); });
+    await vi.waitFor(() => expect(location()[0]?.props.subtitle).toBe('/private/rebound'));
+    await screen.unmount();
   });
 
   it('keeps a failed persisted shutdown visible and retryable in Voice Settings', async () => {

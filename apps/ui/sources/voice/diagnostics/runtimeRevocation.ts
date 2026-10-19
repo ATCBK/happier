@@ -1,5 +1,6 @@
 import type { VoiceSpeechDiagnosticsSettingsV1 } from '@happier-dev/protocol';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { createAbortRacer } from '@/voice/agent/voiceAgentAbort';
 
 import { setVoiceDiagnosticsSessionCaptureAllowed } from './capturePolicy';
 import { createVoiceDiagnosticsClientForMachine } from './client';
@@ -177,13 +178,18 @@ async function applyDeclaredMachinePolicyIntent(input: Readonly<{
   intent: VoiceDiagnosticsMachinePolicyIntent;
   settings: VoiceSpeechDiagnosticsSettingsV1;
   signal?: AbortSignal;
+  waitSignal?: AbortSignal;
 }>) {
-  return await enqueueMachinePolicy(input.intent.machineId, async () => {
+  const client = createVoiceDiagnosticsClientForMachine(input.intent.machineId);
+  // A retired observer must not release the serialized policy write: a late
+  // enable acknowledgement must precede the already-queued privacy disable.
+  // The pinned client keeps the write on its admitted Account lifetime.
+  const request = enqueueMachinePolicy(input.intent.machineId, async () => {
     if (!isLatestMachinePolicyIntent(input.intent)) {
       return { applied: false as const, acknowledged: false as const };
     }
     try {
-      const status = await createVoiceDiagnosticsClientForMachine(input.intent.machineId).configure(
+      const status = await client.configure(
         input.intent.kind === 'enable' ? input.settings : disabledDiagnosticsPolicy(input.settings),
         input.signal,
       );
@@ -211,6 +217,12 @@ async function applyDeclaredMachinePolicyIntent(input: Readonly<{
       throw error;
     }
   });
+  const observer = createAbortRacer(input.waitSignal);
+  try {
+    return await observer.race(request);
+  } finally {
+    observer.dispose();
+  }
 }
 
 export function disableVoiceDiagnosticsOnMachine(input: Readonly<{
@@ -235,13 +247,15 @@ export function applyVoiceDiagnosticsMachinePolicy(input: Readonly<{
   machineId: string;
   settings: VoiceSpeechDiagnosticsSettingsV1;
   signal?: AbortSignal;
+  /** The settings observer may retire while its authorized write stays queued. */
+  waitSignal?: AbortSignal;
   intent?: VoiceDiagnosticsMachinePolicyIntent<'enable'>;
 }>) {
   const intent = input.intent ?? declareVoiceDiagnosticsMachinePolicyIntent({
     machineId: input.machineId,
     kind: 'enable',
   });
-  return applyDeclaredMachinePolicyIntent({ intent, settings: input.settings, signal: input.signal });
+  return applyDeclaredMachinePolicyIntent({ intent, settings: input.settings, signal: input.signal, waitSignal: input.waitSignal });
 }
 
 export function revokeVoiceDiagnosticsSessionAuthorization(input: Readonly<{

@@ -27,8 +27,8 @@ import {
  * the setup steps cannot read readiness differently.
  *
  * `probeMachine: false` keeps a surface passive (Home's setup tile, a hub): the daemon model catalog
- * is not asked, so a local service's model facts stay unknown rather than being fetched because a
- * page opened. The open setup panel and the Conversations page pass `true` (the person asked).
+ * is not asked. It observes the catalog owner's established facts for this Account and machine,
+ * or remains unknown when none exist. The open setup panel and Conversations page pass `true`.
  */
 export function useVoiceConversationsReadinessInputs(voice: VoiceSettings, options: Readonly<{ probeMachine: boolean }>) {
   const happierVoiceSupported = useHappierVoiceSupport();
@@ -36,7 +36,7 @@ export function useVoiceConversationsReadinessInputs(voice: VoiceSettings, optio
   const daemonCatalogEnabled = options.probeMachine
     && (providerId === 'local_direct' || providerId === 'local_conversation');
   const executionMachine = useVoiceExecutionMachinePresentation();
-  const daemonMachineId = daemonCatalogEnabled ? executionMachine.machineId : null;
+  const daemonMachineId = executionMachine.machineId;
   const daemonModelCatalog = useDaemonVoiceModelCatalogState({
     enabled: daemonCatalogEnabled,
     refreshKey: daemonMachineId,

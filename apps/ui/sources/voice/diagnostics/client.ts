@@ -15,7 +15,8 @@ import {
 } from '@/voice/credentials/selectedMachineClient';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { downloadBulkPayloadViaMachineRpcToDestination } from '@/sync/domains/transfers/runtime/transferRuntime/carriers/downloadBulkPayloadViaMachineRpcToDestination';
-import type { BulkTransferFileDestination } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/bulkTransferFileDestination';
+import type { BulkTransferFileDestination } from '@/sync/domains/transfers/runtime/transferRuntime';
+import { createAbortRacer } from '@/voice/agent/voiceAgentAbort';
 
 type VoiceDiagnosticsMachineClient = Readonly<{
   invoke(method: string, payload: unknown, signal?: AbortSignal | null): Promise<unknown>;
@@ -109,11 +110,12 @@ export function createVoiceDiagnosticsClient(
             input.signal,
           ),
         ),
-        abort: async (request) => await bound.invoke(
+        // The export observer can leave without canceling admitted daemon
+        // cleanup; that request remains owned by the bound Account transport.
+        abort: async (request) => await createAbortRacer(input.signal ?? undefined).race(bound.invoke(
           RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_ARTIFACT_DOWNLOAD_ABORT,
           request,
-          input.signal,
-        ),
+        ).catch(() => undefined)),
         onInit: input.onInit ?? null,
         onProgress: input.onProgress ?? null,
         signal: input.signal ?? null,
@@ -132,14 +134,8 @@ export function createVoiceDiagnosticsClientForMachine(
   machineId: string,
   machineRpc: typeof machineRpcWithServerScope = machineRpcWithServerScope,
 ) {
-  return createVoiceDiagnosticsClient({
-    invoke: async (method, payload, signal) => await machineRpc({
-      machineId,
-      method,
-      payload,
-      ...(signal ? { signal } : {}),
-    }),
-  });
+  const bound = createSelectedVoiceMachineClient({ resolveMachineId: () => machineId, machineRpc }).bindOperation();
+  return createVoiceDiagnosticsClient(bound);
 }
 
 export type VoiceDiagnosticsClient = ReturnType<typeof createVoiceDiagnosticsClient>;

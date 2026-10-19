@@ -33,6 +33,10 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 // Model operations never start the unavailable vendor conversation SDK.
 vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: () => { throw new Error('Unexpected ElevenLabs conversation start'); } } }));
 const { getPreferredLanguage, setPreferredLanguageFromSettings } = await import('@/text');
+const { renderMountedCurrentUiContext } = await import('@/dev/testkit/harness/mountedCurrentUiContext');
+const { createVoiceSettingsAccountTestHarness } = await import('./panels/voiceSettingsAccountTestHarness');
+const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
 const initialLanguage = getPreferredLanguage();
 afterAll(() => { setPreferredLanguageFromSettings(initialLanguage); });
 
@@ -73,6 +77,43 @@ describe('native device model operations through the real installer', () => {
         });
     });
     afterEach(() => vi.unstubAllGlobals());
+
+    it('cancels mounted native preparation through settings.invoke without removing model files', async () => {
+        const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { providerId: 'local_conversation',
+            providers: { local_conversation: { schemaVersion: 1, config: { stt: { provider: 'local_neural',
+                localNeural: { assetId: packId, execution: 'device' } } } } } } }));
+        const entered = createDeferred<AbortSignal>();
+        vi.stubGlobal('fetch', vi.fn((_url: string, options: RequestInit) => new Promise<Response>((_resolve, reject) => {
+            if (!options.signal) throw new Error('Native preparation must retain its caller signal');
+            entered.resolve(options.signal);
+            options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        })));
+        let owner: ReturnType<typeof useLocalNeuralModelPackState> | null = null;
+        function Harness() {
+            owner = useLocalNeuralModelPackState({ ...input, manifestUrl: 'https://example.test/manifest.json' });
+            return null;
+        }
+        const current = () => { if (!owner) throw new Error('Native preparation owner missing'); return owner; };
+        const screen = await renderMountedCurrentUiContext(React.createElement(Harness));
+        let operation: Promise<void> | undefined;
+        try {
+            await act(async () => { operation = current().prepareModel(); });
+            const signal = await entered.promise;
+            const result = await createDefaultActionExecutor().execute('settings.invoke', {
+                anchor: 'voiceConversations.sttCancelPrepare', input: { kind: 'model_pack', packId },
+            }, { surface: 'agent', serverId: account.scope.serverId });
+            expect(result).toMatchObject({ ok: true, result: { status: 'completed' } });
+            await act(async () => { await operation; });
+            expect(signal.aborted).toBe(true);
+            expect(current().modelStatus).toBe('idle');
+            expect(filesystem.files.has(modelUri())).toBe(false);
+            expect(nativeTransferReplies).toEqual([]);
+        } finally {
+            await act(async () => { current().cancelPrepare(); await operation; });
+            await screen.unmount();
+            await account.dispose();
+        }
+    });
 
     it.each(['prepare', 'update'] as const)('keeps a slow %s pending for its caller instead of imposing a local deadline', async (operation) => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -222,13 +263,17 @@ describe('native device model operations through the real installer', () => {
             if (props.suspend) throw props.suspend;
             return React.createElement('Remove', { onPress: owner.clearAssets });
         }
-        const { tree } = await renderScreen(React.createElement(React.Suspense, { fallback: null },
+        const screen = await renderScreen(React.createElement(React.Suspense, { fallback: React.createElement('Fallback') },
             React.createElement(Harness, { packId })));
+        const { tree } = screen;
         await act(async () => { tree.root.findByType('Remove').props.onPress(); });
-        await act(async () => {
-            tree.update(React.createElement(React.Suspense, { fallback: null },
+        let replacement!: Promise<void>;
+        React.startTransition(() => {
+            replacement = screen.update(React.createElement(React.Suspense, { fallback: React.createElement('Fallback') },
                 React.createElement(Harness, { packId: 'other-pack', suspend: neverCommits })));
         });
+        await replacement;
+        expect(tree.root.findAllByType('Fallback')).toHaveLength(0);
         await act(async () => { answer(true); });
         expect(filesystem.files.has(modelUri())).toBe(false);
     });

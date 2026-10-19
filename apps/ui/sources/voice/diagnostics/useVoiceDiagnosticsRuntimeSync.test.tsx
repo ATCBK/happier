@@ -112,7 +112,8 @@ function createHarness(props: { voice: unknown }) {
   const machines = ['m1', 'm2', 'm3'].map(id => {
     const target = runtimeTargetsByMachineId.get(id) ?? (id === machineState.machineId ? machineState : { daemonStateVersion: 0, isOnline: false });
     return createMachineFixture({ id, active: target.isOnline, activeAt: target.isOnline ? Date.now() : 0,
-      daemonStateVersion: target.daemonStateVersion });
+      daemonStateVersion: target.daemonStateVersion,
+      daemonState: { status: 'running', startedAt: target.daemonStateVersion } });
   });
   storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
     machineListByServerId: { [scope.serverId]: machines } });
@@ -179,6 +180,69 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     resetVoiceDiagnosticsRuntimeStatusForTests();
     resetVoiceDiagnosticsRevocationForTests();
     resetVoiceDiagnosticsSessionPolicyForTests();
+  });
+
+  it.each([true, false])('configures diagnostics only when policy or daemon facts change (enabled: %s)', async (enabled) => {
+    const initialDiagnostics = enabled ? diagnostics : VoiceSpeechDiagnosticsSettingsV1Schema.parse({});
+    const first = { diagnostics: initialDiagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } };
+    const tree = await mountHarness({ voice: first });
+    expect(configureCalls).toHaveLength(1);
+    const settledStatus = readVoiceDiagnosticsRuntimeStatus();
+
+    // Real settings echoes replace object identities and can change other Voice
+    // preferences. Neither is a new diagnostics policy or a daemon restart.
+    for (const assistantLanguage of ['fr', 'de', 'en']) {
+      await act(async () => {
+        tree.update(createHarness({ voice: { ...first, diagnostics: { ...initialDiagnostics }, assistantLanguage } }));
+      });
+    }
+    expect(configureCalls).toHaveLength(1);
+    expect(readVoiceDiagnosticsRuntimeStatus()).toBe(settledStatus);
+
+    const changedDiagnostics = { ...initialDiagnostics, maxFiles: initialDiagnostics.maxFiles + 1 };
+    await act(async () => { tree.update(createHarness({ voice: { ...first, diagnostics: changedDiagnostics } })); });
+    expect(configureCalls).toHaveLength(2);
+    expect(configureCalls.at(-1)?.settings).toEqual(changedDiagnostics);
+
+    machineState.daemonStateVersion = 2;
+    await act(async () => { tree.update(createHarness({ voice: { ...first, diagnostics: { ...changedDiagnostics } } })); });
+    expect(configureCalls).toHaveLength(3);
+    expect(configureCalls.at(-1)?.settings).toEqual(changedDiagnostics);
+    await act(async () => { tree.unmount(); });
+  });
+
+  it('does not reconfigure or replay a failed revocation for unrelated daemon-state publications', async () => {
+    let failFormerMachine = false;
+    configureImpl.mockImplementation(async (machineId: string, settings: unknown, signal?: AbortSignal | null) => {
+      configureCalls.push({ machineId, settings, signal });
+      if (failFormerMachine && machineId === 'm1') throw new Error('former_machine_unavailable');
+      return { ok: true, settings };
+    });
+    const first = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } };
+    const tree = await mountHarness({ voice: first });
+    failFormerMachine = true;
+    runtimeTargetsByMachineId.set('m1', { isOnline: true, daemonStateVersion: 1 });
+    machineState.machineId = 'm2';
+    machineState.daemonStateVersion = 2;
+    const second = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm2' } };
+    await act(async () => { tree.update(createHarness({ voice: second })); });
+    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+      machineId: 'm2', phase: 'active',
+      revocationObligations: [expect.objectContaining({ target: { kind: 'machine_policy', machineId: 'm1' }, status: 'failed' })],
+    }));
+    const settledCalls = configureCalls.length;
+    const settledStatus = readVoiceDiagnosticsRuntimeStatus();
+    // A resource/service publication increments the state version while the
+    // published daemon start remains the same on both exact machines.
+    await act(async () => {
+      const machines = Object.fromEntries(Object.entries(storage.getState().machines).map(([id, machine]) => [
+        id, { ...machine, daemonStateVersion: machine.daemonStateVersion + 1 },
+      ]));
+      storage.setState({ machines, machineListByServerId: { [scope.serverId]: Object.values(machines) } });
+    });
+    expect(configureCalls).toHaveLength(settledCalls);
+    expect(readVoiceDiagnosticsRuntimeStatus()).toBe(settledStatus);
+    await act(async () => { tree.unmount(); });
   });
 
   it('reapplies consent on mount, selected-machine changes, and a fresh runtime mount', async () => {

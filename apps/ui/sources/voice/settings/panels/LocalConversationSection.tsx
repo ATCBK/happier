@@ -17,6 +17,7 @@ import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { SettingAnchor, SettingRow, useSettingRevealRequested } from '@/components/settings/shell/SettingRow';
 import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
+import { useVoiceSettingsSearchPrerequisite } from '@/voice/settings/VoiceSettingsSearchPrerequisite';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -60,6 +61,19 @@ import {
   importLegacyVoiceOpenAiChatProvider,
 } from '@/voice/adapters/localConversation/migrateLegacyOpenAiChatProvider';
 
+const AGENT_SELECTION_SETTINGS = {
+  agentSource: VOICE_CONVERSATIONS_SETTINGS.settings.agentSource,
+  agent: VOICE_CONVERSATIONS_SETTINGS.settings.agent,
+  customAgent: VOICE_CONVERSATIONS_SETTINGS.settings.customAgent,
+} as const;
+const CHAT_MODEL_SETTINGS = {
+  chatModelSource: VOICE_CONVERSATIONS_SETTINGS.settings.chatModelSource,
+  chatModelId: VOICE_CONVERSATIONS_SETTINGS.settings.chatModelId,
+} as const;
+const COMMIT_MODEL_SETTINGS = {
+  commitModelSource: VOICE_CONVERSATIONS_SETTINGS.settings.commitModelSource,
+  commitModelId: VOICE_CONVERSATIONS_SETTINGS.settings.commitModelId,
+} as const;
 
 /** The rows inside "Advanced agent behaviour": search opening one of them opens the disclosure. */
 const ADVANCED_AGENT_SETTINGS = [
@@ -69,13 +83,16 @@ const ADVANCED_AGENT_SETTINGS = [
   VOICE_CONVERSATIONS_SETTINGS.settings.prewarmOnConnect,
   VOICE_CONVERSATIONS_SETTINGS.settings.teleportEnabled,
   VOICE_CONVERSATIONS_SETTINGS.settings.stayInVoiceHome,
-  VOICE_CONVERSATIONS_SETTINGS.settings.commitModelSource,
-  VOICE_CONVERSATIONS_SETTINGS.settings.commitModelId,
+  ...Object.values(COMMIT_MODEL_SETTINGS),
   VOICE_CONVERSATIONS_SETTINGS.settings.commitIsolation,
   VOICE_CONVERSATIONS_SETTINGS.settings.streamingEnabled,
   VOICE_CONVERSATIONS_SETTINGS.settings.streamingTtsEnabled,
   VOICE_CONVERSATIONS_SETTINGS.settings.ttsChunkChars,
 ] as const;
+
+const AGENT_SETTINGS = [...Object.values(AGENT_SELECTION_SETTINGS), ...Object.values(CHAT_MODEL_SETTINGS),
+  VOICE_CONVERSATIONS_SETTINGS.settings.permissionIntent, VOICE_CONVERSATIONS_SETTINGS.settings.verbosity,
+  ...ADVANCED_AGENT_SETTINGS] as const;
 
 export function LocalConversationSection(props: {
   voice: VoiceSettings;
@@ -83,6 +100,7 @@ export function LocalConversationSection(props: {
   popoverBoundaryRef?: React.RefObject<any> | null;
   daemonRouteDiagnosticReason?: VoiceDaemonRouteDiagnosticReason | null;
 }) {
+  const searchPrerequisite = useVoiceSettingsSearchPrerequisite();
   const { theme } = useUnistyles();
   const router = useRouter();
   const voiceAgentDecision = useFeatureDecision('voice.agent');
@@ -117,11 +135,13 @@ export function LocalConversationSection(props: {
   const voice = voiceSettingsParse(props.voice);
   const cfg = readLocalConversationVoiceSettings(voice);
   const hasConfiguredProviderChat = cfg.agent.providerChat?.status === 'configured';
+  const needsProviderChatSelection = cfg.agent.providerChat?.status === 'needs_selection'
+    || cfg.agent.providerChat?.status === 'migration_required' && cfg.agent.providerChat.reason === 'provider_catalog_import_required';
   const executionMachine = useVoiceExecutionMachinePresentation();
   const enabled = resolveVoiceProviderIdFromSettings(voice) === 'local_conversation';
-  const customAgentRequested = useSettingRevealRequested([VOICE_CONVERSATIONS_SETTINGS.settings.customAgent]);
-  const customChatModelRequested = useSettingRevealRequested([VOICE_CONVERSATIONS_SETTINGS.settings.chatModelId]);
-  const customCommitModelRequested = useSettingRevealRequested([VOICE_CONVERSATIONS_SETTINGS.settings.commitModelId]);
+  const customAgentRequested = useSettingRevealRequested([AGENT_SELECTION_SETTINGS.customAgent]);
+  const customChatModelRequested = useSettingRevealRequested([CHAT_MODEL_SETTINGS.chatModelId]);
+  const customCommitModelRequested = useSettingRevealRequested([COMMIT_MODEL_SETTINGS.commitModelId]);
   React.useEffect(() => {
     if (customAgentRequested && enabled && cfg.conversationMode === 'agent'
       && !hasConfiguredProviderChat && cfg.agent.agentSource === 'agent') {
@@ -295,7 +315,8 @@ export function LocalConversationSection(props: {
   ], []);
 
 
-  if (!enabled) return null;
+  if (!enabled) return searchPrerequisite({ settings: [VOICE_CONVERSATIONS_SETTINGS.settings.conversationMode, ...AGENT_SETTINGS,
+      ...(resolveVoiceProviderIdFromSettings(voice) === 'local_direct' ? [VOICE_CONVERSATIONS_SETTINGS.settings.greeting] : [])], reason: t('settingsVoice.pages.search.select', { choice: t('settingsVoice.mode.local'), control: t('settingsVoice.providerSectionTitle') }), group: true });
 
   const setCfg = (patch: Partial<typeof cfg>) => {
     props.setVoice(writeLocalConversationVoiceSettings(voice, { ...cfg, ...patch }));
@@ -309,6 +330,7 @@ export function LocalConversationSection(props: {
     <>
       <LocalVoiceSttGroup
         cfgStt={cfg.stt}
+        otherSpeechProviderId={cfg.tts.provider}
         setStt={(next) => setCfg({ stt: next })}
         voice={voice}
         setVoice={props.setVoice}
@@ -363,10 +385,8 @@ export function LocalConversationSection(props: {
         </SettingAnchor>
       {cfg.conversationMode === 'agent' ? (
         <>
-        {cfg.agent.providerChat?.status === 'needs_selection'
-          || (cfg.agent.providerChat?.status === 'migration_required'
-            && cfg.agent.providerChat.reason === 'provider_catalog_import_required') ? (
-          <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.agent}>
+        {needsProviderChatSelection ? (
+          <SettingAnchor setting={AGENT_SELECTION_SETTINGS.agent}>
           <DropdownMenu
             open={openMenu === 'providerChatAgentSelection'}
             onOpenChange={(next) => setOpenMenu(next ? 'providerChatAgentSelection' : null)}
@@ -420,9 +440,9 @@ export function LocalConversationSection(props: {
         ) : null}
         {!hasConfiguredProviderChat ? (
           <>
-        <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.agentSource}>
+        <SettingAnchor setting={AGENT_SELECTION_SETTINGS.agentSource}>
         <SegmentedChoiceItem
-          title={t(VOICE_CONVERSATIONS_SETTINGS.settings.agentSource.titleKey)}
+          title={t(AGENT_SELECTION_SETTINGS.agentSource.titleKey)}
           subtitleLines={0}
           testIDPrefix="settings.voice.local.mediatorAgentSource"
           value={cfg.agent.agentSource}
@@ -435,7 +455,7 @@ export function LocalConversationSection(props: {
         </SettingAnchor>
         {cfg.agent.agentSource === 'agent' ? (
           <>
-          <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.agent}>
+          <SettingAnchor setting={AGENT_SELECTION_SETTINGS.agent}>
           <DropdownMenu
             open={openMenu === 'mediatorAgentId'}
             onOpenChange={(next) => setOpenMenu(next ? 'mediatorAgentId' : null)}
@@ -470,7 +490,7 @@ export function LocalConversationSection(props: {
           />
           </SettingAnchor>
           {customEntry === 'agentId' ? (
-            <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.customAgent}>
+            <SettingAnchor setting={AGENT_SELECTION_SETTINGS.customAgent}>
             <FieldValueItem
               title={t('settingsVoice.local.mediatorAgentId')}
               subtitle={t('settingsVoice.local.mediatorAgentIdSubtitle')}
@@ -488,9 +508,10 @@ export function LocalConversationSection(props: {
             </SettingAnchor>
           ) : null}
           </>
-        ) : null}
+        ) : searchPrerequisite({ settings: [AGENT_SELECTION_SETTINGS.customAgent,
+          ...(!needsProviderChatSelection ? [AGENT_SELECTION_SETTINGS.agent] : [])], reason: t('settingsVoice.pages.search.select', { choice: t('settingsVoice.local.conversation.agentSource.fixedAgentTitle'), control: t('settingsVoice.local.mediatorAgentSource') }) })}
           </>
-        ) : null}
+        ) : searchPrerequisite({ settings: Object.values(AGENT_SELECTION_SETTINGS), reason: t('settingsVoice.pages.search.providerChatConfigured') })}
         <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.permissionIntent}>
         <SegmentedChoiceItem
           title={t(VOICE_CONVERSATIONS_SETTINGS.settings.permissionIntent.titleKey)}
@@ -508,9 +529,9 @@ export function LocalConversationSection(props: {
         </SettingAnchor>
         {!hasConfiguredProviderChat ? (
           <>
-        <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.chatModelSource}>
+        <SettingAnchor setting={CHAT_MODEL_SETTINGS.chatModelSource}>
         <SegmentedChoiceItem
-          title={t(VOICE_CONVERSATIONS_SETTINGS.settings.chatModelSource.titleKey)}
+          title={t(CHAT_MODEL_SETTINGS.chatModelSource.titleKey)}
           subtitleLines={0}
           testIDPrefix="settings.voice.local.mediatorChatModelSource"
           value={cfg.agent.chatModelSource}
@@ -522,7 +543,7 @@ export function LocalConversationSection(props: {
         />
         </SettingAnchor>
         {cfg.agent.chatModelSource === 'custom' ? (
-          <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.chatModelId}>
+          <SettingAnchor setting={CHAT_MODEL_SETTINGS.chatModelId}>
           <>
           <DropdownMenu
             open={openMenu === 'mediatorChatModelId'}
@@ -583,9 +604,9 @@ export function LocalConversationSection(props: {
           ) : null}
           </>
           </SettingAnchor>
-        ) : null}
+        ) : searchPrerequisite({ settings: [CHAT_MODEL_SETTINGS.chatModelId], reason: t('settingsVoice.pages.search.select', { choice: t('settingsVoice.local.mediatorChatModelSourceCustom'), control: t('settingsVoice.local.mediatorChatModelSource') }) })}
           </>
-        ) : null}
+        ) : searchPrerequisite({ settings: Object.values(CHAT_MODEL_SETTINGS), reason: t('settingsVoice.pages.search.providerChatConfigured') })}
         <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.verbosity}>
         <SegmentedChoiceItem
           title={t(VOICE_CONVERSATIONS_SETTINGS.settings.verbosity.titleKey)}
@@ -646,7 +667,7 @@ export function LocalConversationSection(props: {
                     }}
                   />
                   </SettingAnchor>
-                ) : null}
+                ) : searchPrerequisite({ settings: [VOICE_CONVERSATIONS_SETTINGS.settings.maxWarmRoots], reason: t('settingsVoice.pages.search.select', { choice: t('settingsVoice.local.conversation.rootSessionPolicy.keepWarmTitle'), control: t('settingsVoice.local.conversation.rootSessionPolicy.title') }) })}
           <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.idleTtlSeconds}>
           <FieldValueItem
             title={t(VOICE_CONVERSATIONS_SETTINGS.settings.idleTtlSeconds.titleKey)}
@@ -713,9 +734,9 @@ export function LocalConversationSection(props: {
 
           {!hasConfiguredProviderChat ? (
             <>
-          <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.commitModelSource}>
+          <SettingAnchor setting={COMMIT_MODEL_SETTINGS.commitModelSource}>
           <SegmentedChoiceItem
-            title={t(VOICE_CONVERSATIONS_SETTINGS.settings.commitModelSource.titleKey)}
+            title={t(COMMIT_MODEL_SETTINGS.commitModelSource.titleKey)}
             subtitleLines={0}
             testIDPrefix="settings.voice.local.mediatorCommitModelSource"
             value={cfg.agent.commitModelSource}
@@ -728,7 +749,7 @@ export function LocalConversationSection(props: {
           />
           </SettingAnchor>
           {cfg.agent.commitModelSource === 'custom' ? (
-            <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.commitModelId}>
+            <SettingAnchor setting={COMMIT_MODEL_SETTINGS.commitModelId}>
             <>
             <DropdownMenu
               open={openMenu === 'mediatorCommitModelId'}
@@ -789,9 +810,9 @@ export function LocalConversationSection(props: {
             ) : null}
             </>
             </SettingAnchor>
-          ) : null}
+          ) : searchPrerequisite({ settings: [COMMIT_MODEL_SETTINGS.commitModelId], reason: t('settingsVoice.pages.search.select', { choice: t('settingsVoice.local.mediatorCommitModelSourceCustom'), control: t('settingsVoice.local.mediatorCommitModelSource') }) })}
             </>
-          ) : null}
+          ) : searchPrerequisite({ settings: Object.values(COMMIT_MODEL_SETTINGS), reason: t('settingsVoice.pages.search.providerChatConfigured') })}
           {voiceAgentEnabled ? (
             <SettingRow
               setting={VOICE_CONVERSATIONS_SETTINGS.settings.commitIsolation}
@@ -810,7 +831,7 @@ export function LocalConversationSection(props: {
               showChevron={false}
               selected={false}
             />
-          ) : null}
+          ) : searchPrerequisite({ settings: [VOICE_CONVERSATIONS_SETTINGS.settings.commitIsolation], reason: voiceAgentUnavailableReason ?? t('settingsVoice.pages.search.chooseService') })}
           <SettingRow
             setting={VOICE_CONVERSATIONS_SETTINGS.settings.streamingEnabled}
             subtitle={t('settingsVoice.local.conversation.streaming.enableSubtitle')}
@@ -857,11 +878,13 @@ export function LocalConversationSection(props: {
           </ExpandableItem>
         </SettingAnchor>
         </>
-      ) : null}
+      ) : searchPrerequisite({ settings: [...AGENT_SETTINGS, VOICE_CONVERSATIONS_SETTINGS.settings.greeting],
+        reason: voiceAgentUnavailableReason ?? t('settingsVoice.pages.search.select', { choice: t('settingsVoice.pages.conversations.talkToAgent'), control: t('settingsVoice.pages.conversations.talkToTitle') }) })}
       </ItemGroup>
 
       <LocalVoiceTtsGroup
         cfgTts={cfg.tts}
+        otherSpeechProviderId={cfg.stt.provider}
         setTts={(next) => setCfg({ tts: next })}
         voice={voice}
         setVoice={props.setVoice}

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { MAX_VOICE_TIMER_DELAY_MS } from '@happier-dev/protocol/voice/settings/timing';
 
 import { SettingAnchor, SettingSection } from '@/components/settings/shell/SettingRow';
 import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
@@ -6,7 +7,6 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import {
   readLocalConversationVoiceSettings,
   readLocalDirectVoiceSettings,
-  VoiceLocalConversationSchema,
   voiceSettingsParse,
   writeLocalConversationVoiceSettings,
   writeLocalDirectVoiceSettings,
@@ -17,14 +17,8 @@ import { resolveVoiceProviderIdFromSettings } from '@/voice/settings/resolveVoic
 import { VOICE_ADVANCED_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
 
 // The admitted range is the setting's own schema; this row only converts it to seconds.
-const TIMEOUT_SCHEMA = VoiceLocalConversationSchema.shape.networkTimeoutMs._zod.def.innerType;
-const MIN_TIMEOUT_SECONDS = Math.max(
-  Math.ceil((TIMEOUT_SCHEMA._zod.bag.minimum ?? 0) / 1000),
-  TIMEOUT_SCHEMA._zod.bag.exclusiveMinimum === undefined
-    ? 0
-    : Math.floor(TIMEOUT_SCHEMA._zod.bag.exclusiveMinimum / 1000) + 1,
-);
-const MAX_TIMEOUT_MS = TIMEOUT_SCHEMA._zod.bag.maximum ?? Number.MAX_SAFE_INTEGER;
+const MIN_TIMEOUT_SECONDS = 1;
+const MAX_TIMEOUT_MS = MAX_VOICE_TIMER_DELAY_MS;
 
 /**
  * "Give up on a speech request after": Local voice's request timeout for endpoints and speech

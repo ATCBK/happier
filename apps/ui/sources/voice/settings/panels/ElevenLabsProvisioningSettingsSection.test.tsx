@@ -16,12 +16,11 @@ import {
   type Settings,
 } from '@/sync/domains/settings/settings';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
-import { saveAndUseAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
 import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
 import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from '@/voice/registry/generatedBundledVoiceRuntimeEntries';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { createElevenLabsSettingsRuntimeTestHarness, createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
+import { createElevenLabsSettingsRuntimeTestHarness, createVoiceSettingsAccountTestHarness, withVoiceSettingsCredentialResource } from './voiceSettingsAccountTestHarness';
 import 'fake-indexeddb/auto';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 
@@ -125,26 +124,17 @@ describe('ElevenLabs settings provisioning composed path', () => {
         },
       },
     });
-    fixtureState.settings = saveAndUseAccountVoiceCredential({
-      settings: settingsParse({
-        voice, experiments: true, featureToggles: { voice: true },
-      }),
-      contribution: {
-        pluginId: entry.pluginId,
-        localId: entry.declaration.id,
-      },
-      credentialSlotId: recipientContract.credentialSlot.id,
-      currentDeclaration: entry.declaration,
-      expectedSettingsVersion: 1,
-      value: 'test-only-elevenlabs-key',
-      generateId: () => 'elevenlabs-composed-secret',
-      now: 1,
-      expectedSecretId: null,
-      expectedSecretUpdatedAt: null,
-      approvedRecipientContractDigest:
-        createRecipientContractDigestV1(recipientContract),
-    }).settings;
+    fixtureState.settings = settingsParse({
+      voice, experiments: true, featureToggles: { voice: true },
+    });
     const account = await createVoiceSettingsAccountTestHarness(fixtureState.settings);
+    account.replaceSettings(await withVoiceSettingsCredentialResource(account, {
+      settings: account.settings,
+      declaration: entry.declaration,
+      pluginId: entry.pluginId,
+      resourceId: 'elevenlabs-composed-secret',
+      recipientContractDigest: createRecipientContractDigestV1(recipientContract),
+    }));
     expect(account.settings.voice.providerId).toBe(providerId);
     disposals.push(account.dispose);
     await refreshSavedSecretCatalog(account.scope);

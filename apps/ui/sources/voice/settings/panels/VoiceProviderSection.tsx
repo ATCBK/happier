@@ -7,6 +7,8 @@ import { Platform } from 'react-native';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
+import { useVoiceSettingsSearchPrerequisite } from '@/voice/settings/VoiceSettingsSearchPrerequisite';
+import { getVoiceContributedSettingRefs, useVoiceContributedSettingsDeclarations } from '@/voice/settings/useVoiceContributedSettingRefs';
 import {
   PluginSettingSelectField,
   PluginSettingSwitchField,
@@ -1011,6 +1013,8 @@ export function VoiceProviderSection(props: Parameters<typeof useVoiceConversati
    */
   renderServiceSettings?: (accountLead: React.ReactNode) => React.ReactNode;
 }>) {
+  const searchPrerequisite = useVoiceSettingsSearchPrerequisite();
+  const declarations = useVoiceContributedSettingsDeclarations('voiceConversations');
   const router = useRouter();
   const {
     serviceTiles, isOff, select, selectService, voice, visibleRows, selectedServiceBillingRows, selectedProviderReadiness,
@@ -1094,7 +1098,8 @@ export function VoiceProviderSection(props: Parameters<typeof useVoiceConversati
           </VoicePipelineView>
         </ItemGroup>
         </SettingAnchor>
-      ) : null}
+      ) : searchPrerequisite({ settings: [VOICE_CONVERSATIONS_SETTINGS.settings.readiness],
+        reason: t('settingsVoice.pages.search.chooseService'), group: true })}
       <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.provider}>
       <ItemGroup
         title={t('settingsVoice.pages.conversations.serviceTitle')}
@@ -1110,6 +1115,9 @@ export function VoiceProviderSection(props: Parameters<typeof useVoiceConversati
         />
       </ItemGroup>
       </SettingAnchor>
+      {serviceTiles.filter((tile) => !tile.selected).map((tile) => (
+        searchPrerequisite({ settings: getVoiceContributedSettingRefs(declarations, tile.id), reason: t('settingsVoice.pages.search.select', { choice: tile.title, control: t('settingsVoice.providerSectionTitle') }), group: true })
+      ))}
       {props.renderServiceSettings ? props.renderServiceSettings(payWith) : payWith ? (
         <ItemGroup
           title={t('settingsVoice.pages.conversations.accountTitle')}

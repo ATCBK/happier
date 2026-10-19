@@ -3,6 +3,7 @@ import { act, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { getDefaultModelPackId, listModelPackCatalogEntries } from '@happier-dev/protocol/voice/modelPacks/catalog';
+import { createRpcCallError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import {
     DaemonVoiceInferenceModelStatusSchema, DaemonVoiceInferenceModelsListResponseSchema,
     DaemonVoiceInferenceModelsStatusResponseSchema, DaemonVoiceInferenceModelsInstallResponseSchema,
@@ -100,6 +101,19 @@ describe('DaemonVoiceModelCatalogSection', () => {
         expect(modelRows(tree)).toHaveLength(0);
         await act(async () => pending.resolve(DaemonVoiceInferenceModelsListResponseSchema.parse({ ok: true, models: [] })));
         await vi.waitFor(() => expect(tree.root.findAllByProps({ testID: 'voice-model-catalog-status' })).toHaveLength(0));
+    });
+
+    it('leaves loading and renders unavailable when the selected daemon does not serve speech RPCs', async () => {
+        respond = () => { throw createRpcCallError({ error: 'RPC method not available', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }); };
+        const tree = await renderSection();
+        await vi.waitFor(() => expect(tree.root.findByProps({ testID: 'voice-model-catalog-status' }).props.kind).toBe('unavailable'));
+        expect(modelRows(tree)).toHaveLength(0);
+
+        catalogReply([]);
+        // Reopening after an owner-managed daemon reload uses the normal status path.
+        const recovered = await renderSection();
+        await vi.waitFor(() => expect(recovered.root.findAllByProps({ testID: 'voice-model-catalog-status' })).toHaveLength(0));
+        expect(modelRows(recovered).length).toBeGreaterThan(0);
     });
 
     it.each([

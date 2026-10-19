@@ -2,9 +2,9 @@ import type { SettingDeclaration } from '@/components/settings/catalog/settingDe
 import { readBuiltInSettingsOperationPolicyV1 } from '@happier-dev/protocol/actions';
 
 export type VoiceSettingsOperation =
-    | 'stt_prepare' | 'stt_remove' | 'stt_update'
-    | 'tts_prepare' | 'tts_remove' | 'tts_update' | 'tts_preview' | 'tts_preview_stop' | 'tts_test'
-    | 'model_install' | 'model_remove' | 'model_default' | 'models_inspect' | 'readiness_inspect'
+    | 'stt_prepare' | 'stt_remove' | 'stt_update' | 'stt_cancel'
+    | 'tts_prepare' | 'tts_remove' | 'tts_update' | 'tts_cancel' | 'tts_preview' | 'tts_preview_stop' | 'tts_test'
+    | 'model_install' | 'model_remove' | 'model_default' | 'model_cancel' | 'models_inspect' | 'readiness_inspect'
     | 'memory_forget' | 'privacy_policy_open'
     | 'diagnostics_enabled' | 'diagnostics_inspect' | 'diagnostics_export' | 'diagnostics_cleanup'
     | 'diagnostics_delete' | 'diagnostics_session_opt_out' | 'diagnostics_retry_shutdown';

@@ -1,0 +1,65 @@
+import { describe, expect, it, vi } from 'vitest';
+import { VoiceProviderContributionSchema } from '@happier-dev/protocol/plugins/contributions/voice';
+
+import { createVoiceProviderRegistry } from '@/voice/registry/providerRegistry';
+import { getVoiceContributedSettingsDeclarations } from './voiceContributedSettingsDeclarations';
+
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock();
+});
+
+describe('contributed Voice settings declaration admission', () => {
+    it.each([false, true])('admits a provider presentation once per projection while preserving field validation (invalid presentation: %s)', (invalidPresentation) => {
+        const pluginId = 'fixture.voice';
+        const providerId = `${pluginId}/speech`;
+        const fieldIds = ['speed', 'pitch', 'volume'];
+        const declaration = VoiceProviderContributionSchema.parse({
+            id: 'speech', title: 'Fixture voice', kind: 'conversation', roles: ['realtime_conversation'], platforms: ['web'],
+            capabilities: { turn: { cancelResponse: false, bargeIn: false }, tools: { effectCalls: 'none' } },
+            client: { artifactId: 'voice', exportName: 'activate' },
+            settings: {
+                schemaVersion: 1,
+                fields: fieldIds.map(id => ({ id, title: id, schema: { type: 'number', minimum: 0, maximum: 10 },
+                    default: 1, presentation: { control: 'number' } })),
+                presentation: {
+                    kind: 'voice.provider-settings.v1', modes: ['byo'], credential: { kind: 'none', catalog: null }, links: {},
+                    fields: fieldIds.map(path => ({ kind: 'number', path, requiresOptIn: true })),
+                },
+            },
+        });
+        const source = createVoiceProviderRegistry({
+            bundledContributions: [{ pluginId, providerId, declaration }],
+            bundledPresentations: [{ providerId, settingsSectionId: providerId }],
+        }).get(providerId);
+        const descriptor = source?.providerSettings;
+        const presentation = descriptor?.presentation;
+        if (!source || !descriptor || !presentation) throw new Error('Missing fixture provider settings');
+        let presentationAdmissions = 0;
+        const measuredPresentation = {
+            ...presentation,
+            // Observe the real schema reading this input, without replacing its parser.
+            get modes() { presentationAdmissions++; return presentation.modes; },
+            links: invalidPresentation ? { privacy: 'http://invalid.example' } : presentation.links,
+        };
+        const measuredEntry = { ...source, providerSettings: { ...descriptor, presentation: measuredPresentation } };
+        const registry = createVoiceProviderRegistry({ builtIn: [measuredEntry] });
+        presentationAdmissions = 0;
+
+        for (let projection = 1; projection <= 2; projection++) {
+            const [page] = getVoiceContributedSettingsDeclarations(registry);
+            expect(page?.pageId).toBe('voiceConversations');
+            const fields = page?.settings;
+            expect(Object.keys(fields ?? {})).toHaveLength(fieldIds.length);
+            for (const id of fieldIds) {
+                const binding = fields?.[`provider.${providerId}.${id}`]?.storage;
+                if (!binding || !('kind' in binding) || binding.kind !== 'owner') throw new Error('Missing provider field owner');
+                expect(binding.parse(5)).toEqual({ success: true, value: 5 });
+                expect(binding.parse(11)).toEqual({ success: false });
+                expect(binding.parse({ value: 5 })).toEqual({ success: false });
+                expect(typeof binding.prepare).toBe(invalidPresentation ? 'undefined' : 'function');
+            }
+            expect(presentationAdmissions).toBe(projection);
+        }
+    });
+});

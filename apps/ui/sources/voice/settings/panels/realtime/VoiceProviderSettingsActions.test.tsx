@@ -7,7 +7,6 @@ import { log } from '@/log';
 import { CustomModal } from '@/modal/components/CustomModal';
 import { t, setPreferredLanguageFromSettings } from '@/text';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
-import { saveAndUseAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { getSavedSecretCatalogSnapshot, resolveSavedSecretReference } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import renderer, { act } from 'react-test-renderer';
@@ -30,14 +29,15 @@ import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { commitExternalVoiceProviderRegistration, removeExternalVoiceProviderRegistration, type ExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
-import { createElevenLabsSettingsRuntimeTestHarness, createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
+import { createElevenLabsSettingsRuntimeTestHarness, createVoiceSettingsAccountTestHarness, withVoiceSettingsCredentialResource } from '../voiceSettingsAccountTestHarness';
 import { VoiceProviderSettingsJsonValueV1Schema } from '@happier-dev/protocol/voice/realtime/providerSettings';
+import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 
 let accountFixture: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
 let registration: ExternalVoiceProviderRegistration | null = null;
 let provider: ReturnType<typeof createElevenLabsSettingsRuntimeTestHarness>;
 let modalTree: renderer.ReactTestRenderer;
-function providerUrl(input: Parameters<typeof globalThis.fetch>[0]) {
+function providerUrl(input: Parameters<RuntimeFetch>[0]) {
   return new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
 }
 async function providerBody(init: RequestInit | undefined): Promise<unknown> {
@@ -65,24 +65,12 @@ async function saveCredential() {
   const declaration = VoiceProviderContributionSchema.parse(PLUGIN_MANIFEST.contributes.voiceProviders?.[0]);
   const recipient = createBundledVoiceRecipientContract({ pluginId: PLUGIN_MANIFEST.id, declaration });
   if (!recipient) throw new Error('Expected ElevenLabs recipient contract');
-  accountFixture.replaceSettings(saveAndUseAccountVoiceCredential({ settings: accountFixture.settings,
-    contribution: { pluginId: PLUGIN_MANIFEST.id, localId: 'realtime-elevenlabs' }, credentialSlotId: 'api_key',
-    currentDeclaration: declaration, expectedSettingsVersion: state.settingsVersion,
-    approvedRecipientContractDigest: createRecipientContractDigestV1(recipient),
-    value: 'test-only-api-key', generateId: () => 'elevenlabs-secret', now: 1,
-    expectedSecretId: null, expectedSecretUpdatedAt: null }).settings);
+  accountFixture.replaceSettings(await withVoiceSettingsCredentialResource(accountFixture, {
+    settings: accountFixture.settings, declaration, pluginId: PLUGIN_MANIFEST.id,
+    resourceId: 'elevenlabs-secret', recipientContractDigest: createRecipientContractDigestV1(recipient),
+  }));
   await refreshSavedSecretCatalog(accountFixture.scope);
-  // The catalog publishes readiness before its canonical retained-secret
-  // promotion completes. Start with the resulting persisted resource authority.
-  await vi.waitFor(() => {
-    expect(accountFixture.resources).toHaveLength(1);
-    const binding = accountFixture.settings.voiceSettingsV1.credentialBindings.find(candidate =>
-      candidate.contribution.pluginId === PLUGIN_MANIFEST.id && candidate.contribution.localId === 'realtime-elevenlabs');
-    expect(binding?.credentialBindings.account?.api_key).toMatch(/^happier:shared-secret:v1:/u);
-  });
-  await refreshSavedSecretCatalog(accountFixture.scope);
-  // Resource creation precedes retained-history cleanup; admit the operation
-  // only after the canonical catalog has published that completed maintenance.
+  // Admit the operation only after the real material catalog is current.
   await vi.waitFor(() => {
     expect(getSavedSecretCatalogSnapshot(accountFixture.scope)).toMatchObject({
       status: 'ready', stale: false, legacyImport: { status: 'complete' },
@@ -228,7 +216,7 @@ describe('VoiceProviderSettingsActions', () => {
               : settingsParse({ ...current, analyticsOptOut: !current.analyticsOptOut }),
               { version: state.settingsVersion + 1, publish: false });
           }
-          if (state.outcomeUnknown) throw new Error('transport_response_lost');
+          if (state.outcomeUnknown && isActionPatch) throw new Error('transport_response_lost');
           const result = await request(url, init);
           if (isActionPatch) state.mutationApplied = result.ok && (await result.clone().json()).success === true;
           return result;
@@ -586,11 +574,17 @@ describe('VoiceProviderSettingsActions', () => {
     await waitForConfirmation(1);
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(nativeAlert.mock.calls.map(call => call.slice(0, 2))).toContainEqual([
-        t('common.error'),
-        t('settingsProviders.errors.mutationOutcomeUnknownDescription'),
-      ]));
     });
+    await vi.waitFor(() => expect(nativeAlert.mock.calls.map(call => call.slice(0, 2)), JSON.stringify({
+      mutationAttempts: state.mutationAttempts,
+      providerRequests: provider.fetch.mock.calls.map(([input, init]) => `${init?.method ?? 'GET'} ${providerUrl(input).pathname}`),
+      settingsRequests: accountFixture.request.mock.calls.filter(([input]) => providerUrl(input).pathname === '/v2/account/settings')
+        .map(([, init]) => init?.method ?? 'GET'),
+      logs: log.getLogs(),
+    })).toContainEqual([
+      t('common.error'),
+      t('settingsProviders.errors.mutationOutcomeUnknownDescription'),
+    ]));
 
     expect(state.mutationApplied).toBe(false);
     expect(state.config.agentId).toBe('');

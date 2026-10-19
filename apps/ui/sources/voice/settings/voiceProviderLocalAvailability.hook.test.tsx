@@ -38,6 +38,7 @@ vi.mock('expo-speech-recognition', () => ({
 const account = createProviderSettingsAccountHarness();
 const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
 const { AuthProvider } = await import('@/auth/context/AuthContext');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { notifyAuthCredentialsInvalidated } = await import('@/sync/runtime/orchestration/authCredentialsInvalidation');
 const { useVoiceProviderLocalAvailability } = await import('./voiceProviderLocalAvailability');
 
@@ -273,30 +274,32 @@ describe('useVoiceProviderLocalAvailability', () => {
         });
         expect(hook.getCurrent().daemon?.route).toBe('direct');
 
-        const home = account.home.findByServerUrl('https://provider-settings-account.test')!;
-        const credentials = home.token;
-        home.token = null;
-        home.accountId = null;
+        const serverUrl = 'https://provider-settings-account.test';
+        const target = { serverId: account.serverId };
+        const credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl, target);
+        if (!credentials) throw new Error('Expected restored Home credentials');
         await act(async () => {
+            // Auth invalidation reloads device credential storage, not the HTTP Home record.
+            expect(await TokenStorage.removeCredentialsForServerUrl(serverUrl, target)).toBe(true);
             notifyAuthCredentialsInvalidated({
                 kind: 'credentials_removed',
                 serverId: account.serverId,
-                serverUrl: 'https://provider-settings-account.test',
+                serverUrl,
             });
             await flushHookEffects({ cycles: 4, turns: 2 });
         });
-        expect(hook.getCurrent().daemon?.route).toBe('relay_disabled');
+        await vi.waitFor(() => expect(hook.getCurrent().daemon?.route).toBe('relay_disabled'));
 
-        home.token = credentials;
-        home.accountId = 'account-a';
         await act(async () => {
+            expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, target, credentials)).toBe(true);
             notifyAuthCredentialsInvalidated({
                 kind: 'credentials_removed',
                 serverId: account.serverId,
-                serverUrl: 'https://provider-settings-account.test',
+                serverUrl,
             });
             await flushHookEffects({ cycles: 4, turns: 2 });
         });
-        expect(hook.getCurrent().daemon?.route).toBe('direct');
+        // Credential restoration resumes the real asynchronous Account bootstrap.
+        await vi.waitFor(() => expect(hook.getCurrent().daemon?.route).toBe('direct'));
     });
 });

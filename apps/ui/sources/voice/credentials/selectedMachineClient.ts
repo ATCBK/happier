@@ -2,6 +2,7 @@ import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverSc
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { runWithServerAccountScopeRequestGuard } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
 import {
   resolveVoiceExecutionMachineId,
   type VoiceExecutionMachineOverride,
@@ -71,17 +72,25 @@ export function createSelectedVoiceMachineClient(deps?: Partial<SelectedVoiceMac
     payload: unknown,
     signal?: AbortSignal | null,
   ): Promise<unknown> => {
-    if (!scope.isCurrent()) throw new VoiceCredentialClientError('cancelled');
-    const response = await resolved.machineRpc({
-      machineId,
-      serverId: scope.serverId,
-      ...('accountId' in scope ? { accountId: scope.accountId } : {}),
-      method,
-      payload,
-      ...(signal ? { signal } : {}),
-    });
-    if (!scope.isCurrent()) throw new VoiceCredentialClientError('cancelled');
-    return response;
+    const accountId = 'accountId' in scope ? scope.accountId : null;
+    if (!scope.isCurrent() || typeof accountId !== 'string') throw new VoiceCredentialClientError('cancelled');
+    try {
+      return await runWithServerAccountScopeRequestGuard({
+        scope: { serverId: scope.serverId, accountId },
+        isCurrent: scope.isCurrent,
+        signal: signal ?? undefined,
+        staleError: () => new VoiceCredentialClientError('cancelled'),
+      }, async guard => {
+        guard.check();
+        const response = await resolved.machineRpc({ machineId, serverId: scope.serverId,
+          accountId, method, payload, signal: guard.signal });
+        guard.check();
+        return response;
+      });
+    } catch (error) {
+      if (!scope.isCurrent()) throw new VoiceCredentialClientError('cancelled');
+      throw error;
+    }
   };
 
   return Object.freeze({

@@ -3,7 +3,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { readStoredSessionMessages, type Message } from '@happier-dev/session-core/messages';
 import type { PartialOptions } from '@elevenlabs/client';
 import { PendingLocalIdSchema } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
@@ -12,6 +12,7 @@ import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/pr
 import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import { pendingDeliveryStatusV1ToPersistedFields, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { VoiceAgentTurnV1Schema } from '@happier-dev/protocol/messages/structured/voiceAgentTurnV1';
 
 import { renderScreen } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -72,11 +73,11 @@ const { deriveVoiceSetupFacts } = await import('./voiceSetupFacts');
 const initialAdapters = getVoiceAdapterRegistry().list();
 const providerId = 'happier.voice.elevenlabs/realtime-elevenlabs';
 let homeSequence = 0;
-const pendingPostSchema = z.object({ localId: PendingLocalIdSchema, content: StrictSessionStoredMessageContentEnvelopeSchema,
-    messageRole: z.literal('user'), deliveryMode: z.literal('external_handoff').optional(),
-    requestedAction: PendingRequestedActionV1Schema, targetMachineId: z.string().optional() }).strict();
-const messagePostSchema = z.object({ localId: z.string().min(1),
-    content: StrictSessionStoredMessageContentEnvelopeSchema, messageRole: SessionMessageRoleSchema }).strict();
+const pendingPostSchema = z.strictObject({ localId: PendingLocalIdSchema, content: StrictSessionStoredMessageContentEnvelopeSchema,
+    messageRole: z.literal('user'), deliveryMode: z.optional(z.literal('external_handoff')),
+    requestedAction: PendingRequestedActionV1Schema, targetMachineId: z.optional(z.string()) });
+const messagePostSchema = z.strictObject({ localId: z.string().check(z.minLength(1)),
+    content: StrictSessionStoredMessageContentEnvelopeSchema, messageRole: SessionMessageRoleSchema });
 
 it.each([
     { source: 'canonical', endBeforeReply: false, restartBeforeInput: false },
@@ -240,8 +241,11 @@ it.each([
                 messages = messages.map((message) => ({ ...message,
                     seq: message.kind === 'user-text' ? messageSequence + 1 : messageSequence + 2,
                     localId: message.kind === 'user-text' ? 'durable-current-input' : 'durable-current-reply',
-                    meta: { happier: { kind: 'voice_agent_turn.v1', payload: { v: 1, epoch: 1, voiceAgentId: 'current-agent',
-                        role: message.kind === 'user-text' ? 'user' : 'assistant', ts: message.createdAt } } },
+                    // Local capture's retained input and the daemon reply have
+                    // different envelopes, as observed in the composed ship journey.
+                    meta: message.kind === 'user-text' ? meta : { happier: { kind: 'voice_agent_turn.v1',
+                        payload: VoiceAgentTurnV1Schema.parse({ v: 1, epoch: 1, voiceAgentId: 'current-agent',
+                            role: 'assistant', ts: message.createdAt }) } },
                 }));
                 expect(await sendVoiceSessionComposerText({ conversationSessionId: conversation.sessionId, text: 'hello',
                     localId: 'durable-current-input', getAdapter: getVoiceAdapterRegistry().get,

@@ -16,12 +16,12 @@ import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/f
 
 import { createDeferred, createMachineFixture, flushHookEffects, renderScreen as renderAppScreen, standardCleanup } from '@/dev/testkit';
 import { getStorage as getActualStorage, storage } from '@/sync/domains/state/storageStore';
-import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
+import { createVoiceSettingsAccountTestHarness, withVoiceSettingsCredentialResource } from '../voiceSettingsAccountTestHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
-import { applyAccountVoiceCredentialSourceSelection, resolveExactAccountVoiceCredentialSecretId, upsertAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
+import { applyAccountVoiceCredentialSourceSelection } from '@/voice/credentials/accountVoiceCredential';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { VoiceLocalTtsSchema } from '@/sync/domains/settings/voiceLocalTtsSettings';
 import {
@@ -344,14 +344,12 @@ const { VoiceCredentialSourceField } = await import('../realtime/VoiceCredential
 await import('./BundledSpeechSettings');
 
 async function saveCredential(providerId: string, secretId = 'account-secret-a') {
-  const [pluginId, localId] = providerId.split('/');
-  const contribution = { pluginId, localId };
-  const expectedSecretId = resolveExactAccountVoiceCredentialSecretId({ settings: account.settings, contribution, credentialSlotId: 'api_key' });
-  const existing = account.settings.secrets.find(secret => secret.id === expectedSecretId);
-  account.replaceSettings(upsertAccountVoiceCredential({ settings: account.settings,
-    contribution, credentialSlotId: 'api_key', value: `test-only-${secretId}`,
-    generateId: () => secretId, now: 1, expectedSecretId, expectedSecretUpdatedAt: existing?.updatedAt ?? null,
-  }).settings);
+  const entry = createDefaultVoiceProviderRegistry().get(providerId);
+  if (entry?.kind !== 'voice.speech-engine.v1' || !entry.declaration) throw new Error('Expected speech credential declaration');
+  account.replaceSettings(await withVoiceSettingsCredentialResource(account, {
+    settings: account.settings, declaration: entry.declaration, pluginId: entry.pluginId, resourceId: secretId,
+    recipientContractDigest: entry.accountCredentialSlot?.recipientContractDigest,
+  }));
   await refreshSavedSecretCatalog(account.scope);
 }
 

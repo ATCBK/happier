@@ -3,7 +3,7 @@ import { act, create } from 'react-test-renderer';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
-import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
+import { createVoiceSettingsAccountTestHarness, withVoiceSettingsCredentialResource } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { storage } from '@/sync/domains/state/storage';
@@ -665,7 +665,6 @@ describe('DictationSettingsSection', () => {
   it('reprojects checked credential readiness after the selected secret is removed', async () => {
     const { DictationSettingsSection } = await import('./DictationSettingsSection');
     const { settingsParse } = await import('@/sync/domains/settings/settings');
-    const { saveAndUseAccountVoiceCredential } = await import('@/voice/credentials/accountVoiceCredential');
     const voice = {
       ...voiceSettingsDefaults,
       dictation: {
@@ -683,21 +682,14 @@ describe('DictationSettingsSection', () => {
       throw new Error('Expected Gemini STT declaration');
     }
     const declaration = entry.declaration;
-    const ready = saveAndUseAccountVoiceCredential({
-      settings: settingsParse({ voice }),
-      contribution: { pluginId: 'happier.voice.google', localId: 'gemini-stt' },
-      credentialSlotId: 'api_key',
-      expectedSettingsVersion: 0,
-      currentDeclaration: declaration,
-      machineId: 'machine-online',
-      value: 'google-stt-key',
-      generateId: () => 'google-stt-secret',
-      now: 1,
-      expectedSecretId: null,
-      expectedSecretUpdatedAt: null,
-    }).settings;
-    const account = await createVoiceSettingsAccountTestHarness(ready);
+    const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice }));
     onTestFinished(account.dispose);
+    const ready = await withVoiceSettingsCredentialResource(account, {
+      settings: account.settings, declaration, pluginId: entry.pluginId,
+      resourceId: 'google-stt-secret', machineId: 'machine-online',
+      recipientContractDigest: entry.accountCredentialSlot?.recipientContractDigest,
+    });
+    account.replaceSettings(ready);
     const subject = { kind: 'credential_access_disclosure', contribution: { pluginId: 'happier.voice.google', localId: 'gemini-stt' },
       credentialSlotId: 'api_key', purpose: declaration.credentials!.slot.purpose,
       accessDeclarationDigest: 'b'.repeat(64), selectedAuthorityDigest: 'c'.repeat(64), selectedRawAccessDigest: 'd'.repeat(64) };

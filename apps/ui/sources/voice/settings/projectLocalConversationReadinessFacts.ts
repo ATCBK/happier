@@ -176,6 +176,7 @@ export function projectLocalConversationReadinessFacts(input: Readonly<{
     ? projectVoiceProviderSettings(adapterEntry, input.voice.providers[local.adapterId] ?? null)
     : null;
   const needsAgent = local.config.conversationMode === 'agent';
+  const needsConfiguredAgent = needsAgent && local.config.agent.agentSource === 'agent';
   const thinkSettings: VoiceSettingsReadinessFact = adapterSettings?.status !== 'ready'
     ? adapterSettings?.status ?? 'unknown'
     : needsAgent && local.config.agent.agentSource === 'agent' && !local.config.agent.agentId.trim()
@@ -187,7 +188,10 @@ export function projectLocalConversationReadinessFacts(input: Readonly<{
     role: 'conversation_stt',
     providerId: local.adapterId,
     platform: input.platform,
-    settingsRequirements: needsAgent ? ['server_feature', 'execution_machine', 'runtime'] : [],
+    // Follow session resolves its Agent from the bound Session at start. Only a
+    // fixed Agent consumes the configured-selection catalog availability fact.
+    settingsRequirements: needsConfiguredAgent ? ['server_feature', 'execution_machine', 'runtime']
+      : needsAgent ? ['server_feature', 'execution_machine'] : [],
     facts: {
       settings: thinkSettings,
       serverFeature,
@@ -312,7 +316,7 @@ export function projectLocalConversationReadinessFacts(input: Readonly<{
     settings,
     serverFeature,
     executionMachine,
-    runtime: needsAgent && agentRuntime !== 'ready' ? agentRuntime : runtime,
+    runtime: needsConfiguredAgent && agentRuntime !== 'ready' ? agentRuntime : runtime,
     model,
     endpoint,
     credential,

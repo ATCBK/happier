@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { t } from '@/text';
 import { speakDeviceText } from '@/voice/local/speakDeviceText';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 import type { LocalTtsProviderSpec } from '../_types';
 
@@ -14,7 +15,15 @@ export const deviceTtsProviderSpec: LocalTtsProviderSpec = {
   iconName: 'device-mobile',
   detail: t('settingsVoice.local.deviceTtsDetail'),
   Settings: DeviceTtsSettings,
-  test: async ({ sample }) => {
-    await speakDeviceText(sample);
+  test: async ({ sample, signal, isCurrent, registerPlaybackStopper }) => {
+    const playback = new AbortController();
+    const cancellation = mergeAbortSignals([signal, playback.signal]);
+    const unregister = registerPlaybackStopper?.(() => playback.abort());
+    try {
+      await speakDeviceText(sample, undefined, { signal: cancellation.signal, isCurrent });
+    } finally {
+      unregister?.();
+      cancellation.dispose();
+    }
   },
 };

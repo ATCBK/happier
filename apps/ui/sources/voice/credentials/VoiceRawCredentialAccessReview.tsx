@@ -14,7 +14,8 @@ import {
   createPluginPermissionGrantActions,
   type PluginPermissionGrantActions,
 } from '@/sync/domains/plugins/permissions/actions';
-import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useActiveServerAccountScope } from '@/sync/store/hooks';
 import {
   selectPluginPermissionGrants,
   selectPluginPermissionPendingRequests,
@@ -134,9 +135,11 @@ export function createVoiceRawCredentialReviewDetailRows(
 
 export function VoiceRawCredentialAccessReview(props: VoiceRawCredentialAccessReviewProps) {
   const client = props.client ?? rawCredentialAuthorizationClient;
+  const scope = useActiveServerAccountScope();
+  const { executeValue } = useMountedActionExecution(scope, { openOnRequest: true });
   const defaultActions = React.useMemo(() => createPluginPermissionGrantActions({
-    execute: createFrontDoorUiActionExecutor(),
-  }), []);
+    execute: executeValue,
+  }), [executeValue]);
   const actions = props.actions ?? defaultActions;
   const settingsVersion = useSettingsVersion();
   const [inspection, setInspection] = React.useState<AuthorizationInspection | null>(null);

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -139,26 +139,24 @@ export function useRealtimeCatalogMenuItems(
                 />}
               />
             ) : null;
+            // The preview leads the row (as in the lab's voice list), so names align on one edge and the
+            // right edge is left for the one fact that can need it: the voice in use.
             return {
               id: row.id,
               title: row.name,
               subtitle: row.subtitle,
               ...(category ? { category } : {}),
-              rightElement: inUse ? (
-                <View
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}
-                >
+              ...(preview ? { icon: preview } : {}),
+              ...(inUse ? {
+                rightElement: (
                   <StatusPill
                     variant="neutral"
                     hideDot
                     label={t('sessionVoice.inUse')}
                     labelVariant="phrase"
                   />
-                  {preview}
-                </View>
-              ) : (
-                (preview ?? undefined)
-              ),
+                ),
+              } : {}),
             };
           })
         : [];

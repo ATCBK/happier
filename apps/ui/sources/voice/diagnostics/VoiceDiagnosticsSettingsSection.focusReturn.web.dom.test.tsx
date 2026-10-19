@@ -138,12 +138,6 @@ async function renderSettings(surface?: React.ReactNode): Promise<void> {
 describe('VoiceDiagnosticsSettingsSection web focus return', () => {
   beforeEach(async () => {
     restoreBrowserLocks = installBrowserStorageLockBoundary();
-    home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://diagnostics-focus.test', accountId: 'account-a' }],
-      route: ({ path }) => path.startsWith('/v1/machines/')
-        ? Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a' }) })
-        : undefined });
-    disconnect = await home.restoreActiveConnection();
-    resetVoiceSessionStoreForTests();
     boundary.voice = voiceSettingsParse({
       executionMachine: { mode: 'fixed', machineId: 'm1' },
       diagnostics: {
@@ -154,10 +148,16 @@ describe('VoiceDiagnosticsSettingsSection web focus return', () => {
         captureTtsOutput: false,
       },
     });
+    home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://diagnostics-focus.test', accountId: 'account-a',
+      settings: { voice: boundary.voice } }],
+      route: ({ path }) => path.startsWith('/v1/machines/')
+        ? Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(path.slice('/v1/machines/'.length)), accountId: 'account-a' }) })
+        : undefined });
+    disconnect = await home.restoreActiveConnection();
+    resetVoiceSessionStoreForTests();
     boundary.sessionId = 'focused-diagnostics-session';
     const machine = createMachineFixture({ id: 'm1', activeAt: Date.now() });
     storage.setState({ machines: { m1: machine }, machineListByServerId: { [home.homes.diagnostics!.id]: [machine] } });
-    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: boundary.voice }, storage.getState().settings));
     setVoiceSessionSnapshot({ adapterId: 'local_conversation', sessionId: boundary.sessionId, status: 'connected', mode: 'listening', canStop: true });
     boundary.revokeCaptureAuthorization.mockClear();
     resetVoiceDiagnosticsRuntimeStatusForTests();

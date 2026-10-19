@@ -24,7 +24,7 @@ const { useRealtimeVoiceCatalog, useRealtimeCatalogMenuItems } = await import('.
 const { createBundledConversationUi } = await import('@/voice/credentials/bundledConversationClient');
 const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
 const { readDeclaredVoiceSettingsCatalog } = await import('./voiceCatalog');
-const { getPreferredLanguage, setPreferredLanguageFromSettings, t, tLoose } = await import('@/text');
+const { getPreferredLanguage, preloadTranslationsForSettings, setPreferredLanguageFromSettings, t, tLoose } = await import('@/text');
 const initialLanguage = getPreferredLanguage();
 const initialStorage = storage.getState();
 
@@ -32,6 +32,7 @@ let runtime: ReturnType<typeof createElevenLabsSettingsRuntimeTestHarness>;
 let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
 let client: NonNullable<ReturnType<typeof createBundledConversationUi>>['client'];
 beforeEach(async () => {
+  await preloadTranslationsForSettings('en');
   setPreferredLanguageFromSettings('en');
   account = await createVoiceSettingsAccountTestHarness(settingsParse({
     voice: { providerId: 'happier.voice.elevenlabs/realtime-elevenlabs' },
@@ -72,6 +73,23 @@ describe('the shared realtime voice catalog', () => {
     retry.props.onPress({ stopPropagation });
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(stopPropagation).toHaveBeenCalledTimes(1);
+  });
+
+  it('leads a voice row with its preview control and keeps the right edge for the in-use mark', async () => {
+    const rows = [{ id: 'af_maple', name: 'Maple', subtitle: 'American English · female' }, { id: 'af_sol', name: 'Sol' }];
+    const render = (inUseId: string | null) => renderHook(() => useRealtimeCatalogMenuItems({
+      catalog: { phase: 'ready', rows }, credentialUsable: true, credentialUnavailableDetail: '', previewingId: null,
+      onPreview: () => {}, canPreview: true, inUseId,
+    }));
+    const idle = (await render(null)).getCurrent().catalogRows;
+    // Every voice has the same leading control: no empty leading column, nothing competing on the right.
+    expect(idle.map((row) => row.icon != null)).toEqual([true, true]);
+    expect(idle.map((row) => row.rightElement)).toEqual([undefined, undefined]);
+    expect(idle[0]).toMatchObject({ title: 'Maple', subtitle: 'American English · female' });
+    const inUse = (await render('af_sol')).getCurrent().catalogRows;
+    expect(inUse[1]!.rightElement).toBeDefined();
+    expect(inUse[0]!.rightElement).toBeUndefined();
+    expect(inUse[1]!.icon).toBeDefined();
   });
 
   it('uses a provider-declared static catalog without contacting the catalog transport', async () => {

@@ -140,7 +140,7 @@ export function useBundledConversationProviderSettings(voice: VoiceSettings): Re
           tts.localNeural.execution, machineId, scope]),
         client: { fetchVoiceCatalog: async signal => {
           signal?.throwIfAborted();
-          const catalog = await readLocalNeuralVoiceCatalog({ config: tts.localNeural, originMachineId: machineId });
+          const catalog = await readLocalNeuralVoiceCatalog({ config: tts.localNeural, originMachineId: machineId, signal: signal ?? undefined });
           signal?.throwIfAborted();
           return catalog.rows;
         } },

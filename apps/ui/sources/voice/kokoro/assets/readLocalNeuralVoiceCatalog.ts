@@ -11,6 +11,7 @@ export async function readLocalNeuralVoiceCatalog(input: Readonly<{
   sessionId?: string | null;
   originMachineId?: string | null;
   resolvedExecution?: 'device' | 'daemon';
+  signal?: AbortSignal;
 }>) {
   if (input.config.model !== 'kokoro') throw new Error('local_neural_tts_model_unavailable');
   const execution = input.resolvedExecution ?? await resolveDaemonVoiceInferenceExecution({
@@ -20,7 +21,7 @@ export async function readLocalNeuralVoiceCatalog(input: Readonly<{
   const selection = execution === 'daemon'
     ? resolveDaemonTtsVoiceSelection({ packId, configuredVoiceId: input.config.voiceId,
       statuses: await new DaemonVoiceInferenceClient().getModelsStatus([packId],
-        input.originMachineId ? { machineId: input.originMachineId } : undefined) })
+        input.originMachineId ? { machineId: input.originMachineId } : undefined, input.signal) })
     : null;
   const voices = selection?.voices ?? await readInstalledKokoroVoices({ packId });
   return { execution, rows: voices.map(voice => ({ id: voice.id, name: voice.title,

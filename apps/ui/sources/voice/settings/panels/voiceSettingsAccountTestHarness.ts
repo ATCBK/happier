@@ -12,6 +12,9 @@ import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
 import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
+import type { VoiceProviderContribution } from '@happier-dev/protocol/plugins/contributions/voice';
+import { formatSavedSecretCatalogFingerprintV1, formatSavedSecretCatalogReferenceV1, SavedSecretResourceMaterialV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
+import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 
 export type VoiceSettingsAccountTestHarness = Omit<
     Awaited<ReturnType<typeof createSecretSettingsTestHarness>>, 'purposes'
@@ -26,7 +29,7 @@ export type VoiceSettingsAccountTestHarness = Omit<
 
 /** Real Account Settings owner; only the Home HTTP transport is synthetic. */
 export async function createVoiceSettingsAccountTestHarness(settings: Settings,
-    options: Pick<NonNullable<Parameters<typeof createSecretSettingsTestHarness>[0]>, 'features'> = {}): Promise<VoiceSettingsAccountTestHarness> {
+    options: Pick<NonNullable<Parameters<typeof createSecretSettingsTestHarness>[0]>, 'features' | 'token' | 'serverIdentityId'> = {}): Promise<VoiceSettingsAccountTestHarness> {
     const account = await createSecretSettingsTestHarness({ ...options, settings, voiceEnabled: true, connectedPurposes: { v: 1, bindings: [] } });
     const request = account.request.getMockImplementation();
     if (!request) throw new Error('Voice Settings Account HTTP boundary missing');
@@ -53,6 +56,52 @@ export async function createVoiceSettingsAccountTestHarness(settings: Settings,
             replaceSettings(settingsParse({ ...current, ...normalizeVoiceSettingsLocalDelta({ voice: next }, current) }));
         },
     };
+}
+
+/** Current credential material at the Home HTTP boundary, bound by the real source owner.
+ * Legacy Settings import has a separate approval/lifecycle contract. */
+export async function withVoiceSettingsCredentialResource(account: VoiceSettingsAccountTestHarness, params: Readonly<{
+    settings: Settings;
+    declaration: VoiceProviderContribution;
+    pluginId: string;
+    resourceId: string;
+    machineId?: string;
+    recipientContractDigest?: string;
+    approvedRecipientContractDigest?: string;
+}>): Promise<Settings> {
+    const { applyAccountVoiceCredentialSourceSelection, createAccountVoiceCredentialBindingMutation,
+        resolveAccountVoiceCredentialApprovalDigest, resolveExactAccountVoiceCredentialSecretId } = await import('@/voice/credentials/accountVoiceCredential');
+    const slot = params.declaration.credentials?.slot;
+    if (!slot) throw new Error('Expected a Voice credential slot');
+    const expectedSettingsVersion = storage.getState().settingsVersion;
+    if (expectedSettingsVersion === null) throw new Error('Expected hydrated Voice Account Settings');
+    const contribution = { pluginId: params.pluginId, localId: params.declaration.id };
+    const expectedSecretId = resolveExactAccountVoiceCredentialSecretId({ settings: params.settings,
+        contribution, credentialSlotId: slot.id, machineId: params.machineId });
+    const existing = params.settings.secrets.find(secret => secret.id === expectedSecretId);
+    const ref = formatSavedSecretCatalogReferenceV1({ kind: 'shared_resource', id: params.resourceId });
+    const content = { v: 1 as const, name: params.resourceId, kind: 'apiKey' as const, value: `${params.resourceId}-key` };
+    account.resources.push(SavedSecretResourceMaterialV1Schema.parse({
+        resourceId: params.resourceId, encryptionMode: 'plain', recipientEnvelope: null,
+        storedContent: sealSavedSecretResourceStoredContentV1({ resourceId: params.resourceId, mode: 'plain', content }),
+        entry: { ref, source: 'shared_resource', relationship: 'owner', ownerAccountId: account.scope.accountId,
+            name: content.name, kind: content.kind, encryptionMode: 'plain', revision: 1, materialStatus: 'ready',
+            capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } },
+    }));
+    const approvedRecipientContractDigest = params.approvedRecipientContractDigest
+        ?? resolveAccountVoiceCredentialApprovalDigest({ requiredRecipientContractDigest: params.recipientContractDigest,
+            savedSecret: { kind: 'shared_resource', fingerprint: formatSavedSecretCatalogFingerprintV1({
+                ref, source: 'shared_resource', revision: 1,
+            }) } });
+    return applyAccountVoiceCredentialSourceSelection({
+        settings: params.settings, connectedPurposes: account.purposes.value, currentDeclaration: params.declaration,
+        mutation: { contribution, credentialSlotId: slot.id, expectedSettingsVersion,
+            selection: { kind: 'savedSecret' }, savedSecretMutation: createAccountVoiceCredentialBindingMutation({
+                contribution, credentialSlotId: slot.id, machineId: params.machineId, secretId: ref,
+                expectedSecretId, expectedSecretUpdatedAt: existing?.updatedAt ?? null,
+                ...(approvedRecipientContractDigest ? { approvedRecipientContractDigest } : {}),
+            }) },
+    }).settings;
 }
 
 /** Real activation, Account credential admission, tools and human interactions;

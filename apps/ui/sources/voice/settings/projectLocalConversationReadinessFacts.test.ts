@@ -21,6 +21,9 @@ import { projectLocalConversationReadinessFacts } from './projectLocalConversati
 import { buildVoiceConversationsPipeline } from './pipeline/voicePipelineSteps';
 import { projectVoiceConfiguredAgentTarget } from '@/voice/agent/projectVoiceConfiguredAgentTarget';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
+import { projectVoiceProviderSettings } from '@/voice/registry/providerRegistry';
+import { resolveVoiceRoleReadiness } from '@/voice/registry/readiness';
+import { deriveVoiceSetupFacts } from './setup/voiceSetupFacts';
 
 const registry = createDefaultVoiceProviderRegistry();
 const executionMachineId = 'machine-a';
@@ -146,7 +149,9 @@ describe('projectLocalConversationReadinessFacts credential readiness', () => {
   it.each(['unknown', 'incompatible'] as const)('keeps %s Agent runtime availability separate from ready device speech', (runtime) => {
     const settings = createLocalSettings('device', 'device');
     const config = readLocalConversationVoiceSettings(settings.voice);
-    const voice = writeLocalConversationVoiceSettings(settings.voice, { ...config, conversationMode: 'agent' });
+    const voice = writeLocalConversationVoiceSettings(settings.voice, {
+      ...config, conversationMode: 'agent', agent: { ...config.agent, agentSource: 'agent' },
+    });
     const facts = projectLocalConversationReadinessFacts({
       registry, voice, voiceSettingsV1: settings.voiceSettingsV1, secrets: settings.secrets,
       connectedPurposes: null, platform: 'web', local, localInput, executionMachineId,
@@ -155,6 +160,41 @@ describe('projectLocalConversationReadinessFacts credential readiness', () => {
     expect(facts.thinkReadiness).toMatchObject({ code: `runtime_${runtime}`, recoveryAction: 'switch_provider' });
     expect(facts.runtime).toBe(runtime);
     expect(facts.speechReadiness).toMatchObject({ hear: { status: 'ready' }, speak: { status: 'ready' } });
+  });
+
+  it.each([
+    { runtimeState: 'available', runtime: 'ready', code: 'ready', canTry: true },
+    { runtimeState: 'unknown', runtime: 'unknown', code: 'runtime_unknown', canTry: false },
+  ] as const)('uses current speech runtime for a session-sourced Voice Agent: $runtimeState', (scenario) => {
+    const settings = createLocalSettings('local_neural', 'local_neural');
+    const config = readLocalConversationVoiceSettings(settings.voice);
+    const voice = writeLocalConversationVoiceSettings(settings.voice, {
+      ...config,
+      conversationMode: 'agent',
+      agent: { ...config.agent, agentSource: 'session' },
+      stt: { ...config.stt, localNeural: { ...config.stt.localNeural, execution: 'daemon' } },
+      tts: { ...config.tts, localNeural: { ...config.tts.localNeural, execution: 'daemon' } },
+    });
+    const input = { ...localInput, daemon: { ...localInput.daemon, runtimeState: scenario.runtimeState } };
+    const facts = projectLocalConversationReadinessFacts({
+      registry, voice, voiceSettingsV1: settings.voiceSettingsV1, secrets: settings.secrets,
+      connectedPurposes: null, platform: 'web', executionMachineId, voiceAgentEnabled: true,
+      localInput: input,
+      local: resolveVoiceProviderAvailability({ happierVoiceSupported: true, platformOs: 'web', local: input }).local,
+      // Follow session has no fixed Agent selection to resolve in the catalog.
+      voiceAgentRuntime: 'unknown',
+    });
+    expect(facts.thinkReadiness).toMatchObject({ status: 'ready' });
+    expect(facts.runtime).toBe(scenario.runtime);
+    const entry = registry.get('local_conversation')!;
+    const projection = projectVoiceProviderSettings(entry, voice.providers.local_conversation ?? null);
+    const readiness = resolveVoiceRoleReadiness({
+      registry, role: entry.roles[0]!, providerId: 'local_conversation', platform: 'web',
+      modeId: projection?.modeId, settingsRequirements: projection?.requirements, facts,
+    });
+    expect(readiness.code).toBe(scenario.code);
+    expect(deriveVoiceSetupFacts({ providerId: voice.providerId, readiness,
+      microphonePermission: 'granted', messages: [] }).canTry).toBe(scenario.canTry);
   });
 
   it('projects exact, disabled, unknown and legacy Agent selections from incumbent catalog facts', () => {

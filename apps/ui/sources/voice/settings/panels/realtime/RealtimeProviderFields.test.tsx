@@ -182,7 +182,7 @@ describe('RealtimeProviderFields', () => {
       onRequestCatalog: vi.fn(),
     }));
 
-    const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].rightElement;
+    const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].icon;
     act(() => preview.props.onPress({ stopPropagation: vi.fn() }));
     await vi.waitFor(() => expect(audioPreview.play).toHaveBeenCalledTimes(1));
     expect(audioPreview.create).toHaveBeenCalledWith(
@@ -311,7 +311,7 @@ describe('RealtimeProviderFields', () => {
       onRequestCatalog: vi.fn(),
     }));
     const dropdown = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' });
-    const preview = dropdown.props.items[0].rightElement;
+    const preview = dropdown.props.items[0].icon;
     const painted = await renderScreen(preview);
     const button = painted.tree.findAll(node => typeof node.type === 'string'
       && (node.props.accessibilityRole ?? node.props.role) === 'button')[0];
@@ -342,7 +342,7 @@ describe('RealtimeProviderFields', () => {
       catalog: { phase: 'ready' as const, rows: [{ id: 'voice_a', name: 'Voice A', previewUrl: 'https://example.test/a.mp3' }] },
     });
     const screen = await renderScreen(render(providerId));
-    const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].rightElement;
+    const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].icon;
     act(() => preview.props.onPress({ stopPropagation: vi.fn() }));
     await screen.update(render('another_provider'));
     await act(async () => undefined);
@@ -364,7 +364,7 @@ describe('RealtimeProviderFields', () => {
       config: owner.defaultConfig, credentialStatus: 'ready', onRequestCatalog: vi.fn(),
       catalog: { phase: 'ready', rows: [{ id: 'voice_a', name: 'Voice A', previewUrl: 'https://example.test/a.mp3' }] },
     }));
-    const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].rightElement;
+    const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].icon;
     await act(async () => { preview.props.onPress({ stopPropagation: vi.fn() }); });
     await vi.waitFor(() => expect(audioPreview.play).toHaveBeenCalled());
     const { stopRealtimeCatalogPreview } = await import('./catalogPreview');

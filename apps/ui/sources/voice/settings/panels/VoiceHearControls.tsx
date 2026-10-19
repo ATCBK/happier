@@ -7,6 +7,11 @@ import type { VoiceLocalConversationSettings } from '@/sync/domains/settings/voi
 import { t } from '@/text';
 import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
 import { MAX_VOICE_TIMER_DELAY_MS } from '@/voice/runtime/input/TurnEndpointDetector';
+import { useVoiceSettingsSearchPrerequisite } from '@/voice/settings/VoiceSettingsSearchPrerequisite';
+
+export const VOICE_HEAR_SETTINGS = [VOICE_CONVERSATIONS_SETTINGS.settings.handsFree,
+  VOICE_CONVERSATIONS_SETTINGS.settings.silenceMs, VOICE_CONVERSATIONS_SETTINGS.settings.minSpeechMs,
+  VOICE_CONVERSATIONS_SETTINGS.settings.bargeInEnabled] as const;
 
 type HandsFree = VoiceLocalConversationSettings['handsFree'];
 
@@ -24,6 +29,7 @@ export function VoiceHearControls(props: Readonly<{
   setBargeInEnabled: (next: boolean) => void;
   testIDPrefix: string;
 }>) {
+  const searchPrerequisite = useVoiceSettingsSearchPrerequisite();
   const { handsFree } = props;
   const handsFreeOn = props.handsFreeSupported && handsFree.enabled;
   const commitEndpointing = (key: 'silenceMs' | 'minSpeechMs') => (draft: string) => {
@@ -51,8 +57,7 @@ export function VoiceHearControls(props: Readonly<{
           />
         )}
       />
-      {/* Hands-free timing belongs to Hands-free: it is drawn only while Hands-free is on. A search for
-          it while Hands-free is off lands on the page's prerequisite row (VoiceSettingsSearchPrerequisite). */}
+      {/* The same Hands-free branch owns the timing rows and their search prerequisite. */}
       {handsFreeOn ? (
         <>
         <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.silenceMs}>
@@ -76,7 +81,7 @@ export function VoiceHearControls(props: Readonly<{
           />
         </SettingAnchor>
         </>
-      ) : null}
+      ) : searchPrerequisite({ settings: [VOICE_CONVERSATIONS_SETTINGS.settings.silenceMs, VOICE_CONVERSATIONS_SETTINGS.settings.minSpeechMs], reason: t(props.handsFreeSupported ? 'settingsVoice.pages.conversations.handsFreeTimingUnavailable' : 'settingsVoice.pages.conversations.handsFreeUnsupported') })}
       <SettingRow
         setting={VOICE_CONVERSATIONS_SETTINGS.settings.bargeInEnabled}
         rightElement={(

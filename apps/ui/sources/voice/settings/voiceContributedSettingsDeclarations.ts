@@ -19,7 +19,12 @@ function record(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 /** Only published field/presentation paths can create a binding; Action input never supplies a path. */
-function providerFieldBinding(entry: VoiceProviderRegistryEntry, path: string, preparesEndpoint: boolean): SettingStorageBinding | undefined {
+function providerFieldBinding(
+    entry: VoiceProviderRegistryEntry,
+    path: string,
+    preparesEndpoint: boolean,
+    presentation: RealtimeSettingsFieldDescriptor | undefined,
+): SettingStorageBinding | undefined {
     const descriptor = entry.providerSettings;
     if (!descriptor) return undefined;
     const segments = path.split('.');
@@ -35,9 +40,6 @@ function providerFieldBinding(entry: VoiceProviderRegistryEntry, path: string, p
     const published = descriptor.fields.find((field) => field.id === path);
     const publishedSchema = published?.schema;
     const publishedType = record(publishedSchema) ? publishedSchema.type : undefined;
-    const presentation = parseRealtimeSettingsDescriptor(entry.providerId, descriptor.presentation)?.fields
-        .flatMap((field) => [field, ...(Array.isArray(field.subfields) ? field.subfields as readonly RealtimeSettingsFieldDescriptor[] : [])])
-        .find((field) => field.path === path);
     const compound = record(defaultValue) || Array.isArray(defaultValue)
         || published?.presentation?.control === 'json'
         || publishedType === 'object' || publishedType === 'array'
@@ -113,6 +115,11 @@ export function getVoiceContributedSettingsDeclarations(
         if (!descriptor) return [];
         const declaration = 'declaration' in entry ? entry.declaration : undefined;
         const endpointConsent = readBundledSpeechSettingsDescriptorFromEntry(entry.providerId, entry)?.endpointConsent;
+        const presentationFields = descriptor.presentation
+            ? parseRealtimeSettingsDescriptor(entry.providerId, descriptor.presentation)?.fields.flatMap((field) => [
+                field, ...(Array.isArray(field.subfields) ? field.subfields as readonly RealtimeSettingsFieldDescriptor[] : []),
+            ]) ?? []
+            : [];
         const label = (value: unknown) => entry.source.kind !== 'external' && typeof value === 'string'
             ? String(tLoose(value))
             : localize?.(entry.pluginId, value) ?? resolvePluginLocalizedText({ projection: null, pluginId: entry.pluginId, value });
@@ -122,7 +129,9 @@ export function getVoiceContributedSettingsDeclarations(
                 titleKey: 'settingsVoice.providerSectionTitle', title: label(title) || path,
                 ...(declaration ? { contribution: { pluginId: entry.pluginId, localId: declaration.id } } : {}),
                 ...(description ? { description: label(description) } : {}),
-                ...(sensitive ? { sensitive: true, operation: { kind: 'interaction', requiresHumanInteraction: true } as const } : { storage: providerFieldBinding(entry, path, endpointConsent?.baseUrlFieldId === path) }),
+                ...(sensitive ? { sensitive: true, operation: { kind: 'interaction', requiresHumanInteraction: true } as const } : { storage: providerFieldBinding(
+                    entry, path, endpointConsent?.baseUrlFieldId === path, presentationFields.find((field) => field.path === path),
+                ) }),
             };
         };
         for (const field of descriptor.fields) {

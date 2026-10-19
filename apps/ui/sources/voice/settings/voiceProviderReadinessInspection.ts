@@ -44,6 +44,7 @@ import { projectLocalConversationProviderReadiness, projectLocalConversationRead
 import { resolveVoiceProviderAvailability } from './resolveVoiceProviderAvailability';
 import { resolveVoiceDaemonDirectRouteAvailability, resolveVoiceDaemonModelAvailabilityFromCatalogState, resolveVoiceProviderLocalAvailability } from './voiceProviderLocalAvailability';
 import type { VoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
+import { captureDaemonVoiceModelCatalogObservation } from './panels/modelCatalog/daemonVoiceModelCatalogObservation';
 
 export type VoiceRawSpeechReadinessTarget = Readonly<{
     providerId: string;
@@ -154,7 +155,9 @@ export async function inspectVoiceSettingsSemanticReadiness(input: Readonly<{
             const packIds = [requireStt ? stt.localNeural.assetId ?? getDefaultModelPackId('stt_sherpa') : null,
                 requireTts ? tts.localNeural.assetId ?? getDefaultModelPackId('tts_sherpa') : null]
                 .filter((id): id is string => Boolean(id));
-            models = await new DaemonVoiceInferenceClient().getModelsStatus(packIds, { machineId: machine.machineId });
+            models = await captureDaemonVoiceModelCatalogObservation(machine.machineId).read({
+                client: new DaemonVoiceInferenceClient(), packIds, requireNewObservation: true, isCurrent: input.isCurrent, signal: context.signal,
+            }) ?? [];
         } catch (error) {
             const code = readDaemonVoiceInferenceClientErrorCode(error);
             modelError = code === 'feature_disabled' || code === 'machine_unreachable' || code === 'runtime_unavailable'

@@ -8,6 +8,8 @@ import { getModelPackInstallSummary } from '@/voice/modelPacks/installer.native'
 import { invokeVoiceDeviceModelPackOperation } from '@/voice/settings/voiceDeviceModelPackOperation.native';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
+import { createVoiceModelCancellationCommand } from '@/voice/settings/voiceModelCancellation';
+import { useCurrentUiContextMountedCommand } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
 
 type ModelStatus = ModelPackRowStatus;
 
@@ -29,6 +31,8 @@ export function useLocalNeuralModelPackState(params: {
   const [modelStatus, setModelStatus] = React.useState<ModelStatus>('idle');
   const [downloadProgress, setDownloadProgress] = React.useState<unknown | null>(null);
   const prepareAbortRef = React.useRef<AbortController | null>(null);
+  const [cancellationCommand, setCancellationCommand] = React.useState<ReturnType<typeof createVoiceModelCancellationCommand>>(null);
+  useCurrentUiContextMountedCommand(cancellationCommand, t('common.cancel'));
   const [installed, setInstalled] = React.useState(false);
   const [installSummary, setInstallSummary] = React.useState<Awaited<ReturnType<typeof getModelPackInstallSummary>> | null>(null);
   const [updateCheckedRemote, setUpdateCheckedRemote] = React.useState<{ build: string | null; updateAvailable: boolean } | null>(null);
@@ -69,6 +73,7 @@ export function useLocalNeuralModelPackState(params: {
   React.useEffect(() => {
     prepareAbortRef.current?.abort();
     prepareAbortRef.current = null;
+    setCancellationCommand(null);
     setModelStatus('idle');
     setDownloadProgress(null);
     setInstalled(false);
@@ -86,11 +91,16 @@ export function useLocalNeuralModelPackState(params: {
       controller.abort();
       if (prepareAbortRef.current === controller) prepareAbortRef.current = null;
       if (isCurrent()) {
+        setCancellationCommand(null);
         setModelStatus(installed ? 'ready' : 'idle');
         setDownloadProgress(null);
       }
     });
     const current = () => isCurrent() && accountLifetime.isCurrent() && !controller.signal.aborted;
+    const command = createVoiceModelCancellationCommand({ packId: params.packId, execution: 'device', machineId: null,
+      account: 'scope' in accountLifetime ? accountLifetime : null, isCurrent: () => current() && prepareAbortRef.current === controller,
+      cancel: () => controller.abort() });
+    setCancellationCommand(command);
     let checkedUpdateAvailable: boolean | null = null;
     try {
       const result = await invokeVoiceDeviceModelPackOperation({
@@ -161,7 +171,10 @@ export function useLocalNeuralModelPackState(params: {
       accountRetirement.dispose();
       if (prepareAbortRef.current === controller) {
         prepareAbortRef.current = null;
-        if (isCurrent()) setDownloadProgress(null);
+        if (isCurrent()) {
+          setCancellationCommand(current => current === command ? null : current);
+          setDownloadProgress(null);
+        }
       }
     }
   }, [installed, isCurrent, params.manifestUrl, params.packId, refreshInstallState, role]);

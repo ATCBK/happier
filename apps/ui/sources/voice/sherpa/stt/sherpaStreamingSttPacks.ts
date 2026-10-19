@@ -1,6 +1,7 @@
-import { getDefaultModelPackId } from '@happier-dev/protocol/voice/modelPacks/catalog';
+import { getDefaultModelPackId, listModelPackCatalogEntries } from '@happier-dev/protocol/voice/modelPacks/catalog';
+import { formatModelPackDisplayName } from '@/voice/modelPacks/formatDisplayName';
 import { t } from '@/text';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export type SherpaStreamingSttPackOption = {
   id: string;
@@ -11,29 +12,31 @@ export type SherpaStreamingSttPackOption = {
 const EXPO_PUBLIC_SHERPA_STREAMING_STT_PACKS = 'EXPO_PUBLIC_SHERPA_STREAMING_STT_PACKS';
 
 const SherpaStreamingSttPackOptionSchema = z.object({
-  id: z.string().min(1),
-  title: z.string().min(1),
-  subtitle: z.string().optional(),
+  id: z.string().check(z.minLength(1)),
+  title: z.string().check(z.minLength(1)),
+  subtitle: z.optional(z.string()),
 });
 
-const DEFAULT_STREAMING_STT_PACK_ID =
-  getDefaultModelPackId('stt_sherpa') ?? 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17';
-
 function getBuiltInOptions(): SherpaStreamingSttPackOption[] {
-  return [
-    {
-      id: DEFAULT_STREAMING_STT_PACK_ID,
-      title: 'Zipformer EN 20M (int8)',
-      subtitle: t('settingsVoice.local.models.nativeOptions.sherpaStreamingRecommendedSubtitle'),
-    },
-  ];
+  const defaultPackId = getDefaultModelPackId('stt_sherpa');
+  return listModelPackCatalogEntries('stt_sherpa')
+    .filter(entry => entry.publicationStatus === 'published'
+      && entry.streamingCapable && entry.runtimeFamily === 'sherpa_zipformer_streaming')
+    .sort((a, b) => Number(b.packId === defaultPackId) - Number(a.packId === defaultPackId))
+    .map(entry => ({
+      id: entry.packId,
+      title: formatModelPackDisplayName(entry),
+      ...(entry.packId === defaultPackId
+        ? { subtitle: t('settingsVoice.local.models.nativeOptions.sherpaStreamingRecommendedSubtitle') }
+        : {}),
+    }));
 }
 
 function readOptionsFromEnv(env: Record<string, string | undefined>): SherpaStreamingSttPackOption[] | null {
   const raw = env[EXPO_PUBLIC_SHERPA_STREAMING_STT_PACKS];
   if (!raw || !raw.trim()) return null;
   try {
-    const parsed = SherpaStreamingSttPackOptionSchema.array().safeParse(JSON.parse(raw));
+    const parsed = z.array(SherpaStreamingSttPackOptionSchema).safeParse(JSON.parse(raw));
     if (!parsed.success) return null;
     return parsed.data;
   } catch {

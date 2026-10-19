@@ -1,6 +1,8 @@
 import * as React from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
+import { storage } from '@/sync/domains/state/storage';
 import {
   useActiveServerAccountScope,
   useMachineCliDetectionTarget,
@@ -28,9 +30,12 @@ import {
  */
 export function useVoiceDiagnosticsRuntimeSync(rawVoiceSettings: unknown): void {
   const parsed = React.useMemo(() => voiceSettingsParse(rawVoiceSettings), [rawVoiceSettings]);
-  const diagnostics = parsed.diagnostics;
+  // Settings echoes can replace the Voice object without changing this flat
+  // policy. Only changed diagnostics values require daemon reconciliation.
+  const selectDiagnostics = useShallow((settings: typeof parsed) => settings.diagnostics);
+  const diagnostics = selectDiagnostics(parsed);
   const { machineId } = useVoiceExecutionMachinePresentation();
-  const { daemonStateVersion, isOnline } = useMachineCliDetectionTarget(machineId);
+  const { isOnline } = useMachineCliDetectionTarget(machineId);
   const persistenceScope = useActiveServerAccountScope();
   const runtimeStatus = useVoiceDiagnosticsRuntimeStatus();
   const formerMachineRevocations = React.useMemo(() => (
@@ -43,6 +48,17 @@ export function useVoiceDiagnosticsRuntimeSync(rawVoiceSettings: unknown): void 
     [formerMachineRevocations],
   );
   const formerMachineTargets = useMachineCliDetectionTargets(formerMachineIds);
+  // Daemon-state versions also advance for resources, services, and transfers.
+  // Control registration publishes startedAt on each ready connection. That
+  // fact, rather than unrelated publications, invalidates in-memory policy.
+  const machineRuntimeStarts = storage(useShallow((state) => {
+    const starts: Record<string, number | null> = {};
+    for (const id of machineId ? [machineId, ...formerMachineIds] : formerMachineIds) {
+      starts[id] = state.machines[id]?.daemonState?.startedAt ?? null;
+    }
+    return starts;
+  }));
+  const startedAt = machineId ? machineRuntimeStarts[machineId] ?? null : null;
   const previousSelectionRef = React.useRef<Readonly<{
     machineId: string | null;
     persistenceScope: ServerAccountScope | null;
@@ -51,14 +67,14 @@ export function useVoiceDiagnosticsRuntimeSync(rawVoiceSettings: unknown): void 
   const generationRef = React.useRef(0);
   const previousRuntimeTargetRef = React.useRef<Readonly<{
     machineId: string | null;
-    daemonStateVersion: number;
+    startedAt: number | null;
     isOnline: boolean;
   }> | null>(null);
   // This is only the mounted-hook cancellation/currentness book-keeping for
   // rendered exact targets. The policy intent, request serialization, and
   // persisted acknowledgement remain owned by runtimeRevocation.
   const formerMachineRevalidationsRef = React.useRef(new Map<string, Readonly<{
-    daemonStateVersion: number;
+    startedAt: number | null;
     isOnline: boolean;
     controller: AbortController | null;
   }>>());
@@ -90,15 +106,15 @@ export function useVoiceDiagnosticsRuntimeSync(rawVoiceSettings: unknown): void 
       const target = obligation.target;
       if (target.kind !== 'machine_policy') continue;
       const machineTarget = formerMachineTargets[target.machineId] ?? {
-        daemonStateVersion: 0,
         isOnline: false,
       };
+      const machineRuntimeStart = machineRuntimeStarts[target.machineId] ?? null;
       const previousRevalidation = revalidations.get(target.machineId);
       const runtimeCurrentnessChanged = !previousRevalidation
         || !previousRevalidation.isOnline
-        || machineTarget.daemonStateVersion > previousRevalidation.daemonStateVersion;
+        || machineRuntimeStart !== previousRevalidation.startedAt;
       const activeRevalidationHasStaleCurrentness = Boolean(previousRevalidation?.controller && (
-        previousRevalidation.daemonStateVersion !== machineTarget.daemonStateVersion
+        previousRevalidation.startedAt !== machineRuntimeStart
         || previousRevalidation.isOnline !== machineTarget.isOnline
       ));
       const replacesOwnStalePendingRevalidation = obligation.status === 'pending'
@@ -108,7 +124,7 @@ export function useVoiceDiagnosticsRuntimeSync(rawVoiceSettings: unknown): void 
       const shouldRetryFailedRevocation = obligation.status === 'failed' && runtimeCurrentnessChanged;
       if (!machineTarget.isOnline || (!shouldRetryFailedRevocation && !replacesOwnStalePendingRevalidation)) {
         revalidations.set(target.machineId, {
-          daemonStateVersion: machineTarget.daemonStateVersion,
+          startedAt: machineRuntimeStart,
           isOnline: machineTarget.isOnline,
           controller: activeRevalidationHasStaleCurrentness ? null : previousRevalidation?.controller ?? null,
         });
@@ -117,7 +133,7 @@ export function useVoiceDiagnosticsRuntimeSync(rawVoiceSettings: unknown): void 
 
       const controller = new AbortController();
       const revalidation = {
-        daemonStateVersion: machineTarget.daemonStateVersion,
+        startedAt: machineRuntimeStart,
         isOnline: machineTarget.isOnline,
         controller,
       };
@@ -146,6 +162,7 @@ export function useVoiceDiagnosticsRuntimeSync(rawVoiceSettings: unknown): void 
     diagnostics,
     formerMachineRevocations,
     formerMachineTargets,
+    machineRuntimeStarts,
     persistenceScope,
   ]);
 
@@ -159,10 +176,10 @@ export function useVoiceDiagnosticsRuntimeSync(rawVoiceSettings: unknown): void 
       && previousRuntimeTarget?.machineId === machineId
       && (
         !previousRuntimeTarget.isOnline
-        || daemonStateVersion > previousRuntimeTarget.daemonStateVersion
+        || startedAt !== previousRuntimeTarget.startedAt
       ),
     );
-    previousRuntimeTargetRef.current = { machineId, daemonStateVersion, isOnline };
+    previousRuntimeTargetRef.current = { machineId, startedAt, isOnline };
     const previousSelection = previousSelectionRef.current;
     previousSelectionRef.current = { machineId, persistenceScope };
     const selectionScopeChanged = previousSelection.persistenceScope === null && persistenceScope === null
@@ -254,5 +271,5 @@ export function useVoiceDiagnosticsRuntimeSync(rawVoiceSettings: unknown): void 
     };
     transitionTailRef.current = transitionTailRef.current.then(transition, transition);
     return () => controller.abort();
-  }, [daemonStateVersion, diagnostics, isOnline, machineId, persistenceScope]);
+  }, [startedAt, diagnostics, isOnline, machineId, persistenceScope]);
 }

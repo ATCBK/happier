@@ -9,9 +9,9 @@ vi.mock('socket.io-client', async (importOriginal) => (
   await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
 let invoke: (method: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>;
-const requests = installSessionActionRpcBoundary(request => {
+const requests = installSessionActionRpcBoundary((request, context) => {
   if (request.method.endsWith('.configure')) VoiceSpeechDiagnosticsConfigureRequestV1Schema.parse(request.params);
-  return invoke(request.method.slice(request.method.indexOf(':') + 1), request.params);
+  return invoke(request.method.slice(request.method.indexOf(':') + 1), request.params, context.signal);
 });
 const { storage } = await import('@/sync/domains/state/storage');
 const { voiceSettingsParse } = await import('@/sync/domains/settings/voiceSettings');
@@ -91,5 +91,32 @@ describe('voice diagnostics client', () => {
     invoke = async () => ({ ok: false, errorCode: 'machine_unavailable' });
     await expect(createVoiceDiagnosticsClient().status())
       .rejects.toMatchObject({ code: 'machine_unavailable' });
+  });
+
+  it('releases a cancelled export waiter while keeping its admitted cleanup alive', async () => {
+    let cleanupSignal: AbortSignal | undefined;
+    let releaseCleanup!: () => void;
+    const cleanup = new Promise<void>(resolve => { releaseCleanup = resolve; });
+    invoke = async (method, _payload, signal) => {
+      if (method.endsWith('.init')) return { success: true, downloadId: 'abcdef12-dead-4eef-beef-0123456789ab',
+        chunkSizeBytes: 1024, sizeBytes: 0, name: 'diagnostics.wav' };
+      if (method.endsWith('.abort')) {
+        cleanupSignal = signal;
+        await cleanup;
+        return { success: true };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    };
+    const controller = new AbortController();
+    const pending = createVoiceDiagnosticsClient().downloadArtifact({ artifactId: 'abcdef12-dead-beef',
+      signal: controller.signal,
+      destination: { writeBytes: async () => {}, close: async () => {}, cleanup: async () => {} },
+      onInit: async () => { throw new Error('destination_unavailable'); },
+    });
+    await vi.waitFor(() => expect(cleanupSignal).toBeDefined());
+    controller.abort();
+    await expect(pending).resolves.toMatchObject({ ok: false });
+    expect(cleanupSignal?.aborted).toBe(false);
+    releaseCleanup();
   });
 });
