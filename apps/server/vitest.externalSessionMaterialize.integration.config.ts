@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { serverWorkspacePackageSourcesPlugin } from './vitestWorkspacePackageResolution';
+import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -16,8 +17,10 @@ export default defineConfig({
     fileParallelism: false,
     include: ['scripts/externalSessionMaterializeRecovery.composed.integration.test.ts'],
     isolate: true,
-    setupFiles: ['./sources/configureZodLocale.ts'],
+    setupFiles: [resolve(__dirname, '../../scripts/testing/vitestHomeSetup.mjs'), './sources/configureZodLocale.ts'],
+    sequence: { setupFiles: 'list' },
     env: {
+      ...createTestHomeEnvironment().env,
       HAPPIER_FEATURE_POLICY_ENV: '',
       S3_HOST: 'localhost',
       S3_PORT: '9000',

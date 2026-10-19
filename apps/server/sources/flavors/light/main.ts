@@ -35,8 +35,11 @@ export async function runLightServerMain(argv: readonly string[] = process.argv.
         return;
     }
 
+    const runtimeImportProbe = argv.includes('--probe-runtime-import');
     await import('reflect-metadata');
-    await import('dotenv/config');
+    // The import probe must retain Stack's isolated environment, not reload
+    // credentials or retained data paths from a deployment dotenv file.
+    if (!runtimeImportProbe) await import('dotenv/config');
     const [
         {
             applyLightDefaultEnv,
@@ -189,10 +192,15 @@ export async function runLightServerMain(argv: readonly string[] = process.argv.
         return;
     }
 
-    // Instrument dependencies before runtime import; the post-overlay startup owner configures the client.
-    prepareServerSentryInstrumentation();
-    registerProcessHandlers();
+    // Probe the same lazy startup graph without opening a database, listener,
+    // telemetry client or process handlers. Stack supplies an isolated env.
+    if (!runtimeImportProbe) {
+        // Instrument dependencies before runtime import; the post-overlay startup owner configures the client.
+        prepareServerSentryInstrumentation();
+        registerProcessHandlers();
+    }
 
     const { startServer } = await import('@/startServer');
+    if (runtimeImportProbe) return;
     await startServer('light');
 }

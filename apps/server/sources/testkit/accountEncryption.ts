@@ -1,4 +1,4 @@
-import { signAccountContentKeyBindingV1 } from "@happier-dev/protocol";
+import { signAccountContentKeyBindingV1 } from "@happier-dev/protocol/crypto/accountContentKeyBindingV1";
 import tweetnacl from "tweetnacl";
 
 export function createSignedAccountContentBinding(

@@ -6,6 +6,7 @@ import { dirname, resolve } from 'node:path';
 
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating';
 import { serverWorkspacePackageSourcesPlugin } from './vitestWorkspacePackageResolution';
+import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -14,7 +15,8 @@ export default defineConfig({
     ...resolveVitestWorkers(),
     globals: true,
     environment: 'node',
-    setupFiles: ['./sources/configureZodLocale.ts'],
+    setupFiles: [resolve(__dirname, '../../scripts/testing/vitestHomeSetup.mjs'), './sources/configureZodLocale.ts'],
+    sequence: { setupFiles: 'list' },
     testTimeout: 20_000,
     hookTimeout: 20_000,
     include: ['sources/**/*.test.ts', 'sources/**/*.spec.ts', 'scripts/**/*.test.ts', 'scripts/**/*.spec.ts'],
@@ -30,6 +32,7 @@ export default defineConfig({
     // Without isolation, those mocks can contaminate other files depending on execution order.
     isolate: true,
     env: {
+      ...createTestHomeEnvironment().env,
       HAPPIER_FEATURE_POLICY_ENV: '',
       S3_HOST: 'localhost',
       S3_PORT: '9000',

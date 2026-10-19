@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import nacl from 'tweetnacl';
-import { MACHINE_PLAIN_DATA_KEY_MARKER, decodeBase64, encodePlainMachineStoredContent } from '@happier-dev/protocol';
+import { MACHINE_PLAIN_DATA_KEY_MARKER, decodeBase64 } from '@happier-dev/protocol';
 
 import { createLightSqliteHarness } from './lightSqliteHarness.ts';
 import { createAuthenticatedTestApp } from '../app/api/testkit/sqliteFastify.ts';
@@ -13,11 +13,14 @@ import { startSocket } from '../app/api/socket.ts';
 import { auth } from '../app/auth/auth.ts';
 import { db } from '../storage/db.ts';
 import { initiateShutdown } from '../utils/process/shutdown.ts';
+import { createSignedAccountContentBinding } from './accountEncryption.ts';
+import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { createMachineContentCodec } from '../../../cli/src/api/machine/machineStoredContent.ts';
 
 // The executable fixture stays with the server so its @ alias resolves to
 // server source. Its declaration lets composed CLI tests retain strict types
 // without treating both apps as one TypeScript alias namespace.
-export async function createConnectedAccountSocketHome() {
+export async function createConnectedAccountSocketHome({ encryptionMode = 'plain' } = {}) {
     const harness = await createLightSqliteHarness({
         tempDirPrefix: 'happier-connected-account-socket-home-', initAuth: true, initEncrypt: true,
         env: {
@@ -38,16 +41,25 @@ export async function createConnectedAccountSocketHome() {
         } finally { await harness.close(); }
     };
     try {
-        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const contentKeys = encryptionMode === 'e2ee' ? nacl.box.keyPair() : null;
+        const account = await db.account.create({ data: { encryptionMode,
+            ...(contentKeys ? createSignedAccountContentBinding(contentKeys.publicKey) : {}) } });
         const token = await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' });
         const keys = nacl.sign.keyPair();
         const installationId = randomUUID();
+        const machineEncryptionKey = contentKeys ? nacl.randomBytes(32) : null;
+        const machineCodec = createMachineContentCodec(machineEncryptionKey
+            ? { encryptionMode: 'e2ee', encryptionKey: machineEncryptionKey, encryptionVariant: 'dataKey' }
+            : { encryptionMode: 'plain' });
         const machine = await db.machine.create({ data: {
             id: randomUUID(), accountId: account.id, active: true,
             installationId, installationPublicKey: new Uint8Array(keys.publicKey),
-            metadata: encodePlainMachineStoredContent({ host: 'OAuth fixture', platform: 'linux', happyCliVersion: 'test',
+            metadata: machineCodec.encodeStored({ host: 'OAuth fixture', platform: 'linux', happyCliVersion: 'test',
                 homeDir: harness.baseDir, happyHomeDir: harness.baseDir }),
-            dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
+            dataEncryptionKey: contentKeys && machineEncryptionKey
+                ? sealEncryptedDataKeyEnvelopeV1({ dataKey: machineEncryptionKey, recipientPublicKey: contentKeys.publicKey,
+                    randomBytes: nacl.randomBytes })
+                : new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
         } });
         registerQualifiedConnectedAccountCredentialRoutesV4(home);
         registerConnectedAccountAttemptTransactionRoutes(home);
@@ -63,7 +75,11 @@ export async function createConnectedAccountSocketHome() {
             baseUrl: `http://127.0.0.1:${address.port}`,
             accountId: account.id,
             machineId: machine.id,
-            token, keys, installationId, close,
+            token, keys, installationId, encryptionMode,
+            machineEncryptionKey,
+            encryption: contentKeys ? { type: 'dataKey', machineKey: new Uint8Array(contentKeys.secretKey),
+                publicKey: new Uint8Array(contentKeys.publicKey) } : null,
+            close,
         };
     } catch (error) {
         await close();

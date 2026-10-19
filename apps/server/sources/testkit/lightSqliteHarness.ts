@@ -3,7 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { vi } from 'vitest';
 import { renderPrismaCompatibleSqliteDatabaseUrl } from "@happier-dev/cli-common/firstPartyRuntime/server";
 
 import { applyLightDefaultEnv, ensureHandyMasterSecret } from "@/flavors/light/env";
@@ -19,6 +18,7 @@ export async function createAccountTokenForTests(accountId: string, options: Rea
 }>): Promise<string> {
     const authSource = '@/app/auth/auth';
     // The loaded server module is the real token issuer at this testkit boundary.
+    const { vi } = await import('vitest');
     const { auth } = await vi.importActual<{ auth: {
         createToken(accountId: string, extras: undefined, provenance: typeof options): Promise<string>;
     } }>(authSource);

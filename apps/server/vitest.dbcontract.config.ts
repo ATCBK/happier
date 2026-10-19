@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 
 import { resolveVitestFeatureTestExcludeGlobs } from "../../scripts/testing/featureTestGating";
 import { serverWorkspacePackageSourcesPlugin } from './vitestWorkspacePackageResolution';
+import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -14,13 +15,15 @@ export default defineConfig({
         ...resolveVitestWorkers(),
         globals: true,
         environment: "node",
-        setupFiles: ["./sources/configureZodLocale.ts"],
+        setupFiles: [resolve(__dirname, '../../scripts/testing/vitestHomeSetup.mjs'), "./sources/configureZodLocale.ts"],
+        sequence: { setupFiles: 'list' },
         include: ["**/*.dbcontract.spec.ts"],
         exclude: [...resolveVitestFeatureTestExcludeGlobs()],
         isolate: true,
         testTimeout: 60_000,
         hookTimeout: 60_000,
         env: {
+            ...createTestHomeEnvironment().env,
             HAPPIER_FEATURE_POLICY_ENV: "",
         },
     },
