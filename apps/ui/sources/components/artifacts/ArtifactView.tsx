@@ -36,6 +36,7 @@ import { ArtifactBinaryBody } from './ArtifactBinaryBody';
 import { ArtifactHtmlBody } from './ArtifactHtmlBody';
 import { ArtifactWidgetBody } from './ArtifactWidgetBody';
 import { ArtifactPassageSelection } from './ArtifactPassageSelection';
+import { useDocCollaboration, type DocCollaboration } from './useDocCollaboration';
 
 function bodyMarkdown(artifact: DecryptedArtifact): string | null {
     const body = artifact.body;
@@ -68,6 +69,7 @@ export function ArtifactView(props: Readonly<{
 function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>): React.ReactElement {
     const { artifact } = props;
     const body = useArtifactBody(props.artifactId, artifact);
+    const collaboration = useDocCollaboration(body.state === 'failed' || body.state === 'loading' ? null : (body.result?.artifact ?? artifact));
     const styles = stylesheet;
 
     if (artifact === null) {
@@ -103,15 +105,15 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
     ) : body.state === 'loading' ? (
         <View style={styles.bodyPlaceholder} testID="artifact:bodyLoading" />
     ) : (
-        <ArtifactBody artifact={body.result?.artifact ?? artifact} prepared={body.result} onRetry={body.retry} />
+        <ArtifactBody artifact={body.result?.artifact ?? artifact} prepared={body.result} onRetry={body.retry} collaboration={collaboration} />
     );
 
     if (props.presentation === 'pane') {
         return (
             <ItemList testID="artifact:pane">
                 <View style={styles.paneColumn}>
-                    <ArtifactFacts artifact={artifact} />
-                    <ArtifactActions artifact={artifact} presentation="pane" onDeleted={props.onDeleted} />
+                    <ArtifactFacts artifact={artifact} collaboration={collaboration} />
+                    <ArtifactActions artifact={artifact} presentation="pane" onDeleted={props.onDeleted} collaboration={collaboration} />
                     <View style={styles.paneRule} />
                     {content}
                 </View>
@@ -120,10 +122,10 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
     }
     return (
         <ItemList testID="artifact:page">
-            <ArtifactPageHeader artifact={artifact} />
+            <ArtifactPageHeader artifact={artifact} collaboration={collaboration} />
             <ItemGroup surface="none">
                 {/* The title keeps the whole column; the artifact's operations sit under its facts, as in the pane. */}
-                <ArtifactActions artifact={artifact} presentation="page" onDeleted={props.onDeleted} />
+                <ArtifactActions artifact={artifact} presentation="page" onDeleted={props.onDeleted} collaboration={collaboration} />
                 <View style={styles.paneRule} />
                 {content}
             </ItemGroup>
@@ -131,7 +133,7 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
     );
 }
 
-function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: ArtifactViewRead | null; onRetry: () => void }>) {
+function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: ArtifactViewRead | null; onRetry: () => void; collaboration: DocCollaboration | null }>) {
     if (isArtifactHtmlHeaderV1(props.artifact.rawHeader ?? props.artifact.header)) return <ArtifactHtmlBody
         artifactId={props.artifact.id} headerVersion={props.artifact.headerVersion} bodyVersion={props.artifact.bodyVersion}
         body={props.artifact.body} name={props.artifact.title || t('artifacts.untitled')} readPreview={sync.fetchArtifactHtmlPreview}
@@ -148,21 +150,26 @@ function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: A
     // Only a document's own Markdown is a passage source; a code document's fence is presentation.
     if (readArtifactCodeLanguage(props.artifact) || props.artifact.bodyVersion === undefined) return body;
     return <ArtifactPassageSelection artifactId={props.artifact.id} markdown={markdown}
-        revision={{ headerVersion: props.artifact.headerVersion, bodyVersion: props.artifact.bodyVersion }}>{body}</ArtifactPassageSelection>;
+        revision={{ headerVersion: props.artifact.headerVersion, bodyVersion: props.artifact.bodyVersion }}
+        margin={props.collaboration?.margin}>{body}</ArtifactPassageSelection>;
 }
 
-function readFacts(artifact: DecryptedArtifact): readonly PageHeaderMetaFact[] {
+function readFacts(artifact: DecryptedArtifact, collaboration: DocCollaboration | null): readonly PageHeaderMetaFact[] {
     const kind = artifactKindFact(classifyArtifactBrowserKind(artifact) ?? 'document', readArtifactCodeLanguage(artifact));
+    // A Doc names the edit that made this version (lab K1-R) instead of a bare edit age.
+    const accepted = collaboration?.accepted ?? null;
     return [
         { key: 'kind', text: kind.label, icon: kind.icon },
-        { key: 'edited', text: t('artifacts.browser.facts.edited', { age: formatRelativeTimeShort(artifact.updatedAt, Date.now()) }) },
+        accepted
+            ? { key: 'accepted', text: t('artifacts.browser.facts.acceptedEdit', { who: accepted.label, age: formatRelativeTimeShort(accepted.atMs, Date.now()) }) }
+            : { key: 'edited', text: t('artifacts.browser.facts.edited', { age: formatRelativeTimeShort(artifact.updatedAt, Date.now()) }) },
     ];
 }
 
 /** The pane's identity line: where it came from, then its kind and age (the pane band holds the title). */
-function ArtifactFacts(props: Readonly<{ artifact: DecryptedArtifact }>) {
+function ArtifactFacts(props: Readonly<{ artifact: DecryptedArtifact; collaboration: DocCollaboration | null }>) {
     const styles = stylesheet;
-    const facts = readFacts(props.artifact);
+    const facts = readFacts(props.artifact, props.collaboration);
     return (
         <View style={styles.facts}>
             <ArtifactProvenanceLabel
@@ -176,13 +183,13 @@ function ArtifactFacts(props: Readonly<{ artifact: DecryptedArtifact }>) {
     );
 }
 
-function ArtifactPageHeader(props: Readonly<{ artifact: DecryptedArtifact }>) {
+function ArtifactPageHeader(props: Readonly<{ artifact: DecryptedArtifact; collaboration: DocCollaboration | null }>) {
     return (
         <PageHeader
             testID="artifact:header"
             title={props.artifact.title || t('artifacts.untitled')}
             alwaysShowTitle
-            meta={readFacts(props.artifact)}
+            meta={readFacts(props.artifact, props.collaboration)}
             details={(
                 <View style={stylesheet.headerDetails}>
                     <ArtifactProvenanceLabel
@@ -198,7 +205,7 @@ function ArtifactPageHeader(props: Readonly<{ artifact: DecryptedArtifact }>) {
 }
 
 /** Edit and History quiet, Share bordered, rare operations (Delete) behind ⋯ — in the pane and on the page. */
-function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presentation: 'pane' | 'page'; onDeleted?: () => void }>) {
+function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presentation: 'pane' | 'page'; onDeleted?: () => void; collaboration: DocCollaboration | null }>) {
     const { theme } = useUnistyles();
     const router = useRouter();
     const styles = stylesheet;
@@ -219,6 +226,22 @@ function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presenta
                     leading={<Icon name="pencil-simple" size={14} color={theme.colors.text.secondary} />}
                     textStyle={{ color: theme.colors.text.secondary }}
                     onPress={() => router.push(`/artifacts/edit/${encodeURIComponent(artifact.id)}` as never)}
+                />
+            ) : null}
+            {props.collaboration ? (
+                <RoundButton
+                    testID="artifact:comments"
+                    size="small"
+                    display="inverted"
+                    // Unknown stays unknown (an em dash with its cause), never a zero.
+                    title={props.collaboration.openCommentCount === null ? '—' : String(props.collaboration.openCommentCount)}
+                    accessibilityLabel={props.collaboration.openCommentCount === null
+                        ? t('artifacts.browser.passage.countUnavailable')
+                        : t('artifacts.browser.passage.count', { count: props.collaboration.openCommentCount })}
+                    leading={<Icon name="chat-circle" size={14} color={theme.colors.text.secondary} />}
+                    textStyle={{ color: theme.colors.text.secondary, fontVariant: ['tabular-nums'] }}
+                    disabled={props.collaboration.firstThreadId === null}
+                    onPress={props.collaboration.openFirstThread}
                 />
             ) : null}
             <RoundButton

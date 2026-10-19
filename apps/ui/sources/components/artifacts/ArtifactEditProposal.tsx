@@ -451,11 +451,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     gap: theme.space.s6,
   },
   buttons: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
+  // One line: the receipt text takes what is left and wraps inside itself, so its action stays at
+  // the end of the line even in a narrow Doc margin (lab K1-R).
   line: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
     gap: theme.space.s6,
   },
-  lineText: { flex: 1, minWidth: 160 },
+  lineText: { flex: 1, minWidth: 0 },
 }));

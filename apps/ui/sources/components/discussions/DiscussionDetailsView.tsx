@@ -219,7 +219,7 @@ function discussionMentionText(part: Extract<DiscussionMessagePartV1, { t: 'ment
  * The message as the reader sees it: text as written, and each mention tinted and named. A message
  * without mentions stays one plain string.
  */
-function renderDiscussionMessageContent(
+export function renderDiscussionMessageContent(
     message: DiscussionDisplayMessage,
     resolveAccountLabel: (accountId: string) => string | null,
     resolveSessionLabel: (sessionId: string) => string | null,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { mapRenderedSelectionToMarkdownSource } from './markdownSelectionSource';
+import { mapMarkdownSourceToRenderedRange, mapRenderedSelectionToMarkdownSource } from './markdownSelectionSource';
 
 const markdown = [
   '# Runbook',
@@ -93,5 +93,26 @@ describe('mapRenderedSelectionToMarkdownSource', () => {
         end: 9,
       }),
     ).toBeNull();
+  });
+});
+
+describe('mapMarkdownSourceToRenderedRange', () => {
+  it('places a stored source passage on the rendered occurrence it came from, never a repeated phrase', () => {
+    const start = markdown.lastIndexOf('A replay shows');
+    const end = markdown.lastIndexOf('row.') + 4;
+    expect(mapMarkdownSourceToRenderedRange({ markdown, rendered, start, end })).toEqual(select('A replay shows one row.', 1));
+    const first = markdown.indexOf('A replay shows');
+    expect(mapMarkdownSourceToRenderedRange({ markdown, rendered, start: first, end: first + 'A replay shows one row.'.length }))
+      .toEqual(select('A replay shows one row.', 0));
+  });
+
+  it('round-trips a selection, including inline markup it crosses', () => {
+    const range = mapRenderedSelectionToMarkdownSource({ markdown, rendered, ...select('Retrying… Pending') })!;
+    expect(mapMarkdownSourceToRenderedRange({ markdown, rendered, ...range })).toEqual(select('Retrying… Pending'));
+  });
+
+  it('reports nothing when the rendered text does not carry the passage', () => {
+    expect(mapMarkdownSourceToRenderedRange({ markdown, rendered: 'Something else entirely', start: 10, end: 20 })).toBeNull();
+    expect(mapMarkdownSourceToRenderedRange({ markdown, rendered, start: 3, end: 3 })).toBeNull();
   });
 });

@@ -134,9 +134,20 @@ export type ArtifactsBrowserTranslations = Readonly<{
     }>;
     facts: Readonly<{
         edited: (params: Readonly<{ age: string }>) => string;
+        acceptedEdit: (params: Readonly<{ who: string; age: string }>) => string;
     }>;
     passage: Readonly<{
         comment: string;
+        you: string;
+        changed: string;
+        openConversation: string;
+        replied: (params: Readonly<{ name: string; time: string }>) => string;
+        changedReason: (params: Readonly<{ n: number }>) => string;
+        openRevision: (params: Readonly<{ n: number }>) => string;
+        count: (params: Readonly<{ count: number }>) => string;
+        countUnavailable: string;
+        youAccepted: (params: Readonly<{ name: string }>) => string;
+        accepted: (params: Readonly<{ name: string }>) => string;
     }>;
     proposal: Readonly<{
         title: string;
@@ -301,9 +312,20 @@ export const artifactsBrowserTranslationsEnglish = { en: {
         },
         facts: {
             edited: ({ age }) => `Edited ${age}`,
+            acceptedEdit: ({ who, age }) => `${who} · ${age}`,
         },
         passage: {
             comment: 'Comment',
+            you: 'You',
+            changed: 'Changed',
+            openConversation: 'Open conversation',
+            replied: ({ name, time }) => `${name} replied · ${time}`,
+            changedReason: ({ n }) => `This passage changed after the comment. The quote is from version ${n}.`,
+            openRevision: ({ n }) => `Open version ${n}`,
+            count: ({ count }) => `${count} ${count === 1 ? 'conversation' : 'conversations'}`,
+            countUnavailable: 'Comment count unavailable',
+            youAccepted: ({ name }) => `You accepted ${name}’s edit`,
+            accepted: ({ name }) => `${name}’s edit was accepted`,
         },
         proposal: {
             title: 'Suggested edit',
