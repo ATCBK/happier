@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { db, initDbMysql, initDbPostgres } from "@/storage/db";
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 import { inTx } from "@/storage/inTx";
 import { markAccountChanged, markAccountsChanged } from "./markAccountChanged";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
@@ -147,6 +148,36 @@ describe("AccountChange coalescing database contract", () => {
         })));
     });
 
+    it.skipIf(provider !== "postgres")("fences the Follow destination audience before locking source publication", async () => {
+        const stem = `follow-publication-${randomUUID()}`;
+        const destinationOwner = await db.account.create({ data: { id: `${stem}-a`, publicKey: `${publicKeyPrefix}${randomUUID()}` } });
+        const sourceOwner = await db.account.create({ data: { id: `${stem}-z`, publicKey: `${publicKeyPrefix}${randomUUID()}` } });
+        const source = await db.session.create({ data: { accountId: sourceOwner.id, tag: `${stem}-source`, metadata: '{}' } });
+        const destination = await db.session.create({ data: { accountId: destinationOwner.id, tag: `${stem}-destination`, metadata: '{}' } });
+        await db.sessionFollowEdge.create({ data: { sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: source.id }), sourceSessionId: source.id, destinationSessionId: destination.id, policyJson: '{"preset":"quiet"}' } });
+        let release!: () => void;
+        const mayCommit = new Promise<void>(resolve => { release = resolve; });
+        let ready!: () => void;
+        const locked = new Promise<void>(resolve => { ready = resolve; });
+        const first = inTx(async tx => {
+            await acquireSessionAccountCursorLocksInTx(tx, [source.id]);
+            ready();
+            await mayCommit;
+        }, { isolationLevel: 'ReadCommitted' });
+        const firstOutcome = Promise.allSettled([first]);
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
+        try {
+            await Promise.race([locked, firstOutcome.then(() => { throw new Error('Publication ended before lock acquisition'); })]);
+            await expect(inTx(tx => tx.$queryRawUnsafe(
+                'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', destinationOwner.id,
+            ), { isolationLevel: 'ReadCommitted' })).rejects.toThrow();
+        } finally {
+            release();
+            vi.unstubAllEnvs();
+            for (const outcome of await firstOutcome) if (outcome.status === 'rejected') throw outcome.reason;
+        }
+    });
+
     it.skipIf(provider !== "postgres").each(["unpublished", "inactive"] as const)("fences a granted %s reader before publication can expand the audience", async state => {
         const stem = `audience-prospective-${randomUUID()}`;
         const owner = await db.account.create({ data: {
@@ -167,6 +198,9 @@ describe("AccountChange coalescing database contract", () => {
         const locksAcquired = new Promise<void>(resolve => { locked = resolve; });
         let release!: () => void;
         const mayCommit = new Promise<void>(resolve => { release = resolve; });
+        // This probe deliberately observes NOWAIT refusal while the holder is
+        // live; do not spend the production retry/backoff before releasing it.
+        vi.stubEnv("HAPPIER_DB_TX_MAX_RETRIES", "0");
         const holder = inTx(async tx => {
             await acquireSessionAccountCursorLocksInTx(tx, [session.id]);
             locked();
@@ -179,9 +213,11 @@ describe("AccountChange coalescing database contract", () => {
             })]);
             await expect(inTx(tx => tx.$queryRawUnsafe(
                 'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', reader.id,
-            ), { isolationLevel: "ReadCommitted" })).rejects.toMatchObject({ code: "P2010", meta: { code: "55P03" } });
+            ), { isolationLevel: "ReadCommitted" })).rejects.toMatchObject({ code: "database_transaction_conflict_exhausted",
+                cause: { code: "P2010", meta: { code: "55P03" } } });
         } finally {
             release();
+            vi.unstubAllEnvs();
             for (const outcome of await holderOutcome) if (outcome.status === "rejected") throw outcome.reason;
         }
     });

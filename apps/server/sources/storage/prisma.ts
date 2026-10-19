@@ -11,6 +11,7 @@ import { resolveLightSqliteBusyTimeoutMsFromEnv } from "@/flavors/light/sqliteCo
 import { log, warn } from "@/utils/logging/log";
 import { AsyncLock } from "@/utils/runtime/lock";
 import { isPrismaErrorCode, readSharedQaSchemaMismatchDiagnostic } from './prismaErrors';
+import { annotateWebLatencyQuery, timeWebLatencyPhase } from '@/utils/webLatencyTrace';
 export { isPrismaErrorCode } from './prismaErrors';
 export type TransactionClient = PrismaNamespace.TransactionClient;
 export type PrismaClientType = PrismaClientInstance;
@@ -121,12 +122,16 @@ export function resolvePreferredGeneratedClientEntrypoint(
 }
 
 function withSharedQaSchemaDiagnostics(client: PrismaClientType): PrismaClientType {
-    if (!process.env.HAPPIER_STACK_SHARED_DB_SOURCE_STACK?.trim()) return client;
+    if (!process.env.HAPPIER_STACK_SHARED_DB_SOURCE_STACK?.trim() && process.env.HAPPIER_WEB_LATENCY_TRACE !== '1') return client;
     const extended = client.$extends({
         query: {
-            async $allOperations({ args, query }) {
+            async $allOperations({ args, query, model, operation }) {
                 try {
-                    return await query(args);
+                    return await timeWebLatencyPhase(`db.${model ?? 'raw'}.${operation}`, () => query(
+                        (operation === '$queryRawUnsafe' || operation === '$executeRawUnsafe')
+                            && Array.isArray(args) && typeof args[0] === 'string'
+                            ? [annotateWebLatencyQuery(args[0]), ...args.slice(1)] : args,
+                    ));
                 } catch (error) {
                     const diagnostic = readSharedQaSchemaMismatchDiagnostic(error);
                     // Preserve Prisma's code, metadata and identity for existing error owners.

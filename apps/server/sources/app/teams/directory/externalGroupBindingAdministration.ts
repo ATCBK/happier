@@ -308,7 +308,6 @@ export async function setExternalGroupBindingForActor(
                 // Exact contribution state decides whether this mapping creates
                 // or ends an effective Group relationship. A same-target replay
                 // must not pre-upgrade the shared capture.
-                origin: "retained_lifecycle",
             }, async (sessionAccessImpacts) => {
                 if (!binding) {
                     if (existing) {

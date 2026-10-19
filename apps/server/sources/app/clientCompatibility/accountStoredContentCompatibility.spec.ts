@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { projectSessionTurnWaitingCompatibility } from './sessionTurnWaitingCompatibility';
 
 import {
     buildAccountStoredContentUpgradeRequired,
@@ -8,6 +9,19 @@ import {
 } from './accountStoredContentCompatibility';
 
 describe('account-stored-content compatibility', () => {
+    it('withholds only unknown waiting history while retaining an active external snapshot cursor barrier', () => {
+        const completed = { turnId: 'known-turn', status: 'completed', startedAt: 10, updatedAt: 20 };
+        const waiting = { turnId: 'question-turn', status: 'waiting', startedAt: 30, updatedAt: 40 };
+        const snapshot = { externalShareableSnapshot: { turns: [completed, waiting], turnSettlementBlockedFromSeq: 4 } };
+        for (const version of [2, 3]) {
+            const compatibility = evaluateAccountStoredContentCompatibility({ status: 'valid', declaration: { v: 1, protocolVersion: version } });
+            expect(projectSessionTurnWaitingCompatibility(snapshot, compatibility)).toEqual({
+                externalShareableSnapshot: { turns: [completed], turnSettlementBlockedFromSeq: 4 },
+            });
+        }
+        const current = evaluateAccountStoredContentCompatibility({ status: 'valid', declaration: { v: 1, protocolVersion: 4 } });
+        expect(projectSessionTurnWaitingCompatibility(snapshot, current)).toBe(snapshot);
+    });
     it('treats missing and malformed declarations as legacy callers without rejecting their connection', () => {
         expect(evaluateAccountStoredContentCompatibility({ status: 'missing' })).toMatchObject({
             supportsCurrentProtocol: false,

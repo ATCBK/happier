@@ -90,14 +90,18 @@ describe("scoped API-token route admission", () => {
         expect(isRestrictedAuthTokenDeniedForRoute({ ...request, params: {
             destinationSessionId: runner.sessionId, sourceSessionId: runner.sessionId,
         } })).toBe(false);
-        const nullableRequest = { ...request, body: { leadSessionId: null }, routeOptions: { config: {
-            restrictedCredentialBinding: { scope: 'session', session: 'params.destinationSessionId',
-                additionalSessions: [{ field: 'body.leadSessionId', nullable: true }] },
-        } } } as const;
-        expect(isRestrictedAuthTokenDeniedForRoute(nullableRequest)).toBe(false);
-        expect(isRestrictedAuthTokenDeniedForRoute({ ...nullableRequest, body: { leadSessionId: runner.sessionId } })).toBe(false);
-        expect(isRestrictedAuthTokenDeniedForRoute({ ...nullableRequest, body: { leadSessionId: 'session-2' } })).toBe(true);
-        expect(isRestrictedAuthTokenDeniedForRoute({ ...nullableRequest, body: {} })).toBe(true);
+        for (const [operand, field] of [
+            ['managerSessionId', 'body.managerSessionId'], ['expectedManagerSessionId', 'body.expectedManagerSessionId'],
+        ] as const) {
+            const nullableRequest = { ...request, body: { [operand]: null }, routeOptions: { config: {
+                restrictedCredentialBinding: { scope: 'session', session: 'params.destinationSessionId',
+                    additionalSessions: [{ field, nullable: true }] },
+            } } } as const;
+            expect(isRestrictedAuthTokenDeniedForRoute(nullableRequest)).toBe(false);
+            expect(isRestrictedAuthTokenDeniedForRoute({ ...nullableRequest, body: { [operand]: runner.sessionId } })).toBe(false);
+            expect(isRestrictedAuthTokenDeniedForRoute({ ...nullableRequest, body: { [operand]: 'session-2' } })).toBe(true);
+            expect(isRestrictedAuthTokenDeniedForRoute({ ...nullableRequest, body: {} })).toBe(true);
+        }
         expect(isRestrictedAuthTokenDeniedForRoute({ ...request, params: { destinationSessionId: runner.sessionId } })).toBe(true);
         expect(isRestrictedAuthTokenDeniedForRoute({ ...request, params: {
             destinationSessionId: runner.sessionId, sourceSessionId: runner.sessionId,

@@ -110,7 +110,7 @@ export async function acquireAccountChangePublicationLocksInTx(
  * Team and Home-governance mutations resolve their audiences transactionally.
  * Publishing those audiences one Account at a time makes the transaction grow
  * by two database round trips per viewer. This set-oriented owner performs
- * one PostgreSQL statement, or a fixed number of provider-portable Prisma
+ * one PostgreSQL statement, or a fixed number of portable database
  * operations: increment every recipient cursor, read the resulting cursors,
  * then replace the one coalesced projection row for each Account. The Account
  * update is still the writer fence and all rows plus their content-free wakes
@@ -154,8 +154,29 @@ export async function markAccountsChanged(
         return cursors;
     }
 
+    return markAccountProjectionChanges(tx, kind, new Map([[entityId, accountIds]]));
+}
+
+/** Hint-free Session fanout allocates one distinct cursor per Account/entity pair. */
+export async function markSessionAccountsChanged(
+    tx: Tx,
+    recipientsBySession: ReadonlyMap<string, readonly string[]>,
+): Promise<AccountChangeCursor[]> {
+    return markAccountProjectionChanges(tx, "session", recipientsBySession);
+}
+
+async function markAccountProjectionChanges(
+    tx: Tx,
+    kind: "account" | "savedSecretResource" | "session",
+    recipientsByEntity: ReadonlyMap<string, readonly string[]>,
+): Promise<AccountChangeCursor[]> {
+    const requests = [...recipientsByEntity.keys()].sort().flatMap(entityId =>
+        [...new Set(recipientsByEntity.get(entityId))].sort().map(accountId => ({ accountId, entityId })));
+    if (requests.length === 0) return [];
+    const counts = new Map<string, number>();
+    for (const request of requests) counts.set(request.accountId, (counts.get(request.accountId) ?? 0) + 1);
+    const accountIds = [...counts.keys()].sort();
     const changedAt = new Date();
-    const sessionId = kind === "session" ? entityId : null;
     const provider = getDbProviderFromEnv(process.env, "postgres");
     if (provider === "postgres") {
         // A locking SELECT cannot inline; its ordered rows fence the UPDATE
@@ -163,20 +184,28 @@ export async function markAccountsChanged(
         // Existing Account batches advanced updatedAt through Prisma; Session
         // invalidation retains the PostgreSQL point writer's seq-only mutation.
         const rows = await tx.$queryRawUnsafe<Array<{ accountId: string; cursor: number | bigint }>>(
-            `WITH locked AS (
+            `WITH requested AS (
+                SELECT * FROM jsonb_to_recordset($1::jsonb) AS r("accountId" text, "entityId" text)
+            ), totals AS (
+                SELECT "accountId", count(*)::int AS total FROM requested GROUP BY "accountId"
+            ), locked AS (
                 SELECT "id" FROM "Account"
-                WHERE "id" IN (${accountIds.map((_, index) => `$${index + 5}`).join(", ")})
+                WHERE "id" IN (SELECT "accountId" FROM totals)
                 ORDER BY "id" FOR NO KEY UPDATE
             ), next AS (
-                UPDATE "Account" SET "seq" = "seq" + 1,
-                    "updatedAt" = CASE WHEN $1 = 'session' THEN "updatedAt" ELSE $3 END
-                FROM locked WHERE "Account"."id" = locked."id"
+                UPDATE "Account" SET "seq" = "seq" + totals.total,
+                    "updatedAt" = CASE WHEN $2 = 'session' THEN "updatedAt" ELSE $3 END
+                FROM locked, totals WHERE "Account"."id" = locked."id" AND locked."id" = totals."accountId"
                 RETURNING "Account"."id", "Account"."seq"
             )
             INSERT INTO "AccountChange" (
                 "accountId", "kind", "entityId", "cursor", "changedAt", "sessionId"
             )
-            SELECT next."id", $1, $2, next."seq", $3, $4 FROM next
+            SELECT next."id", $2, requested."entityId",
+                next."seq" - totals.total + row_number() OVER (PARTITION BY next."id" ORDER BY requested."entityId"),
+                $3, CASE WHEN $2 = 'session' THEN requested."entityId" ELSE NULL END
+            FROM requested JOIN next ON next."id" = requested."accountId"
+                JOIN totals ON totals."accountId" = next."id"
             ON CONFLICT ("accountId", "kind", "entityId") DO UPDATE SET
                 "cursor" = EXCLUDED."cursor",
                 "changedAt" = EXCLUDED."changedAt",
@@ -186,29 +215,31 @@ export async function markAccountsChanged(
                 "artifactId" = NULL,
                 "accountPetPackageId" = NULL
             RETURNING "accountId", "cursor"`,
-            kind, entityId, changedAt, sessionId, ...accountIds,
+            JSON.stringify(requests), kind, changedAt,
         );
-        if (rows.length !== accountIds.length) {
+        if (rows.length !== requests.length) {
             throw new Error("markAccountsChanged: every Account recipient must exist");
         }
-        const cursorByAccountId = new Map(rows.map(row => [row.accountId, Number(row.cursor)]));
-        const cursors = accountIds.map(accountId => {
-            const cursor = cursorByAccountId.get(accountId);
-            if (cursor === undefined || !Number.isFinite(cursor)) {
+        const cursors = rows.map(row => {
+            const cursor = Number(row.cursor);
+            if (!Number.isFinite(cursor)) {
                 throw new Error("markAccountsChanged: failed to read every Account cursor");
             }
-            return { accountId, cursor };
-        });
+            return { accountId: row.accountId, cursor };
+        }).sort((left, right) => left.accountId < right.accountId ? -1
+            : left.accountId > right.accountId ? 1 : left.cursor - right.cursor);
         for (const row of cursors) scheduleAccountChangeWake(tx, row.accountId, row.cursor);
         return cursors;
     }
 
     await acquireAccountChangePublicationLocksInTx(tx, accountIds);
-    const updated = await tx.account.updateMany({
-        where: { id: { in: accountIds } },
-        data: { seq: { increment: 1 } },
-    });
-    if (updated.count !== accountIds.length) {
+    const updated = await tx.$executeRawUnsafe(
+        `UPDATE \`Account\` SET \`seq\` = \`seq\` + CASE \`id\`
+            ${accountIds.map(() => "WHEN ? THEN ?").join(" ")} END, \`updatedAt\` = ?
+            WHERE \`id\` IN (${accountIds.map(() => "?").join(", ")})`,
+        ...accountIds.flatMap(accountId => [accountId, counts.get(accountId)!]), changedAt, ...accountIds,
+    );
+    if (updated !== accountIds.length) {
         throw new Error("markAccountsChanged: every Account recipient must exist");
     }
 
@@ -223,32 +254,33 @@ export async function markAccountsChanged(
 
     // The point writer's Prisma upsert omits an undefined hint on update.
     // Preserve those retained Session hints after taking the same Account fence.
+    const identities = requests.map(({ accountId, entityId }) => ({ accountId, kind, entityId }));
     const retainedSessionHints = kind === "session"
         ? await tx.accountChange.findMany({
-            where: { accountId: { in: accountIds }, kind, entityId },
-            select: { accountId: true, hint: true },
+            where: { OR: identities },
+            select: { accountId: true, entityId: true, hint: true },
         })
         : [];
-    const hintByAccountId = new Map(retainedSessionHints.map(row => [row.accountId, row.hint]));
+    const hintByIdentity = new Map(retainedSessionHints.map(row => [JSON.stringify([row.accountId, row.entityId]), row.hint]));
     await tx.accountChange.deleteMany({
-        where: {
-            accountId: { in: accountIds },
-            kind,
-            entityId,
-        },
+        where: { OR: identities },
+    });
+    const nextCursorByAccountId = new Map(cursorRows.map(row => [row.id, row.seq - counts.get(row.id)!]));
+    const changes = requests.map(({ accountId, entityId }) => {
+        const cursor = nextCursorByAccountId.get(accountId)! + 1;
+        nextCursorByAccountId.set(accountId, cursor);
+        return { accountId, kind, entityId, cursor, changedAt,
+            ...(kind === "session" ? { sessionId: entityId,
+                hint: hintByIdentity.get(JSON.stringify([accountId, entityId])) ?? undefined } : {}),
+        };
     });
     await tx.accountChange.createMany({
-        data: cursorRows.map((row) => ({
-            accountId: row.id,
-            kind,
-            entityId,
-            cursor: row.seq,
-            changedAt,
-            ...(kind === "session" ? { sessionId, hint: hintByAccountId.get(row.id) ?? undefined } : {}),
-        })),
+        data: changes,
     });
 
-    const cursors = cursorRows.map((row) => ({ accountId: row.id, cursor: row.seq }));
+    const cursors = changes.map(({ accountId, cursor }) => ({ accountId, cursor }))
+        .sort((left, right) => left.accountId < right.accountId ? -1
+            : left.accountId > right.accountId ? 1 : left.cursor - right.cursor);
     for (const row of cursors) scheduleAccountChangeWake(tx, row.accountId, row.cursor);
     return cursors;
 }

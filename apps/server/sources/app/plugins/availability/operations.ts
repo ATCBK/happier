@@ -14,7 +14,7 @@ import { decodePackageAssetArchiveBodyV1, openPackageAssetArchiveV1 } from '@hap
 import * as privacyKit from "privacy-kit";
 import semver from "semver";
 
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
 import { resolvePluginUiArtifactHostingCapability } from "@/app/features/pluginsFeature";
@@ -1307,7 +1307,8 @@ function isClaimableMachineRowV1(
  * Classifies every current materialization for one authenticated machine
  * installation with a fixed number of database queries. Consumers that select
  * work across materializations use this projection instead of re-running the
- * exact currentness reader once per candidate.
+ * exact currentness reader once per candidate. A consumer of one plugin scopes
+ * the database read before loading or parsing other plugins' declarations.
  */
 export async function resolveCurrentClaimablePluginMachineMaterializationsTx(params: Readonly<{
     tx: Tx;
@@ -1315,6 +1316,7 @@ export async function resolveCurrentClaimablePluginMachineMaterializationsTx(par
     serverIdentityId: string;
     machineId: string;
     machineInstallationId: string;
+    pluginId?: string;
     requiredMachineOperationCapability?: MachineOperationProtocolCapabilityNameV1;
 }>): Promise<readonly PluginMachineMaterializationV1[]> {
     const machine = await params.tx.machine.findFirst({
@@ -1338,6 +1340,7 @@ export async function resolveCurrentClaimablePluginMachineMaterializationsTx(par
             accountId: params.accountId,
             serverIdentityId: params.serverIdentityId,
             machineId: params.machineId,
+            ...(params.pluginId === undefined ? {} : { pluginId: params.pluginId }),
             enabled: true,
             trustState: "trusted",
         },
@@ -2289,6 +2292,12 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                     }
                     throw error;
                 }
+                // Immutable contracts are global, not Account state. Prepare
+                // them before occupying this Account's publication fence, in
+                // the same Contract→Account order as release publication.
+                // Keep intent, quota and promotion admission inside the fence;
+                // failed admission still rolls materialization back atomically.
+                await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
                 const current = await tx.accountPluginIntent.findUnique({
                     where: {
                         accountId_pluginId: {
@@ -2392,7 +2401,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                         releaseLessDeclaration,
                     },
                 });
-            }, { /* Hosting intent admission reads Collection activation quota and readiness before promotion fencing. */ isolationLevel: "Serializable" });
+            }, { isolationLevel: "ReadCommitted", transactionClass: "plugin-availability.collection-writers-claim" });
         } catch (error) {
             throw intentTransitionError(error);
         }

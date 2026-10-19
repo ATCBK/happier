@@ -549,7 +549,7 @@ async function applyNativeDirectoryFactsInTx(
     // woken exactly once at the end instead of once per materialized row.
     const changedAccountIds = new Set<string>();
     let teamChanged = false;
-    await withTeamSessionAccessEffectsInTx(tx, { teamId: current.teamId, accountIds, origin: "retained_lifecycle" }, async (sessionAccessImpacts) => {
+    await withTeamSessionAccessEffectsInTx(tx, { teamId: current.teamId, accountIds }, async (sessionAccessImpacts) => {
         for (const identity of identities) {
             if (!identity.boundAccountId) continue;
             const applied = await applyExternalTeamMembershipInTx(tx, {

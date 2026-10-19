@@ -131,8 +131,18 @@ export function validateSavedSecretResourceReferenceCapturesV1(
 export async function validateSavedSecretResourceReferencesInTx(tx: Tx, input: SavedSecretResourceReferenceCaptureInput & Readonly<{
     accountId: string; authentication?: TeamOperationAuthenticationContext;
 }>): Promise<boolean> {
-    const resources = input.references.length > 0
-        ? await listSavedSecretResourcesForAccountInTx(tx, input.accountId, input.authentication) : [];
+    const resourceIds = new Set<string>();
+    for (const reference of input.references) {
+        try {
+            const parsed = parseSavedSecretRefV1(reference);
+            if (parsed.kind === 'shared_resource') resourceIds.add(parsed.resourceId);
+            else if (!input.allowPersonal) return false;
+        } catch {
+            return false;
+        }
+    }
+    const resources = resourceIds.size > 0
+        ? await readSavedSecretResourcesForAccountInTx(tx, input.accountId, input.authentication, [...resourceIds]) : [];
     return validateSavedSecretResourceReferenceCapturesV1(resources, input);
 }
 
@@ -859,8 +869,21 @@ export async function listSavedSecretResourcesForAccountInTx(
     accountId: string,
     authentication?: TeamOperationAuthenticationContext,
 ): Promise<readonly SavedSecretCatalogResultV1[]> {
+    return readSavedSecretResourcesForAccountInTx(tx, accountId, authentication);
+}
+
+/** Reference validation shares catalog authorization/material policy, but reads only named resources.
+ * Filter by identity before reading grant arms: an accessible-catalog predicate
+ * can scan unrelated grants even when combined with a resource-id predicate.
+ */
+export async function readSavedSecretResourcesForAccountInTx(
+    tx: Tx,
+    accountId: string,
+    authentication?: TeamOperationAuthenticationContext,
+    resourceIds?: readonly string[],
+): Promise<readonly SavedSecretCatalogResultV1[]> {
     const [rows, account] = await Promise.all([tx.savedSecretResource.findMany({
-        where: authorizedSavedSecretRowWhere(accountId),
+        where: resourceIds ? { id: { in: [...resourceIds] } } : authorizedSavedSecretRowWhere(accountId),
         orderBy: { updatedAt: "desc" },
         select: authorizedSavedSecretRowSelect(accountId),
     }), tx.account.findUnique({
@@ -1744,7 +1767,7 @@ export async function validateSavedSecretHistoryTransferProofsInTx(tx: Tx, input
         }
     }
     if (input.transfers.length === 0) return { status: 'ready' };
-    const resources = await listSavedSecretResourcesForAccountInTx(tx, input.accountId);
+    const resources = await readSavedSecretResourcesForAccountInTx(tx, input.accountId, undefined, [...sourceIds]);
     for (const transfer of input.transfers) {
         const ref = formatSharedSavedSecretRefV1(transfer.resourceId);
         const resource = resources.find(candidate => 'ref' in candidate && candidate.ref === ref);

@@ -9,6 +9,7 @@ import { z } from "zod/mini";
 import { readPluginsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { isPrismaErrorCode } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
+import { getDbProviderFromEnv } from "@/storage/prisma";
 
 import {
     findPluginCollectionActivationQuotaIncompatibility,
@@ -352,19 +353,28 @@ async function materializeOnePluginCollectionContractTx(
     contract: NormalizedPluginAccountCollectionContractV1,
 ): Promise<void> {
     if (await assertExistingContract(tx, contract)) return;
+    const data = {
+        pluginId: contract.pluginId,
+        collectionId: contract.collectionId,
+        schemaVersion: contract.schemaVersion,
+        contractDigest: contract.contractDigest,
+        normalizedSchema: toPrismaJson(contract.schema),
+        indexes: toPrismaJson(contract.indexes),
+        relations: toPrismaJson(contract.relations),
+        privacyProjection: storedPrivacyProjection(contract),
+    };
+    if (getDbProviderFromEnv(process.env, "postgres") !== "sqlite") {
+        // Contracts are shared across Accounts, whose publication fences are
+        // independent. A duplicate insert must not abort PostgreSQL before
+        // this canonical owner can reconstruct and validate the winner.
+        const inserted = await tx.pluginCollectionContract.createMany({ data, skipDuplicates: true });
+        if (inserted.count === 0 && !await assertExistingContract(tx, contract)) {
+            throw new PluginCollectionContractMaterializationError("collection_contract_inconsistent");
+        }
+        return;
+    }
     try {
-        await tx.pluginCollectionContract.create({
-            data: {
-                pluginId: contract.pluginId,
-                collectionId: contract.collectionId,
-                schemaVersion: contract.schemaVersion,
-                contractDigest: contract.contractDigest,
-                normalizedSchema: toPrismaJson(contract.schema),
-                indexes: toPrismaJson(contract.indexes),
-                relations: toPrismaJson(contract.relations),
-                privacyProjection: storedPrivacyProjection(contract),
-            },
-        });
+        await tx.pluginCollectionContract.create({ data });
     } catch (error) {
         if (!isPrismaErrorCode(error, "P2002")) throw error;
         if (!await assertExistingContract(tx, contract)) throw error;

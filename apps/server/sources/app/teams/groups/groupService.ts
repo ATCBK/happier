@@ -562,7 +562,7 @@ async function setTeamGroupArchivedInTx(
     // Archive retains every membership row and horizon. Restoration re-enables
     // exactly the retained grants that are still valid — nothing is rebuilt.
     const archivedAt = input.operation === "archive" ? await readTransactionDatabaseTime(tx) : null;
-    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, teamGroupId: row.id, origin: "retained_lifecycle" }, async () => {
+    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, teamGroupId: row.id }, async () => {
         const updated = await tx.teamGroup.update({
             where: { id: row.id },
             data: { archivedAt },

@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { join } from "node:path";
 import axios from "axios";
 import { projectPluginAccountCollectionDeclaration } from "@happier-dev/plugin-sdk/host/registration";
 import { CORPUS_ACCOUNT_COLLECTIONS } from "../../../../../../packages/plugins/triage/src/corpus/collections/definitions.js";
@@ -2224,11 +2223,8 @@ describe("plugin Availability operations", () => {
 
     it("rejoins descriptor-bearing reports from fresh reporter lifetimes without revising installation facts", async () => {
         await seedAccountAndMachine();
-        const cliHome = join(harness.baseDir, "reporter-home");
-        process.env.HAPPIER_HOME_DIR = cliHome;
-        process.env.HAPPIER_SERVER_URL = "http://127.0.0.1:1";
-        const { configuration } = await vi.importActual<{ configuration: { happyHomeDir: string } }>("../../../../../cli/src/configuration");
-        expect(configuration.happyHomeDir).toBe(cliHome);
+        // The canonical Vitest test Home is established before CLI imports.
+        // Reporter CAS state belongs to each instance, not a later Home override.
         // Each lifetime starts without an acknowledged CAS token. Descriptors
         // remain live daemon facts and never round-trip through server storage.
         const freshReport = (enabled = true) => ({

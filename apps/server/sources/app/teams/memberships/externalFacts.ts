@@ -187,7 +187,6 @@ export async function applyExternalTeamMembershipInTx(
     return withTeamSessionAccessEffectsInTx(tx, {
         teamId: input.teamId,
         accountIds: [input.accountId],
-        origin: existing && input.desired !== "absent" ? "retained_lifecycle" : "relationship_change",
         sessionAccessImpacts: input.sessionAccessImpacts,
     }, async (sessionAccessImpacts) => {
         if (input.desired === "absent") {
@@ -572,7 +571,7 @@ export async function applyExternalManagedGroupInTx(
     if (!archiveChanged && !renamed) return { status: "unchanged", teamGroupId: group.id };
 
     return withTeamSessionAccessEffectsInTx(tx, {
-        teamId: input.teamId, teamGroupId: group.id, origin: "retained_lifecycle", sessionAccessImpacts: input.sessionAccessImpacts,
+        teamId: input.teamId, teamGroupId: group.id, sessionAccessImpacts: input.sessionAccessImpacts,
     }, async () => {
         await tx.teamGroup.update({
             where: { id: group.id },
@@ -711,7 +710,7 @@ export async function revokeExternalSourceFactsInTx(
         ...memberships.map(member => member.accountId),
         ...bindings.flatMap(binding => binding.contributions.map(contribution => contribution.membership.teamMembership.accountId)),
     ];
-    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, accountIds, origin: "relationship_change" }, async (sessionAccessImpacts) => {
+    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, accountIds }, async (sessionAccessImpacts) => {
         const affected = new Set<string>();
         let contributionsRemoved = 0;
 

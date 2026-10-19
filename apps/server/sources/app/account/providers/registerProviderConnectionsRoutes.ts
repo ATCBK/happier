@@ -6,7 +6,7 @@ import type { Fastify } from '@/app/api/types';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot, inTx, isTransactionConflictExhaustedError } from '@/storage/inTx';
 import { mutateProviderConnectionsRowInTx, readProviderConnectionsRowInTx } from './connectionRows';
 
 const internal = z.strictObject({ error: z.literal('internal') });
@@ -17,8 +17,12 @@ export function registerProviderConnectionsRoutes(app: Fastify): void {
   app.get(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
     schema: { response: { 200: asServerProtocolZod(ProviderConnectionsRowReadResponseV1Schema), 500: internal } },
   }, async (request, reply) => {
-    try { return reply.send(await inTx(tx => readProviderConnectionsRowInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })); }
-    catch { return reply.code(500).send({ error: 'internal' }); }
+    try { return reply.send(await inReadSnapshot(tx => readProviderConnectionsRowInTx(tx, { accountId: request.userId }),
+      { transactionClass: 'provider-catalog-read' })); }
+    catch (error) {
+      if (isTransactionConflictExhaustedError(error)) throw error;
+      return reply.code(500).send({ error: 'internal' });
+    }
   });
   app.post(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
     schema: { body: asServerProtocolZod(ProviderConnectionsRowMutationV1Schema),
@@ -26,7 +30,15 @@ export function registerProviderConnectionsRoutes(app: Fastify): void {
   }, async (request, reply) => {
     try { return reply.send(await inTx(tx => mutateProviderConnectionsRowInTx(tx, {
       accountId: request.userId, authentication: readTeamOperationAuthenticationFromRequest(request), ...request.body,
-    }), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" })); }
-    catch { return reply.code(500).send({ error: 'internal' }); }
+    }), {
+      // The Account fence protects mode/source currentness and catalog CAS. Only
+      // shared Secret revisions/Team-derived access add cross-Account predicates.
+      isolationLevel: request.body.referencedSavedSecretIds.length > 0 ? 'Serializable' : 'ReadCommitted',
+      transactionClass: 'provider-catalog-write',
+    })); }
+    catch (error) {
+      if (isTransactionConflictExhaustedError(error)) throw error;
+      return reply.code(500).send({ error: 'internal' });
+    }
   });
 }

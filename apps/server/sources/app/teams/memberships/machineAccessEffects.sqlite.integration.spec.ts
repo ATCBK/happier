@@ -82,7 +82,7 @@ describe("Machine effective access membership effects (SQLite integration)", () 
     it("uses the enclosing atomic mutation's final union for bulk loss and rolls all invalidation back on failure", async () => {
         const f = await fixture();
         await expect(inTx(tx => withTeamSessionAccessEffectsInTx(tx, {
-            teamId: f.team.id, accountIds: [f.member.id], origin: "relationship_change",
+            teamId: f.team.id, accountIds: [f.member.id],
         }, async () => {
             await tx.teamMembership.delete({ where: { id: f.membership.id } });
             throw new Error("rollback mutation");
@@ -90,7 +90,7 @@ describe("Machine effective access membership effects (SQLite integration)", () 
         expect(f.disconnected).not.toHaveBeenCalled();
         expect(await db.accountChange.count({ where: { accountId: f.member.id, entityId: f.machine.id } })).toBe(0);
         await inTx(tx => withTeamSessionAccessEffectsInTx(tx, {
-            teamId: f.team.id, accountIds: [f.member.id], origin: "relationship_change",
+            teamId: f.team.id, accountIds: [f.member.id],
         }, async impacts => {
             await setTeamMembershipStatusInTx(tx, { teamId: f.team.id, membershipId: f.membership.id, accountId: f.member.id, status: "suspended", sessionAccessImpacts: impacts });
             // Replacement independent authority is part of the same atomic bulk change.
@@ -111,7 +111,7 @@ describe("Machine effective access membership effects (SQLite integration)", () 
         const f = await fixture();
         const second = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
         await db.teamMembership.create({ data: { teamId: f.team.id, accountId: second.id, role: "member" } });
-        await inTx(tx => withTeamSessionAccessEffectsInTx(tx, { teamId: f.team.id, origin: "relationship_change" }, async () => {
+        await inTx(tx => withTeamSessionAccessEffectsInTx(tx, { teamId: f.team.id }, async () => {
             await tx.teamMembership.deleteMany({ where: { teamId: f.team.id } });
         }));
         expect(f.disconnected).toHaveBeenCalledWith(true);

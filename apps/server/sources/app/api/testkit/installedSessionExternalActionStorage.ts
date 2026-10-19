@@ -1,4 +1,5 @@
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { inTxPostgresControlStatementMock } from './dbMocks';
 
 /** Database I/O boundary for the real Home issuer and installed-Session MCP journey. */
 export function createInstalledSessionExternalActionStorage() {
@@ -23,6 +24,9 @@ export function createInstalledSessionExternalActionStorage() {
         return Object.entries(where).every(([field, expected]) => row[field as keyof typeof row] === expected) ? row : null;
     };
     const reader = {
+        // The real transaction owner now establishes a PostgreSQL read snapshot.
+        // Replace only that database command, leaving currentness/policy real.
+        ...inTxPostgresControlStatementMock,
         account: { findUnique: async ({ where }: { where: { id: string } }) =>
             where.id === account.id ? account : where.id === otherAccount.id ? otherAccount : null },
         machine: { findUnique: readMachine, findFirst: readMachine },

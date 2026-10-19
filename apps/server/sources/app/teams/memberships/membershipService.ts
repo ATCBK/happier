@@ -104,7 +104,7 @@ export async function admitTeamMemberInTx(
     const sessionAccessStartsAt = mintSessionAccessStartsAt(historyAccess, activationNow);
 
     return withTeamSessionAccessEffectsInTx(tx, {
-        teamId: params.teamId, accountIds: [params.accountId], origin: "relationship_change", sessionAccessImpacts: params.sessionAccessImpacts,
+        teamId: params.teamId, accountIds: [params.accountId], sessionAccessImpacts: params.sessionAccessImpacts,
     }, async () => {
         // Upsert is the provider-safe conditional create. In particular, it
         // never catches a PostgreSQL uniqueness error and then tries to keep
@@ -176,7 +176,6 @@ export async function setTeamMembershipStatusInTx(
     await withTeamSessionAccessEffectsInTx(tx, {
         teamId: params.teamId,
         accountIds: [params.accountId],
-        origin: "retained_lifecycle",
         change: { kind: "teamMembership", teamId: params.teamId },
         sessionAccessImpacts: params.sessionAccessImpacts,
     }, async () => {

@@ -3,15 +3,47 @@ import { serializerCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/mini';
 import { installDbModuleMock } from '../testkit/dbMocks';
+import { ExternalActionHttpErrorSchema } from '@happier-dev/protocol/actions/externalActionApi';
 
 const transaction = vi.fn();
 // Fail the database boundary, preserving real retry exhaustion and HTTP projection.
 installDbModuleMock({ db: { $transaction: transaction } });
 const { inTx } = await import('@/storage/inTx');
 const { enableErrorHandlers } = await import('./enableErrorHandlers');
+const { createAuthenticatedTestApp } = await import('../testkit/sqliteFastify');
+const { registerExternalActionRoutes } = await import('../routes/actions/registerExternalActionRoutes');
 
 describe('HTTP transaction conflict projection', () => {
     afterEach(() => { vi.unstubAllEnvs(); transaction.mockReset(); });
+
+    it.each([
+        { driver: 'P2034', expected: 'database_transaction_conflict_exhausted', meta: undefined },
+        { driver: 'P2024', expected: 'database_connection_unavailable', meta: undefined },
+        { driver: 'P2028', expected: 'database_connection_unavailable',
+            meta: { error: 'Unable to start a transaction in the given time.' } },
+    ])('preserves $driver as typed $expected through the external Action route error handler', async ({ driver, expected, meta }) => {
+        vi.stubEnv('HAPPIER_DB_PROVIDER', 'postgres');
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
+        transaction.mockRejectedValue(Object.assign(new Error('private SQL contents'), { code: driver, ...(meta ? { meta } : {}) }));
+        const app = createAuthenticatedTestApp();
+        // Exercise the real transaction owner at Fastify's database-failure boundary;
+        // no internal dispatcher is substituted and no native dispatch can run.
+        app.addHook('preHandler', async () => { await inTx(async () => undefined); });
+        registerExternalActionRoutes(app);
+        try {
+            const response = await app.inject({ method: 'POST', url: '/v1/actions/session.spawn_new',
+                headers: { authorization: 'Bearer pat-secret', 'x-test-user-id': 'account-1',
+                    'x-test-auth-token-kind': 'api_token', 'x-test-api-token-account-id': 'account-1',
+                    'x-test-api-token-principal-id': 'principal-1', 'x-test-api-token-credential-id': 'credential-1' },
+                payload: { v: 1, requestId: 'confirmed-rollback', input: {} },
+            });
+            expect(response.statusCode).toBe(503);
+            expect(response.json()).toEqual({ error: 'invalid_request', code: expected,
+                requestId: 'confirmed-rollback' });
+            expect(ExternalActionHttpErrorSchema.safeParse(response.json()).success).toBe(true);
+            expect(response.body).not.toContain('private');
+        } finally { await app.close(); }
+    });
 
     it('projects exhausted rollback once as typed 503 despite a narrow route response schema', async () => {
         vi.stubEnv('HAPPIER_DB_PROVIDER', 'postgres');

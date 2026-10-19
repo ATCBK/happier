@@ -91,7 +91,8 @@ async function applyConfiguredAgentCatalogMutationInTx(tx: Tx, input: MutationIn
                     if (!isFreshAcpCatalogSourceV1(raw)) return { status: 'source-transfer-required' };
                 } else {
                     const prepared = prepareAcpCatalogTransferV2({ rawSettings: raw, sourceSettingsVersion: fence.account.settingsVersion,
-                        savedSecretRefs, kiroStderrRules: KIRO_ACP_STDERR_RULES });
+                        savedSecretRefs, agentDeclarations: [{ identity: { pluginId: 'happier.agent.kiro', localId: 'kiro' },
+                            acpStderrRules: KIRO_ACP_STDERR_RULES }] });
                     if (prepared.status !== 'ready' || mutation.content.t !== 'plain'
                         || !isDeepStrictEqual(prepared.record, mutation.content.v)) return { status: 'source-transfer-required' };
                 }
@@ -153,6 +154,11 @@ export async function mutateConfiguredAgentCatalogRowInTx(tx: Tx, input: Mutatio
 }
 
 export async function mutateConfiguredAgentCatalogRow(input: MutationInput): Promise<MutationResult> {
-    try { return await inTx(tx => mutateConfiguredAgentCatalogRowInTx(tx, input), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" }); }
+    // The Account fence serializes mode, source Settings and catalog CAS. Only
+    // referenced grants can change under another Account and still require SSI.
+    try { return await inTx(tx => mutateConfiguredAgentCatalogRowInTx(tx, input), {
+        ...((input.referencedSavedSecretIds?.length ?? 0) > 0 ? { isolationLevel: "Serializable" as const } : {}),
+        transactionClass: "acp-catalog-mutate",
+    }); }
     catch (error) { if (error instanceof ConfiguredAgentCatalogTransactionAbort) return error.result; throw error; }
 }

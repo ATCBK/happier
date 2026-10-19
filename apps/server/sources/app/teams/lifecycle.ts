@@ -343,7 +343,7 @@ export async function archiveTeamInTx(tx: Tx, input: ArchiveTeamInput): Promise<
     }
 
     const now = await readTransactionDatabaseTime(tx);
-    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, origin: "retained_lifecycle" }, async () => {
+    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId }, async () => {
         const archived = await tx.team.update({
             where: { id: input.teamId },
             data: { archivedAt: now },
@@ -400,9 +400,8 @@ export async function restoreTeamInTx(tx: Tx, input: RestoreTeamInput): Promise<
         if (!qualification.ok) return denied(qualification.error);
     }
 
-    // Restoration re-enables exactly the retained memberships, Groups and grants
-    // it paused, so it is not a qualifying transition for prospective auto-follow.
-    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, origin: "retained_lifecycle" }, async () => {
+    // Restoration re-enables exactly the retained memberships, Groups and grants.
+    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId }, async () => {
         const restored = await tx.team.update({
             where: { id: input.teamId },
             data: { archivedAt: null },

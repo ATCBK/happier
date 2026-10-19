@@ -609,7 +609,7 @@ export async function setTeamMemberRoleForActorInTx(
 
     if (target.role !== input.role) {
         await withTeamSessionAccessEffectsInTx(tx, {
-            teamId: input.teamId, accountIds: [target.accountId], origin: "relationship_change",
+            teamId: input.teamId, accountIds: [target.accountId],
             change: { kind: "teamRole", teamId: input.teamId },
         }, async () => {
             await tx.teamMembership.update({ where: { id: target.id }, data: { role: input.role } });
@@ -740,7 +740,7 @@ export async function removeTeamMemberForActorInTx(
     if (!selfRemoval && await wouldStrandTeamInTx(tx, { target })) return denied("team_owner_transfer_required");
 
     await withTeamSessionAccessEffectsInTx(tx, {
-        teamId: input.teamId, accountIds: [target.accountId], origin: "relationship_change",
+        teamId: input.teamId, accountIds: [target.accountId],
         change: { kind: "teamMembership", teamId: input.teamId },
     }, async () => {
         await revokeTeamCredentialExternalApiKeysForMembershipInTx(tx, {
@@ -851,7 +851,6 @@ export async function setTeamMemberManagementForActorInTx(
         await withTeamSessionAccessEffectsInTx(tx, {
             teamId: input.teamId,
             accountIds: [target.accountId],
-            origin: "retained_lifecycle",
         }, async (sessionAccessImpacts) => {
             if (current) {
                 await tx.teamProvisionedIdentity.update({

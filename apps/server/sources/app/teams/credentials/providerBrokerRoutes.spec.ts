@@ -11,6 +11,7 @@ import {
 import { encodeSessionTeamCredentialSlotKeyV1 } from '@happier-dev/protocol/teams';
 import { createAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
+import { createEnvPatcher } from '@/testkit/env';
 import { db } from '@/storage/db';
 
 import { registerTeamCredentialProviderBrokerRoutes } from './providerBrokerRoutes';
@@ -41,77 +42,93 @@ describe('Team credential Provider broker HTTP routes', () => {
     });
 
     it('mounts both authenticated routes and fails closed when the Home signing root is unavailable', async () => {
-        expect(openRouteRunnerBinding).toEqual({
-            scope: 'session',
-            session: 'body.consumer.sessionId',
-            machine: 'body.initiatorMachineId',
+        const signingEnv = createEnvPatcher([
+            'HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID',
+            'HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PRIVATE_KEY',
+            'HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PUBLIC_KEY',
+            'HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_EXPIRES_AT',
+        ]);
+        signingEnv.setMany({
+            HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID: 'unavailable',
+            HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PRIVATE_KEY: undefined,
+            HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PUBLIC_KEY: undefined,
+            HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_EXPIRES_AT: undefined,
         });
-        const headers = { 'x-test-user-id': 'account-1' };
-        const open = await app.inject({
-            method: 'POST',
-            url: PROVIDER_BROKER_OPEN_HTTP_PATH_V1,
-            headers,
-            payload: {
-                v: 1,
-                resourceId: 'resource-1',
-                expectedResourceRevision: 1,
-                modelId: 'gpt-5',
-                sourceRevision: 'source-revision-1',
-                initiatorMachineId: 'worker-1',
-                consumer: { kind: 'session', sessionId: 'session-1' },
-                application: {
-                    agentTargetKey: 'codex',
-                    implementationIdentity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' },
-                    endpointTemplateId: 'cliproxyapi-openai-responses',
-                    protocol: 'openai-responses',
-                },
-            },
-        });
-        expect({ status: open.statusCode, body: open.json() }).toEqual({
-            status: 200,
-            body: { ok: false, reasonCode: 'update_required' },
-        });
-
-        const admit = await app.inject({
-            method: 'POST',
-            url: PROVIDER_BROKER_REQUEST_ADMISSION_HTTP_PATH_V1,
-            headers,
-            payload: {},
-        });
-        expect(admit.statusCode).toBe(400);
-
-        const externalModels = await app.inject({
-            method: 'POST',
-            url: PROVIDER_BROKER_MODEL_CATALOG_AUTHORIZE_HTTP_PATH_V1,
-            headers,
-            payload: {
-                v: 1,
-                binding: {
+        try {
+            expect(openRouteRunnerBinding).toEqual({
+                scope: 'session',
+                session: 'body.consumer.sessionId',
+                machine: 'body.initiatorMachineId',
+            });
+            const headers = { 'x-test-user-id': 'account-1' };
+            const open = await app.inject({
+                method: 'POST',
+                url: PROVIDER_BROKER_OPEN_HTTP_PATH_V1,
+                headers,
+                payload: {
                     v: 1,
-                    kind: 'external_api_key',
-                    teamId: 'team-1',
                     resourceId: 'resource-1',
-                    requestId: 'request-1',
-                    externalApiKeyId: '550e8400-e29b-41d4-a716-446655440000',
-                    operationId: null,
-                    brokerPlacementFingerprint: 'a'.repeat(64),
-                    assignedAccountId: 'account-1',
-                    assignedTeamMembershipId: 'membership-1',
+                    expectedResourceRevision: 1,
+                    modelId: 'gpt-5',
+                    sourceRevision: 'source-revision-1',
+                    initiatorMachineId: 'worker-1',
+                    consumer: { kind: 'session', sessionId: 'session-1' },
+                    application: {
+                        agentTargetKey: 'codex',
+                        implementationIdentity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' },
+                        endpointTemplateId: 'cliproxyapi-openai-responses',
+                        protocol: 'openai-responses',
+                    },
                 },
-                brokerMachineId: 'broker-1',
-                expectedResourceRevision: 1,
-                application: {
-                    agentTargetKey: 'agent:happier.agent.codex/codex',
-                    implementationIdentity: { pluginId: 'provider.plugin', localId: 'provider' },
-                    endpointTemplateId: 'provider-responses',
-                    protocol: 'openai-responses',
+            });
+            expect({ status: open.statusCode, body: open.json() }).toEqual({
+                status: 200,
+                body: { ok: false, reasonCode: 'update_required' },
+            });
+
+            const admit = await app.inject({
+                method: 'POST',
+                url: PROVIDER_BROKER_REQUEST_ADMISSION_HTTP_PATH_V1,
+                headers,
+                payload: {},
+            });
+            expect(admit.statusCode).toBe(400);
+
+            const externalModels = await app.inject({
+                method: 'POST',
+                url: PROVIDER_BROKER_MODEL_CATALOG_AUTHORIZE_HTTP_PATH_V1,
+                headers,
+                payload: {
+                    v: 1,
+                    binding: {
+                        v: 1,
+                        kind: 'external_api_key',
+                        teamId: 'team-1',
+                        resourceId: 'resource-1',
+                        requestId: 'request-1',
+                        externalApiKeyId: '550e8400-e29b-41d4-a716-446655440000',
+                        operationId: null,
+                        brokerPlacementFingerprint: 'a'.repeat(64),
+                        assignedAccountId: 'account-1',
+                        assignedTeamMembershipId: 'membership-1',
+                    },
+                    brokerMachineId: 'broker-1',
+                    expectedResourceRevision: 1,
+                    application: {
+                        agentTargetKey: 'agent:happier.agent.codex/codex',
+                        implementationIdentity: { pluginId: 'provider.plugin', localId: 'provider' },
+                        endpointTemplateId: 'provider-responses',
+                        protocol: 'openai-responses',
+                    },
                 },
-            },
-        });
-        expect({ status: externalModels.statusCode, body: externalModels.json() }).toEqual({
-            status: 200,
-            body: { ok: false, reasonCode: 'operation_not_current' },
-        });
+            });
+            expect({ status: externalModels.statusCode, body: externalModels.json() }).toEqual({
+                status: 200,
+                body: { ok: false, reasonCode: 'operation_not_current' },
+            });
+        } finally {
+            signingEnv.restore();
+        }
     });
 
     it('fails a Pool open closed on malformed daemon eligibility and removes request listeners', async () => {

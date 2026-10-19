@@ -84,7 +84,6 @@ export async function prepareIdentityConnectionGroupRefresh(input: Readonly<{
                 // The contribution owner below classifies each current row. A
                 // replay starts retained and is upgraded only if one binding
                 // creates the first effective Group relationship.
-                origin: "retained_lifecycle",
                 accountIds: [input.accountId],
                 change: {
                     kind: "teamGroupMembership",

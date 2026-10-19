@@ -155,6 +155,13 @@ export function isExternalActionSessionRoutePurposeAllowed(
     const config = request.routeOptions?.config;
     if (config?.apiTokenSessionAction === undefined && config?.apiTokenSessionActionWhen === undefined) return true;
     const actionId = resolveApiTokenSessionActionForRoute(request);
+    if (effectActionId === 'session.pending.action.set' && actionId === 'session.message.send') {
+        // The incumbent PATCH retains direct message-send credential admission.
+        // Its named Action spends only that same catalog-declared operation.
+        const transport = getActionSpec(effectActionId).serverTransport;
+        return request.method?.toUpperCase() === transport?.method
+            && request.routeOptions?.url === transport?.path;
+    }
     if ((effectActionId === 'session.pending.resetStart.set' && actionId === 'session.message.send')
         || (effectActionId === 'session.pending.resetStart.cancel' && actionId === 'session.pending.withdraw')) {
         return readExternalActionPendingResetStartPurpose({ actionId: effectActionId,
@@ -185,10 +192,10 @@ export function readRestrictedCredentialRouteField(
             return params?.sourceSessionId;
         case "body.sessionId":
             return body?.sessionId;
-        case "body.leadSessionId":
-            return body?.leadSessionId;
-        case "body.expectedLeadSessionId":
-            return body?.expectedLeadSessionId;
+        case "body.managerSessionId":
+            return body?.managerSessionId;
+        case "body.expectedManagerSessionId":
+            return body?.expectedManagerSessionId;
         case "body.subject.id": {
             const subject = readRecord(body?.subject);
             return subject?.kind === "session" ? subject.id : undefined;

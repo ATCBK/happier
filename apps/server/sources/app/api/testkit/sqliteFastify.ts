@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyServerOptions } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { API_TOKEN_FULL_GRANT_V1 } from "@happier-dev/protocol";
 import { captureAccountStoredContentCompatibilityForHttpRequest } from "@/app/clientCompatibility/accountStoredContentCompatibility";
@@ -11,12 +11,15 @@ import {
 } from "../utils/apiTokenRouteAdmission";
 
 export function createAuthenticatedTestApp(
-    options: Readonly<{ bodyLimit?: number; authentication?: 'fixture' | 'real' }> = {},
+    options: Readonly<{ bodyLimit?: number; authentication?: 'fixture' | 'real'; trustProxy?: FastifyServerOptions['trustProxy'] }> = {},
 ) {
     // Fastify's own 1 MiB default would answer 413 for a route that relies on
     // the application transport limit, so a body-limit test must be able to
     // reproduce the production application limit explicitly.
-    const app = Fastify(options.bodyLimit === undefined ? {} : { bodyLimit: options.bodyLimit });
+    const app = Fastify({
+        ...(options.bodyLimit === undefined ? {} : { bodyLimit: options.bodyLimit }),
+        ...(options.trustProxy === undefined ? {} : { trustProxy: options.trustProxy }),
+    });
     enableSchemaValidation(app);
     const typed = app.withTypeProvider<ZodTypeProvider>() as any;
     // Route validation failures use the same public error contract as startApi.
@@ -81,8 +84,9 @@ export function createAuthenticatedTestApp(
 export async function withAuthenticatedTestApp(
     registerRoutes: (app: any) => void,
     run: (app: any) => Promise<void>,
+    options: Parameters<typeof createAuthenticatedTestApp>[0] = {},
 ): Promise<void> {
-    const app = createAuthenticatedTestApp();
+    const app = createAuthenticatedTestApp(options);
     registerRoutes(app);
     await app.ready();
     try {

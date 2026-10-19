@@ -147,6 +147,11 @@ export async function applyAccountEncryptionTransitionInTx(
     if (sourceMode.status === "inconsistent") {
         throw new Error("account_encryption_inconsistent");
     }
+    // Every ingress, including the empty-only and staged paths, must leave
+    // independently owned resources in the target mode before the Account flips.
+    if (await tx.discussion.count({ where: { ownerAccountId: params.accountId, encryptionMode: { not: params.toMode } } }) > 0) {
+        throw new Error("discussion_encryption_transition_incomplete");
+    }
     const currentCredential = source.AccountPasswordCredential;
     const replacement = params.passwordCredential;
     if (currentCredential) {

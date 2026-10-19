@@ -28,7 +28,7 @@ describe("Account domain read snapshots", () => {
     afterAll(async () => { await harness.close(); });
 
     it("serves Project, Workspace, Trust, Directory and pet reads before a blocked primary writer is released", async () => {
-        const account = await db.account.create({ data: { id: "domain-snapshot-account", encryptionMode: "plain", firstName: "Snapshot", seq: 1 } });
+        const account = await db.account.create({ data: { id: "domain-snapshot-account", encryptionMode: "plain", name: "Snapshot", seq: 1 } });
         const token = await auth.createToken(account.id, undefined, { kind: "account", authority: "present_user" });
         const directoryToken = await auth.createToken(account.id, undefined, { kind: "account_directory", authority: "present_user" });
         const app = Fastify().withTypeProvider<ZodTypeProvider>();

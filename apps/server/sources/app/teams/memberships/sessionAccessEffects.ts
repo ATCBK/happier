@@ -9,10 +9,8 @@ import {
 import {
     captureSessionAccessMembershipImpactsInTx,
     applySessionAccessMembershipImpactsInTx,
-    mergeSessionAccessMembershipImpactOrigin,
     type SessionAccessMembershipChange,
     type SessionAccessMembershipImpact,
-    type SessionAccessMembershipOrigin,
 } from "@/app/session/access/sessionAccessMembershipImpact";
 
 /** Before-state captured by an enclosing atomic mutation of this Team. */
@@ -58,17 +56,11 @@ export async function applyTeamSessionAuthenticationContextEffectsInTx(
  * directory changes capture their complete Account set first and pass it to
  * nested mutations, so an intermediate access loss cannot clear personal state.
  * This helper neither evaluates access nor writes personal Session state.
- *
- * `origin` is the mutation owner's authoritative statement about whether this
- * transition can create a genuinely new relationship. A reversible lifecycle
- * mutation states `retained_lifecycle`, so restoring retained Team, Group, or
- * membership state cannot subscribe an opted-in Account to work it never chose.
  */
 export async function withTeamSessionAccessEffectsInTx<T>(
     tx: Tx,
     input: Readonly<{
         teamId: string;
-        origin: SessionAccessMembershipOrigin;
         accountIds?: readonly string[];
         teamGroupId?: string;
         change?: SessionAccessMembershipChange;
@@ -92,7 +84,6 @@ export async function withTeamSessionAccessEffectsInTx<T>(
     const captured = await captureSessionAccessMembershipImpactsInTx(tx, {
         accountIds: ownedAccountIds,
         changes: [change],
-        origin: input.origin,
     });
     const machines = ownedAccountIds.length === 0 ? [] : await tx.machine.findMany({
         where: change.kind === "teamGroupMembership"
@@ -113,10 +104,6 @@ export async function withTeamSessionAccessEffectsInTx<T>(
         if (!machine) throw new Error("Machine membership before-state must be captured with Session before-state");
         impacts.set(accountId, { session: impact, machine });
         owned.push(impact);
-    }
-    for (const accountId of uniqueAccountIds) {
-        const impact = impacts.get(accountId);
-        if (impact) mergeSessionAccessMembershipImpactOrigin(impact.session, input.origin);
     }
     const result = await mutate(impacts);
     await applySessionAccessMembershipImpactsInTx(tx, { impacts: owned });

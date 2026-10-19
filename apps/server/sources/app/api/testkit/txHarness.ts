@@ -136,13 +136,6 @@ export function createInTxHarness<TTx extends object>(createTxState: () => TTx) 
 export function createEmptySessionFollowEdgeTransactionModel() {
     return {
         findMany: async (): Promise<never[]> => [],
-    };
-}
-
-/** Empty ReportsTo storage boundary for transactions without authored relations. */
-export function createEmptySessionReportsToTransactionModel() {
-    return {
-        findMany: async (): Promise<never[]> => [],
         findUnique: async (): Promise<null> => null,
     };
 }

@@ -126,6 +126,22 @@ export function installPrismaModuleMock<TModule extends object>(module: ModuleMo
     vi.doMock("@/storage/prisma", () => resolveModuleMock(module));
 }
 
+/** Mirrors the transaction-local PostgreSQL control statements owned by `inTx`. */
+export const inTxPostgresControlStatementMock = {
+    async $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<number> {
+        if (query.join('?').trim() === 'SET TRANSACTION READ ONLY' && values.length === 0) return 0;
+        throw new Error('Unexpected fixture SQL');
+    },
+    async $queryRaw(query: TemplateStringsArray, ...values: unknown[]) {
+        if (query.join('?').trim() === 'SHOW statement_timeout' && values.length === 0) return [{ statement_timeout: '0' }];
+        throw new Error('Unexpected fixture SQL');
+    },
+    async $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number> {
+        if (/^SET LOCAL statement_timeout = [1-9]\d*$/.test(query) && values.length === 0) return 0;
+        throw new Error('Unexpected fixture SQL');
+    },
+};
+
 export function createDbTransactionMock<TTx extends object>(createTxState: () => TTx): {
     transaction: ReturnType<typeof vi.fn>;
     readSnapshot: <T>(read: (reader: TTx) => Promise<T>) => Promise<T>;

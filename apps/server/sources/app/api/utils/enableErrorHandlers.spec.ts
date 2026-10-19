@@ -1,6 +1,8 @@
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { symbols, type DestinationStream } from 'pino';
+import { logger } from '@/utils/logging/log';
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -10,6 +12,40 @@ import { enableErrorHandlers } from './enableErrorHandlers';
 import { InactiveAccountError } from '@/app/auth/accountStatus';
 
 describe('enableErrorHandlers', () => {
+    it.each([
+        { name: 'PrismaClientKnownRequestError', code: 'P2028', errorClass: 'PrismaClientKnownRequestError', prismaCode: 'P2028',
+            file: '/srv/happier/apps/server/sources/storage/inTx.ts' },
+        { name: 'private-name', code: 'private-code', errorClass: 'Error', prismaCode: undefined,
+            file: 'C:\\happier\\apps\\server\\sources\\storage\\inTx.ts' },
+        { name: 'TypeError', code: 'private-code', errorClass: 'TypeError', prismaCode: undefined,
+            file: '/srv/happier/apps/server/sources/app/machines/managed/managedRoutes.ts', serialization: true },
+    ])('logs a correlated safe global diagnostic for $errorClass without exception or request content', async diagnostic => {
+        const records: Record<string, unknown>[] = [];
+        const stream = Reflect.get(logger, symbols.streamSym) as DestinationStream;
+        const sink = vi.spyOn(stream, 'write').mockImplementation(chunk => { records.push(JSON.parse(String(chunk))); });
+        const app = Fastify({ logger: false, genReqId: () => 'qb80-http-request' });
+        enableErrorHandlers(app as Parameters<typeof enableErrorHandlers>[0]);
+        app.post('/v1/machines/managed/controller/report', async (_request, reply) => {
+            const failure = Object.assign(new Error('private-driver-message'), { name: diagnostic.name, code: diagnostic.code,
+                stack: `${diagnostic.name}: private-driver-message\nSQL private-query\n    at privateFunction (${diagnostic.file}:250:18)\n    at privateFunction (https://private-host/source.js?private-token:1:2)` });
+            if ('serialization' in diagnostic) return reply.serializer(() => { throw failure; }).send({ secret: 'private-response' });
+            throw failure;
+        });
+        try {
+            const response = await app.inject({ method: 'POST', url: '/v1/machines/managed/controller/report?token=private-url',
+                headers: { authorization: 'Bearer private-credential', 'user-agent': 'private-agent' },
+                payload: { requestId: 'private-unvalidated-id', secret: 'private-input' } });
+            expect(response.statusCode).toBe(500);
+            expect(response.json()).toMatchObject({ code: 'internal_error' });
+            expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ module: 'fastify-error',
+                httpRequestId: 'qb80-http-request', errorClass: diagnostic.errorClass,
+                ...(diagnostic.prismaCode ? { prismaCode: diagnostic.prismaCode } : {}),
+                stackFrames: [{ file: diagnostic.file, line: 250, column: 18 }] })]));
+            expect(JSON.stringify(records)).not.toContain('private-');
+            expect(response.body).not.toContain('P2028');
+        } finally { sink.mockRestore(); await app.close(); }
+    });
+
     it.each(['P2021', 'P2022'])('reports %s as an actionable shared QA schema mismatch', async (code) => {
         const envSnapshot = snapshotEnv();
         applyEnvValues({ HAPPIER_STACK_SHARED_DB_SOURCE_STACK: 'dev-test' });
@@ -50,6 +86,7 @@ describe('enableErrorHandlers', () => {
             expect(response.statusCode).toBe(500);
             expect(response.json()).toEqual({
                 error: 'Internal Server Error',
+                code: 'internal_error',
                 message: 'An unexpected error occurred',
                 statusCode: 500,
             });
@@ -170,6 +207,7 @@ describe('enableErrorHandlers', () => {
             expect(res.statusCode).toBe(500);
             expect(res.json()).toEqual({
                 error: "Internal Server Error",
+                code: 'internal_error',
                 message: "An unexpected error occurred",
                 statusCode: 500,
             });
@@ -200,6 +238,7 @@ describe('enableErrorHandlers', () => {
             expect(res.statusCode).toBe(500);
             expect(res.json()).toEqual({
                 error: "Internal Server Error",
+                code: 'internal_error',
                 message: "An unexpected error occurred",
                 statusCode: 500,
             });

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
@@ -18,6 +18,29 @@ describe('MCP catalog Account row (SQLite)', () => {
     let harness: LightSqliteHarness;
     beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-mcp-catalog-', initAuth: false, initEncrypt: true }); }, 120_000);
     afterAll(async () => { await harness?.close(); });
+
+    it('preserves the canonical confirmed-rollback response through catalog mutation transport', async () => {
+        const { registerMcpServerCatalogRoutes } = await import('./registerMcpServerCatalogRoutes');
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const originalTransaction = db.$transaction;
+        // Fail only the persistent database boundary. Real transaction recovery,
+        // route registration and the global typed error handler remain active.
+        db.$transaction = () => Promise.reject(Object.assign(new Error('private database diagnostic'), { code: 'P2034' }));
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
+        try {
+            await withAuthenticatedTestApp(app => registerMcpServerCatalogRoutes(app as unknown as Fastify), async app => {
+                const response = await app.inject({ method: 'POST', url: route, headers: { 'x-test-user-id': account.id },
+                    payload: { expectedRevision: 'absent', sourceSettingsVersion: 0, content: catalog } });
+                expect(response.statusCode).toBe(503);
+                expect(response.json()).toEqual({ error: 'database_transaction_conflict_exhausted', statusCode: 503 });
+                expect(response.body).not.toContain('private database diagnostic');
+            });
+        } finally {
+            db.$transaction = originalTransaction;
+            vi.unstubAllEnvs();
+        }
+        expect(await db.userKVStore.count({ where: { accountId: account.id } })).toBe(0);
+    });
 
     it('classifies exactly the private MCP catalog and no alternate catalog key', () => {
         expect(classifyAccountScopedKvKey('@happier/account/mcp/v1/catalog')).toEqual({ kind: 'accountMcpServerCatalog' });

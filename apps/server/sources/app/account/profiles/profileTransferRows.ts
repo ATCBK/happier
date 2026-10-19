@@ -20,7 +20,7 @@ import {
     mutateReservedAccountScopedKvRowInTx, listReservedAccountScopedKvRowsInTx,
 } from '@/app/kv/reservedAccountScopedKvRow';
 import { readArtifactForCallerInTx, projectPlainArtifactSharingResourceV1 } from '@/app/artifacts/artifactAccessService';
-import { listSavedSecretResourcesForAccountInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
+import { readSavedSecretResourcesForAccountInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { profileRecordDomain, mutateProfileRowsInTx } from './profileRows';
 import { profileTransferDomain, readProfileTransferControlInTx, markProfileTransferChangedInTx } from './profileTransferControl';
 export { profileTransferDomain, readProfileTransferControlInTx, profileTransferControlReadResponseV1, markProfileTransferChangedInTx } from './profileTransferControl';
@@ -93,7 +93,8 @@ async function verifyProfileTransferInventoryInTx(tx: Tx, input: Readonly<{
         return { status: 'inventory-incomplete' };
     }
     const secretInventory = input.inventory.filter(entry => entry.kind === 'saved_secret');
-    const secrets = secretInventory.length > 0 ? await listSavedSecretResourcesForAccountInTx(tx, input.accountId, input.authentication) : [];
+    const secrets = secretInventory.length > 0
+        ? await readSavedSecretResourcesForAccountInTx(tx, input.accountId, input.authentication, secretInventory.map(entry => entry.id)) : [];
     for (const entry of secretInventory) {
         const ref = formatSharedSavedSecretRefV1(entry.id);
         const resource = secrets.find(secret => 'ref' in secret && secret.ref === ref);

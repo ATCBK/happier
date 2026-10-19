@@ -69,8 +69,9 @@ const NONE: TeamMembershipCapabilities = {
  * suppresses mutations but never discards the administrative visibility that makes
  * restoration reachable.
  *
- * An inactive Account or suspended membership yields nothing at all: those are
- * lifecycle facts owned elsewhere, and a stale role must never survive them.
+ * An inactive Account or suspended membership grants no Team read or management
+ * authority. Self-leave is composed separately through `resolveTeamLeaveDecision`;
+ * it must never restore the Team capabilities a stale role would otherwise grant.
  *
  * This mapping answers only what a membership confers. Home governance authority
  * (`manageAllTeams` and the narrow owner-required recovery) is a separate Home-owned

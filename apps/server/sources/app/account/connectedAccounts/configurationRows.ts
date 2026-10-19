@@ -116,8 +116,13 @@ export async function mutateConnectedAccountCatalogRowInTx(tx: Tx, input: Mutati
     return { ...result, settingsVersion: settings.version };
 }
 
-/** Paired Settings and row CAS share the incumbent serializable transaction and rollback on either refusal. */
+/** Paired Settings and row CAS share the Account fence and roll back on either refusal. */
 export async function mutateConnectedAccountCatalogRow(input: MutationInput): Promise<ConnectedAccountCatalogRowMutationResponseV1> {
-    try { return await inTx(tx => mutateConnectedAccountCatalogRowInTx(tx, input), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" }); }
+    // The Account fence serializes mode, Settings and catalog admission. Shared
+    // Secret grants may be changed by other Accounts and still need SSI.
+    try { return await inTx(tx => mutateConnectedAccountCatalogRowInTx(tx, input), {
+        ...((input.referencedSavedSecretIds?.length ?? 0) > 0 ? { isolationLevel: "Serializable" as const } : {}),
+        transactionClass: "connected-account-catalog-mutate",
+    }); }
     catch (error) { if (error instanceof ConnectedAccountCatalogPairedMutationRejected) return error.result; throw error; }
 }

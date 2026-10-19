@@ -3,7 +3,6 @@ import {
     withTeamSessionAccessEffectsInTx,
     type TeamSessionAccessImpacts,
 } from "../memberships/sessionAccessEffects";
-import type { SessionAccessMembershipOrigin } from "@/app/session/access/sessionAccessMembershipImpact";
 import type { SessionHistoryAccess } from "@/storage/enums.generated";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
 import { mintSessionAccessStartsAt } from "../memberships/sessionHistory";
@@ -71,22 +70,6 @@ async function readContributionStateInTx(
     };
 }
 
-function classifyContributionImpactOrigin(
-    existing: ContributionState,
-    input: Readonly<{ contribution: TeamGroupContribution; desired: "present" | "absent" }>,
-): SessionAccessMembershipOrigin {
-    if (input.desired === "present") {
-        return existing === null ? "relationship_change" : "retained_lifecycle";
-    }
-    if (existing === null) return "retained_lifecycle";
-
-    const removesLastContribution = input.contribution.kind === "native"
-        ? existing.nativeContribution && existing.externalBindingIds.length === 0
-        : !existing.nativeContribution
-            && existing.externalBindingIds.length === 1
-            && existing.externalBindingIds[0] === input.contribution.externalGroupBindingId;
-    return removesLastContribution ? "relationship_change" : "retained_lifecycle";
-}
 
 export async function applyTeamGroupContributionInTx(
     tx: Tx,
@@ -107,7 +90,6 @@ export async function applyTeamGroupContributionInTx(
     return withTeamSessionAccessEffectsInTx(tx, {
         teamId: input.teamId,
         teamGroupId: input.teamGroupId,
-        origin: classifyContributionImpactOrigin(existing, input),
         accountIds: member ? [member.accountId] : [], sessionAccessImpacts: input.sessionAccessImpacts,
     }, async () => {
         if (input.desired === "present") {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { installDbModuleMock } from "../api/testkit/dbMocks";
+import { inTxPostgresControlStatementMock, installDbModuleMock } from "../api/testkit/dbMocks";
 
 const transaction = vi.fn();
 installDbModuleMock(() => ({
@@ -15,7 +15,7 @@ type MarkAccountChangedParams = Parameters<typeof import("./markAccountChanged")
 type MarkAccountsChangedParams = Parameters<typeof import("./markAccountChanged").markAccountsChanged>[1];
 
 async function runMarkAccountChanged(tx: object, params: MarkAccountChangedParams): Promise<number> {
-    transaction.mockImplementationOnce(async (fn: (transactionTx: object) => Promise<number>) => await fn(tx));
+    transaction.mockImplementationOnce(async (fn: (transactionTx: object) => Promise<number>) => await fn({ ...inTxPostgresControlStatementMock, ...tx }));
     const [{ inTx }, { markAccountChanged }] = await Promise.all([
         import("@/storage/inTx"),
         import("./markAccountChanged"),
@@ -27,7 +27,7 @@ async function runMarkAccountsChanged(
     tx: object,
     params: MarkAccountsChangedParams,
 ): Promise<ReadonlyArray<{ accountId: string; cursor: number }>> {
-    transaction.mockImplementationOnce(async (fn: (transactionTx: object) => Promise<ReadonlyArray<{ accountId: string; cursor: number }>>) => await fn(tx));
+    transaction.mockImplementationOnce(async (fn: (transactionTx: object) => Promise<ReadonlyArray<{ accountId: string; cursor: number }>>) => await fn({ ...inTxPostgresControlStatementMock, ...tx }));
     const [{ inTx }, { markAccountsChanged }] = await Promise.all([
         import("@/storage/inTx"),
         import("./markAccountChanged"),
@@ -310,8 +310,8 @@ describe("markAccountChanged", () => {
     it("publishes one Account projection change to a recipient set with bounded database operations", async () => {
         process.env.HAPPIER_DB_PROVIDER = "sqlite";
         const tx: any = {
+            $executeRawUnsafe: vi.fn().mockResolvedValue(2),
             account: {
-                updateMany: vi.fn().mockResolvedValue({ count: 2 }),
                 findMany: vi.fn().mockResolvedValue([
                     { id: "a1", seq: 11 },
                     { id: "a2", seq: 24 },
@@ -332,7 +332,7 @@ describe("markAccountChanged", () => {
             { accountId: "a1", cursor: 11 },
             { accountId: "a2", cursor: 24 },
         ]);
-        expect(tx.account.updateMany).toHaveBeenCalledTimes(1);
+        expect(tx.$executeRawUnsafe).toHaveBeenCalledTimes(1);
         expect(tx.account.findMany).toHaveBeenCalledTimes(1);
         expect(tx.accountChange.deleteMany).toHaveBeenCalledTimes(1);
         expect(tx.accountChange.createMany).toHaveBeenCalledTimes(1);
@@ -347,8 +347,8 @@ describe("markAccountChanged", () => {
     it("publishes a Saved Secret resource invalidation to the recipient set without a Session foreign key", async () => {
         process.env.HAPPIER_DB_PROVIDER = "sqlite";
         const tx: any = {
+            $executeRawUnsafe: vi.fn().mockResolvedValue(2),
             account: {
-                updateMany: vi.fn().mockResolvedValue({ count: 2 }),
                 findMany: vi.fn().mockResolvedValue([
                     { id: "owner", seq: 12 },
                     { id: "recipient", seq: 25 },
@@ -366,13 +366,8 @@ describe("markAccountChanged", () => {
             entityId: "resource-1",
         });
 
-        expect(tx.accountChange.deleteMany).toHaveBeenCalledWith({
-            where: {
-                accountId: { in: ["owner", "recipient"] },
-                kind: "savedSecretResource",
-                entityId: "resource-1",
-            },
-        });
+        expect(tx.accountChange.createMany.mock.calls[0][0].data
+            .every((row: { sessionId?: unknown }) => row.sessionId === undefined)).toBe(true);
         expect(tx.accountChange.createMany).toHaveBeenCalledWith({
             data: [
                 expect.objectContaining({ accountId: "owner", kind: "savedSecretResource", entityId: "resource-1", cursor: 12 }),

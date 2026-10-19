@@ -175,8 +175,6 @@ async function applyProfileRowsInTx(tx: Tx, input: ProfileRowsMutationInput,
     if (input.expectedReferenceGuardRevision !== undefined && guard.revision !== input.expectedReferenceGuardRevision) {
         return { status: 'conflict', revision: guard.revision === 'absent' ? -1 : guard.revision };
     }
-    const secrets = mutations.some(mutation => mutation.referencedSavedSecretIds.length > 0)
-        ? await (await import('@/app/account/savedSecrets/savedSecretResourceService')).listSavedSecretResourcesForAccountInTx(tx, input.accountId, input.authentication) : [];
     let nextPlainSettings = fence.account.currentness.encryptionMode === 'plain'
         ? openPlainAccountSettingsDbValue({ accountId: input.accountId, dbValue: fence.account.settings }) : null;
     let settingsCleanup: ProfileRowMutationV1['settingsCleanup'];
@@ -268,7 +266,8 @@ async function applyProfileRowsInTx(tx: Tx, input: ProfileRowsMutationInput,
         }
         const references = bindings === undefined ? mutation.referencedSavedSecretIds : [...new Set(Object.values(bindings))];
         if (mutation.content?.t === 'plain' && !isDeepStrictEqual([...references].sort(), [...new Set(mutation.referencedSavedSecretIds)].sort())) return { status: 'invalid-reference' };
-        if (!(await import('@/app/account/savedSecrets/savedSecretResourceService')).validateSavedSecretResourceReferenceCapturesV1(secrets, {
+        if (!await (await import('@/app/account/savedSecrets/savedSecretResourceService')).validateSavedSecretResourceReferencesInTx(tx, {
+            accountId: input.accountId, authentication: input.authentication,
             references, savedSecretRevisions: mutation.savedSecretRevisions ?? [], allowPersonal: mutation.operation === 'import',
         })) return { status: 'invalid-reference' };
         if (mutation.operation === 'remove' && nextPlainSettings?.t === 'plain') {

@@ -4,7 +4,7 @@ import { type ManagedResourceDependencyV1, type ManagedResourceDispositionV1 } f
 import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx } from "@/app/machines/managed/managedRead";
 import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { eventRouter } from "@/app/events/eventRouter";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
@@ -12,6 +12,7 @@ import {
     assertHomeOwnershipSurvivesTransitionInTx,
     authorizeHomeAccountErasureActorInTx,
     authorizeHomeGovernanceMutationInTx,
+    readHomeGovernanceAccountInTx,
 } from "@/app/home/governance/homeCapabilities";
 import { setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
 import { publishHomeGovernanceChangedInTx } from "@/app/home/governance/governanceChanges";
@@ -22,6 +23,7 @@ import { deleteDefaultAccountPetPrivateObject } from "@/app/pets/accountPetLibra
 import { deleteSessionWithRecipientsInTx } from "@/app/session/delete/deleteOwnedSession";
 import { SessionDeleteConditionLostError } from "@/app/session/delete/deleteSessionTree";
 import { eraseSessionAccessGrantsForAccountInTx } from "@/app/session/access/sessionAccessGrantService";
+import { eraseDiscussionAccessGrantsForAccountInTx } from "@/app/discussions/accessService";
 import { assertTeamOwnershipAllowsAccountErasureInTx } from "@/app/teams/memberships/erasurePrecondition";
 import { publishAccountTeamMembershipsChangedInTx } from "@/app/teams/teamChanges";
 import { clearSessionResponsibilitiesForAccountRemovalInTx } from "@/app/session/access/sessionResponsibilityService";
@@ -597,7 +599,7 @@ async function deleteAccountErasureBlobLocators(
 
 /**
  * Sole physical Account-deletion composition. Existing domain owners remove
- * restrictive custody in the same serializable transaction as the Account row,
+ * restrictive custody in the same fenced transaction as the Account row,
  * but owned public/private blob coordinates remain in Account rows until their
  * storage owners confirm idempotent deletion. A retry therefore keeps exact
  * coordinates without adding a ledger, worker, status row, or second API.
@@ -610,7 +612,13 @@ export async function deleteAccountForErasure(input: Readonly<{
     managedResourceDispositions?: readonly ManagedResourceDispositionV1[];
 }>): Promise<DeleteAccountForErasureResult> {
     const actor: AccountErasureActor = input.actor ?? { kind: "self" };
-    const preflight = await inTx(async (tx) => {
+    const fenceAccounts = (tx: Tx, erasureActor: AccountErasureActor) => acquireAccountChangePublicationLocksInTx(
+        tx,
+        [input.accountId, ...(erasureActor.kind === "home_administration" ? [erasureActor.actorAccountId] : [])],
+        { includeSingleAccount: true },
+    );
+    const capturePreflight = async (tx: Tx, serializable: boolean) => {
+        await fenceAccounts(tx, actor);
         const fence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
             input.accountId,
@@ -629,6 +637,19 @@ export async function deleteAccountForErasure(input: Readonly<{
         // request was admitted is honored here.
         const actorRejection = await admitAccountErasureActorInTx(tx, { actor, accountId: input.accountId });
         if (actorRejection) return { status: "rejected" as const, code: actorRejection };
+        if (!serializable) {
+            const target = await readHomeGovernanceAccountInTx(tx, input.accountId);
+            const teamOwnership = await tx.teamMembership.findFirst({
+                where: { accountId: input.accountId, role: "owner" }, select: { id: true },
+            });
+            // Only these ownership predicates need SSI. The Account fence
+            // prevents a non-owner from acquiring ownership after this choice.
+            // Escalate before retirement or any other domain write; the next
+            // transaction rechecks current authority and both ownership owners.
+            if ((target?.homeRole === "owner" && target.status === "active") || teamOwnership) {
+                return { status: "serializable-retirement-required" as const };
+            }
+        }
         // Ownership is decided before any irreversible external deletion, and
         // it applies to every entry point: a Home must never be left without an
         // active owner because one of its owners erased their Account.
@@ -712,7 +733,18 @@ export async function deleteAccountForErasure(input: Readonly<{
             status: "captured" as const,
             locators: await captureAccountErasureBlobLocatorsInTx(tx, input.accountId),
         };
-    }, { /* Erasure dependency and last-owner censuses span Account, Team and managed rows. */ isolationLevel: "Serializable" });
+    };
+    let preflight = await inTx(tx => capturePreflight(tx, false), {
+        isolationLevel: "ReadCommitted", transactionClass: "account-erasure.retire",
+    });
+    if (preflight.status === "serializable-retirement-required") {
+        preflight = await inTx(tx => capturePreflight(tx, true), {
+            isolationLevel: "Serializable", transactionClass: "account-erasure.retire-owner",
+        });
+    }
+    if (preflight.status === "serializable-retirement-required") {
+        throw new Error("Serializable Account erasure retirement did not establish ownership admission");
+    }
     if (preflight.status === "already-deleted") return { status: "already-deleted" };
     if (preflight.status === "rejected") {
         if (preflight.code === "account_erasure_managed_resources_review_required") return { status: "failed", code: preflight.code, resources: preflight.resources };
@@ -730,7 +762,16 @@ export async function deleteAccountForErasure(input: Readonly<{
         return { status: "failed", code: "account_erasure_blob_delete_failed" };
     }
 
+    // Retirement and the Account fences protect admission and owned locators.
+    // ReadCommitted lets late publication allocate current cursors for the wider
+    // Home/Team/Session audience, including Accounts updated during this cleanup.
     return await inTx(async (tx) => {
+        // Retirement already removed this Account from active ownership and
+        // prevents new ownership/admission. Its existing Account fence also
+        // serializes Session, content and managed-resource publication. Lock an
+        // independent administrator in the same ordered audience before reading
+        // current authority, so demotion cannot race the physical deletion.
+        await fenceAccounts(tx, continuationActor);
         const fence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
             input.accountId,
@@ -806,6 +847,7 @@ export async function deleteAccountForErasure(input: Readonly<{
         await tx.sessionShareAccessLog.deleteMany({ where: { userId: input.accountId } });
         await tx.publicShareAccessLog.deleteMany({ where: { userId: input.accountId } });
         await eraseSessionAccessGrantsForAccountInTx(tx, { accountId: input.accountId });
+        await eraseDiscussionAccessGrantsForAccountInTx(tx, { accountId: input.accountId });
         await tx.publicSessionShare.deleteMany({ where: { createdByUserId: input.accountId } });
         for (const session of sessions) {
             const deleted = await deleteSessionWithRecipientsInTx(tx, {
@@ -870,5 +912,5 @@ export async function deleteAccountForErasure(input: Readonly<{
         }
         await tx.account.delete({ where: { id: input.accountId } });
         return { status: "deleted" };
-    }, { isolationLevel: "Serializable" });
+    }, { isolationLevel: "ReadCommitted", transactionClass: "account-erasure.delete-retired" });
 }
