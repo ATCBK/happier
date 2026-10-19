@@ -13431,6 +13431,7 @@ const widgetDefinitionTranslations = { ca: {
         becomesContextInput: "Passa a ser una entrada: cada lloc tria la seva",
         alsoAddTo: "Afegeix-lo també a",
         alsoAddToNamed: ({ place }) => `Afegeix-lo també a ${place}`,
+        anotherPlace: "Un altre lloc…",
         snapshotMenu: "Publica una instantània en aquest tauler…",
         snapshotMenuSubtitle: "Tothom aquí veu les teves xifres d’ara",
         snapshotTitle: "Vols publicar una instantània per a tothom?",

@@ -12,6 +12,7 @@ import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountS
 import { readMountedComposerPresentationSnapshot } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { appendMountedComposerDraft } from '@/sync/ops/actions/appendMountedComposerDraft';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
+import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
 
@@ -89,7 +90,19 @@ export function useWidgetDefinitionFlows(input: Readonly<{
     const artifactId = instance?.definition.kind === 'artifact' ? instance.definition.artifactId : null;
     // Add to… chooses its place in the shared chooser first; the copy's setup then opens at setup width.
     const [copyTo, setCopyTo] = React.useState<string | null>(null);
-    const close = React.useCallback(() => { setFlow(null); setCopyTo(null); }, []);
+    // Save as your widget hands each place the person chose to the same setup Add to… uses; the copy it created stays.
+    const [placing, setPlacing] = React.useState<Readonly<{ saved: WidgetDefinitionV1; instance: WidgetInstanceV1; remaining: readonly string[] }> | null>(null);
+    const close = React.useCallback(() => { setFlow(null); setCopyTo(null); setPlacing(null); }, []);
+    const stopPlacing = React.useCallback(() => {
+        if (placing) publishPresentationNotice({ key: `widget-save:${instance?.id ?? 'item'}`, severity: 'info', message: t('widgetDefinition.savedButNotPlaced') });
+        close();
+    }, [close, instance?.id, placing]);
+    const placeNext = React.useCallback(() => {
+        const [next, ...remaining] = placing?.remaining ?? [];
+        if (!placing || next === undefined) { close(); return; }
+        setCopyTo(next);
+        setPlacing({ ...placing, remaining });
+    }, [close, placing]);
     const about = React.useMemo(() => (instance && scope ? () => setFlow('about') : undefined), [instance, scope]);
     const addTo = React.useMemo(() => (instance && scope && (scope.owner.kind !== 'sessionBoard'
         || canPromoteSessionWidgetDefinitionSourceV1({ kind: 'widget', instance })) ? () => setFlow('addTo') : undefined), [instance, scope]);
@@ -107,25 +120,36 @@ export function useWidgetDefinitionFlows(input: Readonly<{
     } else if (flow === 'addTo' && scope && instance && copyTo === null) {
         panel = <WidgetCopyChooser instance={instance} current={scope} anchorRef={anchorRef} onChoose={setCopyTo} onClose={close} testID={`${testID}.addTo`} />;
     } else if (flow && scope) {
+        const placeInstance = placing?.instance ?? instance;
         const title = flow === 'about' ? t('widgetDefinition.aboutTitle') : flow === 'save' ? t('widgetDefinition.saveTitle')
             : flow === 'addTo' ? t('widgetFrame.groupAddTo') : t('widgetDefinition.snapshotTitle');
         const account = { serverId: scope.serverId, accountId: scope.accountId };
         panel = (
             <WidgetFlowShell anchorRef={anchorRef} title={title} onRequestClose={close} testID={`${testID}.${flow}`}
                 {...(flow === 'addTo' ? { width: WIDGET_FLOW_WIDTH_PX.setup } : {})}>
-                {flow === 'addTo' && instance && copyTo !== null ? (
-                    <WidgetCopyPanel instance={instance} current={scope} destinationKey={copyTo} providedContext={input.providedContext ?? {}}
-                        onBack={() => setCopyTo(null)} onClose={close} testID={`${testID}.addTo`} />
+                {flow === 'addTo' && placeInstance && copyTo !== null ? (
+                    <WidgetCopyPanel instance={placeInstance} current={scope} destinationKey={copyTo} providedContext={input.providedContext ?? {}}
+                        {...(placing ? { saved: placing.saved, onDone: placeNext, onClose: stopPlacing } : { onBack: () => setCopyTo(null), onClose: close })}
+                        testID={`${testID}.addTo`} />
                 ) : flow === 'save' && sessionItem && scope.owner.kind === 'sessionBoard' ? (
                     <SaveAsWidgetPanel
                         account={account}
                         session={{ serverId: scope.serverId, sessionId: scope.owner.sessionId }}
+                        instance={instance}
                         itemId={sessionItem.itemId}
                         defaultName={sessionItem.title}
                         converted={sessionItem.converted}
                         {...(sessionItem.renderPreview ? { preview: sessionItem.renderPreview() } : {})}
+                        {...(sessionItem.mark ? { mark: sessionItem.mark } : {})}
+                        sourceLabel={sessionItem.sourceLabel}
+                        providedContext={input.providedContext ?? {}}
                         onCancel={close}
                         onDone={close}
+                        onSaved={(saved, [first = null, ...remaining]) => {
+                            // The copy is placed from what it is: the item's widget, or its own definition when it declares no inputs.
+                            setPlacing({ saved, remaining, instance: instance ?? { v: 1, id: sessionItem.itemId, definition: { kind: 'inline', definition: saved }, bindings: {} } });
+                            setCopyTo(first); setFlow('addTo');
+                        }}
                         testID={`${testID}.save`}
                     />
                 ) : flow === 'snapshot' && sessionItem ? (

@@ -65,6 +65,7 @@ export type WidgetDefinitionTranslation = Readonly<{
     becomesContextInput: string;
     alsoAddTo: string;
     alsoAddToNamed: (params: Readonly<{ place: string }>) => string;
+    anotherPlace: string;
     snapshotMenu: string;
     snapshotMenuSubtitle: string;
     snapshotTitle: string;
@@ -144,6 +145,7 @@ export const widgetDefinitionTranslationsEnglish = { en: {
         becomesContextInput: "Becomes an input: each place chooses its own",
         alsoAddTo: "Also add to",
         alsoAddToNamed: ({ place }) => `Also add to ${place}`,
+        anotherPlace: "Another place…",
         snapshotMenu: "Post a snapshot to this board…",
         snapshotMenuSubtitle: "Everyone here sees your numbers as of now",
         snapshotTitle: "Post a snapshot for everyone here?",

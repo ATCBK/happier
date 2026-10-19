@@ -13408,6 +13408,7 @@ const widgetDefinitionTranslations = { pt: {
         becomesContextInput: "Vira uma entrada: cada lugar escolhe a sua",
         alsoAddTo: "Adicionar também a",
         alsoAddToNamed: ({ place }) => `Adicionar também a ${place}`,
+        anotherPlace: "Outro lugar…",
         snapshotMenu: "Publicar um instantâneo neste quadro…",
         snapshotMenuSubtitle: "Todos aqui veem seus números de agora",
         snapshotTitle: "Publicar um instantâneo para todos?",

@@ -41,12 +41,16 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
 
     const selected = filter.options?.find((option) => option.id === filter.selectedId) ?? null;
     const valueLabel = filter.valueLabel ?? selected?.label ?? '';
-    const leading = filter.icon ?? selected?.icon ?? null;
+    const leading = filter.icon ?? selected?.icon
+        ?? (filter.onToggle && filter.selected ? <Icon name="check" size={12} color={theme.colors.text.primary} /> : null);
     const hasChooser = filter.renderPopoverContent !== undefined
         || (filter.options !== undefined && filter.options.length > 0 && filter.onChange !== undefined);
     const canOpen = hasChooser && filter.disabled !== true;
     const phoneSheet = filter.renderPopoverContent !== undefined || filter.selectedIds !== undefined;
     const clearable = !hasChooser && filter.onClear !== undefined && filter.disabled !== true;
+    const toggleable = !hasChooser && !clearable && filter.onToggle !== undefined && filter.disabled !== true;
+    // An on/off chip that is on takes the selection fill (lab dk-checks); off, it reads quieter.
+    const toggledOn = toggleable && filter.selected === true;
     const testID = filter.testID ?? `selection-list-filter:${filter.id}`;
 
     const optionsStep = React.useMemo<SelectionListStep | null>(() => filter.options ? {
@@ -79,20 +83,22 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
             <View ref={anchorRef} style={[styles.anchor, stackedInRow ? styles.anchorStacked : null]}>
                 <HappierPressable
                     testID={testID}
-                    accessibilityRole="button"
+                    accessibilityRole={toggleable ? 'checkbox' : 'button'}
+                    {...(toggleable ? { checked: filter.selected === true } : {})}
                     accessibilityLabel={clearable
                         ? [valueLabel, filter.count, filter.clearAccessibilityLabel].filter(Boolean).join(', ')
                         : `${filter.label}: ${valueLabel}`}
                     {...(filter.accessibilityHint === undefined ? {} : { accessibilityHint: filter.accessibilityHint })}
                     expanded={canOpen ? open : undefined}
                     hasPopup={canOpen ? 'dialog' : undefined}
-                    disabled={!canOpen && !clearable}
-                    onPress={() => (clearable ? filter.onClear?.() : setOpen(!open))}
+                    disabled={!canOpen && !clearable && !toggleable}
+                    onPress={() => (clearable ? filter.onClear?.() : toggleable ? filter.onToggle?.() : setOpen(!open))}
                     style={(state) => [
                         styles.chip,
                         filter.active ? { borderColor: theme.colors.text.link } : null,
                         state.pressed ? styles.chipPressed : null,
-                        { backgroundColor: paintColor(state.pressed ? theme.colors.surface.pressed : theme.colors.surface.base) },
+                        { backgroundColor: paintColor(state.pressed ? theme.colors.surface.pressed : toggledOn ? theme.colors.surface.selected : theme.colors.surface.base) },
+                        toggledOn ? styles.chipToggledOn : null,
                         focusRingStyle({
                             focused: resolveHappierFocusRingVisible(state.focused),
                             color: theme.colors.border.focus,
@@ -101,7 +107,7 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
                 >
                     {leading}
                     {filter.showLabel ? <Text style={[styles.label, styles.labelMuted, styles.name]} numberOfLines={1}>{filter.label}</Text> : null}
-                    <Text style={[styles.label, filter.muted ? styles.labelMuted : null, filter.active ? { color: theme.colors.text.link } : null]} numberOfLines={1}>{valueLabel}</Text>
+                    <Text style={[styles.label, filter.muted || (toggleable && !toggledOn) ? styles.labelMuted : null, filter.active ? { color: theme.colors.text.link } : null]} numberOfLines={1}>{valueLabel}</Text>
                     {filter.count !== undefined || filter.reserveCount
                         ? <Text style={[styles.label, styles.labelMuted, styles.count]}>{filter.reserveCount ? reserveCountSlot(filter.count ?? '') : filter.count}</Text> : null}
                     {filter.presence || filter.reservePresence ? (
@@ -217,6 +223,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.strong,
         backgroundColor: theme.colors.surface.base,
+    },
+    chipToggledOn: {
+        borderColor: 'transparent',
     },
     chipPressed: {
         backgroundColor: theme.colors.surface.pressed,

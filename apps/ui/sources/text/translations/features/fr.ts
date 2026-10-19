@@ -13455,6 +13455,7 @@ const widgetDefinitionTranslations = { fr: {
         becomesContextInput: "Devient une entrée : chaque emplacement choisit la sienne",
         alsoAddTo: "Ajouter aussi à",
         alsoAddToNamed: ({ place }) => `Ajouter aussi à ${place}`,
+        anotherPlace: "Autre endroit…",
         snapshotMenu: "Publier un instantané sur ce tableau…",
         snapshotMenuSubtitle: "Tout le monde ici voit tes chiffres actuels",
         snapshotTitle: "Publier un instantané pour tout le monde ?",

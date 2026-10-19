@@ -13408,6 +13408,7 @@ const widgetDefinitionTranslations = { it: {
         becomesContextInput: "Diventa un input: ogni posto sceglie il suo",
         alsoAddTo: "Aggiungi anche a",
         alsoAddToNamed: ({ place }) => `Aggiungi anche a ${place}`,
+        anotherPlace: "Altro posto…",
         snapshotMenu: "Pubblica un’istantanea su questa bacheca…",
         snapshotMenuSubtitle: "Tutti qui vedono i tuoi numeri di adesso",
         snapshotTitle: "Pubblicare un’istantanea per tutti?",

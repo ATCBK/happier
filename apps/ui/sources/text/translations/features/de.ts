@@ -12902,6 +12902,7 @@ const widgetDefinitionTranslations = { de: {
         becomesContextInput: "Wird zur Eingabe: Jeder Ort wählt selbst",
         alsoAddTo: "Auch hinzufügen zu",
         alsoAddToNamed: ({ place }) => `Auch zu ${place} hinzufügen`,
+        anotherPlace: "Anderer Ort…",
         snapshotMenu: "Momentaufnahme auf diesem Board posten …",
         snapshotMenuSubtitle: "Alle hier sehen deine Zahlen von jetzt",
         snapshotTitle: "Momentaufnahme für alle hier posten?",

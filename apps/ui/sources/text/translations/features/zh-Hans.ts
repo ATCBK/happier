@@ -13392,6 +13392,7 @@ const widgetDefinitionTranslations = { 'zh-Hans': {
         becomesContextInput: "变为输入：每个位置各自选择",
         alsoAddTo: "同时添加到",
         alsoAddToNamed: ({ place }) => `同时添加到 ${place}`,
+        anotherPlace: "其他位置…",
         snapshotMenu: "在此看板发布快照…",
         snapshotMenuSubtitle: "这里的每个人都能看到你此刻的数字",
         snapshotTitle: "为这里的每个人发布快照？",

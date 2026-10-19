@@ -13434,6 +13434,7 @@ const widgetDefinitionTranslations = { ru: {
         becomesContextInput: "Станет входным параметром: каждое место выбирает своё",
         alsoAddTo: "Также добавить в",
         alsoAddToNamed: ({ place }) => `Также добавить в ${place}`,
+        anotherPlace: "Другое место…",
         snapshotMenu: "Опубликовать снимок на этой доске…",
         snapshotMenuSubtitle: "Все здесь увидят ваши текущие цифры",
         snapshotTitle: "Опубликовать снимок для всех?",

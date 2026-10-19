@@ -751,6 +751,12 @@ export type SelectionListFilter = Readonly<{
      */
     onClear?: () => void;
     clearAccessibilityLabel?: string;
+    /**
+     * An on/off choice drawn as a chip ("Also add to: ✓ Home"): pressing it turns it on or off. It has no
+     * chooser; `selected` draws the check and the accent edge, and announces the chip as checked.
+     */
+    onToggle?: () => void;
+    selected?: boolean;
     /** The chip's testID; its popover list is `<testID>.list` and each option `<testID>:<optionId>`. */
     testID?: string;
     /** What else the chip's value means ("Changed for this step"), announced after its name. */

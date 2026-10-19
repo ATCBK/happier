@@ -13422,6 +13422,7 @@ const widgetDefinitionTranslations = { pl: {
         becomesContextInput: "Staje się danymi wejściowymi: każde miejsce wybiera własne",
         alsoAddTo: "Dodaj też do",
         alsoAddToNamed: ({ place }) => `Dodaj też do: ${place}`,
+        anotherPlace: "Inne miejsce…",
         snapshotMenu: "Opublikuj migawkę na tej tablicy…",
         snapshotMenuSubtitle: "Wszyscy tutaj zobaczą twoje obecne liczby",
         snapshotTitle: "Opublikować migawkę dla wszystkich?",

@@ -13396,6 +13396,7 @@ const widgetDefinitionTranslations = { ja: {
         becomesContextInput: "入力になります: 各場所で個別に選択",
         alsoAddTo: "追加先",
         alsoAddToNamed: ({ place }) => `${place} にも追加`,
+        anotherPlace: "別の場所…",
         snapshotMenu: "このボードにスナップショットを投稿…",
         snapshotMenuSubtitle: "ここにいる全員に今の数値が見えます",
         snapshotTitle: "全員にスナップショットを投稿しますか?",
