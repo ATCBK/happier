@@ -7,8 +7,9 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 
 import { applyPendingSessionStateChange } from '@/app/session/pending/applyPendingSessionStateChange';
 import { emitPendingChanged } from '@/app/session/pending/publishPendingMutation';
+import { resolveSessionAccountChangePublications } from '@/app/session/changeTracking/markAccountChangesForSessionAccounts';
 import { db } from '@/storage/db';
-import { inTx } from '@/storage/inTx';
+import { inTx, transactionResult } from '@/storage/inTx';
 
 type ExchangeResult =
     | Readonly<{ ok: true; state: AutonomousExchangeStateV1; observedRevision: string }>
@@ -121,8 +122,14 @@ export async function controlAutonomousExchange(params: Readonly<{
             publications.push({ sessionId, ...pendingState,
                 recipient: { kind: 'execution_run' as const, runId } });
         }
-        return { result: { ok: true, state: next,
-            observedRevision: revision(row.rowRevision + BigInt(1)) } as const, publications };
+        return transactionResult(() => ({
+            result: { ok: true, state: next,
+                observedRevision: revision(row.rowRevision + BigInt(1)) } as const,
+            publications: publications.map(publication => ({
+                ...publication,
+                recipientCursors: resolveSessionAccountChangePublications(publication.recipientCursors),
+            })),
+        }));
     }, { isolationLevel: 'Serializable' });
     for (const publication of outcome.publications) {
         await emitPendingChanged({ sessionId: publication.sessionId, changedByAccountId: params.actorUserId,

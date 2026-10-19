@@ -1,6 +1,6 @@
 import { afterTx, type Tx } from '@/storage/inTx';
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from '@/app/session/access/sessionRecipients';
-import { markSessionAccountsChanged } from '@/app/changes/markAccountChanged';
+import { markSessionAccountsChanged, type AccountChangePublication } from '@/app/changes/markAccountChanged';
 import { eventRouter } from '@/app/events/eventRouter';
 import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 
@@ -18,12 +18,13 @@ export async function invalidateSessionRelationProjectionsInTx(
     tx: Tx,
     sessionIds: Iterable<string>,
     resolvedRecipients?: ReadonlyMap<string, readonly string[]>,
-): Promise<void> {
+): Promise<AccountChangePublication[]> {
     const uniqueSessionIds = [...new Set(sessionIds)].sort();
     const recipientsBySession = resolvedRecipients
         ?? await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, { sessionIds: uniqueSessionIds });
-    await markSessionAccountsChanged(tx, recipientsBySession);
+    const publications = await markSessionAccountsChanged(tx, recipientsBySession);
     for (const [sessionId, accountIds] of recipientsBySession) {
         scheduleSessionRelationBroadcastAfterTx(tx, sessionId, accountIds);
     }
+    return publications;
 }

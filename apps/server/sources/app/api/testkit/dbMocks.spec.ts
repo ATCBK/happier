@@ -70,15 +70,13 @@ describe("dbMocks", () => {
     it("supplies fixture delegates to primary transactions and SQLite read snapshots", async () => {
         const updatedAt = new Date("2026-07-01T00:00:00.000Z");
         const txState = createSessionTransactionModel({ id: "session-1", seq: 4, updatedAt });
-        const createTxState = vi.fn(() => txState);
-        const transactionMock = createDbTransactionMock(createTxState);
+        const transactionMock = createDbTransactionMock(() => txState);
         const wrappedDb = transactionMock.wrapDb({});
 
         await expect(wrappedDb.$transaction(async (tx) => await tx.session.updateMany({
             where: { id: "session-1", seq: 4 },
             data: { seq: { increment: 1 }, updatedAt },
-        }), { isolationLevel: "RepeatableRead" })).resolves.toEqual({ count: 1 });
-        expect(createTxState).toHaveBeenLastCalledWith({ isolationLevel: "RepeatableRead" });
+        }))).resolves.toEqual({ count: 1 });
 
         expect(txState.readSession()).toEqual({ id: "session-1", seq: 5, updatedAt });
 

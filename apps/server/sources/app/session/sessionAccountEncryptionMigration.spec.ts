@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAccountCursorRawQueryTransactionModel } from "@/app/api/testkit/txHarness";
 import { inTxPostgresControlStatementMock } from "@/app/api/testkit/dbMocks";
 import type { Tx } from "@/storage/inTx";
@@ -67,6 +67,9 @@ const plainTarget = {
 } as const;
 
 describe("migrateSessionAccountEncryptionInTx", () => {
+    beforeEach(() => vi.stubEnv("HAPPIER_DB_PROVIDER", "postgres"));
+    afterEach(() => vi.unstubAllEnvs());
+
     it("atomically rewrites a complete owner inventory beyond the former 500-Session ceiling", async () => {
         const rows = Array.from({ length: 501 }, (_, index) => ({
             id: `session-${index}`,

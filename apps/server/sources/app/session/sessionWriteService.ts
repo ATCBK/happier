@@ -355,7 +355,7 @@ function doesStoredSessionOwnerMetadataMatchEnvelope(
 /**
  * Canonical Session tuple owner for Account-mode owner-envelope rewrites.
  *
- * The Account transition already holds the shared Account-first fence. This
+ * The Account transition already holds exclusive Account admission. This
  * owner inventories active and archived layout-1 Sessions, validates the exact
  * source tuple, changes only ownerMetadata, and advances the owner's canonical
  * Account Session-change cursor. Shared recipients are not published because
@@ -2333,9 +2333,9 @@ export async function updateSessionRuntimeActivityProjection(params: SessionRunt
     }, { transactionClass: "session.runtime-activity" });
     if (unchanged) return unchanged;
     return await inTx(async (tx): Promise<SessionWriteInTxResult<AuthorizedSessionRuntimeActivityProjectionResult>> => {
-        // Serialize with publisher replacement and Account publication before
-        // reading admission. RC then observes the writer that released the fence
-        // instead of retrying an obsolete Serializable snapshot of that Account.
+        // Stabilize Account admission and serialize publisher replacement at
+        // the Session resource. Account cursor publication runs after domain
+        // work, while RC observes the current admitted Session row.
         await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId]);
         const publisher = await readSessionRuntimeActivityPublisherInTx(tx, params);
         if (publisher.status === "rejected") return publisher;
@@ -3325,8 +3325,8 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
             sessionId,
         );
     }
-    // Publication writers retain Account-before-Session ordering. Admission,
-    // turn decisions and receipt reservation all follow the Session lock.
+    // Compatible Account admission precedes the Session resource lock; turn
+    // decisions and receipt reservation follow it, with cursor publication last.
     const access = await readSessionMutationContextInTx(tx, {
         actorUserId: params.actorUserId,
         sessionId,
@@ -4808,8 +4808,8 @@ export async function updateSessionMetadataEnvelopeTupleInTx(
         return { ok: false, error: "invalid-params" };
     }
 
-    // Transaction-composing callers retain their audience fence before the
-    // Account-first owner-metadata authority lock.
+    // Transaction-composing callers admit their complete audience and lock
+    // Session resources before entering the shared metadata mutation body.
     await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [params.actorUserId]);
     return updateSessionMetadataEnvelopeTupleAfterCursorFenceInTx(tx, params, preconditions);
 }

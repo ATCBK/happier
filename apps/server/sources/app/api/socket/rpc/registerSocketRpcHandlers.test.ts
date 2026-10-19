@@ -126,23 +126,27 @@ vi.mock("@/app/monitoring/metrics/index", () => rpcMetricsMocks);
 
 vi.mock("@/storage/db", async () => {
     const { inTxPostgresControlStatementMock } = await import('../../testkit/dbMocks');
+    const readMachine = async (args: Readonly<{ where: { id: string } }>) => {
+        const observed = await machineFindFirstMock(args);
+        if (!observed) return null;
+        // Genuine Prisma boundary: return persisted relations to the real admission owner.
+        return { id: args.where.id, accountId: 'user-1', kind: 'persistent', active: true,
+            metadata: encodePlainMachineStoredContent({ host: 'fixture', platform: 'linux', happyCliVersion: 'test',
+                homeDir: '/home/fixture', happyHomeDir: '/home/fixture/.happier' }), metadataVersion: 1,
+            daemonState: null, daemonStateVersion: 0,
+            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'), installationId: null,
+            account: { id: 'user-1', status: 'active', encryptionMode: 'plain', firstName: null,
+                lastName: null, username: null, avatar: null }, accountGrants: [], teamGrants: [], groupGrants: [],
+            ...observed };
+    };
     const databaseBoundary = {
         // Prisma executes the real inTx owner's transaction-mode declaration at this database boundary.
         ...inTxPostgresControlStatementMock,
-        machine: { findFirst: machineFindFirstMock, findUnique: async (args: Readonly<{ where: { id: string } }>) => {
-            const observed = await machineFindFirstMock(args);
-            if (!observed) return null;
-            // Genuine Prisma boundary: return the persisted relations consumed
-            // by the real C41 owner instead of mocking its admission decision.
-            return { id: args.where.id, accountId: 'user-1', kind: 'persistent', active: true,
-                metadata: encodePlainMachineStoredContent({ host: 'fixture', platform: 'linux', happyCliVersion: 'test',
-                    homeDir: '/home/fixture', happyHomeDir: '/home/fixture/.happier' }), metadataVersion: 1,
-                daemonState: null, daemonStateVersion: 0,
-                dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'), installationId: null,
-                account: { id: 'user-1', status: 'active', encryptionMode: 'plain', firstName: null,
-                    lastName: null, username: null, avatar: null }, accountGrants: [], teamGrants: [], groupGrants: [],
-                ...observed };
-        } },
+        machine: { findFirst: machineFindFirstMock, findUnique: readMachine,
+            findMany: async (args: Readonly<{ where: { id: { in: readonly string[] } } }>) => {
+                const rows = await Promise.all(args.where.id.in.map(id => readMachine({ where: { id } })));
+                return rows.filter(row => row !== null);
+            } },
         account: { findUnique: accountFindUniqueMock },
         managedMachine: { findUnique: managedMachineFindUniqueMock },
         accessKey: { findUnique: accessKeyFindUniqueMock },

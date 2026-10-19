@@ -488,6 +488,23 @@ async function resolveAffectedAccountIdsInTx(
     );
 }
 
+/** Pure birth census; grant eligibility and envelope validation remain with the writer. */
+export async function readInitialSessionAccessAccountIdsInTx(tx: Tx, input: Readonly<{
+    initialAccess?: SessionInitialAccessMaterializedV1;
+    primaryTeamId?: string | null;
+}>): Promise<readonly string[]> {
+    const subjects = (input.initialAccess?.grants ?? []).map(grant => grant.subject);
+    if (input.primaryTeamId && await teamPolicyStillRequiresGrant(tx, input.primaryTeamId)
+        && !subjects.some(subject => subject.kind === "team" && subject.teamId === input.primaryTeamId)) {
+        subjects.push({ kind: "team", teamId: input.primaryTeamId });
+    }
+    const accounts = new Set<string>();
+    for (const subject of subjects) {
+        for (const accountId of await resolveAffectedAccountIdsInTx(tx, subject)) accounts.add(accountId);
+    }
+    return [...accounts].sort();
+}
+
 /** Grant changes also invalidate the explicit roster for its current managers. */
 async function applyGrantTransitionEffectsInTx(
     tx: Tx,

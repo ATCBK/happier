@@ -17,6 +17,7 @@ type SocketTimeoutEmitter = {
 
 export type FakeSocket = {
     connected: boolean;
+    nsp?: Readonly<{ server: Server }>;
     data?: Record<string, unknown>;
     id: string;
     handlers: Map<string, SocketHandler>;

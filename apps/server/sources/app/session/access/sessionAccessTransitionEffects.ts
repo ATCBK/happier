@@ -1,7 +1,7 @@
 import { afterTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { notifySessionHumanPresenceAccessChanged } from "@/app/session/humanPresence/sessionHumanPresenceService";
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
-import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
+import { markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
+import { acquireSessionAccountCursorLocksInTx, type SessionAccountCursorLockOptions } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { tombstoneSessionDraftForLifecycleInTx } from "@/app/account/sessionDrafts/sessionDraftService";
 import { removeAccountSessionFollowsOnAccessLossInTx } from "@/app/session/follow/accountFollowService";
 import { removeUnsafeSessionFollowEdgesForAccessChangeInTx } from "@/app/session/follow/sessionFollowEdgeService";
@@ -14,7 +14,7 @@ export interface SessionAccessTransitionEffects {
     readonly changedAccountIds: readonly string[];
     readonly grantedAccountIds: readonly string[];
     readonly revokedAccountIds: readonly string[];
-    readonly accountCursors: ReadonlyMap<string, number>;
+    readonly accountCursors: ReadonlyMap<string, AccountChangePublication>;
 }
 
 function readTranscript(access: EffectiveSessionAccess | null): boolean {
@@ -30,7 +30,7 @@ function accessFingerprint(access: EffectiveSessionAccess | null): string {
     return `${access.level}|${capabilities}`;
 }
 
-async function resolveAccessTransitionProjectionSessionIdsInTx(tx: Tx, sessionIds: readonly string[]): Promise<string[]> {
+export async function resolveAccessTransitionProjectionSessionIdsInTx(tx: Tx, sessionIds: readonly string[]): Promise<string[]> {
     const ids = [...new Set(sessionIds)];
     if (ids.length === 0) return [];
     const [followEdges, managerEdges] = await Promise.all([
@@ -48,9 +48,10 @@ export async function acquireSessionAccessTransitionCursorLocksInTx(
     tx: Tx,
     sessionIds: readonly string[],
     additionalAccountIds: readonly string[] = [],
+    options?: SessionAccountCursorLockOptions,
 ): Promise<void> {
     const projectionSessionIds = await resolveAccessTransitionProjectionSessionIdsInTx(tx, sessionIds);
-    await acquireSessionAccountCursorLocksInTx(tx, projectionSessionIds, additionalAccountIds);
+    await acquireSessionAccountCursorLocksInTx(tx, projectionSessionIds, additionalAccountIds, options);
     const captured = new Set(projectionSessionIds);
     const current = await resolveAccessTransitionProjectionSessionIdsInTx(tx, sessionIds);
     if (current.some(sessionId => !captured.has(sessionId))) {
@@ -74,7 +75,7 @@ export async function applySessionAccessTransitionEffectsInTx(
     const changedAccountIds: string[] = [];
     const grantedAccountIds: string[] = [];
     const revokedAccountIds: string[] = [];
-    const accountCursors = new Map<string, number>();
+    const accountCursors = new Map<string, AccountChangePublication>();
     let anyEffectiveAccessChanged = false;
     // Presence qualifies each socket against the source that grants it, so a
     // source change can revoke one credential's view while the structural
@@ -109,8 +110,8 @@ export async function applySessionAccessTransitionEffectsInTx(
     // Only final read-access loss retires the person's own draft; Edit-to-View
     // keeps it. Draft and Session cursors share the complete transition fence.
     for (const accountId of revokedAccountIds) await tombstoneSessionDraftForLifecycleInTx(tx, { accountId, sessionId: params.sessionId });
-    for (const { accountId, cursor } of await markAccountsChanged(tx, { accountIds: changedAccountIds, kind: "session", entityId: params.sessionId })) {
-        accountCursors.set(accountId, cursor);
+    for (const publication of await markAccountsChanged(tx, { accountIds: changedAccountIds, kind: "session", entityId: params.sessionId })) {
+        accountCursors.set(publication.accountId, publication);
     }
 
     if (revokedAccountIds.length > 0) {

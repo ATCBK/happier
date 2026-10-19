@@ -5,6 +5,7 @@ import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/en
 import { type ArtifactAccessErrorCodeV1, type ArtifactAccessGrantSetStorageInputV1, type ArtifactAccessGrantRemoveInputV1, type ArtifactAccessGrantsListResponseV1, type ArtifactAccessGrantMutationResponseV1, type ArtifactAccessRecipientCensusResponseV1, type ArtifactCallerAccessV1, type ArtifactRecipientKeyEnvelopeCommitInputV1, type ArtifactRecipientKeyEnvelopeCommitResponseV1, type ArtifactRecipientKeyEnvelopeInputV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv } from "@/storage/prisma";
+import { readArtifactStorageEnv } from "@/app/features/catalog/readFeatureEnv";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { artifactVisibleWhere } from "./artifactClassification";
 import { openArtifactStoredContentBytes, openArtifactProvenanceBytes, artifactProvenanceMatchesAccountMode } from "./artifactStoredContent";
@@ -22,6 +23,7 @@ import { isPublicSessionShareActive } from "@/app/share/publicSessionSharePublic
 import { ArtifactHeaderMetadataV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { ArtifactBodyEnvelopeV1StoredSchema } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
+import { ArtifactCoarseKindV1Schema, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { artifactAccessFactsSelect, artifactGrantFacts, artifactGrantStorageAdapter, type ArtifactAccessFacts } from './artifactGrantStorageAdapter';
 
@@ -41,9 +43,10 @@ export async function resolveArtifactAccessInTx(tx: Tx, input: Readonly<{
 }
 
 /** Candidate discovery starts at grant relations, then the access owner decides. */
-export async function listArtifactCandidatesInTx(tx: Tx, actorAccountId: string): Promise<string[]> {
+export async function listArtifactCandidatesInTx(tx: Tx, actorAccountId: string, kind?: ArtifactCoarseKindV1 | null): Promise<string[]> {
     const [owned, direct, memberships, groupMemberships] = await Promise.all([
-        tx.artifact.findMany({ where: { accountId: actorAccountId, ...artifactVisibleWhere }, select: { id: true } }),
+        tx.artifact.findMany({ where: { accountId: actorAccountId, ...artifactVisibleWhere,
+            ...(kind !== undefined ? { kind } : {}) }, select: { id: true } }),
         tx.artifactAccountGrant.findMany({ where: { accountId: actorAccountId }, select: { artifactId: true } }),
         tx.teamMembership.findMany({ where: { accountId: actorAccountId }, select: { teamId: true } }),
         tx.teamGroupMembership.findMany({ where: { teamMembership: { accountId: actorAccountId } }, select: { teamGroupId: true } }),
@@ -67,15 +70,25 @@ function resolveArtifactAudienceFromFacts(row: ArtifactAccessFacts): string[] {
 
 /**
  * Fence the complete publication audience before reading mode, head or storage budget.
- * ReadCommitted writers share publication's Account locks instead of an SSI
- * snapshot that conflicts with unrelated Account cursor increments.
+ * Account storage quotas require exclusive admission before any Artifact write.
+ * Other mutations preserve mode/currentness through compatible content admission.
  */
 export async function acquireArtifactPublicationLocksInTx(tx: Tx, artifactId: string, additionalAccountIds: readonly string[] = []): Promise<void> {
     // SQLite already admits one writer. PostgreSQL/MySQL use the same ordered
     // Account locks as publication, including the single-owner Artifact case.
     if (getDbProviderFromEnv(process.env, "postgres") === "sqlite") return;
     const accountIds = [...new Set([...await resolveArtifactAudienceInTx(tx, artifactId), ...additionalAccountIds])];
-    await acquireAccountChangePublicationLocksInTx(tx, accountIds, { includeSingleAccount: true });
+    await acquireAccountChangePublicationLocksInTx(tx, accountIds, {
+        includeSingleAccount: true,
+        intent: readArtifactStorageEnv(process.env).accountLimitBytes === null ? "content" : "exclusive",
+    });
+    // Header/body versions are independent, but head sequence, retained history
+    // and document storage admission consume one complete current head.
+    if (getDbProviderFromEnv(process.env, "postgres") === "postgres") {
+        await tx.$queryRawUnsafe('SELECT "id" FROM "Artifact" WHERE "id" = $1 FOR NO KEY UPDATE', artifactId);
+    } else {
+        await tx.$queryRawUnsafe('SELECT `id` FROM `Artifact` WHERE `id` = ? FOR UPDATE', artifactId);
+    }
     const captured = new Set(accountIds);
     // ReadCommitted may observe a newly granted recipient while acquiring the
     // locks. Replay instead of extending an already ordered lock set in place.
@@ -86,6 +99,7 @@ export async function acquireArtifactPublicationLocksInTx(tx: Tx, artifactId: st
 
 export interface ArtifactForCaller {
     id: string;
+    kind: ArtifactCoarseKindV1 | null;
     ownerAccountId: string;
     access: ArtifactCallerAccessV1;
     encryptionMode: "plain" | "e2ee";
@@ -121,11 +135,11 @@ export function projectPlainArtifactSharingResourceV1(artifact: ArtifactForCalle
 type StoredRecipientEnvelope = ResourceStoredRecipientEnvelope;
 
 const headerContentSelect = {
-    id: true, header: true, headerVersion: true, dataEncryptionKey: true, seq: true, createdAt: true, updatedAt: true,
+    id: true, kind: true, header: true, headerVersion: true, dataEncryptionKey: true, seq: true, createdAt: true, updatedAt: true,
     provenanceDataEncryptionKey: true,
 } as const;
 type StoredArtifactHeader = Readonly<{
-    id: string; header: Uint8Array; headerVersion: number; dataEncryptionKey: Uint8Array;
+    id: string; kind: string | null; header: Uint8Array; headerVersion: number; dataEncryptionKey: Uint8Array;
     provenanceDataEncryptionKey: Uint8Array | null;
     seq: number; createdAt: Date; updatedAt: Date;
 }>;
@@ -138,7 +152,7 @@ function projectArtifactHeader(row: StoredArtifactHeader, access: ArtifactAccess
     const header = openArtifactStoredContentBytes({ accountId: access.ownerAccountId, artifactId: row.id,
         mode: access.encryptionMode, dataEncryptionKey: row.dataEncryptionKey, content: row.header, field: "header" });
     if (!header) return { ok: false, error: "artifact_content_unavailable", ownerAccountId: access.ownerAccountId };
-    return { ok: true, artifact: { id: row.id, ownerAccountId: access.ownerAccountId,
+    return { ok: true, artifact: { id: row.id, kind: ArtifactCoarseKindV1Schema.safeParse(row.kind).data ?? null, ownerAccountId: access.ownerAccountId,
         access: access.level, encryptionMode: access.encryptionMode, header,
         headerVersion: row.headerVersion, dataEncryptionKey: key,
         provenanceDataEncryptionKey: provenanceKey,
@@ -263,8 +277,9 @@ function artifactContentAdmissionMatches(current: ArtifactHeaderForCaller, captu
 export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
     actorAccountId: string; limit: number; cursor: Readonly<{ updatedAt: Date; id: string }> | null;
     includeBody?: boolean;
+    kind?: ArtifactCoarseKindV1 | null;
 }>): Promise<ArtifactListItemForCaller[]> {
-    const candidates = await listArtifactCandidatesInTx(tx, input.actorAccountId);
+    const candidates = await listArtifactCandidatesInTx(tx, input.actorAccountId, input.kind);
     const result: ArtifactListItemForCaller[] = [];
     let cursor = input.cursor;
     while (result.length < input.limit) {
@@ -275,6 +290,7 @@ export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
             ...(getDbProviderFromEnv(process.env, "postgres") === "postgres" ? { relationLoadStrategy: "query" as const } : {}),
             where: {
                 id: { in: candidates }, ...artifactVisibleWhere,
+                ...(input.kind !== undefined ? { kind: input.kind } : {}),
                 ...(cursor ? { OR: [
                     { updatedAt: { lt: cursor.updatedAt } },
                     { updatedAt: cursor.updatedAt, id: { lt: cursor.id } },
@@ -315,6 +331,7 @@ export async function listArtifactHeadersForCaller(input: Parameters<typeof list
         return captured.flatMap(artifact => {
             const current = currentById.get(artifact.id);
             return current?.ok && artifactContentAdmissionMatches(current.artifact, artifact)
+                && (input.kind === undefined || current.artifact.kind === input.kind)
                 ? [{ ...artifact, access: current.artifact.access }] : [];
         });
     });

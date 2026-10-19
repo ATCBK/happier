@@ -18,6 +18,7 @@ import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracki
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";
 import { AccountStatus, getDbProviderFromEnv } from "@/storage/prisma";
 import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterAccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
     assertSessionCapabilityInTx,
     resolveEffectiveSessionAccess,
@@ -202,13 +203,13 @@ export async function setSessionResponsibility(params: Readonly<{
         if (desired !== null && desired !== params.actorAccountId) {
             const recipientChange = readerCursors.find(change => change.accountId === desired);
             if (recipientChange) {
-                scheduleSessionPersonalEvent(tx, desired, {
+                afterAccountChangePublication(tx, async () => scheduleSessionPersonalEvent(tx, desired, {
                     type: "session-personal-event",
                     sessionId: params.sessionId,
                     event: "assigned",
-                    eventId: `assigned:${desired}:${recipientChange.cursor}`,
+                    eventId: `assigned:${desired}:${recipientChange.resolveCursor()}`,
                     assignmentAutoFollowed: autoFollowed,
-                });
+                }));
             }
         }
 
