@@ -6561,11 +6561,11 @@ export async function startDaemonSessionControlRuntime(
       },
     });
   };
-  const captureSessionRunnerRemainder = async (tracked: TrackedSession, sessionId: string): Promise<void> => {
+  const captureSessionRunnerRemainder = async (tracked: TrackedSession, sessionId: string) => {
     // This exact native tree includes Session-owned Runs, even though their
     // process tags deliberately identify the more specific logical Run owner.
     // Anchor it to the same witnessed wrapper/runner that receives the signal.
-    tracked.ownerRemainderCapture = await ownerRemainder.captureTree({ kind: 'session', sessionId }, {
+    return await ownerRemainder.captureTree({ kind: 'session', sessionId }, {
       pid: tracked.pid,
       ...(tracked.processStartTimeMs === undefined ? {} : { start: { startTimeMs: tracked.processStartTimeMs } }),
     });

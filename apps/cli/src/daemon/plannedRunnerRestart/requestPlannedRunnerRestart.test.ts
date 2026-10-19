@@ -40,6 +40,7 @@ describe('requestPlannedRunnerRestart', () => {
         // Capture can suspend on the OS. A replaced runner cannot inherit the
         // previous generation's signal authority after it returns.
         trackedByPid.set(tracked.pid, { ...tracked });
+        return { scope: 'subtree', roots: [], ownership: [] };
       },
       requestSignal: async request => {
         signaled = await request.shouldSignal();

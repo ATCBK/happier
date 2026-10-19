@@ -13170,6 +13170,18 @@ describe('startDaemonSessionControlRuntime', () => {
     });
 
     it('keeps unresolved terminal topology fenced without exact physical retirement proof', async () => {
+        // The canonical Stop owner can repair an obsolete unresolved index when
+        // no host exists. Retain a real descriptor whose death cannot be proven.
+        await writeTerminalHostAttachmentInfo({
+            happyHomeDir: configuration.happyHomeDir,
+            sessionId: 'session-unresolved-terminal',
+            handle: {
+                kind: 'tmux',
+                sessionName: 'happier-unresolved-terminal',
+                paneId: 'pane-unresolved',
+                attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared', locality: 'same_machine', liveProbe: 'required' },
+            },
+        });
         const runtime = await startDaemonSessionControlRuntime({
             machineId: 'machine-terminal-recovery',
             credentials: {
@@ -13199,8 +13211,7 @@ describe('startDaemonSessionControlRuntime', () => {
         });
 
         try {
-            // An unresolved startup entry supplies no exact attachment or dead
-            // process proof. It must not be treated as a positively retired host.
+            // Without an adapter/probe, the retained host is not positively dead.
             await expect(runtime.spawnSession({
                 directory: '/tmp/project',
                 backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
@@ -18278,7 +18289,7 @@ describe('startDaemonSessionControlRuntime', () => {
         }
     });
 
-    it.each(['idle', 'transcript-only input after stopped narrator', 'activity observation unavailable', 'active child', 'child exceeds existing budget', 'replacement exceeds observer budget', 'credential retirement',
+    it.each(['idle', 'transcript-only input after stopped narrator', 'activity observation unavailable', 'remainder capture unavailable', 'active child', 'child exceeds existing budget', 'replacement exceeds observer budget', 'credential retirement',
         'Stop before exit', 'shutdown before exit', 'adopted runner survives'] as const)('finishes a planned refresh after the child is idle, including shutdown respawn (%s)', async (childActivity) => {
         const home = await mkdtemp(join(tmpdir(), 'runner-child-restart-'));
         const previousConfiguration = { happyHomeDir: configuration.happyHomeDir,
@@ -18306,6 +18317,16 @@ describe('startDaemonSessionControlRuntime', () => {
             tracked.childProcess = childProcess as never;
             tracked.sessionRunnerPid = tracked.pid;
             await installTrackedRunnerProcfsBoundary(tracked, () => credentialProcessLive);
+        }
+        if (childActivity !== 'adopted runner survives' && childActivity !== 'credential retirement') {
+            await installTrackedRunnerProcfsBoundary(tracked, () => credentialProcessLive);
+        }
+        if (childActivity === 'remainder capture unavailable') {
+            const previousReaddir = vi.mocked(filesystem.readdir).getMockImplementation()!;
+            vi.mocked(filesystem.readdir).mockImplementation((async (path, options) => {
+                if (String(path) === '/proc') throw Object.assign(new Error('Fixture census unavailable'), { code: 'EACCES' });
+                return Reflect.apply(previousReaddir, undefined, [path, options]);
+            }) as typeof filesystem.readdir);
         }
         let shuttingDown = false;
         let signalSent = false;
@@ -18416,6 +18437,14 @@ describe('startDaemonSessionControlRuntime', () => {
         let refreshResult: unknown;
         void refresh?.then(result => { refreshResult = result; });
         try {
+            if (childActivity === 'remainder capture unavailable') {
+                expect(RestartSessionRunnerResultV1Schema.parse(await refresh)).toMatchObject({ ok: false, status: 'partial_failure',
+                    diagnostics: { runnerRemainderCapture: 'unavailable', retryable: true } });
+                expect(signalSent).toBe(false);
+                expect(runtime.hasPendingRunnerRestarts()).toBe(false);
+                expect(executeSpawnSessionRequest).not.toHaveBeenCalled();
+                return;
+            }
             if (childActivity === 'activity observation unavailable') {
                 expect(RestartSessionRunnerResultV1Schema.parse(await refresh)).toMatchObject({ ok: false, status: 'partial_failure',
                     diagnostics: { activityObservation: 'unavailable' } });

@@ -9,6 +9,7 @@ import type {
 } from './types';
 import type { TrackedSession } from '../types';
 import type { RestartSessionRunnerCompletion } from './restartSessionRunnerOnCurrentRuntime';
+import type { OwnerRemainderCapture } from '../processes/endOwnerRemainder';
 
 type RestartCompletionWaiter = Readonly<{
   promise: Promise<RestartSessionRunnerCompletion>;
@@ -26,7 +27,7 @@ export type RequestPlannedRunnerRestartParams = Readonly<{
     create: () => RestartCompletionWaiter;
   }>;
   observeRunnerRetirement?: (tracked: TrackedSession, sessionId: string) => void | boolean | Promise<void | boolean>;
-  captureRunnerRemainder?: (tracked: TrackedSession, sessionId: string) => Promise<void>;
+  captureRunnerRemainder?: (tracked: TrackedSession, sessionId: string) => Promise<OwnerRemainderCapture | undefined>;
   deferral: PlannedRunnerRestartDeferral;
   restartRequestedPids: Set<number>;
   pidToTrackedSession: ReadonlyMap<number, TrackedSession>;
@@ -181,7 +182,14 @@ export async function requestPlannedRunnerRestart(
               : allowedByActivityGate;
             return false;
           }
-          await params.captureRunnerRemainder?.(params.tracked, params.sessionId);
+          if (params.captureRunnerRemainder) {
+            const captured = await params.captureRunnerRemainder(params.tracked, params.sessionId);
+            if (!captured) {
+              notSignaledReason = 'remainder_capture_unavailable';
+              return false;
+            }
+            params.tracked.ownerRemainderCapture = captured;
+          }
           if (!await exactProcessWitnessIsCurrent()) return false;
           if (signal.aborted) {
             notSignaledReason = 'activity_in_progress';

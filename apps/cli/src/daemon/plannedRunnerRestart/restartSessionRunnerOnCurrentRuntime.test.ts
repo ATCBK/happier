@@ -25,6 +25,7 @@ import {
 import { applyTrackedSessionTurnLifecycle } from '../sessions/applyTrackedSessionTurnLifecycle';
 import { requestPlannedRunnerRestart } from './requestPlannedRunnerRestart';
 import { requestConnectedServiceSessionRestartSignal } from '../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
+import { restartStaleRunnersAfterDaemonStart } from './restartStaleRunnersAfterDaemonStart';
 
 function currentIdentity(version: string): SessionRunnerEntrypointIdentity {
   return {
@@ -77,6 +78,46 @@ function providerRecoveryRequest() {
 }
 
 describe('restartSessionRunnerOnCurrentRuntime', () => {
+  it.each(['single', 'bulk', 'startup'] as const)('refuses %s refresh without capture authority and permits an explicit retry', async mode => {
+    const tracked = trackedSession();
+    const reservations = new Set<number>();
+    const signals: number[] = [];
+    let available = false;
+    const input = {
+      trackedSessions: [tracked], currentIdentity: currentIdentity('0.2.11'),
+      requestRestart: async input =>
+        requestPlannedRunnerRestart({ ...input, deferral: { kind: 'none' },
+          restartRequestedPids: reservations, pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+          isProcessSafeToSignal: async () => true,
+          captureRunnerRemainder: async () => available ? { scope: 'subtree', roots: [], ownership: [] } : undefined,
+          requestSignal: async request => {
+            if (!await request.shouldSignal()) return { status: 'skipped_stale_owner' };
+            signals.push(tracked.pid);
+            return { status: 'requested' };
+          },
+        }),
+    } satisfies Omit<Parameters<typeof restartAllSessionRunnersOnCurrentRuntime>[0], 'mode' | 'reason'>;
+    const run = async () => {
+      if (mode === 'single') return await restartSessionRunnerOnCurrentRuntime({ ...input, tracked,
+        request: { sessionId: 'sess-1', mode: 'if_stale', reason: 'daemon_restart_session_runners_command' } });
+      const result = mode === 'bulk'
+        ? await restartAllSessionRunnersOnCurrentRuntime({ ...input, mode: 'if_stale', reason: 'daemon_restart_session_runners_command' })
+        : await restartStaleRunnersAfterDaemonStart({ readSettings: async () => ({ restartSessionRunnersOnUpdate: true }),
+          isShuttingDown: () => false, restart: () => input, logDebug: () => {}, logWarn: () => {} });
+      const bulk = 'status' in result ? result.status === 'completed' ? result.result : null : result;
+      expect(bulk).not.toBeNull();
+      return bulk!.results[0]!;
+    };
+    const refusal = await run();
+    expect(refusal).toEqual({ ok: false, status: 'partial_failure', sessionId: 'sess-1',
+      diagnostics: { runnerRemainderCapture: 'unavailable', retryable: true } });
+    expect(RestartSessionRunnerResultV1Schema.safeParse(refusal).success).toBe(true);
+    expect(signals).toEqual([]);
+    expect(reservations.size).toBe(0);
+    available = true;
+    expect(await run()).toMatchObject({ ok: true, status: 'restarted' });
+    expect(signals).toEqual([tracked.pid]);
+  });
   it('keeps final shutdown cancellation within the existing public restart response schema', async () => {
     const tracked = trackedSession();
     const restartRequestedPids = new Set<number>();

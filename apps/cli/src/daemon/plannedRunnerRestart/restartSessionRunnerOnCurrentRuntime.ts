@@ -158,6 +158,7 @@ function mapRestartNotSignaledReasonToDisabledReason(
     || reason === 'shutting_down'
     || reason === 'runner_identity_changed'
     || reason === 'activity_observation_unavailable'
+    || reason === 'remainder_capture_unavailable'
   ) {
     return null;
   }
@@ -518,6 +519,10 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
     if (restart.notSignaledReason === 'activity_observation_unavailable') {
       return { ok: false, status: 'partial_failure', sessionId,
         diagnostics: { activityObservation: 'unavailable' } };
+    }
+    if (restart.notSignaledReason === 'remainder_capture_unavailable') {
+      return { ok: false, status: 'partial_failure', sessionId,
+        diagnostics: { runnerRemainderCapture: 'unavailable', retryable: true } };
     }
     if (
       restart.notSignaledReason === 'unsafe_process'
