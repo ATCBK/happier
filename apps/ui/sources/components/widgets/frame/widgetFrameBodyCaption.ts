@@ -34,12 +34,17 @@ export function useWidgetFrameBodyMeta(meta: React.ReactNode): void {
 }
 
 /**
- * The host's one sentence about a body that cannot reach the Machine it runs on ("This operation is
+ * The host's one sentence (and, when no Machine exists, its next step) about a body that cannot reach the Machine it runs on ("This operation is
  * unavailable on Studio Mac. Reconnect it or choose another machine with Run on."). The mount that
  * was refused lends how to word it now (`undefined` once the Machine answers again), and the shared
  * widget surface says it once, whichever plugin the widget is.
  */
-export type WidgetFrameBodyNoticeSource = () => string | undefined;
+export type WidgetFrameBodyNotice = Readonly<{
+  sentence: string;
+  /** No Machine exists to run it, so retrying cannot help: the way forward is adding one. */
+  addMachine?: true;
+}>;
+export type WidgetFrameBodyNoticeSource = () => WidgetFrameBodyNotice | undefined;
 export const WidgetFrameBodyNoticeContext = React.createContext<
   ((notice: WidgetFrameBodyNoticeSource | null) => void) | null
 >(null);

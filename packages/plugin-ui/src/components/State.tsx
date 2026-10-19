@@ -1,10 +1,10 @@
-import { useMemo, type ReactElement, type ReactNode } from 'react';
+import { useContext, useMemo, type ReactElement, type ReactNode } from 'react';
 import { View } from 'react-native';
 import type { ResourceContent } from '@happier-dev/plugin-sdk/ui';
 import type { PluginUiResourceSnapshot } from '../hostApi/resourceStore.js';
 
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
-import { useClaimedPluginUiSurfaceNotice } from '../presentationHost/surfaceNotice.js';
+import { PluginUiSurfaceNoticeContext, useClaimedPluginUiSurfaceNotice } from '../presentationHost/surfaceNotice.js';
 import { resolveHappierFreshnessText } from '../presentation/state/asOfTime.js';
 import { usePluginSurfaceActivity } from '../hostApi/context.js';
 import { HappierSkeletonRows } from '../presentation/feedback/Skeleton.js';
@@ -494,8 +494,10 @@ function SurfaceStateAdapter(authored: SurfaceStateProps & Readonly<{ actionSlot
   // failure state says that sentence in its own place, with its own action, instead of its own copy:
   // the cause is said once, where it failed, and the host draws nothing of its own beside it.
   const hostSentence = useClaimedPluginUiSurfaceNotice(authored.kind === 'error' || authored.kind === 'unavailable');
+  const hostAction = useContext(PluginUiSurfaceNoticeContext)?.action;
   const props = hostSentence === null ? authored : {
     ...authored, kind: 'warning' as const, title: hostSentence, titleKey: undefined,
+    ...(hostAction ? { action: { label: hostAction.label, onPress: hostAction.onPress }, actionSlot: undefined } : {}),
     description: undefined, descriptionKey: undefined, note: undefined, noteKey: undefined, details: undefined, icon: undefined,
     body: undefined, live: undefined, actionCaption: undefined, secondaryAction: undefined, learnMore: undefined,
   };

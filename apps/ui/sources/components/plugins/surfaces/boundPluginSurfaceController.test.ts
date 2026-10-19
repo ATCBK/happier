@@ -27,7 +27,7 @@ import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContri
 import { log } from '@/log';
 import { t } from '@/text';
 import { settlePluginSurfaceHostApiRequest } from './createPluginSurfaceHostApi';
-import { WidgetFrameBodyNoticeContext } from '@/components/widgets/frame/widgetFrameBodyCaption';
+import { WidgetFrameBodyNoticeContext, type WidgetFrameBodyNoticeSource } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { storage } from '@/sync/domains/state/storageStore';
 import {
     createBoundPluginSurfaceController,
@@ -368,10 +368,23 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         // Lent once, as a way to word it that follows the Machine's state.
         await settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation));
         expect(lend).toHaveBeenCalledTimes(1);
-        const describe = lend.mock.calls[0]![0] as () => string | undefined;
-        expect(describe()).toBe(t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine: 'Studio Mac' }));
+        const describe = lend.mock.calls[0]![0] as WidgetFrameBodyNoticeSource;
+        expect(describe()).toEqual({ sentence: t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine: 'Studio Mac' }) });
         await hook.unmount();
         expect(lend).toHaveBeenLastCalledWith(null);
+    });
+
+    it('tells the widget frame that no Machine exists, so it leads to adding one instead of retrying', async () => {
+        const lend = vi.fn();
+        const hook = await renderHook(() => useBoundPluginSurfaceController({ facts: {
+            ...FACTS, machineId: null, machineDisplayName: null, occurrenceId: null, executionOrigin: null,
+            daemonInteractionEnabled: false, executionOriginSelectionKind: 'unavailable',
+        } }), { wrapper: ({ children }) => React.createElement(WidgetFrameBodyNoticeContext.Provider, { value: lend }, children) });
+        const invocation = request('executeAction', { action: 'refresh-index', input: {} });
+        await settlePluginSurfaceHostApiRequest(invocation, () => hook.getCurrent().hostApi.handleRequest(invocation));
+        const describe = lend.mock.calls[0]![0] as WidgetFrameBodyNoticeSource;
+        expect(describe()).toEqual({ sentence: t('settingsPlugins.targetSelection.noMachine'), addMachine: true });
+        await hook.unmount();
     });
 
     it.each(['selectionRequired', 'conflict'] as const)('asks for a target only when Administration reports %s', async executionOriginSelectionKind => {

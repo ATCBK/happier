@@ -656,6 +656,27 @@ describe('a host sentence about a part that cannot run now', () => {
     expect(claims).toHaveLength(0);
   });
 
+  it('draws the host\'s way forward in place of the failure state\'s own retry when retrying cannot help', () => {
+    let opened = 0;
+    let retried = 0;
+    const notice = {
+      sentence: 'Add or connect a machine to use this here.',
+      action: { label: 'Add a machine', onPress: () => { opened += 1; } },
+      claim: () => () => undefined,
+    };
+    const mount = mountSurface(
+      <PluginUiSurfaceNoticeContext.Provider value={notice}>
+        <ErrorState title="The latest entries could not be read" onRetry={() => { retried += 1; }} />
+      </PluginUiSurfaceNoticeContext.Provider>,
+    );
+    const buttons = mount.container.querySelectorAll('[role="button"]');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]!.textContent).toBe('Add a machine');
+    act(() => { (buttons[0] as HTMLElement).click(); });
+    expect({ opened, retried }).toEqual({ opened: 1, retried: 0 });
+    mount.unmount();
+  });
+
   it('leaves a non-failure state and every state outside such a host untouched', () => {
     const mount = mountSurface(
       <>

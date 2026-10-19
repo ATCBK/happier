@@ -90,7 +90,7 @@ import { createPluginOpenNewSessionHostApiHandler } from './pluginOpenNewSession
 import { createPluginSurfaceSessionHandlers } from './pluginSurfaceSessionState';
 import { createPluginSurfaceStoredImageOwner, type PluginStoredImageReadTransport } from './pluginSurfaceStoredImage';
 import { createPluginSurfaceLiveStreamOwner } from './pluginSurfaceLiveStream';
-import { WidgetFrameBodyNoticeContext } from '@/components/widgets/frame/widgetFrameBodyCaption';
+import { WidgetFrameBodyNoticeContext, type WidgetFrameBodyNotice, type WidgetFrameBodyNoticeSource } from '@/components/widgets/frame/widgetFrameBodyCaption';
 
 /**
  * The bound surface controller (§3.1).
@@ -269,7 +269,7 @@ export type BoundPluginSurfaceFacts = Readonly<{
      * Told, on this mount's first Machine-owned refusal, how to word it from then on (`undefined` once
      * the Machine answers); a widget frame says it once above the body.
      */
-    onMachineUnavailable?: (describe: () => string | undefined) => void;
+    onMachineUnavailable?: (describe: WidgetFrameBodyNoticeSource) => void;
     /**
      * The hook-owned live form of daemon availability. It narrows the already
      * bound daemon handlers during connectivity/projection refresh without
@@ -1173,22 +1173,22 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     const isConnectionPending = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1) =>
         input.facts.isDaemonConnectionPending?.() === true && isMachineUnavailable(diagnostics, request);
     let machineNoticeLent = false;
-    const describeMachineUnavailable = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): string | undefined => {
+    const describeMachineNotice = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): WidgetFrameBodyNotice | undefined => {
         const daemonUnavailable = isMachineUnavailable(diagnostics, request);
         if (!daemonUnavailable || input.facts.isDaemonConnectionPending?.() === true) return undefined;
         const machineId = input.facts.machineId?.trim();
         if (!machineId) {
             const kind = input.facts.executionOriginSelectionKind;
-            if (kind === 'selectionRequired' || kind === 'conflict') return t('settingsPlugins.targetSelection.selectionRequired');
+            if (kind === 'selectionRequired' || kind === 'conflict') return { sentence: t('settingsPlugins.targetSelection.selectionRequired') };
+            // No Machine can run it at all: say what to do, and lead to doing it, not "this machine" cannot.
+            if (kind === 'unavailable') return { sentence: t('settingsPlugins.targetSelection.noMachine'), addMachine: true };
         }
         // A Machine whose name has not loaded yet is "this machine" in a sentence, never its raw id.
         const machine = input.facts.machineDisplayName?.trim() || t('machine.thisMachineInSentence');
-        return daemonUnavailable
-            ? t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine })
-            // No Machine can run it at all: say what to do, not that "this machine" cannot.
-            if (kind === 'unavailable') return t('settingsPlugins.targetSelection.noMachine');
-            : undefined;
+        return { sentence: t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine }) };
     };
+    const describeMachineUnavailable = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): string | undefined =>
+        describeMachineNotice(diagnostics, request)?.sentence;
     const widgetArea = createPluginWidgetAreaHostHandler({ facts: input.facts, isCurrent, lifetimeSignal: mountLifetime.signal, hostAction, callerBinding,
         isConnectionPending: reason => isConnectionPending([reason]),
         describeUnavailable: (reason) => describeMachineUnavailable([reason]) });
@@ -1221,7 +1221,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             const sentence = describeMachineUnavailable(error.diagnostics, request);
             if (sentence && !machineNoticeLent) {
                 machineNoticeLent = true;
-                input.facts.onMachineUnavailable?.(() => describeMachineUnavailable(error.diagnostics, request));
+                input.facts.onMachineUnavailable?.(() => describeMachineNotice(error.diagnostics, request));
             }
             return sentence;
         },
@@ -1370,7 +1370,7 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     const lendMachineNoticeRef = React.useRef(lendMachineNotice);
     lendMachineNoticeRef.current = lendMachineNotice;
     const onMachineUnavailable = React.useCallback(
-        (describe: () => string | undefined) => lendMachineNoticeRef.current?.(describe), [],
+        (describe: WidgetFrameBodyNoticeSource) => lendMachineNoticeRef.current?.(describe), [],
     );
     const daemonInteractionEnabledRef = React.useRef(facts.daemonInteractionEnabled);
     daemonInteractionEnabledRef.current = facts.daemonInteractionEnabled;

@@ -1,11 +1,14 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useStore } from 'zustand';
 import { PluginUiSurfaceNoticeContext } from '@happier-dev/plugin-ui/advanced';
 
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { WidgetFrameBodyNoticeContext, type WidgetFrameBodyNoticeSource } from '@/components/widgets/frame/widgetFrameBodyCaption';
+import { MACHINES_ADD_ROUTE } from '@/components/settings/machines/collection/machineCollectionModel';
 import { storage } from '@/sync/domains/state/storageStore';
+import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { t } from '@/text';
 
 /**
@@ -16,7 +19,8 @@ import { t } from '@/text';
  * answers. A plugin's own failure state for that part (plugin-ui `ErrorState`, a failed `SurfaceState`)
  * claims the sentence and says it in its own place with its own action, so only the part that needed
  * the Machine changes; while nothing claims it (an optional part failed quietly), the host says it as
- * one line above the body, with one action, Retry, which asks the body afresh.
+ * one line above the body, with one action, Retry, which asks the body afresh. When no Machine exists at
+ * all, retrying cannot help, so the one action is the way forward — adding a machine — in either place.
  */
 export function WidgetMachineNoticeBoundary(props: Readonly<{ testID: string; children: React.ReactNode }>): React.ReactElement {
     const [source, setSource] = React.useState<WidgetFrameBodyNoticeSource | null>(null);
@@ -36,17 +40,26 @@ export function WidgetMachineNoticeBoundary(props: Readonly<{ testID: string; ch
             return next;
         });
     }, []);
-    const notice = useStore(storage, () => source?.() ?? null);
-    const surfaceNotice = React.useMemo(() => (notice === null ? null : { sentence: notice, claim }), [notice, claim]);
+    const router = useRouter();
+    // Primitive selections keep each snapshot stable by value while the stores change.
+    const sentence = useStore(storage, () => source?.()?.sentence ?? null);
+    const addMachine = useStore(storage, () => source?.()?.addMachine === true);
+    const action = React.useMemo(() => addMachine
+        ? { label: t('settings.addMachine'), onPress: () => { runGuardedNavigation(() => router.push(MACHINES_ADD_ROUTE as never)); } }
+        : undefined, [addMachine, router]);
+    const surfaceNotice = React.useMemo(
+        () => (sentence === null ? null : { sentence, claim, ...(action ? { action } : {}) }),
+        [sentence, claim, action],
+    );
     return (
         <WidgetFrameBodyNoticeContext.Provider value={lend}>
-            {notice === null || claimants.size > 0 ? null : (
+            {sentence === null || claimants.size > 0 ? null : (
                 <SurfaceStateCard
                     testID={`${props.testID}-machine-notice`}
                     kind="warning"
                     size="line"
-                    title={notice}
-                    action={{ label: t('common.retry'), onPress: retry }}
+                    title={sentence}
+                    action={action ?? { label: t('common.retry'), onPress: retry }}
                     accessibilitySemantics="status"
                 />
             )}

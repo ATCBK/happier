@@ -6,9 +6,14 @@ import { createContext, useContext, useId, useLayoutEffect } from 'react';
  * state (`ErrorState`, a failed `SurfaceState`) says the host's sentence in its own place instead of its
  * own copy, keeping its own action; the host says it itself only while no failure state does. Either
  * way the cause is said once and the rest of the body stays as the plugin drew it.
+ *
+ * When retrying cannot help (no Machine exists to run it), the host offers the real next step as `action`;
+ * the claiming failure state draws it in place of its own recovery.
  */
 export type PluginUiSurfaceNotice = Readonly<{
   sentence: string;
+  /** The way forward when the plugin's own retry cannot help; replaces the failure state's action. */
+  action?: Readonly<{ label: string; onPress(): void }>;
   /** Keep stable for the host's lifetime: a failure state claims once and releases on unmount. */
   claim(id: string): () => void;
 }>;
