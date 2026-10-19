@@ -56,6 +56,13 @@ export type SessionInitialGoalRequestV1 = z.infer<typeof SessionInitialGoalReque
 export const SessionGoalClearRequestV1Schema = lazyZodSchema(() => z.looseObject({}));
 export type SessionGoalClearRequestV1 = z.infer<typeof SessionGoalClearRequestV1Schema>;
 
+/** Content-free settlement evidence; never carry the native error or command here. */
+export const SessionGoalControlFailureV1Schema = lazyZodSchema(() => z.strictObject({
+  phase: z.enum(['native_effect', 'provider_completion', 'tail_drain',
+    'missing_matching_publication', 'host_publication_rejected']),
+}));
+export type SessionGoalControlFailureV1 = z.infer<typeof SessionGoalControlFailureV1Schema>;
+
 export const SessionConnectedServiceAuthInvalidateTransportsRequestV1Schema = lazyZodSchema(() => z.looseObject({}));
 export type SessionConnectedServiceAuthInvalidateTransportsRequestV1 =
   z.infer<typeof SessionConnectedServiceAuthInvalidateTransportsRequestV1Schema>;

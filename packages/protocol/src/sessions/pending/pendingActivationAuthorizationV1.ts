@@ -4,8 +4,16 @@ import { ManagedWakeTargetV1Schema } from '../../machines/managed/managedIntentV
 import { SessionInputMachineTargetV1Schema } from '../messages/sessionInputAdmission.js';
 import { SpawnSessionErrorCodeSchema } from '../spawnSession.js';
 
-export const PendingActivationFailureCodeV1Schema = lazyZodSchema(() => z.enum(['runtime_start_failed']));
+export const PendingActivationFailureCodeV1Schema = lazyZodSchema(() => z.enum([
+  'runtime_start_failed', 'managed_start_refused', 'managed_start_denied', 'managed_start_expired', 'managed_start_failed',
+]));
 export type PendingActivationFailureCodeV1 = z.infer<typeof PendingActivationFailureCodeV1Schema>;
+
+/** Optional read-only queue diagnostics. Unknown reasons are ignored, never activation authority. */
+export const PendingActivationHoldReasonV1Schema = lazyZodSchema(() => z.enum([
+  'resume_not_requested', 'managed_power_required',
+]));
+export type PendingActivationHoldReasonV1 = z.infer<typeof PendingActivationHoldReasonV1Schema>;
 
 export const PendingActivationRuntimeFailureReasonV1Schema = lazyZodSchema(() => z.enum([
   'runner_authority_unavailable', 'runner_presence_unproven', 'no_token', 'shutdown',
@@ -23,7 +31,7 @@ export type PendingActivationFailureDetailsV1 = z.infer<typeof PendingActivation
 
 // The predecessor ignores query diagnostics and still accepts the unchanged CAS body.
 export const PendingActivationFailureQueryV1Schema = lazyZodSchema(() => z.strictObject({
-  failureDetails: z.optional(z.pipe(z.transform(value => {
+  failureDetails: z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(value => {
     if (typeof value !== 'string') return value;
     try { return JSON.parse(value); } catch { return null; }
   }), PendingActivationFailureDetailsV1Schema)),

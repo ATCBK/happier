@@ -1342,8 +1342,30 @@ describe('session metadata privacy envelopes v1', () => {
     } as const;
     expect(SessionMetadataTuplePatchV1Schema.parse({ ...ownerPatch, activitySummaryV1 }))
       .toEqual({ ...ownerPatch, activitySummaryV1 });
+    const requestSummary = { ...activitySummaryV1, newUserActionRequiredOccurrences: [{
+      requestId: 'question', sourceTurnId: 'turn-question', requestKind: 'user_action', occurredAt: 250,
+      followEvent: { kind: 'needs_you', type: 'decision', mode: 'wait', handling: 'person' },
+    }] };
+    expect(SessionMetadataTuplePatchV1Schema.parse({ ...ownerPatch, activitySummaryV1: requestSummary }))
+      .toEqual({ ...ownerPatch, activitySummaryV1: requestSummary });
+    expect(SessionMetadataTuplePatchV1Schema.safeParse({ ...ownerPatch, activitySummaryV1: {
+      ...requestSummary, newUserActionRequiredOccurrences: [{ ...requestSummary.newUserActionRequiredOccurrences[0], accountId: 'other' }],
+    } }).success).toBe(false);
     expect(SessionMetadataTuplePatchV1Schema.safeParse({ ...sharedEditorPatch, activitySummaryV1 }).success)
       .toBe(false);
+    const sharedActionConfirmationSummaryV1 = { pendingPermissionRequestCount: 1 };
+    for (const patch of [ownerPatch, sharedEditorPatch]) {
+      expect(SessionMetadataTuplePatchV1Schema.parse({ ...patch, sharedActionConfirmationSummaryV1 }))
+        .toEqual({ ...patch, sharedActionConfirmationSummaryV1 });
+    }
+    for (const summary of [
+      { pendingPermissionRequestCount: -1 },
+      { pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 1 },
+      { pendingPermissionRequestCount: 2_147_483_648 },
+    ]) expect(SessionMetadataTuplePatchV1Schema.safeParse({ ...sharedEditorPatch,
+      sharedActionConfirmationSummaryV1: summary }).success).toBe(false);
+    expect(SessionMetadataTuplePatchV1Schema.safeParse({ ...sharedEditorPatch,
+      mutationIntent: 'rename_session', sharedActionConfirmationSummaryV1 }).success).toBe(false);
     expect(SessionMetadataTuplePatchV1Schema.safeParse({
       ...ownerPatch,
       publisherPrecondition: {

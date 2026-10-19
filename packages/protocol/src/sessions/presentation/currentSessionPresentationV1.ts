@@ -336,7 +336,9 @@ export const CurrentSessionPresentationAckV1Schema = lazyZodSchema(() => z.stric
 export type CurrentSessionPresentationAckV1 = z.infer<typeof CurrentSessionPresentationAckV1Schema>;
 
 export const CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY = 'currentSessionPresentationV1' as const;
-export const CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD = 'session.presentation.bind' as const;
-export const CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD = 'session.presentation.ack' as const;
-export const CURRENT_SESSION_PRESENTATION_UNBIND_RPC_METHOD = 'session.presentation.unbind' as const;
-export const CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD = 'session.presentation.apply' as const;
+export {
+  CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD,
+  CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD,
+  CURRENT_SESSION_PRESENTATION_UNBIND_RPC_METHOD,
+  CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD,
+} from '../../rpc/methods.js';

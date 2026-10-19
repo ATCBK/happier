@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildSessionWorkspaceLocationV1,
+  readSessionWorkspaceLocationFromMetadata,
   resolveSessionWorkspaceRootForMachine,
+  SessionWorkspaceLocationV1Schema,
 } from './sessionWorkspaceLocationV1';
 import {
   createSessionOwnerMetadataV1,
@@ -14,6 +16,42 @@ describe('sessionWorkspaceLocationV1', () => {
     machineId: 'machine-1',
     agentPath: '/home/coder/project',
     machinePath: '/Users/alice/project',
+  });
+
+  it('does not allocate validation errors for absent optional workspace mappings', () => {
+    // Call-through instrumentation: keep the real schema and parsing behavior.
+    const parse = vi.spyOn(SessionWorkspaceLocationV1Schema, 'safeParse');
+    try {
+      for (const metadata of [{}, { sessionWorkspaceLocationV1: undefined }, { sessionWorkspaceLocationV1: null }]) {
+        expect(resolveSessionWorkspaceRootForMachine({
+          metadata, machineId: 'machine-1', candidatePath: '/home/coder/project',
+        })).toEqual({ machinePath: '/home/coder/project' });
+      }
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+    expect(readSessionWorkspaceLocationFromMetadata({ metadata: {
+      sessionWorkspaceLocationV1: { ...location, machinePath: '   ' },
+    } })).toBeNull();
+    expect(readSessionWorkspaceLocationFromMetadata({ metadata: {
+      sessionWorkspaceLocationV1: { ...location, future: true },
+    } })).toEqual({ ...location, future: true });
+  });
+
+  it.runIf(process.env.HAPPIER_MEASURE_UI_HOT_LOOPS === '1')('measures ordinary workspace root reads across state updates', () => {
+    const metadata = { path: '/home/coder/project' };
+    const start = performance.now();
+    for (let tick = 0; tick < 20; tick++) {
+      for (let index = 0; index < 2_000; index++) {
+        const resolved = resolveSessionWorkspaceRootForMachine({
+          metadata, machineId: 'machine-1', candidatePath: metadata.path,
+        });
+        if (resolved.machinePath !== metadata.path) throw new Error('Missing mapping changed the workspace root');
+      }
+    }
+    console.log(JSON.stringify({ measurement: 'absent-workspace-location', sessions: 2_000, ticks: 20,
+      elapsedMs: performance.now() - start }));
   });
 
   it('maps the published agent workspace root only for its owning machine', () => {

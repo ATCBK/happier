@@ -37,9 +37,9 @@ export function readSessionWorkspaceLocationFromMetadata(params: Readonly<{
   metadata: unknown;
 }>): SessionWorkspaceLocationV1 | null {
   if (!params.metadata || typeof params.metadata !== 'object' || Array.isArray(params.metadata)) return null;
-  const parsed = SessionWorkspaceLocationV1Schema.safeParse(
-    (params.metadata as Record<string, unknown>)[SESSION_WORKSPACE_LOCATION_METADATA_KEY],
-  );
+  const value = (params.metadata as Record<string, unknown>)[SESSION_WORKSPACE_LOCATION_METADATA_KEY];
+  if (value == null) return null;
+  const parsed = SessionWorkspaceLocationV1Schema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
 

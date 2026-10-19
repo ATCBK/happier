@@ -84,7 +84,7 @@ const textDecoder = new TextDecoder('utf-8', { fatal: true });
 
 export const SessionDataKeyEnvelopeRecipientAccountIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(SESSION_DATA_KEY_ENVELOPE_RECIPIENT_ACCOUNT_ID_MAX_LENGTH_V1), z.regex(NO_OUTER_WHITESPACE_PATTERN)));
 
-function canonicalBase64BytesSchema(exactBytes: number): z.ZodMiniString {
+function canonicalBase64BytesSchema(exactBytes: number): z.ZodMiniString<string> {
   return z.string().check(z.refine((value) => {
     if (readCanonicalPaddedBase64DecodedLength(value) !== exactBytes) return false;
     return encodeBase64(decodeBase64(value, 'base64')) === value;

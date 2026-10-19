@@ -53,6 +53,7 @@ describe('SessionStateCapabilitiesV1Schema', () => {
       'intent.acpSessionMode',
       'intent.acpConfigOption',
       'display.title',
+      'display.statusReason',
       'display.bot',
       'runtime.workState',
       'runtime.activity',

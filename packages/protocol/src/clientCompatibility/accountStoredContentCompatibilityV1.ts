@@ -55,6 +55,10 @@ export const ACCOUNT_STORED_CONTENT_SESSION_SPAWN_PLACEMENT_ORIGIN_PROTOCOL_VERS
 export const ACCOUNT_STORED_CONTENT_PROFILE_PRESERVING_SETTINGS_WRITER_PROTOCOL_VERSION =
   ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION_V4;
 
+/** V4 readers also preserve the ended primary turn that is waiting for a person. */
+export const ACCOUNT_STORED_CONTENT_SESSION_TURN_WAITING_PROTOCOL_VERSION =
+  ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION_V4;
+
 /**
  * This must be checked by the transition operation itself. It is not the base
  * stored-content requirement and is deliberately not advertised by default.

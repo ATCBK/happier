@@ -25,7 +25,7 @@ function normalizeMaterializationIdentityInput(value: unknown): unknown {
 }
 
 export function createConnectedServiceMaterializationIdentityV1Schema(zod: typeof z) {
-  return zod.pipe(zod.transform(normalizeMaterializationIdentityInput), zod.looseObject({
+  return (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new zod.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(zod.transform(normalizeMaterializationIdentityInput), zod.looseObject({
       v: zod.literal(1),
       id: zod
         .string().check(zod.trim(), zod.minLength(1), zod.maxLength(128), zod.regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/)),

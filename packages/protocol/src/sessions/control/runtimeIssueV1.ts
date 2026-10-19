@@ -18,6 +18,7 @@ export type TurnTerminalStatusV1 = z.infer<typeof TurnTerminalStatusV1Schema>;
 
 export const PrimaryTurnStatusV1Schema = lazyZodSchema(() => z.union([
   z.literal('in_progress'),
+  z.literal('waiting'),
   TurnTerminalStatusV1Schema,
 ]));
 export type PrimaryTurnStatusV1 = z.infer<typeof PrimaryTurnStatusV1Schema>;
@@ -203,7 +204,7 @@ export const SessionRuntimeTemporaryThrottleDetailsV1Schema = lazyZodSchema(() =
 export type SessionRuntimeTemporaryThrottleDetailsV1 =
   z.infer<typeof SessionRuntimeTemporaryThrottleDetailsV1Schema>;
 
-export const SessionRuntimeIssueV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyRuntimeIssueV1), z.readonly(z.object({
+export const SessionRuntimeIssueV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacyRuntimeIssueV1), z.readonly(z.object({
     v: z.literal(1),
     scope: z.literal('primary_session'),
     status: z.literal('failed'),

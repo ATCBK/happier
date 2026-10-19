@@ -7,6 +7,7 @@ import { SessionPermissionApprovalReviewerClaimV1Schema } from '../permissions/v
 import { SessionForkFilesNotCopiedV1Schema } from '../creation/sessionSpawnNewResultV1.js';
 import { SessionPublisherGenerationV1Schema } from '../control/machineSessionTerminalV1.js';
 import { SessionForkVisualCopyV1Schema, SessionForkVisualsV1Schema } from '../board/forkVisualCopies.js';
+import { SessionUserActionRequiredOccurrenceV1Schema } from '../userActionRequiredOccurrenceV1.js';
 
 import type { AccountEncryptionMode } from '../../features/payload/capabilities/encryptionCapabilities.js';
 import { readAccountScopedCiphertextKindByte } from '../../crypto/accountScopedCipherEnvelope.js';
@@ -55,6 +56,7 @@ import {
   SessionRuntimeActivitySnapshotSchema,
 } from '../runtime/activity/sessionRuntimeActivity.js';
 import { SessionPendingQueueHoldV1Schema } from './sessionPendingQueueHoldV1.js';
+import { SessionExplicitStopV1Schema } from './sessionExplicitStopV1.js';
 import { ProviderAccountUsageRefsV1Schema } from './providerAccountUsageRefsV1.js';
 import { projectRuntimeDescriptorV1ForPredecessor } from './compat/runtimeDescriptorMetadata.js';
 import { SessionUsageLimitRecoveryV1Schema } from '../state/valueSchemas/usageLimitRecovery.js';
@@ -67,7 +69,7 @@ import { SessionWorkspaceLocationV1Schema } from './sessionWorkspaceLocationV1.j
 import { SessionCreationCorrespondenceV1Schema } from '../creation/sessionCreationCorrespondenceV1.js';
 import { SessionAttestedContextV1Schema } from '../creation/sessionAttestedContextV1.js';
 import { MachinePoolSelectionOriginV1Schema } from '../../machines/pools/v1.js';
-import { SessionDiscussionSelectionSourceV1Schema } from '../discussions/content.js';
+import { DiscussionSelectionSourceV1Schema } from '../../discussions/references.js';
 import { SessionActionConfirmationsV1Schema } from './sessionActionConfirmationsV1.js';
 import { SessionRolesV1Schema } from '../../prompts/roles/sessionRolesSnapshot.js';
 import { PluginUiNewSessionSeedOriginV1Schema } from '../../plugins/ui/newSessionSeedOrigin.js';
@@ -193,11 +195,20 @@ export const SessionAgentStateActivitySummaryV1Schema = lazyZodSchema(() => z.st
   pendingPermissionRequestCount: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
   pendingUserActionRequestCount: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
   pendingRequestNewestCreatedAt: z.nullable(TimestampSchema),
+  /** Newly pending main-turn requests, committed with this exact Agent-state revision. */
+  newUserActionRequiredOccurrences: z.optional(z.array(SessionUserActionRequiredOccurrenceV1Schema)),
+}));
+
+/** Shared host confirmations require approval, independent of the owner's Agent state. */
+export const SessionSharedActionConfirmationSummaryV1Schema = lazyZodSchema(() => z.strictObject({
+  // This projection is persisted in a Prisma Int (signed 32-bit) column.
+  pendingPermissionRequestCount: z.number().check(z.int(), z.nonnegative(), z.maximum(2_147_483_647)),
 }));
 
 const SessionMetadataOwnerMigrationPatchBaseV1Schema = lazyZodSchema(() => z.strictObject({
   mode: z.literal('owner_migration'),
   activitySummaryV1: z.optional(SessionAgentStateActivitySummaryV1Schema),
+  sharedActionConfirmationSummaryV1: z.optional(SessionSharedActionConfirmationSummaryV1Schema),
   source: z.strictObject({
     metadataLayoutVersion: z.literal(0),
     metadata: z.strictObject({
@@ -268,6 +279,7 @@ export type SessionMetadataPublisherPreconditionV1 = z.infer<
 export const SessionMetadataOwnerPatchV1Schema = lazyZodSchema(() => z.strictObject({
   mode: z.literal('owner'),
   activitySummaryV1: z.optional(SessionAgentStateActivitySummaryV1Schema),
+  sharedActionConfirmationSummaryV1: z.optional(SessionSharedActionConfirmationSummaryV1Schema),
   metadataLayoutVersion: z.literal(SESSION_METADATA_LAYOUT_VERSION_V1),
   publisherPrecondition:
     z.optional(SessionMetadataPublisherPreconditionV1Schema),
@@ -287,6 +299,7 @@ export const SessionMetadataInactiveModelIntentOwnerPatchV1Schema =
   lazyZodSchema(() => z.extend(z.omit(SessionMetadataOwnerPatchV1Schema, {
     publisherPrecondition: true,
     activitySummaryV1: true,
+    sharedActionConfirmationSummaryV1: true,
   }), {
     mode: z.literal('owner_inactive_model_intent'),
     sessionExpectation:
@@ -302,9 +315,10 @@ export const SessionMetadataTuplePatchV1Schema = lazyZodSchema(() => z.discrimin
   z.strictObject({
     mode: z.literal('shared_editor'),
     mutationIntent: z.optional(z.literal('rename_session')),
+    sharedActionConfirmationSummaryV1: z.optional(SessionSharedActionConfirmationSummaryV1Schema),
     metadataLayoutVersion: z.literal(SESSION_METADATA_LAYOUT_VERSION_V1),
     sharedMetadata: SessionMetadataSharedPatchV1Schema,
-  }),
+  }).check(z.refine(patch => patch.mutationIntent !== 'rename_session' || patch.sharedActionConfirmationSummaryV1 === undefined)),
 ]));
 export type SessionMetadataTuplePatchV1 = z.infer<
   typeof SessionMetadataTuplePatchV1Schema
@@ -995,6 +1009,7 @@ const SessionOwnerRollbackRangesV1Schema = lazyZodSchema(() => z.strictObject({
 
 const SessionOwnerRuntimeV1Schema = lazyZodSchema(() => z.strictObject({
   ...AgentSessionToolPolicyShapeV1,
+  workspaceWrites: z.optional(z.enum(['allow', 'deny'])),
   externalSessionOperationV1: z.optional(ExternalSessionOperationStateV1Schema),
   terminal: z.optional(SessionOwnerTerminalV1Schema),
   tools: z.optional(z.array(z.string().check(z.maxLength(2_000))).check(z.maxLength(4_096))),
@@ -1016,6 +1031,7 @@ const SessionOwnerRuntimeV1Schema = lazyZodSchema(() => z.strictObject({
   sessionUsageLimitRecoveryV1: z.optional(SessionUsageLimitRecoveryV1Schema),
   sessionRunnerRuntimeV1: z.optional(SessionRunnerRuntimeStateV1Schema),
   sessionPendingQueueHoldV1: z.optional(SessionPendingQueueHoldV1Schema),
+  sessionExplicitStopV1: z.optional(SessionExplicitStopV1Schema),
   providerBindingV1: z.optional(SessionProviderBindingMetadataV1Schema),
   modelSelectionIntentV1: z.optional(SessionModelSelectionIntentV1Schema),
   modelSelectionIntentV2: z.optional(SessionModelSelectionV2Schema),
@@ -1156,7 +1172,7 @@ const SessionOwnerHistoryV1Schema = lazyZodSchema(() => z.strictObject({
     createdAtMs: TimestampSchema,
     sourceMessageIds: z.optional(z.array(BoundedIdentifierSchema).check(z.maxLength(20_000))),
     sourceSessionId: z.optional(OptionalOwnerIdentifierSchema),
-    source: z.optional(z.omit(SessionDiscussionSelectionSourceV1Schema, { draftCorrelationId: true })),
+    source: z.optional(z.omit(DiscussionSelectionSourceV1Schema, { draftCorrelationId: true })),
   })),
   sessionMediaContinuityV1: z.optional(z.strictObject({
     v: z.literal(1),
@@ -1263,6 +1279,8 @@ const SessionOwnerAgentActivityEntryV1Schema = lazyZodSchema(() => z.strictObjec
 }));
 
 const SessionOwnerWorkV1Schema = lazyZodSchema(() => z.strictObject({
+  // Authored explanation; lifecycle and item outcome classifications remain runtime-owned.
+  statusReason: z.optional(z.string()),
   bot: z.optional(SessionBotV1Schema),
   createdAsBot: z.optional(z.literal(true)),
   memoryEnabled: z.optional(z.boolean()),
@@ -1949,6 +1967,7 @@ const RELEASED_NATIVE_SESSION_COMPATIBILITY_KEYS = [
 const RUNTIME_OWNER_KEYS = [
   'allowedTools',
   'unlistedTools',
+  'workspaceWrites',
   EXTERNAL_SESSION_OPERATION_METADATA_KEY,
   'terminal',
   'tools',
@@ -1970,6 +1989,7 @@ const RUNTIME_OWNER_KEYS = [
   'sessionUsageLimitRecoveryV1',
   'sessionRunnerRuntimeV1',
   'sessionPendingQueueHoldV1',
+  'sessionExplicitStopV1',
   'providerBindingV1',
   'modelSelectionIntentV1',
   'modelSelectionIntentV2',

@@ -41,6 +41,7 @@ import { ExecutionRunOutputObservationSchema } from '../../reviews/reviewNarrati
 import { ProviderAgentTargetKeySchema } from '../../providers/ids.js';
 import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
 import { ReviewFindingsV2Schema } from '../../messages/structured/reviewFindingsV2.js';
+import { SessionRuntimeIssueV1Schema } from '../../sessions/control/runtimeIssueV1.js';
 
 /** A refusal offers choices, never credential material or permission to use a route. */
 export const ExecutionRunChildChoiceV1Schema = lazyZodSchema(() => z.strictObject({
@@ -141,6 +142,7 @@ export type ExecutionRunListRequest = ExecutionRunListRequestBase;
 export const ExecutionRunErrorSchema = lazyZodSchema(() => z.looseObject({
   code: z.string().check(z.minLength(1)),
   message: z.optional(z.string()),
+  runtimeIssueV1: z.optional(SessionRuntimeIssueV1Schema),
 }));
 export type ExecutionRunError = z.infer<typeof ExecutionRunErrorSchema>;
 

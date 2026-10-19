@@ -29,6 +29,7 @@ const restartReasons = [
   'doctor_repair',
   'restart_session_runners_on_update_config',
   'daemon_dist_generation_rollout',
+  'capability_selection_change',
 ] as const;
 
 const restartStatuses = [

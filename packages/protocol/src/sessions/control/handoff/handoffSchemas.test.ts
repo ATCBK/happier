@@ -17,6 +17,9 @@ describe('session handoff schemas', () => {
     if ('error' in mod) return;
     const capability = { protocolVersion: 3, atomicTargetResume: true, targetCleanup: true, sameMachineHandoff: true, existingState: true };
     expect(mod.SessionHandoffCapabilityV3Schema.parse(capability)).toEqual(capability);
+    expect(mod.SessionHandoffCapabilityV3Schema.parse({
+      protocolVersion: 3, atomicTargetResume: true, targetCleanup: true,
+    })).toEqual({ ...capability, sameMachineHandoff: false, existingState: false });
     // Current ../0.2 e087d15a2f0cce1de6de8ef0895d9c8bcc035056 handoffSchemas.ts
     // advertises the same copy policy through protocolVersion:2, not the V3 owner.
     expect(mod.SessionHandoffCapabilityV3Schema.safeParse({ ...capability, protocolVersion: 2 }).success).toBe(false);

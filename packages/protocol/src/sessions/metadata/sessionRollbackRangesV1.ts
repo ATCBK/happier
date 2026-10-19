@@ -4,7 +4,7 @@ import { createStoredReadSchema, defineStoredReadProjection } from '../../json/s
 import { SessionRollbackTargetSchema } from '../rollback.js';
 
 export function createSessionRollbackRangeV1Schema(zod: typeof z) {
-  const schema = (<T extends zod.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.unknown() }) as zod.ZodMiniObject<T['shape'], zod.core.$loose>)(zod
+  const schema = (<T extends z.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(zod
     .object({
       target: SessionRollbackTargetSchema,
       startSeqInclusive: zod.number().check(zod.int(), zod.nonnegative()),
