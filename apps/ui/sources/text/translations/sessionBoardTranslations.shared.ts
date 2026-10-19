@@ -192,6 +192,8 @@ export type SessionBoardTranslation = Readonly<{
      */
     inline: Readonly<{
         openPanel: string;
+        /** Brings the live body of a visual that runs elsewhere to this reply. */
+        showHere: string;
         openPanelA11y: (params: Readonly<{ title: string }>) => string;
     }>;
     /** Viewer-local Companion copy. Product says "Companion"; persistence says item. */
@@ -262,6 +264,7 @@ export type SessionBoardTranslation = Readonly<{
             returnedToChat: string;
             boardViewSelected: string;
             boardItemRevealed: string;
+            shownInChat: string;
             fullOpened: string;
         }>;
     }>;
@@ -463,6 +466,7 @@ export const sessionBoardTranslationsEnglish = { en: {
         mobile: { searchPlaceholder: 'Search this board' },
         inline: {
             openPanel: 'Open in panel',
+            showHere: 'Show here',
             openPanelA11y: ({ title }) => `Open “${title}” in a panel`,
         },
         companion: {
@@ -528,6 +532,7 @@ export const sessionBoardTranslationsEnglish = { en: {
                 returnedToChat: 'Returned to Chat by the agent',
                 boardViewSelected: 'Board view selected by the agent',
                 boardItemRevealed: 'Board item opened by the agent',
+                shownInChat: 'Shown in the chat by the agent',
                 fullOpened: 'Companion opened by the agent',
             },
         },

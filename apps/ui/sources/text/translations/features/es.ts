@@ -2219,6 +2219,20 @@ const detailPageTranslations = { es: {
                 waitingFor: ({ name }) => `Esperando a que ${name} confirme`,
                 confirmedBy: 'Confirmado por',
                 declinedBy: 'Rechazado por',
+                thread: {
+                    youConfirm: 'Lo pediste tú, así que confirmas tú',
+                    review: 'Revisar y confirmar…',
+                    decline: 'Rechazar',
+                    waiting: ({ name }) => `Esperando a que ${name} confirme. Solo puede hacerlo quien lo pidió.`,
+                    writesWith: ({ name }) => `Escribe con la configuración de ${name}`,
+                    writesWithYours: 'Escribe con tu configuración',
+                    confirmedPending: ({ name }) => `Confirmado por ${name} · esperando el resultado`,
+                    done: ({ name }) => `Hecho · confirmado por ${name}`,
+                    declined: ({ name }) => `Rechazado por ${name} · no se escribió nada`,
+                    canceled: 'Cancelado · no se escribió nada',
+                    uncertain: 'Aún no se sabe si se hizo. No lo vuelvas a confirmar.',
+                    failed: 'No se pudo hacer',
+                },
             },
         },
         runs: {
@@ -9394,6 +9408,7 @@ const sessionBoardTranslations = { es: {
         mobile: { searchPlaceholder: 'Buscar en este tablero' },
         inline: {
             openPanel: 'Abrir en un panel',
+            showHere: 'Mostrar aquí',
             openPanelA11y: ({ title }) => `Abrir «${title}» en un panel`,
         },
         companion: {
@@ -9459,6 +9474,7 @@ const sessionBoardTranslations = { es: {
                 returnedToChat: 'El agente volvió al chat',
                 boardViewSelected: 'El agente seleccionó una vista del tablero',
                 boardItemRevealed: 'El agente abrió un elemento del tablero',
+                shownInChat: 'El agente lo mostró en la conversación',
                 fullOpened: 'El agente abrió el acompañante',
             },
         },
@@ -13498,6 +13514,7 @@ const widgetAddTranslations = { es: {
         panes: 'Paneles',
         panesHint: 'se añade como un enlace que se abre en Detalles',
         builtIn: 'Integrado',
+        sessionDetails: 'Detalles de la sesión',
         prompts: { project: '¿Qué proyecto?', projects: '¿Qué proyectos?', session: '¿Qué sesión?', workspace: '¿Qué espacio de trabajo?', machine: '¿Qué máquina?' },
         inputLabels: { session: 'Sesión', metric: 'Métrica', breakdown: 'Desglose', groupBy: 'Agrupar por', apiEquivalent: 'Equivalente de API', agent: 'Agente', model: 'Modelo', project: 'Proyecto', workspace: 'Espacio de trabajo', backendMode: 'Modo de backend', source: 'Fuente', machine: 'Máquina' },
         nativeDescriptions: {

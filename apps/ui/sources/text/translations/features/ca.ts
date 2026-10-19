@@ -2219,6 +2219,20 @@ const detailPageTranslations = { ca: {
                 waitingFor: ({ name }) => `Esperant que ${name} confirmi`,
                 confirmedBy: 'Confirmat per',
                 declinedBy: 'Rebutjat per',
+                thread: {
+                    youConfirm: 'Ho has demanat tu, així que confirmes tu',
+                    review: 'Revisa i confirma…',
+                    decline: 'Rebutja',
+                    waiting: ({ name }) => `Esperant que ${name} confirmi. Només pot fer-ho qui ho ha demanat.`,
+                    writesWith: ({ name }) => `Escriu amb la configuració de ${name}`,
+                    writesWithYours: 'Escriu amb la teva configuració',
+                    confirmedPending: ({ name }) => `Confirmat per ${name} · esperant el resultat`,
+                    done: ({ name }) => `Fet · confirmat per ${name}`,
+                    declined: ({ name }) => `Rebutjat per ${name} · no s’ha escrit res`,
+                    canceled: 'Cancel·lat · no s’ha escrit res',
+                    uncertain: 'Encara no se sap si s’ha fet. No ho tornis a confirmar.',
+                    failed: 'No s’ha pogut fer',
+                },
             },
         },
         runs: {
@@ -9390,6 +9404,7 @@ const sessionBoardTranslations = { ca: {
         mobile: { searchPlaceholder: 'Cerca en aquest tauler' },
         inline: {
             openPanel: 'Obre al panell',
+            showHere: 'Mostra aquí',
             openPanelA11y: ({ title }) => `Obre «${title}» en un panell`,
         },
         companion: {
@@ -9455,6 +9470,7 @@ const sessionBoardTranslations = { ca: {
                 returnedToChat: 'L’agent ha tornat al xat',
                 boardViewSelected: 'L’agent ha seleccionat una vista del tauler',
                 boardItemRevealed: 'L’agent ha obert un element del tauler',
+                shownInChat: 'L’agent ho ha mostrat a la conversa',
                 fullOpened: 'L’agent ha obert l’acompanyant',
             },
         },
@@ -13471,6 +13487,7 @@ const widgetAddTranslations = { ca: {
         panes: 'Panells',
         panesHint: 's’afegeix com un enllaç que s’obre a Detalls',
         builtIn: 'Integrat',
+        sessionDetails: 'Detalls de la sessió',
         prompts: { project: 'Quin projecte?', projects: 'Quins projectes?', session: 'Quina sessió?', workspace: 'Quin espai de treball?', machine: 'Quina màquina?' },
         inputLabels: { session: 'Sessió', metric: 'Mètrica', breakdown: 'Desglossament', groupBy: 'Agrupa per', apiEquivalent: 'Equivalent d’API', agent: 'Agent', model: 'Model', project: 'Projecte', workspace: 'Espai de treball', backendMode: 'Mode de backend', source: 'Font', machine: 'Màquina' },
         nativeDescriptions: {

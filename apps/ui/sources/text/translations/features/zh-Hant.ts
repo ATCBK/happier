@@ -2214,6 +2214,20 @@ const detailPageTranslations = { 'zh-Hant': {
                 waitingFor: ({ name }) => `等待 ${name} 確認`,
                 confirmedBy: '確認人',
                 declinedBy: '拒絕人',
+                thread: {
+                    youConfirm: '是你提出的，所以由你確認',
+                    review: '查看並確認…',
+                    decline: '拒絕',
+                    waiting: ({ name }) => `等待 ${name} 確認。只有提出請求的人可以確認。`,
+                    writesWith: ({ name }) => `使用 ${name} 的設定寫入`,
+                    writesWithYours: '使用你的設定寫入',
+                    confirmedPending: ({ name }) => `${name} 已確認 · 等待結果`,
+                    done: ({ name }) => `已完成 · 由 ${name} 確認`,
+                    declined: ({ name }) => `${name} 已拒絕 · 未寫入任何內容`,
+                    canceled: '已取消 · 未寫入任何內容',
+                    uncertain: '尚不確定是否已完成。請勿再次確認。',
+                    failed: '未能完成',
+                },
             },
         },
         runs: {
@@ -9374,6 +9388,7 @@ const sessionBoardTranslations = { 'zh-Hant': {
         mobile: { searchPlaceholder: '搜尋此面板' },
         inline: {
             openPanel: '在面板中開啟',
+            showHere: '在此顯示',
             openPanelA11y: ({ title }) => `在面板中開啟「${title}」`,
         },
         companion: {
@@ -9439,6 +9454,7 @@ const sessionBoardTranslations = { 'zh-Hant': {
                 returnedToChat: '代理已返回聊天',
                 boardViewSelected: '代理已選擇看板檢視',
                 boardItemRevealed: '代理已開啟看板項目',
+                shownInChat: '代理已在對話中顯示',
                 fullOpened: '代理已開啟隨行面板',
             },
         },
@@ -13431,6 +13447,7 @@ const widgetAddTranslations = { 'zh-Hant': {
         panes: '面板',
         panesHint: '以連結形式新增，在詳細資訊中開啟',
         builtIn: '內建',
+        sessionDetails: '工作階段詳細資料',
         prompts: { project: '哪個專案？', projects: '哪些專案？', session: '哪個工作階段？', workspace: '哪個工作區？', machine: '哪部機器？' },
         inputLabels: { session: '工作階段', metric: '指標', breakdown: '細分', groupBy: '分組依據', apiEquivalent: 'API 等值', agent: '代理', model: '模型', project: '專案', workspace: '工作區', backendMode: '後端模式', source: '來源', machine: '機器' },
         nativeDescriptions: {

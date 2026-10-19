@@ -2230,6 +2230,20 @@ const detailPageTranslations = { pl: {
                 waitingFor: ({ name }) => `Czeka na potwierdzenie od: ${name}`,
                 confirmedBy: 'Potwierdził(a)',
                 declinedBy: 'Odrzucił(a)',
+                thread: {
+                    youConfirm: 'To twoja prośba, więc ty potwierdzasz',
+                    review: 'Sprawdź i potwierdź…',
+                    decline: 'Odrzuć',
+                    waiting: ({ name }) => `Czeka na potwierdzenie od: ${name}. Może to zrobić tylko osoba, która prosiła.`,
+                    writesWith: ({ name }) => `Zapisuje z konfiguracją: ${name}`,
+                    writesWithYours: 'Zapisuje z twoją konfiguracją',
+                    confirmedPending: ({ name }) => `Potwierdzone przez: ${name} · czeka na wynik`,
+                    done: ({ name }) => `Gotowe · potwierdzone przez: ${name}`,
+                    declined: ({ name }) => `Odrzucone przez: ${name} · nic nie zapisano`,
+                    canceled: 'Anulowano · nic nie zapisano',
+                    uncertain: 'Jeszcze nie wiadomo, czy się udało. Nie potwierdzaj ponownie.',
+                    failed: 'Nie udało się',
+                },
             },
         },
         runs: {
@@ -9404,6 +9418,7 @@ const sessionBoardTranslations = { pl: {
         mobile: { searchPlaceholder: 'Szukaj na tej tablicy' },
         inline: {
             openPanel: 'Otwórz w panelu',
+            showHere: 'Pokaż tutaj',
             openPanelA11y: ({ title }) => `Otwórz „${title}” w panelu`,
         },
         companion: {
@@ -9469,6 +9484,7 @@ const sessionBoardTranslations = { pl: {
                 returnedToChat: 'Agent wrócił do czatu',
                 boardViewSelected: 'Agent wybrał widok tablicy',
                 boardItemRevealed: 'Agent otworzył element tablicy',
+                shownInChat: 'Agent pokazał to w rozmowie',
                 fullOpened: 'Agent otworzył towarzysza',
             },
         },
@@ -13467,6 +13483,7 @@ const widgetAddTranslations = { pl: {
         panes: 'Panele',
         panesHint: 'dodane jako link otwierany w Szczegółach',
         builtIn: 'Wbudowane',
+        sessionDetails: 'Szczegóły sesji',
         prompts: { project: 'Który projekt?', projects: 'Które projekty?', session: 'Która sesja?', workspace: 'Który obszar roboczy?', machine: 'Która maszyna?' },
         inputLabels: { session: 'Sesja', metric: 'Miara', breakdown: 'Podział', groupBy: 'Grupuj według', apiEquivalent: 'Odpowiednik API', agent: 'Agent', model: 'Model', project: 'Projekt', workspace: 'Obszar roboczy', backendMode: 'Tryb backendu', source: 'Źródło', machine: 'Maszyna' },
         nativeDescriptions: {

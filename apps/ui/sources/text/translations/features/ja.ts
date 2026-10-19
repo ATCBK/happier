@@ -2219,6 +2219,20 @@ const detailPageTranslations = { ja: {
                 waitingFor: ({ name }) => `${name}の確認を待っています`,
                 confirmedBy: '確認した人',
                 declinedBy: '拒否した人',
+                thread: {
+                    youConfirm: 'あなたが依頼したので、あなたが確認します',
+                    review: '確認して承認…',
+                    decline: '断る',
+                    waiting: ({ name }) => `${name}の確認を待っています。依頼した人だけが確認できます。`,
+                    writesWith: ({ name }) => `${name}の設定で書き込みます`,
+                    writesWithYours: 'あなたの設定で書き込みます',
+                    confirmedPending: ({ name }) => `${name}が確認済み · 結果を待っています`,
+                    done: ({ name }) => `完了 · ${name}が確認`,
+                    declined: ({ name }) => `${name}が断りました · 何も書き込まれていません`,
+                    canceled: 'キャンセル · 何も書き込まれていません',
+                    uncertain: '実行されたかまだわかりません。もう一度確認しないでください。',
+                    failed: '実行できませんでした',
+                },
             },
         },
         runs: {
@@ -9379,6 +9393,7 @@ const sessionBoardTranslations = { ja: {
         mobile: { searchPlaceholder: 'このボードを検索' },
         inline: {
             openPanel: 'パネルで開く',
+            showHere: 'ここに表示',
             openPanelA11y: ({ title }) => `「${title}」をパネルで開く`,
         },
         companion: {
@@ -9444,6 +9459,7 @@ const sessionBoardTranslations = { ja: {
                 returnedToChat: 'エージェントがチャットに戻りました',
                 boardViewSelected: 'エージェントがボードビューを選択しました',
                 boardItemRevealed: 'エージェントがボード項目を開きました',
+                shownInChat: 'エージェントが会話に表示しました',
                 fullOpened: 'エージェントがコンパニオンを開きました',
             },
         },
@@ -13435,6 +13451,7 @@ const widgetAddTranslations = { ja: {
         panes: 'ペイン',
         panesHint: '詳細で開くリンクとして追加',
         builtIn: '組み込み',
+        sessionDetails: 'セッションの詳細',
         prompts: { project: 'どのプロジェクトですか？', projects: 'どのプロジェクトですか？', session: 'どのセッションですか？', workspace: 'どのワークスペースですか？', machine: 'どのマシンですか？' },
         inputLabels: { session: 'セッション', metric: '指標', breakdown: '内訳', groupBy: 'グループ化', apiEquivalent: 'API換算', agent: 'エージェント', model: 'モデル', project: 'プロジェクト', workspace: 'ワークスペース', backendMode: 'バックエンドモード', source: 'ソース', machine: 'マシン' },
         nativeDescriptions: {

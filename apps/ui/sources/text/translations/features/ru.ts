@@ -2241,6 +2241,20 @@ const detailPageTranslations = { ru: {
                 waitingFor: ({ name }) => `Ждём подтверждения от: ${name}`,
                 confirmedBy: 'Подтвердил(а)',
                 declinedBy: 'Отклонил(а)',
+                thread: {
+                    youConfirm: 'Вы попросили — вам и подтверждать',
+                    review: 'Проверить и подтвердить…',
+                    decline: 'Отклонить',
+                    waiting: ({ name }) => `Ждём подтверждения от: ${name}. Подтвердить может только тот, кто попросил.`,
+                    writesWith: ({ name }) => `Пишет с настройками: ${name}`,
+                    writesWithYours: 'Пишет с вашими настройками',
+                    confirmedPending: ({ name }) => `Подтвердил(а): ${name} · ждём результата`,
+                    done: ({ name }) => `Готово · подтвердил(а): ${name}`,
+                    declined: ({ name }) => `Отклонил(а): ${name} · ничего не записано`,
+                    canceled: 'Отменено · ничего не записано',
+                    uncertain: 'Пока неизвестно, прошло ли это. Не подтверждайте снова.',
+                    failed: 'Не получилось',
+                },
             },
         },
         runs: {
@@ -9415,6 +9429,7 @@ const sessionBoardTranslations = { ru: {
         mobile: { searchPlaceholder: 'Поиск по этой доске' },
         inline: {
             openPanel: 'Открыть на панели',
+            showHere: 'Показать здесь',
             openPanelA11y: ({ title }) => `Открыть «${title}» на панели`,
         },
         companion: {
@@ -9480,6 +9495,7 @@ const sessionBoardTranslations = { ru: {
                 returnedToChat: 'Агент вернулся в чат',
                 boardViewSelected: 'Агент выбрал представление доски',
                 boardItemRevealed: 'Агент открыл элемент доски',
+                shownInChat: 'Агент показал это в чате',
                 fullOpened: 'Агент открыл спутник',
             },
         },
@@ -13479,6 +13495,7 @@ const widgetAddTranslations = { ru: {
         panes: 'Панели',
         panesHint: 'добавляется как ссылка, открывающаяся в «Подробностях»',
         builtIn: 'Встроенное',
+        sessionDetails: 'Сведения о сеансе',
         prompts: { project: 'Какой проект?', projects: 'Какие проекты?', session: 'Какой сеанс?', workspace: 'Какое рабочее пространство?', machine: 'Какая машина?' },
         inputLabels: { session: 'Сеанс', metric: 'Метрика', breakdown: 'Разбивка', groupBy: 'Группировать по', apiEquivalent: 'Эквивалент API', agent: 'Агент', model: 'Модель', project: 'Проект', workspace: 'Рабочее пространство', backendMode: 'Режим бэкенда', source: 'Источник', machine: 'Машина' },
         nativeDescriptions: {

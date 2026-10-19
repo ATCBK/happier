@@ -2214,6 +2214,20 @@ const detailPageTranslations = { 'zh-Hans': {
                 waitingFor: ({ name }) => `等待 ${name} 确认`,
                 confirmedBy: '确认人',
                 declinedBy: '拒绝人',
+                thread: {
+                    youConfirm: '是你提出的，所以由你确认',
+                    review: '查看并确认…',
+                    decline: '拒绝',
+                    waiting: ({ name }) => `等待 ${name} 确认。只有提出请求的人可以确认。`,
+                    writesWith: ({ name }) => `使用 ${name} 的设置写入`,
+                    writesWithYours: '使用你的设置写入',
+                    confirmedPending: ({ name }) => `${name} 已确认 · 等待结果`,
+                    done: ({ name }) => `已完成 · 由 ${name} 确认`,
+                    declined: ({ name }) => `${name} 已拒绝 · 未写入任何内容`,
+                    canceled: '已取消 · 未写入任何内容',
+                    uncertain: '尚不确定是否已完成。请勿再次确认。',
+                    failed: '未能完成',
+                },
             },
         },
         runs: {
@@ -9374,6 +9388,7 @@ const sessionBoardTranslations = { 'zh-Hans': {
         mobile: { searchPlaceholder: '搜索此面板' },
         inline: {
             openPanel: '在面板中打开',
+            showHere: '在此显示',
             openPanelA11y: ({ title }) => `在面板中打开“${title}”`,
         },
         companion: {
@@ -9439,6 +9454,7 @@ const sessionBoardTranslations = { 'zh-Hans': {
                 returnedToChat: '智能体已返回聊天',
                 boardViewSelected: '智能体已选择看板视图',
                 boardItemRevealed: '智能体已打开看板项目',
+                shownInChat: '智能体已在对话中显示',
                 fullOpened: '智能体已打开随行面板',
             },
         },
@@ -13431,6 +13447,7 @@ const widgetAddTranslations = { 'zh-Hans': {
         panes: '面板',
         panesHint: '以链接形式添加，在详情中打开',
         builtIn: '内置',
+        sessionDetails: '会话详情',
         prompts: { project: '哪个项目？', projects: '哪些项目？', session: '哪个会话？', workspace: '哪个工作区？', machine: '哪台机器？' },
         inputLabels: { session: '会话', metric: '指标', breakdown: '细分', groupBy: '分组依据', apiEquivalent: 'API 等价', agent: '代理', model: '模型', project: '项目', workspace: '工作区', backendMode: '后端模式', source: '来源', machine: '机器' },
         nativeDescriptions: {

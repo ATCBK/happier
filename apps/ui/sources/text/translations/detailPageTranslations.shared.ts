@@ -23,6 +23,20 @@ export type DetailPageTranslations = Readonly<{
             waitingFor: (params: Readonly<{ name: string }>) => string;
             confirmedBy: string;
             declinedBy: string;
+            thread: Readonly<{
+                youConfirm: string;
+                review: string;
+                decline: string;
+                waiting: (params: Readonly<{ name: string }>) => string;
+                writesWith: (params: Readonly<{ name: string }>) => string;
+                writesWithYours: string;
+                confirmedPending: (params: Readonly<{ name: string }>) => string;
+                done: (params: Readonly<{ name: string }>) => string;
+                declined: (params: Readonly<{ name: string }>) => string;
+                canceled: string;
+                uncertain: string;
+                failed: string;
+            }>;
         }>;
     }>;
     runs: Readonly<{
@@ -83,6 +97,20 @@ export const detailPageTranslationsEnglish = { en: {
                 waitingFor: ({ name }) => `Waiting for ${name} to confirm`,
                 confirmedBy: 'Confirmed by',
                 declinedBy: 'Declined by',
+                thread: {
+                    youConfirm: 'You asked, so you confirm',
+                    review: 'Review and confirm…',
+                    decline: 'Decline',
+                    waiting: ({ name }) => `Waiting for ${name} to confirm. Only the person who asked can.`,
+                    writesWith: ({ name }) => `Writes with ${name}’s setup`,
+                    writesWithYours: 'Writes with your setup',
+                    confirmedPending: ({ name }) => `Confirmed by ${name} · waiting for the result`,
+                    done: ({ name }) => `Done · confirmed by ${name}`,
+                    declined: ({ name }) => `Declined by ${name} · nothing was written`,
+                    canceled: 'Canceled · nothing was written',
+                    uncertain: 'Not known yet whether this went through. Don’t confirm again.',
+                    failed: 'Didn’t go through',
+                },
             },
         },
         runs: {
