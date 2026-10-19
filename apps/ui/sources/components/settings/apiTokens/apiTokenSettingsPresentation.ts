@@ -116,6 +116,7 @@ export type ApiTokenAccessSummaryPart =
     | Readonly<{ kind: 'full' }>
     | Readonly<{ kind: 'allActions' }>
     | Readonly<{ kind: 'actions'; names: readonly string[]; more: number }>
+    | Readonly<{ kind: 'automations'; name: string | null; count: number }>
     | Readonly<{ kind: 'targets'; sessions: number; machines: number }>
     | Readonly<{ kind: 'approve' }>
     | Readonly<{ kind: 'models'; name: string | null; count: number }>
@@ -127,10 +128,11 @@ export type ApiTokenAccessSummaryNames = Readonly<{
     familyName: (family: ActionIdFamilyV1) => string | null;
     actionName: (actionId: string) => string | null;
     modelName: (ref: ProviderBoundModelRef) => string | null;
+    automationName: (automationId: string) => string | null;
 }>;
 
 /**
- * A token's access as one line, always in the order scope → targets → approve → models → websites →
+ * A token's access as one line, always in the order scope → Automations → targets → approve → models → websites →
  * content → expiry (plan 01 §6.1). Quiet defaults (every session, any model, no websites, API access
  * only) say nothing; an unrestricted token is "Full access". The rail, the list and the editor's
  * review line all read this one owner.
@@ -152,6 +154,13 @@ export function buildApiTokenAccessSummaryParts(params: Readonly<{
         parts.push({ kind: 'allActions' });
     } else {
         parts.push({ kind: 'full' });
+    }
+    if (grant.automationIds != null) {
+        parts.push({
+            kind: 'automations',
+            name: grant.automationIds.length === 1 ? params.names.automationName(grant.automationIds[0]!) : null,
+            count: grant.automationIds.length,
+        });
     }
     if (grant.targets !== null) parts.push({ kind: 'targets', sessions: grant.targets.sessions.length, machines: grant.targets.machines.length });
     if (grant.approve) parts.push({ kind: 'approve' });
@@ -192,6 +201,7 @@ export function formatApiTokenAccessSummaryPart(part: ApiTokenAccessSummaryPart)
         case 'actions': return part.more > 0
             ? t('settingsApiTokens.summary.namesAndMore', { names: part.names.join(', '), count: part.more })
             : part.names.join(', ');
+        case 'automations': return part.name ?? t('settingsApiTokens.summary.automations', { count: part.count });
         case 'targets': return [
             part.sessions > 0 ? t('settingsApiTokens.summary.sessions', { count: part.sessions }) : null,
             part.machines > 0 ? t('settingsApiTokens.summary.computers', { count: part.machines }) : null,

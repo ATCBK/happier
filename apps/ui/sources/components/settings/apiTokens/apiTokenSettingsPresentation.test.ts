@@ -103,6 +103,7 @@ describe('API-token Settings presentation', () => {
             familyName: (family: string) => ({ messaging: 'Messaging', session_transcripts: 'Session transcripts' })[family] ?? null,
             actionName: (actionId: string) => (actionId === 'session.user_action.answer' ? 'Answer questions' : null),
             modelName: () => 'Claude Sonnet 4.5',
+            automationName: (automationId: string) => (automationId === 'brief' ? 'Morning brief' : null),
         };
         const token = {
             expiresAt: '2026-09-21T12:00:00.000Z',
@@ -122,6 +123,20 @@ describe('API-token Settings presentation', () => {
         expect(parts[1]).toEqual({ kind: 'targets', sessions: 1, machines: 0 });
         expect(parts[3]).toEqual({ kind: 'models', name: 'Claude Sonnet 4.5', count: 1 });
         expect(parts[4]).toEqual({ kind: 'websites', host: null, count: 2 });
+
+        // An Automation restriction reads right after the actions it narrows.
+        expect(buildApiTokenAccessSummaryParts({
+            token: {
+                expiresAt: null,
+                hasEncryptionAccess: false,
+                grant: { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: ['workflow.trigger.run_now'] }, automationIds: ['brief'] },
+            },
+            nowMs: NOW,
+            names,
+        }).slice(0, 2)).toEqual([
+            { kind: 'actions', names: ['workflow.trigger.run_now'], more: 0 },
+            { kind: 'automations', name: 'Morning brief', count: 1 },
+        ]);
 
         // Quiet defaults say nothing: a full grant is one scope fact and its expiry.
         expect(buildApiTokenAccessSummaryParts({

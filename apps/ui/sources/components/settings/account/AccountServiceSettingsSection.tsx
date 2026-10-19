@@ -38,6 +38,7 @@ import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import { useUnistyles } from 'react-native-unistyles';
 import { AccountServiceBenefits, AccountServiceInvitationIntro } from './AccountServiceInvitation';
 import { AccountServiceChooser } from './AccountServiceChooser';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { AccountServiceMark } from './AccountServiceMark';
 import { AccountRecoveryKeyItem } from './AccountRecoveryKeyItem';
 import { AccountServicePasswordForm, type AccountServicePasswordFormView } from '@/components/account/auth/AccountServicePasswordForm';
@@ -746,7 +747,8 @@ export function AccountServiceSettingsSection(): React.ReactElement {
                     : null;
 
     const localHomeTitle = (profile: ServerProfile) => resolveHomeDisplayLabel(profile, profile.id);
-    const serviceMark = <AccountServiceMark url={endpoint.url} size={22} />;
+    // The mark fills the page row's leading column exactly, so the rows' titles share one edge.
+    const serviceMark = <AccountServiceMark url={endpoint.url} size={PAGE_LIST_METRICS.rowLeadingColumnPx} inset={0} />;
     const toggleChangingService = () => setChangingService((current) => !current);
     // A notice that carries "Change service" itself hides the header's, so there is one way in.
     const noticeCarriesChange = connectionKind === 'unsupported' || connectionKind === 'unreachable' || connectionKind === 'methodless';
@@ -1009,8 +1011,8 @@ export function AccountServiceSettingsSection(): React.ReactElement {
             >
                 <SettingAnchor setting={ACCOUNT_SETTINGS.settings.accountService}>
                     {primaryRows ?? (
-                        <SectionContentRow testID="settings-account-service-invitation">
-                            <AccountServiceInvitationIntro serviceMark={serviceMark} />
+                        <SectionContentRow testID="settings-account-service-invitation" leading={serviceMark}>
+                            <AccountServiceInvitationIntro />
                         </SectionContentRow>
                     )}
                 </SettingAnchor>

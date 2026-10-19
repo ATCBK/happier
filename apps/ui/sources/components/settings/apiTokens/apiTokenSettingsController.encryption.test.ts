@@ -1,4 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
+});
 import {
     parseAccountApiTokenCredentialV1,
     openApiTokenEncryptionAccessV1,
@@ -206,7 +213,7 @@ describe('trusted token UI encryption lifecycle', () => {
         expect(openApiTokenEncryptionAccessV1({
             context: { serverIdentityId: parsed!.serverIdentityId, accountId: parsed!.accountId, tokenId: String(created!.body.tokenId), contentPublicKey: parsed!.contentPublicKey },
             wrappingSecret: decodeBase64(parsed!.wrappingSecret, 'base64url'), encryptionAccess: (created!.body.encryption as { access: AccountApiTokenEncryptionAccessV1 }).access,
-        })).toEqual(encryption.getContentPrivateKey());
+        })).toEqual(encryption!.getContentPrivateKey());
         controller.clearReveal();
         expect(controller.getState().reveal).toBeNull();
         controller.retire();

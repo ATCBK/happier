@@ -1,16 +1,14 @@
 import React from 'react';
-import { expect, vi } from 'vitest';
+import { expect } from 'vitest';
+import 'fake-indexeddb/auto';
 import {
     API_TOKEN_FULL_GRANT_V1,
     computeAccountEncryptionMigrateKeyFingerprintV1,
 } from '@happier-dev/protocol';
-import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
-import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
-
-import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { renderScreen } from '@/dev/testkit';
-import { encodeBase64 } from '@/encryption/base64';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
 
 /**
  * The real API-token settings controller on a real Home and Account scope, for controller and
@@ -33,54 +31,44 @@ export type ApiTokenSettingsControllerHarnessOptions = Readonly<{
 export type ApiTokenSettingsControllerHarnessRequest = Readonly<{ path: string; body: Record<string, unknown> }>;
 
 const authScreens: Awaited<ReturnType<typeof renderScreen>>[] = [];
+const accounts: Awaited<ReturnType<typeof createSecretSettingsTestHarness>>[] = [];
+let nextHome = 0;
 
 /** Unmounts every harness auth provider; call from `afterEach`. */
 export async function disposeApiTokenSettingsControllerHarnesses(): Promise<void> {
     for (const screen of authScreens.splice(0).reverse()) await screen.unmount();
+    for (const account of accounts.splice(0).reverse()) await account.dispose();
 }
 
 export async function createApiTokenSettingsControllerHarness(options: ApiTokenSettingsControllerHarnessOptions = {}) {
+    installDisconnectedServerSocketBoundary();
     await loadSyncSingletonForTests();
-    vi.stubEnv('EXPO_PUBLIC_HAPPY_STORAGE_SCOPE', `token-ui-${crypto.randomUUID()}`);
-    const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
-    const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
-    const profile = await upsertAndActivateServer({ serverUrl: 'https://token-ui.example', name: 'Token Home' });
-    await setServerProfileIdentityForUrl(profile.serverUrl, 'srv_token-ui');
-    // Apply the Home through the real connection owner rather than staging the
-    // applied-runtime facts it publishes. The credential store is still empty
-    // here, so this runs the genuine switch lifecycle without starting
-    // authenticated Sync or issuing network requests — the same composition
-    // `pendingQueueV2.testHelpers.ts#activatePendingQueueScope` relies on.
-    const { switchConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
-    await switchConnectionToActiveServer();
-    const { storage } = await import('@/sync/domains/state/storageStore');
-    storage.getState().activateProfileScope({ serverId: 'srv_token-ui', accountId: 'account-a' });
-    const credentials = {
-        token: `header.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature`,
-        secret: encodeBase64(new Uint8Array(32).fill(7), 'base64url'),
-    };
-    const encryption = await createEncryptionFromAuthCredentials(credentials);
-    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-    vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(credentials);
+    const account = await createSecretSettingsTestHarness({
+        mode: options.mode ?? 'e2ee', sharedEnabled: false, serverIdentityId: `srv_token-ui-${++nextHome}`,
+    });
+    accounts.push(account);
+    const { credentials, encryption } = account;
+    // Complete the mounted client's real credential projection before observing
+    // controller traffic or holding one of its optional currentness reads.
+    const { InjectedAuthProvider, getCurrentAuth } = await import('@/auth/context/AuthContext');
+    authScreens.push(await renderScreen(React.createElement(InjectedAuthProvider, {
+        credentials, children: React.createElement(React.Fragment),
+    })));
+    expect(getCurrentAuth()?.credentialAuthorityKind).toBe('account');
     const requests: ApiTokenSettingsControllerHarnessRequest[] = [];
     const rows: Record<string, unknown>[] = [...(options.rows ?? [])];
     let currentnessAvailable = true;
     let listAvailable = true;
     let readiness = options.readiness ?? 'available';
-    const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-    setRuntimeFetch(async (input, init) => {
+    const requestAccount = account.request.getMockImplementation();
+    if (!requestAccount) throw new Error('API token fixture requires its real Account HTTP boundary');
+    account.request.mockImplementation(async (input, init) => {
         const url = new URL(String(input));
+        const tokenRequest = url.pathname.startsWith('/v1/auth/api-tokens/');
+        if (!tokenRequest && url.pathname !== '/v1/account/encryption/currentness') return requestAccount(input, init);
         const body = init?.body ? JSON.parse(String(init.body)) : {};
         requests.push({ path: url.pathname, body });
         let response: unknown = { ok: true };
-        // Action admission reads the captured Account's policy through these
-        // real adapters. An empty settings document is valid in either mode.
-        if (url.pathname === '/v1/account/encryption') {
-            response = AccountEncryptionModeResponseSchema.parse({ mode: options.mode ?? 'e2ee', updatedAt: 1 });
-        }
-        if (url.pathname === '/v2/account/settings') {
-            response = AccountSettingsV2GetResponseSchema.parse({ content: null, version: 0 });
-        }
         if (url.pathname === '/v1/account/encryption/currentness') {
             await options.holdCurrentness;
             if (!currentnessAvailable) throw new Error('Home unavailable');
@@ -89,7 +77,7 @@ export async function createApiTokenSettingsControllerHarness(options: ApiTokenS
                 recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
             } : {
                 mode: 'e2ee', version: 1, updatedAt: 1, signingKeyFingerprint: 'signing',
-                contentKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(encryption.contentDataKey),
+                contentKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(encryption!.contentDataKey),
                 recipientEnvelopeReadiness: readiness === 'unavailable'
                     ? { status: 'unavailable', reason: 'encryption_setup_required' }
                     : { status: 'available' },
@@ -151,13 +139,6 @@ export async function createApiTokenSettingsControllerHarness(options: ApiTokenS
     });
     const { createApiTokenSettingsController } = await import('./apiTokenSettingsController');
     const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-    // This controller fixture must install the same real credential
-    // projection as a mounted client, not supply caller-chosen authority.
-    const { InjectedAuthProvider, getCurrentAuth } = await import('@/auth/context/AuthContext');
-    authScreens.push(await renderScreen(React.createElement(InjectedAuthProvider, {
-        credentials, children: React.createElement(React.Fragment),
-    })));
-    expect(getCurrentAuth()?.credentialAuthorityKind).toBe('account');
     const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
     const controller = createApiTokenSettingsController({
         execute: createDefaultActionExecutor().execute,
@@ -169,6 +150,7 @@ export async function createApiTokenSettingsControllerHarness(options: ApiTokenS
         controller,
         requests,
         encryption,
+        scope: account.scope,
         withdrawCurrentness: () => { currentnessAvailable = false; },
         /** Whether the Home answers the token list from the next read on. */
         setListAvailable: (next: boolean) => { listAvailable = next; },

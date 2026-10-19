@@ -1,19 +1,29 @@
 import * as React from 'react';
+import { isDeepStrictEqual } from 'node:util';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushHookEffects, renderScreen } from '@/dev/testkit';
+import { computeHomeQrBindingProofV2, tryWriteServerEnabledBitInPlace, type HomeConnectionDescriptorV1 } from '@happier-dev/protocol';
+
+import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
+import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installAccountCommonModuleMocks } from '../../account/accountTestHelpers';
 
+const modalMocks = vi.hoisted(() => ({ alertAsync: vi.fn(async () => {}) }));
+const clipboardMocks = vi.hoisted(() => ({ setStringAsync: vi.fn(async (_value: string) => {}) }));
+vi.mock('expo-clipboard', () => clipboardMocks);
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('@shopify/react-native-skia', async () =>
+    (await import('@/dev/testkit/mocks/reactNativeSkia')).createReactNativeSkiaMock());
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-vi.spyOn(globalThis, 'setInterval').mockImplementation(() => 0 as any);
-vi.spyOn(globalThis, 'clearInterval').mockImplementation(() => {});
-
-const modalMocks = vi.hoisted(() => ({
-    alertAsync: vi.fn(async () => {}),
-}));
-
+installTokenStorageWebPlatformMocks();
 installAccountCommonModuleMocks({
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -21,685 +31,418 @@ installAccountCommonModuleMocks({
     },
 });
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: 'TextInput',
-}));
-
-const clipboardMocks = vi.hoisted(() => ({
-    setStringAsync: vi.fn(async (_value: string) => {}),
-}));
-vi.mock('expo-clipboard', () => clipboardMocks);
-
-vi.mock('@/components/qr/QRCode', () => ({
-    QRCode: 'QRCode',
-}));
-
-
-const AUTH_FIXTURE = Object.freeze({
-    isAuthenticated: true,
-    credentials: Object.freeze({ token: 'focused-home-b-token' }),
-});
-
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => AUTH_FIXTURE,
-    useOptionalAuth: () => AUTH_FIXTURE,
-}));
-
-const tokenStorageMocks = vi.hoisted(() => ({
-    getCredentialsForServerUrl: vi.fn(async () => ({ token: 'captured-home-a-token' })),
-}));
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/auth/storage/tokenStorage')>();
-    return {
-        ...actual,
-        TokenStorage: {
-            ...actual.TokenStorage,
-            ...tokenStorageMocks,
-        },
-    };
-});
-
-vi.mock('@/platform/cryptoRandom', () => ({
-    getRandomBytes: (length: number) => new Uint8Array(length).fill(7),
-}));
-
-vi.mock('@/platform/digest', () => ({
-    digest: vi.fn(async () => new Uint8Array(32).fill(1)),
-}));
-
-const homeState = vi.hoisted(() => ({
-    activeServerUrl: 'https://stack.example.test',
-    activeServerId: 'profile-test',
-    selectedFeatureProfileId: 'profile-test',
-    boundQrV2Enabled: true,
-    savedProfiles: [] as Array<{
-        id: string;
-        name: string;
-        serverUrl: string;
-        canonicalServerUrl: string;
-        serverIdentityId: string;
-    }>,
-    descriptorOverride: null as import('@happier-dev/protocol').HomeConnectionDescriptorV1 | null,
-}));
-function currentDescriptor(): import('@happier-dev/protocol').HomeConnectionDescriptorV1 | null {
-    if (homeState.descriptorOverride) return homeState.descriptorOverride;
-    if (!homeState.activeServerUrl.startsWith('https://')) return null;
-    return {
-        v: 1,
-        homeServerIdentityId: 'srv_test',
-        canonicalServerUrl: homeState.activeServerUrl,
-        revision: 1,
-        endpoints: [{ kind: 'https', url: homeState.activeServerUrl }],
-    };
-}
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-    // The Home naming rule (`readServerProfileHomeName`) stays real; the stored profiles are fixtures.
-    ...await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>(),
-    getActiveServerUrl: () => homeState.activeServerUrl,
-    loadHomeViewState: () => null,
-    listServerProfiles: () => homeState.savedProfiles,
-    getServerProfileById: (profileId: string) => {
-        const profile = homeState.savedProfiles.find((candidate) => candidate.id === profileId) ?? null;
-        return profile?.id === homeState.activeServerId
-            ? { ...profile, serverUrl: homeState.activeServerUrl, canonicalServerUrl: homeState.activeServerUrl }
-            : profile;
-    },
-    buildHomeConnectionDescriptorForProfile: (profile: {
-        canonicalServerUrl?: string;
-        serverUrl: string;
-        serverIdentityId?: string;
-    }) => {
-        if (homeState.descriptorOverride) return homeState.descriptorOverride;
-        const canonicalServerUrl = profile.canonicalServerUrl ?? profile.serverUrl;
-        const homeServerIdentityId = profile.serverIdentityId;
-        if (!homeServerIdentityId || !canonicalServerUrl.startsWith('https://')) return null;
-        return {
-            v: 1,
-            homeServerIdentityId,
-            canonicalServerUrl,
-            revision: 1,
-            endpoints: [{ kind: 'https', url: canonicalServerUrl }],
-        };
-    },
-    reconcileServerProfileHomeConnectionDescriptor: vi.fn(async () => ({ kind: 'applied', profile: { id: 'profile-test' } })),
-}));
-
-vi.mock('@/hooks/server/useServerProfilesGeneration', () => ({
-    useServerProfilesGeneration: () => 0,
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/server/serverRuntime')>(),
-    getActiveServerSnapshot: () => {
-        return ({
-        serverId: homeState.activeServerId,
-        serverUrl: homeState.activeServerUrl,
-        generation: 0,
-        activeShareableServerUrl: homeState.activeServerUrl,
-        activeShareableServerUrlValidatedAgainstServerUrl: homeState.activeServerUrl,
-        runtimeOrigin: null,
-        });
-    },
-}));
-
-vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
-    getCachedServerFeaturesSnapshot: () => ({
-        status: 'ready',
-        serverIdentityId: 'srv_test',
-        features: {
-            features: { auth: { pairing: { boundQrV2: { enabled: homeState.boundQrV2Enabled } } } },
-            capabilities: { server: { canonicalServerUrl: homeState.activeServerUrl } },
-        },
-    }),
-    getServerFeaturesSnapshot: async (params?: { serverId?: string }) => {
-        homeState.selectedFeatureProfileId = params?.serverId ?? homeState.activeServerId;
-        const profile = homeState.savedProfiles.find((candidate) => candidate.id === homeState.selectedFeatureProfileId);
-        return {
-            status: 'ready',
-            serverIdentityId: profile?.serverIdentityId ?? 'srv_test',
-            features: {
-                features: { auth: { pairing: { boundQrV2: { enabled: homeState.boundQrV2Enabled } } } },
-                capabilities: { server: { canonicalServerUrl: profile?.canonicalServerUrl ?? homeState.activeServerUrl } },
-            },
-        };
-    },
-    observeAuthenticatedServerFeaturesFresh: async () => {
-        const profile = homeState.savedProfiles.find((candidate) => candidate.id === homeState.selectedFeatureProfileId);
-        const descriptor = homeState.descriptorOverride
-            ?? (homeState.selectedFeatureProfileId === homeState.activeServerId ? currentDescriptor() : null)
-            ?? (profile
-            ? {
-                v: 1 as const,
-                homeServerIdentityId: profile.serverIdentityId,
-                canonicalServerUrl: profile.canonicalServerUrl,
-                revision: 1,
-                endpoints: [{ kind: 'https' as const, url: profile.canonicalServerUrl }],
-            }
-            : null);
-        return descriptor
-            ? {
-                status: 'ready',
-                serverIdentityId: descriptor.homeServerIdentityId,
-                features: {
-                    features: { auth: { pairing: { boundQrV2: { enabled: homeState.boundQrV2Enabled } } } },
-                    capabilities: { server: { canonicalServerUrl: descriptor.canonicalServerUrl } },
-                    homeConnectionDescriptor: descriptor,
-                },
-            }
-            : { status: 'error', reason: 'network' };
-    },
-}));
-
-let pairingExpiresAt = new Date(Date.now() + 60_000).toISOString();
-let accountApprovalResponse: any = { ok: true, status: 200, json: async () => ({ success: true }) };
-let pairingConsumeResponse: any = { ok: true, status: 200, json: async () => ({ success: true }) };
-const serverFetchSpy = vi.fn(async (path: string, _init?: any, _options?: any) => {
-    if (path === '/v1/auth/pairing/start') {
-        return {
-            ok: true,
-            status: 200,
-            json: async () => ({ pairId: 'pair_123', expiresAt: pairingExpiresAt }),
-        } as any;
-    }
-    if (path.startsWith('/v1/auth/pairing/status')) {
-        return pairingStatusResponse;
-    }
-    if (path === '/v1/auth/account/response') {
-        return accountApprovalResponse;
-    }
-    if (path === '/v1/auth/pairing/consume') {
-        return pairingConsumeResponse;
-    }
-    throw new Error(`Unexpected serverFetch path: ${path}`);
-});
-
-let pairingStatusResponse: any = {
-    ok: true,
-    status: 200,
-    json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: pairingExpiresAt }),
-} as any;
-
-vi.mock('@/sync/http/client', () => ({
-    serverFetch: (path: string, init?: any, options?: any) => serverFetchSpy(path, init, options),
-    createServerFetchAtEndpoint: (requestContext: any) => (
-        path: string,
-        init?: any,
-        options?: any,
-    ) => serverFetchSpy(path, init, { ...options, requestContext }),
-}));
-
-// Collect the real page graph after configuring the shared platform/modal boundaries,
-// rather than loading it inside a timed test or before that configuration exists.
+await initializeRealAppRuntimeForTests();
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+const { AuthProvider } = await import('@/auth/context/AuthContext');
 const { AddPhoneSettingsView } = await import('./AddPhoneSettingsView');
 const { storage } = await import('@/sync/domains/state/storageStore');
-const initialSettings = storage.getState().settings;
+const profiles = await import('@/sync/domains/server/serverProfiles');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
+const { encodeBase64, decodeBase64 } = await import('@/encryption/base64');
+const atmosphere = storage.getState().settings.homeAtmosphere;
+const accountSettings = { homeAtmosphere: { ...atmosphere,
+    moments: { ...atmosphere.moments, qr: false, pairing: false },
+} };
+
+type HttpReply = Readonly<{ status: number; body: unknown }>;
+type PairingRequest = Readonly<{
+    serverId: string; path: string; input: Record<string, unknown>; authenticatedForTarget: boolean;
+}>;
+type SavedHome = Readonly<{
+    profileId: string; serverIdentityId: string; serverUrl: string; descriptor: HomeConnectionDescriptorV1 | null;
+}>;
+const pairingRequests: PairingRequest[] = [];
+const featureReplies = new Map<string, ReturnType<typeof createRootLayoutFeaturesResponse>>();
+let fixtureSequence = 0;
+let focusedHome: SavedHome;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+let localStorage: ReturnType<typeof installLocalStorageMock> | null = null;
+let pairingExpiresAt = '';
+let pairingStatusResponse: HttpReply | null = null;
+let accountApprovalResponse: HttpReply;
+let beforeStart: (() => void) | null = null;
+let statusReply: (() => HttpReply) | null = null;
+let currentnessReads = 0;
+let currentnessGate: Promise<void> | null = null;
+let releaseCurrentness: (() => void) | null = null;
+const pairId = 'pair-add-phone';
+
+function json(reply: HttpReply): Response {
+    return Response.json(reply.body, { status: reply.status });
+}
+
+function pendingStatus(): HttpReply {
+    return { status: 200, body: { state: 'pending', pairId, expiresAt: pairingExpiresAt } };
+}
+
+// The genuine HTTP port serves focused and retained Homes. All credential, feature,
+// descriptor, currentness, lifecycle and encryption decisions stay with their real owners.
+const request: NonNullable<Parameters<typeof setRuntimeFetch>[0]> = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const home = homes.findByServerUrl(url.origin);
+    if (!home) throw new Error('Unexpected Add Phone fixture Home');
+    const path = url.pathname;
+    if (path === '/v1/features' || path === '/v1/features/authenticated') {
+        const features = featureReplies.get(url.origin);
+        if (!features) throw new Error('Add Phone fixture features were not installed');
+        return Response.json(features);
+    }
+    if (path === '/v1/account/encryption/currentness') {
+        currentnessReads += 1;
+        const gate = currentnessGate;
+        currentnessGate = null;
+        await gate;
+        return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 1 }));
+    }
+    if (path.startsWith('/v1/auth/pairing/') || path === '/v1/auth/account/response') {
+        const body: unknown = init?.body ? JSON.parse(String(init.body)) : {};
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Malformed pairing fixture request');
+        const authorization = new Headers(init?.headers).get('Authorization');
+        pairingRequests.push({ serverId: home.serverId, path, input: body as Record<string, unknown>,
+            authenticatedForTarget: home.token !== null && authorization === `Bearer ${home.token}` });
+        if (path === '/v1/auth/pairing/start') {
+            beforeStart?.();
+            return json({ status: 200, body: { pairId, expiresAt: pairingExpiresAt } });
+        }
+        if (path === '/v1/auth/pairing/status') return json(statusReply?.() ?? pairingStatusResponse ?? pendingStatus());
+        if (path === '/v1/auth/account/response') return json(accountApprovalResponse);
+        if (path === '/v1/auth/pairing/consume') return json({ status: 200, body: { success: true } });
+        throw new Error('Unexpected Add Phone fixture pairing operation');
+    }
+    return createEmptyAccountBootstrapHttpResponse(`${path}${url.search}`, init) ?? homes.request(input, init);
+};
+
+async function saveHome(options: Readonly<{
+    name?: string; local?: boolean; boundQrV2?: boolean; descriptor?: HomeConnectionDescriptorV1;
+}> = {}): Promise<SavedHome> {
+    const sequence = ++fixtureSequence;
+    const serverUrl = options.descriptor?.canonicalServerUrl
+        ?? (options.local ? `http://localhost:${19000 + sequence}` : `https://add-phone-${sequence}.example.test`);
+    const homeServerIdentityId = options.descriptor?.homeServerIdentityId ?? `srv_add_phone_${sequence}`;
+    const descriptor = options.local ? null : options.descriptor ?? {
+        v: 1 as const, homeServerIdentityId, canonicalServerUrl: serverUrl, revision: 1,
+        endpoints: [{ kind: 'https' as const, url: serverUrl }],
+    };
+    const savedId = await homes.addHome({ name: options.name ?? 'Focused Home', serverUrl,
+        serverIdentityId: homeServerIdentityId, accountId: 'phone-account', currentAccount: true, active: false });
+    // Pairing observes the static QR; its real Account settings read must retain that preference.
+    homes.answer(savedId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: accountSettings } } });
+    const profile = descriptor ? await profiles.adoptHomeProfile({ descriptor, source: 'qr',
+        descriptorAuthority: 'current_connection_observation' }) : profiles.getServerProfileById(savedId);
+    if (!profile) throw new Error('Add Phone fixture Home was not saved');
+    const features = { ...createRootLayoutFeaturesResponse(), ...(descriptor ? { homeConnectionDescriptor: descriptor } : {}) };
+    features.capabilities.serverIdentity.serverIdentityId = homeServerIdentityId;
+    features.capabilities.server.canonicalServerUrl = serverUrl;
+    if (!tryWriteServerEnabledBitInPlace(features, 'auth.pairing.boundQrV2', options.boundQrV2 !== false)) {
+        throw new Error('Add Phone fixture feature declaration was unavailable');
+    }
+    featureReplies.set(new URL(serverUrl).origin, features);
+    return { profileId: profile.id, serverIdentityId: homeServerIdentityId, serverUrl, descriptor };
+}
+
+async function focusHome(options: Parameters<typeof saveHome>[0] = {}) {
+    await connection?.dispose();
+    connection = null;
+    focusedHome = await saveHome(options);
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = await TokenStorage.getCredentialsForServerUrl(focusedHome.serverUrl, { serverId: focusedHome.serverIdentityId });
+    if (!credentials) throw new Error('Add Phone fixture Home credentials were unavailable');
+    connection = await restoreServerAccountForTest({ serverUrl: focusedHome.serverUrl,
+        serverIdentityId: focusedHome.serverIdentityId, accountId: 'phone-account', credentials, request,
+        additionalRequestOrigins: [...featureReplies.keys()],
+    });
+}
+
+async function renderAuthenticated(element: React.ReactNode) {
+    if (!connection) throw new Error('Add Phone fixture Account was not restored');
+    // The same external port also serves Homes saved after the focused Account was restored.
+    setRuntimeFetch(request);
+    return renderScreen(<AuthProvider initialCredentials={connection.credentials}>{element}</AuthProvider>);
+}
+
+async function renderPhone() {
+    const screen = await renderAuthenticated(<AddPhoneSettingsView />);
+    await waitForHomeGovernance(() => expect(
+        ['add-phone-qr', 'add-phone-expired', 'add-phone-update-required', 'add-phone-invalid-request', 'add-phone-complete']
+            .some(testId => screen.findByTestId(testId) !== null),
+    ).toBe(true));
+    return screen;
+}
+
+function requestsFor(path: string) {
+    return pairingRequests.filter(candidate => candidate.path === path);
+}
+
+function readInvite(screen: Awaited<ReturnType<typeof renderPhone>>) {
+    // The renderer exposes the memo's inner component; read the real QR renderer's encoded payload.
+    const qr = screen.findByTestId('add-phone-qr')?.findAll(node => typeof node.props.data === 'string')[0];
+    const parsed = qr ? parseHomeQrInviteDeepLink(String(qr.props.data)) : null;
+    if (!parsed) throw new Error('Expected a valid Add Phone QR invite');
+    return parsed.invite;
+}
+
+async function requestPhone(screen: Awaited<ReturnType<typeof renderPhone>>) {
+    const invite = readInvite(screen);
+    const { generateAuthKeyPair } = await import('@/auth/flows/qrStart');
+    const requester = generateAuthKeyPair();
+    pairingStatusResponse = { status: 200, body: {
+        state: 'requested', pairId: invite.pairId, expiresAt: new Date(invite.expiresAtMs).toISOString(),
+        requestedPublicKey: encodeBase64(requester.publicKey), requestedDeviceLabel: 'Phone',
+        homeServerIdentityId: invite.home.homeServerIdentityId,
+        bindingProof: computeHomeQrBindingProofV2({ direction: invite.direction,
+            qrSecret: decodeBase64(invite.qrSecretBase64Url, 'base64url'), pairId: invite.pairId,
+            homeServerIdentityId: invite.home.homeServerIdentityId, requesterPublicKey: requester.publicKey,
+            expiresAtMs: invite.expiresAtMs,
+        }),
+    } };
+    return { invite, requester };
+}
+
+function expectCancellation() {
+    const cancellation = requestsFor('/v1/auth/pairing/consume').at(-1);
+    expect({ matchingPair: cancellation?.input.pairId === pairId, cancellationIntent: cancellation?.input.intent === 'cancel',
+        fields: Object.keys(cancellation?.input ?? {}).sort(), authenticated: cancellation?.authenticatedForTarget,
+    }).toEqual({ matchingPair: true, cancellationIntent: true, fields: ['intent', 'pairId'], authenticated: true });
+}
 
 describe('AddPhoneSettingsView', () => {
-    beforeEach(() => {
-        // This suite observes the static QR payload; the moment renderer owns animated painting.
-        storage.setState((state) => ({ settings: { ...state.settings, homeAtmosphere: {
-            ...state.settings.homeAtmosphere,
-            moments: { ...state.settings.homeAtmosphere.moments, qr: false, pairing: false },
-        } } }));
-        homeState.activeServerId = 'profile-test';
-        homeState.activeServerUrl = 'https://stack.example.test';
-        homeState.selectedFeatureProfileId = homeState.activeServerId;
-        homeState.boundQrV2Enabled = true;
-        homeState.savedProfiles = [{
-            id: homeState.activeServerId,
-            name: 'Focused Home',
-            serverUrl: homeState.activeServerUrl,
-            canonicalServerUrl: homeState.activeServerUrl,
-            serverIdentityId: 'srv_test',
-        }];
+    beforeEach(async () => {
+        localStorage = installLocalStorageMock();
+        pairingRequests.length = 0;
+        featureReplies.clear();
         pairingExpiresAt = new Date(Date.now() + 60_000).toISOString();
-        accountApprovalResponse = { ok: true, status: 200, json: async () => ({ success: true }) };
-        pairingConsumeResponse = { ok: true, status: 200, json: async () => ({ success: true }) };
-        serverFetchSpy.mockClear();
-        tokenStorageMocks.getCredentialsForServerUrl.mockClear();
-        homeState.descriptorOverride = null;
+        pairingStatusResponse = null;
+        accountApprovalResponse = { status: 200, body: { success: true } };
+        beforeStart = null;
+        statusReply = null;
+        currentnessReads = 0;
+        currentnessGate = null;
+        releaseCurrentness = null;
+        await focusHome();
     });
-    afterEach(() => {
-        storage.setState({ settings: initialSettings });
+    afterEach(async () => {
+        releaseCurrentness?.();
+        currentnessGate = null;
+        await standardCleanup();
+        await connection?.dispose();
+        connection = null;
+        await homes.reset();
+        localStorage?.restore();
+        localStorage = null;
         clipboardMocks.setStringAsync.mockClear();
         modalMocks.alertAsync.mockClear();
     });
 
     it('issues and cancels the modal code on its displayed Home while another Home stays focused', async () => {
-        homeState.savedProfiles.push({
-            id: 'profile-home-b', name: 'Home B',
-            serverUrl: 'https://home-b.example.test', canonicalServerUrl: 'https://home-b.example.test',
-            serverIdentityId: 'srv_home_b',
-        });
-        pairingStatusResponse = {
-            ok: true, status: 200,
-            json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: pairingExpiresAt }),
-        };
+        const background = await saveHome({ name: 'Home B' });
         const { Modal, ModalProvider } = await import('@/modal');
         const { showHomePairingModal } = await import('@/components/auth/pairing/HomePairingModal');
         Modal.hideAll();
-        const screen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
-        await act(async () => showHomePairingModal('phone', 'profile-home-b'));
-        await flushHookEffects({ cycles: 4 });
-
-        expect(screen.findByTestId('home-pairing-modal-qr')).toBeTruthy();
-        const start = serverFetchSpy.mock.calls.find((call) => call[0] === '/v1/auth/pairing/start');
-        expect(start?.[2]?.requestContext).toMatchObject({
-            serverId: 'profile-home-b', endpointUrl: 'https://home-b.example.test',
-        });
-        expect(homeState.activeServerId).toBe('profile-test');
-
+        const screen = await renderAuthenticated(<ModalProvider>{null}</ModalProvider>);
+        await act(async () => showHomePairingModal('phone', background.profileId));
+        await waitForHomeGovernance(() => expect(screen.findByTestId('home-pairing-modal-qr') !== null).toBe(true));
+        const start = requestsFor('/v1/auth/pairing/start').at(-1);
+        expect({ serverId: start?.serverId, authenticated: start?.authenticatedForTarget })
+            .toEqual({ serverId: background.profileId, authenticated: true });
+        expect(getActiveServerSnapshot().serverId).toBe(focusedHome.serverIdentityId);
         await act(async () => Modal.hideAll());
-        await flushHookEffects({ cycles: 2 });
-        const cancel = serverFetchSpy.mock.calls.find((call) => call[0] === '/v1/auth/pairing/consume');
-        expect(JSON.parse(String(cancel?.[1]?.body))).toEqual({ pairId: 'pair_123', intent: 'cancel' });
-        expect(cancel?.[2]?.requestContext).toMatchObject({ serverId: 'profile-home-b' });
-        expect(screen.findByTestId('home-pairing-modal-qr')).toBeNull();
+        await waitForHomeGovernance(() => expect(requestsFor('/v1/auth/pairing/consume').length).toBe(1));
+        expectCancellation();
+        expect(requestsFor('/v1/auth/pairing/consume')[0]?.serverId).toBe(background.profileId);
+        expect(screen.findByTestId('home-pairing-modal-qr') === null).toBe(true);
     });
 
     it('renders a pairing QR code after starting a session', async () => {
-        homeState.activeServerUrl = 'https://stack.example.test';
-        pairingStatusResponse = {
-            ok: true,
-            status: 200,
-            json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: pairingExpiresAt }),
-        } as any;
-
-        const screen = await renderScreen(<AddPhoneSettingsView />);
-        await flushHookEffects({ cycles: 4 });
-        const qrContainer = screen.findByTestId('add-phone-qr');
-        if (!qrContainer) {
-            throw new Error(`Expected QR container; rendered=${screen.getTextContent()}`);
-        }
-        const qr = qrContainer.findByType('QRCode');
-        const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        expect(parseHomeQrInviteDeepLink(String(qr.props.data))?.invite).toMatchObject({
-            v: 2,
-            intent: 'home_device',
-            pairId: 'pair_123',
-            home: { homeServerIdentityId: 'srv_test' },
-        });
-        // The panel counts down to the code's expiry while it waits for the phone.
-        expect(screen.findByTestId('add-phone-countdown')).toBeTruthy();
-        expect(screen.getTextContent()).toContain('homeSetup.waitingForPhone');
+        const screen = await renderPhone();
+        const invite = readInvite(screen);
+        expect({ v: invite.v, intent: invite.intent, matchingPair: invite.pairId === pairId, homeId: invite.home.homeServerIdentityId })
+            .toEqual({ v: 2, intent: 'home_device', matchingPair: true, homeId: focusedHome.serverIdentityId });
+        expect(screen.findByTestId('add-phone-countdown') !== null).toBe(true);
+        expect(screen.getTextContent().includes('homeSetup.waitingForPhone')).toBe(true);
     });
 
     it('pairs against the selected saved Home without changing the focused Home', async () => {
-        homeState.savedProfiles = [
-            ...homeState.savedProfiles,
-            {
-                id: 'profile-home-b',
-                name: 'Home B',
-                serverUrl: 'https://home-b.example.test',
-                canonicalServerUrl: 'https://home-b.example.test',
-                serverIdentityId: 'srv_home_b',
-            },
-        ];
-        pairingStatusResponse = {
-            ok: true,
-            status: 200,
-            json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: pairingExpiresAt }),
-        } as any;
-        const screen = await renderScreen(<AddPhoneSettingsView />);
-        await flushHookEffects({ cycles: 4 });
-        serverFetchSpy.mockClear();
-
-        const homeB = screen.findByTestId('add-phone-home-profile-profile-home-b');
-        expect(homeB).toBeTruthy();
-        await act(async () => homeB?.props.onPress());
-        await flushHookEffects({ cycles: 4 });
-
-        const startCall = serverFetchSpy.mock.calls.find((call) => call[0] === '/v1/auth/pairing/start');
-        expect(startCall?.[2]?.requestContext).toMatchObject({
-            serverId: 'profile-home-b',
-            endpointUrl: 'https://home-b.example.test',
-        });
-        expect(homeState.activeServerId).toBe('profile-test');
-        expect(screen.getTextContent()).toContain('connect.addPhoneChooseHomeFooter');
+        const background = await saveHome({ name: 'Home B' });
+        const screen = await renderPhone();
+        pairingRequests.length = 0;
+        await screen.pressByTestIdAsync(`add-phone-home-profile-${background.profileId}`);
+        await waitForHomeGovernance(() => expect(requestsFor('/v1/auth/pairing/start').length).toBe(1));
+        const start = requestsFor('/v1/auth/pairing/start')[0];
+        expect({ serverId: start?.serverId, authenticated: start?.authenticatedForTarget })
+            .toEqual({ serverId: background.profileId, authenticated: true });
+        expect(getActiveServerSnapshot().serverId).toBe(focusedHome.serverIdentityId);
+        expect(screen.getTextContent().includes('connect.addPhoneChooseHomeFooter')).toBe(true);
     });
 
     it('clears the QR code when the Home gives up on a code early, and offers a new one', async () => {
-        homeState.activeServerUrl = 'https://stack.example.test';
-        pairingStatusResponse = {
-            ok: false,
-            status: 404,
-            json: async () => ({ error: 'not_found' }),
-        } as any;
-
-        const screen = await renderScreen(<AddPhoneSettingsView />);
-        await flushHookEffects({ cycles: 1 });
-
-        expect(screen.findAllByTestId('add-phone-qr')).toHaveLength(0);
-        expect(screen.findByTestId('add-phone-expired')).toBeTruthy();
-
-        const textContent = screen.getTextContent();
-        expect(textContent).toContain('connect.pairingQrExpired');
-        expect(screen.findByTestId('add-phone-generate')).toBeTruthy();
+        pairingStatusResponse = { status: 404, body: { error: 'not_found' } };
+        const screen = await renderPhone();
+        await waitForHomeGovernance(() => expect(screen.findByTestId('add-phone-expired') !== null).toBe(true));
+        expect(screen.findAllByTestId('add-phone-qr').length).toBe(0);
+        expect(screen.getTextContent().includes('connect.pairingQrExpired')).toBe(true);
         expect(screen.findByTestId('add-phone-generate')?.props.disabled).toBe(false);
-        // Not renewed behind the person's back: only the one code was made.
-        expect(serverFetchSpy.mock.calls.filter((call) => call[0] === '/v1/auth/pairing/start')).toHaveLength(1);
+        expect(requestsFor('/v1/auth/pairing/start').length).toBe(1);
     });
 
     it('makes the next code when the current one runs out while the page stays open', async () => {
-        homeState.activeServerUrl = 'https://stack.example.test';
-        // The first code lives about a second; the Home reports it gone once it has run out. The next
-        // code (made while the page stays open) lives a minute.
         let starts = 0;
         let currentExpiresAtMs = 0;
-        const baseline = serverFetchSpy.getMockImplementation()!;
-        serverFetchSpy.mockImplementation(async (path: string, init?: any, options?: any) => {
-            if (path === '/v1/auth/pairing/start') {
-                starts += 1;
-                currentExpiresAtMs = Date.now() + (starts === 1 ? 1_200 : 60_000);
-                pairingExpiresAt = new Date(currentExpiresAtMs).toISOString();
-            }
-            if (path.startsWith('/v1/auth/pairing/status')) {
-                return Date.now() >= currentExpiresAtMs
-                    ? { ok: false, status: 404, json: async () => ({ error: 'not_found' }) } as any
-                    : { ok: true, status: 200, json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: pairingExpiresAt }) } as any;
-            }
-            return baseline(path, init, options);
+        beforeStart = () => {
+            currentExpiresAtMs = Date.now() + (++starts === 1 ? 1_200 : 60_000);
+            pairingExpiresAt = new Date(currentExpiresAtMs).toISOString();
+        };
+        statusReply = () => Date.now() >= currentExpiresAtMs
+            ? { status: 404, body: { error: 'not_found' } } : pendingStatus();
+        const screen = await renderPhone();
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects({ cycles: 1 });
+            expect(requestsFor('/v1/auth/pairing/start').length).toBe(2);
+            expect(screen.getTextContent().includes('homeSetup.waitingForPhone')).toBe(true);
         });
-        try {
-            const screen = await renderScreen(<AddPhoneSettingsView />);
-
-            // The lifecycle notices the expiry on its own poll schedule (real timers), so wait for the
-            // outcome within the case's own budget rather than a fixed number of flushes.
-            const runnerTimeoutMs = (globalThis as { __vitest_worker__?: { config?: { testTimeout?: number } } })
-                .__vitest_worker__?.config?.testTimeout;
-            await vi.waitFor(async () => {
-                await flushHookEffects({ cycles: 1 });
-                expect(serverFetchSpy.mock.calls.filter((call) => call[0] === '/v1/auth/pairing/start')).toHaveLength(2);
-                // The new code is live: the panel waits for the phone again.
-                expect(screen.getTextContent()).toContain('homeSetup.waitingForPhone');
-            }, { timeout: runnerTimeoutMs, interval: 50 });
-        } finally {
-            serverFetchSpy.mockImplementation(baseline);
-        }
     });
 
     it('renders the lifecycle update requirement inline when the selected Home lacks bound QR v2', async () => {
-        homeState.boundQrV2Enabled = false;
-        homeState.activeServerUrl = 'https://stack.example.test';
-        pairingStatusResponse = {
-            ok: true,
-            status: 200,
-            json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: pairingExpiresAt }),
-        } as any;
-
-        const screen = await renderScreen(<AddPhoneSettingsView />);
-        await flushHookEffects({ cycles: 4 });
-
-        const textContent = screen.getTextContent();
-        expect(screen.findByTestId('add-phone-update-required')).toBeTruthy();
-        expect(textContent).toContain('connect.updateRequiredTitle');
-        expect(textContent).toContain('connect.updateRequiredBody');
-        expect(textContent).not.toContain('modals.pleaseSignInFirst');
-        expect(modalMocks.alertAsync).not.toHaveBeenCalled();
+        await focusHome({ boundQrV2: false });
+        const screen = await renderPhone();
+        expect(screen.findByTestId('add-phone-update-required') !== null).toBe(true);
+        expect(screen.getTextContent().includes('connect.updateRequiredTitle')).toBe(true);
+        expect(screen.getTextContent().includes('connect.updateRequiredBody')).toBe(true);
+        expect(screen.getTextContent().includes('modals.pleaseSignInFirst')).toBe(false);
+        expect(modalMocks.alertAsync.mock.calls.length).toBe(0);
     });
 
     it('fails closed when a local development Home has no shareable application endpoint', async () => {
-        homeState.activeServerUrl = 'http://localhost:53288';
-        pairingStatusResponse = {
-            ok: true,
-            status: 200,
-            json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: pairingExpiresAt }),
-        } as any;
-
-        const screen = await renderScreen(<AddPhoneSettingsView />);
-
-        const textContent = screen.getTextContent();
-        expect(textContent).not.toContain('connect.serverUrlNotEmbeddedTitle');
-        expect(screen.findAllByTestId('add-phone-qr')).toHaveLength(0);
-        expect(textContent).toContain('homeSetup.codeFailed');
+        await focusHome({ local: true });
+        const screen = await renderPhone();
+        expect(screen.getTextContent().includes('connect.serverUrlNotEmbeddedTitle')).toBe(false);
+        expect(screen.findAllByTestId('add-phone-qr').length).toBe(0);
+        expect(screen.getTextContent().includes('homeSetup.codeFailed')).toBe(true);
     });
 
-    it('keeps the secret-bearing pairing link hidden until the user reveals it, then copies it', async () => {
-        homeState.activeServerUrl = 'https://stack.example.test';
-        pairingStatusResponse = {
-            ok: true,
-            status: 200,
-            json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: pairingExpiresAt }),
-        } as any;
-
-        const screen = await renderScreen(<AddPhoneSettingsView />);
-        await flushHookEffects({ cycles: 4 });
-        expect(screen.findAllByTestId('add-phone-pairing-link')).toHaveLength(0);
-        const showLinkButton = screen.findByTestId('add-phone-pairing-link-details');
-        expect(showLinkButton).toBeTruthy();
-        expect(showLinkButton?.props.accessibilityState).toMatchObject({ expanded: false });
-
-        await act(async () => {
-            showLinkButton!.props.onPress();
-        });
-        expect(screen.findByTestId('add-phone-pairing-link')).toBeTruthy();
-        expect(screen.findByTestId('add-phone-pairing-link-details')?.props.accessibilityState)
-            .toMatchObject({ expanded: true });
-        expect(screen.getTextContent()).toContain('connect.pairingLinkSecurityWarning');
-        const copyLinkButton = screen.findByTestId('add-phone-pairing-link-copy');
-        expect(copyLinkButton).toBeTruthy();
-        await act(async () => {
-            await screen.pressByTestIdAsync('add-phone-pairing-link-copy');
-        });
-
-        expect(clipboardMocks.setStringAsync).toHaveBeenCalledTimes(1);
-        const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        expect(parseHomeQrInviteDeepLink(String(clipboardMocks.setStringAsync.mock.calls[0]?.[0]))?.invite.v).toBe(2);
+    it('keeps the pairing link behind disclosure and copies it without exposing the secret in a success modal', async () => {
+        const screen = await renderPhone();
+        expect(screen.findAllByTestId('add-phone-pairing-link').length).toBe(0);
+        expect(screen.findByTestId('add-phone-pairing-link-details')?.props.accessibilityState).toMatchObject({ expanded: false });
+        await screen.pressByTestIdAsync('add-phone-pairing-link-details');
+        expect(screen.findByTestId('add-phone-pairing-link') !== null).toBe(true);
+        expect(screen.findByTestId('add-phone-pairing-link-details')?.props.accessibilityState).toMatchObject({ expanded: true });
+        expect(screen.getTextContent().includes('connect.pairingLinkSecurityWarning')).toBe(true);
+        await screen.pressByTestIdAsync('add-phone-pairing-link-copy');
+        expect(clipboardMocks.setStringAsync.mock.calls.length).toBe(1);
+        expect(parseHomeQrInviteDeepLink(String(clipboardMocks.setStringAsync.mock.calls[0]?.[0]))?.invite.v === 2).toBe(true);
         expect(modalMocks.alertAsync).not.toHaveBeenCalledWith('common.success', 'common.copied');
-        expect(screen.findByTestId('add-phone-pairing-link-copy-feedback')).toBeTruthy();
+        expect(screen.findByTestId('add-phone-pairing-link-copy-feedback') !== null).toBe(true);
     });
 
     it('automatically completes the captured Home once with no code or direct-QR decision UI', async () => {
-        homeState.activeServerUrl = 'https://stack.example.test';
-        const requestedPublicKey = new Uint8Array(32).fill(9);
-        const expiresAt = pairingExpiresAt;
-        const expiresAtMs = Date.parse(expiresAt);
-        const { computeHomeQrBindingProofV2 } = await import('@happier-dev/protocol');
-        const { encodeBase64 } = await import('@/encryption/base64');
-        pairingStatusResponse = {
-            ok: true,
-            status: 200,
-            json: async () => ({
-                state: 'requested',
-                pairId: 'pair_123',
-                expiresAt,
-                requestedPublicKey: encodeBase64(requestedPublicKey),
-                requestedDeviceLabel: 'Phone',
-                homeServerIdentityId: 'srv_test',
-                bindingProof: computeHomeQrBindingProofV2({
-                    direction: 'trusted_home_displays',
-                    qrSecret: new Uint8Array(32).fill(7),
-                    pairId: 'pair_123',
-                    homeServerIdentityId: 'srv_test',
-                    requesterPublicKey: requestedPublicKey,
-                    expiresAtMs,
-                }),
-            }),
-        } as any;
-        accountApprovalResponse = {
-            ok: false,
-            status: 409,
-            json: async () => ({ error: 'already_completed' }),
-        } as any;
-        serverFetchSpy.mockClear();
-
-        const screen = await renderScreen(<AddPhoneSettingsView />);
-        await flushHookEffects({ cycles: 4 });
-
-        expect(screen.findByTestId('add-phone-request-confirm-code')).toBeNull();
-        expect(screen.findByTestId('add-phone-approve')).toBeNull();
-        expect(screen.findByTestId('add-phone-reject')).toBeNull();
-        expect(screen.findByTestId('add-phone-complete')).toBeTruthy();
-        expect(screen.findByTestId('add-phone-pairing-link-details')).toBeNull();
-        expect(screen.findByTestId('add-phone-pairing-link')).toBeNull();
-        expect(screen.getTextContent()).toContain('homeSetup.deviceJoined');
-        expect(screen.getTextContent()).not.toContain('connect.homeAddedPreservedFocusBody');
-        expect(screen.getTextContent()).not.toContain('common.unavailable');
-
-        expect(tokenStorageMocks.getCredentialsForServerUrl).toHaveBeenCalledWith(
-            'https://stack.example.test',
-            { serverId: 'profile-test' },
-        );
-        const approvalCall = serverFetchSpy.mock.calls.find((call) => call[0] === '/v1/auth/account/response');
-        expect(approvalCall).toBeTruthy();
-        expect(approvalCall?.[2]?.requestContext?.credentials).toEqual({
-            token: 'captured-home-a-token',
-        });
-        expect(JSON.parse(String(approvalCall?.[1]?.body))).toMatchObject({
-            pairId: 'pair_123',
-            publicKey: encodeBase64(requestedPublicKey),
-            homeServerIdentityId: 'srv_test',
-            responseKind: 'tokenOnly',
-            response: expect.any(String),
-        });
-        const approvalBody = JSON.parse(String(approvalCall?.[1]?.body)) as { response: string };
+        accountApprovalResponse = { status: 409, body: { error: 'already_completed' } };
+        const screen = await renderPhone();
+        const { invite, requester } = await requestPhone(screen);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('add-phone-complete') !== null).toBe(true));
+        for (const testId of ['add-phone-request-confirm-code', 'add-phone-approve', 'add-phone-reject',
+            'add-phone-pairing-link-details', 'add-phone-pairing-link']) {
+            expect(screen.findByTestId(testId) === null).toBe(true);
+        }
+        expect(screen.getTextContent().includes('homeSetup.deviceJoined')).toBe(true);
+        expect(screen.getTextContent().includes('connect.homeAddedPreservedFocusBody')).toBe(false);
+        expect(screen.getTextContent().includes('common.unavailable')).toBe(false);
+        const approval = requestsFor('/v1/auth/account/response')[0];
+        const body = approval?.input;
+        expect({ matchingHome: approval?.serverId === focusedHome.profileId, authenticated: approval?.authenticatedForTarget,
+            matchingPair: body?.pairId === invite.pairId, matchingRequester: body?.publicKey === encodeBase64(requester.publicKey),
+            matchingIdentity: body?.homeServerIdentityId === focusedHome.serverIdentityId,
+            correctResponseKind: body?.responseKind === 'tokenOnly', hasSealedResponse: typeof body?.response === 'string',
+            disclosedCredential: Boolean(connection && JSON.stringify(body ?? {}).includes(connection.credentials.token)),
+        }).toEqual({ matchingHome: true, authenticated: true, matchingPair: true, matchingRequester: true,
+            matchingIdentity: true, correctResponseKind: true, hasSealedResponse: true, disclosedCredential: false });
         const { inspectTerminalProvisioningV3Payload } = await import('@happier-dev/protocol');
-        expect(inspectTerminalProvisioningV3Payload(
-            (await import('@/encryption/base64')).decodeBase64(approvalBody.response),
-        )).toEqual({ type: 'tokenOnly' });
-        expect(serverFetchSpy.mock.calls.some((call) => call[0] === '/v1/auth/pairing/consume')).toBe(false);
-        expect(serverFetchSpy.mock.calls.filter((call) => call[0] === '/v1/auth/account/response')).toHaveLength(1);
-        expect(serverFetchSpy.mock.calls.filter((call) => call[0] === '/v1/auth/pairing/start')).toHaveLength(1);
+        expect(inspectTerminalProvisioningV3Payload(decodeBase64(String(body?.response)))?.type).toBe('tokenOnly');
+        expect(requestsFor('/v1/auth/pairing/consume').length).toBe(0);
+        expect(requestsFor('/v1/auth/account/response').length).toBe(1);
+        expect(requestsFor('/v1/auth/pairing/start').length).toBe(1);
+    });
+
+    it('does not complete with a replacement Account after captured Home credentials retire', async () => {
+        const screen = await renderPhone();
+        const captured = captureActiveServerAccountScopeLifetime();
+        expect(captured?.isCurrent()).toBe(true);
+        expect(captured?.scope.accountId).toBe('phone-account');
+        expect(profiles.areServerProfileIdentifiersEquivalent(captured?.scope.serverId ?? '', focusedHome.serverIdentityId)).toBe(true);
+        currentnessGate = new Promise<void>(resolve => { releaseCurrentness = resolve; });
+        const initialReads = currentnessReads;
+        await requestPhone(screen);
+        await waitForHomeGovernance(() => expect(currentnessReads > initialReads).toBe(true));
+        await homes.switchAccount(focusedHome.profileId, 'replacement-phone-account', { currentAccount: true });
+        expect(captured?.isCurrent()).toBe(false);
+        const replacement = captureActiveServerAccountScopeLifetime();
+        expect(replacement?.isCurrent()).toBe(true);
+        expect(replacement?.scope.accountId).toBe('replacement-phone-account');
+        releaseCurrentness?.();
+        currentnessGate = null;
+        await waitForHomeGovernance(() => expect(screen.findByTestId('add-phone-invalid-request') !== null).toBe(true));
+        expect(requestsFor('/v1/auth/account/response').length).toBe(0);
+        expect(screen.findByTestId('add-phone-complete') === null).toBe(true);
+        expect(screen.findByTestId('add-phone-pairing-link') === null).toBe(true);
     });
 
     it('shows one create-new-QR recovery after a terminal completion failure', async () => {
-        homeState.activeServerUrl = 'https://stack.example.test';
-        const requestedPublicKey = new Uint8Array(32).fill(9);
-        const expiresAt = pairingExpiresAt;
-        const { computeHomeQrBindingProofV2 } = await import('@happier-dev/protocol');
-        const { encodeBase64 } = await import('@/encryption/base64');
-        pairingStatusResponse = {
-            ok: true,
-            status: 200,
-            json: async () => ({
-                state: 'requested', pairId: 'pair_123', expiresAt,
-                requestedPublicKey: encodeBase64(requestedPublicKey), requestedDeviceLabel: null,
-                homeServerIdentityId: 'srv_test',
-                bindingProof: computeHomeQrBindingProofV2({
-                    direction: 'trusted_home_displays',
-                    qrSecret: new Uint8Array(32).fill(7), pairId: 'pair_123',
-                    homeServerIdentityId: 'srv_test', requesterPublicKey: requestedPublicKey,
-                    expiresAtMs: Date.parse(expiresAt),
-                }),
-            }),
-        } as any;
-        accountApprovalResponse = new Response(null, { status: 403 });
-        const screen = await renderScreen(<AddPhoneSettingsView />);
-        await flushHookEffects({ cycles: 4 });
-
-        expect(screen.findByTestId('add-phone-invalid-request')).toBeTruthy();
-        expect(screen.findAllHostsByTestId('add-phone-generate')).toHaveLength(1);
+        accountApprovalResponse = { status: 403, body: { error: 'forbidden' } };
+        const screen = await renderPhone();
+        await requestPhone(screen);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('add-phone-invalid-request') !== null).toBe(true));
+        expect(screen.findAllHostsByTestId('add-phone-generate').length).toBe(1);
         expect(screen.findByTestId('add-phone-generate')?.props.disabled).toBe(false);
-        expect(screen.findByTestId('add-phone-approve')).toBeNull();
-        expect(screen.findByTestId('add-phone-reject')).toBeNull();
+        expect(screen.findByTestId('add-phone-approve') === null).toBe(true);
+        expect(screen.findByTestId('add-phone-reject') === null).toBe(true);
     });
 
     it('omits only the QR image and keeps the exact link behind disclosure when the invite exceeds QR capacity', async () => {
-        homeState.activeServerUrl = 'https://stack.example.test';
-        const longRelayUrls = Array.from({ length: 4 }, (_, index) =>
-            `https://relay-${index}.example.test/${'a'.repeat(470)}`,
-        );
-        homeState.descriptorOverride = {
-            v: 1,
-            homeServerIdentityId: 'srv_test',
-            canonicalServerUrl: 'https://stack.example.test',
-            revision: 1,
-            endpoints: [
-                {
-                    kind: 'iroh',
-                    endpointId: 'a'.repeat(64),
-                    relayUrls: longRelayUrls,
-                    directAddresses: ['192.0.2.10:443', '192.0.2.11:443'],
-                },
-                { kind: 'https', url: 'https://stack.example.test' },
-            ],
-        };
-        pairingStatusResponse = {
-            ok: true,
-            status: 200,
-            json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: pairingExpiresAt }),
-        } as any;
-
-        const screen = await renderScreen(<AddPhoneSettingsView />);
-        await flushHookEffects({ cycles: 2 });
-
-        // Only the QR image is unavailable; the pairing stays live and the
-        // oversized descriptor reaches the invite unchanged.
-        expect(screen.findByTestId('add-phone-qr')?.findAllByType('QRCode')).toHaveLength(0);
-        const textContent = screen.getTextContent();
-        expect(textContent).toContain('connect.pairingQrTooLargeTitle');
-        expect(textContent).toContain('connect.pairingQrTooLargeBody');
-        expect(screen.findByTestId('add-phone-invalid-request')).toBeNull();
-        expect(screen.findByTestId('add-phone-cancel')).toBeTruthy();
-
-        // The exact secret-bearing link stays behind the existing warning/disclosure.
-        expect(screen.findAllByTestId('add-phone-pairing-link')).toHaveLength(0);
-        const showLinkButton = screen.findByTestId('add-phone-pairing-link-details');
-        expect(showLinkButton).toBeTruthy();
-        await act(async () => {
-            showLinkButton!.props.onPress();
-        });
-        expect(screen.getTextContent()).toContain('connect.pairingLinkSecurityWarning');
-        const copyLinkButton = screen.findByTestId('add-phone-pairing-link-copy');
-        expect(copyLinkButton).toBeTruthy();
-        await act(async () => {
-            await screen.pressByTestIdAsync('add-phone-pairing-link-copy');
-        });
-        expect(clipboardMocks.setStringAsync).toHaveBeenCalledTimes(1);
-        const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        expect(parseHomeQrInviteDeepLink(String(clipboardMocks.setStringAsync.mock.calls[0]?.[0]))?.invite.home)
-            .toEqual(homeState.descriptorOverride);
-
-        // The live pairing can still be cancelled through the strict decision.
-        await act(async () => {
-            await screen.pressByTestIdAsync('add-phone-cancel');
-        });
-        const cancellationCall = serverFetchSpy.mock.calls.find((call) => call[0] === '/v1/auth/pairing/consume');
-        expect(JSON.parse(String(cancellationCall?.[1]?.body))).toEqual({ pairId: 'pair_123', intent: 'cancel' });
+        const serverUrl = `https://large-add-phone-${fixtureSequence + 1}.example.test`;
+        const descriptor: HomeConnectionDescriptorV1 = { v: 1, homeServerIdentityId: `srv_large_add_phone_${fixtureSequence + 1}`,
+            canonicalServerUrl: serverUrl, revision: 1, endpoints: [
+                { kind: 'iroh', endpointId: 'a'.repeat(64),
+                    relayUrls: Array.from({ length: 4 }, (_, index) => `https://relay-${index}.example.test/${'a'.repeat(470)}`),
+                    directAddresses: ['192.0.2.10:443', '192.0.2.11:443'] },
+                { kind: 'https', url: serverUrl },
+            ] };
+        await focusHome({ descriptor });
+        const screen = await renderPhone();
+        expect(screen.findByTestId('add-phone-qr')?.findAll(node => typeof node.props.data === 'string').length).toBe(0);
+        expect(screen.getTextContent().includes('connect.pairingQrTooLargeTitle')).toBe(true);
+        expect(screen.getTextContent().includes('connect.pairingQrTooLargeBody')).toBe(true);
+        expect(screen.findByTestId('add-phone-invalid-request') === null).toBe(true);
+        expect(screen.findByTestId('add-phone-cancel') !== null).toBe(true);
+        expect(screen.findAllByTestId('add-phone-pairing-link').length).toBe(0);
+        await screen.pressByTestIdAsync('add-phone-pairing-link-details');
+        expect(screen.getTextContent().includes('connect.pairingLinkSecurityWarning')).toBe(true);
+        await screen.pressByTestIdAsync('add-phone-pairing-link-copy');
+        expect(clipboardMocks.setStringAsync.mock.calls.length).toBe(1);
+        const parsed = parseHomeQrInviteDeepLink(String(clipboardMocks.setStringAsync.mock.calls[0]?.[0]));
+        expect(isDeepStrictEqual(parsed?.invite.home, descriptor)).toBe(true);
+        await screen.pressByTestIdAsync('add-phone-cancel');
+        expectCancellation();
     });
 
     it('cancels a pending invite through the strict cancellation decision and does not create a successor invite', async () => {
-        homeState.activeServerUrl = 'https://stack.example.test';
-        pairingStatusResponse = {
-            ok: true,
-            status: 200,
-            json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: pairingExpiresAt }),
-        } as any;
-
-        const screen = await renderScreen(<AddPhoneSettingsView />);
-        await flushHookEffects({ cycles: 2 });
-        // While a code is live the page offers cancelling it, not making another.
-        expect(screen.findByTestId('add-phone-generate')).toBeNull();
-        const cancelButton = screen.findByTestId('add-phone-cancel');
-        expect(cancelButton).toBeTruthy();
-        await act(async () => {
-            await screen.pressByTestIdAsync('add-phone-cancel');
-        });
-
-        const cancellationCall = serverFetchSpy.mock.calls.find((call) => call[0] === '/v1/auth/pairing/consume');
-        expect(JSON.parse(String(cancellationCall?.[1]?.body))).toEqual({ pairId: 'pair_123', intent: 'cancel' });
-        expect(serverFetchSpy.mock.calls.filter((call) => call[0] === '/v1/auth/pairing/start')).toHaveLength(1);
-        expect(screen.findByTestId('add-phone-pairing-link')).toBeNull();
-        // A new code is one press away, and only on request.
+        const screen = await renderPhone();
+        expect(screen.findByTestId('add-phone-generate') === null).toBe(true);
+        expect(screen.findByTestId('add-phone-cancel') !== null).toBe(true);
+        await screen.pressByTestIdAsync('add-phone-cancel');
+        expectCancellation();
+        expect(requestsFor('/v1/auth/pairing/start').length).toBe(1);
+        expect(screen.findByTestId('add-phone-pairing-link') === null).toBe(true);
         expect(screen.findByTestId('add-phone-generate')?.props.disabled).toBe(false);
     });
 
     it('cancels the live code when the panel leaves the screen', async () => {
-        homeState.activeServerUrl = 'https://stack.example.test';
-        pairingStatusResponse = {
-            ok: true,
-            status: 200,
-            json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: pairingExpiresAt }),
-        } as any;
-        const screen = await renderScreen(<AddPhoneSettingsView />);
-        await flushHookEffects({ cycles: 2 });
-        expect(screen.findByTestId('add-phone-qr')).toBeTruthy();
-
+        const screen = await renderPhone();
+        expect(screen.findByTestId('add-phone-qr') !== null).toBe(true);
         await act(async () => { screen.tree.unmount(); });
-        await flushHookEffects({ cycles: 2 });
-
-        const cancellationCall = serverFetchSpy.mock.calls.find((call) => call[0] === '/v1/auth/pairing/consume');
-        expect(JSON.parse(String(cancellationCall?.[1]?.body))).toEqual({ pairId: 'pair_123', intent: 'cancel' });
+        await waitForHomeGovernance(() => expect(requestsFor('/v1/auth/pairing/consume').length).toBe(1));
+        expectCancellation();
     });
 });

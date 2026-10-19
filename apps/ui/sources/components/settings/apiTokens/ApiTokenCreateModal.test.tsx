@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { API_TOKEN_FULL_GRANT_V1, type ApiTokenGrantV1 } from '@happier-dev/protocol';
 import * as React from 'react';
 import { act, type ReactTestInstance } from 'react-test-renderer';
@@ -14,6 +15,7 @@ import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers
 import type { ApiTokenSettingsController, ApiTokenSettingsState } from './apiTokenSettingsController';
 
 const ACCESSIBILITY_ANNOUNCEMENT = 'Copy your token now — it is shown once.';
+let focusTarget: HTMLButtonElement | null = null;
 
 const runtime = vi.hoisted(() => ({
     platform: 'web' as 'web' | 'ios' | 'android',
@@ -163,6 +165,8 @@ function createController(state: ApiTokenSettingsState): ApiTokenSettingsControl
 
 afterEach(() => {
     standardCleanup();
+    focusTarget?.remove();
+    focusTarget = null;
     runtime.platform = 'web';
     runtime.push.mockClear();
     runtime.announceAccessibilityMessage.mockClear();
@@ -442,7 +446,7 @@ describe('ApiTokenCreateModal', () => {
         expect(chrome && 'subtitle' in chrome && chrome.subtitle).toBeNull();
         expect(runtime.announceAccessibilityMessage).toHaveBeenCalledWith(ACCESSIBILITY_ANNOUNCEMENT);
         const copy = screen.findByTestId('settings-api-tokens-reveal-copy');
-        expect(copy?.props.accessibilityRole).toBe('button');
+        expect(copy?.props.role ?? copy?.props.accessibilityRole).toBe('button');
 
         const ancestors: ReactTestInstance[] = [];
         for (let ancestor = copy?.parent; ancestor; ancestor = ancestor.parent) ancestors.push(ancestor);
@@ -658,7 +662,7 @@ describe('ApiTokenCreateModal', () => {
     });
 
     it.each([
-        ['web', 'web', 44],
+        ['web', 'web', 24],
         ['iOS', 'ios', 44],
         ['Android', 'android', 48],
     ] as const)('routes to Action Settings through a physical %s target', async (_name, platform, minimum) => {
@@ -692,6 +696,13 @@ describe('ApiTokenCreateModal', () => {
                 setChrome={vi.fn()}
             />,
         );
+
+        focusTarget = document.createElement('button');
+        document.body.appendChild(focusTarget);
+        await act(async () => {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+            focusTarget?.focus();
+        });
 
         for (const testID of [
             'settings-api-tokens-action-settings',

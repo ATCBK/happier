@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { parseAccountApiTokenCredentialV1 } from '@happier-dev/protocol';
 
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -149,8 +152,8 @@ describe('Settings → Embeds detail (create, real token controller)', () => {
         const harness = await createApiTokenSettingsControllerHarness({ mode: 'plain' });
         const { storage } = await import('@/sync/domains/state/storageStore');
         const machine = createMachineFixture({ id: 'embed-target', activeAt: Date.now() });
-        storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { 'srv_token-ui': [machine] } });
-        recordMachineRequestFailed({ serverId: 'srv_token-ui', accountId: 'account-a', machineId: machine.id });
+        storage.getState().applyMachines([machine], true, { sourceServerId: harness.scope.serverId });
+        recordMachineRequestFailed({ ...harness.scope, machineId: machine.id });
         const screen = await renderCreate(harness);
         await until(() => expect(harness.controller.getState().encryptionAvailability).toBe('plain'));
         expect(screen.findByTestId('settings-embed-sessions-switch')?.props.disabled).toBe(true);
@@ -294,7 +297,18 @@ describe('Settings → Embeds detail (create, real token controller)', () => {
         await until(() => expect(harness.controller.getState().encryptionAvailability).toBe('ready'));
         expect(resumed.findByTestId('settings-embed-e2ee-trust')).toBeTruthy();
 
+        let approveCreate!: (approved: boolean) => void;
+        const pendingConfirmation = new Promise<boolean>((resolve) => { approveCreate = resolve; });
+        const { Modal } = await import('@/modal');
+        const confirmation = vi.spyOn(Modal, 'confirm').mockReturnValue(pendingConfirmation);
         await resumed.pressByTestIdAsync('settings-embed-create');
+        await until(() => expect(confirmation).toHaveBeenCalledTimes(1));
+        // Action confirmation is intentionally pre-transport: while the person reviews it, the
+        // controller is pending and the Home has not received a token-create request.
+        expect(harness.controller.getState()).toMatchObject({ createPending: true, createError: null, reveal: null });
+        expect(createRequests(harness.requests)).toHaveLength(0);
+
+        await act(async () => { approveCreate(true); });
         await until(() => {
             expect(harness.controller.getState().createError).toBeNull();
             expect(harness.controller.getState().reveal).not.toBeNull();

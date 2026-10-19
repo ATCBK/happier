@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { renderScreen } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
@@ -101,8 +104,6 @@ it.each(['account', 'approval'])('%s Settings resumes exact Home authentication 
             const url = new URL(String(input));
             return boundary.request(url.origin, url.pathname, init);
         } });
-    // Later Home authentication writes belong to the real Web credential fixture, not restoration's read override.
-    vi.mocked(TokenStorage.getCredentialsForServerUrl).mockRestore();
     setRuntimeFetch(async (input, init) => {
         const url = new URL(String(input));
         return boundary.request(url.origin, url.pathname, init);

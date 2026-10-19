@@ -1,7 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 
-import { isApiTokenGrantDraftSendable, readApiTokenGrantOriginInput } from './apiTokenGrantDraft';
+import {
+    apiTokenGrantOffersAutomations,
+    areApiTokenGrantsEqual,
+    isApiTokenGrantDraftSendable,
+    readApiTokenGrantOriginInput,
+    resolveApiTokenGrantDraftIssues,
+    setApiTokenGrantAllActions,
+    setApiTokenGrantAnyAutomation,
+    toggleApiTokenGrantActionId,
+    toggleApiTokenGrantAutomation,
+} from './apiTokenGrantDraft';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -44,5 +54,34 @@ describe('grant website input', () => {
         }
         expect(readApiTokenGrantOriginInput('http://example.com', [])).toEqual({ ok: false, reason: 'invalid' });
         expect(readApiTokenGrantOriginInput('ftp://example.com', [])).toEqual({ ok: false, reason: 'invalid' });
+    });
+});
+
+describe('grant Automation restriction (C-05)', () => {
+    const limited = setApiTokenGrantAllActions(API_TOKEN_FULL_GRANT_V1, false);
+
+    it('offers the Automation choice only while Run now is granted or a restriction exists', () => {
+        expect(apiTokenGrantOffersAutomations(API_TOKEN_FULL_GRANT_V1)).toBe(true);
+        expect(apiTokenGrantOffersAutomations(limited)).toBe(false);
+        expect(apiTokenGrantOffersAutomations(toggleApiTokenGrantActionId(limited, 'session.message.send'))).toBe(false);
+        expect(apiTokenGrantOffersAutomations(toggleApiTokenGrantActionId(limited, 'workflow.trigger.run_now'))).toBe(true);
+        // A restriction that outlived its Run now grant stays visible so it can be removed.
+        expect(apiTokenGrantOffersAutomations({ ...limited, actions: { families: [], ids: ['session.message.send'] }, automationIds: ['brief'] })).toBe(true);
+    });
+
+    it('restricts Run now to the chosen Automations through the protocol grant', () => {
+        const runNow = toggleApiTokenGrantActionId(limited, 'workflow.trigger.run_now');
+        const only = setApiTokenGrantAnyAutomation(runNow, false);
+        expect(resolveApiTokenGrantDraftIssues(only)).toEqual(['automations_required']);
+        expect(isApiTokenGrantDraftSendable(only)).toBe(false);
+
+        const chosen = toggleApiTokenGrantAutomation(toggleApiTokenGrantAutomation(only, 'brief'), 'digest');
+        expect(chosen.automationIds).toEqual(['brief', 'digest']);
+        expect(resolveApiTokenGrantDraftIssues(chosen)).toEqual([]);
+        expect(isApiTokenGrantDraftSendable(chosen)).toBe(true);
+        expect(areApiTokenGrantsEqual(chosen, { ...chosen, automationIds: ['digest', 'brief'] })).toBe(true);
+
+        expect(toggleApiTokenGrantAutomation(chosen, 'brief').automationIds).toEqual(['digest']);
+        expect(setApiTokenGrantAnyAutomation(chosen, true).automationIds).toBeNull();
     });
 });

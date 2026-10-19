@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ApiTokenGrantV1Schema } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { EmbedConfigV1Schema } from '@happier-dev/protocol/embed';
 
@@ -28,23 +28,23 @@ export type ApiTokenCreateResumeTarget = Readonly<{
 
 type CreateDraft = ApiTokenSettingsState['createDraft'];
 
-const CreateDraftResumeSchema = z.object({
-    label: z.string().max(256),
+const CreateDraftResumeSchema = z.strictObject({
+    label: z.string().check(z.maxLength(256)),
     expiryPreset: z.enum(['30d', '90d', '1y', 'none']),
-    encryptionAccess: z.boolean().optional(),
-    authorizeUnattendedTeamAccess: z.boolean().optional(),
+    encryptionAccess: z.optional(z.boolean()),
+    authorizeUnattendedTeamAccess: z.optional(z.boolean()),
     access: z.enum(['full', 'limited']),
     grant: z.optional(ApiTokenGrantV1Schema),
     embedConfig: z.optional(EmbedConfigV1Schema),
-}).strict().superRefine((draft, context) => {
+}).check(z.superRefine((draft, context) => {
     // A limited draft is only its grant: without one it cannot resume as anything honest.
     if (draft.access === 'limited' && draft.grant === undefined) {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: ['grant'], message: 'A limited draft carries its grant.' });
+        context.addIssue({ code: "custom", path: ['grant'], message: 'A limited draft carries its grant.' });
     }
     if (draft.embedConfig !== undefined && draft.access !== 'limited') {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: ['embedConfig'], message: 'An embed draft is limited.' });
+        context.addIssue({ code: "custom", path: ['embedConfig'], message: 'An embed draft is limited.' });
     }
-});
+}));
 
 export function isApiTokenCreateResumeReturnPath(path: string | null): path is ApiTokenCreateResumeReturnPath {
     return path !== null && (API_TOKEN_CREATE_RESUME_RETURN_PATHS as readonly string[]).includes(path);
@@ -63,7 +63,7 @@ export function buildApiTokenCreateResumePath(
     returnTo: ApiTokenCreateResumeReturnPath,
     draft: CreateDraft,
     target: ApiTokenCreateResumeTarget,
-): string {
+): `${ApiTokenCreateResumeReturnPath}?${string}` {
     return `${returnTo}?${buildResumeQuery(draft, target)}`;
 }
 
@@ -72,7 +72,7 @@ export function buildApiTokenCreateRestorePath(
     returnTo: ApiTokenCreateResumeReturnPath,
     draft: CreateDraft,
     target: ApiTokenCreateResumeTarget,
-): string {
+): `/restore/manual?${string}` {
     return `/restore/manual?returnTo=${encodeURIComponent(returnTo)}&${buildResumeQuery(draft, target)}`;
 }
 

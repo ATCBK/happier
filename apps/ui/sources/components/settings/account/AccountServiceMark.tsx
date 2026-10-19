@@ -18,10 +18,12 @@ export function isDefaultAccountServiceUrl(url: string): boolean {
 export const AccountServiceMark = React.memo(function AccountServiceMark(props: Readonly<{
     url: string;
     size?: number;
+    /** The mark's box inset (see `HeaderLogo`); a page row passes 0 so its leading column sets the box. */
+    inset?: number;
     fallback?: Extract<IconName, 'cloud' | 'hard-drives' | 'globe'>;
 }>) {
     const { theme } = useUnistyles();
     const size = props.size ?? 20;
-    if (isDefaultAccountServiceUrl(props.url)) return <HeaderLogo size={size} />;
+    if (isDefaultAccountServiceUrl(props.url)) return <HeaderLogo size={size} inset={props.inset} />;
     return <Icon name={props.fallback ?? 'cloud'} size={size} color={theme.colors.text.secondary} />;
 });

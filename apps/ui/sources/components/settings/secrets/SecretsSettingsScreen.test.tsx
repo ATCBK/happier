@@ -231,7 +231,17 @@ describe('Saved Secrets editor continuity through the settings screen', () => {
         expect(readApproval(firstId)).toMatchObject({ status: 'failed', execution: {
             ok: false, errorCode: 'managed_resources_review_required',
         } });
-        await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+        const { readApprovalExecutionFailure } = await import('@happier-dev/protocol/approvals/approvalExecutionFailure');
+        expect(readApprovalExecutionFailure(readApproval(firstId))).toMatchObject({
+            errorCode: 'managed_resources_review_required',
+            details: { error: 'managed_resources_review_required', resources: [resource] },
+        });
+        await vi.waitFor(() => expect(confirm, JSON.stringify({
+            localStatus: storage.getState().artifacts[firstId]?.header?.approvalStatus,
+            localBodyAvailable: typeof storage.getState().artifacts[firstId]?.body === 'string',
+            approvalReads: harness.requestsFor(`/v1/artifacts/${firstId}`).length,
+            alerts: alert.mock.calls.map(([title]) => title),
+        })).toHaveBeenCalledTimes(1));
         expect(confirm.mock.calls[0]?.[1]).toContain('native-1');
         await vi.waitFor(() => expect(artifacts.list()).toHaveLength(2));
         const retryId = artifacts.list()[1]!.id;

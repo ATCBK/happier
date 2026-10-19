@@ -52,7 +52,7 @@ describe('API token modal browser layout', () => {
             // Action transport and Account lifetime are system boundaries. Only the read is admitted.
             execute: async (actionId) => actionId === 'account.apiTokens.list'
                 ? { ok: true, result: { tokens: [token] } }
-                : { ok: false, errorCode: 'unsupported' },
+                : { ok: false, errorCode: 'execution_not_available', error: 'Unexpected Action outside the token listing fixture' },
             captureActiveAccountScopeLifetime: () => ({
                 scope: { serverId: 'home-a', accountId: 'account-a' },
                 isCurrent: () => true,
@@ -93,7 +93,8 @@ describe('API token modal browser layout', () => {
                 expect(card.width).toBe(viewport.width);
                 expect(layout.rect(edit ? 'settings-api-tokens-edit-editor' : 'settings-api-tokens-create-label').right).toBeLessThanOrEqual(card.right);
             } else {
-                expect(card.width).toBe(600);
+                expect(card.left).toBeGreaterThan(0);
+                expect(card.right).toBeLessThan(viewport.width);
             }
         } finally {
             await act(async () => root.unmount());

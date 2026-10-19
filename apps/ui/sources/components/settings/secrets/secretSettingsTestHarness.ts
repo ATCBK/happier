@@ -42,6 +42,7 @@ import { createConnectedPurposeCatalogHttpBoundary, type ConnectedPurposeCatalog
 import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { AccountSettingsV2HistoryListResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 
 export type SecretSettingsTestHarness = {
     credentials: AuthCredentials;
@@ -73,6 +74,9 @@ export type SecretSettingsTestHarness = {
 
 /** Real Home/Account/catalog/Action/crypto owners, with only HTTP and credential storage synthetic. */
 export async function createSecretSettingsTestHarness(options: Readonly<{
+    /** Provenance-bearing credential for composed CLI/daemon/app Account ingress. */
+    token?: string;
+    serverIdentityId?: string;
     features?: ReturnType<typeof createRootLayoutFeaturesResponse>;
     mode?: 'plain' | 'e2ee';
     sharedEnabled?: boolean;
@@ -87,12 +91,14 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
 }> = {}): Promise<SecretSettingsTestHarness> {
     await loadSyncSingletonForTests();
     const mode = options.mode ?? 'plain';
-    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature`;
+    const token = options.token ?? `e30.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature`;
     const credentials = mode === 'e2ee'
         ? { token, secret: encodeBase64(new Uint8Array(32).fill(7), 'base64url') }
         : { token };
     const encryption = mode === 'e2ee' ? await createEncryptionFromAuthCredentials(credentials) : null;
-    const features = options.features ?? createRootLayoutFeaturesResponse();
+    const features = options.features ?? createRootLayoutFeaturesResponse({ capabilities: {
+        serverIdentity: { serverIdentityId: options.serverIdentityId ?? null },
+    } });
     if (options.voiceEnabled !== undefined && !tryWriteServerEnabledBitInPlace(features, 'voice', options.voiceEnabled)) {
         throw new Error('Voice feature fixture is not writable');
     }
@@ -136,6 +142,9 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
         const artifactResponse = artifacts.handle(`${path}${url.search}`, init);
         if (artifactResponse) return await artifactResponse;
         if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+        if (path === '/v1/account/profile') return new Headers(init?.headers).get('Authorization') === `Bearer ${token}`
+            ? Response.json(AccountProfileSchema.parse({ id: 'account-a' }))
+            : Response.json({ error: 'Not authenticated' }, { status: 401 });
         if (path === '/v1/account/authoring-memory') return Response.json({ rows: [] });
         if (path.startsWith('/v1/account/authoring-memory/')) return Response.json({ status: 'absent' });
         if (path === '/v1/account/project-rows/list') return Response.json({ status: 'listed', rows: [], coverage: 'complete' });
@@ -186,10 +195,10 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
             }));
             return Response.json({resourceId:body.resourceId,revision:1});
         }
-        if (path === PROFILE_ROWS_ROUTE_V1) return Response.json({ status: 'listed', rows: [], nextCursor: null,
+        if (path === PROFILE_ROWS_ROUTE_V1) return Response.json(catalogRows.get(path) ?? { status: 'listed', rows: [], nextCursor: null,
             complete: true, referenceGuardRevision, transferControl: { status: 'absent' }, diagnostics: [] });
         if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: referenceGuardRevision });
-        if (path === PROFILE_TRANSFER_ROUTE_V1 || path === REMOTE_HOST_ROWS_ROUTE_V1 || path === NOTIFICATION_CHANNELS_ROUTE_V1) return Response.json({ status: 'absent' });
+        if (path === PROFILE_TRANSFER_ROUTE_V1 || path === REMOTE_HOST_ROWS_ROUTE_V1 || path === NOTIFICATION_CHANNELS_ROUTE_V1) return Response.json(catalogRows.get(path) ?? { status: 'absent' });
         if (['/v1/account/entity-rows/mcp', '/v1/account/entity-rows/acp', '/v1/account/entity-rows/provider-connections',
             '/v1/account/entity-rows/connected-accounts/configurations', '/v1/account/entity-rows/connected-accounts/purposes',
             '/v1/account/entity-rows/prompt-library/registry-sources'].includes(path)) {
@@ -277,12 +286,13 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
     }) : null;
     const connection = await restoreServerAccountForTest({
         serverUrl: `https://secrets-${crypto.randomUUID()}.example.test`, accountId: 'account-a', credentials, request,
+        ...(options.serverIdentityId ? { serverIdentityId: options.serverIdentityId } : {}),
         credentialScope: 'restored-home',
     });
     const { sync } = await import('@/sync/sync');
     const queue = Reflect.get(sync, 'settingsSync') as import('@/utils/sessions/sync').InvalidateSync;
     await queue.awaitQueue();
-    const scope = { serverId: connection.home.id, accountId: 'account-a' };
+    const scope = { serverId: connection.serverId, accountId: 'account-a' };
     storage.setState({ settings, settingsScope: scope, settingsVersion });
     return {
         credentials, encryption, scope, request, resources, recipients, updates, creations, deletes, repairs, settingsWrites, promotions, catalogRows, artifacts, purposes,

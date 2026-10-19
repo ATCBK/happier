@@ -14,11 +14,11 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { useAllMachines, useAllSessions } from '@/sync/store/hooks';
+import { useAllMachines, useAllSessions, useAutomations } from '@/sync/store/hooks';
 import { t } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineDisplayName, getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
@@ -26,7 +26,7 @@ import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 import { buildApiTokenRowPresentation } from './apiTokenSettingsPresentation';
 import { API_TOKENS_COLLECTION_ROOT, apiTokenEmbedDetailPath } from './collection/apiTokensCollection';
 import { useApiTokenSettingsScopeController } from './collection/ApiTokenSettingsScope';
-import { apiTokenGrantModelKey } from './grant/apiTokenGrantDraft';
+import { apiTokenGrantModelKey, apiTokenGrantOffersAutomations } from './grant/apiTokenGrantDraft';
 import { useApiTokenGrantActionGroups, useApiTokenGrantModelGroups } from './grant/useApiTokenGrantCatalogs';
 import { resolveApiTokenGrantActionTitle } from './grant/apiTokenGrantCatalog';
 import { summarizeApiTokenGrantPermissionModes, useApiTokenGrantModeAgentType } from './grant/apiTokenGrantPermissionModes';
@@ -141,6 +141,7 @@ const ApiTokenDetail = React.memo(function ApiTokenDetail(props: Readonly<{ toke
             />
 
             <ApiTokenActionsFacts token={token} />
+            {apiTokenGrantOffersAutomations(token.grant) ? <ApiTokenAutomationFacts automationIds={token.grant.automationIds ?? null} /> : null}
             <ApiTokenTargetFacts token={token} />
             <ApiTokenModelFacts token={token} />
             <ApiTokenSessionFacts token={token} />
@@ -264,7 +265,7 @@ function ApiTokenCreateFact(props: Readonly<{ machineId: string }>) {
             testID="settings-api-token-detail-create"
             title={t('settingsApiTokens.detail.createsSessions')}
             subtitle={t('settingsApiTokens.detail.createsSessionsOn', {
-                computer: getMachineDisplayName(machine) ?? t('settingsApiTokens.detail.unknownComputer'),
+                computer: machine ? getMachineSentenceName(machine) : t('settingsApiTokens.detail.unknownComputer'),
             })}
             subtitleLines={0}
             mode="info"
@@ -317,6 +318,34 @@ function ApiTokenTargetRows(props: Readonly<{ sessions: readonly string[]; machi
                 );
             })}
         </>
+    );
+}
+
+/** Mounted only while the token can run an Automation now, so other tokens' pages never read Automations. */
+function ApiTokenAutomationFacts(props: Readonly<{ automationIds: readonly string[] | null }>) {
+    const automations = useAutomations();
+    const byId = new Map(automations.map((automation) => [automation.id, automation]));
+    return (
+        <ItemGroup
+            testID="settings-api-token-detail-automations"
+            title={t('settingsApiTokens.grant.automations.title')}
+            description={props.automationIds === null ? undefined : t('settingsApiTokens.grant.automations.pickerDescription')}
+        >
+            {props.automationIds === null ? (
+                <Item title={t('settingsApiTokens.grant.automations.any')} mode="info" showChevron={false} />
+            ) : props.automationIds.map((automationId) => {
+                const automation = byId.get(automationId);
+                return (
+                    <Item
+                        key={automationId}
+                        title={automation ? automation.name || t('settingsApiTokens.grant.automations.unnamed') : t('settingsApiTokens.grant.automations.unknown')}
+                        subtitle={automation && !automation.enabled ? t('settingsApiTokens.grant.automations.off') : undefined}
+                        mode="info"
+                        showChevron={false}
+                    />
+                );
+            })}
+        </ItemGroup>
     );
 }
 

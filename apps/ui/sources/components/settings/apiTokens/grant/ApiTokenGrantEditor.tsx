@@ -18,7 +18,9 @@ import { StepTransitionFrame } from '@/components/ui/motion';
 import { SelectionListBackChip } from '@/components/ui/selectionList/SelectionListBackChip';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { useAllMachines, useAllSessions } from '@/sync/store/hooks';
+import { useAllMachines, useAllSessions, useAutomations } from '@/sync/store/hooks';
+import { formatAutomationTriggerLabel } from '@/components/automations/list/automationListFormatting';
+import { useAutomationDefinitionPagination } from '@/components/automations/list/useAutomationDefinitionPagination';
 import { t } from '@/text';
 import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
@@ -30,14 +32,17 @@ import { getSessionName } from '@/utils/sessions/sessionUtils';
 import {
     addApiTokenGrantOrigin,
     apiTokenGrantModelKey,
+    apiTokenGrantOffersAutomations,
     readApiTokenGrantOriginInput,
     removeApiTokenGrantOrigin,
     resolveApiTokenGrantDraftIssues,
     setApiTokenGrantAllActions,
     setApiTokenGrantAllTargets,
+    setApiTokenGrantAnyAutomation,
     setApiTokenGrantAnyModel,
     setApiTokenGrantApprove,
     toggleApiTokenGrantActionId,
+    toggleApiTokenGrantAutomation,
     toggleApiTokenGrantFamily,
     toggleApiTokenGrantModel,
     toggleApiTokenGrantTarget,
@@ -47,6 +52,7 @@ import {
     useApiTokenGrantActionGroups,
     useApiTokenGrantModelAgents,
     useApiTokenGrantModelMachine,
+    useApiTokenGrantNativeModels,
     useApiTokenGrantNames,
     useApiTokenGrantProviderModelGroups,
     type ApiTokenGrantModelAgent,
@@ -61,7 +67,7 @@ import { formatApiTokenAccessSummary, buildApiTokenAccessSummaryParts } from '..
  * through untouched.
  */
 
-export type ApiTokenGrantPicker = 'actions' | 'targets' | 'models';
+export type ApiTokenGrantPicker = 'actions' | 'automations' | 'targets' | 'models';
 
 export type ApiTokenGrantEditorProps = Readonly<{
     value: ApiTokenGrantV1;
@@ -149,6 +155,7 @@ export const ApiTokenGrantEditor = React.memo(function ApiTokenGrantEditor(props
                         <SelectionListBackChip label={t('settingsApiTokens.grant.back')} onPress={close} testID={`${testID}-back`} />
                     </View>
                     {picker === 'actions' ? <ApiTokenGrantActionsPicker value={props.value} onChange={props.onChange} disabled={props.disabled} /> : null}
+                    {picker === 'automations' ? <ApiTokenGrantAutomationsPicker value={props.value} onChange={props.onChange} disabled={props.disabled} /> : null}
                     {picker === 'targets' ? <ApiTokenGrantTargetsPicker value={props.value} onChange={props.onChange} disabled={props.disabled} /> : null}
                     {picker === 'models' ? <ApiTokenGrantModelsPicker value={props.value} onChange={props.onChange} disabled={props.disabled} /> : null}
                 </View>
@@ -186,6 +193,13 @@ const ApiTokenGrantAccessSection = React.memo(function ApiTokenGrantAccessSectio
                 targets.sessions.length > 0 ? t('settingsApiTokens.summary.sessions', { count: targets.sessions.length }) : null,
                 targets.machines.length > 0 ? t('settingsApiTokens.summary.computers', { count: targets.machines.length }) : null,
             ].filter(Boolean).join(' · ');
+    const offersAutomations = apiTokenGrantOffersAutomations(props.value);
+    const automationIds = props.value.automationIds ?? null;
+    const automationsSummary = automationIds === null
+        ? t('settingsApiTokens.grant.automations.any')
+        : issues.includes('automations_required')
+            ? t('settingsApiTokens.grant.automations.none')
+            : summarizeNames(automationIds.map((id) => names.automationName(id) ?? t('settingsApiTokens.grant.automations.unknown')));
     const modelsSummary = models === null
         ? t('settingsApiTokens.grant.models.any')
         : issues.includes('models_required')
@@ -201,6 +215,15 @@ const ApiTokenGrantAccessSection = React.memo(function ApiTokenGrantAccessSectio
                 onPress={() => props.onOpenPicker('actions')}
                 disabled={props.disabled}
             />
+            {offersAutomations ? (
+                <Item
+                    testID="api-token-grant-automations"
+                    title={t('settingsApiTokens.grant.automations.title')}
+                    subtitle={automationsSummary}
+                    onPress={() => props.onOpenPicker('automations')}
+                    disabled={props.disabled}
+                />
+            ) : null}
             <Item
                 testID="api-token-grant-targets"
                 title={t('settingsApiTokens.grant.targets.title')}
@@ -515,6 +538,86 @@ export const ApiTokenGrantActionsPicker = React.memo(function ApiTokenGrantActio
     );
 });
 
+/**
+ * Which Automations "Run now" may start. The Account's Automations come from the one store-owned
+ * definition window; a chosen Automation that is not in it (deleted, or on a later page) stays
+ * listed so it can still be removed.
+ */
+/** The same identity the Automations list shows: what starts it, then Off when it is turned off. */
+function describeGrantAutomation(automation: ReturnType<typeof useAutomations>[number]): string | null {
+    const parts = [
+        automation.description,
+        automation.triggers.length > 0 ? automation.triggers.map((trigger) => formatAutomationTriggerLabel(trigger)).join(', ') : null,
+        automation.enabled ? null : t('settingsApiTokens.grant.automations.off'),
+    ].filter((part): part is string => typeof part === 'string' && part.length > 0);
+    return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+export const ApiTokenGrantAutomationsPicker = React.memo(function ApiTokenGrantAutomationsPicker(props: GrantPartProps) {
+    const automations = useAutomations();
+    const pagination = useAutomationDefinitionPagination();
+    const automationIds = props.value.automationIds ?? null;
+    const listed = React.useMemo(() => new Set(automations.map((automation) => automation.id)), [automations]);
+    const unlisted = automationIds ? automationIds.filter((id) => !listed.has(id)) : [];
+
+    return (
+        <>
+            <ScopeChoice
+                testIDPrefix="api-token-grant-automations-scope"
+                allTitle={t('settingsApiTokens.grant.automations.any')}
+                onlyTitle={t('settingsApiTokens.grant.automations.onlyThese')}
+                onlySubtitle={automationIds ? t('settingsApiTokens.grant.selectedCount', { count: automationIds.length }) : null}
+                all={automationIds === null}
+                disabled={props.disabled}
+                onChange={(any) => props.onChange(setApiTokenGrantAnyAutomation(props.value, any))}
+            />
+            {automationIds ? (
+                <ItemGroup
+                    title={t('settingsApiTokens.grant.automations.title')}
+                    description={t('settingsApiTokens.grant.automations.pickerDescription')}
+                >
+                    {automations.length === 0 && unlisted.length === 0 ? (
+                        <Item title={t('settingsApiTokens.grant.automations.noAutomations')} mode="info" showChevron={false} />
+                    ) : null}
+                    {automations.map((automation) => (
+                        <CheckRow
+                            key={automation.id}
+                            testID={`api-token-grant-automation:${automation.id}`}
+                            title={automation.name || t('settingsApiTokens.grant.automations.unnamed')}
+                            subtitle={describeGrantAutomation(automation)}
+                            checked={automationIds.includes(automation.id)}
+                            disabled={props.disabled}
+                            onToggle={() => props.onChange(toggleApiTokenGrantAutomation(props.value, automation.id))}
+                        />
+                    ))}
+                    {unlisted.map((automationId) => (
+                        <CheckRow
+                            key={automationId}
+                            testID={`api-token-grant-automation:${automationId}`}
+                            title={t('settingsApiTokens.grant.automations.unknown')}
+                            checked
+                            disabled={props.disabled}
+                            onToggle={() => props.onChange(toggleApiTokenGrantAutomation(props.value, automationId))}
+                        />
+                    ))}
+                    {pagination.hasMore ? (
+                        <Item
+                            testID="api-token-grant-automations-more"
+                            title={pagination.loadMoreFailed
+                                ? t('settingsApiTokens.grant.automations.loadMoreFailed')
+                                : t('settingsApiTokens.grant.automations.loadMore')}
+                            loading={pagination.loadingMore}
+                            disabled={props.disabled || pagination.loadingMore}
+                            onPress={pagination.requestPage}
+                            showChevron={false}
+                        />
+                    ) : null}
+                </ItemGroup>
+            ) : null}
+        </>
+    );
+});
+
 export const ApiTokenGrantTargetsPicker = React.memo(function ApiTokenGrantTargetsPicker(props: GrantPartProps) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
@@ -659,12 +762,18 @@ function ApiTokenGrantAgentModels(props: GrantPartProps & Readonly<{
         serverId: props.serverId,
         accountAddressAvailable: props.accountAddressAvailable,
     });
+    const resolvedNativeModels = useApiTokenGrantNativeModels({
+        agentTargetKey: props.agent.agentTargetKey,
+        machineId: props.agent.entry ? props.machineId : null,
+        serverId: props.serverId,
+        accountAddressAvailable: props.accountAddressAvailable,
+    });
     const options = React.useMemo(() => buildApiTokenGrantModelOptions({
         agentTargetKey: props.agent.agentTargetKey,
-        nativeModels: props.agent.nativeModels,
+        nativeModels: resolvedNativeModels ?? props.agent.nativeModels,
         providerGroups,
         granted: props.value.models,
-    }), [props.agent, providerGroups, props.value.models]);
+    }), [props.agent, providerGroups, props.value.models, resolvedNativeModels]);
     if (options.length === 0) return null;
     return (
         <ItemGroup title={props.agent.title} description={t('settingsApiTokens.grant.models.pickerDescription')}>
