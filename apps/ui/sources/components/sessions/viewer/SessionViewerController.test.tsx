@@ -211,7 +211,7 @@ describe('SessionViewerController', () => {
     const { render } = mountController({ phone: false });
     const hook = await render();
     await act(async () => {
-      hook.getCurrent().controller.setReadingInset({ left: 0, right: 320, centred: { left: 0, right: 480 } });
+      hook.getCurrent().controller.setReadingInset({ left: 0, right: 320, centred: { left: 0, right: 480, bottom: 0 } });
     });
     expect(hook.getCurrent().inset).toEqual(NO_SESSION_VIEWER_INSET);
     await act(async () => {
