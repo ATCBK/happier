@@ -1,4 +1,5 @@
 import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
+import { readObservedAccountEncryptionCurrentness } from './accountEncryptionCurrentnessObservation';
 
 type AccountEncryptionMode = 'plain' | 'e2ee';
 
@@ -9,7 +10,10 @@ export type AccountEncryptionModeReadResult =
 
 export async function readAccountEncryptionModeOnce(input: Readonly<{
   request: () => Promise<Readonly<{ status: number; data: unknown }>>;
+  scope?: Readonly<{ token: string; serverBaseUrl: string; signal?: AbortSignal }>;
 }>): Promise<AccountEncryptionModeReadResult> {
+  const observed = input.scope ? readObservedAccountEncryptionCurrentness(input.scope) : null;
+  if (observed) return { kind: 'resolved', mode: (await observed).mode };
   const response = await input.request();
   if (response.status < 200 || response.status >= 300) {
     return { kind: 'http_error', status: response.status };

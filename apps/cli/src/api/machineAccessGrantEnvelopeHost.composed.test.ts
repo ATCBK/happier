@@ -14,6 +14,8 @@ import { prepareCurrentMachineDataKeyEnvelopes } from '../../../ui/sources/sync/
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { createAccountServerActionDeps } from './accountServerActionDeps';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
+import { acquireRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
 
 vi.mock('axios', async importOriginal => {
   const actual = await importOriginal<typeof import('axios')>();
@@ -140,6 +142,9 @@ describe('trusted Machine key envelope continuation', () => {
     let delivered = false;
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'offline-custodian' })).toString('base64url')}.signature`;
     vi.mocked(axios.get).mockImplementation(async url => {
+      if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'e2ee', version: 1, updatedAt: 1, signingKeyFingerprint: 'signing', contentKeyFingerprint: 'content',
+      } };
       if (String(url).endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'e2ee', updatedAt: 1 } };
       if (String(url).endsWith('/v1/machines/machine')) return { status: 200, data: { machine: {
         id: 'machine', ...page.content, dataEncryptionKey: callerDataEncryptionKey,
@@ -158,13 +163,29 @@ describe('trusted Machine key envelope continuation', () => {
       axios.get<unknown>(`https://home.test${request.path}`, { headers: { 'X-Action-Authority': 'signed' } }),
     });
     expect(prepared.encryptionKey).toEqual(dataKey);
-    const result = await prepareMachineAccessKeyEnvelopes({ ...params, credentials, requestHeaders: async () => ({ 'X-Action-Authority': 'signed' }) });
-    expect(result).toEqual({ kind: 'prepared' });
-    expect(delivered).toBe(true);
-    for (const [url, config] of vi.mocked(axios.get).mock.calls) {
-      expect(String(url).startsWith('https://home.test/')).toBe(true);
-      expect(config?.headers).toMatchObject({ 'X-Action-Authority': 'signed' });
-    }
+    const channel = await createRequesterCurrentnessSocketHarness();
+    const observation = acquireRequesterAccountEncryptionCurrentness({ token, accountId: 'offline-custodian', serverBaseUrl: 'https://home.test' });
+    try {
+      await observation.read();
+      const initial = vi.mocked(axios.get).mock.calls.filter(([url]) => String(url).endsWith('/v1/account/encryption')).length;
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+      for (let tick = 0; tick < 3; tick++) {
+        await vi.advanceTimersByTimeAsync(200_000);
+        const result = await prepareMachineAccessKeyEnvelopes({ ...params, credentials, requestHeaders: async () => ({ 'X-Action-Authority': 'signed' }) });
+        expect(result).toEqual({ kind: 'prepared' });
+      }
+      expect(vi.mocked(axios.get).mock.calls.filter(([url]) => String(url).endsWith('/v1/account/encryption')).length - initial).toBe(0);
+      expect(delivered).toBe(true);
+      for (const [url, config] of vi.mocked(axios.get).mock.calls) {
+        expect(String(url).startsWith('https://home.test/')).toBe(true);
+        if (!String(url).endsWith('/v1/account/encryption/currentness')) {
+          expect(config?.headers).toMatchObject({ 'X-Action-Authority': 'signed' });
+        }
+      }
+      vi.useRealTimers();
+      await channel.disconnect();
+      expect(await prepareMachineAccessKeyEnvelopes({ ...params, credentials })).toMatchObject({ kind: 'unavailable' });
+    } finally { vi.useRealTimers(); await observation.dispose(); await channel.close(); }
     expect(axios.post).not.toHaveBeenCalled();
   });
 

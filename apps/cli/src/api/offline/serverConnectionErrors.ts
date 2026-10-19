@@ -114,6 +114,11 @@ export interface OfflineReconnectionHandle<TSession> {
     isReconnected: () => boolean;
 }
 
+/** Shared Home-unavailable pacing; ten failures saturates the delay, not the retries. */
+export function resolveOfflineReconnectionBackoffDelayMs(failureCount: number): number {
+    return exponentialBackoffDelay(failureCount, 5000, 60000, 10);
+}
+
 /**
  * Starts background reconnection with exponential backoff.
  * Backend-agnostic: works for Claude, Codex, or any future backend.
@@ -173,7 +178,7 @@ export function startOfflineReconnection<TSession>(
     const initialDelayMs = config.initialDelayMs ?? 5000;
     const getBackoffDelayMs =
         config.backoffDelayMs ??
-        ((failureCount: number) => exponentialBackoffDelay(failureCount, 5000, 60000, 10));
+        resolveOfflineReconnectionBackoffDelayMs;
 
     /**
      * Core reconnection attempt logic.

@@ -1,11 +1,13 @@
 import { AccountEncryptionCurrentnessResponseSchema, type AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import { createManagedConnectionSupervisor, DEFAULT_MANAGED_CONNECTION_POLICY, type ManagedConnectionSupervisor, type ManagedConnectionTransport } from '@happier-dev/connection-supervisor';
-import { fetchAccountEncryptionCurrentnessFromServer, AccountEncryptionCurrentnessUnavailableError } from '@/api/client/connectedServiceCredentialApi';
-import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { fetchAccountEncryptionCurrentnessFromServer, AccountEncryptionCurrentnessUnavailableError } from './accountEncryptionCurrentness';
+import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { classifyTransportErrorToProbeResult } from '@/api/connection/classifyTransportErrorToProbeResult';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { logger } from '@/ui/logger';
+import { DEFAULT_ACCOUNT_CHANGES_PAGE_LIMIT, fetchChanges } from '@/api/changes';
+import { readSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/follow/changes';
 
 type Scope = Readonly<{ accountId: string; token: string; serverBaseUrl: string; signal?: AbortSignal }>;
 export type RequesterAccountSettingsObservation = Readonly<
@@ -16,6 +18,9 @@ type Observation = Readonly<{
     read(signal?: AbortSignal): Promise<AccountEncryptionCurrentnessResponse>;
     isCurrent(expected: AccountEncryptionCurrentnessResponse): boolean;
     subscribeAccountSettings(listener: (event: RequesterAccountSettingsObservation) => void): () => void;
+    subscribeSessionFollowRules(listener: () => void): () => void;
+    /** Exact Session invalidation; null rebuilds demanded ranges after a gap/reconnect. */
+    subscribeSessionFollowSources(listener: (sourceSessionId: string | null) => void): () => void;
     dispose(): Promise<void>;
 }>;
 type SharedObservation = Observation & {
@@ -90,6 +95,18 @@ export function acquireRequesterAccountEncryptionCurrentness(scope: Scope): Obse
             subscriptions.add(release);
             return () => { subscriptions.delete(release); release(); };
         },
+        subscribeSessionFollowRules(listener) {
+            if (released) throw new AccountEncryptionCurrentnessUnavailableError();
+            const release = owned.subscribeSessionFollowRules(listener);
+            subscriptions.add(release);
+            return () => { subscriptions.delete(release); release(); };
+        },
+        subscribeSessionFollowSources(listener) {
+            if (released) throw new AccountEncryptionCurrentnessUnavailableError();
+            const release = owned.subscribeSessionFollowSources(listener);
+            subscriptions.add(release);
+            return () => { subscriptions.delete(release); release(); };
+        },
         async dispose() {
             if (released) return;
             released = true;
@@ -124,11 +141,62 @@ function createObservation(scope: Scope): SharedObservation {
     let supervisor: ManagedConnectionSupervisor | undefined;
     const settingsListeners = new Set<(event: RequesterAccountSettingsObservation) => void>();
     let settingsEvent: RequesterAccountSettingsObservation | null = null;
+    const followListeners = new Set<() => void>();
+    const sourceListeners = new Set<(sourceSessionId: string | null) => void>();
+    let followCursor = 0;
+    let followSyncRequested = false;
+    let followSyncPending: Promise<void> | null = null;
+    const publishFollow = () => { for (const listener of followListeners) listener(); };
+    const publishSource = (sourceSessionId: string | null) => { for (const listener of sourceListeners) listener(sourceSessionId); };
+    const hasFollowDemand = () => followListeners.size > 0 || sourceListeners.size > 0;
     const publishSettings = (event: RequesterAccountSettingsObservation) => {
         settingsEvent = event;
         for (const listener of settingsListeners) listener(event);
     };
     const invalidate = () => { lifetime.abort(); lifetime = new AbortController(); fact = null; pending = null; readError = null; };
+    // Classify the incumbent Account feed before invalidating private rules:
+    // ordinary Session updates must not reload the rule corpus per occurrence.
+    const syncFollowChanges = () => {
+        if (disposed || !connected || !hasFollowDemand()) return;
+        followSyncRequested = true;
+        if (followSyncPending) return;
+        const captured = lifetime;
+        const token = activeToken;
+        const current = () => !disposed && connected && lifetime === captured && activeToken === token
+            && references.has(token) && hasFollowDemand();
+        const work = (async () => {
+            while (followSyncRequested && current()) {
+                followSyncRequested = false;
+                let more = false;
+                do {
+                    const result = await runWithServerHttpBaseUrl(scope.serverBaseUrl, () => fetchChanges({
+                        token, after: followCursor, signal: captured.signal,
+                    }));
+                    if (!current()) return;
+                    if (result.status === 'ok') {
+                        if (result.response.changes.some(change => change.kind === 'account'
+                            && readSessionFollowChangeHintV1(change.hint) !== null)) publishFollow();
+                        for (const change of result.response.changes) if (change.kind === 'session') publishSource(change.entityId);
+                        followCursor = result.response.nextCursor;
+                        more = result.response.changes.length === DEFAULT_ACCOUNT_CHANGES_PAGE_LIMIT;
+                    } else {
+                        // A gap/failed classification cannot preserve a trusted cached rule set.
+                        publishFollow();
+                        publishSource(null);
+                        if (result.status === 'cursor-gone') followCursor = result.currentCursor;
+                        else logger.warn('Requester Follow Account changes unavailable.');
+                        more = false;
+                    }
+                } while (more && current());
+            }
+        })().finally(() => {
+            if (followSyncPending === work) followSyncPending = null;
+            if (followSyncRequested && !disposed && connected && hasFollowDemand()) syncFollowChanges();
+        });
+        followSyncPending = work;
+        // Transport failures are normalized by fetchChanges; keep listener failures observed, too.
+        void work.catch(() => { if (current()) logger.warn('Requester Follow invalidation unavailable.'); });
+    };
     const refresh = () => {
         if (!connected || disposed || fact || pending) return;
         const captured = lifetime;
@@ -171,6 +239,7 @@ function createObservation(scope: Scope): SharedObservation {
             socket.on('update', (raw: unknown) => {
                 if (!isActive() || !connected || !transport.isConnected()) return;
                 const parsed = UpdateContainerSchema.safeParse(raw);
+                if (parsed.success && parsed.data.body.t === 'account-change') syncFollowChanges();
                 // The authenticated user channel owns Account routing. Preserve malformed
                 // Settings publications for the Settings owner to withdraw admission.
                 const body = raw && typeof raw === 'object' && 'body' in raw ? raw.body : null;
@@ -198,8 +267,8 @@ function createObservation(scope: Scope): SharedObservation {
                 fact = next.success ? next.data : null;
                 pending = null;
             });
-            transport.onConnected(() => { if (isActive()) { connected = true; invalidate(); refresh(); publishSettings({ kind: 'reconnected' }); } });
-            transport.onDisconnected(() => { if (isActive()) { connected = false; invalidate(); publishSettings({ kind: 'disconnected' }); } });
+            transport.onConnected(() => { if (isActive()) { connected = true; invalidate(); refresh(); publishSettings({ kind: 'reconnected' }); publishFollow(); publishSource(null); syncFollowChanges(); } });
+            transport.onDisconnected(() => { if (isActive()) { connected = false; invalidate(); publishSettings({ kind: 'disconnected' }); publishFollow(); publishSource(null); } });
             return transport;
         };
         supervisor = createManagedConnectionSupervisor({ ...DEFAULT_MANAGED_CONNECTION_POLICY,
@@ -222,6 +291,17 @@ function createObservation(scope: Scope): SharedObservation {
             if (settingsEvent) listener(settingsEvent);
             return () => { settingsListeners.delete(listener); };
         },
+        subscribeSessionFollowRules(listener) {
+            followListeners.add(listener);
+            syncFollowChanges();
+            return () => { followListeners.delete(listener); };
+        },
+        subscribeSessionFollowSources(listener) {
+            sourceListeners.add(listener);
+            listener(null);
+            syncFollowChanges();
+            return () => { sourceListeners.delete(listener); };
+        },
         async releaseCredential(token) {
             if (disposed || token !== activeToken || references.has(token)) return;
             const nextToken = references.keys().next().value;
@@ -232,6 +312,8 @@ function createObservation(scope: Scope): SharedObservation {
             invalidate();
             // Settings holders lose the retired credential's channel like any disconnect.
             publishSettings({ kind: 'disconnected' });
+            publishFollow();
+            publishSource(null);
             // Before the async import completes, its first factory uses the new token.
             if (!supervisor || unsupported) return;
             await stopConnection();
@@ -270,6 +352,8 @@ function createObservation(scope: Scope): SharedObservation {
             disposed = true; activeTransport = undefined; connected = false; retirement.abort(); invalidate();
             publishSettings({ kind: 'disconnected' });
             settingsListeners.clear();
+            followListeners.clear();
+            sourceListeners.clear();
             settingsEvent = null;
             await stopConnection();
             await initial;

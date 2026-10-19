@@ -203,6 +203,7 @@ export function classifyServerEndpointError(
   if (
     code === 'HAPPIER_ACCOUNT_MODE_UNKNOWN'
     || code === 'state_sharing_lock_unavailable'
+    || code === 'database_connection_unavailable'
   ) {
     return {
       kind: 'dependency_unavailable',

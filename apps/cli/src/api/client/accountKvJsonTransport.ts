@@ -1,12 +1,13 @@
 import axios from 'axios';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import type { ScmReviewedMarksJsonTransport } from '@happier-dev/protocol/scm';
+import type { AccountJsonKvCollectionPort } from '@happier-dev/protocol/todos/todoActionOperationsV1';
 import type { StoredCredentials } from '@/persistence';
 import { decodeBase64, encodeBase64, decryptResult, encrypt } from '@/api/encryption';
-import { fetchAccountEncryptionCurrentness } from './connectedServiceCredentialApi';
+import { readRequesterAccountEncryptionCurrentness } from './accountEncryptionCurrentnessObservation';
 import { resolveServerHttpBaseUrl } from './serverHttpBaseUrl';
 
 export type AccountKvAuthorizationRequest = Readonly<{ method: 'GET' | 'POST'; path: string; body?: unknown }>;
@@ -22,7 +23,7 @@ export async function resolveCliAccountStorageContext(params: Readonly<{
   credentials: StoredCredentials; serverBaseUrl?: string; signal?: AbortSignal; shouldContinue?: () => boolean;
   authorizationHeaders?: Readonly<Record<string, string>>;
 }>) {
-  const currentness = await fetchAccountEncryptionCurrentness({ token: params.credentials.token,
+  const currentness = await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token,
     ...(params.serverBaseUrl ? { serverBaseUrl: params.serverBaseUrl } : {}),
     ...(params.authorizationHeaders ? { authorizationHeaders: params.authorizationHeaders } : {}),
     ...(params.signal ? { signal: params.signal } : {}) });
@@ -39,15 +40,34 @@ export async function resolveCliAccountStorageContext(params: Readonly<{
   }
   return { mode: 'e2ee' as const, encryption, material };
 }
-const storedItem = z.object({ key: z.string(), value: z.string(), version: z.number().int().nonnegative() }).strict();
+const storedItem = z.strictObject({ key: z.string(), value: z.string(), version: z.number().check(z.int(), z.nonnegative()) });
 const mutationResponse = z.discriminatedUnion('success', [
-  z.object({ success: z.literal(true), results: z.array(z.object({ key: z.string(), version: z.number().int().nonnegative() }).strict()) }).strict(),
-  z.object({ success: z.literal(false), errors: z.array(z.object({ key: z.string(), error: z.literal('version-mismatch'),
-    version: z.number().int().min(-1), value: z.string().nullable() }).strict()) }).strict(),
+  z.strictObject({ success: z.literal(true), results: z.array(z.strictObject({ key: z.string(), version: z.number().check(z.int(), z.nonnegative()) })) }),
+  z.strictObject({ success: z.literal(false), errors: z.array(z.strictObject({ key: z.string(), error: z.literal('version-mismatch'),
+    version: z.number().check(z.int(), z.minimum(-1)), value: z.nullable(z.string()) })) }),
 ]);
 
 /** Account mode/fingerprint admission and opaque JSON/CAS, shared by CLI domain operations. */
 export function createCliAccountKvJsonTransport(params: CliAccountKvJsonTransportParams): ScmReviewedMarksJsonTransport {
+  const collection = createCliAccountKvJsonCollectionTransport(params);
+  return {
+    read: () => collection.read(params.key),
+    compareAndSet: async (value, version) => {
+      const result = await collection.mutate([{ key: params.key, value, version }]);
+      if (result.success) {
+        const row = result.results.find(row => row.key === params.key);
+        if (!row) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV mutation omitted its result');
+        return { success: true, version: row.version };
+      }
+      const row = result.errors.find(row => row.key === params.key);
+      if (!row) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV mutation omitted its conflict');
+      return { success: false, value: row.value, version: row.version, ...(row.value === null ? { tombstone: true as const } : {}) };
+    },
+  };
+}
+
+/** The same raw Account namespace and mode admission, including atomic multi-key intents. */
+export function createCliAccountKvJsonCollectionTransport(params: Omit<CliAccountKvJsonTransportParams, 'key'>): AccountJsonKvCollectionPort {
   const base = (params.serverBaseUrl ?? resolveServerHttpBaseUrl()).replace(/\/+$/, '');
   const check = () => {
     if (params.signal?.aborted || params.shouldContinue?.() === false) throw new AccountKvJsonTransportError('account_kv_scope_retired', 'The captured Account KV scope retired');
@@ -86,33 +106,51 @@ export function createCliAccountKvJsonTransport(params: CliAccountKvJsonTranspor
     return result.value;
   };
   return {
-    read: async () => {
-      check(); const admitted = await context(); const path = `/v1/kv/${encodeURIComponent(params.key)}`;
+    read: async key => {
+      check(); const admitted = await context(); const path = `/v1/kv/${encodeURIComponent(key)}`;
       const response = await axios.get(`${base}${path}`, { headers: headers({ method: 'GET', path }), validateStatus: () => true,
         ...(params.signal ? { signal: params.signal } : {}) });
       check(); if (response.status === 404) return { value: null, version: -1 };
       if (response.status !== 200) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV read failed');
       const item = storedItem.parse(response.data);
-      if (item.key !== params.key) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV read returned another key');
+      if (item.key !== key) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV read returned another key');
       return { value: decode(item.value, admitted), version: item.version };
     },
-    compareAndSet: async (value, version) => {
+    list: async prefix => {
       check(); const admitted = await context();
-      const body = { mutations: [{ key: params.key, value: encode(value, admitted), version }] };
+      const rows: { key: string; value: unknown; version: number }[] = [];
+      const seen = new Set<string>();
+      let afterKey: string | undefined;
+      for (;;) {
+        // The HTTP KV owner admits at most 1,000 records per page, not per Account.
+        const query = new URLSearchParams({ prefix, limit: '1000', ...(afterKey ? { afterKey } : {}) });
+        const path = `/v1/kv?${query}`;
+        const response = await axios.get(`${base}${path}`, { headers: headers({ method: 'GET', path }), validateStatus: () => true,
+          ...(params.signal ? { signal: params.signal } : {}) });
+        check();
+        if (response.status !== 200) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV list failed');
+        const page = z.strictObject({ items: z.array(storedItem) }).parse(response.data).items;
+        for (const row of page) {
+          if (!row.key.startsWith(prefix) || seen.has(row.key)) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV list returned invalid membership');
+          seen.add(row.key); rows.push({ ...row, value: decode(row.value, admitted) });
+        }
+        if (page.length < 1000) return rows;
+        afterKey = page[page.length - 1]!.key;
+      }
+    },
+    mutate: async mutations => {
+      check(); const admitted = await context();
+      const body = { mutations: mutations.map(row => ({ key: row.key, value: encode(row.value, admitted), version: row.version })) };
       const response = await axios.post(`${base}/v1/kv`, body,
         { headers: headers({ method: 'POST', path: '/v1/kv', body }), validateStatus: () => true, ...(params.signal ? { signal: params.signal } : {}) });
       check();
       if (response.status !== 200 && response.status !== 409) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV mutation failed');
       const result = mutationResponse.parse(response.data);
       if (result.success) {
-        const stored = result.results.find(item => item.key === params.key);
-        if (!stored) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV mutation omitted its result');
-        return { success: true, version: stored.version };
+        return result;
       }
-      const conflict = result.errors.find(item => item.key === params.key);
-      if (!conflict) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV mutation omitted its conflict');
-      return { success: false, value: conflict.value === null ? null : decode(conflict.value, admitted), version: conflict.version,
-        ...(conflict.value === null ? { tombstone: true as const } : {}) };
+      if (result.errors.length === 0) throw new AccountKvJsonTransportError('account_kv_unavailable', 'Account KV mutation omitted its conflict');
+      return { success: false, errors: result.errors.map(row => ({ key: row.key, value: row.value === null ? null : decode(row.value, admitted), version: row.version })) };
     },
   };
 }
