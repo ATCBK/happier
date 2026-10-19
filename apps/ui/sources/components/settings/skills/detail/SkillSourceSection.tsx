@@ -9,6 +9,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import type { CapabilitySource } from '@/components/capabilities/facts/CapabilityFacts';
 
 import type { SkillChange, SkillChangeResult } from './useSkillDetail';
 
@@ -29,12 +30,13 @@ function formatDay(ms: number): string {
 function sourceRow(
   read: SkillReadResultV1,
   machineName: (machineId: string) => string,
+  pluginSource?: Extract<CapabilitySource, { kind: 'plugin' }>,
 ): Readonly<{
   title: string;
   subtitle?: string;
-  icon: 'github-logo' | 'link' | 'desktop' | 'user-circle' | 'sparkle';
+  icon?: 'github-logo' | 'link' | 'desktop' | 'user-circle' | 'sparkle' | 'puzzle-piece';
   mono?: boolean;
-}> {
+}> | null {
   const provenance = read.provenance;
   switch (provenance.kind) {
     case 'written':
@@ -56,6 +58,11 @@ function sourceRow(
         title: t('capabilities.skillDetail.source.firstParty'),
         icon: 'sparkle',
       };
+    case 'plugin':
+      return pluginSource ? {
+        title: t('capabilities.skillsFound.fromPlugin', { plugin: pluginSource.pluginName }),
+        icon: 'puzzle-piece',
+      } : null;
     case 'machine':
       return {
         title: t('capabilities.skillDetail.source.foundOn', {
@@ -100,6 +107,7 @@ export function SkillSourceSection(
     read: SkillReadResultV1;
     updatePolicy: 'manual' | 'auto' | 'pinned';
     machineName: (machineId: string) => string;
+    pluginSource?: Extract<CapabilitySource, { kind: 'plugin' }>;
     checkNow: () => void;
     checking: boolean;
     checkedAt: number | null;
@@ -114,7 +122,7 @@ export function SkillSourceSection(
   const { read } = props;
   const tracked =
     read.provenance.kind === 'registry' || read.provenance.kind === 'link';
-  const source = sourceRow(read, props.machineName);
+  const source = sourceRow(read, props.machineName, props.pluginSource);
   const [policy, setPolicy] = React.useState(props.updatePolicy);
   React.useEffect(() => setPolicy(props.updatePolicy), [props.updatePolicy]);
   const setUpdatePolicy = React.useCallback(
@@ -127,16 +135,20 @@ export function SkillSourceSection(
     [policy, props],
   );
 
+  if (!source) return null;
+
   const description =
-    read.provenance.kind === 'first_party'
-      ? t('capabilities.skillDetail.source.descriptionFirstParty')
-      : !tracked
-        ? t('capabilities.skillDetail.source.descriptionOwn')
-        : policy === 'pinned'
-          ? t('capabilities.skillDetail.source.descriptionPinned')
-          : policy === 'auto'
-            ? t('capabilities.skillDetail.source.descriptionAuto')
-            : t('capabilities.skillDetail.source.descriptionReview');
+    read.provenance.kind === 'plugin'
+      ? undefined
+      : read.provenance.kind === 'first_party'
+        ? t('capabilities.skillDetail.source.descriptionFirstParty')
+        : !tracked
+          ? t('capabilities.skillDetail.source.descriptionOwn')
+          : policy === 'pinned'
+            ? t('capabilities.skillDetail.source.descriptionPinned')
+            : policy === 'auto'
+              ? t('capabilities.skillDetail.source.descriptionAuto')
+              : t('capabilities.skillDetail.source.descriptionReview');
   const upstream = read.upstream?.state;
   const stateWords =
     upstream === 'update_available'
@@ -165,12 +177,13 @@ export function SkillSourceSection(
         subtitleStyle={
           read.provenance.kind === 'machine' ? styles.mono : undefined
         }
-        icon={
+        icon={source.icon ? (
           <Icon
             name={source.icon}
             size={20}
             color={theme.colors.text.secondary}
           />
+        ) : undefined
         }
         showChevron={false}
       />

@@ -6,6 +6,7 @@ import type {
   SkillInstallPreviewV1,
 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
+import { CapabilityAddFooter } from '@/components/capabilities/add/CapabilityAddModal';
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -266,8 +267,7 @@ export function SkillUploadInput(
         ) : null}
       </ScrollView>
       {state.kind === 'ready' ? (
-        <View style={styles.footer}>
-          <View style={styles.footerStart} />
+        <CapabilityAddFooter testID={`${props.testID}.footer`} start={null}>
           <RoundButton
             size="normal"
             title={t('capabilities.skillAdd.addToLibrary')}
@@ -275,7 +275,7 @@ export function SkillUploadInput(
             onPress={() => void add()}
             testID={`${props.testID}.add`}
           />
-        </View>
+        </CapabilityAddFooter>
       ) : null}
     </View>
   );
@@ -299,14 +299,4 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.lg,
   },
   chooseRow: { flexDirection: 'row', gap: theme.space.s8 },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s16,
-    paddingHorizontal: theme.space.s24,
-    paddingVertical: theme.space.s12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.border.subtle,
-  },
-  footerStart: { flex: 1, minWidth: 0 },
 }));

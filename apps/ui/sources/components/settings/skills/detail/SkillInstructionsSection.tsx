@@ -187,8 +187,8 @@ export function SkillInstructionsSection(
   props: Readonly<{
     skillId: string;
     skillMd: string;
-    /** First-party: shipped with Happier, never edited here. */
-    readOnly: boolean;
+    /** Host-owned (built in or from a plugin): never edited here; its note says whose it is. */
+    readOnly: false | Readonly<{ note: string }>;
     /** The draft page starts in the editor and never autosaves (the person adds it once). */
     draft?: Readonly<{ text: string; onChange: (text: string) => void }>;
     onSave: (text: string) => Promise<SkillChangeResult>;
@@ -270,9 +270,7 @@ export function SkillInstructionsSection(
       testID={props.testID}
       title={t('capabilities.skillDetail.instructions.title')}
       description={
-        props.readOnly
-          ? t('capabilities.skillDetail.instructions.readOnly')
-          : undefined
+        props.readOnly ? props.readOnly.note : undefined
       }
       action={
         props.readOnly || draftMode ? undefined : (

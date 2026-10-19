@@ -25,6 +25,14 @@ export function groupSkillUpdates(items: readonly SkillListItemV1[]): Readonly<{
   };
 }
 
+/**
+ * Whether any skill came from somewhere that can publish a newer version (a link or a registry, the same
+ * sources "Modified" is measured against). Without one, "up to date" would claim a check that means nothing.
+ */
+export function hasUpdatingSource(items: readonly SkillListItemV1[]): boolean {
+  return items.some((item) => item.provenance.kind === 'registry' || item.provenance.kind === 'link');
+}
+
 /** The rail's Updates count: only skills with a newer version waiting (never a removed source). */
 export function countSkillUpdates(items: readonly SkillListItemV1[]): number {
   return items.filter((item) => item.upstream?.state === 'update_available')

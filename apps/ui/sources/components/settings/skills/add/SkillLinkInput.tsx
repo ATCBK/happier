@@ -3,6 +3,7 @@ import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { SkillInstallPreviewV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
+import { CapabilityAddFooter } from '@/components/capabilities/add/CapabilityAddModal';
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -178,14 +179,16 @@ export function SkillLinkInput(
         ) : null}
       </ScrollView>
       {found !== null && found.length > 0 ? (
-        <View style={styles.footer}>
-          <View style={styles.footerStart}>
-            {addError ? (
+        <CapabilityAddFooter
+          testID={`${props.testID}.footer`}
+          start={
+            addError ? (
               <Text variant="meta" style={{ color: theme.colors.status.error }}>
                 {addError}
               </Text>
-            ) : null}
-          </View>
+            ) : null
+          }
+        >
           <RoundButton
             size="normal"
             title={t('capabilities.skillAdd.link.addSelected', {
@@ -196,7 +199,7 @@ export function SkillLinkInput(
             onPress={() => void add()}
             testID={`${props.testID}.add`}
           />
-        </View>
+        </CapabilityAddFooter>
       ) : null}
     </View>
   );
@@ -216,14 +219,4 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s12,
   },
   field: { flex: 1, minWidth: 0 },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s16,
-    paddingHorizontal: theme.space.s24,
-    paddingVertical: theme.space.s12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.border.subtle,
-  },
-  footerStart: { flex: 1, minWidth: 0 },
 }));

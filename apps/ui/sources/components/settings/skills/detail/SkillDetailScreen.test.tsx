@@ -108,7 +108,8 @@ async function seededHome(
     }),
   });
   expect(seeded?.status).toBe(200);
-  storage.setState({ isDataReady: true, artifactsLoaded: true });
+  // Rows were seeded at the Home boundary; the global Artifact inventory has not synced.
+  storage.setState({ isDataReady: true, artifactsLoaded: false });
   return { ...home, catalog };
 }
 
@@ -448,6 +449,9 @@ describe('SkillDetailScreen over the real skills Actions', () => {
         ] });
         expect(groups?.find(group => group.id === 'work')?.rows.map(item => item.skillId)).toEqual(['release-notes']);
         expect(groups?.some(group => group.id === 'old')).toBe(false);
+        await act(async () => { expect(await detail.getCurrent().moveToFolder(null)).toBe(true); });
+        await vi.waitFor(() => expect(library.getCurrent().items.find(item => item.skillId === 'release-notes')?.folderId).toBeNull());
+        await vi.waitFor(() => expect(reopened.getCurrent().items.find(item => item.skillId === 'release-notes')?.folderId).toBeNull());
         // The legacy header is deliberately unchanged: canonical personal placement must win it.
         expect(home.boundary.read('release-notes')?.header).toBe(encodePlainArtifactStoredContent(
           PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2', title: 'release-notes',

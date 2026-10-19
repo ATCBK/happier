@@ -251,6 +251,8 @@ export function SkillFilesSection(
               />
             }
             rightElement={end}
+            // The overflow menu is a control of its own: it sits beside the row's pressable, never inside it.
+            rightElementOutsidePressable={expandable && !props.readOnly}
             showChevron={false}
           />
         );

@@ -646,7 +646,7 @@ function SkillAddDetail(
         <View style={styles.head}>
         <Text
           variant="title"
-          emphasis="strong"
+          emphasis="semiBold"
           style={{ color: theme.colors.text.primary }}
           testID={`${TEST_ID}.detail.title`}
         >

@@ -45,12 +45,15 @@ import { SkillsList } from './SkillsRail';
 import {
   SKILLS_COLLECTION_ROUTE,
   buildSkillsReach,
+  skillDisplayName,
   skillHref,
   SKILLS_NEW_ROUTE,
   skillSource,
   type SkillsPresent,
   type SkillsReach,
   foldReachMachines,
+  skillsReachLegendCount,
+  hasOwnSkills,
 } from './skillsCollectionModel';
 import { usePreviewedSkill } from './skillsPreviewStore';
 import { arrivedReachDots } from './skillsReachTravel';
@@ -64,6 +67,7 @@ import { SKILLS_FOUND_ROUTE } from './found/foundSkillsModel';
 import type { SkillNeedsALookEntry } from './status/skillStatus';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { useFoundSkillsCount } from '@/sync/domains/skills/useFoundSkills';
+import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 
 /**
  * The reach map's box beside its legend (lab hs-A: a 284 × 264 scene around a 42 px planet). The orbits
@@ -133,6 +137,7 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
   props: Readonly<{ library: SkillsLibrary; phone: boolean }>,
 ) {
   const { library } = props;
+  const { pluginUiProjection } = useAppShellPluginUiProjection();
   const open = useOpen();
   const openAdd = useOpenSkillAddModal();
   useSkillAddRouteParams();
@@ -179,7 +184,8 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
   const loading = library.status === 'loading' && library.items.length === 0;
   const unavailable =
     library.status === 'unavailable' && library.items.length === 0;
-  const empty = library.status === 'ready' && library.items.length === 0;
+  // Only the person's own skills count: the built-in one is always listed (P6 §4.1).
+  const empty = library.status === 'ready' && !hasOwnSkills(library.items);
 
   // A returning visit is titled by the page itself; the present lives in the sentence (lab hs A2/A3).
   // A brand-new library keeps the page's anatomy (lab hs A4): the map shows where a skill will ride.
@@ -286,15 +292,6 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
         </View>
       ) : null}
       </View>
-      {(firstVisit || empty) && !props.phone ? (
-        <ItemGroup
-          title={t('capabilities.skills.home.whereTitle')}
-          description={t('capabilities.skills.home.whereBody')}
-          surface="none"
-        >
-          {null}
-        </ItemGroup>
-      ) : null}
       {needs.length > 0 ? (
         <ItemGroup
           title={t('capabilities.skills.home.needsLook')}
@@ -309,6 +306,7 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
               key={`${entry.kind}:${entry.key}`}
               entry={entry}
               names={names}
+              installedPlugins={pluginUiProjection?.installedPackagesById}
               onOpen={() => {
                 // Unreadable: read the library again. Masked: Compare lives on Found. Updates: the
                 // Updates page; a dropped source: the skill itself.
@@ -318,6 +316,16 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
               }}
             />
           ))}
+        </ItemGroup>
+      ) : null}
+      {/* P6 §4.2 order: what needs the person comes before the standing rule. */}
+      {(firstVisit || empty) && !props.phone ? (
+        <ItemGroup
+          title={t('capabilities.skills.home.whereTitle')}
+          description={t('capabilities.skills.home.whereBody')}
+          surface="none"
+        >
+          {null}
         </ItemGroup>
       ) : null}
       {loading || unavailable ? null : (
@@ -336,6 +344,7 @@ function NeedsALookRow(
   props: Readonly<{
     entry: SkillNeedsALookEntry;
     names: ReturnType<typeof useWhereItsOnNames>['names'];
+    installedPlugins: Parameters<typeof skillSource>[2];
     onOpen: () => void;
   }>,
 ) {
@@ -345,9 +354,9 @@ function NeedsALookRow(
     return (
       <CapabilityRow
         testID={`skills.home.needs.${entry.key}`}
-        title={entry.unavailable.title ?? entry.key}
+        title={skillDisplayName(entry.unavailable.title, entry.key)}
+        // The description says what is wrong; the shared error chip ("Couldn't start") would say a second, wrong thing.
         description={t('capabilities.skills.home.unreadable')}
-        status={{ kind: 'error' }}
         action={
           <RoundButton size="small" display="secondary" title={t('common.retry')} onPress={props.onOpen} />
         }
@@ -377,7 +386,7 @@ function NeedsALookRow(
       whereSummary={shortWhereItsOn(item.rules, props.names)}
       facts={{
         presentation: 'row',
-        source: skillSource(item, props.names.machineName),
+        source: skillSource(item, props.names.machineName, props.installedPlugins),
         trust: item.trust,
       }}
       status={
@@ -480,7 +489,7 @@ const ReachBlock = React.memo(function ReachBlock(
         noSkillAgents:
           row.machine.agentIds.length > 0 && row.supportedAgentIds.length === 0,
         inventoryUnknown: row.machine.agentInventoryComplete === false,
-        count: row.machine.agentInventoryComplete === false ? null : props.firstVisit ? 0 : row.skillIds.length,
+        count: skillsReachLegendCount(row, props.firstVisit),
       })),
     [props.firstVisit, folded.shown],
   );

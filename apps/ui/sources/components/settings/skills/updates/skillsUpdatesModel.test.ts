@@ -6,6 +6,7 @@ import {
   countSkillUpdates,
   defaultSkillFileChoices,
   groupSkillUpdates,
+  hasUpdatingSource,
   needsALookDestination,
   skillUpdateApplyChoices,
 } from './skillsUpdatesModel';
@@ -100,5 +101,15 @@ describe('skills updates', () => {
       'SKILL.md': 'theirs',
       'scripts/new.py': 'theirs',
     });
+  });
+
+  it('only a skill added from a link or a registry has a source that can update: written, uploaded and found ones never do', () => {
+    expect(hasUpdatingSource([base, { ...base, skillId: 'up', provenance: { kind: 'upload', importedAt: 1 } }])).toBe(false);
+    const linked = SkillListItemV1Schema.parse({
+      ...base,
+      skillId: 'linked',
+      provenance: { kind: 'link', url: 'https://github.com/acme/skills/tree/main/pdf', ref: { kind: 'version', version: '1.0.0' } },
+    });
+    expect(hasUpdatingSource([base, linked])).toBe(true);
   });
 });

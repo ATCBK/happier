@@ -6,6 +6,7 @@ import {
 
 import type { ReachMachine } from '@/sync/domains/capabilities/reach/useReachProjection';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 
 import {
   buildSkillsReach,
@@ -16,6 +17,7 @@ import {
   resolveSkillsFirstVisit,
   resolveSkillsPresent,
   skillSource,
+  skillsReachLegendCount,
 } from './skillsCollectionModel';
 import { buildSkillsNeedsALook } from './status/skillStatus';
 import { arrivedReachDots } from './skillsReachTravel';
@@ -234,6 +236,35 @@ describe('Skills collection model', () => {
     expect(reach.offlineMachineIds).toEqual(['win']);
   });
 
+  it('legend count: known Agents give a count even while the roster is incomplete; only an unknown roster is unknown', () => {
+    const [known, unknown, offline] = buildSkillsReach(
+      [skill('every'), skill('off', { rules: [] })],
+      [
+        { ...machine('mbp', ['claude', 'codex']), agentInventoryComplete: false },
+        { ...machine('nl2', []), agentInventoryComplete: false },
+        { ...machine('win', ['claude'], true), agentInventoryComplete: false },
+      ],
+    ).machines;
+    expect(skillsReachLegendCount(known!, false)).toBe(1);
+    expect(skillsReachLegendCount(offline!, false)).toBe(1);
+    expect(skillsReachLegendCount(unknown!, false)).toBeNull();
+    expect(skillsReachLegendCount(known!, true)).toBe(0);
+  });
+
+  it('a library holding only the built-in skill is new: the first-party item never counts as the person\'s own', () => {
+    const builtIn = skill('happier:happier', { provenance: { kind: 'first_party' } });
+    const reach = buildSkillsReach([builtIn], [machine('mbp', ['claude'])]);
+    expect(resolveSkillsPresent({ items: [builtIn], reach, needs: 0, firstVisit: null })).toEqual({ kind: 'new' });
+    expect(resolveSkillsPresent({ items: [builtIn, skill('pdf')], reach, needs: 0, firstVisit: null }).kind).not.toBe('new');
+  });
+
+  it('a plugin\'s skill is host-owned like the built-in one: it never makes the library the person\'s own', () => {
+    const builtIn = skill('happier:happier', { provenance: { kind: 'first_party' } });
+    const pluginOwned = skill('plugin:acme/check', { provenance: { kind: 'plugin', pluginId: 'acme', occurrenceId: 'o1' } });
+    const reach = buildSkillsReach([builtIn, pluginOwned], [machine('mbp', ['claude'])]);
+    expect(resolveSkillsPresent({ items: [builtIn, pluginOwned], reach, needs: 0, firstVisit: null })).toEqual({ kind: 'new' });
+  });
+
   it('ranks reached machines before idle peers, including an older reached offline machine before a recently seen idle one', () => {
     const seen = (id: string, at: number): ReachMachine => ({ ...machine(id, ['claude'], true), lastSeenAt: at });
     const machines = [seen('old', 10), machine('idle', ['claude']), seen('recent', 50), machine('busy', ['claude']), machine('bare', [])];
@@ -277,6 +308,21 @@ describe('Skills collection model', () => {
     expect(firstVisit([skill('all-on')])).toBeNull();
   });
 
+  it('maps plugin provenance to its declared display name and leaves an unknown source absent', () => {
+    const pluginId = 'com.acme.skills';
+    const item = skill('plugin:com.acme.skills/check', { provenance: {
+      kind: 'plugin', pluginId, occurrenceId: 'acme-runtime',
+    } });
+    const projection = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+      installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Acme Skills', enabled: true,
+        source: { kind: 'path', locator: '/plugins/acme' } } },
+    }));
+    const machineName = (id: string) => `Machine ${id}`;
+    expect(skillSource(item, machineName, projection.installedPackagesById)).toEqual({ kind: 'plugin', pluginName: 'Acme Skills' });
+    expect(skillSource(item, machineName, null)).toBeUndefined();
+    expect(skillSource(item, machineName, normalizePluginUiProjection(null).installedPackagesById)).toBeUndefined();
+  });
+
   it('maps provenance to one source: GitHub links and registries read as the repository', () => {
     const name = (id: string) => `name:${id}`;
     expect(skillSource(skill('w'), name)).toEqual({ kind: 'you' });
@@ -284,6 +330,11 @@ describe('Skills collection model', () => {
       sourceId: 'marketplace:3347a9078f85', format: 'happier-catalog', sourceUrl: 'https://marketplace.happier.dev/catalog.json',
       itemId: 'pick', importedAt: 1, ref: { kind: 'gitTree', repo: 'https://github.com/example/skills', path: 'review', commit: 'a'.repeat(40), treeSha: 'b'.repeat(40) },
     } } }), name)).toEqual({ kind: 'git', label: 'example/skills' });
+    // A source outside GitHub reads as its host, never as the internal source id.
+    expect(skillSource(skill('own', { provenance: { kind: 'registry', registry: {
+      sourceId: 'registry:4d6524bab2a4', format: 'git', sourceUrl: 'https://git.example.com/team/skills.git',
+      itemId: 'own', importedAt: 1, ref: { kind: 'gitTree', repo: 'https://git.example.com/team/skills.git', path: 'own', commit: 'a'.repeat(40), treeSha: 'b'.repeat(40) },
+    } } }), name)).toEqual({ kind: 'git', label: 'git.example.com' });
     expect(
       skillSource(
         skill('l', {

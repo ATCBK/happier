@@ -6,7 +6,6 @@ import type { SkillUpdateFileV1 } from '@happier-dev/protocol/prompts/library/sk
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
-import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsOnNames';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { getDiffStats } from '@/components/ui/code/model/diff/calculateDiff';
@@ -25,12 +24,15 @@ import { useSkillsLibrary, type SkillsLibrary } from '@/sync/domains/skills/useS
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 
 import { readSkillText } from '../detail/skillFileContent';
 import { SKILLS_COLLECTION_ROUTE, skillSource } from '../skillsCollectionModel';
+import { useSkillPlaces } from '../useSkillPlaces';
 import {
   defaultSkillFileChoices,
   groupSkillUpdates,
+  hasUpdatingSource,
   skillUpdateApplyChoices,
   type SkillFileChoice,
 } from './skillsUpdatesModel';
@@ -44,9 +46,6 @@ import {
 } from './useSkillsUpdates';
 import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourceStatus';
 
-const NO_AGENTS: readonly string[] = Object.freeze([]);
-const NO_MACHINES: readonly Readonly<{ machineId: string; name: string }>[] =
-  Object.freeze([]);
 
 function formatTime(ms: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -91,11 +90,10 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
   props: Readonly<{ library: SkillsLibrary; updates: SkillsUpdatesController }>,
 ) {
   const { library, updates } = props;
+  const { pluginUiProjection } = useAppShellPluginUiProjection();
   const router = useRouter();
-  const { names } = useWhereItsOnNames({
-    agentIds: NO_AGENTS,
-    machines: NO_MACHINES,
-  });
+  // A skill added from a machine names that machine, as the rail and homepage do.
+  const { names } = useSkillPlaces();
   const groups = React.useMemo(
     () => groupSkillUpdates(library.items),
     [library.items],
@@ -128,6 +126,8 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
   }, [router]);
 
   const loading = library.status === 'loading' && library.items.length === 0;
+  // Written, uploaded and found skills have nowhere newer to come from: say that, not "up to date".
+  const sourced = React.useMemo(() => hasUpdatingSource(library.items), [library.items]);
   // A failed check that never succeeded says nothing about freshness: no "up to date" claim.
   const nothing =
     !loading &&
@@ -154,7 +154,7 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
             }
             icon="arrow-clockwise"
             loading={updates.check.checking}
-            disabled={updates.check.checking || !updates.ready}
+            disabled={updates.check.checking || !updates.ready || (!loading && !sourced)}
             onPress={() => void updates.checkNow()}
           />
         }
@@ -202,7 +202,9 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
             size="line"
             kind="empty"
             title={
-              updates.check.checkedAt !== null
+              !sourced
+                ? t('capabilities.skillsUpdates.updates.noSources')
+                : updates.check.checkedAt !== null
                 ? t('capabilities.skillsUpdates.updates.upToDateChecked', {
                     time: formatTime(updates.check.checkedAt),
                   })
@@ -212,15 +214,17 @@ export const SkillsUpdatesPage = React.memo(function SkillsUpdatesPage(
         </ItemGroup>
       ) : null}
       {groups.ready.length > 0 || applied.length > 0 ? (
+        // Once only receipts remain, the group no longer promises a safe update: it says what happened.
         <ItemGroup
-          title={t('capabilities.skillsUpdates.updates.readyTitle')}
-          description={t('capabilities.skillsUpdates.updates.readyBody')}
+          title={groups.ready.length > 0 ? t('capabilities.skillsUpdates.updates.readyTitle') : t('capabilities.skillsUpdates.updates.updatedTitle')}
+          description={groups.ready.length > 0 ? t('capabilities.skillsUpdates.updates.readyBody') : undefined}
         >
           {[...groups.ready, ...applied].flatMap((item) => [
             <ReadyRow
               key={item.skillId}
               item={item}
               machineName={names.machineName}
+              installedPlugins={pluginUiProjection?.installedPackagesById}
               diff={diffs.get(item.skillId)?.revision === item.revision ? diffs.get(item.skillId)! : null}
               applyState={updates.applies.get(item.skillId) ?? null}
               onToggleDiff={(open) =>
@@ -259,6 +263,7 @@ function ReadyRow(
   props: Readonly<{
     item: SkillListItemV1;
     machineName: (machineId: string) => string;
+    installedPlugins: Parameters<typeof skillSource>[2];
     diff: SkillUpdateDiffState | null;
     applyState: SkillUpdateApplyState | null;
     onToggleDiff: (open: boolean) => void;
@@ -311,7 +316,7 @@ function ReadyRow(
         }
         facts={{
           presentation: 'row',
-          source: skillSource(item, props.machineName),
+          source: skillSource(item, props.machineName, props.installedPlugins),
           trust: item.trust,
           ...(cost
             ? cost.to === cost.tokens

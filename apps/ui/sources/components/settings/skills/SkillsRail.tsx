@@ -43,6 +43,7 @@ import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { useOpenSkillAddModal } from './add/useOpenSkillAddModal';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 
 import {
   SKILLS_COLLECTION_ROUTE,
@@ -52,6 +53,7 @@ import {
   groupSkillsByUse,
   skillHref,
   skillSource,
+  hasOwnSkills,
 } from './skillsCollectionModel';
 import { SKILLS_FOUND_ROUTE } from './found/foundSkillsModel';
 import { useSkillsNeedsALook } from './status/useSkillsNeedsALook';
@@ -99,6 +101,7 @@ export const SkillsList = React.memo(function SkillsList(
   props: Readonly<{ variant: 'rail' | 'page'; library: SkillsLibrary }>,
 ) {
   const { theme } = useUnistyles();
+  const { pluginUiProjection } = useAppShellPluginUiProjection();
   const router = useRouter();
   const pathname = usePathname().replace(/\/+$/, '');
   const { library } = props;
@@ -199,7 +202,7 @@ export const SkillsList = React.memo(function SkillsList(
       whereSummary={shortWhereItsOn(item.rules, names)}
       facts={{
         presentation: 'row',
-        source: skillSource(item, names.machineName),
+        source: skillSource(item, names.machineName, pluginUiProjection?.installedPackagesById),
         trust: item.trust,
         cost: { tokensWhenUsed: item.cost.bodyTokens },
       }}
@@ -216,7 +219,8 @@ export const SkillsList = React.memo(function SkillsList(
   const loading = library.status === 'loading' && library.items.length === 0;
   const unavailable = library.status === 'unavailable';
   const noMatch = !loading && visible.length === 0 && library.items.length > 0;
-  const empty = !loading && !unavailable && library.items.length === 0;
+  // The built-in skill stays listed under In use; the line says none of the person's own exist yet (P6 §4.1).
+  const empty = !loading && !unavailable && !hasOwnSkills(library.items);
 
   if (!rail) {
     // The phone's Skills page: the same list as grouped inset sheets under the hero (lab hs A2p), each
@@ -377,12 +381,13 @@ export const SkillsList = React.memo(function SkillsList(
           onPress={() => open(SKILLS_CHOOSE_ROUTE)}
         />
       ) : null}
-      {updateCount > 0 ? (
+      {/* Pinned while it has something, and while it is the open page so the rail always marks where you are. */}
+      {updateCount > 0 || atUpdates ? (
         <CollectionIndexRow
           testID="skills.rail.updates"
           icon="arrow-up"
           title={t('capabilities.skills.updates')}
-          detail={String(updateCount)}
+          detail={updateCount > 0 ? String(updateCount) : undefined}
           selected={atUpdates}
           onPress={() => open(SKILLS_UPDATES_ROUTE)}
         />

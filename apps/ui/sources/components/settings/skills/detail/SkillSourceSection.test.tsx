@@ -1,10 +1,15 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SkillReadResultV1 } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
+import { SkillReadResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
+import { t } from '@/text';
 
 import { SkillSourceSection } from './SkillSourceSection';
+import { skillSource } from '../skillsCollectionModel';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -55,6 +60,35 @@ const common = {
 };
 
 describe('SkillSourceSection', () => {
+  it('names the supplying plugin and omits unknown source metadata without claiming personal ownership', async () => {
+    const pluginId = 'com.acme.skills';
+    const pluginRead = SkillReadResultV1Schema.parse({ ...read({
+      kind: 'plugin', pluginId, occurrenceId: 'acme-runtime',
+    }), revision: '1:1' });
+    const projection = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+      installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Acme Skills', enabled: true,
+        source: { kind: 'path', locator: '/plugins/acme' } } },
+    }));
+    const source = skillSource(pluginRead, common.machineName, projection.installedPackagesById);
+    if (source?.kind !== 'plugin') throw new Error('Canonical plugin source metadata must be available');
+    const screen = await renderScreen(<SkillSourceSection {...common} read={pluginRead}
+      pluginSource={source} updatePolicy="manual" />);
+    expect(screen.findByTestId('src:source')).not.toBeNull();
+    expect(screen.getTextContent()).toContain('Acme Skills');
+    expect(screen.getTextContent()).not.toContain(t('capabilities.skillDetail.source.descriptionOwn'));
+    expect(screen.findByTestId('src:checkNow')).toBeNull();
+    expect(screen.findByTestId('src:auto')).toBeNull();
+    expect(screen.findByTestId('src:pin')).toBeNull();
+
+    await screen.update(<SkillSourceSection {...common} read={pluginRead} updatePolicy="manual" />);
+    expect(screen.findByTestId('src:source')).toBeNull();
+    expect(screen.getTextContent()).not.toContain(pluginId);
+    expect(screen.getTextContent()).not.toContain(t('capabilities.skillDetail.source.descriptionOwn'));
+    await screen.update(<SkillSourceSection {...common} read={pluginRead}
+      pluginSource={source} updatePolicy="manual" />);
+    expect(screen.getTextContent()).toContain('Acme Skills');
+  });
+
   it('a written skill says "Written by you" and offers no update controls', async () => {
     const screen = await renderScreen(
       <SkillSourceSection

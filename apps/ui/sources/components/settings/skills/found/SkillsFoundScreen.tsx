@@ -211,7 +211,7 @@ export const SkillsFoundPage = React.memo(function SkillsFoundPage(
           <SurfaceStateCard
             testID="skills.found.unseenOffline"
             size="line"
-            kind="offline"
+            kind="unavailable"
             title={t('capabilities.skillsFound.offlineUnseen', { count: unseenOffline })}
           />
         </ItemGroup>
