@@ -93,9 +93,14 @@ export const McpPreviewEntryAvailabilityV1Schema = lazyZodSchema(() => z.union([
 export type McpPreviewEntryAvailabilityV1 = z.infer<typeof McpPreviewEntryAvailabilityV1Schema>;
 
 const ManagedAvailabilityValues = ['active', 'available', 'unavailable'] as const satisfies ReadonlyArray<ManagedSessionMcpAvailabilityV1>;
-export const ManagedSessionMcpAvailabilityV1Schema = lazyZodSchema(() => z.custom<ManagedSessionMcpAvailabilityV1>(
-  (value) => typeof value === 'string' && ManagedAvailabilityValues.includes(value as ManagedSessionMcpAvailabilityV1),
-));
+export const ManagedSessionMcpAvailabilityV1Schema = lazyZodSchema(() => {
+  const schema = z.custom<ManagedSessionMcpAvailabilityV1>(
+    (value) => typeof value === 'string' && ManagedAvailabilityValues.includes(value as ManagedSessionMcpAvailabilityV1),
+  );
+  schema._zod.processJSONSchema = (context, jsonSchema, params) =>
+    context.processors.enum(z.enum(ManagedAvailabilityValues), context, jsonSchema, params);
+  return schema;
+});
 
 const ManagedReasonValues = [
   'active_by_default',
@@ -106,14 +111,24 @@ const ManagedReasonValues = [
   'available_portable',
   'not_portable',
 ] as const satisfies ReadonlyArray<ManagedSessionMcpReasonCodeV1>;
-export const ManagedSessionMcpReasonCodeV1Schema = lazyZodSchema(() => z.custom<ManagedSessionMcpReasonCodeV1>(
-  (value) => typeof value === 'string' && ManagedReasonValues.includes(value as ManagedSessionMcpReasonCodeV1),
-));
+export const ManagedSessionMcpReasonCodeV1Schema = lazyZodSchema(() => {
+  const schema = z.custom<ManagedSessionMcpReasonCodeV1>(
+    (value) => typeof value === 'string' && ManagedReasonValues.includes(value as ManagedSessionMcpReasonCodeV1),
+  );
+  schema._zod.processJSONSchema = (context, jsonSchema, params) =>
+    context.processors.enum(z.enum(ManagedReasonValues), context, jsonSchema, params);
+  return schema;
+});
 
 const ManagedPortabilityValues = ['portable', 'machine_scoped'] as const satisfies ReadonlyArray<ManagedSessionMcpPortabilityV1>;
-export const ManagedSessionMcpPortabilityV1Schema = lazyZodSchema(() => z.custom<ManagedSessionMcpPortabilityV1>(
-  (value) => typeof value === 'string' && ManagedPortabilityValues.includes(value as ManagedSessionMcpPortabilityV1),
-));
+export const ManagedSessionMcpPortabilityV1Schema = lazyZodSchema(() => {
+  const schema = z.custom<ManagedSessionMcpPortabilityV1>(
+    (value) => typeof value === 'string' && ManagedPortabilityValues.includes(value as ManagedSessionMcpPortabilityV1),
+  );
+  schema._zod.processJSONSchema = (context, jsonSchema, params) =>
+    context.processors.enum(z.enum(ManagedPortabilityValues), context, jsonSchema, params);
+  return schema;
+});
 
 const McpPreviewEntryBaseV1Schema = lazyZodSchema(() => z.object({
   key: z.string().check(z.minLength(1)),

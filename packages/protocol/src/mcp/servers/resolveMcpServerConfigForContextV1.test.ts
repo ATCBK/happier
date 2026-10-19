@@ -14,16 +14,14 @@ describe('MCP working folder configuration', () => {
     expect(resolveMcpServerConfigForContextV1(server, context).remote).toEqual({ url: 'https://other.example.test/mcp', headers: {} });
     expect(resolveMcpServerConfigForContextV1(server, { ...context, machineId: 'another' }).remote).toEqual(server.remote);
   });
-  it('applies the machine folder without changing reach', () => {
+  it.each([{ t: 'path' as const, path: 'C:\\work' }, { t: 'session' as const }])('applies the machine folder %j without changing other machines', (cwd) => {
     const server = McpServerCatalogEntryV1Schema.parse({ id: 'server', name: 'server', transport: 'stdio',
-      stdio: { command: 'server', args: [], cwd: { t: 'session' } }, env: {}, createdAt: 1, updatedAt: 1,
-      configOverrides: [{ target: { t: 'machine', machineId: 'machine' }, stdio: { cwd: { t: 'path', path: 'C:\\work' } } }],
+      stdio: { command: 'server', args: [], cwd: { t: 'path', path: 'C:\\base' } }, env: {}, createdAt: 1, updatedAt: 1,
+      configOverrides: [{ target: { t: 'machine', machineId: 'machine' }, stdio: { cwd } }],
     });
     const context = { machineId: 'machine', directory: 'C:\\session', machinePlatform: 'win32' as const,
       projectKey: null, agentId: null };
-    expect(resolveMcpServerConfigForContextV1(server, context).stdio?.cwd).toEqual({ t: 'path', path: 'C:\\work' });
-    expect(McpServerCatalogEntryV1Schema.safeParse({ ...server, configOverrides: [{
-      target: { t: 'machine', machineId: 'machine' }, stdio: { cwd: { t: 'session' } },
-    }] }).success).toBe(false);
+    expect(resolveMcpServerConfigForContextV1(server, context).stdio?.cwd).toEqual(cwd);
+    expect(resolveMcpServerConfigForContextV1(server, { ...context, machineId: 'another' }).stdio).toEqual(server.stdio);
   });
 });

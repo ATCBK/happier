@@ -13,8 +13,87 @@ import { createRegistryHostV1 } from '../../registries/registryHostV1.js';
 import { BUILT_IN_REGISTRY_SOURCES_V1 } from '../../registries/registrySourcesV1.js';
 import { MCP_REGISTRY_V01_READ_FIXTURE } from '../../registries/formats/fixtures/mcpRegistryV01Fixture.js';
 import { createPersonalSavedSecretActionExecuteV1 } from '../../account/settings/personalSavedSecretActionsV1.js';
+import { parseMcpServerImportV1 } from './import/parseMcpServerImportV1.js';
+import { DaemonMcpServersTestRequestSchema } from './daemonRpcV1.js';
 
 describe('canonical MCP Action owner', () => {
+  it('duplicates by source identity under catalog CAS with unique names, default reach and no sign-in transfer', async () => {
+    let catalog: McpServerCatalogV1 = { v: 1, bindings: [{ id: 'source-rule', serverId: 'source', enabled: false,
+      target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }], servers: [{ id: 'source', name: 'issues', title: 'Issues',
+      transport: 'http', remote: { url: 'https://mcp.example.test', auth: { kind: 'oauth' },
+        headers: { Authorization: { t: 'savedSecret', secretId: 'private-secret-ref' } } }, env: {},
+      configOverrides: [{ target: { t: 'machine', machineId: 'machine' }, remote: { url: 'https://other.example.test' } }],
+      tools: { default: 'ask', overrides: { write: 'off' } }, createdAt: 1, updatedAt: 1 },
+      { id: 'collision', name: 'issues_copy', transport: 'stdio', stdio: { command: 'tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }] };
+    let revision = 7; let ids = 0; let conflict = false;
+    const execute = createMcpServerActionExecuteV1({
+      ruleWriteContext: () => ({ nowMs: 10, newId: () => `new-${++ids}` }),
+      readCatalog: () => loadMcpServerCatalogV1({ mode: 'plain', material: null,
+        readRow: async () => ({ status: 'present', revision, content: { t: 'plain', v: catalog } }) }),
+      mutate: (change, expectedRevision) => commitMcpServerCatalogMutationV1({ catalog, revision, change, scope: null,
+        writeCatalog: async candidate => {
+          if (conflict || candidate.expectedRevision !== revision || expectedRevision !== revision) return { status: 'conflict', revision };
+          catalog = candidate.catalog; return { status: 'updated', revision: ++revision, cursor: revision };
+        } }),
+      machine: async () => { throw new Error('Duplicate must not transfer sign-in or launch code'); },
+      connectedServiceAction: async () => { throw new Error('Duplicate must not read or copy OAuth state'); },
+    });
+    const context = { surface: 'agent', authority: 'account_automation', defaultSessionId: 'session' } as const;
+    const input = { serverId: 'source' };
+    const schema = MCP_SERVER_ACTION_INPUT_SCHEMAS_V1['mcp.servers.duplicate'];
+    expect(schema.safeParse(input).success).toBe(true);
+    expect(schema.safeParse({ ...input, entry: catalog.servers[0], expectedRevision: 7 }).success).toBe(false);
+    const first = await execute({ actionId: 'mcp.servers.duplicate', input, context });
+    expect(first).toEqual({ ok: true, result: { serverId: 'new-1' } });
+    expect(MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.duplicate'].parse(first.ok ? first.result : null)).toEqual({ serverId: 'new-1' });
+    expect(JSON.stringify(first)).not.toContain('private-');
+    expect(catalog.servers[2]).toEqual({ ...catalog.servers[0], id: 'new-1', name: 'issues_copy_2', title: 'Issues copy', createdAt: 10, updatedAt: 10 });
+    expect(catalog.bindings.filter(rule => rule.serverId === 'new-1')).toMatchObject([{ enabled: true, target: { t: 'allMachines' } }]);
+    const second = await execute({ actionId: 'mcp.servers.duplicate', input, context });
+    expect(second.ok).toBe(true);
+    expect(catalog.servers[3]?.name).toBe('issues_copy_3');
+    conflict = true;
+    expect(await execute({ actionId: 'mcp.servers.duplicate', input, context })).toMatchObject({ ok: false, errorCode: 'mcp_catalog_conflict' });
+    expect(catalog.servers).toHaveLength(4);
+    expect(await execute({ actionId: 'mcp.servers.duplicate', input: { serverId: 'missing' }, context }))
+      .toMatchObject({ ok: false, errorCode: 'mcp_server_not_found' });
+  });
+  it('authors tests only for saved servers while accepting released draft requests at daemon ingress', () => {
+    const action = MCP_SERVER_ACTION_INPUT_SCHEMAS_V1['mcp.servers.test'];
+    const saved = { t: 'byId', machineId: 'machine', directory: '/repo', serverId: 'one' };
+    expect(action.parse(saved)).toEqual(saved);
+    expect(DaemonMcpServersTestRequestSchema.parse(saved)).toEqual(saved);
+    // ui-web-v0.2.17-preview.19, McpServerTestPanel.tsx:136–141.
+    const draft = { t: 'draft', machineId: 'machine', directory: '/repo', binding: null,
+      server: { id: 'one', name: 'one', transport: 'stdio', stdio: { command: 'tool', args: [] },
+        env: {}, createdAt: 1, updatedAt: 1 } };
+    expect(DaemonMcpServersTestRequestSchema.safeParse(draft).success).toBe(true);
+    expect(action.safeParse(draft).success).toBe(false);
+  });
+
+  it('reads an install link through the output schema and the shared importer without exporting values', async () => {
+    const catalog: McpServerCatalogV1 = { v: 1, bindings: [], servers: [{ id: 'one', name: 'one', transport: 'http',
+      remote: { url: 'https://mcp.example.test', headers: { Authorization: { t: 'literal', v: 'private-header' } } },
+      env: { TOKEN: { t: 'savedSecret', secretId: 'private-secret-ref' } }, createdAt: 1, updatedAt: 1 }] };
+    const execute = createMcpServerActionExecuteV1({
+      resolveWebappUrl: () => 'https://web.example.test',
+      readCatalog: () => loadMcpServerCatalogV1({ mode: 'plain', material: null,
+        readRow: async () => ({ status: 'present', revision: 1, content: { t: 'plain', v: catalog } }) }),
+      mutate: async () => { throw new Error('Read cannot mutate'); },
+      machine: async () => { throw new Error('Read cannot launch a Machine'); },
+    });
+    const receipt = await execute({ actionId: 'mcp.servers.read', input: { serverId: 'one' }, context: { surface: 'ui' } });
+    expect(receipt).toMatchObject({ ok: true, result: { status: 'present', installLink: expect.any(String) } });
+    const output = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.read'].parse(receipt.ok ? receipt.result : null);
+    if (!('installLink' in output) || typeof output.installLink !== 'string') throw new Error('Missing install link');
+    expect(new URL(output.installLink).origin).toBe('https://web.example.test');
+    const imported = parseMcpServerImportV1(output.installLink);
+    expect(imported.errors).toEqual([]);
+    expect(imported.servers).toMatchObject([{ name: 'one', transport: 'http', remote: { url: 'https://mcp.example.test' } }]);
+    expect(imported.inputs.map(input => input.title).sort()).toEqual(['Authorization', 'TOKEN']);
+    expect(JSON.stringify(imported)).not.toContain('private-');
+  });
+
   it('preserves an acknowledged secret when the catalog write outcome is unknown', async () => {
     const catalog: McpServerCatalogV1 = { v: 1, servers: [], bindings: [] };
     const secretWrites: unknown[] = [];
@@ -196,13 +275,17 @@ describe('canonical MCP Action owner', () => {
     if (!set.ok) throw new Error('Tool update refused');
     const committed = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.set'].parse(set.result);
     await execute({ actionId: 'mcp.servers.tools.set', input: { serverId: 'server', ...committed.previous }, context });
-    expect(catalog).toEqual(original);
+    const assertRestored = () => {
+      expect(catalog.servers[0]!.updatedAt).toBeGreaterThan(original.servers[0]!.updatedAt);
+      expect(catalog).toEqual({ ...original, servers: [{ ...original.servers[0]!, updatedAt: catalog.servers[0]!.updatedAt }] });
+    };
+    assertRestored();
     const setDefault = await execute({ actionId: 'mcp.servers.tools.set', input: { serverId: 'server', default: 'allow_all' }, context });
     expect(catalog.servers[0]?.tools).toEqual({ default: 'allow_all', overrides: { keep: 'off', existing: 'ask' } });
     if (!setDefault.ok) throw new Error('Default update refused');
     const previousDefault = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.set'].parse(setDefault.result).previous;
     await execute({ actionId: 'mcp.servers.tools.set', input: { serverId: 'server', ...previousDefault }, context });
-    expect(catalog).toEqual(original);
+    assertRestored();
     const objectNameSet = await execute({ actionId: 'mcp.servers.tools.set', input: { serverId: 'server',
       tools: JSON.parse('{"__proto__":"off","constructor":"allow"}') }, context });
     if (!objectNameSet.ok) throw new Error('Object-name tool update refused');
@@ -218,7 +301,7 @@ describe('canonical MCP Action owner', () => {
     expect(projected.tools['__proto__']).toBe('off');
     const previousObjectNames = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.set'].parse(objectNameSet.result).previous;
     await execute({ actionId: 'mcp.servers.tools.set', input: { serverId: 'server', ...previousObjectNames }, context });
-    expect(catalog).toEqual(original);
+    assertRestored();
     const beforeConflict = catalog;
     refuseWrite = true;
     expect(await execute({ actionId: 'mcp.servers.tools.set', input: { serverId: 'server', tools: { added: 'allow' } }, context }))
@@ -271,14 +354,6 @@ describe('canonical MCP Action owner', () => {
     expect(deletion.safeParse({ expectedRevision: 9, serverId: 'server' }).success).toBe(false);
     expect(deletion.safeParse({ expectedRevision: 9, serverId: 'server', removeBindings: true, shell: 'unsafe' }).success).toBe(false);
     expect(deletion.safeParse({ expectedRevision: 9, serverId: 'server', removeBindings: true }).success).toBe(true);
-    const draftTest = { t: 'draft', machineId: 'machine', directory: '/repo', server: {
-      id: 'server', name: 'server', transport: 'http', remote: { url: 'https://example.test/mcp', headers: {} },
-      env: {}, createdAt: 1, updatedAt: 1 }, binding: { id: 'rule', serverId: 'server', enabled: true,
-      target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 } };
-    expect(MCP_SERVER_ACTION_INPUT_SCHEMAS_V1['mcp.servers.test'].safeParse(draftTest).success).toBe(true);
-    expect(MCP_SERVER_ACTION_INPUT_SCHEMAS_V1['mcp.servers.test'].safeParse({ ...draftTest, unexpected: true }).success).toBe(false);
-    expect(MCP_SERVER_ACTION_INPUT_SCHEMAS_V1['mcp.servers.test'].safeParse({ ...draftTest,
-      binding: { ...draftTest.binding, overrides: { envPatch: { TOKEN: null } } } }).success).toBe(false);
     const byIdTest = { t: 'byId', machineId: 'machine', directory: '/repo', serverId: 'server' };
     expect(MCP_SERVER_ACTION_INPUT_SCHEMAS_V1['mcp.servers.test'].safeParse(byIdTest).success).toBe(true);
     expect(MCP_SERVER_ACTION_INPUT_SCHEMAS_V1['mcp.servers.test'].safeParse({ ...byIdTest,

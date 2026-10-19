@@ -1,4 +1,4 @@
-import { decodeBase64 } from '../../../crypto/base64.js';
+import { decodeBase64, encodeBase64 } from '../../../crypto/base64.js';
 import type { McpServerCatalogEntryTransportV1, McpServerCatalogEntryV1 } from '../settingsV1.js';
 import { readMcpRegistryServerV1 } from '../../../registries/formats/mcpRegistry.js';
 import { mapMcpRegistryServerV1, selectMcpRegistryServerTransportV1 } from '../registry/mapMcpRegistryServerV1.js';
@@ -33,6 +33,16 @@ export const isMcpImportSecretNameV1 = (name: string) => /TOKEN|SECRET|KEY|PASSW
 function decodeConfig(value: string): unknown {
     if (!/^[A-Za-z0-9+/_-]+={0,2}$/u.test(value)) throw new Error('invalid-install-link');
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(decodeBase64(value, 'base64url')));
+}
+
+/** Share configuration and required value names; never serialize value refs or sign-in state. */
+export function encodeMcpServerInstallLinkV1(server: McpServerCatalogEntryV1, webappUrl: string): string {
+    const payload = { name: server.name, ...(server.title ? { title: server.title } : {}), transport: server.transport,
+        ...(server.transport === 'stdio' ? { command: server.stdio!.command, args: server.stdio!.args } : { url: server.remote!.url }),
+        headerNames: Object.keys(server.remote?.headers ?? {}), envNames: Object.keys(server.env) };
+    const url = new URL('/settings/mcp', webappUrl);
+    url.searchParams.set('install', encodeBase64(new TextEncoder().encode(JSON.stringify(payload)), 'base64url'));
+    return url.toString();
 }
 
 /** Install URLs are data only. Parsing never fetches a URL or starts third-party code. */

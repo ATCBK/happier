@@ -1,8 +1,37 @@
 import { describe, expect, it } from 'vitest';
-import { parseMcpServerImportV1 } from './parseMcpServerImportV1.js';
-import { encodeBase64 } from '../../../crypto/base64.js';
+import { encodeMcpServerInstallLinkV1, parseMcpServerImportV1 } from './parseMcpServerImportV1.js';
+import { decodeBase64, encodeBase64 } from '../../../crypto/base64.js';
+import { McpServerCatalogEntryV1Schema } from '../settingsV1.js';
 
 describe('parseMcpServerImportV1', () => {
+    it.each(['stdio', 'http', 'sse'] as const)('round trips a names-only %s install link without credentials or value references', transport => {
+        const server = McpServerCatalogEntryV1Schema.parse({ id: 'one', name: 'one', title: '日本語 tools', transport,
+            ...(transport === 'stdio' ? { stdio: { command: 'tool', args: ['日本語'], cwd: { t: 'path', path: '/private/folder' } } }
+                : { remote: { url: 'https://mcp.example.test/events', headers: {
+                    Authorization: { t: 'template', template: 'Bearer {token}', vars: { token: { t: 'literal', v: 'private-header-token' } } },
+                    'X-Tenant': { t: 'literal', v: 'private-tenant' },
+                }, auth: { kind: 'oauth' } } }),
+            env: { API_KEY: { t: 'savedSecret', secretId: 'private-secret-ref' }, MODE: { t: 'literal', v: 'private-env-value' } },
+            configOverrides: [{ target: { t: 'machine', machineId: 'private-machine' }, envPatch: { TOKEN: { t: 'literal', v: 'private-override' } } }],
+            createdAt: 1, updatedAt: 1 });
+        const link = encodeMcpServerInstallLinkV1(server, 'https://web.example.test/?token=private-web-token#private-fragment');
+        const url = new URL(link);
+        expect(`${url.origin}${url.pathname}`).toBe('https://web.example.test/settings/mcp');
+        const payload = new TextDecoder().decode(decodeBase64(url.searchParams.get('install')!, 'base64url'));
+        expect(`${link}\n${payload}`).not.toContain('private-');
+        expect(JSON.parse(payload)).toEqual({ name: server.name, title: server.title, transport,
+            ...(server.stdio ? { command: 'tool', args: ['日本語'] } : { url: 'https://mcp.example.test/events' }),
+            headerNames: transport === 'stdio' ? [] : ['Authorization', 'X-Tenant'], envNames: ['API_KEY', 'MODE'] });
+        const parsed = parseMcpServerImportV1(link);
+        expect(parsed.errors).toEqual([]);
+        expect(parsed.warnings).toEqual([]);
+        expect(parsed.servers).toMatchObject([{ name: 'one', title: server.title, transport,
+            ...(server.stdio ? { stdio: { command: 'tool', args: ['日本語'] } } : { remote: { url: server.remote!.url } }) }]);
+        expect(parsed.inputs.map(input => input.title).sort()).toEqual(transport === 'stdio'
+            ? ['API_KEY', 'MODE'] : ['API_KEY', 'Authorization', 'MODE', 'X-Tenant']);
+        expect(parsed.inputs.every(input => input.suggestedValue === undefined)).toBe(true);
+    });
+
     it.each([
         [{ mcpServers: { one: { command: 'tool', args: ['start'] } } }, 'stdio'],
         [{ servers: { one: { command: 'tool', args: ['start'] } } }, 'stdio'],

@@ -30,6 +30,7 @@ export type McpServerCatalogEntryTransportV1 = z.infer<typeof McpServerCatalogEn
 
 const McpValueRefOrNullV1Schema = lazyZodSchema(() => z.union([ValueRefV1Schema, z.null()]));
 const McpWorkingFolderPathV1Schema = lazyZodSchema(() => z.strictObject({ t: z.literal('path'), path: z.string().check(z.minLength(1)) }));
+const McpWorkingFolderV1Schema = lazyZodSchema(() => z.union([z.strictObject({ t: z.literal('session') }), McpWorkingFolderPathV1Schema]));
 const McpToolSettingV1Definition = defineProtocolUnion([
   defineProtocolLiteral('off'), defineProtocolLiteral('ask'), defineProtocolLiteral('allow'),
 ]);
@@ -74,7 +75,7 @@ export const McpServerPluginSettingsMapV1Schema = lazyZodSchema(() => z.record(
 ));
 export const McpServerConfigOverrideFieldsV1Schema = lazyZodSchema(() => z.strictObject({
   stdio: z.optional(z.strictObject({ command: z.optional(z.string().check(z.minLength(1))), args: z.optional(z.array(z.string())),
-    cwd: z.optional(McpWorkingFolderPathV1Schema) })),
+    cwd: z.optional(McpWorkingFolderV1Schema) })),
   remote: z.optional(z.strictObject({ url: zMini.optional(McpRemoteUrlV1Schema), headersPatch: z.optional(z.record(McpHeaderKeyV1Schema, McpValueRefOrNullV1Schema)) })),
   envPatch: z.optional(z.record(McpEnvVarKeyV1Schema, McpValueRefOrNullV1Schema)),
 }));
@@ -94,7 +95,7 @@ export const McpServerCatalogEntryV1Schema = lazyZodSchema(() => z.strictObject(
     stdio: z.optional(z.strictObject({
         command: z.string().check(z.minLength(1)),
         args: z.array(z.string()),
-        cwd: z.optional(z.union([z.strictObject({ t: z.literal('session') }), McpWorkingFolderPathV1Schema])),
+        cwd: z.optional(McpWorkingFolderV1Schema),
       })),
     remote: z.optional(z.strictObject({
         url: McpRemoteUrlV1Schema,
@@ -186,7 +187,7 @@ export function refineMcpServerCatalogV1(value: Readonly<{
   }
 }
 
-export const McpServersSettingsV1Schema = lazyZodSchema(() => z.pipe(z.transform((raw) => {
+export const McpServersSettingsV1Schema = lazyZodSchema(() => (<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform((raw) => {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
       return raw;
     }), z
