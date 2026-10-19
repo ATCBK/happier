@@ -50,7 +50,7 @@ describe('TerminalConnectScreen safe navigation', () => {
             const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200, headers: { 'content-type': 'application/json' } });
             if (url.pathname === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture());
-            if (url.pathname === '/v1/features') return json(createRootLayoutFeaturesResponse({ features: { encryption: { plaintextStorage: { enabled: true } }, e2ee: { keylessAccounts: { enabled: true } } } }));
+            if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return json(createRootLayoutFeaturesResponse({ features: { encryption: { plaintextStorage: { enabled: true } }, e2ee: { keylessAccounts: { enabled: true } } } }));
             if (url.pathname === '/v1/auth/request/status') return json({ status: 'pending', supportsV2: true });
             if (url.pathname === '/v1/auth/response') {
                 expect(new Headers(init?.headers).get('authorization')).toBe('Bearer ' + credentials.token);

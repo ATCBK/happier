@@ -1,12 +1,12 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen, standardCleanup, type RenderScreenResult } from '@/dev/testkit';
 import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUtils';
-import type { HomeAuthenticationAction } from '@/auth/capabilities/authMethodCapabilities';
-import type { PendingSetupIntent } from '@/sync/domains/pending/pendingSetupIntent.shared';
-import type { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 vi.mock('@/assets/images/logotype-light.png', () => ({ default: 'logotype-light' }));
 vi.mock('@/assets/images/logotype-dark.png', () => ({ default: 'logotype-dark' }));
@@ -38,15 +38,6 @@ vi.mock('@react-navigation/native', async () => {
     return createReactNavigationNativeMock();
 });
 
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({
-        isAuthenticated: false,
-        login: vi.fn(),
-        loginWithCredentials: vi.fn(),
-        credentials: null,
-    }),
-}));
-
 vi.mock('@/components/navigation/connectionStatus/useConnectionHealth', () => ({
     useConnectionHealth: () => ({ onlineCount: 0 }),
 }));
@@ -66,52 +57,8 @@ vi.mock('@/components/settings/server/useRelayDriftBanner', () => ({
     useRelayDriftBanner: () => null,
 }));
 
-const authEntryActionsMock = vi.hoisted(() => ({ value: [] as HomeAuthenticationAction[] }));
-vi.mock('@/components/account/auth/useAuthEntryOptions', () => ({
-    useAuthEntryOptions: () => ({
-        authenticationActions: authEntryActionsMock.value,
-        homeTarget: { kind: 'saved_profile', profileRef: 'server-a' },
-        requestedHomeTarget: { kind: 'saved_profile', profileRef: 'server-a' },
-        serverAvailability: 'ready',
-        authEntryUnavailable: false,
-        serverUrlForCopy: 'https://relay.example.test',
-        showAuthActions: true,
-        retryServerCheck: vi.fn(),
-    }),
-}));
-
-vi.mock('@/hooks/server/useFeatureDecision', () => ({
-    useFeatureDecision: (featureId: string, scope?: unknown) => ({
-        featureId,
-        state: 'disabled',
-        blockedBy: 'server',
-        blockerCode: 'feature_disabled',
-        diagnostics: [],
-        evaluatedAt: 0,
-        scope: scope ?? { scopeKind: 'runtime' },
-    }),
-}));
-
-const getServerFeaturesSnapshotMock = vi.hoisted(() => vi.fn<typeof getServerFeaturesSnapshot>());
-vi.mock('@/sync/api/capabilities/serverFeaturesClient', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/api/capabilities/serverFeaturesClient')>();
-    return {
-        ...actual,
-        getServerFeaturesSnapshot: (params?: Parameters<typeof getServerFeaturesSnapshot>[0]) =>
-            getServerFeaturesSnapshotMock(params),
-    };
-});
-
 vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
     getPendingTerminalConnect: () => null,
-}));
-
-const getPendingSetupIntentMock = vi.hoisted(() => vi.fn<() => PendingSetupIntent | null>());
-const setPendingSetupIntentMock = vi.hoisted(() => vi.fn<(value: PendingSetupIntent) => void>());
-vi.mock('@/sync/domains/pending/pendingSetupIntent', () => ({
-    getPendingSetupIntent: () => getPendingSetupIntentMock(),
-    setPendingSetupIntent: (value: PendingSetupIntent) => setPendingSetupIntentMock(value),
-    clearPendingSetupIntent: vi.fn(),
 }));
 
 vi.mock('@/utils/platform/responsive', async (importOriginal) => {
@@ -128,10 +75,6 @@ const platformState = vi.hoisted(() => ({
 
 const tauriDesktopState = vi.hoisted(() => ({
     value: false,
-}));
-const serverRuntimeState = vi.hoisted(() => ({
-    serverUrl: 'https://api.example.test',
-    listeners: new Set<(snapshot: { serverId: string; serverUrl: string; generation: number }) => void>(),
 }));
 const invokeDesktopHostSpy = vi.hoisted(() => vi.fn<(command: string, args?: Record<string, unknown>) => Promise<unknown>>(async () => undefined));
 vi.mock('@/utils/platform/desktopHost', () => ({
@@ -165,45 +108,6 @@ vi.mock('@/modal/components/BaseModal', () => ({
     BaseModal: (props: any) => React.createElement('BaseModal', props, props.children),
 }));
 
-const getAuthProviderMock = vi.hoisted(() => vi.fn());
-vi.mock('@/auth/providers/registry', () => ({
-    getAuthProvider: (id: string) => getAuthProviderMock(id),
-}));
-
-const activeServerSwitchMocks = vi.hoisted(() => ({
-    setActiveServerAndSwitch: vi.fn(async (_params: unknown) => true),
-    upsertActivateAndSwitchServer: vi.fn(async (_params: unknown) => true),
-}));
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
-    normalizeServerUrl: (value: string) => value,
-    isSameServerUrl: (left: string, right: string) => left === right,
-    setActiveServerAndSwitch: (params: unknown) => activeServerSwitchMocks.setActiveServerAndSwitch(params),
-    upsertActivateAndSwitchServer: (params: unknown) => activeServerSwitchMocks.upsertActivateAndSwitchServer(params),
-}));
-
-const CLOUD_SERVER_URL = 'https://api.happier.dev';
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>();
-    return {
-        ...actual,
-        getResetToDefaultServerId: () => 'cloud-profile',
-        getServerProfileById: (serverId: string) => (
-            serverId === 'server-a'
-                ? {
-                    id: 'server-a',
-                    serverIdentityId: 'server-a',
-                    serverUrl: 'https://api.example.test',
-                    canonicalServerUrl: 'https://api.example.test',
-                }
-                : serverId === 'cloud-profile'
-                ? { id: 'cloud-profile', serverUrl: CLOUD_SERVER_URL }
-                : null
-        ),
-        getOrCreateHappierCloudServerProfile: () => ({ id: 'cloud-profile', name: 'Happier Cloud', serverUrl: CLOUD_SERVER_URL }),
-        listServerProfiles: () => [],
-    };
-});
-
 const tokenStorageMock = vi.hoisted(() => ({
     setPendingExternalAuth: vi.fn(async () => true),
     clearPendingExternalAuth: vi.fn(async () => true),
@@ -217,28 +121,11 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
     });
 });
 
-vi.mock('@/auth/providers/externalAuthUrl', () => ({
-    isSafeExternalAuthUrl: () => true,
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/server/serverRuntime')>();
-    return {
-        ...actual,
-        getActiveServerSnapshot: () => ({ serverId: 'server-a', serverUrl: serverRuntimeState.serverUrl, generation: 1 }),
-        isActiveServerSelectionExplicit: () => false,
-        subscribeActiveServer: (listener: (snapshot: { serverId: string; serverUrl: string; generation: number }) => void) => {
-            serverRuntimeState.listeners.add(listener);
-            return () => {
-                serverRuntimeState.listeners.delete(listener);
-            };
-        },
-    };
-});
-
 vi.mock('@/track', () => ({
+    tracking: null,
     trackAccountCreated: vi.fn(),
     trackAccountRestored: vi.fn(),
+    trackLogout: vi.fn(),
 }));
 
 vi.mock('@/components/navigation/shell/HomeHeader', () => ({
@@ -252,45 +139,6 @@ vi.mock('@/components/navigation/shell/MainView', () => ({
 vi.mock('@/components/onboarding/unauthShell', () => ({
     UnauthenticatedSplitShell: (props: any) => React.createElement('UnauthenticatedSplitShell', props, props.children),
     useApplyBrandHeroSeen: () => vi.fn(),
-}));
-
-vi.mock('@/components/onboarding/preAuth/WelcomeDecisionPanel', () => ({
-    WelcomeDecisionPanel: (props: any) => {
-        const requestFor = (actionId: 'provision' | 'login') => {
-            const projected = props.authEntryOptions?.authenticationActions?.find(
-                (candidate: HomeAuthenticationAction) => candidate.action.id === actionId,
-            );
-            const target = props.authEntryOptions?.homeTarget;
-            if (!projected || !target) return undefined;
-            return {
-                ...projected,
-                authority: { purpose: 'home', target },
-                intendedHome: target,
-            };
-        };
-        return React.createElement(
-            'WelcomeDecisionPanel',
-            props,
-            React.createElement('ActionButton', {
-                testID: 'welcome-restore',
-                onPress: props.onOpenRestore,
-            }),
-            React.createElement('ActionButton', {
-                testID: 'welcome-signup-provider',
-                action: () => {
-                    const request = requestFor('provision');
-                    return request ? props.onContinueWithHomeAuthentication?.(request) : undefined;
-                },
-            }),
-            React.createElement('ActionButton', {
-                testID: 'welcome-create-account',
-                action: () => {
-                    const request = requestFor('login');
-                    return request ? props.onContinueWithHomeAuthentication?.(request) : undefined;
-                },
-            }),
-        );
-    },
 }));
 
 vi.mock('@/modal', async () => {
@@ -319,7 +167,52 @@ vi.mock('@/platform/cryptoRandom', () => ({
     getRandomBytesAsync: async (size: number) => new Uint8Array(size).fill(1),
 }));
 
+
+
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } = await import(
+    '@/dev/testkit/harness/homeGovernanceHarness'
+);
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+installDisconnectedServerSocketBoundary();
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { setActiveServer } = await import('@/sync/domains/server/serverRuntime');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+const { AuthProvider, setCurrentAuth } = await import('@/auth/context/AuthContext');
+const pendingSetupIntent = await import('@/sync/domains/pending/pendingSetupIntent');
+const setPendingSetupIntentSpy = vi.spyOn(pendingSetupIntent, 'setPendingSetupIntent');
+const HOME_IDENTITY_A = 'srv_external_auth_a';
+const HOME_IDENTITY_B = 'srv_external_auth_b';
+let homeProfileId: string;
+let homeScopeId: string;
+let targetHomeProfileId: string;
+
+beforeEach(async () => {
+    await loadSyncSingletonForTests();
+    await homes.reset();
+    homeProfileId = await homes.addHome({
+        name: 'Home A', serverUrl: 'https://api.example.test', serverIdentityId: HOME_IDENTITY_A, accountId: null,
+    });
+    targetHomeProfileId = await homes.addHome({
+        name: 'Home B', serverUrl: 'https://stack.example.test', serverIdentityId: HOME_IDENTITY_B,
+        accountId: null, active: false,
+    });
+    homeScopeId = resolveServerProfileScopeIdForIdentifier(homeProfileId);
+    pendingSetupIntent.clearPendingSetupIntent();
+    setPendingSetupIntentSpy.mockClear();
+});
+
+function SignedOutAuthProvider({ children }: React.PropsWithChildren) {
+    return <AuthProvider initialCredentials={null}>{children}</AuthProvider>;
+}
+
+function renderHome(Home: React.ComponentType) {
+    return renderScreen(<Home />, { wrapper: SignedOutAuthProvider });
+}
 
 async function loadHome() {
     const mod = await import('@/app/(app)/index');
@@ -328,8 +221,8 @@ async function loadHome() {
 
 async function advanceWizardToAuth(screen: RenderScreenResult) {
     const hasAuthActions = () => (
-        screen.findAllByTestId('welcome-signup-provider').length > 0
-        || screen.findAllByTestId('welcome-create-account').length > 0
+        screen.findAllByTestId('welcome-primary-start').length > 0
+        || screen.findAllByTestId('welcome-provider-primary').length > 0
         || screen.findAllByTestId('welcome-mtls-login').length > 0
     );
 
@@ -337,6 +230,14 @@ async function advanceWizardToAuth(screen: RenderScreenResult) {
     // Drive it until the composed welcome actions are visible.
     for (let attempt = 0; attempt < 8; attempt += 1) {
         if (hasAuthActions()) return;
+
+        // A supplied Home remains on address entry until the real admission/focus action runs.
+        const homeAddress = screen.findByTestId('onboarding-wizard-relay-url-input');
+        if (homeAddress) {
+            await screen.pressByTestIdAsync('onboarding-wizard-primary');
+            await flushHookEffects({ cycles: 1, turns: 2 });
+            continue;
+        }
 
         const cloud = screen.findByTestId('onboarding-wizard-relay:cloud');
         if (cloud) {
@@ -380,8 +281,17 @@ function findActionButton(screen: RenderScreenResult, testID: string) {
     return button;
 }
 
+function githubOAuthParamsRequest() {
+    const request = homes.requests.find((request) => (
+        new URL(request.path, request.serverUrl).pathname === '/v1/auth/external/github/params'
+    ));
+    if (!request) throw new Error('Expected a GitHub OAuth params request');
+    return request;
+}
+
 function mockGithubAuthFeatures(action: 'provision' | 'login', mode: 'keyed' | 'keyless') {
     const snapshot = buildServerFeaturesResponse({
+        updatesOtaEnabled: false,
         authProviders: {
             github: { enabled: true, configured: true },
         },
@@ -397,28 +307,29 @@ function mockGithubAuthFeatures(action: 'provision' | 'login', mode: 'keyed' | '
             },
         ],
     });
-    getServerFeaturesSnapshotMock.mockResolvedValue({
-        status: 'ready',
-        features: snapshot,
-    });
-    authEntryActionsMock.value = [{
-        method: { id: 'github', enabledActions: [{ id: action, mode }] },
-        action: { id: action, mode },
-        execution: { kind: 'oauth', providerId: 'github', mode },
-    }];
+    snapshot.features.e2ee.keylessAccounts.enabled = mode === 'keyless';
+    const fixtures = [
+        { serverId: homeProfileId, identity: HOME_IDENTITY_A },
+        { serverId: targetHomeProfileId, identity: HOME_IDENTITY_B },
+    ];
+    for (const { serverId, identity } of fixtures) {
+        const features = { ...snapshot, capabilities: { ...snapshot.capabilities, serverIdentity: { serverIdentityId: identity } } };
+        homes.answer(serverId, '/v1/features', { body: features });
+        homes.answer(serverId, '/v1/features/authenticated', { body: features });
+        homes.answer(serverId, '/v1/auth/external/github/params', { body: { url: 'https://oauth.example.test/auth' } });
+        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+    }
 }
 
 afterEach(async () => {
     await Promise.allSettled(fireAndForgetPromises.splice(0));
     standardCleanup();
+    setCurrentAuth(null);
+    pendingSetupIntent.clearPendingSetupIntent();
+    await homes.reset();
     vi.clearAllMocks();
     platformState.os = 'web';
     tauriDesktopState.value = false;
-    serverRuntimeState.serverUrl = 'https://api.example.test';
-    serverRuntimeState.listeners.clear();
-    getPendingSetupIntentMock.mockReturnValue(null);
-    setPendingSetupIntentMock.mockReset();
-    authEntryActionsMock.value = [];
     delete (globalThis as any).window;
     delete (globalThis as any).document;
 });
@@ -429,24 +340,20 @@ describe('Home external auth start', () => {
 
         const Home = await loadHome();
         mockGithubAuthFeatures('provision', 'keyed');
-        getPendingSetupIntentMock.mockReturnValue(null);
-
-        await renderScreen(<Home />);
+        await renderHome(Home);
         await flushHookEffects({ cycles: 1, turns: 2 });
 
-        expect(setPendingSetupIntentMock).not.toHaveBeenCalled();
+        expect(setPendingSetupIntentSpy).not.toHaveBeenCalled();
         expect(expoRouterSpies.replace).not.toHaveBeenCalledWith('/setup');
     });
 
     it('does not redirect browser-web users into /setup by default', async () => {
         const Home = await loadHome();
         mockGithubAuthFeatures('provision', 'keyed');
-        getPendingSetupIntentMock.mockReturnValue(null);
-
-        await renderScreen(<Home />);
+        await renderHome(Home);
         await flushHookEffects({ cycles: 1, turns: 2 });
 
-        expect(setPendingSetupIntentMock).not.toHaveBeenCalled();
+        expect(setPendingSetupIntentSpy).not.toHaveBeenCalled();
         expect(expoRouterSpies.replace).not.toHaveBeenCalledWith('/setup');
     });
 
@@ -454,12 +361,10 @@ describe('Home external auth start', () => {
         platformState.os = 'ios';
         const Home = await loadHome();
         mockGithubAuthFeatures('provision', 'keyed');
-        getPendingSetupIntentMock.mockReturnValue(null);
-
-        await renderScreen(<Home />);
+        await renderHome(Home);
         await flushHookEffects({ cycles: 1, turns: 2 });
 
-        expect(setPendingSetupIntentMock).not.toHaveBeenCalled();
+        expect(setPendingSetupIntentSpy).not.toHaveBeenCalled();
         expect(expoRouterSpies.replace).not.toHaveBeenCalledWith('/setup');
     });
 
@@ -475,30 +380,23 @@ describe('Home external auth start', () => {
             history: { replaceState: vi.fn() },
         };
 
-        serverRuntimeState.serverUrl = 'https://api.example.test';
-
         const Home = await loadHome();
         mockGithubAuthFeatures('provision', 'keyed');
-        getPendingSetupIntentMock.mockReturnValue(null);
-
-        const screen = await renderScreen(<Home />);
+        const screen = await renderHome(Home);
         await flushHookEffects({ cycles: 1, turns: 2 });
-        await advanceWizardToAuth(screen);
-
-        expect(screen.findAllByTestId('welcome-restore')).toHaveLength(0);
-        expect(screen.findAllByTestId('welcome-create-account')).toHaveLength(0);
+        expect(screen.findAllHostsByTestId('welcome-scan-existing-home')).toHaveLength(0);
+        expect(screen.findAllHostsByTestId('welcome-primary-start')).toHaveLength(0);
 
         await act(async () => {
-            serverRuntimeState.serverUrl = 'https://stack.example.test';
-            for (const listener of serverRuntimeState.listeners) {
-                listener({ serverId: 'server-b', serverUrl: serverRuntimeState.serverUrl, generation: 2 });
-            }
+            await setActiveServer({ serverId: targetHomeProfileId, scope: 'device' });
         });
         await flushHookEffects({ cycles: 1, turns: 2 });
         await advanceWizardToAuth(screen);
 
-        expect(screen.findAllByTestId('welcome-restore')).toHaveLength(1);
-        expect(screen.findAllByTestId('welcome-create-account').length).toBeGreaterThan(0);
+        await waitForHomeGovernance(() => {
+            expect(screen.findAllHostsByTestId('welcome-scan-existing-home')).toHaveLength(1);
+            expect(screen.findAllHostsByTestId('welcome-primary-start').length).toBeGreaterThan(0);
+        });
     });
 
     it('lets users enter restore from the welcome decision', async () => {
@@ -507,10 +405,10 @@ describe('Home external auth start', () => {
         const Home = await loadHome();
         mockGithubAuthFeatures('provision', 'keyed');
 
-        const screen = await renderScreen(<Home />);
+        const screen = await renderHome(Home);
         await flushHookEffects({ cycles: 3, turns: 3 });
 
-        const restore = screen.findByTestId('welcome-restore');
+        const restore = screen.findByTestId('welcome-scan-existing-home');
         expect(restore).not.toBeNull();
 
         await act(async () => {
@@ -519,7 +417,7 @@ describe('Home external auth start', () => {
         });
 
         await flushHookEffects({ cycles: 1, turns: 2 });
-        expect(setPendingSetupIntentMock).toHaveBeenLastCalledWith({
+        expect(setPendingSetupIntentSpy).toHaveBeenLastCalledWith({
             branch: 'thisComputer',
             phase: 'awaiting_auth',
             relayUrl: 'https://api.example.test',
@@ -530,27 +428,23 @@ describe('Home external auth start', () => {
         tauriDesktopState.value = true;
 
         const Home = await loadHome();
-        const provider = {
-            id: 'github',
-            getExternalAuthUrl: vi.fn(async () => 'https://oauth.example.test/auth'),
-        };
-        getAuthProviderMock.mockReturnValue(provider);
-        getPendingSetupIntentMock.mockReturnValue({
+        pendingSetupIntent.setPendingSetupIntent({
             branch: 'thisComputer',
             phase: 'awaiting_auth',
-            relayUrl: 'https://relay.example.test',
+            relayUrl: 'https://api.example.test',
         });
+        setPendingSetupIntentSpy.mockClear();
         mockGithubAuthFeatures('provision', 'keyed');
 
-        const screen = await renderScreen(<Home />);
+        const screen = await renderHome(Home);
         await flushHookEffects({ cycles: 3, turns: 3 });
 
         await advanceWizardToAuth(screen);
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const signupButton = findActionButton(screen, 'welcome-signup-provider');
+        const signupButton = findActionButton(screen, 'welcome-primary-start');
         await act(async () => {
-            await signupButton.props.action();
+            await signupButton.props.onPress();
             await flushHookEffects({ cycles: 1, turns: 2 });
         });
 
@@ -559,28 +453,23 @@ describe('Home external auth start', () => {
                 provider: 'github',
                 returnTo: '/',
             }),
-            { serverId: 'server-a', serverUrl: 'https://api.example.test' },
+            { serverId: homeScopeId, serverUrl: 'https://api.example.test' },
         );
     });
 
     it('starts keyed external provider signup with publicKey', async () => {
         const Home = await loadHome();
-        const provider = {
-            id: 'github',
-            getExternalAuthUrl: vi.fn(async () => 'https://oauth.example.test/auth'),
-        };
-        getAuthProviderMock.mockReturnValue(provider);
         mockGithubAuthFeatures('provision', 'keyed');
 
-        const screen = await renderScreen(<Home />);
+        const screen = await renderHome(Home);
         await flushHookEffects({ cycles: 3, turns: 3 });
 
         await advanceWizardToAuth(screen);
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const signupButton = findActionButton(screen, 'welcome-signup-provider');
+        const signupButton = findActionButton(screen, 'welcome-primary-start');
         await act(async () => {
-            await signupButton.props.action();
+            await signupButton.props.onPress();
             await flushHookEffects({ cycles: 1, turns: 2 });
         });
 
@@ -590,40 +479,31 @@ describe('Home external auth start', () => {
                 proof: expect.any(String),
                 secret: expect.any(String),
             }),
-            { serverId: 'server-a', serverUrl: 'https://api.example.test' },
+            { serverId: homeScopeId, serverUrl: 'https://api.example.test' },
         );
-        expect(provider.getExternalAuthUrl).toHaveBeenCalledWith(
-            expect.objectContaining({
-                mode: 'keyed',
-                proofHash: expect.any(String),
-                publicKey: expect.any(String),
-            }),
-            expect.objectContaining({
-                target: { serverId: 'server-a', serverUrl: 'https://api.example.test' },
-                request: expect.any(Function),
-            }),
-        );
+        const request = githubOAuthParamsRequest();
+        expect(request).toMatchObject({ serverId: homeProfileId, serverUrl: 'https://api.example.test' });
+        const query = new URL(request.path, request.serverUrl).searchParams;
+        expect(query.get('proofHash')).toEqual(expect.any(String));
+        expect(query.get('publicKey')).toEqual(expect.any(String));
+        // The Home OAuth wire contract omits mode for keyed starts.
+        expect(query.get('mode')).toBeNull();
 
     });
 
     it('starts keyless external login with mode=keyless proofHash', async () => {
         const Home = await loadHome();
-        const provider = {
-            id: 'github',
-            getExternalAuthUrl: vi.fn(async () => 'https://oauth.example.test/auth'),
-        };
-        getAuthProviderMock.mockReturnValue(provider);
         mockGithubAuthFeatures('login', 'keyless');
 
-        const screen = await renderScreen(<Home />);
+        const screen = await renderHome(Home);
         await flushHookEffects({ cycles: 3, turns: 3 });
 
         await advanceWizardToAuth(screen);
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const loginButton = findActionButton(screen, 'welcome-create-account');
+        const loginButton = findActionButton(screen, 'welcome-provider-primary');
         await act(async () => {
-            await loginButton.props.action();
+            await loginButton.props.onPress();
             await flushHookEffects({ cycles: 1, turns: 2 });
         });
 
@@ -632,18 +512,13 @@ describe('Home external auth start', () => {
                 provider: 'github',
                 proof: expect.any(String),
             }),
-            { serverId: 'server-a', serverUrl: 'https://api.example.test' },
+            { serverId: homeScopeId, serverUrl: 'https://api.example.test' },
         );
-        expect(provider.getExternalAuthUrl).toHaveBeenCalledWith(
-            expect.objectContaining({
-                mode: 'keyless',
-                proofHash: expect.any(String),
-            }),
-            expect.objectContaining({
-                target: { serverId: 'server-a', serverUrl: 'https://api.example.test' },
-                request: expect.any(Function),
-            }),
-        );
+        const request = githubOAuthParamsRequest();
+        expect(request).toMatchObject({ serverId: homeProfileId, serverUrl: 'https://api.example.test' });
+        const query = new URL(request.path, request.serverUrl).searchParams;
+        expect(query.get('mode')).toBe('keyless');
+        expect(query.get('proofHash')).toEqual(expect.any(String));
 
     });
 
@@ -655,50 +530,43 @@ describe('Home external auth start', () => {
                 releasePending = resolve;
             }),
         );
-        const provider = {
-            id: 'github',
-            getExternalAuthUrl: vi.fn(async () => 'https://oauth.example.test/auth'),
-        };
-        getAuthProviderMock.mockReturnValue(provider);
         mockGithubAuthFeatures('login', 'keyless');
 
-        const screen = await renderScreen(<Home />);
+        const screen = await renderHome(Home);
         await flushHookEffects({ cycles: 3, turns: 3 });
         await advanceWizardToAuth(screen);
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const loginButton = findActionButton(screen, 'welcome-create-account');
+        const loginButton = findActionButton(screen, 'welcome-provider-primary');
         let started!: Promise<unknown>;
         act(() => {
-            started = loginButton.props.action();
+            started = loginButton.props.onPress();
         });
-        await vi.waitFor(() => {
-            expect(tokenStorageMock.setPendingExternalAuth).toHaveBeenCalledWith(
+        try {
+            await waitForHomeGovernance(() => {
+                expect(tokenStorageMock.setPendingExternalAuth).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    serverId: 'server-a',
+                    serverId: homeScopeId,
                     serverUrl: 'https://api.example.test',
                 }),
                 {
-                    serverId: 'server-a',
+                    serverId: homeScopeId,
                     serverUrl: 'https://api.example.test',
                 },
             );
-        });
-        serverRuntimeState.serverUrl = 'https://home-b.example.test';
+            });
         await act(async () => {
+            await setActiveServer({ serverId: targetHomeProfileId, scope: 'device' });
             releasePending(true);
             await started;
         });
+        } finally {
+            releasePending?.(true);
+            await started;
+        }
 
-        expect(provider.getExternalAuthUrl).toHaveBeenCalledWith(
-            expect.objectContaining({ mode: 'keyless' }),
-            expect.objectContaining({
-                target: {
-                    serverId: 'server-a',
-                    serverUrl: 'https://api.example.test',
-                },
-                request: expect.any(Function),
-            }),
-        );
+        const request = githubOAuthParamsRequest();
+        expect(request).toMatchObject({ serverId: homeProfileId, serverUrl: 'https://api.example.test' });
+        expect(new URL(request.path, request.serverUrl).searchParams.get('mode')).toBe('keyless');
     });
 });

@@ -13,11 +13,15 @@ import { parsePendingTerminalConnectPreAuthEnvelope } from '@/sync/domains/pendi
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { initializeAuthRouteRuntimeForTests } from '@/dev/testkit/harness/authRouteRuntimeHarness';
 import { MMKV } from 'react-native-mmkv';
 import { clearPendingTerminalConnect } from '@/sync/domains/pending/pendingTerminalConnect';
 import type { IrohHomeRuntimeOriginLease, IrohHomeTunnelAcquireInput } from '@/sync/runtime/nativeIrohTunnels/types';
 
 installTokenStorageWebPlatformMocks();
+vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness'))
+    .createSocketIoClientBoundary(importOriginal));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -62,6 +66,7 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock({ spies: { confirm: confirmSpy } }).module;
 });
 
+await initializeAuthRouteRuntimeForTests();
 const { default: TerminalConnectScreen } = await import('./connect');
 const { default: TerminalScreen } = await import('./index');
 
@@ -370,7 +375,7 @@ it.each(['https-origin', 'native-iroh-origin', 'browser-iroh-carrier'] as const)
     expect(profiles.getServerProfileById(profile.id)?.descriptorProvenance).toBe('advisory-only');
     const runtimeOrigin = transportKind === 'native-iroh-origin'
         ? 'http://127.0.0.1:43315' : descriptor.endpoints[0].url;
-    const carrierRequest = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ mode: 'plain', updatedAt: 0 }), {
+    const carrierRequest = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify(createPlainAccountEncryptionCurrentnessFixture()), {
         status: 200, headers: { 'content-type': 'application/json' },
     }));
     // The active connection owner publishes this handle only after its authenticated
@@ -385,7 +390,7 @@ it.each(['https-origin', 'native-iroh-origin', 'browser-iroh-carrier'] as const)
         ...(transportKind === 'browser-iroh-carrier' ? { homeCarrier } : { runtimeOrigin }),
     })).toBe(true);
     runtimeFetchSpy.mockClear();
-    runtimeFetchSpy.mockImplementation(async (...args: unknown[]) => new Response(JSON.stringify({ mode: 'plain', updatedAt: 0 }), {
+    runtimeFetchSpy.mockImplementation(async (...args: unknown[]) => new Response(JSON.stringify(createPlainAccountEncryptionCurrentnessFixture()), {
         status: String(args[0]).startsWith(runtimeOrigin) ? 200 : 503,
         headers: { 'content-type': 'application/json' },
     }));
@@ -405,7 +410,7 @@ it.each(['https-origin', 'native-iroh-origin', 'browser-iroh-carrier'] as const)
     expect(runtimeFetchSpy.mock.calls.some((args) => String(args[0]).startsWith(descriptor.canonicalServerUrl))).toBe(false);
     expect(runtimeFetchSpy.mock.calls.some((args) => String(args[0]).includes('untrusted-advice'))).toBe(false);
     const modeRead = transportKind === 'browser-iroh-carrier'
-        ? carrierRequest.mock.calls[0] : runtimeFetchSpy.mock.calls.find((args) => String(args[0]).endsWith('/v1/account/encryption'));
+        ? carrierRequest.mock.calls[0] : runtimeFetchSpy.mock.calls.find((args) => String(args[0]).endsWith('/v1/account/encryption/currentness'));
     expect(modeRead).toBeDefined();
     expect(new Headers((modeRead![1] as RequestInit).headers).get('authorization')).toBe(`Bearer ${credentials.token}`);
     await hook.unmount();
@@ -481,7 +486,7 @@ it('reads the target Account mode for approval preview without using focused Acc
     runtimeFetchSpy.mockClear();
     runtimeFetchSpy.mockImplementation(async (...args: unknown[]) => {
         const url = String(args[0]);
-        return new Response(JSON.stringify({ mode: url.startsWith(descriptor.canonicalServerUrl) ? 'plain' : 'e2ee', updatedAt: 0 }), {
+        return new Response(JSON.stringify({ ...createPlainAccountEncryptionCurrentnessFixture(), mode: url.startsWith(descriptor.canonicalServerUrl) ? 'plain' : 'e2ee' }), {
             status: 200, headers: { 'content-type': 'application/json' },
         });
     });
@@ -494,9 +499,9 @@ it('reads the target Account mode for approval preview without using focused Acc
         kind: 'ready', homeUrl: descriptor.canonicalServerUrl, storageMode: 'plain',
     }));
     expect(profiles.getActiveServerId()).toBe(focused.id);
-    const modeReads = runtimeFetchSpy.mock.calls.filter((args) => String(args[0]).endsWith('/v1/account/encryption'));
+    const modeReads = runtimeFetchSpy.mock.calls.filter((args) => String(args[0]).endsWith('/v1/account/encryption/currentness'));
     expect(modeReads).toHaveLength(1);
-    expect(String(modeReads[0][0])).toBe(`${descriptor.canonicalServerUrl}/v1/account/encryption`);
+    expect(String(modeReads[0][0])).toBe(`${descriptor.canonicalServerUrl}/v1/account/encryption/currentness`);
     expect(new Headers(modeReads[0][1]?.headers).get('authorization')).toBe(`Bearer ${targetCredentials.token}`);
     await hook.unmount();
 
@@ -516,7 +521,7 @@ it('reads the target Account mode for approval preview without using focused Acc
     await vi.waitFor(() => expect(forgedHook.getCurrent().approvalDetails).toEqual({
         kind: 'ready', homeUrl: descriptor.canonicalServerUrl, storageMode: 'plain',
     }));
-    expect(runtimeFetchSpy.mock.calls.filter((args) => String(args[0]).endsWith('/v1/account/encryption'))
-        .map((args) => String(args[0]))).toEqual([`${descriptor.canonicalServerUrl}/v1/account/encryption`]);
+    expect(runtimeFetchSpy.mock.calls.filter((args) => String(args[0]).endsWith('/v1/account/encryption/currentness'))
+        .map((args) => String(args[0]))).toEqual([`${descriptor.canonicalServerUrl}/v1/account/encryption/currentness`]);
     await forgedHook.unmount();
 });

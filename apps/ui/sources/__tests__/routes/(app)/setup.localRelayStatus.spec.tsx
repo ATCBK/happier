@@ -120,7 +120,7 @@ describe('/setup route pre-auth access gate', () => {
         expect(setPendingSetupIntentMock).not.toHaveBeenCalled();
         expect(upsertServerProfileMock).not.toHaveBeenCalled();
         expect(setActiveServerIdMock).not.toHaveBeenCalled();
-        expect(expoRouterMock.spies.replace).toHaveBeenCalledWith('/');
+        expect(screen.findByType('Redirect' as never).props.href).toBe('/');
         expect(screen.findAllByType('PreAuthOnboardingWizardEntry' as never)).toHaveLength(0);
     });
 });

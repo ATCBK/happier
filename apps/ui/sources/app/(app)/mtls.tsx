@@ -18,7 +18,7 @@ import {
     presentFirstKeyCredentialLifecycle,
 } from '@/components/account/presentFirstKeyCredentialLifecycle';
 import { teamSignInReturnPath } from '@/components/teams/entry/teamSignInHome';
-import { normalizeInternalReturnPath } from '@/utils/path/routeUtils';
+import { admitInternalRouteHref, normalizeInternalReturnPath } from '@/utils/path/routeUtils';
 
 export default function MtlsCallbackScreen() {
     const auth = useAuth();
@@ -59,7 +59,7 @@ export default function MtlsCallbackScreen() {
                         if (!await TokenStorage.recordAccountDirectoryOAuthReturn({ ...pending.accountContinuation,
                             homeAuthenticationFailure: { homeServerIdentityId: pending.accountContinuation.homeServerIdentityId, code: 'restore_required' },
                         }, { expectedCredentialTokenDigest: pending.accountContinuation.credentialTokenDigest })) return;
-                        router.replace(destination);
+                        router.replace(admitInternalRouteHref(destination));
                         return;
                     }
                     router.replace('/restore');
@@ -92,7 +92,7 @@ export default function MtlsCallbackScreen() {
                 if (!admissionReferenceMatches) {
                     await TokenStorage.clearPendingExternalAuth(target);
                     await Modal.alert(t('common.error'), t('errors.operationFailed'));
-                    router.replace(failureReturnTo);
+                    router.replace(admitInternalRouteHref(failureReturnTo));
                     return;
                 }
                 const ownsContinuation = async () => mounted && !controller.signal.aborted
@@ -100,14 +100,14 @@ export default function MtlsCallbackScreen() {
                 if (!await ownsContinuation()) {
                     await TokenStorage.clearPendingExternalAuth(target);
                     await Modal.alert(t('common.error'), t('errors.operationFailed'));
-                    router.replace(failureReturnTo);
+                    router.replace(admitInternalRouteHref(failureReturnTo));
                     return;
                 }
                 const code = typeof params.code === 'string' ? params.code : '';
                 if (!code.trim()) {
                     await TokenStorage.clearPendingExternalAuth(target);
                     await Modal.alert(t('common.error'), t('errors.operationFailed'));
-                    router.replace(failureReturnTo);
+                    router.replace(admitInternalRouteHref(failureReturnTo));
                     return;
                 }
                 const acquired = pending.accountContinuation
@@ -145,7 +145,7 @@ export default function MtlsCallbackScreen() {
                         await Modal.alert(t('common.error'), authenticationErrorMessage(
                             createAuthenticationFailure(res.status, json), serverUrl,
                         ) ?? t('errors.operationFailed'));
-                        router.replace(failureReturnTo);
+                        router.replace(admitInternalRouteHref(failureReturnTo));
                         return;
                     }
 
@@ -159,7 +159,7 @@ export default function MtlsCallbackScreen() {
                             || parsed.data.teamId !== pending.teamContinuation.teamId) {
                             await TokenStorage.clearPendingExternalAuth(target);
                             await Modal.alert(t('common.error'), t('errors.operationFailed'));
-                            router.replace(failureReturnTo);
+                            router.replace(admitInternalRouteHref(failureReturnTo));
                             return;
                         }
                         const updatedPending = await TokenStorage.recordTeamInvitationPostAuthContinuation(
@@ -170,7 +170,7 @@ export default function MtlsCallbackScreen() {
                         if (!updatedPending) {
                             await TokenStorage.clearPendingExternalAuth(target);
                             await Modal.alert(t('common.error'), t('errors.operationFailed'));
-                            router.replace(failureReturnTo);
+                            router.replace(admitInternalRouteHref(failureReturnTo));
                             return;
                         }
                         continuationPending = updatedPending;
@@ -197,16 +197,16 @@ export default function MtlsCallbackScreen() {
                             }, { expectedCredentialTokenDigest: pending.accountContinuation.credentialTokenDigest })) {
                                 throw new Error('Account Service credential custody changed');
                             }
-                            router.replace(destination);
+                            router.replace(admitInternalRouteHref(destination));
                             return;
                         }
-                        router.replace(pending.teamContinuation
+                        router.replace(admitInternalRouteHref(pending.teamContinuation
                             ? teamSignInReturnPath({
                                 teamId: pending.teamContinuation.destination.teamId,
                                 carrier: pending.teamContinuation.homeServerIdentityId,
                                 postAuthInvitation: retainPostAuthInvitation,
                             })
-                            : failureReturnTo);
+                            : failureReturnTo));
                     };
                     await presentFirstKeyCredentialLifecycle({
                         run: async () =>
@@ -223,7 +223,7 @@ export default function MtlsCallbackScreen() {
                     ? formatOperationFailedDebugMessage(t('errors.operationFailed'), error)
                     : t('errors.operationFailed');
                 await Modal.alert(t('common.error'), message);
-                router.replace(failureReturnTo);
+                router.replace(admitInternalRouteHref(failureReturnTo));
             } finally {
                 await closeTransport();
             }

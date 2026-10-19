@@ -13,6 +13,9 @@ import { resetDemoModeDepthForTests } from '@/demoMode/runtime/enterExitDemoMode
 import { endOnboardingJourneySession } from '@/components/onboarding/tour/state/journeySession';
 import { storage } from '@/sync/domains/state/storage';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 const reactNativeState = vi.hoisted(() => ({
     width: 1100,
     height: 720,
@@ -63,7 +66,7 @@ const journeyHostImportState = vi.hoisted(() => {
 
 async function settleLazyImports(): Promise<void> {
     await act(async () => {
-        await vi.dynamicImportSettled();
+        await import('@/components/onboarding/tour/OnboardingJourneyHost');
     });
 }
 
@@ -237,16 +240,6 @@ vi.mock('@/auth/providers/registry', () => ({
     getAuthProvider: () => null,
 }));
 
-vi.mock('@/auth/storage/tokenStorage', () => ({
-    TokenStorage: {
-        getCredentials: vi.fn(async () => null),
-        setPendingExternalAuth: vi.fn(async () => {}),
-        clearPendingExternalAuth: vi.fn(async () => {}),
-        getAuthAutoRedirectSuppressedUntil: vi.fn(async () => 0),
-    },
-    isLegacyAuthCredentials: () => false,
-}));
-
 vi.mock('@/platform/cryptoRandom', () => ({
     getRandomBytes: vi.fn((size: number) => new Uint8Array(size).fill(3)),
     getRandomBytesAsync: vi.fn(async (size: number) => new Uint8Array(size).fill(7)),
@@ -301,10 +294,6 @@ vi.mock('@/sync/domains/pending/pendingSetupIntent', () => ({
 
 vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
     getPendingTerminalConnect: () => null,
-}));
-
-vi.mock('@/utils/platform/desktopHost', () => ({
-    isDesktopHost: () => false,
 }));
 
 vi.mock('@/components/navigation/shell/MainView', () => ({
@@ -424,7 +413,7 @@ describe('/ (welcome) onboarding tour shell composition', () => {
         journeyHostImportState.deferImport = true;
         journeyHostImportState.resetDeferredImport();
 
-        const Screen = (await import('@/app/(app)/index')).default;
+        const Screen = (await import('@/app/(app)/index')).Home;
         const screen = await renderScreen(React.createElement(Screen));
 
         try {
@@ -435,7 +424,7 @@ describe('/ (welcome) onboarding tour shell composition', () => {
         } finally {
             await act(async () => {
                 journeyHostImportState.releaseImport();
-                await vi.dynamicImportSettled();
+                await import('@/components/onboarding/tour/OnboardingJourneyHost');
             });
         }
 
@@ -449,7 +438,7 @@ describe('/ (welcome) onboarding tour shell composition', () => {
     });
 
     it('replaces the classic unauth shell with the journey-owned split stage when the tour flag is enabled', async () => {
-        const Screen = (await import('@/app/(app)/index')).default;
+        const Screen = (await import('@/app/(app)/index')).Home;
         const screen = await renderScreen(React.createElement(Screen));
         await settleLazyImports();
         await flushHookEffects({ cycles: 30, turns: 6, frames: 1 });

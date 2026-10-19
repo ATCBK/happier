@@ -1,27 +1,24 @@
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
 import type { PendingSetupIntent } from '@/sync/domains/pending/pendingSetupIntent.shared';
-import type { PersonalHomeFacts } from '@/components/personalHome/bootstrap/personalHomeBootstrapTypes';
+import { SystemTaskResultSchema, SystemTaskSpecSchema } from '@happier-dev/protocol/system/tasks/spec';
+import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 vi.mock('@/assets/images/logotype-light.png', () => ({ default: 'logotype-light' }));
 vi.mock('@/assets/images/logotype-dark.png', () => ({ default: 'logotype-dark' }));
-vi.mock('@/components/onboarding', () => ({
-    OnboardingWizardSurface: () => null,
-    PreAuthOnboardingWizardEntry: () => null,
-}));
-vi.mock('@/components/onboarding/preAuth/PreAuthOnboardingWizardEntry', () => ({
-    PreAuthOnboardingWizardEntry: (props: Record<string, unknown>) => React.createElement('PreAuthOnboardingWizardEntry', props),
-}));
 
-const applyLocalSettingsSpy = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplyLocalSettings: () => applyLocalSettingsSpy,
-}));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { OS: 'web' } });
@@ -35,209 +32,249 @@ const routeParamsState = vi.hoisted(() => ({
 }));
 vi.mock('expo-router', () => ({
     ...expoRouterMock.module,
-    useGlobalSearchParams: () => routeParamsState.value,
+    useLocalSearchParams: () => ({ ...expoRouterMock.module.useLocalSearchParams(), ...routeParamsState.value }),
+    useGlobalSearchParams: () => ({ ...expoRouterMock.module.useGlobalSearchParams(), ...routeParamsState.value }),
 }));
 
-const activeServerState = vi.hoisted(() => ({
-    value: {
-        serverId: 'server-a',
-        serverUrl: 'http://server-a.local',
-        generation: 1,
-    },
-}));
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => activeServerState.value,
-}));
-
-const tauriDesktopState = vi.hoisted(() => ({ value: true }));
-vi.mock('@/utils/platform/desktopHost', () => ({
-    desktopHostKind: () => tauriDesktopState.value ? 'tauri' : null,
-    isDesktopHost: () => tauriDesktopState.value,
+vi.mock('@tauri-apps/api/window', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@tauri-apps/api/window')>(),
+    getCurrentWindow: () => ({ label: 'main' }),
 }));
 
 let isAuthenticated = true;
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({
-        isAuthenticated,
-    }),
-}));
 
-vi.mock('@/components/navigation/shell/MainView', () => ({
-    MainView: (props: Record<string, unknown>) => React.createElement('MainView', props),
-}));
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+const HOME_A_URL = 'https://relay.example.test';
+const HOME_A_ID = 'srv_setup_home_a';
+const HOME_B_URL = 'https://setup-home-b.test';
+const PERSONAL_HOME_URL = 'http://127.0.0.1:43123';
+const PERSONAL_HOME_ID = 'srv_setup_personal_home';
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | null = null;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+let homeBId = '';
+let profileStorage: Storage | null = null;
+let nextNativeTaskId = 0;
+let relayStatus: Readonly<Record<string, unknown>>;
+let nativeBridge: Readonly<{ invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>; transformCallback: () => number; unregisterCallback: () => void }>;
 
-vi.mock('@/components/navigation/shell/HomeHeader', () => ({
-    HomeHeaderNotAuth: () => null,
-}));
+function setDesktop(enabled: boolean) {
+    const bridge = enabled ? nativeBridge : undefined;
+    vi.stubGlobal('__TAURI_INTERNALS__', bridge);
+    // Tauri's real event SDK reads Window, while the shared desktop adapter
+    // also accepts globalThis. Both must address the same native transport.
+    if (browser) {
+        Reflect.set(browser.window, '__TAURI_INTERNALS__', bridge);
+        // Snapshot replies deliver this fixture's native task results; the
+        // genuine event SDK still unregisters its native listener bookkeeping.
+        Reflect.set(browser.window, '__TAURI_EVENT_PLUGIN_INTERNALS__', enabled ? { unregisterListener: () => {} } : undefined);
+    }
+}
 
-const pendingTerminalConnectState = vi.hoisted(() => ({
-    value: null as null | { publicKeyB64Url: string; serverUrl: string },
-}));
-vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
-    getPendingTerminalConnect: () => pendingTerminalConnectState.value,
-}));
+let AuthProvider: typeof import('@/auth/context/AuthContext')['AuthProvider'];
+let MainView: typeof import('@/components/navigation/shell/MainView')['MainView'];
+let MainAppTabStateProvider: typeof import('@/components/navigation/mobile/chrome/MainAppTabStateProvider')['MainAppTabStateProvider'];
+let AppPaneProvider: typeof import('@/components/appShell/panes/AppPaneProvider')['AppPaneProvider'];
+let BaseModal: typeof import('@/modal/components/BaseModal')['BaseModal'];
+let PreAuthOnboardingWizardEntry: typeof import('@/components/onboarding/preAuth/PreAuthOnboardingWizardEntry')['PreAuthOnboardingWizardEntry'];
+let pendingSetup: typeof import('@/sync/domains/pending/pendingSetupIntent');
+let pendingTerminal: typeof import('@/sync/domains/pending/pendingTerminalConnect');
+let clearPendingSetupIntentMock: MockInstance<() => void>;
+let setPendingSetupIntentMock: MockInstance<(value: PendingSetupIntent) => void>;
 
-const connectionHealthState = vi.hoisted(() => ({ value: 0 as number }));
-vi.mock('@/components/navigation/connectionStatus/useConnectionHealth', () => ({
-    useConnectionHealth: () => ({ onlineCount: connectionHealthState.value }),
-}));
+function seedSetupIntent(value: PendingSetupIntent | null) {
+    pendingSetup.clearPendingSetupIntent();
+    if (value) pendingSetup.setPendingSetupIntent(value);
+    clearPendingSetupIntentMock.mockClear();
+    setPendingSetupIntentMock.mockClear();
+}
 
-const localDaemonStatus = vi.hoisted(() => ({
-    value: {
-        serviceInstalled: false,
-        daemonRunning: false,
-        needsAuth: true,
-        machineId: null as string | null,
-    },
-}));
-vi.mock('@/components/settings/machines/localControl/useLocalDaemonControl', () => ({
-    useLocalDaemonControl: () => ({
-        status: localDaemonStatus.value,
-    }),
-}));
+function RouteProviders(props: React.PropsWithChildren) {
+    return <AuthProvider initialCredentials={isAuthenticated ? connection!.credentials : null}>
+        <MainAppTabStateProvider><AppPaneProvider>{props.children}</AppPaneProvider></MainAppTabStateProvider>
+    </AuthProvider>;
+}
 
-const relayDriftBannerState = vi.hoisted(() => ({ value: null as Record<string, unknown> | null }));
-vi.mock('@/components/settings/server/useRelayDriftBanner', () => ({
-    useRelayDriftBanner: () => relayDriftBannerState.value,
-}));
+const renderRoute: typeof renderScreen = (element, options) => renderScreen(element, { ...options, wrapper: RouteProviders });
 
-vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
-    getServerFeaturesSnapshot: vi.fn(async () => ({ status: 'ready', features: { capabilities: { auth: { methods: [] } } } })),
-}));
+async function restoreHome(serverUrl: string, serverIdentityId?: string) {
+    await connection?.dispose();
+    const issuer = homes.findByServerUrl(serverUrl);
+    if (!issuer?.token) throw new Error('Setup fixture Home issuer is unavailable');
+    connection = await restoreServerAccountForTest({ serverUrl, serverIdentityId, accountId: 'setup-account',
+        credentials: { token: issuer.token }, request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        return createEmptyAccountBootstrapHttpResponse(path, init) ?? homes.request(url, init);
+    } });
+    const { storage } = await import('@/sync/domains/state/storage');
+    await waitForHomeGovernance(() => expect(storage.getState().profileScope?.accountId).toBe('setup-account'));
+}
 
-const getPendingSetupIntentMock = vi.hoisted(() => vi.fn<() => PendingSetupIntent | null>(() => ({
-    branch: 'thisComputer',
-    phase: 'awaiting_auth',
-    relayUrl: 'https://relay.example.test',
-})));
-const clearPendingSetupIntentMock = vi.hoisted(() => vi.fn());
-const setPendingSetupIntentMock = vi.hoisted(() => vi.fn<(value: PendingSetupIntent) => void>());
-vi.mock('@/sync/domains/pending/pendingSetupIntent', () => ({
-    getPendingSetupIntent: () => getPendingSetupIntentMock(),
-    clearPendingSetupIntent: clearPendingSetupIntentMock,
-    setPendingSetupIntent: setPendingSetupIntentMock,
-}));
+// The browser persistence port must exist before the real profile owner captures it.
+// Keep that same port for the suite, including the adoption-write failure case.
+browser = await installBrowserRuntimeForTests({ url: 'https://setup-route.test/' });
+profileStorage = browser.storage;
+afterAll(() => { browser?.restore(); browser = null; });
+// Cold source transformation is setup work, not part of Account restoration's hook deadline.
+await (await import('@/dev/testkit/harness/syncSingletonLoader')).loadSyncSingletonForTests();
+({ AuthProvider } = await import('@/auth/context/AuthContext'));
+({ MainView } = await import('@/components/navigation/shell/MainView'));
+({ MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider'));
+({ AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider'));
+({ BaseModal } = await import('@/modal/components/BaseModal'));
+({ PreAuthOnboardingWizardEntry } = await import('@/components/onboarding/preAuth/PreAuthOnboardingWizardEntry'));
+pendingSetup = await import('@/sync/domains/pending/pendingSetupIntent');
+pendingTerminal = await import('@/sync/domains/pending/pendingTerminalConnect');
 
 describe('/ (welcome) setup continuation', () => {
-    beforeEach(() => {
-        vi.resetModules();
-        isAuthenticated = true;
-        activeServerState.value = {
-            serverId: 'server-a',
-            serverUrl: 'http://server-a.local',
-            generation: 1,
+    beforeEach(async () => {
+        browser!.activate();
+        browser!.reconfigureUrl('https://setup-route.test/');
+        relayStatus = { installed: false, healthy: false, dataPresent: false, relayUrl: PERSONAL_HOME_URL, service: { active: false, enabled: false } };
+        const secureStorage = createDesktopSecureStorageBoundary();
+        const tasks = new Map<string, ReturnType<typeof SystemTaskSpecSchema.parse>>();
+        let callbackId = 0;
+        nativeBridge = {
+            transformCallback: () => ++callbackId,
+            unregisterCallback: () => {},
+            async invoke(command, args) {
+                if (command.startsWith('desktop_secure_storage_')) return secureStorage.invoke(command, args);
+                if (command === 'plugin:event|listen') return ++callbackId;
+                if (command === 'plugin:event|unlisten' || command === 'cancel_system_task') return undefined;
+                if (command === 'start_system_task') {
+                    const spec = SystemTaskSpecSchema.parse(JSON.parse(String(args?.specJson)));
+                    const taskId = `setup-route-task-${++nextNativeTaskId}`;
+                    tasks.set(taskId, spec);
+                    return { taskId };
+                }
+                if (command === 'get_system_task_snapshot') {
+                    const taskId = String(args?.taskId);
+                    const spec = tasks.get(taskId);
+                    if (!spec) throw new Error('Unknown setup route native task');
+                    if (spec.kind !== 'daemon.service.status.v1' && spec.kind !== 'relay.runtime.status.v1') {
+                        return { events: [], result: { protocolVersion: 1, taskId, ok: false,
+                            error: { code: 'unsupported_task', message: 'This fixture serves status reads only' } } };
+                    }
+                    const result = SystemTaskResultSchema.parse({ protocolVersion: 1, taskId, ok: true, data: spec.kind === 'daemon.service.status.v1'
+                        ? { serviceInstalled: false, daemonRunning: false, needsAuth: true, machineId: null }
+                        : relayStatus });
+                    return { events: [], result };
+                }
+                throw new Error(`Unexpected desktop route command: ${command}`);
+            },
         };
+        setDesktop(true);
+    await initializeRealAppRuntimeForTests();
+    await homes.reset();
+        await homes.addHome({ name: 'Setup Home A', serverUrl: HOME_A_URL, serverIdentityId: HOME_A_ID, accountId: 'setup-account' });
+        homeBId = await homes.addHome({ name: 'Setup Home B', serverUrl: HOME_B_URL, accountId: 'setup-account', active: false });
+    await restoreHome(HOME_A_URL);
+        clearPendingSetupIntentMock = vi.spyOn(pendingSetup, 'clearPendingSetupIntent');
+        setPendingSetupIntentMock = vi.spyOn(pendingSetup, 'setPendingSetupIntent');
+        isAuthenticated = true;
         routeParamsState.value = {};
         expoRouterMock.resetParams();
-        tauriDesktopState.value = true;
-        connectionHealthState.value = 0;
-        pendingTerminalConnectState.value = null;
-        relayDriftBannerState.value = null;
-        getPendingSetupIntentMock.mockReset();
-        getPendingSetupIntentMock.mockReturnValue({
+        pendingTerminal.clearPendingTerminalConnect();
+        seedSetupIntent({
             branch: 'thisComputer',
             phase: 'awaiting_auth',
             relayUrl: 'https://relay.example.test',
         });
-        clearPendingSetupIntentMock.mockReset();
-        setPendingSetupIntentMock.mockReset();
-        applyLocalSettingsSpy.mockReset();
-        localDaemonStatus.value = {
-            serviceInstalled: false,
-            daemonRunning: false,
-            needsAuth: true,
-            machineId: null,
-        };
         expoRouterMock.spies.replace.mockReset();
         expoRouterMock.spies.push.mockReset();
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
         globalThis.localStorage?.removeItem('happier.voice.e2e.fixture');
+        pendingSetup?.clearPendingSetupIntent();
+        pendingTerminal?.clearPendingTerminalConnect();
+        clearPendingSetupIntentMock?.mockRestore();
+        setPendingSetupIntentMock?.mockRestore();
+        try { await connection?.dispose(); connection = null; await homes.reset(); }
+        finally { vi.unstubAllGlobals(); }
     });
 
     it.each([
         ['thisComputer', 'awaiting_auth', 'thisComputer'],
         ['remoteMachine', 'post_auth', 'ssh'],
     ] as const)('routes an explicit %s intent once to the draft', async (branch, phase, path) => {
-        getPendingSetupIntentMock.mockReturnValue(branch === 'remoteMachine'
+        seedSetupIntent(branch === 'remoteMachine'
             ? { branch, phase, relayUrl: 'https://relay.example.test', machineId: null, remoteSetupIntent: 'remoteMachine' }
             : { branch, phase, relayUrl: 'https://relay.example.test' });
         const Screen = (await import('@/app/(app)/index')).Home;
-        const screen = await renderScreen(<React.StrictMode><Screen /></React.StrictMode>);
+        const screen = await renderRoute(<React.StrictMode><Screen /></React.StrictMode>);
         await flushHookEffects({ cycles: 1, turns: 2 });
         expect(expoRouterMock.spies.replace.mock.calls.filter(([href]) => href === `/settings/machines/add?path=${path}`)).toHaveLength(1);
         expect(clearPendingSetupIntentMock).toHaveBeenCalled();
-        expect(screen.findAllByType('MainView' as never)).toHaveLength(1);
-        expect(screen.findAllByType('BaseModal' as never)).toHaveLength(0);
+        expect(pendingSetup.getPendingSetupIntent()).toBeNull();
+        expect(screen.findAllByType(MainView)).toHaveLength(1);
+        expect(screen.findAllByType(BaseModal)).toHaveLength(0);
     });
 
     it.each(['pre_auth', 'dismissed'] as const)('leaves a %s intent alone', async (phase) => {
-        getPendingSetupIntentMock.mockReturnValue({ branch: 'thisComputer', phase, relayUrl: null });
+        seedSetupIntent({ branch: 'thisComputer', phase, relayUrl: null });
         const Screen = (await import('@/app/(app)/index')).Home;
-        await renderScreen(<Screen />);
+        await renderRoute(<Screen />);
         await flushHookEffects({ cycles: 1, turns: 2 });
         expect(expoRouterMock.spies.replace).not.toHaveBeenCalled();
         expect(clearPendingSetupIntentMock).not.toHaveBeenCalled();
+        expect(pendingSetup.getPendingSetupIntent()?.phase).toBe(phase);
     });
 
     it.each([true, false])('does not seed automatic setup on desktop=%s', async (desktop) => {
-        tauriDesktopState.value = desktop;
-        getPendingSetupIntentMock.mockReturnValue(null);
+        setDesktop(desktop);
+        seedSetupIntent(null);
         const Screen = (await import('@/app/(app)/index')).Home;
-        const screen = await renderScreen(<Screen />);
+        const screen = await renderRoute(<Screen />);
         await flushHookEffects({ cycles: 1, turns: 2 });
-        expect(screen.findAllByType('MainView' as never)).toHaveLength(1);
+        expect(screen.findAllByType(MainView)).toHaveLength(1);
         expect(expoRouterMock.spies.replace).not.toHaveBeenCalled();
         expect(setPendingSetupIntentMock).not.toHaveBeenCalled();
+        expect(pendingSetup.getPendingSetupIntent()).toBeNull();
     });
 
     it('gives a session deep link precedence without consuming setup', async () => {
         routeParamsState.value = { id: 'session-1' };
         const Screen = (await import('@/app/(app)/index')).Home;
-        await renderScreen(<Screen />);
+        await renderRoute(<Screen />);
         await flushHookEffects({ cycles: 1, turns: 2 });
         expect(expoRouterMock.spies.replace).not.toHaveBeenCalledWith('/settings/machines/add?path=thisComputer');
         expect(clearPendingSetupIntentMock).not.toHaveBeenCalled();
     });
 
     it('resumes a signed-out explicit Home new-session continuation after that Home authenticates', async () => {
-        getPendingSetupIntentMock.mockReturnValue(null);
-        activeServerState.value = {
-            serverId: 'server-b',
-            serverUrl: 'http://server-b.local',
-            generation: 2,
-        };
+        seedSetupIntent(null);
+        await restoreHome(HOME_B_URL);
         routeParamsState.value = {
             newSessionAuthContinuation: '1',
-            spawnServerId: 'server-b',
+            spawnServerId: homeBId,
             draftId: 'draft-1',
         };
 
         const Screen = (await import('@/app/(app)/index')).Home;
-        await renderScreen(React.createElement(Screen));
+        await renderRoute(React.createElement(Screen));
         await flushHookEffects({ cycles: 1, turns: 2 });
 
         expect(expoRouterMock.spies.replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: expect.objectContaining({
-                spawnServerId: 'server-b',
+                spawnServerId: homeBId,
                 draftId: 'draft-1',
             }),
         });
     });
 
     it('does not resume an explicit Home continuation against a different active Home', async () => {
-        getPendingSetupIntentMock.mockReturnValue(null);
+        seedSetupIntent(null);
         routeParamsState.value = {
             newSessionAuthContinuation: '1',
-            spawnServerId: 'server-b',
+            spawnServerId: homeBId,
             draftId: 'draft-1',
         };
 
         const Screen = (await import('@/app/(app)/index')).Home;
-        await renderScreen(React.createElement(Screen));
+        await renderRoute(React.createElement(Screen));
         await flushHookEffects({ cycles: 1, turns: 2 });
 
         expect(expoRouterMock.spies.replace).not.toHaveBeenCalledWith(expect.objectContaining({
@@ -247,83 +284,102 @@ describe('/ (welcome) setup continuation', () => {
 
     it('renders the real Desktop shell after the Personal Home provider releases readiness', async () => {
         isAuthenticated = false;
-        getPendingSetupIntentMock.mockReturnValue(null);
+        seedSetupIntent(null);
 
         const Screen = (await import('@/app/(app)/index')).Home;
-        const screen = await renderScreen(React.createElement(Screen));
+        const screen = await renderRoute(React.createElement(Screen));
         await flushHookEffects({ cycles: 1, turns: 2 });
 
-        expect(screen.findAllByType('MainView' as never)).toHaveLength(1);
-        expect(screen.findAllByType('PreAuthOnboardingWizardEntry' as never)).toHaveLength(0);
+        expect(screen.findAllByType(MainView)).toHaveLength(1);
+        expect(screen.findAllByType(PreAuthOnboardingWizardEntry)).toHaveLength(0);
     });
 
     it('keeps verified Home plus profile-adoption retry in the real provider/index shell', async () => {
-        isAuthenticated = false;
-        getPendingSetupIntentMock.mockReturnValue(null);
-        const verifiedUnadopted: PersonalHomeFacts = {
-            hostIsDesktop: true,
-            isDesktopMainWindow: true,
-            explicitlySelectedOtherHome: false,
-            completedPersonalHomeProfile: null,
-            candidateLocalProfile: {
-                id: 'local', name: 'Personal Home', serverUrl: 'http://127.0.0.1:43123',
-                serverIdentityId: 'personal-home-identity', createdAt: 1, updatedAt: 1, lastUsedAt: 1,
-            },
-            relayRuntime: {
-                relayUrl: 'http://127.0.0.1:43123',
-                installed: true,
-                healthy: true,
-                serviceActive: true,
-                status: 'healthy',
-                purpose: { kind: 'personal-home', canonicalServerUrl: 'http://127.0.0.1:43123' },
-                anonymousSignupEnabled: false,
-            },
-            localHomeReachability: 'reachable',
-            localHomeIdentity: 'personal-home-identity',
-            localHomeAuth: 'present',
-            anonymousSignup: 'disabled',
-            daemon: null,
-            activeTask: null,
-        };
+        isAuthenticated = true;
+        seedSetupIntent(null);
+        const localId = await homes.addHome({ name: 'Personal Home', serverUrl: PERSONAL_HOME_URL,
+            serverIdentityId: PERSONAL_HOME_ID, accountId: 'setup-account', currentAccount: true });
+        const features = createRootLayoutFeaturesResponse({ homeConnectionDescriptor: HomeConnectionDescriptorV1Schema.parse({
+            v: 1, homeServerIdentityId: PERSONAL_HOME_ID, canonicalServerUrl: PERSONAL_HOME_URL, revision: 1,
+            endpoints: [{ kind: 'https', url: PERSONAL_HOME_URL }],
+        }), capabilities: {
+            serverIdentity: { serverIdentityId: PERSONAL_HOME_ID },
+            auth: { signup: { methods: [{ id: 'anonymous', enabled: false }] }, keyChallenge: { v2: true } },
+            encryption: { storagePolicy: 'plaintext_only' },
+        } });
+        homes.answer(localId, '/v1/features', { body: features });
+        homes.answer(localId, '/v1/features/authenticated', { body: features });
+        homes.answer(localId, '/v1/auth/challenge', { body: {
+            challengeId: 'setup-personal-home-challenge', nonce: 'AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM',
+            issuedAt: new Date(0).toISOString(), expiresAt: new Date(60_000).toISOString(),
+            audience: { origin: PERSONAL_HOME_URL, serverIdentityId: PERSONAL_HOME_ID },
+        } });
+        homes.answer(localId, '/v1/auth', { status: 403, body: { error: 'signup-disabled' } });
+        await restoreHome(PERSONAL_HOME_URL, PERSONAL_HOME_ID);
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        expect(Boolean(await TokenStorage.getCredentialsForServerUrl(PERSONAL_HOME_URL, { serverId: PERSONAL_HOME_ID }))).toBe(true);
+        relayStatus = { installed: true, healthy: true, dataPresent: true, relayUrl: PERSONAL_HOME_URL,
+            service: { active: true, enabled: true }, purpose: { kind: 'personal-home', canonicalServerUrl: PERSONAL_HOME_URL },
+            anonymousSignupEnabled: false };
+        // The browser persistence adapter rejects only this Home's completion write.
+        // Profile adoption and its retry classification remain real.
+        let adoptionRejected = false;
+        const { readStorageScopeFromEnv, scopedStorageId } = await import('@/utils/system/storageScope');
+        const profileKeyPrefix = `${scopedStorageId('server-profiles', readStorageScopeFromEnv())}:`;
+        // Prove this is the browser port retained by the real profile owner,
+        // not the fresh per-case DOM's unrelated Storage instance.
+        expect(profileStorage!.getItem(`${profileKeyPrefix}server-state-v1`)).toContain(PERSONAL_HOME_ID);
+        const storagePrototype = Object.getPrototypeOf(profileStorage!) as Storage;
+        const write = storagePrototype.setItem;
+        const persistenceFailure = vi.spyOn(storagePrototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+            if (key.startsWith(profileKeyPrefix) && value.includes(PERSONAL_HOME_ID)
+                && value.includes('"personalHomeBootstrapCompleted":true')) {
+                adoptionRejected = true;
+                throw new DOMException('Profile storage unavailable', 'QuotaExceededError');
+            }
+            return write.call(this, key, value);
+        });
         const Screen = (await import('@/app/(app)/index')).Home;
         const { PersonalHomeBootstrapGate } = await import('@/components/personalHome/bootstrap/PersonalHomeBootstrapGate');
-        const screen = await renderScreen(
-            <PersonalHomeBootstrapGate
-                isDesktopHost
-                isDesktopMainWindow
-                initialFacts={verifiedUnadopted}
-                readFacts={async () => verifiedUnadopted}
-                operations={{ 'ensure-home-ready': async () => { throw new Error('profile store unavailable'); } }}
-            >
+        const { usePersonalHomeBootstrapRuntime } = await import('@/components/personalHome/bootstrap/usePersonalHomeBootstrapRuntime');
+        // Prove the actual event SDK can reach this fixture's native transport
+        // before interpreting a failed task subscription as unavailable runtime.
+        const unlisten = await (await import('@/utils/platform/desktopHost')).listenDesktopHostEvent('setup-fixture-readiness', () => {});
+        await unlisten();
+        function RuntimeGate() {
+            const runtime = usePersonalHomeBootstrapRuntime();
+            return <PersonalHomeBootstrapGate readFacts={runtime.readFacts} operations={runtime.operations} activeTask={runtime.activeTask}>
                 <Screen />
-            </PersonalHomeBootstrapGate>,
-        );
-        await flushHookEffects({ cycles: 6, turns: 3 });
-
-        expect(screen.findAllByType('MainView' as never)).toHaveLength(1);
-        expect(screen.findAllByType('PreAuthOnboardingWizardEntry' as never)).toHaveLength(0);
-        expect(screen.findByTestId('personal-home-recovery-strip')).not.toBeNull();
+            </PersonalHomeBootstrapGate>;
+        }
+        try {
+            const screen = await renderRoute(<RuntimeGate />);
+            await waitForHomeGovernance(() => {
+                expect(adoptionRejected).toBe(true);
+                expect(screen.findAllByType(MainView)).toHaveLength(1);
+                expect(screen.findAllByType(PreAuthOnboardingWizardEntry)).toHaveLength(0);
+                expect(screen.findByTestId('personal-home-recovery-strip')).not.toBeNull();
+            });
+        } finally { persistenceFailure.mockRestore(); }
     });
 
     it('does not auto-open the setup wizard overlay on web when a voice e2e fixture query param is present', async () => {
-        tauriDesktopState.value = false;
-        connectionHealthState.value = 0;
-        getPendingSetupIntentMock.mockReturnValue(null);
+        setDesktop(false);
+        seedSetupIntent(null);
 
         // The UI e2e harness drives the voice surface via `?happier_voice_e2e_fixture=...`.
         expoRouterMock.state.router.setParams({ happier_voice_e2e_fixture: 'local_auto_return_listening' });
 
         const Screen = (await import('@/app/(app)/index')).Home;
-        const screen = await renderScreen(React.createElement(Screen));
+        const screen = await renderRoute(React.createElement(Screen));
         await flushHookEffects({ cycles: 1, turns: 3 });
 
         expect(setPendingSetupIntentMock).not.toHaveBeenCalledWith(expect.objectContaining({ phase: 'post_auth' }));
     });
 
     it('suppresses the setup wizard overlay on web when a voice e2e fixture query param is present, even if a setup auth continuation is pending', async () => {
-        tauriDesktopState.value = false;
-        connectionHealthState.value = 0;
-        getPendingSetupIntentMock.mockReturnValue({
+        setDesktop(false);
+        seedSetupIntent({
             branch: 'thisComputer',
             phase: 'awaiting_auth',
             relayUrl: 'https://relay.example.test',
@@ -331,29 +387,28 @@ describe('/ (welcome) setup continuation', () => {
         expoRouterMock.state.router.setParams({ happier_voice_e2e_fixture: 'local_auto_return_listening' });
 
         const Screen = (await import('@/app/(app)/index')).Home;
-        const screen = await renderScreen(React.createElement(Screen));
+        const screen = await renderRoute(React.createElement(Screen));
         await flushHookEffects({ cycles: 1, turns: 3 });
 
         expect(setPendingSetupIntentMock).toHaveBeenCalledWith(expect.objectContaining({ phase: 'dismissed' }));
+        expect(pendingSetup.getPendingSetupIntent()?.phase).toBe('dismissed');
     });
 
     it('does not auto-open the setup wizard overlay on web when a voice e2e fixture is persisted in localStorage', async () => {
-        tauriDesktopState.value = false;
-        connectionHealthState.value = 0;
-        getPendingSetupIntentMock.mockReturnValue(null);
+        setDesktop(false);
+        seedSetupIntent(null);
         globalThis.localStorage?.setItem('happier.voice.e2e.fixture', 'local_auto_return_listening');
 
         const Screen = (await import('@/app/(app)/index')).Home;
-        const screen = await renderScreen(React.createElement(Screen));
+        const screen = await renderRoute(React.createElement(Screen));
         await flushHookEffects({ cycles: 1, turns: 3 });
 
         expect(setPendingSetupIntentMock).not.toHaveBeenCalledWith(expect.objectContaining({ phase: 'post_auth' }));
     });
 
     it('does not open the setup wizard overlay during a voice e2e fixture even when a setup continuation is pending', async () => {
-        tauriDesktopState.value = false;
-        connectionHealthState.value = 0;
-        getPendingSetupIntentMock.mockReturnValue({
+        setDesktop(false);
+        seedSetupIntent({
             branch: 'thisComputer',
             phase: 'awaiting_auth',
             relayUrl: 'https://relay.example.test',
@@ -361,9 +416,11 @@ describe('/ (welcome) setup continuation', () => {
         globalThis.localStorage?.setItem('happier.voice.e2e.fixture', 'local_auto_return_listening');
 
         const Screen = (await import('@/app/(app)/index')).Home;
-        const screen = await renderScreen(React.createElement(Screen));
+        const screen = await renderRoute(React.createElement(Screen));
         await flushHookEffects({ cycles: 1, turns: 3 });
 
+        expect(pendingSetup.getPendingSetupIntent()?.phase).toBe('dismissed');
+        expect(screen.findAllByType(BaseModal)).toHaveLength(0);
     });
 
     it('ignores voice fixture query markers in production without dismissing setup', async () => {
@@ -371,12 +428,12 @@ describe('/ (welcome) setup continuation', () => {
         const previousDebug = process.env.EXPO_PUBLIC_DEBUG;
         (globalThis as { __DEV__?: boolean }).__DEV__ = false;
         process.env.EXPO_PUBLIC_DEBUG = '0';
-        tauriDesktopState.value = false;
+        setDesktop(false);
         expoRouterMock.state.router.setParams({ happier_voice_e2e_fixture: 'local_auto_return_listening' });
 
         try {
             const Screen = (await import('@/app/(app)/index')).Home;
-            const screen = await renderScreen(React.createElement(Screen));
+            const screen = await renderRoute(React.createElement(Screen));
             await flushHookEffects({ cycles: 1, turns: 3 });
 
             expect(expoRouterMock.spies.replace).toHaveBeenCalledWith('/settings/machines/add?path=thisComputer');
@@ -393,12 +450,12 @@ describe('/ (welcome) setup continuation', () => {
         const previousDebug = process.env.EXPO_PUBLIC_DEBUG;
         (globalThis as { __DEV__?: boolean }).__DEV__ = false;
         process.env.EXPO_PUBLIC_DEBUG = '0';
-        tauriDesktopState.value = false;
+        setDesktop(false);
         globalThis.localStorage?.setItem('happier.voice.e2e.fixture', 'local_auto_return_listening');
 
         try {
             const Screen = (await import('@/app/(app)/index')).Home;
-            const screen = await renderScreen(React.createElement(Screen));
+            const screen = await renderRoute(React.createElement(Screen));
             await flushHookEffects({ cycles: 1, turns: 3 });
 
             expect(expoRouterMock.spies.replace).toHaveBeenCalledWith('/settings/machines/add?path=thisComputer');
@@ -411,14 +468,16 @@ describe('/ (welcome) setup continuation', () => {
     });
 
     it('does not open the post-auth setup wizard while a terminal connect approval is pending', async () => {
-        tauriDesktopState.value = false;
-        pendingTerminalConnectState.value = {
+        setDesktop(false);
+        pendingTerminal.setPendingTerminalConnect({
             publicKeyB64Url: 'abc123',
-            serverUrl: 'https://relay.example.test',
-        };
+            serverUrl: HOME_A_URL,
+            serverIdentityId: HOME_A_ID,
+        });
+        expect(pendingTerminal.getPendingTerminalConnect()).not.toBeNull();
 
         const Screen = (await import('@/app/(app)/index')).Home;
-        const screen = await renderScreen(React.createElement(Screen));
+        const screen = await renderRoute(React.createElement(Screen));
         await flushHookEffects({ cycles: 1, turns: 3 });
 
         expect(setPendingSetupIntentMock).not.toHaveBeenCalledWith(expect.objectContaining({ phase: 'post_auth' }));

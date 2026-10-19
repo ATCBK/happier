@@ -1,5 +1,8 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { AccountProfileSchema } from '@happier-dev/protocol';
 
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
@@ -11,6 +14,7 @@ import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUt
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { storage } from '@/sync/domains/state/storage';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
+import { buildUiFeatureToggleChange } from '@/sync/domains/features/featureRegistry';
 
 const navigation = vi.hoisted(() => ({ replace: vi.fn(), back: vi.fn() }));
 installTerminalRouteCommonModuleMocks({
@@ -43,6 +47,8 @@ describe('/friends redirect', () => {
             },
         });
         expect((await getServerFeaturesSnapshot({ serverId: connection.home.id, force: true })).status).toBe('ready');
+        storage.getState().applySettingsLocal({ experiments: true,
+            ...buildUiFeatureToggleChange(storage.getState().settings, 'social.friends', true) });
         storage.setState({ profile, friendsLoaded: true, feedLoaded: true });
         navigation.replace.mockClear();
         const Page = (await import('@/app/(app)/friends/index')).default;
