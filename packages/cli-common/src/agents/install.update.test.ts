@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installAgentCliForRuntime } from './install.js';
 import type { AgentCliRuntimeDescriptor } from './resolution.js';
 import { execFileWithDeadline, ExecFileTerminationError } from '../process/execFileWithDeadline.js';
+import { getHappierTempRoot } from '../tempDirs/createHappierTempDir.js';
 
 // Every test runs real executables in a temp HOME; no process boundary is faked.
 const posixOnly = process.platform === 'win32' ? it.skip : it;
@@ -156,7 +157,7 @@ describe('installAgentCliForRuntime intent update (K6)', () => {
       },
     });
     await expect(operation).rejects.toMatchObject({ name: 'AbortError' });
-    expect(await readdir(join(env.HAPPIER_HOME_DIR!, 'tools/providers/claude/.tmp'))).toEqual([]);
+    expect(await readdir(getHappierTempRoot(join(env.HAPPIER_HOME_DIR!, 'tools/providers/claude/.tmp')))).toEqual([]);
   });
 
   posixOnly.each(['install', 'update'] as const)('reports a failed vendor %s termination instead of successful cancellation', async (intent) => {
