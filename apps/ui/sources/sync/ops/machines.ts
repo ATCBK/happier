@@ -673,6 +673,7 @@ export async function machineResolveSpawnSessionByNonce(params: Readonly<{
     spawnNonce: string;
     serverId?: string | null;
     timeoutMs?: number;
+    signal?: AbortSignal;
 }>): Promise<MachineResolveSpawnSessionByNonceResult> {
     const spawnNonce = params.spawnNonce.trim();
     if (!spawnNonce) return { status: 'not_found' };
@@ -684,6 +685,7 @@ export async function machineResolveSpawnSessionByNonce(params: Readonly<{
             payload: { spawnNonce },
             serverId: params.serverId ?? null,
             timeoutMs: params.timeoutMs,
+            ...(params.signal ? { signal: params.signal } : {}),
         });
         try {
             return normalizeSpawnSessionNonceResolution(
@@ -731,6 +733,7 @@ export async function machineResolveSpawnSessionByNonceUntilSettled(params: Read
     serverId?: string | null;
     timeoutMs?: number;
     pollIntervalMs?: number;
+    signal?: AbortSignal;
 }>): Promise<MachineResolveSpawnSessionByNonceResult> {
     const timeoutMs = normalizeMachineSpawnNonceRecoveryDuration(
         params.timeoutMs,
@@ -743,6 +746,7 @@ export async function machineResolveSpawnSessionByNonceUntilSettled(params: Read
     let lastResolutionWasTransportError = false;
     const settled = await settleSpawnSessionNonce({
         spawnNonce: params.spawnNonce,
+        signal: params.signal,
         resolve: async (_spawnNonce, remainingTimeoutMs) => {
             const result = await machineResolveSpawnSessionByNonce({
                 ...params,
@@ -772,13 +776,14 @@ export async function machineResolveSpawnSessionByNonceUntilSettled(params: Read
  */
 export async function machineStopDaemon(
     machineId: string,
-    options?: Readonly<{ serverId?: string | null }>,
+    options?: Readonly<{ serverId?: string | null; signal?: AbortSignal }>,
 ): Promise<{ message: string }> {
     return await machineRpcWithServerScope<{ message: string }, {}>({
         machineId,
         method: RPC_METHODS.STOP_DAEMON,
         payload: {},
         serverId: options?.serverId ?? null,
+        ...(options?.signal ? { signal: options.signal } : {}),
     });
 }
 
@@ -829,7 +834,7 @@ export async function machineBash(
     machineId: string,
     command: MachineBashRequest,
     cwd: string,
-    options?: { serverId?: string | null }
+    options?: { serverId?: string | null; signal?: AbortSignal }
 ): Promise<{
     success: boolean;
     stdout: string;
@@ -852,6 +857,7 @@ export async function machineBash(
             method: 'bash',
             payload,
             serverId: options?.serverId,
+            ...(options?.signal ? { signal: options.signal } : {}),
         });
         return result;
     } catch (error) {
@@ -867,7 +873,7 @@ export async function machineBash(
 export async function machineCreateDirectory(
     machineId: string,
     path: string,
-    options?: { serverId?: string | null },
+    options?: { serverId?: string | null; signal?: AbortSignal },
 ): Promise<
     | { success: true }
     | { success: false; error: string; errorCode?: string }
@@ -878,6 +884,7 @@ export async function machineCreateDirectory(
             method: RPC_METHODS.CREATE_DIRECTORY,
             payload: { path },
             serverId: options?.serverId,
+            ...(options?.signal ? { signal: options.signal } : {}),
         });
     } catch (error) {
         return {
@@ -935,7 +942,7 @@ export type BugReportLogTailResult =
 export async function machinePreviewEnv(
     machineId: string,
     params: PreviewEnvRequest,
-    options?: { serverId?: string | null },
+    options?: { serverId?: string | null; signal?: AbortSignal },
 ): Promise<MachinePreviewEnvResult> {
     try {
         const result = await machineRpcWithServerScope<unknown, PreviewEnvRequest>({
@@ -943,6 +950,7 @@ export async function machinePreviewEnv(
             method: RPC_METHODS.PREVIEW_ENV,
             payload: params,
             serverId: options?.serverId,
+            ...(options?.signal ? { signal: options.signal } : {}),
         });
 
         // Older daemons (or errors) return an encrypted `{ error: ... }` payload.
@@ -1022,7 +1030,7 @@ export async function machinePreviewEnv(
 
 export async function machineCollectBugReportDiagnostics(
     machineId: string,
-    options?: { timeoutMs?: number; serverId?: string | null },
+    options?: { timeoutMs?: number; serverId?: string | null; signal?: AbortSignal },
 ): Promise<BugReportCollectDiagnosticsResult | null> {
     try {
         return await machineRpcWithServerScope<BugReportCollectDiagnosticsResult, {}>({
@@ -1030,6 +1038,7 @@ export async function machineCollectBugReportDiagnostics(
             method: RPC_METHODS.BUGREPORT_COLLECT_DIAGNOSTICS,
             payload: {},
             serverId: options?.serverId ?? null,
+            ...(options?.signal ? { signal: options.signal } : {}),
             timeoutMs: options?.timeoutMs,
         });
     } catch {
@@ -1040,7 +1049,7 @@ export async function machineCollectBugReportDiagnostics(
 export async function machineGetBugReportLogTail(
     machineId: string,
     params?: { path?: string; maxBytes?: number },
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; signal?: AbortSignal },
 ): Promise<BugReportLogTailResult> {
     try {
         return await machineRpcWithServerScope<BugReportLogTailResult, { path?: string; maxBytes?: number }>({
@@ -1051,6 +1060,7 @@ export async function machineGetBugReportLogTail(
                 maxBytes: params?.maxBytes,
             },
             timeoutMs: options?.timeoutMs,
+            ...(options?.signal ? { signal: options.signal } : {}),
         });
     } catch (error) {
         return {
@@ -1067,17 +1077,19 @@ export type MachineReadSessionLogTailResult =
 export async function machineReadSessionLogTail(
     machineId: string,
     params: { path: string; maxBytes?: number },
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; serverId?: string | null; signal?: AbortSignal },
 ): Promise<MachineReadSessionLogTailResult> {
     try {
         return await machineRpcWithServerScope<MachineReadSessionLogTailResult, { path: string; maxBytes?: number }>({
             machineId,
             method: RPC_METHODS.DAEMON_SESSION_LOG_TAIL,
+            serverId: options?.serverId,
             payload: {
                 path: params.path,
                 maxBytes: params.maxBytes,
             },
             timeoutMs: options?.timeoutMs,
+            ...(options?.signal ? { signal: options.signal } : {}),
         });
     } catch (error) {
         return {

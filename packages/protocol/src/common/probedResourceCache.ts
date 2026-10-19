@@ -14,7 +14,13 @@ type ProbedResourceEntry<T> = {
   dataUpdatedAt: number | null;
   error: unknown | null;
   errorUpdatedAt: number | null;
-  inflight: Promise<T | null> | null;
+  inflight: ProbedResourceFlight<T> | null;
+};
+
+type ProbedResourceFlight<T> = {
+  promise: Promise<T | null>;
+  controller: AbortController;
+  consumers: number;
 };
 
 export class ProbedResourceCache<T> {
@@ -58,7 +64,7 @@ export class ProbedResourceCache<T> {
       dataUpdatedAt: entry.dataUpdatedAt,
       error: entry.error,
       errorUpdatedAt: entry.errorUpdatedAt,
-      inflight: entry.inflight,
+      inflight: entry.inflight?.promise ?? null,
     };
   }
 
@@ -124,8 +130,8 @@ export class ProbedResourceCache<T> {
 
   async ensure(
     key: string,
-    fetcher: () => Promise<T>,
-    opts?: Readonly<{ force?: boolean; nowMs?: number }>,
+    fetcher: (signal: AbortSignal) => Promise<T>,
+    opts?: Readonly<{ force?: boolean; nowMs?: number; signal?: AbortSignal }>,
   ): Promise<T | null> {
     const nowMs = typeof opts?.nowMs === 'number' ? opts.nowMs : this.#nowMs();
 
@@ -137,7 +143,8 @@ export class ProbedResourceCache<T> {
       inflight: null,
     };
 
-    if (existing.inflight) return await existing.inflight;
+    if (opts?.signal?.aborted) return existing.data;
+    if (existing.inflight) return await this.#join(key, existing, existing.inflight, opts?.signal);
 
     const hasData = existing.dataUpdatedAt !== null;
     const isStale =
@@ -160,9 +167,18 @@ export class ProbedResourceCache<T> {
       return existing.data;
     }
 
-    const pending = (async () => {
+    const flight: ProbedResourceFlight<T> = {
+      controller: new AbortController(),
+      consumers: 0,
+      promise: Promise.resolve(null),
+    };
+    existing.inflight = flight;
+    this.#entries.set(key, existing);
+    flight.promise = (async () => {
       try {
-        const value = await fetcher();
+        const value = await fetcher(flight.controller.signal);
+        if (flight.controller.signal.aborted) return existing.data;
+        if (this.#entries.get(key) !== existing) return value;
         const commitNowMs = this.#nowMs();
         existing.data = value;
         existing.dataUpdatedAt = commitNowMs;
@@ -170,21 +186,46 @@ export class ProbedResourceCache<T> {
         existing.errorUpdatedAt = null;
         return value;
       } catch (e) {
+        if (flight.controller.signal.aborted || this.#entries.get(key) !== existing) return existing.data;
         const commitNowMs = this.#nowMs();
         existing.error = e;
         existing.errorUpdatedAt = commitNowMs;
         return existing.data;
       } finally {
-        existing.inflight = null;
-        this.#entries.set(key, existing);
-        this.#emit(key);
+        if (existing.inflight === flight) {
+          existing.inflight = null;
+          if (this.#entries.get(key) === existing) this.#emit(key);
+        }
       }
     })();
 
-    existing.inflight = pending;
-    this.#entries.set(key, existing);
     this.#emit(key);
-    return await pending;
+    return await this.#join(key, existing, flight, opts?.signal);
+  }
+
+  #join(key: string, entry: ProbedResourceEntry<T>, flight: ProbedResourceFlight<T>, signal?: AbortSignal): Promise<T | null> {
+    flight.consumers += 1;
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value: T | null) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener('abort', cancel);
+        flight.consumers -= 1;
+        resolve(value);
+      };
+      const cancel = () => {
+        finish(entry.data);
+        if (flight.consumers !== 0 || entry.inflight !== flight) return;
+        // A flight belongs to its joined consumers, not whichever view started it.
+        entry.inflight = null;
+        flight.controller.abort();
+        if (this.#entries.get(key) === entry) this.#emit(key);
+      };
+      signal?.addEventListener('abort', cancel, { once: true });
+      if (signal?.aborted) cancel();
+      void flight.promise.then(finish);
+    });
   }
 
   #emit(key: string): void {

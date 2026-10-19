@@ -102,6 +102,7 @@ export function useEnvironmentVariables(
         }
 
         let cancelled = false;
+        const controller = new AbortController();
         setIsLoading(true);
 
         const fetchVars = async () => {
@@ -129,6 +130,7 @@ export function useEnvironmentVariables(
                 sensitiveKeys: options?.sensitiveKeys,
             }, {
                 serverId: options?.serverId,
+                signal: controller.signal,
             });
 
             if (cancelled) return;
@@ -207,7 +209,7 @@ export function useEnvironmentVariables(
                     return;
                 }
 
-                const result = await machineBash(machineId, command, '/', { serverId: options?.serverId });
+                const result = await machineBash(machineId, command, '/', { serverId: options?.serverId, signal: controller.signal });
 
                 if (cancelled) return;
 
@@ -265,8 +267,9 @@ export function useEnvironmentVariables(
         // Cleanup: prevent state updates after unmount
         return () => {
             cancelled = true;
+            controller.abort();
         };
-    }, [extraEnvKey, machineId, sensitiveKeysKey, sortedVarNames]);
+    }, [extraEnvKey, machineId, options?.serverId, sensitiveKeysKey, sortedVarNames]);
 
     return { variables, meta, policy, isPreviewEnvSupported, isLoading };
 }
