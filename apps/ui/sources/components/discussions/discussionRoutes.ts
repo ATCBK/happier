@@ -23,7 +23,9 @@ export function readDiscussionRouteAnchor(input: Readonly<{
     let value: unknown;
     try { value = JSON.parse(input.anchor); } catch { return null; }
     const parsed = DiscussionAnchorV1Schema.safeParse(value);
-    return parsed.success && parsed.data.kind === 'doc'
+    if (!parsed.success) return null;
+    if (parsed.data.kind === 'task') return input.serverId ? parsed.data : null;
+    return parsed.data.kind === 'doc'
         && areServerProfileIdentifiersEquivalent(parsed.data.doc.ref.serverId, input.serverId) ? parsed.data : null;
 }
 
@@ -57,7 +59,7 @@ export function buildDiscussionRouteHref(input: Readonly<{
             query.set('anchorSessionId', anchor.sessionId);
             if (anchor.messageId) query.set('anchorMessageId', anchor.messageId);
         } else {
-            if (!areServerProfileIdentifiersEquivalent(anchor.doc.ref.serverId, input.target.address.serverId)) throw new Error('server_target_mismatch');
+            if (anchor.kind === 'doc' && !areServerProfileIdentifiersEquivalent(anchor.doc.ref.serverId, input.target.address.serverId)) throw new Error('server_target_mismatch');
             query.set('anchor', JSON.stringify(anchor));
         }
     }

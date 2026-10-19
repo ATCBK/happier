@@ -4,6 +4,19 @@ import { buildDiscussionRouteHref, buildDiscussionsRouteHref, readAnchoredDiscus
 import { upsertServerProfile, setServerProfileIdentityForUrl, areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 describe('Discussion routes', () => {
+    it('round-trips a canonical Task anchor without turning its identity into source access or a provider URL', () => {
+        const anchor = { kind: 'task' as const, entry: { source: { pluginId: 'tracker', localId: 'issues' },
+            kindId: 'issue', collisionScope: 'project', entryId: 'task/42' } };
+        const href = buildDiscussionRouteHref({ target: { kind: 'new', address: { serverId: 'task-home' }, anchor } });
+        const url = new URL(href, 'https://home.invalid');
+        expect(url.pathname).toBe('/discussions/new');
+        expect(url.searchParams.get('serverId')).toBe('task-home');
+        expect(readDiscussionRouteAnchor({ serverId: 'task-home', anchor: url.searchParams.get('anchor') })).toEqual(anchor);
+        expect(readDiscussionRouteAnchor({ serverId: null, anchor: JSON.stringify(anchor) })).toBeNull();
+        expect(readDiscussionRouteAnchor({ serverId: 'task-home', anchor: JSON.stringify({ ...anchor,
+            entry: { ...anchor.entry, providerUrl: 'https://tracker.invalid/42' } }) })).toBeNull();
+        expect(readDiscussionRouteAnchor({ serverId: 'task-home', anchor: JSON.stringify(anchor), anchorSessionId: 'session' })).toBeNull();
+    });
     it('retains a Doc captured before its Home adopted a portable identity', async () => {
         const profile = await upsertServerProfile({ serverUrl: 'https://doc-anchor-alias.test', name: 'Doc Home' });
         const anchor = { kind: 'doc' as const, doc: { ref: { kind: 'doc' as const, artifactId: 'doc', serverId: profile.id },
