@@ -215,7 +215,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                 title={t('widgetAdd.areaUnavailableTitle')}
                 {...(readFailure.reason || scopeRefused ? { reason: readFailure.reason ?? t('widgetAdd.areaScopeRecovery') } : {})}
                 diagnosticCode={readFailure.reasonCode}
-                {...(!scopeRefused ? { action: { label: t('common.retry'), onPress: () => { void layout.reload(); }, testID: `${props.testID}.retry` } } : {})}
+                {...(!scopeRefused ? { action: { label: t('common.retry'), onPress: async () => { await layout.reload(); }, testID: `${props.testID}.retry` } } : {})}
             />
         </DashboardAreaEdge>
     ) : null;
