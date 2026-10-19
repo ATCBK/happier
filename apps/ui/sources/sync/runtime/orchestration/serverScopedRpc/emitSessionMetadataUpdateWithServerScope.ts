@@ -11,6 +11,8 @@ import {
     type SessionMetadataInactiveModelIntentOwnerPatchV1,
     type SessionMetadataTuplePatchV1,
 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { SessionTeamCredentialBindingMetadataPatchV1Schema, SessionTeamCredentialBindingMutationRejectionV1Schema,
+    type SessionTeamCredentialBindingMetadataPatchV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { emitWithAckCancellable } from '@happier-dev/sync-client';
 import type { UpdateMetadataAck } from '@/sync/domains/session/metadata/updateSessionMetadataWithRetry';
@@ -41,7 +43,8 @@ type SessionMetadataUpdateParams =
         | Readonly<{
             patch:
                 | SessionMetadataTuplePatchV1
-                | SessionMetadataInactiveModelIntentOwnerPatchV1;
+                | SessionMetadataInactiveModelIntentOwnerPatchV1
+                | SessionTeamCredentialBindingMetadataPatchV1;
         }>
         | Readonly<{
             expectedVersion: number;
@@ -70,11 +73,15 @@ function assertSessionMetadataHttpAvailable(response: Response, body: unknown): 
 function parseSessionMetadataTuplePatch(
     value:
         | SessionMetadataTuplePatchV1
-        | SessionMetadataInactiveModelIntentOwnerPatchV1,
+        | SessionMetadataInactiveModelIntentOwnerPatchV1
+        | SessionTeamCredentialBindingMetadataPatchV1,
 ):
     | SessionMetadataTuplePatchV1
     | SessionMetadataInactiveModelIntentOwnerPatchV1
+    | SessionTeamCredentialBindingMetadataPatchV1
     | null {
+    const team = SessionTeamCredentialBindingMetadataPatchV1Schema.safeParse(value);
+    if (team.success) return team.data;
     const conditioned =
         SessionMetadataInactiveModelIntentOwnerPatchV1Schema.safeParse(
             value,
@@ -107,7 +114,8 @@ async function emitSessionMetadataTuplePatch(params: Readonly<{
     sessionId: string;
     patch:
         | SessionMetadataTuplePatchV1
-        | SessionMetadataInactiveModelIntentOwnerPatchV1;
+        | SessionMetadataInactiveModelIntentOwnerPatchV1
+        | SessionTeamCredentialBindingMetadataPatchV1;
     context: Awaited<ReturnType<typeof resolveServerAccountRequestContext>>;
     request: (path: string, init?: RequestInit) => Promise<Response>;
     assertCurrent: () => void;
@@ -177,6 +185,12 @@ async function emitSessionMetadataTuplePatch(params: Readonly<{
     }
 
     if (response.status === 409) {
+        const teamRejection = SessionTeamCredentialBindingMutationRejectionV1Schema.safeParse(body);
+        if (patch.mode === 'owner_team_credential_binding' && teamRejection.success) {
+            throw Object.assign(new Error('Team credential binding was rejected by current Session policy'), {
+                code: teamRejection.data.code, reason: teamRejection.data.reason, retryable: false as const,
+            });
+        }
         const activeConflict =
             SessionMetadataActiveConflictV1Schema.safeParse(body);
         if (activeConflict.success) {

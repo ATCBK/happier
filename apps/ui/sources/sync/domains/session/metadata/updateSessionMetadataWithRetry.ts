@@ -13,6 +13,7 @@ import {
     type SessionMetadataInactiveModelIntentOwnerPatchV1,
     type SessionMetadataTuplePatchV1,
 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import type { SessionTeamCredentialBindingMetadataPatchV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 
 import { isDemoModeActive } from '@/demoMode/runtime/enterExitDemoMode';
 
@@ -94,7 +95,11 @@ export type SessionMetadataLegacyUpdatePayload = Readonly<{
 export type SessionMetadataUpdatePayload =
     | SessionMetadataLegacyUpdatePayload
     | SessionMetadataTuplePatchV1
-    | SessionMetadataInactiveModelIntentOwnerPatchV1;
+    | SessionMetadataInactiveModelIntentOwnerPatchV1
+    | SessionTeamCredentialBindingMetadataPatchV1;
+
+export type SessionMetadataTeamCredentialBinding = Pick<SessionTeamCredentialBindingMetadataPatchV1,
+    'operation' | 'teamCredentialBindings' | 'teamVisibilityGrantConsent'>;
 
 type Layout1TupleSnapshot<M, A> =
     Extract<
@@ -149,6 +154,7 @@ export async function updateSessionMetadataWithRetry<M, A = unknown>(
         updater: SessionMetadataUpdateRequest<M>;
         sessionExpectation?:
             SessionMetadataInactiveModelIntentExpectationV1;
+        teamCredentialBinding?: SessionMetadataTeamCredentialBinding;
         mutationIntent?: 'rename_session';
         expectedMetadataRevision?: number;
         onMetadataCommitted?: (revision: number) => void;
@@ -190,6 +196,9 @@ export async function updateSessionMetadataWithRetry<M, A = unknown>(
     const tupleCrypto = params.tupleCrypto;
     const applyTupleSnapshot = params.applyTupleSnapshot;
     const exactInitial = await acquireTupleSnapshot();
+    if (params.teamCredentialBinding && exactInitial.mode !== 'owner') {
+        throw createMetadataPrivacyUpgradeRequiredError('Team credential binding requires Session owner metadata layout v1');
+    }
     if (isDemoModeActive()) {
         params.onMetadataCommitted?.(exactInitial.metadataVersion);
         return;
@@ -346,13 +355,17 @@ export async function updateSessionMetadataWithRetry<M, A = unknown>(
                     ? { expectedMetadataRevision: params.expectedMetadataRevision } : {}) },
             crypto: tupleCrypto,
             commit: async (patch) => {
-                if (params.sessionExpectation && patch.mode !== 'owner') {
+                if ((params.sessionExpectation || params.teamCredentialBinding) && patch.mode !== 'owner') {
                     throw createMetadataPrivacyUpgradeRequiredError(
                         'Inactive model intent requires Session owner metadata',
                     );
                 }
                 const result = await emitUpdateMetadata(
-                    params.sessionExpectation && patch.mode === 'owner'
+                    params.teamCredentialBinding && patch.mode === 'owner'
+                        ? ({ ...patch, ...params.teamCredentialBinding, mode: 'owner_team_credential_binding',
+                            ...(params.sessionExpectation ? { sessionExpectation: params.sessionExpectation } : {}),
+                        } satisfies SessionTeamCredentialBindingMetadataPatchV1)
+                        : params.sessionExpectation && patch.mode === 'owner'
                         ? ({
                             ...patch,
                             mode: 'owner_inactive_model_intent',
