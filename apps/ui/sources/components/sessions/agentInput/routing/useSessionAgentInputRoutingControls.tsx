@@ -4,7 +4,7 @@ import type { ParticipantRecipientV1, PendingRequestedActionV1, ScmDiffSummaryDi
 import { t } from '@/text';
 
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
-import { createRecipientActionChip } from '@/components/sessions/agentInput/definitions/createRecipientActionChip';
+import { createRecipientActionChip, type SessionTalkChipBinding } from '@/components/sessions/agentInput/definitions/createRecipientActionChip';
 import type { SessionParticipantTarget } from '@/sync/domains/session/participants/participantTargets';
 import {
     resolveParticipantRoutingDescriptor,
@@ -30,6 +30,8 @@ export function useSessionAgentInputRoutingControls(params: Readonly<{
     isReadOnly: boolean;
     participantTargets: readonly SessionParticipantTarget[];
     recipientState: SessionRecipientStateLike;
+    /** A session's own composer also talks to other sessions (Send · Ask · Post update). */
+    sessionTalk?: SessionTalkChipBinding;
 }>): SessionAgentInputRoutingControls {
     const recipientChip = React.useMemo<AgentInputExtraActionChip | undefined>(() => {
         return createRecipientActionChip({
@@ -38,8 +40,10 @@ export function useSessionAgentInputRoutingControls(params: Readonly<{
             recipient: params.recipientState.recipient,
             onRecipientChange: params.recipientState.setManualRecipient,
             ...(params.recipientState.scmDiffSummaryDiscussion ? { pendingLabel: t('walkthrough.eyebrow') } : {}),
+            ...(params.sessionTalk ? { sessionTalk: params.sessionTalk } : {}),
         });
     }, [
+        params.sessionTalk,
         params.isReadOnly,
         params.participantTargets,
         params.recipientState.recipient,

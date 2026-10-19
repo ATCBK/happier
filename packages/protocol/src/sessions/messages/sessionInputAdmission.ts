@@ -5,7 +5,7 @@ import { z } from 'zod/mini';
 import { CallerInputConstraintsV1Schema } from '../../auth/callerInputConstraintsV1.js';
 import { sha256 } from '@noble/hashes/sha2';
 import { ActionRequestAttributionV1Schema } from '../../actions/actionRequestAttributionV1.js';
-import { SessionFollowInputV1Schema } from '../follow/sessionFollowInputV1.js';
+import { isRunFollowOriginalV1, SessionFollowInputV1Schema } from '../follow/sessionFollowInputV1.js';
 import { DiscussionAddressingV1Schema } from '../../discussions/references.js';
 import { SessionFollowSourceOccurrenceWitnessesV1Schema, SessionFollowRelationWitnessesV1Schema } from '../follow/sessionFollowSourceOccurrenceV1.js';
 
@@ -484,7 +484,9 @@ export type SessionInputReturnedAnswerV1 = z.infer<typeof SessionInputReturnedAn
 /** Protected origin only: display attribution must never select receiver policy. */
 export function readSessionInputSenderSessionIdV1(request: SessionInputRequest | SessionInputAuthority): string | undefined {
   return request.sourceSession?.sourceSessionId
-    ?? (request.v === 1 ? request.returnedAnswer?.senderSessionId ?? request.followDeliveryV1?.original.sourceSessionId : undefined);
+    ?? (request.v === 1 ? request.returnedAnswer?.senderSessionId ?? (request.followDeliveryV1
+      && !isRunFollowOriginalV1(request.followDeliveryV1.original)
+        ? request.followDeliveryV1.original.sourceSessionId : undefined) : undefined);
 }
 
 const SessionInputProtectedCommonV1Schema = lazyZodSchema(() => z.strictObject({
@@ -509,7 +511,8 @@ function refineProtectedInputCommon(
   if (value.followDeliveryV1) {
     if (value.returnedAnswer || value.replyIntent && !value.discussionAddressing || value.sourceAuthority || value.automation
       || value.producer !== 'sessionAction'
-      || value.sourceSession && value.sourceSession.sourceSessionId !== value.followDeliveryV1.original.sourceSessionId) {
+      || value.sourceSession && (isRunFollowOriginalV1(value.followDeliveryV1.original)
+        || value.sourceSession.sourceSessionId !== value.followDeliveryV1.original.sourceSessionId)) {
       context.addIssue({ code: 'custom', path: ['followDeliveryV1'], message: 'Follow input requires its exact original source and cannot request another effect' });
     }
   }
@@ -639,6 +642,7 @@ const SessionInputProtectedCommonV2Schema = lazyZodSchema(() => z.strictObject({
   caller: z.optional(SessionInputCallerV1Schema),
   sourceSession: z.optional(SessionInputSourceSessionV1Schema),
   sourceAuthority: z.optional(SessionInputSourceAuthorityV1Schema),
+  replyIntent: z.optional(SessionInputReplyIntentV1Schema),
   workflow: SessionInputWorkflowV2Schema,
   actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
 }));
@@ -649,6 +653,9 @@ function refineProtectedWorkflowInputCommon(
 ): void {
   if (value.caller?.kind === 'plugin') {
     context.addIssue({ code: 'custom', path: ['caller'], message: 'Workflow input is emitted only by the trusted host' });
+  }
+  if (value.replyIntent?.humanOrigin || value.replyIntent?.mode === 'return' && !value.sourceSession) {
+    context.addIssue({ code: 'custom', path: ['replyIntent'], message: 'Workflow returns require an admitted causal Session' });
   }
 }
 

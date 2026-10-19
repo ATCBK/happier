@@ -1,24 +1,20 @@
 import * as React from 'react';
-import { useUnistyles } from 'react-native-unistyles';
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import { resolveEffectiveAttentionDeliveryPolicy } from '@/activity/delivery/resolveActivityAttentionDeliveryPlan';
 import { useRouter, type Href } from '@/components/appShell/workspace/destinationRoute';
 import { projectSessionFollowerCensus } from '@/components/sessions/collaboration/SessionPeopleFollowSections';
 import { serializeSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
-import { SessionAgentCatalogIdentityIcon } from '@/components/sessions/presentation/SessionAgentCatalogIdentityIcon';
-import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { useLocalSetting, useSetting } from '@/sync/domains/state/storage';
 import { useSessionListRenderableWithServerScope } from '@/sync/store/hooks';
 import { readExternalSessionFollowPolicy } from '@/sync/domains/session/external/externalSessionFollowMetadata';
 import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
-import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 
 import { AccountSessionFollowEditor, type AccountSessionFollowEditorParts } from './AccountSessionFollowEditor';
+import { FollowSessionMark } from './FollowSessionMark';
 import { useAccountSessionFollowController } from './useAccountSessionFollowController';
 import { useAccountVoiceFollowReadiness } from './useAccountVoiceFollowReadiness';
 import { useSessionFollowers } from './useSessionFollowers';
@@ -47,7 +43,6 @@ export function AccountSessionFollowControl(props: Readonly<{
     /** Places the editor's header, body and footer (the popover panel or the page). */
     frame?: (parts: AccountSessionFollowEditorParts) => React.ReactNode;
 }>) {
-    const { theme } = useUnistyles();
     const router = useRouter();
     const enabled = useFeatureEnabled('sessions.following', { scopeKind: 'spawn', serverId: props.address.serverId });
     const { serverId, sessionId } = props.address;
@@ -78,9 +73,6 @@ export function AccountSessionFollowControl(props: Readonly<{
     const alsoFollowing = census.sessions && census.otherPeople !== null
         ? { people: census.otherPeople, sessions: census.sessions.length } : null;
     const quietHours = useQuietHoursSummary();
-    const agentId = metadata ? resolveAgentIdFromSessionMetadata(metadata as never) : null;
-    const sessionMark = agentId ? <SessionAgentCatalogIdentityIcon agentId={agentId} machineId={resolveSessionMachineId(metadata)}
-        serverId={serverId} color={theme.colors.text.primary} size={ICON_SIZE.md} /> : null;
 
     if (!enabled) return null;
     return <AccountSessionFollowEditor
@@ -95,7 +87,7 @@ export function AccountSessionFollowControl(props: Readonly<{
         onRetry={() => { void controller.retry(); }}
         onOpenNotificationSettings={() => { props.onOpenNotificationSettings?.(); }}
         sessionTitle={session ? getSessionName(session, serverId) : undefined}
-        sessionMark={sessionMark}
+        sessionMark={<FollowSessionMark metadata={metadata} serverId={serverId} />}
         onClose={props.onClose}
         alsoFollowing={alsoFollowing}
         onOpenPeople={() => {

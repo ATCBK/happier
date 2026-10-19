@@ -81,7 +81,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     /** The canonical prepared filesystem owner installed by the daemon. */
     filesystemActionExecute?: ActionExecutorDeps['filesystemActionExecute'];
     skillMachineActionExecute?: ActionExecutorDeps['skillMachineActionExecute'];
-    sessionFollowActionDeps?: Pick<ActionExecutorDeps, 'sessionFollowAction'>;
+    sessionFollowActionDeps?: Pick<ActionExecutorDeps, 'sessionFollowAction' | 'readSessionFollowRules'>;
     sessionTrackedTargetCompatibilityDeps?: Pick<ActionExecutorDeps, 'sessionTargetTrackedSet'>;
     sessionReadStateActionDeps?: Pick<ActionExecutorDeps, 'sessionReadStateAction'>;
     pluginActionExecutionOwner?: 'daemon_control' | 'current_process';
@@ -202,6 +202,8 @@ export function createCliActionExecutor(
       ...(params.skillMachineActionExecute ? { skillMachineActionExecute: params.skillMachineActionExecute } : {}),
       ...(params.sessionFollowActionDeps ?? createSessionFollowActionDeps({
         token: params.token,
+        ...(params.credentials ? { credentials: params.credentials } : {}),
+        ...(params.isCredentialCurrent ? { isCredentialCurrent: params.isCredentialCurrent } : {}),
         ...exactHome,
         ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
         ...(params.externalActionMachineRequestPrivateKey

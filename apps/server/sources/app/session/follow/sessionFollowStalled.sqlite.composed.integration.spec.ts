@@ -638,8 +638,8 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         const count = SESSION_FOLLOW_SOURCE_PROJECTION_MAX_PAGE_ROWS_V1 + 1;
         await db.sessionMessage.createMany({ data: Array.from({ length: count }, (_, index) => ({
             sessionId: f.source.id, seq: firstSeq + index + 1, localId: randomUUID(), messageRole: 'event',
-            content: { t: 'plain', v: { role: 'agent', content: { type: 'event',
-                data: { type: 'message', message: 'Nonsemantic progress' } } } },
+            content: { t: 'plain', v: { role: 'agent', content: { type: 'codex',
+                data: { type: 'token_count' } } } },
         })) });
         await db.session.update({ where: { id: f.source.id }, data: { seq: firstSeq + count } });
         const secondSeq = await f.appendReport('Later original finding');
@@ -658,6 +658,18 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             transcriptPointer: { kind: 'session', sessionId: f.source.id, seq: secondSeq } }]);
         await original.accept(later!);
         expect(f.acceptedPrompts[1]).not.toContain('Aged original finding');
+        expect(f.acceptedPrompts[1]).not.toContain('Actual later final result');
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id)))
+            .toMatchObject({ deliveredTranscriptSeq: secondSeq, deliveredTurnId: null });
+        const terminal = await f.makeReconciler()({ signal: new AbortController().signal, deliveryIntent: 'wake' });
+        expect(terminal?.workerUpdates).toMatchObject([{ ownerState: 'settled', result: 'Actual later final result' }]);
+        await f.commitWorkerWake(terminal!);
+        terminal!.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: terminal!.wakeEventLocalId! });
+        expect(await Promise.all(f.acknowledgements)).toEqual([
+            expect.objectContaining({ ok: true }), expect.objectContaining({ ok: true }), expect.objectContaining({ ok: true }),
+        ]);
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id)))
+            .toMatchObject({ deliveredTurnId: 'later-turn', deliveredTurnStatus: 'completed' });
     });
 
     it('accepts distinct originals with identical text independently through overlapping routes', async () => {

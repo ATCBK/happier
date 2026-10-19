@@ -12,7 +12,8 @@ import { AutonomousExchangeStateV1Schema, createAutonomousExchangeStateV1,
 import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { isPlainMachineDataKeyMarker } from '@happier-dev/protocol/machines/machineStoredContent';
-import { type SessionFollowSourceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { type FollowSourceRelationV1, type SessionFollowSourceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import type { FollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { type SessionFollowSourceProjectionRequestV1, type SessionFollowSourceProjectionResponseV1, SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
 import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import { deriveSessionFollowInputLocalIdV1, deriveSessionFollowOriginalOccurrenceKeyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
@@ -48,7 +49,14 @@ import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "@/app/ses
 import { readSessionPendingReviewRunCountsInTx } from '@/app/session/awareness/sessionManagerProjection';
 import { parseStoredSessionRuntimeIssue, parseStoredSessionTurnTranscriptAnchors } from '@/app/session/turns/parseSessionTurnState';
 import { isDeliveryMutedInTx } from './sessionDeliveryMuteService';
-import { sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
+import { sourceForSessionFollowEdgeV1, sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
+import { discussionContextStorageAdapter } from '@/app/discussions/access';
+import { mayInjectResourceContextInTx } from '@/app/session/access/sessionContextInjection';
+import { resolveWorkflowRunAccessInTx } from '@/app/workflows/workflowRunAccess';
+import { isPublicSessionShareActive } from '@/app/share/publicSessionSharePublication';
+import { canReadFollowSourceInTx } from './followSourceAdmission';
+import { isExecutionRunFollowFrontierWitnessCurrentInTx, type ExecutionRunFollowFrontierWitness } from './executionRunFollowSource';
+import { pageFollowListV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
 import { readCurrentCommittedSessionInputMachineTargetInTx, readStoredSessionInputAdmissionReceipt } from '@/app/session/messages/sessionInputAdmission';
 import { readAdmittedSessionFollowInputInTx, readSessionFollowOriginalOccurrenceFrontiersInTx, sessionFollowInputFrontiers, settleSessionFollowInputReasonsInTx, type SessionFollowInputRelation } from './sessionFollowRuleProgress';
 import { readAutonomousExchangeSourceRoot, readReceiverAutonomousExchangeRootInTx,
@@ -58,7 +66,7 @@ import { readExactCurrentPublisherAuthorityInTx } from '@/app/session/pending/ha
 import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
 import { projectSessionFollowDefaultRelationshipsV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { resolveSessionFollowFactsInTx } from '@/app/session/personal/followFacts';
-import { readSessionPersonalFollowerCensusInTx } from './accountFollowService';
+import { readOtherPersonalFollowerCensusInTx, readSessionPersonalFollowerCensusInTx } from './accountFollowService';
 import type { SessionFollowActionOutputV1 } from '@happier-dev/protocol/sessions/follow/actions';
 export { attachDiscussionFollowSourceInTx, detachDiscussionFollowSourceInTx, invalidateDiscussionFollowDestinationsInTx,
     admitDiscussionFollowAddressingInTx, acknowledgeDiscussionFollowInputInTx } from './discussionFollowSource';
@@ -89,7 +97,12 @@ const SESSION_SELECT = {
 } as const;
 
 const EDGE_SELECT = {
+    sourceKey: true,
     sourceSessionId: true,
+    sourceDiscussionId: true,
+    sourceExecutionRunSessionId: true,
+    sourceExecutionRunId: true,
+    sourceWorkflowRunId: true,
     destinationSessionId: true,
     relation: true,
     attachedAt: true,
@@ -100,6 +113,75 @@ const EDGE_SELECT = {
     deliveredTurnStatus: true,
     policyJson: true,
 } as const;
+
+type OtherFollowSource = Extract<FollowSourceRefV1, { kind: 'discussion' | 'execution_run' | 'workflow_run' }>;
+
+async function canReadOtherFollowSourceInTx(tx: Tx, input: Readonly<{
+    accountId: string; source: OtherFollowSource; authentication: SessionAccessAuthentication;
+}>): Promise<boolean> {
+    return canReadFollowSourceInTx(tx, input);
+}
+
+async function mayInjectOtherFollowSourceInTx(tx: Tx, input: Readonly<{
+    accountId: string; source: OtherFollowSource; destinationSessionId: string; authentication: SessionAccessAuthentication;
+}>): Promise<boolean> {
+    if (input.source.kind === 'discussion') {
+        const participant = await tx.discussionParticipant.findUnique({ where: { discussionId_sessionId: {
+            discussionId: input.source.discussionId, sessionId: input.destinationSessionId,
+        } }, select: { removedAt: true } });
+        if (!participant || participant.removedAt !== null) return false;
+        return (await mayInjectResourceContextInTx(tx, { configuringAccountId: input.accountId,
+            authentication: input.authentication,
+            source: { kind: 'resource', resourceId: input.source.discussionId, adapter: discussionContextStorageAdapter },
+            destination: { kind: 'session', sessionId: input.destinationSessionId },
+        })).ok;
+    }
+    if (input.source.kind === 'execution_run') {
+        return (await mayInjectResourceContextInTx(tx, { configuringAccountId: input.accountId,
+            authentication: input.authentication,
+            source: { kind: 'session', sessionId: input.source.sessionId },
+            destination: { kind: 'session', sessionId: input.destinationSessionId },
+        })).ok;
+    }
+    const destination = await tx.session.findUnique({ where: { id: input.destinationSessionId },
+        select: { accountId: true, publicShare: { select: { expiresAt: true } } } });
+    if (!destination || isPublicSessionShareActive(destination.publicShare)) return false;
+    const audience = await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, { sessionIds: [destination.id] });
+    const accounts = new Set([destination.accountId, ...(audience.get(destination.id) ?? [])]);
+    for (const accountId of accounts) if (!await resolveWorkflowRunAccessInTx(tx, {
+        actorAccountId: accountId, runId: input.source.runId })) return false;
+    return true;
+}
+
+async function projectOtherFollowSourceInTx(tx: Tx, edge: Readonly<{
+    sourceKey: string; destinationSessionId: string; policyJson: string; deliveredTranscriptSeq: number;
+    sourceSessionId: string | null; sourceDiscussionId: string | null;
+    sourceExecutionRunSessionId: string | null; sourceExecutionRunId: string | null; sourceWorkflowRunId: string | null;
+}>, destinationArchived: boolean): Promise<FollowSourceRelationV1 | null> {
+    const source = sourceForSessionFollowEdgeV1(edge);
+    if (!source || source.kind === 'session') return null;
+    let stored: unknown;
+    try { stored = JSON.parse(edge.policyJson); } catch { return null; }
+    const policy = FollowPolicyV1Schema.safeParse(stored);
+    if (!policy.success) return null;
+    let available = false;
+    let pending: boolean | null = null;
+    let archived = false;
+    if (source.kind === 'discussion') {
+        const row = await tx.discussion.findUnique({ where: { id: source.discussionId },
+            select: { archivedAt: true, messageSeq: true } });
+        available = row !== null;
+        archived = row?.archivedAt != null;
+        pending = row ? row.messageSeq > edge.deliveredTranscriptSeq : null;
+    } else if (source.kind === 'workflow_run') {
+        const row = await tx.automationRun.findUnique({ where: { id: source.runId },
+            select: { workflowCustodyState: true } });
+        available = row?.workflowCustodyState !== null && row !== null;
+    }
+    return { source, destinationSessionId: edge.destinationSessionId, policy: policy.data,
+        relation: 'follower', deliveryState: destinationArchived || archived ? 'paused_archived' : 'eligible',
+        sourceAvailability: available ? 'available' : 'unavailable', hasPendingUpdates: pending };
+}
 
 type SessionFollowSourceRunnerInput = Readonly<{
     principal: VerifiedEphemeralSessionRunnerPrincipal;
@@ -256,7 +338,8 @@ export type SessionFollowSourceFailure =
     | "account_inactive"
     | "session_archived"
     | "session_follow_same_session"
-    | "session_follow_source_forbidden";
+    | "session_follow_source_forbidden"
+    | "session_follow_source_unavailable";
 
 export type SessionFollowSourceResult<T> =
     | Readonly<{ ok: true; value: T }>
@@ -297,9 +380,13 @@ type EdgeRow = Readonly<{
 }>;
 
 /** Session-only adapters never reinterpret a Discussion FK as a Session id. */
-function readSessionEdge<T extends { sourceSessionId: string | null; relation: string; policyJson: string }>(edge: T | null):
+function readSessionEdge<T extends { sourceKey: string; sourceSessionId: string | null; sourceDiscussionId: string | null;
+    sourceExecutionRunSessionId: string | null; sourceExecutionRunId: string | null; sourceWorkflowRunId: string | null;
+    relation: string; policyJson: string }>(edge: T | null):
     (T & { sourceSessionId: string; relation: 'follower' | 'manager'; policy: FollowPolicyV1 }) | null {
     if (!edge || edge.sourceSessionId === null || (edge.relation !== 'follower' && edge.relation !== 'manager')) return null;
+    const source = sourceForSessionFollowEdgeV1(edge);
+    if (source?.kind !== 'session' || source.sessionId !== edge.sourceSessionId) return null;
     try {
         const policy = FollowPolicyV1Schema.safeParse(JSON.parse(edge.policyJson));
         return policy.success ? { ...edge, sourceSessionId: edge.sourceSessionId, relation: edge.relation, policy: policy.data } : null;
@@ -462,43 +549,64 @@ export async function listSessionFollowSources(input: Readonly<{
     accountId: string;
     destinationSessionId: string;
     authentication: SessionAccessAuthentication;
-}>): Promise<SessionFollowSourceResult<readonly SessionFollowSourceV1[]>> {
-    return await readSnapshotWithCurrentAdmission<SessionFollowSourceResult<readonly SessionFollowSourceV1[]>>(async (tx) => {
+    cursor?: string;
+    limit?: number;
+}>): Promise<SessionFollowSourceResult<Readonly<{ sources: readonly FollowSourceRelationV1[]; continuation?: string }>>> {
+    return await readSnapshotWithCurrentAdmission<SessionFollowSourceResult<Readonly<{ sources: readonly FollowSourceRelationV1[]; continuation?: string }>>>(async (tx) => {
         if (!await isActingAccountActive(tx, input.accountId)) return { ok: false, error: "account_inactive" };
         const destination = await loadSession(tx, input.destinationSessionId);
         if (!destination || !await canReadSession(tx, input.accountId, input.destinationSessionId, input.authentication)) {
             return { ok: false, error: "session_not_found" };
         }
         const edges = await tx.sessionFollowEdge.findMany({
-            where: { destinationSessionId: input.destinationSessionId, relation: 'follower', sourceSessionId: { not: null } },
+            where: { destinationSessionId: input.destinationSessionId, relation: 'follower' },
             select: EDGE_SELECT,
-            orderBy: { sourceSessionId: "asc" },
+            orderBy: { sourceKey: "asc" },
         });
-        const visible: SessionFollowSourceV1[] = [];
+        const visible: FollowSourceRelationV1[] = [];
         for (const row of edges) {
             const edge = readSessionEdge(row);
-            if (!edge) continue;
-            if (!await canReadSession(tx, input.accountId, edge.sourceSessionId, input.authentication)) continue;
-            const source = await loadSession(tx, edge.sourceSessionId);
-            const dormant = destination.archivedAt !== null || source === null || source.archivedAt !== null;
-            visible.push(projectSource(edge, source, dormant));
+            if (edge) {
+                if (!await canReadSession(tx, input.accountId, edge.sourceSessionId, input.authentication)) continue;
+                const source = await loadSession(tx, edge.sourceSessionId);
+                const dormant = destination.archivedAt !== null || source === null || source.archivedAt !== null;
+                visible.push(projectSource(edge, source, dormant));
+            } else {
+                const source = sourceForSessionFollowEdgeV1(row);
+                if (!source || source.kind === 'session' || !await canReadOtherFollowSourceInTx(tx, {
+                    accountId: input.accountId, source, authentication: input.authentication })) continue;
+                const projected = await projectOtherFollowSourceInTx(tx, row, destination.archivedAt !== null);
+                if (projected) visible.push(projected);
+            }
         }
-        return { ok: true, value: visible };
+        return { ok: true, value: { sources: visible } };
     }, async (tx, captured) => {
         if (!captured.ok) return captured;
         if (!await isActingAccountActive(tx, input.accountId)) return { ok: false, error: "account_inactive" };
         if (!await canReadSession(tx, input.accountId, input.destinationSessionId, input.authentication)) return { ok: false, error: "session_not_found" };
-        const visible: SessionFollowSourceV1[] = [];
-        for (const source of captured.value) {
-            if (await canReadSession(tx, input.accountId, source.sourceSessionId, input.authentication)) visible.push(source);
+        const visible: FollowSourceRelationV1[] = [];
+        for (const source of captured.value.sources) {
+            const permitted = 'sourceSessionId' in source
+                ? await canReadSession(tx, input.accountId, source.sourceSessionId, input.authentication)
+                : await canReadOtherFollowSourceInTx(tx, { accountId: input.accountId, source: source.source as OtherFollowSource,
+                    authentication: input.authentication });
+            if (permitted) visible.push(source);
         }
-        return { ...captured, value: visible };
+        try {
+            const page = pageFollowListV1({ scope: JSON.stringify([input.accountId, 'following', input.destinationSessionId]),
+                rows: visible, key: row => 'sourceSessionId' in row
+                    ? sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: row.sourceSessionId })
+                    : sourceKeyForSessionFollowSourceV1(row.source as OtherFollowSource),
+                cursor: input.cursor, limit: input.limit });
+            return { ok: true, value: { sources: page.rows, ...(page.continuation ? { continuation: page.continuation } : {}) } };
+        } catch { return { ok: false, error: 'invalid_parameters' }; }
     });
 }
 
 /** Reverse inspection is source-authorized; private people remain an anonymous census. */
 export async function listSessionFollowers(input: Readonly<{
     accountId: string; sourceSessionId: string; authentication: SessionAccessAuthentication;
+    cursor?: string; limit?: number;
 }>): Promise<SessionFollowSourceResult<SessionFollowActionOutputV1['follow.list']>> {
     const admitSource = async (tx: Tx) => {
         if (!await isActingAccountActive(tx, input.accountId)) return 'account_inactive' as const;
@@ -527,8 +635,62 @@ export async function listSessionFollowers(input: Readonly<{
         if (error) return { ok: false, error };
         const sources: SessionFollowSourceV1[] = [];
         for (const row of captured.value.sources) if (await canReadSession(tx, input.accountId, row.destinationSessionId, input.authentication)) sources.push(row);
-        return { ok: true, value: { ...captured.value, sources, ...await readSessionPersonalFollowerCensusInTx(tx,
-            { accountId: input.accountId, sessionId: input.sourceSessionId }) } };
+        const census = await readSessionPersonalFollowerCensusInTx(tx, { accountId: input.accountId, sessionId: input.sourceSessionId });
+        try {
+            const page = pageFollowListV1({ scope: JSON.stringify([input.accountId, 'followers', input.sourceSessionId]),
+                rows: sources, key: row => JSON.stringify([row.destinationSessionId, row.relation]),
+                cursor: input.cursor, limit: input.limit });
+            return { ok: true, value: { ...captured.value, sources: page.rows,
+                coverage: page.continuation ? 'partial' : 'complete',
+                ...(page.continuation ? { continuation: page.continuation } : {}),
+                ...census } };
+        } catch { return { ok: false, error: 'invalid_parameters' }; }
+    });
+}
+
+/** Reverse inspection for one exact non-Session source, with anonymous personal census. */
+export async function listOtherSessionFollowers(input: Readonly<{
+    accountId: string; source: OtherFollowSource; authentication: SessionAccessAuthentication;
+    cursor?: string; limit?: number;
+}>): Promise<SessionFollowSourceResult<SessionFollowActionOutputV1['follow.list']>> {
+    const admit = async (tx: Tx) => {
+        if (!await isActingAccountActive(tx, input.accountId)) return 'account_inactive' as const;
+        return await canReadOtherFollowSourceInTx(tx, input) ? null : 'session_not_found' as const;
+    };
+    return readSnapshotWithCurrentAdmission<SessionFollowSourceResult<SessionFollowActionOutputV1['follow.list']>>(async tx => {
+        const error = await admit(tx);
+        if (error) return { ok: false as const, error };
+        const sourceKey = sourceKeyForSessionFollowSourceV1(input.source);
+        const rows = await tx.sessionFollowEdge.findMany({ where: { sourceKey, relation: 'follower' },
+            select: EDGE_SELECT, orderBy: { destinationSessionId: 'asc' } });
+        const sources: FollowSourceRelationV1[] = [];
+        for (const row of rows) {
+            if (JSON.stringify(sourceForSessionFollowEdgeV1(row)) !== JSON.stringify(input.source))
+                throw new Error('Follow Run source digest collision');
+            if (!await canReadSession(tx, input.accountId, row.destinationSessionId, input.authentication)) continue;
+            const destination = await loadSession(tx, row.destinationSessionId);
+            if (!destination) continue;
+            const projected = await projectOtherFollowSourceInTx(tx, row, destination.archivedAt !== null);
+            if (projected) sources.push(projected);
+        }
+        return { ok: true as const, value: { sources, rules: [], coverage: 'complete' as const,
+            ...await readOtherPersonalFollowerCensusInTx(tx, { accountId: input.accountId, source: input.source }) } };
+    }, async (tx, captured) => {
+        if (!captured.ok) return captured;
+        const error = await admit(tx);
+        if (error) return { ok: false as const, error };
+        const sources: FollowSourceRelationV1[] = [];
+        for (const row of captured.value.sources) if (await canReadSession(tx, input.accountId,
+            row.destinationSessionId, input.authentication)) sources.push(row);
+        try {
+            const page = pageFollowListV1({ scope: JSON.stringify([input.accountId, 'followers',
+                    sourceKeyForSessionFollowSourceV1(input.source)]), rows: sources,
+                key: row => JSON.stringify([row.destinationSessionId, row.relation ?? 'follower']),
+                cursor: input.cursor, limit: input.limit });
+            return { ok: true as const, value: { sources: page.rows, rules: [], coverage: 'complete' as const,
+                ...await readOtherPersonalFollowerCensusInTx(tx, { accountId: input.accountId, source: input.source }),
+                ...(page.continuation ? { continuation: page.continuation } : {}) } };
+        } catch { return { ok: false as const, error: 'invalid_parameters' as const }; }
     });
 }
 
@@ -736,6 +898,106 @@ async function prepareSessionFollowSourceKeyPreparerInTx(
 }
 
 /** Resolves the authorized destination room; exact Runner authority is still required at dispatch. */
+/** Non-Session refs use this same edge owner; raw Run fields are checked beside digest keys. */
+export async function setOtherSessionFollowSource(input: Readonly<{
+    accountId: string; destinationSessionId: string; source: OtherFollowSource;
+    policy: FollowPolicyV1; authentication: SessionAccessAuthentication;
+    executionRunFrontier?: ExecutionRunFollowFrontierWitness;
+}>): Promise<SessionFollowSourceResult<Readonly<{ changed: boolean; source: FollowSourceRelationV1 }>>> {
+    const parsed = FollowPolicyV1Schema.safeParse(input.policy);
+    if (!parsed.success) return { ok: false, error: 'invalid_parameters' };
+    return inTx(async tx => {
+        const sessionIds = input.source.kind === 'execution_run'
+            ? [input.source.sessionId, input.destinationSessionId] : [input.destinationSessionId];
+        await acquireSessionAccountCursorLocksInTx(tx, sessionIds, [input.accountId]);
+        if (!await isActingAccountActive(tx, input.accountId)) return { ok: false, error: 'account_inactive' };
+        const destination = await loadSession(tx, input.destinationSessionId);
+        if (!destination || !await canReadSession(tx, input.accountId, destination.id, input.authentication))
+            return { ok: false, error: 'session_not_found' };
+        if (!await canReadOtherFollowSourceInTx(tx, input)) return { ok: false, error: 'session_not_found' };
+        if (!await canSubmitDestinationInput(tx, input.accountId, destination.id, input.authentication)
+            || !await mayInjectOtherFollowSourceInTx(tx, input))
+            return { ok: false, error: 'session_follow_source_forbidden' };
+        if (destination.archivedAt !== null) return { ok: false, error: 'session_archived' };
+        if (input.source.kind === 'discussion') {
+            const discussion = await tx.discussion.findUnique({ where: { id: input.source.discussionId },
+                select: { archivedAt: true } });
+            if (!discussion) return { ok: false, error: 'session_not_found' };
+            if (discussion.archivedAt !== null) return { ok: false, error: 'session_archived' };
+        }
+        if (input.source.kind === 'execution_run') {
+            const parent = await loadSession(tx, input.source.sessionId);
+            if (!parent) return { ok: false, error: 'session_not_found' };
+            if (parent.archivedAt !== null) return { ok: false, error: 'session_archived' };
+        }
+        const sourceKey = sourceKeyForSessionFollowSourceV1(input.source);
+        const key = { destinationSessionId: destination.id, sourceKey, relation: 'follower' };
+        const existing = await tx.sessionFollowEdge.findUnique({ where: { destinationSessionId_sourceKey_relation: key }, select: EDGE_SELECT });
+        if (existing && JSON.stringify(sourceForSessionFollowEdgeV1(existing)) !== JSON.stringify(input.source))
+            throw new Error('Follow Run source digest collision');
+        if (!existing && input.source.kind === 'execution_run') {
+            const frontier = input.executionRunFrontier;
+            if (!frontier || JSON.stringify(frontier.source) !== JSON.stringify(input.source)
+                || !await isExecutionRunFollowFrontierWitnessCurrentInTx(tx, frontier))
+                return { ok: false, error: 'session_follow_source_unavailable' };
+        }
+        const policyJson = serializeFollowPolicyV1(parsed.data);
+        if (existing) {
+            const projection = await projectOtherFollowSourceInTx(tx, existing, false);
+            if (!projection) return { ok: false, error: 'session_follow_source_unavailable' };
+            if (isFollowPolicyEqualV1(projection.policy, parsed.data))
+                return { ok: true, value: { changed: false, source: projection } };
+            const updated = await tx.sessionFollowEdge.update({ where: { destinationSessionId_sourceKey_relation: key },
+                data: { policyJson }, select: EDGE_SELECT });
+            await invalidateSessionFollowDestinationsInTx(tx, [destination.id]);
+            const source = await projectOtherFollowSourceInTx(tx, updated, false);
+            if (!source) throw new Error('Follow source update lost exact identity');
+            return { ok: true, value: { changed: true, source } };
+        }
+        const raw = input.source.kind === 'discussion' ? { sourceDiscussionId: input.source.discussionId }
+            : input.source.kind === 'workflow_run' ? { sourceWorkflowRunId: input.source.runId }
+            : { sourceExecutionRunSessionId: input.source.sessionId, sourceExecutionRunId: input.source.runId };
+        const baseline = input.source.kind === 'discussion'
+            ? { deliveredTranscriptSeq: (await tx.discussion.findUniqueOrThrow({ where: { id: input.source.discussionId },
+                select: { messageSeq: true } })).messageSeq }
+            : input.source.kind === 'workflow_run'
+                ? { deliveredWorkflowRunRevision: (await tx.automationRun.findUniqueOrThrow({ where: { id: input.source.runId },
+                    select: { revision: true } })).revision }
+                : { deliveredExecutionRunTerminalEventId: input.executionRunFrontier?.terminalEventId ?? null };
+        const created = await tx.sessionFollowEdge.upsert({ where: { destinationSessionId_sourceKey_relation: key },
+            create: { ...key, ...raw, ...baseline, policyJson }, update: {}, select: EDGE_SELECT });
+        if (JSON.stringify(sourceForSessionFollowEdgeV1(created)) !== JSON.stringify(input.source))
+            throw new Error('Follow Run source digest collision');
+        await invalidateSessionFollowDestinationsInTx(tx, [destination.id]);
+        const source = await projectOtherFollowSourceInTx(tx, created, false);
+        if (!source) throw new Error('Follow source create lost exact identity');
+        return { ok: true, value: { changed: true, source } };
+    });
+}
+
+export async function removeOtherSessionFollowSource(input: Readonly<{
+    accountId: string; destinationSessionId: string; source: OtherFollowSource;
+    authentication: SessionAccessAuthentication;
+}>): Promise<SessionFollowSourceResult<Readonly<{ changed: boolean }>>> {
+    return inTx(async tx => {
+        await acquireSessionAccountCursorLocksInTx(tx, [input.destinationSessionId], [input.accountId]);
+        if (!await isActingAccountActive(tx, input.accountId)) return { ok: false, error: 'account_inactive' };
+        const destination = await loadSession(tx, input.destinationSessionId);
+        if (!destination || !await canReadSession(tx, input.accountId, destination.id, input.authentication))
+            return { ok: false, error: 'session_not_found' };
+        if (!await canSubmitDestinationInput(tx, input.accountId, destination.id, input.authentication))
+            return { ok: false, error: 'session_follow_source_forbidden' };
+        const key = { destinationSessionId: destination.id, sourceKey: sourceKeyForSessionFollowSourceV1(input.source), relation: 'follower' };
+        const existing = await tx.sessionFollowEdge.findUnique({ where: { destinationSessionId_sourceKey_relation: key }, select: EDGE_SELECT });
+        if (existing && JSON.stringify(sourceForSessionFollowEdgeV1(existing)) !== JSON.stringify(input.source))
+            throw new Error('Follow Run source digest collision');
+        if (!existing) return { ok: true, value: { changed: false } };
+        await tx.sessionFollowEdge.delete({ where: { destinationSessionId_sourceKey_relation: key } });
+        await invalidateSessionFollowDestinationsInTx(tx, [destination.id]);
+        return { ok: true, value: { changed: true } };
+    });
+}
+
 export async function authorizeSessionFollowSourceKeyPreparer(
     input: SessionFollowSourceKeyPreparerInput,
 ): Promise<SessionFollowSourceResult<Readonly<{ destinationRuntimeAccountId: string }>>> {

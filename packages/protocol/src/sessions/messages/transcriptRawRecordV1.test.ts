@@ -62,6 +62,16 @@ describe('TranscriptRawRecordV1Schema', () => {
     expect(TranscriptRawAgentEventV1Schema.parse(event)).toEqual(event);
     expect(TranscriptRawAgentEventV1Schema.safeParse({ ...event, followWakeEventLocalId: 'ordinary-event' }).success).toBe(false);
   });
+  it('retains admitted relation and rule reasons without disclosing private rule identity', () => {
+    const event = { type: 'worker-update', update: {
+      v: 1, workerKind: 'session', workerId: 'worker', ownerState: 'settled', wake: 'finished',
+      headline: 'Worker finished', canInspect: true,
+    }, followMatches: [{ kind: 'relation', relation: 'manager' }, { kind: 'rule' }],
+    followInputLocalId: 'follow-original:accepted' };
+    expect(TranscriptRawAgentEventV1Schema.parse(event)).toEqual(event);
+    expect(TranscriptRawAgentEventV1Schema.safeParse({ ...event,
+      followMatches: [{ kind: 'rule', ruleId: 'private-rule' }] }).success).toBe(false);
+  });
   it('parses user text records with extra fields', () => {
     const parsed = TranscriptRawRecordV1Schema.safeParse({
       role: 'user',

@@ -8,7 +8,7 @@ import { DiscussionAddressingV1Schema, type DiscussionAddressingV1 } from '../..
 import { SessionInputMachineTargetV1Schema } from '../messages/sessionInputAdmission.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
-import { SessionFollowInputV1Schema } from './sessionFollowInputV1.js';
+import { ExecutionRunFollowOriginalV1Schema, SessionFollowInputV1Schema, WorkflowRunFollowOriginalV1Schema } from './sessionFollowInputV1.js';
 import { FollowEventV1Schema, FollowPolicyV1Schema, serializeFollowPolicyV1 } from './sessionFollowPolicyV1.js';
 import { SessionFollowPublisherGenerationV1Schema, SessionFollowSourceMessageV1Schema, SessionFollowSourceRequestsV1Schema } from './sessionFollowSourceOccurrenceV1.js';
 import { SessionMetadataPublisherPreconditionV1Schema } from '../metadata/sessionMetadataSchemasV1.js';
@@ -140,6 +140,25 @@ export const SessionFollowSessionPendingObservationV1Schema = lazyZodSchema(() =
 })));
 export type SessionFollowSessionPendingObservationV1 = z.infer<typeof SessionFollowSessionPendingObservationV1Schema>;
 
+/** Current, exact Run-original route read; no parent Session frontier or private rule proof. */
+export const SessionFollowRunOccurrenceRoutesRequestV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ v: z.literal(1), original: ExecutionRunFollowOriginalV1Schema }),
+  z.strictObject({ v: z.literal(1), original: WorkflowRunFollowOriginalV1Schema }),
+]));
+export type SessionFollowRunOccurrenceRoutesRequestV1 = z.infer<typeof SessionFollowRunOccurrenceRoutesRequestV1Schema>;
+const runRouteFields = { destinationSessionId: SessionIdZodSchema, relation: z.literal('follower'),
+  attachedAt: z.number().check(z.int(), z.nonnegative()), policy: FollowPolicyV1Schema };
+export const SessionFollowRunOccurrenceRoutesResponseV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ ok: z.literal(true), v: z.literal(1), original: ExecutionRunFollowOriginalV1Schema,
+    routes: z.array(z.strictObject({ ...runRouteFields,
+      expectedTerminalEventId: z.nullable(z.string().check(z.minLength(1))) })) }),
+  z.strictObject({ ok: z.literal(true), v: z.literal(1), original: WorkflowRunFollowOriginalV1Schema,
+    routes: z.array(z.strictObject({ ...runRouteFields,
+      expectedRevision: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)) })) }),
+  z.strictObject({ ok: z.literal(false), v: z.literal(1), error: z.enum(['forbidden', 'invalid_request', 'source_unavailable']) }),
+]));
+export type SessionFollowRunOccurrenceRoutesResponseV1 = z.infer<typeof SessionFollowRunOccurrenceRoutesResponseV1Schema>;
+
 /** One original's ordinary source routes; private rule witnesses never cross this read boundary. */
 export const SessionFollowObserveSourceRoutesRequestV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ v: z.literal(1), sourcePublisher: SessionMetadataPublisherPreconditionV1Schema,
@@ -198,7 +217,7 @@ export const SessionFollowAdmittedInputObservationV1Schema = lazyZodSchema(() =>
   sourceSessionId: SessionIdZodSchema, destinationSessionId: SessionIdZodSchema,
   delivered: SessionFollowFrontierV1Schema, observed: SessionFollowFrontierV1Schema,
   delivery: SessionFollowInputV1Schema,
-}).check(z.refine(value => value.sourceSessionId === value.delivery.original.sourceSessionId
+}).check(z.refine(value => 'sourceSessionId' in value.delivery.original && value.sourceSessionId === value.delivery.original.sourceSessionId
   && value.sourceSessionId !== value.destinationSessionId)));
 export type SessionFollowAdmittedInputObservationV1 = z.infer<typeof SessionFollowAdmittedInputObservationV1Schema>;
 export const SessionFollowPendingObservationV1Schema = lazyZodSchema(() => z.union([

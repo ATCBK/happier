@@ -10,6 +10,8 @@ import {
   SessionFollowObservePendingRequestV1Schema,
   SessionFollowObservePendingResponseV1Schema,
   SessionFollowPendingObservationV1Schema,
+  SessionFollowRunOccurrenceRoutesRequestV1Schema,
+  SessionFollowRunOccurrenceRoutesResponseV1Schema,
 } from './sessionFollowTransportV1.js';
 
 const frontier = { transcriptSeq: 1, readyEventSeq: 2, agentStateVersion: 3, turn: null } as const;
@@ -20,6 +22,21 @@ const wakeObservations = [{ policy: { preset: 'everything' as const },
 }] as const;
 
 describe('Session Follow socket transport V1', () => {
+  it('binds Run routes to one exact original and per-edge cursor without a parent Session alias', () => {
+    const original = { source: { kind: 'execution_run', sessionId: 'parent', runId: 'run-1' }, terminalEventId: 'terminal-2' } as const;
+    const request = { v: 1, original } as const;
+    const response = { ok: true, v: 1, original, routes: [{ destinationSessionId: 'receiver', relation: 'follower',
+      attachedAt: 12, policy: { preset: 'important' }, expectedTerminalEventId: 'terminal-1' }] } as const;
+    expect(SessionFollowRunOccurrenceRoutesRequestV1Schema.parse(request)).toEqual(request);
+    expect(SessionFollowRunOccurrenceRoutesResponseV1Schema.parse(response)).toEqual(response);
+    expect(SessionFollowRunOccurrenceRoutesRequestV1Schema.safeParse({ ...request, sourceSessionId: 'parent' }).success).toBe(false);
+    expect(SessionFollowRunOccurrenceRoutesResponseV1Schema.safeParse({ ...response,
+      routes: [{ ...response.routes[0], expectedRevision: 1 }] }).success).toBe(false);
+    const workflow = { source: { kind: 'workflow_run', runId: 'workflow-1' }, revision: 4 } as const;
+    expect(SessionFollowRunOccurrenceRoutesResponseV1Schema.safeParse({ ok: true, v: 1, original: workflow,
+      routes: [{ destinationSessionId: 'receiver', relation: 'follower', attachedAt: 12,
+        policy: { preset: 'quiet' }, expectedRevision: 3 }] }).success).toBe(true);
+  });
   it('carries a committed Discussion occurrence without a fabricated source Session', () => {
     const observation = { source: { kind: 'discussion', discussionId: 'discussion' }, destinationSessionId: 'receiver',
       policy: { preset: 'quiet' }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' },

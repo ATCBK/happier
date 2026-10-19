@@ -202,15 +202,50 @@ describe('Account Follow editor', () => {
             }}
             voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={onEditPolicy}
         />);
-        // An owner always follows: no Follow or Unfollow, and the place Unfollow takes says why.
+        // No stored row still means Important; the owner can explicitly turn delivery off.
         expect(screen.findByTestId('session-follow-follow')).toBeNull();
-        expect(screen.findByTestId('session-follow-unfollow')).toBeNull();
-        expect(screen.findByTestId('session-follow-owner-note')).not.toBeNull();
+        expect(screen.findByTestId('session-follow-unfollow')).not.toBeNull();
         expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
         // The editor is the owner's override, and it writes a real policy through the controller.
         expect(presetSegment(screen, 'quiet')?.props.disabled).not.toBe(true);
         await act(async () => { presetSegment(screen, 'quiet')?.props.onPress(); });
         expect(onEditPolicy).toHaveBeenCalledWith({ kind: 'preset', preset: 'quiet' });
+        await screen.unmount();
+    });
+
+    it('restores an explicitly suppressed owner through the existing Follow set controller', async () => {
+        const address = { serverId: 'home-a', sessionId: 'session-a' };
+        let follow: GetSessionFollowResponse['follow'] = {
+            sessionId: address.sessionId, following: false, notificationLevel: 'none', includeInVoice: false,
+        };
+        const writes: SetSessionFollowRequest[] = [];
+        const controller = createAccountSessionFollowController(address, {
+            get: async () => ({ kind: 'ok', value: { follow, isSessionOwner: true,
+                capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false } }),
+            set: async (_target, preferences) => {
+                writes.push(preferences);
+                follow = { sessionId: address.sessionId, following: true, notificationLevel: 'important', includeInVoice: false };
+                return { kind: 'ok', value: { changed: true, follow, voiceInitialSnapshotPending: false } };
+            },
+            remove: async () => ({ kind: 'ok', value: { changed: false } }),
+        });
+        await controller.refresh();
+        function Editor() {
+            const state = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+            return <AccountSessionFollowEditor state={state} voiceReadiness="eligible" archived={false}
+                onSet={(next) => { void controller.set(next); }} onRemove={() => { void controller.remove(); }}
+                onRetry={() => { void controller.retry(); }} onOpenNotificationSettings={() => {}}
+                onEditPolicy={(edit) => { void controller.editPolicy(edit); }} />;
+        }
+        const screen = await renderSettingsView(<Editor />);
+        expect(controller.getPolicyEditorState()).toMatchObject({ following: true, suppressed: true, deliveryEnabled: false, model: null });
+        expect(screen.findByTestId('session-follow-not-following')).not.toBeNull();
+        expect(screen.findByTestId('session-follow-follow')?.props.disabled).toBe(false);
+        expect(screen.findByTestId('session-follow-owner-note')).toBeNull();
+        await act(async () => { screen.findByTestId('session-follow-follow')?.props.onPress(); });
+        await act(async () => { await controller.refresh(); });
+        expect(writes).toEqual([{ notificationLevel: 'important', includeInVoice: false }]);
+        expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
         await screen.unmount();
     });
 

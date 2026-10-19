@@ -31,6 +31,21 @@ test('generated external Action clients accept shared targets without widening e
       sessionId: 'old-id', message: 'Review the change', idempotencyKey: 'old-request',
     };
     declare const spec: ActionSpec;
+    declare const inbox: Extract<PluginActionResultById['inbox.get'], { status: 'ready' }>;
+    const inboxType: 'decision' | 'approval' | 'blocked' | 'update' | 'mention' = inbox.items[0].type;
+    const inboxView: 'needs_you' | 'updates' | 'mentions' = inbox.items[0].view;
+    const inboxRead: boolean = inbox.items[0].read;
+    const inboxPage: string = inbox.items[0].pageRoute;
+    const inboxSource: { kind: string; id: string; serverId: string } = inbox.items[0].source;
+    const inboxCoverage: 'complete' | 'partial' | 'unavailable' = inbox.coverage.discussions;
+    const proposal = inbox.items[0].discussion;
+    if (proposal) {
+      const committed: { kind: 'discussion'; messageId: string; discussion: { serverId: string; discussionId: string } } = proposal.messageRef;
+      const disposition: 'open' | 'accepted' | 'declined' | undefined = proposal.proposalDisposition?.state;
+      void committed; void disposition;
+    }
+    // @ts-expect-error The canonical read does not invent a second request classification.
+    const invalidInboxType: typeof inboxType = 'question';
     const declaration: { field: string; cardinality: 'one' | 'many' } | undefined = spec.sessionTarget;
     declare const contributed: PluginActionContributionV2;
     const contributedDeclaration: typeof declaration = contributed.sessionTarget;
@@ -48,6 +63,7 @@ test('generated external Action clients accept shared targets without widening e
     const wrongRecipient: PluginActionInputById['session.message.send'] = { sessionId: workers, message: 'Review', idempotencyKey: 'wrong', recipient: { selector: 'manager' } };
     void send; void genericSend; void status; void open; void oldSend; void declaration; void contributedDeclaration; void fanout; void invalidFanout;
     void nested; void unknown; void wrongRecipient;
+    void inboxType; void inboxView; void inboxRead; void inboxPage; void inboxSource; void inboxCoverage; void invalidInboxType;
   `);
   const invocation = resolveTypeScriptCliInvocation({ repoRoot: process.cwd(), workspaceDir: process.cwd() });
   const compiled = spawnSync(invocation.command, [...invocation.argsPrefix, '--ignoreConfig', '--strict', '--skipLibCheck',

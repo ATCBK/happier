@@ -158,8 +158,12 @@ import {
 } from '@happier-dev/agents';
 import {
   createModelIntentMetadataCasCandidate,
+  createModelIntentV2MetadataCasCandidate,
+  isInactiveModelIntentSessionActiveError,
   runModelIntentAtAuthoritativeDisposition,
 } from '@happier-dev/agents/session/state/metadataWriters';
+import { SessionModelSelectionV2Schema } from '@happier-dev/protocol/providers/selection/v2';
+import { isModelRefGrantedV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { OpenProjectResultV1Schema } from '@happier-dev/protocol/projects/openProjectV1';
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
@@ -268,7 +272,7 @@ import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTarget
 import { ensureAgentInstallablesBackground } from '@/capabilities/ensureAgentInstallablesBackground';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { readAgentScopedPluginSettingsSnapshot } from '@/agents/registry/agentScopedPluginSettings';
-import { readSessionSnapshotForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
+import { readSessionSnapshotForAuthority, SessionSnapshotReadError } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
 import { getSessionRunnerRuntimeStatus, restartSessionRunnerOnCurrentRuntime } from '@/sync/ops/sessionRunnerRestart';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { resolveMachineControlTargetForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
@@ -354,6 +358,8 @@ import { createReviewCommentsHttpActionExecutor } from '@/sync/domains/reviews/c
 import { createPluginPermissionGrantHttpActionExecutor } from '@/sync/domains/plugins/permissions/api';
 import { createPluginWebhookEndpointHttpActionExecutor } from '@/sync/api/plugins/webhooks/endpointActions';
 import { sessionFollowAction } from '@/sync/api/session/sessionFollowApi';
+import { readSessionFollowRuleCensus } from '@/sync/api/session/sessionFollowRulesApi';
+import { resolveAccountStorageContext } from '@/sync/encryption/accountStorageContext';
 import { prepareSessionFollowSourceKey } from '@/components/sessions/follow/prepareSessionFollowSourceKey';
 import { sessionReadStateAction } from '@/sync/api/session/sessionReadStateAction';
 import { executeSessionAttentionSetAction } from '@/sync/ops/sessionOrganization/setSessionAttentionStanding';
@@ -1250,18 +1256,31 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       },
     } satisfies Pick<ActionExecutorDeps, 'readAdmittedInputTypeOptions'> : {}),
     resolveSessionReference: opts?.resolveSessionReference ?? (async ({ sessionId, sessionTitle, context, signal }) => {
-      // An exact tuple needs no corpus. A bare id or title is resolved against the one admitted
-      // corpus — a mounted pane's membership when one owns it, otherwise one acquired through the
-      // canonical row-only `session.list` read — so every host answers
-      // unique/ambiguous/incomplete/none from the same evidence instead of
-      // failing closed forever for want of one (Lane 07.1 §3).
+      const exact = normalizeSessionAddress(context.serverId, sessionId);
+      if (exact) {
+        if (!accountContext || !areServerProfileIdentifiersEquivalent(exact.serverId, accountContext.serverId)
+          || context.expectedAccountId && context.expectedAccountId !== accountContext.accountId
+          || context.runtimeAccountId && context.runtimeAccountId !== accountContext.accountId) return { kind: 'incomplete' };
+        try {
+          signal?.throwIfAborted(); accountContext.assertCurrent();
+          const { session } = await runWithServerRequestAuthorityForServerAccountScope({
+            scope: accountContext.accountLifetime.scope, activeRequest: accountContext.request,
+          }, authority => readSessionSnapshotForAuthority({ authority, sessionId: exact.sessionId,
+            isCurrent: () => !signal?.aborted && accountContext.accountLifetime.isCurrent() }));
+          signal?.throwIfAborted(); accountContext.assertCurrent();
+          return session.id === exact.sessionId ? { kind: 'unique', address: exact } : { kind: 'incomplete' };
+        } catch (error) {
+          signal?.throwIfAborted();
+          return error instanceof SessionSnapshotReadError && error.httpStatus === 404 ? { kind: 'none' } : { kind: 'incomplete' };
+        }
+      }
+      // Natural references use the one admitted corpus: mounted membership or
+      // the canonical row-only Session listing, with its original coverage.
       const currentState = storage.getState();
-      const options = normalizeSessionAddress(context.serverId, sessionId)
-        ? null
-        : await acquireAdmittedSessionReferenceCorpusOptions(
-            currentState,
-            signal ? { signal } : undefined,
-          );
+      const options = await acquireAdmittedSessionReferenceCorpusOptions(
+        currentState,
+        signal ? { signal } : undefined,
+      );
       return await resolveVoiceActionSessionReference({
         ...(sessionId ? { sessionId } : {}),
         ...(sessionTitle ? { sessionTitle } : {}),
@@ -1312,7 +1331,28 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
           ...(request.v === 2 && request.executionOriginV1.sessionTargetsV1 ? { sessionTargetsV1: request.executionOriginV1.sessionTargetsV1 } : {}),
           signature: origin.externalActionInputSignature, publicKey: source.installationPublicKey })) || stale('credential_changed');
     },
-    sessionFollowPreview: async (args) => sessionFollowAction({ ...args, actionId: 'follow.preview' }),
+    sessionFollowPreview: async (args) => sessionFollowAction({ ...args, serverId: args.serverId ?? args.context.serverId, actionId: 'follow.preview' }),
+    readSessionFollowRules: async ({ context, serverId, signal }) => {
+      if (!accountContext || !areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId)
+        || context.expectedAccountId && context.expectedAccountId !== accountContext.accountId
+        || context.runtimeAccountId && context.runtimeAccountId !== accountContext.accountId) return { kind: 'unavailable' };
+      try {
+        const assertCurrent = () => { signal?.throwIfAborted(); accountContext.assertCurrent(); };
+        assertCurrent();
+        const { encryption } = await accountContext.resolveAccountEncryption();
+        const account = await resolveAccountStorageContext(accountContext.credentials, { encryption, request: accountContext.request });
+        assertCurrent();
+        const rules = await readSessionFollowRuleCensus({ mode: account.mode,
+          material: account.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(accountContext.credentials),
+          request: accountContext.request, assertCurrent, signal });
+        const current = await resolveAccountStorageContext(accountContext.credentials, { encryption, request: accountContext.request });
+        assertCurrent();
+        return current.mode === account.mode ? { kind: 'complete', rules } : { kind: 'unavailable' };
+      } catch {
+        signal?.throwIfAborted();
+        return { kind: 'unavailable' };
+      }
+    },
     sessionFollowAction: async (args) => {
       const result = await sessionFollowAction(args);
       const failed = typeof result === 'object'
@@ -1946,9 +1986,13 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         ...(accountContext ? { scope: accountContext.accountLifetime.scope,
           isCurrent: accountContext.accountLifetime.isCurrent } : {}) })),
 
-    sessionArchiveSet: async ({ sessionId, archived, serverId }) => archived
-      ? await sessionArchiveWithServerScope(sessionId, { serverId })
-      : await sessionUnarchiveWithServerScope(sessionId, { serverId }),
+    sessionArchiveSet: async ({ sessionId, archived, serverId }) => {
+      const result = archived
+        ? await sessionArchiveWithServerScope(sessionId, { serverId })
+        : await sessionUnarchiveWithServerScope(sessionId, { serverId });
+      return result.success ? result : { ok: false, errorCode: result.code ?? 'unknown_error',
+        error: result.message ?? 'unknown_error', details: result };
+    },
 
     sessionPermissionModeSet: async ({ sessionId, permissionMode, applyTiming, serverId }) => {
       if (!isPermissionMode(permissionMode) || !accountContext) {
@@ -3206,7 +3250,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         throw error;
       }
     },
-    sessionUserActionAnswer: async ({ sessionId, requestId, answers, decision, reason, updatedPermissions, serverId, signal }) => {
+    sessionUserActionAnswer: async ({ sessionId, requestId, answers, disposition, decision, reason, updatedPermissions, serverId, signal }) => {
       const reqId = String(requestId ?? '').trim();
       if (!reqId) {
         return { ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found', sessionId };
@@ -3218,11 +3262,14 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
           normalizedAnswers[question] = [...entry.values];
         }
       }
-      if (!decision && Object.keys(normalizedAnswers).length === 0) {
+      if (disposition !== 'pass_up' && !decision && Object.keys(normalizedAnswers).length === 0) {
         return { ok: false, errorCode: 'invalid_parameters', errorMessage: 'invalid_parameters', sessionId };
       }
       const approved = decision ? decision === 'approve' : true;
-      return projectSessionInteractionRpcResult(await withAccountLifetime(signal, ownedSignal => sessionRespondToUserAction(sessionId, {
+      return projectSessionInteractionRpcResult(await withAccountLifetime(signal, ownedSignal => sessionRespondToUserAction(sessionId, disposition === 'pass_up' ? {
+          id: reqId, disposition,
+          ...(typeof reason === 'string' && reason.trim().length > 0 ? { reason: reason.trim() } : {}),
+        } : {
           id: reqId,
           approved,
           ...(Object.keys(normalizedAnswers).length > 0 ? { answers: normalizedAnswers } : {}),
@@ -3289,13 +3336,59 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       }
       const normalizedSessionId = String(sessionId ?? '').trim();
       const normalizedModelId = String(modelId ?? '').trim();
-      if (!normalizedSessionId || !normalizedModelId) {
+      if (!normalizedSessionId || (!normalizedModelId && args.teamCredentialModel === undefined)) {
         return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
       }
 
       const session = storage.getState().sessions[normalizedSessionId] ?? null;
       if (!session) {
         return { ok: false, errorCode: 'session_not_found', error: 'session_not_found' };
+      }
+      if (args.teamCredentialModel !== undefined) {
+        accountContext?.assertCurrent();
+        if (args.callerInputConstraints && !isModelRefGrantedV1(args.callerInputConstraints, 'automatic')) {
+          return { ok: false, errorCode: 'model_not_granted', error: 'model_not_granted' };
+        }
+        const requested = args.teamCredentialModel;
+        const target = resolveSessionActionDefaultTarget(resolveSessionActionDefaultBackend({ session }));
+        if (!target || buildBackendTargetKeyV2(target) !== requested.agentTargetKey) {
+          return { ok: false, errorCode: 'model_selection_agent_target_unknown', error: 'model_selection_agent_target_unknown' };
+        }
+        const observedActive = session.active === true;
+        const selection = SessionModelSelectionV2Schema.parse({ v: 2, updatedAt: 0, ref: {
+          source: 'team_resource', resourceId: requested.resourceId, teamId: requested.teamId,
+          expectedResourceRevision: requested.expectedResourceRevision, deliveryMode: requested.deliveryMode,
+          agentTargetKey: requested.agentTargetKey, modelId: requested.modelId,
+        } });
+        const candidate = createModelIntentV2MetadataCasCandidate({ selection });
+        const uncommitted = () => ({
+          ok: false, errorCode: 'team_resource_active_transition_unsupported', error: 'team_resource_active_transition_unsupported',
+          details: { status: 'team_resource_active_transition_unsupported', reason: 'session_activated_before_team_resource_commit' },
+        });
+        try {
+          await sync.patchSessionMetadataWithRetry(normalizedSessionId, candidate.update, {
+            serverId, ...(accountContext ? { accountLifetime: accountContext.accountLifetime } : {}),
+            ...(observedActive ? {} : { sessionExpectation: { kind: 'inactive_model_intent' } }),
+            teamCredentialBinding: {
+              operation: 'session.model.set',
+              teamCredentialBindings: [{ v: 1, slot: { kind: 'provider_model' }, resourceId: requested.resourceId,
+                expectedResourceRevision: requested.expectedResourceRevision, deliveryMode: requested.deliveryMode, teamId: requested.teamId }],
+              ...(args.teamVisibilityGrantConsent ? { teamVisibilityGrantConsent: args.teamVisibilityGrantConsent } : {}),
+            },
+          });
+          const state = candidate.readState();
+          if (!state.accepted || state.updatedAt === null) return uncommitted();
+          if (observedActive) {
+            return { ok: false, errorCode: 'restart_required', error: 'restart_required', details: {
+              status: 'restart_required', reason: 'team_resource_binding_changed', requestedTeamSelection: requested,
+            } };
+          }
+          return { ok: true, status: 'intent_updated', sessionId: normalizedSessionId,
+            selection: { ...selection, updatedAt: state.updatedAt }, updatedAt: state.updatedAt };
+        } catch (error) {
+          if (isInactiveModelIntentSessionActiveError(error)) return uncommitted();
+          throw error;
+        }
       }
       const hasExplicitProviderConnectionId = Object.prototype.hasOwnProperty.call(
         args,
@@ -3545,15 +3638,19 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         return { kind: 'manager', address: managerSessionId ? { serverId: accountContext.serverId, sessionId: managerSessionId } : null };
       } catch { return { kind: 'unavailable' }; }
     },
-    sessionMessageReply: async ({ sessionId, requestLocalId, reviewDecision, context, serverId, signal }) => {
-      // Explicit Agent replies still require their live Session publisher. The
-      // private human decision only settles custody at the captured Account.
-      if (!reviewDecision) return { v: 1, ok: false, error: 'unavailable' };
-      if (context.authority !== 'present_user') return { v: 1, ok: false, error: 'forbidden' };
+    sessionMessageReply: async ({ sessionId, requestLocalId, reply, reviewDecision, context, serverId, signal }) => {
       if (!accountContext || (serverId && !areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId))) {
         return { v: 1, ok: false, error: 'unavailable' };
       }
       accountContext.assertCurrent();
+      if (reply) {
+        const result = await actionSessionRpc({ sessionId, serverId: accountContext.serverId,
+          method: SESSION_RPC_METHODS.SESSION_MESSAGE_REPLY, payload: { sessionId, requestLocalId, reply }, signal });
+        accountContext.assertResultCurrent(getActionSpec('session.message.reply').sideEffectClass);
+        return result;
+      }
+      // Review settles the captured original input without publishing an Agent answer.
+      if (context.authority !== 'present_user') return { v: 1, ok: false, error: 'forbidden' };
       const response = await accountContext.request(`/v2/sessions/${encodeURIComponent(sessionId)}/messages/by-local-id/${encodeURIComponent(requestLocalId)}/reply`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reviewDecision), ...(signal ? { signal } : {}) });
       accountContext.assertCurrent();

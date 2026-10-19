@@ -8,6 +8,15 @@ import { sha256 } from '@noble/hashes/sha2';
 import { encodeBase64 } from '../../crypto/base64.js';
 
 const publicFields = { v: z.literal(1), delivery: z.enum(['wake', 'next_turn']) };
+export const ExecutionRunFollowOriginalV1Schema = lazyZodSchema(() => z.strictObject({
+  source: z.strictObject({ kind: z.literal('execution_run'), sessionId: asProtocolZod(SessionIdSchema),
+    runId: z.string().check(z.minLength(1)) }),
+  terminalEventId: z.string().check(z.minLength(1)),
+}));
+export const WorkflowRunFollowOriginalV1Schema = lazyZodSchema(() => z.strictObject({
+  source: z.strictObject({ kind: z.literal('workflow_run'), runId: z.string().check(z.minLength(1)) }),
+  revision: z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER)),
+}));
 /** Public notice-only intent. Private rule identity and match proof stay in server admission custody. */
 export const SessionFollowInputV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ ...publicFields,
@@ -29,12 +38,28 @@ export const SessionFollowInputV1Schema = lazyZodSchema(() => z.union([
     }
     if (ids.size) context.addIssue({ code: 'custom', path: ['requestEvents'], message: 'Every selected original request must be represented' });
   })),
+  z.strictObject({ ...publicFields,
+    original: ExecutionRunFollowOriginalV1Schema,
+    event: z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }),
+  }),
+  z.strictObject({ ...publicFields,
+    original: WorkflowRunFollowOriginalV1Schema,
+    event: z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }),
+  }),
 ]));
 export type SessionFollowInputV1 = z.infer<typeof SessionFollowInputV1Schema>;
+export type RunFollowOriginalV1 = Extract<SessionFollowInputV1['original'], { source: unknown }>;
+export function isRunFollowOriginalV1(original: SessionFollowInputV1['original']): original is RunFollowOriginalV1 {
+  return 'source' in original;
+}
 
 /** Indexed projection of an existing original identity, independent of routes, batches and publisher fences. */
 export function deriveSessionFollowOriginalOccurrenceKeyV1(original: SessionFollowInputV1['original']): string | null {
-  const identity = 'sourceMessage' in original
+  const identity = isRunFollowOriginalV1(original)
+    ? 'terminalEventId' in original
+      ? ['execution_run', original.source.sessionId, original.source.runId, original.terminalEventId]
+      : ['workflow_run', original.source.runId, original.revision]
+    : 'sourceMessage' in original
     ? ['message', original.sourceSessionId, original.sourceMessage.localId, original.sourceMessage.seq]
     : original.sourceRequests.requests.length === 1
       ? ['request', original.sourceSessionId, original.sourceRequests.requests[0]!.requestId,

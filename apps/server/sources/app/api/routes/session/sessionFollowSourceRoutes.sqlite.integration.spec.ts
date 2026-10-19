@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { decodeBase64 } from 'privacy-kit';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { SessionFollowObserveInactiveResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { parseSessionFollowActionResponse, resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
 import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
@@ -63,6 +64,81 @@ describe('Session Follow source routes', () => {
 
     afterAll(async () => harness.close());
 
+    it('authors one exact Discussion source through the existing Follow edge', async () => {
+        const owner = await createAccount();
+        const destination = await createSession(owner.id);
+        const discussion = await db.discussion.create({ data: {
+            ownerAccountId: owner.id, encryptionMode: 'plain',
+            dataEncryptionKey: decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+            creationLocalId: randomUUID(), creationEqualityEvidenceV1: {},
+            titleContent: { t: 'plain', v: 'Discussion' }, lastMessageAt: new Date(), messageSeq: 3,
+        } });
+        await db.discussionParticipant.create({ data: { discussionId: discussion.id,
+            participantSlotId: 'participant-1', sessionId: destination.id } });
+        const app = await buildApp(owner.id);
+        const source = { kind: 'discussion' as const, discussionId: discussion.id };
+        const receiver = { kind: 'session' as const, sessionId: destination.id };
+        const input = { receiver, source, policy: { preset: 'everything' as const } };
+        const path = resolveSessionFollowActionRequest('follow.set', input).path;
+        try {
+            const set = await app.inject({ method: 'PUT', url: path, payload: { policy: input.policy } });
+            expect(set.statusCode).toBe(200);
+            expect(parseSessionFollowActionResponse('follow.set', input, set.json())).toMatchObject({
+                changed: true, source: { source, destinationSessionId: destination.id, hasPendingUpdates: false,
+                    sourceAvailability: 'available' },
+            });
+            expect(await db.sessionFollowEdge.findUnique({ where: { destinationSessionId_sourceKey_relation: {
+                destinationSessionId: destination.id, sourceKey: sourceKeyForSessionFollowSourceV1(source), relation: 'follower',
+            } } })).toMatchObject({ sourceDiscussionId: discussion.id, sourceSessionId: null, deliveredTranscriptSeq: 3 });
+            const get = await app.inject({ method: 'GET', url: path });
+            expect(parseSessionFollowActionResponse('follow.get', { receiver, source }, get.json())).toMatchObject({
+                source: { source, policy: input.policy },
+            });
+            const listInput = { direction: 'following' as const, receiver };
+            const listRequest = resolveSessionFollowActionRequest('follow.list', listInput);
+            const listed = await app.inject({ method: listRequest.method, url: listRequest.path });
+            expect(listed.statusCode).toBe(200);
+            expect(listed.json().sources).toEqual([expect.objectContaining({ source })]);
+            const removed = await app.inject({ method: 'DELETE', url: path });
+            expect(parseSessionFollowActionResponse('follow.remove', { receiver, source }, removed.json())).toEqual({ changed: true });
+            expect((await app.inject({ method: 'GET', url: path })).json()).toEqual({ source: null });
+        } finally { await app.close(); }
+    });
+
+    it('authors a Workflow Run from its current revision and lists only later progress', async () => {
+        const owner = await createAccount();
+        const destination = await createSession(owner.id);
+        const run = await db.automationRun.create({ data: { accountId: owner.id, originKind: 'direct',
+            automationId: null, causeKind: null, causeOccurredAt: null,
+            workflowAcceptedSnapshotEnvelope: '{}', state: 'running', workflowCustodyState: 'pending',
+            scheduledAt: new Date(), dueAt: new Date(), revision: 3 } });
+        const app = await buildApp(owner.id);
+        const source = { kind: 'workflow_run' as const, runId: run.id };
+        const receiver = { kind: 'session' as const, sessionId: destination.id };
+        const policy = { preset: 'everything' as const };
+        const path = resolveSessionFollowActionRequest('follow.set', { receiver, source, policy }).path;
+        try {
+            const saved = await app.inject({ method: 'PUT', url: path, payload: { policy } });
+            expect(saved.statusCode, saved.body).toBe(200);
+            expect(parseSessionFollowActionResponse('follow.set', { receiver, source, policy }, saved.json()))
+                .toMatchObject({ changed: true, source: { source, sourceAvailability: 'available', hasPendingUpdates: false } });
+            expect(await db.sessionFollowEdge.findUnique({ where: { destinationSessionId_sourceKey_relation: {
+                destinationSessionId: destination.id, sourceKey: sourceKeyForSessionFollowSourceV1(source), relation: 'follower',
+            } } })).toMatchObject({ sourceSessionId: null, sourceWorkflowRunId: run.id, deliveredWorkflowRunRevision: 3 });
+            await db.automationRun.update({ where: { id: run.id }, data: { revision: 4 } });
+            const get = await app.inject({ method: 'GET', url: path });
+            expect(parseSessionFollowActionResponse('follow.get', { receiver, source }, get.json()))
+                .toMatchObject({ source: { source, hasPendingUpdates: true } });
+            const listInput = { direction: 'following' as const, receiver };
+            const listRequest = resolveSessionFollowActionRequest('follow.list', listInput);
+            const listed = await app.inject({ method: listRequest.method, url: listRequest.path });
+            expect(listed.statusCode, listed.body).toBe(200);
+            expect(listed.json().sources).toEqual([expect.objectContaining({ source })]);
+            expect((await app.inject({ method: 'DELETE', url: path })).json()).toEqual({ changed: true });
+            expect((await app.inject({ method: 'GET', url: path })).json()).toEqual({ source: null });
+        } finally { await app.close(); }
+    });
+
     it('reads authorized Session followers and anonymous people only, readmitting source and receiver access', async () => {
         const owner = await createAccount();
         const viewer = await createAccount();
@@ -93,6 +169,20 @@ describe('Session Follow source routes', () => {
             expect(body.sources.every(row => row.destinationSessionId === visible.id)).toBe(true);
             expect(body.sources.map(row => row.relation).sort()).toEqual(['follower', 'manager']);
             expect(body.rules).toEqual([]);
+            const pageInput = { ...input, limit: 1 };
+            const firstRequest = resolveSessionFollowActionRequest('follow.list', pageInput);
+            const firstPage = parseSessionFollowActionResponse('follow.list', pageInput,
+                (await viewerApp.inject({ method: firstRequest.method, url: firstRequest.path })).json());
+            expect(firstPage.sources).toHaveLength(1);
+            expect(firstPage).toMatchObject({ coverage: 'partial', continuation: expect.any(String), peopleCount: 2 });
+            const nextInput = { ...pageInput, cursor: firstPage.continuation };
+            const nextRequest = resolveSessionFollowActionRequest('follow.list', nextInput);
+            const nextPage = parseSessionFollowActionResponse('follow.list', nextInput,
+                (await viewerApp.inject({ method: nextRequest.method, url: nextRequest.path })).json());
+            expect(nextPage.sources).toHaveLength(1);
+            expect(nextPage.sources[0]?.relation).not.toBe(firstPage.sources[0]?.relation);
+            expect(nextPage).toMatchObject({ coverage: 'complete', peopleCount: 2 });
+            expect(nextPage.continuation).toBeUndefined();
             expect(JSON.stringify(body)).not.toContain(owner.id);
             expect(JSON.stringify(body)).not.toContain(viewer.id);
             const personal = { accountId: viewer.id, sessionId: source.id, authentication };
@@ -112,6 +202,8 @@ describe('Session Follow source routes', () => {
             await db.sessionShare.deleteMany({ where: { sessionId: visible.id, sharedWithUserId: viewer.id } });
             expect(parseSessionFollowActionResponse('follow.list', input,
                 (await viewerApp.inject({ method: request.method, url: request.path })).json()).sources).toEqual([]);
+            expect((await viewerApp.inject({ method: nextRequest.method, url: nextRequest.path })).json())
+                .toMatchObject({ sources: [], coverage: 'complete' });
             await db.sessionShare.deleteMany({ where: { sessionId: source.id, sharedWithUserId: viewer.id } });
             expect((await viewerApp.inject({ method: request.method, url: request.path })).json()).toEqual({ error: 'session_not_found' });
             const ownerBody = (await app.inject({ method: request.method, url: request.path })).json();

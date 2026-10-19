@@ -3,6 +3,9 @@ import { deriveSessionFollowWakeEventLocalIdV1, normalizeSessionFollowWakeObserv
 import { isAuthoritativeHumanSessionFollowMessageV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowUpdateEnvelopeV1';
 import { isFollowPolicyEqualV1, resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { classifyWorkerUpdateEventV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
+import { buildAgentEventLocalId } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import type { WorkerUpdateFollowMatchV1 } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import { renderSessionInputContextPromptV1, renderWorkerUpdatePromptBlockV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 import type { SessionFollowUpdateEnvelopeV1, WorkerUpdateV1 } from '@happier-dev/protocol';
@@ -19,6 +22,8 @@ export type SessionFollowQueuedDelivery = Readonly<{
   delivery: SessionFollowInputV1;
   localInputId: string;
   userMessageSeq: number | null;
+  /** Public-safe route reasons projected from the validated Pending admission receipt. */
+  followMatches?: readonly WorkerUpdateFollowMatchV1[];
 }>;
 
 import { applySessionFollowContextBudgetV1 } from './sessionFollowContextBudget';
@@ -78,7 +83,8 @@ export type SessionFollowPreparedContext = Readonly<{
   updates: readonly SessionFollowUpdateEnvelopeV1[];
   workerUpdates?: readonly WorkerUpdateV1[];
   /** Per-worker cards share the incumbent frontier identity owner, independently of batch membership. */
-  workerUpdateEvents?: readonly Readonly<{ localId: string; update: WorkerUpdateV1 }>[];
+  workerUpdateEvents?: readonly Readonly<{ localId: string; update: WorkerUpdateV1;
+    followMatches?: readonly WorkerUpdateFollowMatchV1[]; followInputLocalId?: string }>[];
   /** Present only for a wake; this is the deterministic durable event identity committed before delivery. */
   wakeEventLocalId?: string;
   acknowledgeAccepted: (input: Readonly<{
@@ -470,9 +476,11 @@ export function createSessionFollowContextReconciler(input: Readonly<{
     const workerPrepared = stillAdmitted.flatMap((entry) => {
       const { observation, update, workerUpdate, recheckWorkerUpdateAdmission } = entry;
       if ('kind' in observation) return [];
-      // Required originals keep their existing Pending order. A later optional
-      // manager outcome must not spend their budget or ACK past their prefix.
-      if (followDeliveries.some(({ delivery }) => delivery.original.sourceSessionId === observation.sourceSessionId)) return [];
+      // Required transcript originals keep their existing Pending order. A
+      // later optional manager outcome cannot spend or ACK past their prefix.
+      // Foreground questions retain their separate exact-Turn witness rule.
+      if (followDeliveries.some(({ delivery }) => 'sourceMessage' in delivery.original
+        && delivery.original.sourceSessionId === observation.sourceSessionId)) return [];
       if (!workerUpdate || deliveryIntent === 'wake' && !entry.mayWake) return [];
       const fitted = fitWorkerUpdateWithinHostContextAllowance(workerUpdate, Math.max(0, remainingBytes - 2));
       if (!fitted) return [];
@@ -602,8 +610,8 @@ export function createSessionFollowContextReconciler(input: Readonly<{
       ...(prepared.some(entry => entry.workerUpdate) ? {
         workerUpdates: prepared.flatMap(entry => entry.workerUpdate ? [entry.workerUpdate] : []),
       } : {}),
-      ...(deliveryIntent === 'wake' && workerPrepared.length ? {
-        workerUpdateEvents: workerPrepared.map(({ observation, update, workerUpdate }) => ({
+      ...((deliveryIntent === 'wake' && workerPrepared.length) || prefixPrepared.some(entry => entry.workerUpdate && 'kind' in entry.observation) ? {
+        workerUpdateEvents: [...(deliveryIntent === 'wake' ? workerPrepared : []).map(({ observation, update, workerUpdate }) => ({
           localId: deriveSessionFollowWakeEventLocalIdV1({
             destinationSessionId, publisherGeneration,
             observations: [{ sourceSessionId: observation.sourceSessionId, relation: 'manager',
@@ -611,7 +619,17 @@ export function createSessionFollowContextReconciler(input: Readonly<{
               attachedAt: observation.attachedAt, expected: observation.delivered, consumed: update.observed }],
           }),
           update: workerUpdate,
-        })),
+          followMatches: [{ kind: 'relation' as const, relation: observation.relation }],
+        })), ...prefixPrepared.flatMap(({ observation, workerUpdate }) => {
+          if (!('kind' in observation) || !workerUpdate) return [];
+          const queued = representedDeliveries.find(delivery => delivery.localInputId === observation.localInputId);
+          if (!queued) return [];
+          return [{ localId: buildAgentEventLocalId('worker-update', ['follow', deriveSessionFollowInputLocalIdV1({
+              destinationSessionId, original: queued.delivery.original,
+            })]),
+            update: workerUpdate, followInputLocalId: queued.localInputId,
+            ...(queued.followMatches?.length ? { followMatches: queued.followMatches } : {}) }];
+        })],
       } : {}),
       ...(wakeEventLocalId ? { wakeEventLocalId } : {}),
       recheckAdmission: async (dispatchSignal) => {

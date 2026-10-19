@@ -4,6 +4,8 @@ import { ExecutionRunTurnStreamStartV2RequestSchema, ExecutionRunUserTranscriptC
 import { SessionExecutionRunBrokerAuthorityRequestV1Schema, SessionExecutionRunBrokerAuthorityResponseV1Schema } from '@happier-dev/protocol/daemon/executionRuns';
 import type { ExecutionRunPublicState, SessionTranscriptObservationProvenanceV1, ActionExecutorDeps, ReviewCommentPrincipalHeaderV1, ActionId } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { ExecutionRunFollowFrontierRequestSchema, ExecutionRunFollowFrontierResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { readRetainedExecutionRunRecord } from '@/daemon/executionRunRegistry';
 
 import { ExecutionRunHostBridge } from '@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge';
 import type { ExecutionRunTranscriptPublisher } from '@/agent/runtime/bridges/executionRun/executionRunTranscriptPublisher';
@@ -356,6 +358,22 @@ export function registerExecutionRunRpcHandlers(
     approvalDeps: ctx.actionApprovalDeps,
   });
   canonicalActionExecutor = actionExecutor;
+
+  // This content-free source read belongs to the daemon's retained owner, not
+  // the live Session handler or detached Run GET. The Home checks source grants
+  // and exact Machine placement before forwarding this read.
+  if (ctx.sessionId === null) rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
+    async (request: unknown) => {
+      if (!isExecutionRunsEnabled()) return { ok: false, error: 'Execution runs disabled', errorCode: 'execution_run_not_allowed' };
+      const parsed = ExecutionRunFollowFrontierRequestSchema.safeParse(request);
+      if (!parsed.success) return invalidParams();
+      const retained = await readRetainedExecutionRunRecord(parsed.data.runId);
+      const run = retained?.state;
+      if (!run || run.sessionId !== parsed.data.sessionId || run.status !== 'running' && !run.terminalOccurrenceId)
+        return { ok: false, error: 'Execution run not found', errorCode: 'execution_run_not_found' };
+      return ExecutionRunFollowFrontierResponseSchema.parse({ sessionId: parsed.data.sessionId, runId: run.runId,
+        status: run.status, terminalEventId: run.status === 'running' ? null : run.terminalOccurrenceId });
+    });
 
   rpc.registerHandler(
     SESSION_RPC_METHODS.EXECUTION_RUN_BROKER_AUTHORITY_RESOLVE_V1,

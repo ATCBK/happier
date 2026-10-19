@@ -3,10 +3,16 @@ import { pluginJsonValuesEqual } from '../../plugins/contributions/jsonSchemaVal
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListRequestV1Schema } from '../../projects/projectAccountRowsV1.js';
 import { buildSessionOrganizationAssignmentSnapshotHttpRequestV1 } from '../organization/snapshot.js';
 import { SessionFollowActionInputSchemasV1, SessionFollowActionOutputSchemasV1, type SessionFollowActionIdV1, type SessionFollowActionOutputV1 } from './actions.js';
-import { DELIVERY_MUTE_HTTP_PATHS_V1, FollowReceiverRefV1Schema } from './sessionDeliveryMuteV1.js';
+import { DELIVERY_MUTE_HTTP_PATHS_V1, FollowReceiverRefV1Schema, FollowSourceRefV1Schema } from './sessionDeliveryMuteV1.js';
 import { SESSION_FOLLOW_HTTP_PATHS_V1 } from './api.js';
 import { SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1, ListSessionFollowSourcesResponseSchema } from './sessionFollowSourcesApi.js';
 import { SESSION_FOLLOW_RULES_ROUTE_V1, SessionFollowRuleIdV1Schema, SetSessionFollowRuleRequestV1Schema, RemoveSessionFollowRuleRequestV1Schema, equalFollowRuleReceiverV1, type SessionFollowRuleContentV1 } from './sessionFollowRuleV1.js';
+import { appendFollowListPageQueryV1, FollowListPageQueryV1Schema, FollowListPageRequestV1Schema } from './sessionFollowListV1.js';
+import { encodeFollowSourceRefPathV1, parseOtherFollowSourceRefPathV1 } from './followSourceRefPathV1.js';
+
+const sameSourceRef = (row: Readonly<Record<string, unknown>>, source: Readonly<Record<string, unknown>>) =>
+  source.kind === 'session' && (row.sourceSessionId === source.sessionId || row.sessionId === source.sessionId)
+    || row.source !== undefined && pluginJsonValuesEqual(row.source, source);
 
 /** Match signed wire bytes, including sealed private content, without reopening an authoring definition. */
 export function isSessionFollowActionHttpRequestV1(actionId: SessionFollowActionIdV1, request: Readonly<{
@@ -51,17 +57,36 @@ export function isSessionFollowActionHttpRequestV1(actionId: SessionFollowAction
   }
   try {
     const body = request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body : {};
+    const page = FollowListPageQueryV1Schema.parse({ ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+      ...(input.limit === undefined ? {} : { limit: input.limit }) });
+    if (input.sourceRef !== undefined) {
+      if (typeof input.sourceRef !== 'string') return false;
+      const source = parseOtherFollowSourceRefPathV1(input.sourceRef);
+      if (!source) return false;
+      if (input.destinationSessionId !== undefined) {
+        if (typeof input.destinationSessionId !== 'string' || request.sessionRouteSessionId !== input.destinationSessionId || Object.keys(page).length) return false;
+        const receiver = { kind: 'session', sessionId: input.destinationSessionId };
+        const expected = resolveSessionFollowActionRequest(actionId, { receiver, source, ...body });
+        return matches(expected, { destinationSessionId: input.destinationSessionId, sourceRef: input.sourceRef, ...body });
+      }
+      if (request.sessionRouteSessionId !== undefined) return false;
+      if (actionId === 'follow.list') return matches(resolveSessionFollowActionRequest(actionId,
+        { direction: 'followers', source, ...page }), { sourceRef: input.sourceRef, ...page });
+      return matches(resolveSessionFollowActionRequest(actionId, { receiver: { kind: 'account' }, source, ...body }),
+        { sourceRef: input.sourceRef, ...body });
+    }
     if (input.sourceSessionId !== undefined && input.destinationSessionId === undefined) {
       return actionId === 'follow.list' && typeof input.sourceSessionId === 'string'
         && request.sessionRouteSessionId === input.sourceSessionId
         && matches(resolveSessionFollowActionRequest('follow.list', { direction: 'followers',
-          source: { kind: 'session', sessionId: input.sourceSessionId } }), { sourceSessionId: input.sourceSessionId });
+          source: { kind: 'session', sessionId: input.sourceSessionId }, ...page }), { sourceSessionId: input.sourceSessionId, ...page });
     }
     if (input.destinationSessionId !== undefined) {
       if (typeof input.destinationSessionId !== 'string' || request.sessionRouteSessionId !== input.destinationSessionId) return false;
       const receiver = { kind: 'session', sessionId: input.destinationSessionId };
       if (actionId === 'follow.list' || actionId === 'follow.get') {
-        return matches(resolveSessionFollowActionRequest('follow.list', { receiver, direction: 'following' }), { destinationSessionId: input.destinationSessionId });
+        if (actionId === 'follow.get' && Object.keys(page).length) return false;
+        return matches(resolveSessionFollowActionRequest('follow.list', { receiver, direction: 'following', ...page }), { destinationSessionId: input.destinationSessionId, ...page });
       }
       const expected = resolveSessionFollowActionRequest(actionId, { receiver,
         source: { kind: 'session', sessionId: input.sourceSessionId }, ...body });
@@ -79,7 +104,7 @@ export function isSessionFollowActionHttpRequestV1(actionId: SessionFollowAction
       return matches(expected, { sessionId: input.sessionId });
     }
     if (request.sessionRouteSessionId !== undefined) return false;
-    if (actionId === 'follow.list') return matches(resolveSessionFollowActionRequest(actionId, { receiver: { kind: 'account' }, direction: 'following' }));
+    if (actionId === 'follow.list') return matches(resolveSessionFollowActionRequest(actionId, { receiver: { kind: 'account' }, direction: 'following', ...page }), page);
     if (actionId === 'follow.preferences.get' || actionId === 'follow.preferences.set') {
       return matches(resolveSessionFollowActionRequest(actionId, body));
     }
@@ -103,13 +128,13 @@ export function parseSessionFollowActionResponse<TActionId extends SessionFollow
     if (list.success) {
       const destinationSessionId = receiver.data.sessionId;
       if (list.data.sources.some(row => row.destinationSessionId !== destinationSessionId)) mismatch();
-      candidate = { source: list.data.sources.find(row => row.sourceSessionId === source.sessionId) ?? null };
+      candidate = { source: list.data.sources.find(row => sameSourceRef(row, source)) ?? null };
     }
   }
   const result = SessionFollowActionOutputSchemasV1[actionId].parse(candidate);
   if (actionId === 'follow.list' && request.direction === 'followers' && 'sources' in result) {
-    if (source?.kind !== 'session' || result.sources.some(row => row.sourceSessionId !== source.sessionId || row.relation === undefined)
-      || result.follows.length > 1 || result.follows.some(row => row.sessionId !== source.sessionId) || result.rules.length !== 0
+    if (!source || source.kind === 'rule' || result.sources.some(row => !sameSourceRef(row, source) || row.relation === undefined)
+      || result.follows.length > 1 || result.follows.some(row => !sameSourceRef(row, source)) || result.rules.length !== 0
       || result.peopleCount === undefined) mismatch();
   }
   if (actionId === 'follow.get' || actionId === 'follow.set') {
@@ -117,10 +142,10 @@ export function parseSessionFollowActionResponse<TActionId extends SessionFollow
     if (!(selectedField in result)) mismatch();
   }
   if (actionId === 'follow.remove' && (source?.kind === 'rule') !== ('version' in result)) mismatch();
-  if ('follow' in result && result.follow && result.follow.sessionId !== source?.sessionId) mismatch();
+  if ('follow' in result && result.follow && (!source || !sameSourceRef(result.follow, source))) mismatch();
   if ('source' in result && result.source) {
     if (!receiver.success || receiver.data.kind !== 'session'
-      || result.source.destinationSessionId !== receiver.data.sessionId || result.source.sourceSessionId !== source?.sessionId) mismatch();
+      || result.source.destinationSessionId !== receiver.data.sessionId || !source || !sameSourceRef(result.source, source)) mismatch();
   }
   if ('rule' in result && result.rule) {
     if (!receiver.success || result.rule.ruleId !== source?.ruleId || !equalFollowRuleReceiverV1(result.rule.receiver, receiver.data)) mismatch();
@@ -145,14 +170,16 @@ export function resolveSessionFollowActionRequest(actionId: SessionFollowActionI
   const data: Record<string, unknown> = SessionFollowActionInputSchemasV1[actionId].parse(input);
   if (actionId === 'follow.preview') throw new Error('follow_preview_requires_authorized_corpus');
   if (actionId === 'follow.list') {
+    const page = FollowListPageRequestV1Schema.parse({ cursor: data.cursor, limit: data.limit });
     if (data.direction === 'followers') {
       const source = data.source as Readonly<Record<string, unknown>>;
-      if (source.kind !== 'session') throw Object.assign(new Error('follow_source_adapter_unavailable'), { code: 'unsupported_action' });
-      return { method: 'GET', path: SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.followers.replace(':sourceSessionId', encodeURIComponent(String(source.sessionId))) };
+      return { method: 'GET', path: appendFollowListPageQueryV1(source.kind === 'session'
+        ? SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.followers.replace(':sourceSessionId', encodeURIComponent(String(source.sessionId)))
+        : SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.otherFollowers.replace(':sourceRef', encodeFollowSourceRefPathV1(FollowSourceRefV1Schema.parse(source))), page) };
     }
     const receiver = FollowReceiverRefV1Schema.parse(data.receiver);
-    return { method: 'GET', path: receiver.kind === 'account' ? '/v2/account/session-follows'
-      : SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list.replace(':destinationSessionId', encodeURIComponent(receiver.sessionId)) };
+    return { method: 'GET', path: appendFollowListPageQueryV1(receiver.kind === 'account' ? '/v2/account/session-follows'
+      : SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list.replace(':destinationSessionId', encodeURIComponent(receiver.sessionId)), page) };
   }
   if (actionId === 'follow.get' || actionId === 'follow.set' || actionId === 'follow.remove') {
     const receiver = FollowReceiverRefV1Schema.parse(data.receiver);
@@ -165,7 +192,12 @@ export function resolveSessionFollowActionRequest(actionId: SessionFollowActionI
       if (!prepared?.ruleContent) throw new Error('follow_rule_content_not_prepared');
       return { path, method, body: { receiver, content: prepared.ruleContent, expectedVersion: data.expectedVersion } };
     }
-    if (source.kind !== 'session') throw Object.assign(new Error('follow_source_adapter_unavailable'), { code: 'unsupported_action' });
+    if (source.kind !== 'session') {
+      const base = receiver.kind === 'account' ? SESSION_FOLLOW_HTTP_PATHS_V1.otherSource
+        : SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.otherSource.replace(':destinationSessionId', encodeURIComponent(receiver.sessionId));
+      return { path: base.replace(':sourceRef', encodeFollowSourceRefPathV1(FollowSourceRefV1Schema.parse(source))), method,
+        ...(method === 'PUT' ? { body: { policy: data.policy } } : {}) };
+    }
     if (receiver.kind === 'account') return {
       path: SESSION_FOLLOW_HTTP_PATHS_V1.follow.replace(':sessionId', encodeURIComponent(String(source.sessionId))), method,
       ...(method === 'PUT' ? { body: { ...(data.policy !== undefined ? { policy: data.policy } : {}), ...(data.once !== undefined ? { once: data.once } : {}) } } : {}),

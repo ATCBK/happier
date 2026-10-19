@@ -119,7 +119,9 @@ function generateProviderSchemaFromPostgres(
         // Personal Follow policy and accepted one-shot source references are
         // serialized documents, not VARCHAR(191) identifiers.
         body = body.replace(/^model\s+AccountSessionFollow\s+\{[\s\S]*?^\}/gm,
-            (model) => model.replace(/^([ \t]*(?:followPolicy|notifyOnce)\s+String\?)(?![^\n]*@db\.)/gm, "$1 @db.LongText"));
+            (model) => model
+                .replace(/^([ \t]*(?:followPolicy|notifyOnce)\s+String\?)(?![^\n]*@db\.)/gm, "$1 @db.LongText")
+                .replace(/^([ \t]*sourceKey\s+String\?)(?![^\n]*@db\.)/m, "$1 @db.VarChar(202)"));
         // Preserve the full VARCHAR(191) resource id plus the longest domain prefix, discussion:.
         body = body.replace(/^model\s+SessionFollowEdge\s+\{[\s\S]*?^\}/gm,
             (model) => model.replace(/^([ \t]*sourceKey\s+String)(?![^\n]*@db\.)/gm, "$1 @db.VarChar(202)"));

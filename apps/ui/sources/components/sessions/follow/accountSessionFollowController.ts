@@ -56,7 +56,10 @@ export function projectAccountSessionFollowPolicyEditor(
     }) : null;
     const policy = snapshot.policyDraft ?? effective?.policy ?? null;
     return {
+        /** Owner relevance is independent of an active delivery choice. */
         following: effective?.tracked === true,
+        suppressed: effective?.suppressed === true,
+        deliveryEnabled: effective?.policy != null,
         model: policy ? projectFollowPolicyEditorV1(policy, supportedEvents) : null,
         once: snapshot.projection?.follow?.once ?? null,
         hasDraft: snapshot.policyDraft != null,

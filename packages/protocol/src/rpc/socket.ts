@@ -96,6 +96,7 @@ export function isSessionActionRpcMethodV1(method: string): boolean {
     || unscoped === 'skills.read'
     || unscoped === SESSION_RPC_METHODS.SESSION_NEEDS_YOU_RAISE
     || unscoped === RPC_METHODS.SESSION_USER_ACTION_ANSWER
+    || unscoped === SESSION_RPC_METHODS.SESSION_MESSAGE_REPLY
     || unscoped === SESSION_RPC_METHODS.SESSION_ROLES_CONFIGURATION_SET
     || unscoped === SESSION_RPC_METHODS.SESSION_MESSAGE_REPLY_OBSERVE_V1
     || unscoped === RPC_METHODS.DAEMON_WORKSPACE_SYNC_HANDOFF_SOURCE_PHASE
@@ -432,6 +433,7 @@ const SESSION_RPC_DECLARED_AUTHORITIES = Object.freeze({
   [SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND]: { authority: 'submitAgentInput', actionId: 'session.message.send' },
   [SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1]: 'sessionOwner',
   [SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1]: 'sessionOwner',
+  [SESSION_RPC_METHODS.SESSION_MESSAGE_REPLY]: { authority: 'sessionOwner', actionId: 'session.message.reply' },
   [SESSION_RPC_METHODS.SESSION_MESSAGE_REPLY_OBSERVE_V1]: 'sessionOwner',
   [SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1]: 'sessionOwner',
   [SESSION_RPC_METHODS.SESSION_PENDING_MESSAGE_COMPOSER_ADMISSION_PREPARE_V1]: 'submitAgentInput',
@@ -485,6 +487,7 @@ const SESSION_RPC_DECLARED_AUTHORITIES = Object.freeze({
   [SESSION_RPC_METHODS.EXECUTION_RUN_STOP]: { authority: 'sessionOwner', machineScope: true },
   [SESSION_RPC_METHODS.EXECUTION_RUN_LIST]: { authority: 'readTranscript', machineScope: true },
   [SESSION_RPC_METHODS.EXECUTION_RUN_GET]: { authority: 'readTranscript', machineScope: true },
+  [SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER]: { authority: 'readTranscript', machineScope: true },
   [SESSION_RPC_METHODS.EXECUTION_RUN_WAIT]: { authority: 'readTranscript', machineScope: true },
   [SESSION_RPC_METHODS.EXECUTION_RUN_BROKER_AUTHORITY_RESOLVE_V1]: 'sessionOwner',
   [SESSION_RPC_METHODS.EXECUTION_RUN_ACTION]: { authority: 'sessionOwner', machineScope: true },

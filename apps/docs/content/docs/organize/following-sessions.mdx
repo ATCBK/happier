@@ -35,8 +35,8 @@ context. An encrypted session has to be unlocked on this device before Voice can
 include it, and some Voice modes cannot include stored session updates at all —
 Happier says which case you are in rather than silently dropping the session.
 
-If you own the session, the editor tells you so: **You own this session, so its
-updates always reach you.**
+Owning a session supplies implicit tracking. Your notification policy and explicit
+opt-out still apply; ownership does not force every update to interrupt you.
 
 ## Sessions you follow without asking
 
@@ -56,12 +56,11 @@ of forty would otherwise generate forty subscriptions every time anybody shared
 anything. Turn the Team and Group switches on if your Team is small enough that
 you do want all of it.
 
-These preferences apply to new assignments and newly accessible sessions.
-Existing choices stay unchanged, so turning a switch on does not retroactively
-follow everything you can already see. They are set per Home.
-
-When an assignment follows a session for you, the session says why: **Following
-because you were assigned.**
+In current 0.3 development, these preferences are default Follow rules for future
+matching activity. Assignment and sharing do not create an individual Follow
+subscription or read-state baseline. Your explicit Follow choices, opt-outs and
+existing read state stay unchanged when defaults change. These preferences are
+set per Home.
 
 ## Follow, read state, and assignment
 
@@ -71,7 +70,8 @@ Three related things, each answering something different:
 - **Read and unread state** decides whether the session currently wants a look.
   See [Read and unread state](/organize/session-read-state).
 - **Assignment** — the responsible member on a shared session — records who is
-  expected to act, and by default follows the session for them.
+  expected to act. Your default Follow rule can select its later activity without
+  creating an individual subscription.
 
 Receiving Team or Group access on its own creates none of these. It does not
 produce unread state, Inbox pressure, a badge, or a notification. Open the session
@@ -113,8 +113,8 @@ notification workflows continue to work.
 
 ## Follow between sessions
 
-There is a second, unrelated feature with the same word in it: an agent session
-can follow *another session* and receive bounded context from it during a turn.
+An agent session can also follow *another session* and receive bounded context
+from it during a turn, using the same Follow event and delivery policy owners.
 That is **Session updates** in the same editor — **Follow in another Session…** —
 and it is about what the agent reads, not about what you are notified of. It is
 described under [Session-to-Session Follow

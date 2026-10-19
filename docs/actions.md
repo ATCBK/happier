@@ -15,7 +15,8 @@ operand and one/many cardinality through `sessionTarget`. The shared
 `sessionTargetV1` schema normalizes shorthand and object intent; the executor's
 `sessionTargets` owner resolves authorized qualified addresses before approval.
 `session.message.send` and `session.status.get` consume self, manager, workers
-(direct or recursive), and siblings; `session.open` requires exactly one result.
+(direct or recursive), siblings, Followers, Following, Discussion participants,
+and matching filters; `session.open` requires exactly one result.
 Plain Session IDs retain their existing result shape. Group sends/status reads
 return each target's outcome. Native participant recipients remain separate
 inside-Session routing identities.
@@ -33,11 +34,13 @@ expanding changed relations. Missing or incomplete selector backing returns
 `session_target_unavailable` before fanout; an empty group and a one-target
 cardinality mismatch have distinct results. Matching consumes the complete,
 authorized Follow preview/filter owner and refuses unavailable candidates or
-continuation. The CLI reader exhausts ordinary and attention pages; the UI's
-currently partial loaded inventory refuses selection.
-Follow/Discussion selectors and the remaining declaration sweep are coordination integration work;
-their schema presence does not establish executable support. These source
-contracts still require the coordination program's loaded-runtime validation.
+continuation. The host readers exhaust ordinary and attention pages. Follow selectors
+combine authorized stored relations with current rule matches through that same
+filter owner; private person follows and non-Session sources never become Session
+targets. Discussion selection reads the admitted participant roster, including model
+slots only after they have an ordinary Session; selection creates no Session or grant.
+Incomplete reads refuse the whole selection before effects. The remaining declaration
+sweep and the coordination program's loaded-runtime validation are separate gates.
 
 Session messaging in 0.3 development uses that same front door. Send writes
 `session.message.send` with `reply: 'none'`; an ask uses `wait` for inline
@@ -2813,6 +2816,13 @@ Relation membership does not replace ordinary Home access or grant other
 mutation rights. Caller identity, turn depth and subtree membership cannot be
 supplied in Action input.
 
+The development UI Stop producer retains the canonical `sessionId`, `stopped`
+and optional `stopOutcome` alongside its incumbent presentation fields. Exact
+daemon absence plus a fresh authorized inactive row retains `already_stopped`;
+an acknowledgement or cached/offline appearance alone does not confirm Stop.
+UI archive/unarchive refusals use the ordinary Action failure envelope, so a
+composed lifecycle does not acknowledge an archive the Home rejected.
+
 In 0.3 development, Session Action authorization preparation preserves transient
 Home mint failures as `project_requester_home_unavailable`. No effect executes;
 the caller can retry after Home recovers. HTTP 401/403 authorization denials retain
@@ -3557,7 +3567,10 @@ failure does not roll it back. In 0.3 development the controller returns
 `action_outcome_unknown` and retains the same operation with an
 `outcome_uncertain` observation. An unreadable admission acknowledgement also
 retains an unconfirmed outcome; Home's typed acquisition/rollback refusals
-remain definite. Read the managed row before retrying; Stop
+remain definite. Explicit unknown native power, delete and rebuild results use
+the same unconfirmed result while retaining the exact native submission;
+observation and identical request replay do not issue another native effect.
+Read the managed row before retrying; Stop
 remains available to retract desired Start even while the last observation
 says stopped. Definite native refusals retain their existing failure result.
 The shared `project_requester_home_unavailable` code also applies to Machine
@@ -3911,6 +3924,14 @@ Session. Pending outcomes remain resume-only; success, nonretryable failure and
 other Actions' terminal results continue to replay. This does not automatically
 retry a failed start or turn a transport acknowledgement into birth success.
 
+The retained creation operation owns cancellation through native Session open.
+In 0.3 development source, daemon commitment and seeded creation forward that
+same lifetime to their shared Session-create HTTP transport. A signaled request
+has no shorter POST timeout; standalone callers without an operation lifetime
+retain the existing transport timeout. Cancellation refuses a successful caller
+receipt but cannot undo a server commit. The existing creation key and tag
+continue to own create-or-rejoin identity after an uncertain result.
+
 `action.options.resolve` for `session.spawn_new`'s `modelSelection` field returns
 an optional strict `modelCatalog`: native choices from the existing Agent
 inventory, plus the exact Machine's existing Provider picker projection. Generic
@@ -4235,6 +4256,13 @@ answer the read. They never mount or load a second projection and return
 client placement, retaining their existing authority, approval, and domain
 contracts. `inbox.mark_all_read` reports client absence as the typed
 `unavailable`/`noClient` failure rather than an acknowledgement list.
+
+The development `inbox.get` ready result includes the mounted model's canonical
+`items`: type, view, read state, qualified source, exact focus and `pageRoute`.
+Discussion rows retain their exact message reference and Doc proposal disposition;
+`coverage.discussions` reports complete, partial or unavailable source coverage.
+Opening a proposal marks it read without deciding it. The existing grouping and
+source-id fields remain projections of the same mounted model.
 
 **`serverTransport`** — an optional `{ method, path, preservePathFieldsInBody? }` declaration naming the Home route that carries a
 server-owned Action. It is a local declaration only: the domain route still owns wire validation

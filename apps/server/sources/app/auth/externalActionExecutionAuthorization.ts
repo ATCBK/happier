@@ -84,6 +84,7 @@ import { DISCUSSION_SECOND_OPINION_PREVIEW_HTTP_PATH_V1, DiscussionSecondOpinion
 import { ArtifactAccessGrantSetInputV1Schema, ArtifactRecipientKeyEnvelopeCommitInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { bindDiscussionCandidatePeopleReadV1, projectDiscussionCandidateSessionQueryV1 } from '@happier-dev/protocol/actions/discussionActionFamily';
 import { UsersSearchQueryV1Schema } from '@happier-dev/protocol/social/friends';
+import { SESSION_FOLLOW_RULES_ROUTE_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 
 export type VerifiedExternalActionPrincipal = VerifiedApiTokenPrincipal
     | (Extract<ExternalActionServerPrincipalV1, { authentication: unknown }>
@@ -1256,6 +1257,37 @@ function isDiscussionCandidateReadHttpPurpose(verified: VerifiedExternalActionEx
     } catch { return false; }
 }
 
+/** Selector preparation spends its declared root, never a Follow or Discussion child Action. */
+function isSessionTargetPreparationHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
+    proof: ExternalActionExecutionRequestProof): boolean {
+    const root = SignedRootActionIdSchema.safeParse(verified.binding.actionId);
+    if (!root.success || !getActionSpec(root.data).sessionTarget
+        || verified.effectActionId !== verified.binding.actionId) return false;
+    const method = proof.method.toUpperCase();
+    if (method === 'GET' && proof.body === undefined && proof.sessionRouteTarget?.actionId === 'follow.list'
+        && isSessionFollowActionHttpRequestV1('follow.list', { method, path: proof.path, routeInput: proof.routeInput,
+            sessionRouteSessionId: proof.sessionRouteTarget.sessionId })) return true;
+    // Native routes retain current actor/resource admission. Collection and
+    // private Account facts additionally require the root's Account-wide scope.
+    if (!('authentication' in verified.binding) && verified.binding.grant.targets !== null) return false;
+    if (method === 'POST' && proof.path === '/v2/sessions/query') {
+        const query = SessionListQueryV1Schema.safeParse(proof.body);
+        return query.success && (proof.routeInput === undefined || sameManagedInput(proof.routeInput, query.data));
+    }
+    if (method === 'GET' && proof.body === undefined) {
+        if (proof.path === '/v1/account/encryption/currentness' || proof.path === '/v1/features/authenticated') {
+            return proof.routeInput === undefined || sameManagedInput(proof.routeInput, {});
+        }
+        if (isAccountActionHttpOperation('discussion.participants.list', proof)) return true;
+        if (proof.path === SESSION_FOLLOW_RULES_ROUTE_V1 && isSessionFollowActionHttpRequestV1('follow.list', {
+            method, path: proof.path, routeInput: proof.routeInput,
+        })) return true;
+    }
+    // Follow's existing transport owns the closed Project/assignment fact reads.
+    return isSessionFollowActionHttpRequestV1('follow.preview', { method, path: proof.path, body: proof.body,
+        routeInput: proof.routeInput, sessionRouteSessionId: proof.sessionRouteTarget?.sessionId });
+}
+
 /** Collection phases have no single Session operand and require captured Account-wide resource access. */
 function isSessionListHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
     proof: ExternalActionExecutionRequestProof): boolean {
@@ -1455,7 +1487,8 @@ export async function verifyExternalActionDomainExecutionRequest(
         if (!isDiscussionCandidateReadHttpPurpose(verified, proof)) return null;
     } else if (isSessionStateFieldActionHttpPurpose(verified, proof)) {
         // The existing Session routes retain actor access, tuple CAS and publisher policy.
-    } else if (isSessionListHttpPurpose(verified, proof)
+    } else if (isSessionTargetPreparationHttpPurpose(verified, proof)
+        || isSessionListHttpPurpose(verified, proof)
         || isInstalledSessionSubtreeObservationHttpPurpose(verified, proof)
         || isSessionSourceKeyTransportHttpPurpose(verified, proof)
         || await isInstalledSessionLifecycleHttpPurpose(verified, proof)) {

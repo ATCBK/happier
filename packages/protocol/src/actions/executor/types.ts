@@ -1894,6 +1894,13 @@ export type ActionExecutorDeps = Readonly<{
     serverId?: string | null;
     signal?: AbortSignal;
   }>) => Promise<unknown>;
+  /** Complete own-Account rule facts; selector matching remains at the shared preview owner. */
+  readSessionFollowRules?: (args: Readonly<{
+    context: ActionExecutorContext;
+    serverId: string;
+    signal?: AbortSignal;
+  }>) => Promise<Readonly<{ kind: 'complete'; rules: readonly import('../../sessions/follow/actions.js').OpenedSessionFollowRuleV1[] }>
+    | Readonly<{ kind: 'unavailable' }>>;
   /** Authorized fact-bearing corpus adapter at the existing Session listing owner. */
   sessionFollowPreview?: (args: Readonly<{
     context: ActionExecutorContext;

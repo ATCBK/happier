@@ -220,11 +220,16 @@ describe('Session Follow context reconciler', () => {
         followDeliveries: [{ delivery, localInputId: 'accepted-follow', userMessageSeq: 17 }] });
       expect(omitted?.representedFollowLocalInputIds ?? []).toEqual([]);
       const prepared = await reconcile({ signal,
-        followDeliveries: [{ delivery, localInputId: 'accepted-follow', userMessageSeq: 17 }] });
+        followDeliveries: [{ delivery, localInputId: 'accepted-follow', userMessageSeq: 17,
+          followMatches: [{ kind: 'relation', relation: 'manager' }, { kind: 'relation', relation: 'follower' }, { kind: 'rule' }],
+        }] });
       expect(prepared?.representedFollowLocalInputIds).toEqual(['accepted-follow']);
       expect(prepared?.workerUpdates).toEqual([expect.objectContaining({ ownerState: 'published',
         result: 'One committed report', deliverables: [{ kind: 'workspace_file', sessionId: 'source', path: 'result.md' }],
         transcriptPointer: { kind: 'session', sessionId: 'source', seq: 1 } })]);
+      expect(prepared?.workerUpdateEvents).toMatchObject([{ followInputLocalId: 'accepted-follow', followMatches: [
+        { kind: 'relation', relation: 'manager' }, { kind: 'relation', relation: 'follower' }, { kind: 'rule' },
+      ] }]);
       const representationCount = (prepared?.updates.length ?? 0) + (prepared?.workerUpdates?.length ?? 0);
       prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'accepted-follow', userMessageSeq: 17 });
       await vi.waitFor(() => expect(acknowledgements.length).toBeGreaterThan(0));
@@ -284,6 +289,7 @@ describe('Session Follow context reconciler', () => {
     expect(waiting?.workerUpdates).toEqual([expect.objectContaining({ workerKind: 'session',
       ownerState: 'needs_input', wake: 'needs_you' })]);
     expect(waiting?.wakeEventLocalId).toBeDefined();
+    expect(waiting?.workerUpdateEvents).toMatchObject([{ followMatches: [{ kind: 'relation', relation: 'manager' }] }]);
     waiting!.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: waiting!.wakeEventLocalId! });
     await vi.waitFor(() => expect(acknowledgements).toHaveLength(1));
     expect(await reconcile({ signal, deliveryIntent: 'wake' })).toBeNull();
@@ -356,6 +362,7 @@ describe('Session Follow context reconciler', () => {
     expect(shouldWakeForSessionFollowObservation(ordinary, { ...envelopeFor(observation), pendingHumanIngress: true })).toBe(true);
     expect(shouldWakeForSessionFollowObservation(observation, { ...envelopeFor(observation), pendingHumanIngress: true })).toBe(false);
   });
+
 
   it.each(['message', 'request'] as const)('binds a represented public original (%s) to its own admitted input without private rule references', async kind => {
     const delivery = SessionFollowInputV1Schema.parse(kind === 'message' ? { v: 1, delivery: 'next_turn',

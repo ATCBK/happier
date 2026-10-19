@@ -53,6 +53,24 @@ async function setup(secret?: string) {
 }
 
 describe('Follow exact Home Action transport', () => {
+    it('preserves source continuation and emits private rules once across following pages', async () => {
+        const env = await setup();
+        const { executeSessionFollowAction } = await import('./sessionFollowApi');
+        const receiver = { kind: 'account' as const };
+        const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'quiet' as const } };
+        const rule = { ruleId: 'rule', receiver, version: 0, content: { t: 'plain' as const, v: definition } };
+        env.request.mockImplementation(async url => {
+            const parsed = new URL(url);
+            if (parsed.pathname.endsWith('/session-follow-rules')) return Response.json({ rules: [rule] });
+            expect(parsed.pathname).toBe('/v2/account/session-follows');
+            expect(parsed.searchParams.get('limit')).toBe('1');
+            return Response.json(parsed.searchParams.has('cursor') ? { follows: [] } : { follows: [], continuation: 'next-source-page' });
+        });
+        expect(await executeSessionFollowAction('follow.list', { direction: 'following', receiver, limit: 1 }, env.target.id))
+            .toMatchObject({ kind: 'ok', value: { rules: [{ ruleId: 'rule', definition }], coverage: 'partial', continuation: 'next-source-page' } });
+        expect(await executeSessionFollowAction('follow.list', { direction: 'following', receiver, limit: 1, cursor: 'next-source-page' }, env.target.id))
+            .toEqual({ kind: 'ok', value: { follows: [], sources: [], rules: [], coverage: 'complete' } });
+    });
     it('reads source followers on the captured Home without opening private rule census', async () => {
         const env = await setup();
         const { executeSessionFollowAction } = await import('./sessionFollowApi');

@@ -334,10 +334,29 @@ export type SessionTranscriptsActionResultById = {
                     installationId?: string | undefined;
                     sourceMessage?: undefined;
                 })[] | undefined;
-                followRelations?: {
-                    relation: 'follower' | 'manager';
-                    attachedAt?: number | undefined;
-                }[] | undefined;
+                followRelations?: ({
+                    relation: 'follower';
+                } | {
+                    relation: 'manager';
+                    attachedAt: number;
+                } | {
+                    relation: 'follower';
+                    attachedAt: number;
+                    source: {
+                        kind: 'execution_run';
+                        sessionId: string;
+                        runId: string;
+                    };
+                    expectedTerminalEventId: string | null;
+                } | {
+                    relation: 'follower';
+                    attachedAt: number;
+                    source: {
+                        kind: 'workflow_run';
+                        runId: string;
+                    };
+                    expectedRevision: number;
+                })[] | undefined;
                 followDeliveryV1?: {
                     original: {
                         sourceSessionId: string;
@@ -377,6 +396,33 @@ export type SessionTranscriptsActionResultById = {
                             handling?: 'manager' | 'person' | undefined;
                         };
                     }[];
+                    v: 1;
+                    delivery: 'next_turn' | 'wake';
+                } | {
+                    original: {
+                        source: {
+                            kind: 'execution_run';
+                            sessionId: string;
+                            runId: string;
+                        };
+                        terminalEventId: string;
+                    };
+                    event: {
+                        kind: 'finished' | 'failed_or_stopped';
+                    };
+                    v: 1;
+                    delivery: 'next_turn' | 'wake';
+                } | {
+                    original: {
+                        source: {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        revision: number;
+                    };
+                    event: {
+                        kind: 'finished' | 'failed_or_stopped';
+                    };
                     v: 1;
                     delivery: 'next_turn' | 'wake';
                 } | undefined;
@@ -445,10 +491,29 @@ export type SessionTranscriptsActionResultById = {
                     installationId?: string | undefined;
                     sourceMessage?: undefined;
                 })[] | undefined;
-                followRelations?: {
-                    relation: 'follower' | 'manager';
-                    attachedAt?: number | undefined;
-                }[] | undefined;
+                followRelations?: ({
+                    relation: 'follower';
+                } | {
+                    relation: 'manager';
+                    attachedAt: number;
+                } | {
+                    relation: 'follower';
+                    attachedAt: number;
+                    source: {
+                        kind: 'execution_run';
+                        sessionId: string;
+                        runId: string;
+                    };
+                    expectedTerminalEventId: string | null;
+                } | {
+                    relation: 'follower';
+                    attachedAt: number;
+                    source: {
+                        kind: 'workflow_run';
+                        runId: string;
+                    };
+                    expectedRevision: number;
+                })[] | undefined;
                 followDeliveryV1?: {
                     original: {
                         sourceSessionId: string;
@@ -488,6 +553,33 @@ export type SessionTranscriptsActionResultById = {
                             handling?: 'manager' | 'person' | undefined;
                         };
                     }[];
+                    v: 1;
+                    delivery: 'next_turn' | 'wake';
+                } | {
+                    original: {
+                        source: {
+                            kind: 'execution_run';
+                            sessionId: string;
+                            runId: string;
+                        };
+                        terminalEventId: string;
+                    };
+                    event: {
+                        kind: 'finished' | 'failed_or_stopped';
+                    };
+                    v: 1;
+                    delivery: 'next_turn' | 'wake';
+                } | {
+                    original: {
+                        source: {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        revision: number;
+                    };
+                    event: {
+                        kind: 'finished' | 'failed_or_stopped';
+                    };
                     v: 1;
                     delivery: 'next_turn' | 'wake';
                 } | undefined;
@@ -641,10 +733,29 @@ export type SessionTranscriptsActionResultById = {
                     installationId?: string | undefined;
                     sourceMessage?: undefined;
                 })[] | undefined;
-                followRelations?: {
-                    relation: 'follower' | 'manager';
-                    attachedAt?: number | undefined;
-                }[] | undefined;
+                followRelations?: ({
+                    relation: 'follower';
+                } | {
+                    relation: 'manager';
+                    attachedAt: number;
+                } | {
+                    relation: 'follower';
+                    attachedAt: number;
+                    source: {
+                        kind: 'execution_run';
+                        sessionId: string;
+                        runId: string;
+                    };
+                    expectedTerminalEventId: string | null;
+                } | {
+                    relation: 'follower';
+                    attachedAt: number;
+                    source: {
+                        kind: 'workflow_run';
+                        runId: string;
+                    };
+                    expectedRevision: number;
+                })[] | undefined;
                 followDeliveryV1?: {
                     original: {
                         sourceSessionId: string;
@@ -684,6 +795,33 @@ export type SessionTranscriptsActionResultById = {
                             handling?: 'manager' | 'person' | undefined;
                         };
                     }[];
+                    v: 1;
+                    delivery: 'next_turn' | 'wake';
+                } | {
+                    original: {
+                        source: {
+                            kind: 'execution_run';
+                            sessionId: string;
+                            runId: string;
+                        };
+                        terminalEventId: string;
+                    };
+                    event: {
+                        kind: 'finished' | 'failed_or_stopped';
+                    };
+                    v: 1;
+                    delivery: 'next_turn' | 'wake';
+                } | {
+                    original: {
+                        source: {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        revision: number;
+                    };
+                    event: {
+                        kind: 'finished' | 'failed_or_stopped';
+                    };
                     v: 1;
                     delivery: 'next_turn' | 'wake';
                 } | undefined;
@@ -752,10 +890,29 @@ export type SessionTranscriptsActionResultById = {
                     installationId?: string | undefined;
                     sourceMessage?: undefined;
                 })[] | undefined;
-                followRelations?: {
-                    relation: 'follower' | 'manager';
-                    attachedAt?: number | undefined;
-                }[] | undefined;
+                followRelations?: ({
+                    relation: 'follower';
+                } | {
+                    relation: 'manager';
+                    attachedAt: number;
+                } | {
+                    relation: 'follower';
+                    attachedAt: number;
+                    source: {
+                        kind: 'execution_run';
+                        sessionId: string;
+                        runId: string;
+                    };
+                    expectedTerminalEventId: string | null;
+                } | {
+                    relation: 'follower';
+                    attachedAt: number;
+                    source: {
+                        kind: 'workflow_run';
+                        runId: string;
+                    };
+                    expectedRevision: number;
+                })[] | undefined;
                 followDeliveryV1?: {
                     original: {
                         sourceSessionId: string;
@@ -795,6 +952,33 @@ export type SessionTranscriptsActionResultById = {
                             handling?: 'manager' | 'person' | undefined;
                         };
                     }[];
+                    v: 1;
+                    delivery: 'next_turn' | 'wake';
+                } | {
+                    original: {
+                        source: {
+                            kind: 'execution_run';
+                            sessionId: string;
+                            runId: string;
+                        };
+                        terminalEventId: string;
+                    };
+                    event: {
+                        kind: 'finished' | 'failed_or_stopped';
+                    };
+                    v: 1;
+                    delivery: 'next_turn' | 'wake';
+                } | {
+                    original: {
+                        source: {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        revision: number;
+                    };
+                    event: {
+                        kind: 'finished' | 'failed_or_stopped';
+                    };
                     v: 1;
                     delivery: 'next_turn' | 'wake';
                 } | undefined;

@@ -123,7 +123,7 @@ export type SessionTargetingActionResultById = {
                 serverId: string;
                 sessionId: string;
             };
-            reason: 'invalid_parameters' | 'feature_unavailable' | 'session_not_found' | 'account_inactive' | 'session_archived' | 'unavailable';
+            reason: 'invalid_parameters' | 'feature_unavailable' | 'session_not_found' | 'source_not_found' | 'source_unavailable' | 'account_inactive' | 'session_archived' | 'unavailable';
         };
     } | {
         ok: false;

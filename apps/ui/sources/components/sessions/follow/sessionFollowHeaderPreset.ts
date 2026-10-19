@@ -5,7 +5,7 @@ import { isSessionPersonallyTrackedForViewerV1 } from '@happier-dev/protocol/ses
 import { normalizeSessionViewerCompatibility } from '@/sync/domains/session/readState/sessionViewer';
 import { isSessionAccessOwner } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
 
-/** What the header chip says: the effective preset, or `none` when this person does not follow it. */
+/** What the header chip says: the effective delivery preset, or `none` when delivery is off. */
 export type SessionFollowHeaderPreset = FollowPolicyV1['preset'] | 'none';
 
 /**
@@ -32,8 +32,5 @@ export function readSessionFollowHeaderPreset(
     })
   )
     return 'none';
-  return (
-    resolveEffectiveAccountFollowPolicyV1({ facts, isSessionOwner })?.preset ??
-    'important'
-  );
+  return resolveEffectiveAccountFollowPolicyV1({ facts, isSessionOwner })?.preset ?? 'none';
 }

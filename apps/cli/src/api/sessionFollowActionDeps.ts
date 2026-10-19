@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { resolveSessionFollowActionRequest, parseSessionFollowActionResponse } from '@happier-dev/protocol/sessions/follow/actionTransport';
 import { ListSessionFollowSourcesResponseSchema, SessionFollowSourcesErrorResponseSchema, SetSessionFollowSourceResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 import { DeliveryMuteErrorResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
@@ -11,7 +13,7 @@ import { equalFollowRuleReceiverV1, GetSessionFollowRuleResponseV1Schema, ListSe
   SessionFollowRuleDefinitionV1Schema, SetSessionFollowRuleResponseV1Schema, SESSION_FOLLOW_RULES_ROUTE_V1,
   type SessionFollowRuleV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { openSessionFollowRuleContentV1, sealSessionFollowRuleContentV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleContentCodecV1';
-import type { SessionFollowSourceKeyPreparationResultV1, ActionExecutorDeps } from '@happier-dev/protocol';
+import type { SessionFollowSourceKeyPreparationResultV1, ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol';
 import type { StoredCredentials } from '@/persistence';
 import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
@@ -41,7 +43,7 @@ export function createSessionFollowActionDeps(input: Readonly<{
     context: Parameters<NonNullable<ActionExecutorDeps['sessionFollowAction']>>[0]['context'];
     signal?: AbortSignal;
   }>) => Promise<SessionFollowSourceKeyPreparationResultV1>;
-}> & ExternalActionHomeBinding & SessionFollowActionFixedHome): Pick<ActionExecutorDeps, 'sessionFollowAction'> & Readonly<{
+}> & ExternalActionHomeBinding & SessionFollowActionFixedHome): Pick<ActionExecutorDeps, 'sessionFollowAction' | 'readSessionFollowRules'> & Readonly<{
   replaceSessionVoiceInclusions: (args: Readonly<{
     context: Parameters<NonNullable<ActionExecutorDeps['sessionTargetTrackedSet']>>[0]['context'];
     sessionIds: readonly string[];
@@ -57,7 +59,74 @@ export function createSessionFollowActionDeps(input: Readonly<{
   }
   const serverHttpBaseUrl = input.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
   const serverId = input.serverId ?? configuration.activeServerId;
+  const ruleAccess = (context: ActionExecutorContext, effectActionId: string, privateRuleOperation: boolean, signal?: AbortSignal) => {
+    const requester = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
+    const root = ActionIdSchema.safeParse(context.externalActionExecutionAuthorization?.binding.actionId);
+    const readActionId = root.success && getActionSpec(root.data).sessionTarget ? root.data : effectActionId;
+    const assertCurrent = async () => {
+      signal?.throwIfAborted();
+      if (privateRuleOperation && (requester ? !await requester.isCurrent() : input.isCredentialCurrent && !await input.isCredentialCurrent())) {
+        throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
+      }
+    };
+    const authorize = (request: Readonly<{ method: 'GET' | 'PUT' | 'DELETE'; path: string; body?: unknown }>) => resolveExternalActionServerRequestHeaders({
+      context, effectActionId: request.method === 'GET' ? readActionId : effectActionId, method: request.method, path: request.path,
+      ...(request.body === undefined ? {} : { body: request.body }),
+      daemonToken: input.token, serverIdentityId: input.serverIdentityId,
+      ...(input.externalActionMachineRequestPrivateKey ? { privateKey: input.externalActionMachineRequestPrivateKey } : {}),
+      ...(input.externalActionMachineInstallationId ? { installationId: input.externalActionMachineInstallationId } : {}),
+    });
+    const captureRuleStorage = async () => {
+      await assertCurrent();
+      const credentials = requester?.credentials ?? input.credentials;
+      const requesterAccountId = context.externalActionExecutionAuthorization?.binding.accountId;
+      if (!credentials || context.externalActionCredential && !requester
+        || context.runtimeAccountId && readAccountIdFromToken(credentials.token) !== context.runtimeAccountId
+        || (requesterAccountId ? !requester || readAccountIdFromToken(credentials.token) !== requesterAccountId
+        || requester.serverHttpBaseUrl.replace(/\/+$/, '') !== serverHttpBaseUrl.replace(/\/+$/, '')
+        : credentials.token !== input.token)) {
+        throw Object.assign(new Error('follow_rule_account_scope_unavailable'), { code: 'follow_rule_account_scope_unavailable' });
+      }
+      const authorization = authorize({ method: 'GET', path: '/v1/account/encryption/currentness' });
+      if (!authorization.ok) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
+      const admitted = await resolveCliAccountStorageContext({ credentials, serverBaseUrl: serverHttpBaseUrl,
+        authorizationHeaders: authorization.headers, ...(signal ? { signal } : {}) });
+      await assertCurrent();
+      return admitted;
+    };
+    const openRule = ({ content, ...rule }: SessionFollowRuleV1, admitted: Awaited<ReturnType<typeof captureRuleStorage>>) => {
+      const opened = openSessionFollowRuleContentV1({ ruleId: rule.ruleId, receiver: rule.receiver,
+        content, mode: admitted.mode, material: admitted.material });
+      if (opened.status !== 'opened') throw Object.assign(new Error(opened.reason), { code: opened.reason });
+      return { ...rule, definition: opened.definition };
+    };
+    const readRules = async () => {
+      const admitted = await captureRuleStorage();
+      const authorization = authorize({ method: 'GET', path: SESSION_FOLLOW_RULES_ROUTE_V1 });
+      if (!authorization.ok) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
+      await assertCurrent();
+      const response = await axios.request<unknown>({ url: `${serverHttpBaseUrl}${SESSION_FOLLOW_RULES_ROUTE_V1}`, method: 'GET',
+        headers: authorization.headers, ...(signal ? { signal } : {}), validateStatus: () => true });
+      await assertCurrent();
+      if (response.status < 200 || response.status >= 300) throw createHttpStatusError(response.status, 'Follow rule list failed');
+      const rules = ListSessionFollowRulesResponseV1Schema.parse(response.data).rules.map(rule => openRule(rule, admitted));
+      const current = await captureRuleStorage();
+      if (current.mode !== admitted.mode) throw Object.assign(new Error('account-mode-mismatch'), { code: 'account-mode-mismatch' });
+      return rules;
+    };
+    return { assertCurrent, authorize, captureRuleStorage, openRule, readRules };
+  };
   return {
+    readSessionFollowRules: async ({ context, serverId: requestedServerId, signal }) => {
+      if (requestedServerId !== serverId || context.serverId && context.serverId !== serverId) return { kind: 'unavailable' };
+      try {
+        const access = ruleAccess(context, 'follow.list', true, signal);
+        return { kind: 'complete', rules: await access.readRules() };
+      } catch {
+        signal?.throwIfAborted();
+        return { kind: 'unavailable' };
+      }
+    },
     replaceSessionVoiceInclusions: async ({ context, sessionIds, signal }) => {
       const path = SESSION_FOLLOW_HTTP_PATHS_V1.voiceInclusions;
       const body = { sessionIds: [...sessionIds] };
@@ -91,48 +160,9 @@ export function createSessionFollowActionDeps(input: Readonly<{
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       }
       const parsedInput = SessionFollowActionInputSchemasV1[actionId].parse(actionInput);
-      const requester = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
       const privateRuleOperation = 'source' in parsedInput && parsedInput.source.kind === 'rule'
         || 'direction' in parsedInput && parsedInput.direction === 'following';
-      const assertCurrent = async () => {
-        signal?.throwIfAborted();
-        if (privateRuleOperation && (requester ? !await requester.isCurrent() : input.isCredentialCurrent && !await input.isCredentialCurrent())) {
-          throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
-        }
-      };
-      const authorize = (request: Readonly<{ method: 'GET' | 'PUT' | 'DELETE'; path: string; body?: unknown }>) => resolveExternalActionServerRequestHeaders({
-        context,
-        effectActionId: actionId,
-        method: request.method,
-        path: request.path,
-        ...(request.body === undefined ? {} : { body: request.body }),
-        daemonToken: input.token,
-        serverIdentityId: input.serverIdentityId,
-        ...(input.externalActionMachineRequestPrivateKey
-          ? { privateKey: input.externalActionMachineRequestPrivateKey }
-          : {}),
-        ...(input.externalActionMachineInstallationId
-          ? { installationId: input.externalActionMachineInstallationId }
-          : {}),
-      });
-      const captureRuleStorage = async () => {
-        await assertCurrent();
-        const credentials = requester?.credentials ?? input.credentials;
-        const requesterAccountId = context.externalActionExecutionAuthorization?.binding.accountId;
-        if (!credentials || context.externalActionCredential && !requester
-          || context.runtimeAccountId && readAccountIdFromToken(credentials.token) !== context.runtimeAccountId
-          || (requesterAccountId ? !requester || readAccountIdFromToken(credentials.token) !== requesterAccountId
-          || requester.serverHttpBaseUrl.replace(/\/+$/, '') !== serverHttpBaseUrl.replace(/\/+$/, '')
-          : credentials.token !== input.token)) {
-          throw Object.assign(new Error('follow_rule_account_scope_unavailable'), { code: 'follow_rule_account_scope_unavailable' });
-        }
-        const authorization = authorize({ method: 'GET', path: '/v1/account/encryption/currentness' });
-        if (!authorization.ok) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
-        const admitted = await resolveCliAccountStorageContext({ credentials, serverBaseUrl: serverHttpBaseUrl,
-          authorizationHeaders: authorization.headers, ...(signal ? { signal } : {}) });
-        await assertCurrent();
-        return admitted;
-      };
+      const { assertCurrent, authorize, captureRuleStorage, openRule, readRules } = ruleAccess(context, actionId, privateRuleOperation, signal);
       const ruleTarget = 'source' in parsedInput && 'receiver' in parsedInput && parsedInput.source.kind === 'rule'
         ? { ruleId: parsedInput.source.ruleId, receiver: parsedInput.receiver } : null;
       const storage = ruleTarget && actionId !== 'follow.remove' ? await captureRuleStorage() : null;
@@ -167,12 +197,6 @@ export function createSessionFollowActionDeps(input: Readonly<{
         if (isAuthenticationStatus(response.status)) throw createAuthenticationHttpStatusError(response.status, 'Follow Action authentication failed');
         throw createHttpStatusError(response.status, 'Follow Action request failed');
       }
-      const openRule = (rule: SessionFollowRuleV1, admitted: Awaited<ReturnType<typeof captureRuleStorage>>) => {
-        const opened = openSessionFollowRuleContentV1({ ruleId: rule.ruleId, receiver: rule.receiver,
-          content: rule.content, mode: admitted.mode, material: admitted.material });
-        if (opened.status !== 'opened') throw Object.assign(new Error(opened.reason), { code: opened.reason });
-        return { ruleId: rule.ruleId, receiver: rule.receiver, version: rule.version, definition: opened.definition };
-      };
       if (ruleTarget && storage && (actionId === 'follow.get' || actionId === 'follow.set')) {
         const rule = actionId === 'follow.get' ? GetSessionFollowRuleResponseV1Schema.parse(response.data).rule
           : SetSessionFollowRuleResponseV1Schema.parse(response.data).rule;
@@ -182,21 +206,15 @@ export function createSessionFollowActionDeps(input: Readonly<{
       }
       const listInput = actionId === 'follow.list' ? SessionFollowActionInputSchemasV1['follow.list'].parse(actionInput) : null;
       if (listInput?.direction === 'following') {
-        const admitted = await captureRuleStorage();
-        const ruleRequest = { method: 'GET' as const, path: SESSION_FOLLOW_RULES_ROUTE_V1 };
-        const ruleAuthorization = authorize(ruleRequest);
-        if (!ruleAuthorization.ok) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
-        await assertCurrent();
-        const ruleResponse = await axios.request<unknown>({ url: `${serverHttpBaseUrl}${ruleRequest.path}`, method: 'GET',
-          headers: ruleAuthorization.headers, ...(signal ? { signal } : {}), validateStatus: () => true });
-        await assertCurrent();
-        if (ruleResponse.status < 200 || ruleResponse.status >= 300) throw createHttpStatusError(ruleResponse.status, 'Follow rule list failed');
-        const rules = ListSessionFollowRulesResponseV1Schema.parse(ruleResponse.data).rules
-          .filter(rule => equalFollowRuleReceiverV1(rule.receiver, listInput.receiver)).map(rule => openRule(rule, admitted));
+        // The rule owner supplies a complete private census on the first page;
+        // continuation belongs to the source list and must not repeat rules.
+        const rules = listInput.cursor === undefined
+          ? (await readRules()).filter(rule => equalFollowRuleReceiverV1(rule.receiver, listInput.receiver)) : [];
         const rows = listInput.receiver.kind === 'account'
-          ? { follows: ListAccountSessionFollowsResponseV1Schema.parse(response.data).follows, sources: [] }
-          : { follows: [], sources: ListSessionFollowSourcesResponseSchema.parse(response.data).sources };
-        return parseSessionFollowActionResponse('follow.list', actionInput, { ...rows, rules, coverage: 'complete' });
+          ? { ...ListAccountSessionFollowsResponseV1Schema.parse(response.data), sources: [] }
+          : { follows: [], ...ListSessionFollowSourcesResponseSchema.parse(response.data) };
+        return parseSessionFollowActionResponse('follow.list', actionInput, { ...rows, rules,
+          coverage: rows.continuation ? 'partial' : 'complete' });
       }
       const setInput = actionId === 'follow.set' ? SessionFollowActionInputSchemasV1['follow.set'].parse(actionInput) : null;
       if (setInput?.source.kind === 'session' && setInput.receiver.kind === 'session') {

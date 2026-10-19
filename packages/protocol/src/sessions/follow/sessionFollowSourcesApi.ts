@@ -5,6 +5,8 @@ import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.
 import { SessionIdSchema } from '../idsV1.js';
 import { SESSION_FOLLOW_ERROR_CODES_V1 } from './api.js';
 import { FollowPolicyV1Schema } from './sessionFollowPolicyV1.js';
+import { FollowListPageResultFieldsV1 } from './sessionFollowListV1.js';
+import { FollowSourceRefV1Schema } from './sessionDeliveryMuteV1.js';
 
 const FollowSessionIdSchema = asProtocolZod(SessionIdSchema);
 
@@ -26,6 +28,7 @@ export const SESSION_FOLLOW_SOURCES_ERROR_CODES_V1 = Object.freeze([
   ...SESSION_FOLLOW_ERROR_CODES_V1,
   'session_follow_same_session',
   'session_follow_source_forbidden',
+  'session_follow_source_unavailable',
 ] as const);
 export type SessionFollowSourcesErrorCodeV1 = typeof SESSION_FOLLOW_SOURCES_ERROR_CODES_V1[number];
 
@@ -64,9 +67,28 @@ export const SessionFollowSourceV1Schema = lazyZodSchema(() => z.strictObject({
   }));
 export type SessionFollowSourceV1 = z.infer<typeof SessionFollowSourceV1Schema>;
 
+/** Non-Session sources retain their own exact identity on the same Follow edge. */
+export const OtherSessionFollowSourceV1Schema = lazyZodSchema(() => z.strictObject({
+    source: FollowSourceRefV1Schema,
+    destinationSessionId: FollowSessionIdSchema,
+    policy: FollowPolicyV1Schema,
+    deliveryState: SessionFollowSourceDeliveryStateV1Schema,
+    sourceAvailability: z.enum(['available', 'unavailable']),
+    /** Null means this source's own retained-result reader has not proved currentness. */
+    hasPendingUpdates: z.nullable(z.boolean()),
+    relation: z.literal('follower'),
+  }).check(z.refine(row => row.source.kind !== 'session' && row.source.kind !== 'rule')));
+export const FollowSourceRelationV1Schema = lazyZodSchema(() => z.union([
+  SessionFollowSourceV1Schema, OtherSessionFollowSourceV1Schema,
+]));
+export type FollowSourceRelationV1 = z.infer<typeof FollowSourceRelationV1Schema>;
+
 /** `GET /v2/sessions/:destinationSessionId/follows/sessions` takes no input. */
-export const ListSessionFollowSourcesResponseSchema = lazyZodSchema(() => z.strictObject({ sources: z.array(SessionFollowSourceV1Schema) }));
+export const ListSessionFollowSourcesResponseSchema = lazyZodSchema(() => z.strictObject({ sources: z.array(FollowSourceRelationV1Schema), ...FollowListPageResultFieldsV1 }));
 export type ListSessionFollowSourcesResponse = z.infer<typeof ListSessionFollowSourcesResponseSchema>;
+export const GetOtherSessionFollowSourceResponseSchema = lazyZodSchema(() => z.strictObject({
+  source: z.nullable(OtherSessionFollowSourceV1Schema),
+}));
 
 /**
  * `PUT /v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId`.
@@ -81,7 +103,7 @@ export type SetSessionFollowSourceRequest = z.infer<typeof SetSessionFollowSourc
 
 export const SetSessionFollowSourceResponseSchema = lazyZodSchema(() => z.strictObject({
     changed: z.boolean(),
-    source: SessionFollowSourceV1Schema,
+    source: FollowSourceRelationV1Schema,
   }));
 export type SetSessionFollowSourceResponse = z.infer<typeof SetSessionFollowSourceResponseSchema>;
 
@@ -95,8 +117,11 @@ export type RemoveSessionFollowSourceResponse = z.infer<typeof RemoveSessionFoll
 
 export const SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 = Object.freeze({
   occurrenceRoutes: '/v2/sessions/:sourceSessionId/follows/occurrence-routes',
+  runOccurrenceRoutes: '/v2/follows/sources/run-occurrence-routes',
   inactiveObservations: '/v2/sessions/:destinationSessionId/follows/inactive-observations',
   list: '/v2/sessions/:destinationSessionId/follows/sessions',
   followers: '/v2/sessions/:sourceSessionId/follows/followers',
   source: '/v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId',
+  otherSource: '/v2/sessions/:destinationSessionId/follows/sources/:sourceRef',
+  otherFollowers: '/v2/follows/sources/:sourceRef/followers',
 });

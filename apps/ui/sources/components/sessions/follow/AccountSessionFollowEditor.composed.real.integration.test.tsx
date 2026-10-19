@@ -19,6 +19,11 @@ import { createAccountSessionFollowController, type AccountSessionFollowTranspor
 
 installSettingsViewCommonModuleMocks();
 
+function presetSegment(screen: Awaited<ReturnType<typeof renderSettingsView>>, preset: string) {
+    return screen.tree.root.findAll(node => node.props.testID === `session-follow-policy.preset.${preset}`
+        && typeof node.props.onPress === 'function')[0];
+}
+
 describe('personal Follow Voice through the mounted editor, HTTP and SQLite', () => {
     let database: LightSqliteHarness;
     beforeAll(async () => {
@@ -91,6 +96,61 @@ describe('personal Follow Voice through the mounted editor, HTTP and SQLite', ()
             await act(async () => { await controller.refresh(); });
             expect(screen.findByTestId('session-follow-voice')?.props.value).toBe(false);
             expect(await observe()).toEqual([]);
+        } finally {
+            await screen?.unmount();
+            controller.dispose();
+            await app.close();
+        }
+    });
+
+    it('lets an owner suppress delivery, reopen the explicit off state, and restore the policy', async () => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const source = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        const app = createAuthenticatedTestApp();
+        registerSessionFollowRoutes(app);
+        await app.ready();
+        const request = async (method: 'GET' | 'PUT' | 'DELETE', payload?: unknown) => {
+            const response = await app.inject({ method, url: `/v2/sessions/${source.id}/follow`,
+                headers: { 'x-test-user-id': account.id }, ...(payload === undefined ? {} : { payload }) });
+            expect(response.statusCode, response.body).toBe(200);
+            return response.json();
+        };
+        const transport: AccountSessionFollowTransport = {
+            get: async () => ({ kind: 'ok', value: GetSessionFollowResponseSchema.parse(await request('GET')) }),
+            set: async (_target, preferences) => ({ kind: 'ok', value: SetSessionFollowResponseSchema.parse(await request('PUT', preferences)) }),
+            remove: async () => ({ kind: 'ok', value: RemoveSessionFollowResponseSchema.parse(await request('DELETE')) }),
+        };
+        const controller = createAccountSessionFollowController({ serverId: 'home', sessionId: source.id }, transport);
+        let screen: Awaited<ReturnType<typeof renderSettingsView>> | undefined;
+        try {
+            await controller.refresh();
+            function Editor() {
+                const state = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+                return <AccountSessionFollowEditor state={state} voiceReadiness="eligible" archived={false}
+                    onEditPolicy={edit => { void controller.editPolicy(edit); }} onSet={next => { void controller.set(next); }}
+                    onRemove={() => { void controller.remove(); }} onRetry={() => { void controller.retry(); }} onOpenNotificationSettings={() => {}} />;
+            }
+            screen = await renderSettingsView(<Editor />);
+            expect(controller.getSnapshot().projection?.isSessionOwner).toBe(true);
+            expect(presetSegment(screen, 'important')).toBeDefined();
+            expect(screen.findByTestId('session-follow-unfollow')).not.toBeNull();
+            await act(async () => {
+                screen!.findByTestId('session-follow-unfollow')?.props.onPress();
+                await vi.waitFor(() => expect(controller.getSnapshot().saving).toBe(false));
+            });
+            await act(async () => { await controller.refresh(); });
+            expect(controller.getSnapshot().projection).toMatchObject({
+                isSessionOwner: true, follow: { following: false, notificationLevel: 'none' },
+            });
+            expect(presetSegment(screen, 'important')).toBeUndefined();
+            expect(screen.findByTestId('session-follow-follow')?.props.disabled).toBe(false);
+            await act(async () => {
+                screen!.findByTestId('session-follow-follow')?.props.onPress();
+                await vi.waitFor(() => expect(controller.getSnapshot().saving).toBe(false));
+            });
+            await act(async () => { await controller.refresh(); });
+            expect(controller.getSnapshot().projection?.follow).toMatchObject({ following: true, notificationLevel: 'important' });
+            expect(presetSegment(screen, 'important')).toBeDefined();
         } finally {
             await screen?.unmount();
             controller.dispose();

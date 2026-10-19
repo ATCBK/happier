@@ -7,7 +7,7 @@ import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
@@ -15,8 +15,10 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { useListPresentation } from '@/components/ui/lists/listPresentation';
 import { PaneSectionHeader } from '@/components/ui/lists/PaneSectionHeader';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
-import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
+import { useRouter, type Href } from '@/components/appShell/workspace/destinationRoute';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
+import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
+import { useIsTablet } from '@/utils/platform/responsive';
 import {
     listSessionFollowSources,
     removeSessionFollowSource,
@@ -30,7 +32,6 @@ import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachabi
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
-import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import {
@@ -45,7 +46,9 @@ import {
     resolveSessionFollowSourceRuntimeState,
     sessionFollowSourceRuntimeStateLabel,
 } from './sessionFollowSourcePresentation';
-import { FollowPolicyEditorBinding } from './FollowPolicyEditorBinding';
+import { FollowEditorPanel } from './FollowEditorPanel';
+import { FollowPolicyEditorBinding, FollowPolicySection } from './FollowPolicyEditorBinding';
+import { FollowSessionMark } from './FollowSessionMark';
 import { describeSessionFollowLevel } from './sessionFollowLevelCopy';
 import { openSessionFollowSourcePicker } from './openSessionFollowDestinationPicker';
 import {
@@ -83,17 +86,57 @@ function reduceSourceMutation(
     return reduceSessionFollowMutationIntent(state, event);
 }
 
+type FollowSourcePanelParts = Readonly<{
+    title: string;
+    subtitle: string;
+    mark: React.ReactNode;
+    body: React.ReactNode;
+    footer: React.ReactNode;
+}>;
+
 /**
- * Inside a page (`ListPresentationProvider value="page"`) this is two grouped sections, "Following" and "Add".
- * Anywhere else it is one flat section of a side pane (People): a heading with its count and "+", then flat
- * rows, drawn like the pane's Discussions. The pane mounts it with no list presentation around it.
+ * A source row's anchor: the row sits in a view that anchors its own Follow panel, and hands the panel's
+ * focus-return ref to the row's pressable.
+ */
+function SourceRowAnchor(props: Readonly<{
+    row: (triggerRef: React.RefObject<React.ComponentRef<typeof Pressable> | null>) => React.ReactNode;
+    panel: ((refs: Readonly<{
+        anchorRef: React.RefObject<View | null>;
+        triggerRef: React.RefObject<React.ComponentRef<typeof Pressable> | null>;
+    }>) => React.ReactNode) | null;
+}>) {
+    const anchorRef = React.useRef<View>(null);
+    const triggerRef = React.useRef<React.ComponentRef<typeof Pressable>>(null);
+    return <>
+        <View ref={anchorRef} collapsable={false}>{props.row(triggerRef)}</View>
+        {props.panel?.({ anchorRef, triggerRef })}
+    </>;
+}
+
+/**
+ * The Sessions this one follows (lab P1-P, P2-S). Inside a page (`ListPresentationProvider value="page"`) it is two
+ * grouped sections, "Following" and "Add". Anywhere else it is one flat section of a side pane (People): a heading
+ * with its count and "+", then flat rows, drawn like the pane's Discussions. The pane mounts it with no list
+ * presentation around it.
+ *
+ * A row opens that source's Follow panel (title, how much it hears, Stop updates · Done): anchored to the row on
+ * a wide window, a pushed page on a phone. `page` is that pushed page: the same editor, controller and writers
+ * place one source's panel through its `frame` instead of the list.
  */
 export function SessionFollowSourcesEditor(props: Readonly<{
-    destination: Session;
+    /** The Session that follows: its identity is all the list needs, so it shows before the Session's own snapshot lands. */
+    destination: Readonly<{ id: string }>;
     serverId: string | null;
     destinationMachineId: string | null;
+    page?: Readonly<{
+        sourceSessionId: string;
+        frame(parts: FollowSourcePanelParts): React.ReactNode;
+        onClose(): void;
+    }>;
 }>) {
     const { theme } = useUnistyles();
+    const router = useRouter();
+    const anchored = useIsTablet();
     const pane = useListPresentation() !== 'page';
     const rowLook = pane ? { density: 'compact' as const, showDivider: false } : {};
     const online = React.useSyncExternalStore(
@@ -111,7 +154,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const [sources, setSources] = React.useState<readonly SessionFollowSourceV1[]>([]);
     const [loading, setLoading] = React.useState(false);
     const [savingId, setSavingId] = React.useState<string | null>(null);
-    const [expandedSourceKey, setExpandedSourceKey] = React.useState<string | null>(null);
+    const [openSourceId, setOpenSourceId] = React.useState<string | null>(null);
     const [failed, setFailed] = React.useState(false);
     const [mutation, dispatchMutation] = React.useReducer(
         reduceSourceMutation,
@@ -138,7 +181,9 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         const result = await listSessionFollowSources({ serverId, sessionId: props.destination.id });
         if (targetKeyRef.current !== targetKey) return;
         if (result.kind === 'ok') {
-            const committedSourceIds = new Set(result.value.sources.map((source) => source.sourceSessionId));
+            // This list draws Session sources; the Home's other source kinds share the read and are not rows here yet.
+            const sessionSources = result.value.sources.filter((source): source is SessionFollowSourceV1 => 'sourceSessionId' in source);
+            const committedSourceIds = new Set(sessionSources.map((source) => source.sourceSessionId));
             const previousCommittedSourceIds = committedSourceIdsRef.current;
             for (const sourceSessionId of new Set([
                 ...previousCommittedSourceIds,
@@ -162,7 +207,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
             const committedPreparationKeys = new Set([...committedSourceIds].map((sourceSessionId) => (
                 sourcePreparationKey(preparationTargetKeyRef.current, sourceSessionId)
             )));
-            setSources(result.value.sources);
+            setSources(sessionSources);
             setPreparedSourceKeys((current) => {
                 const next = new Set([...current].filter((key) => committedPreparationKeys.has(key)));
                 return next.size === current.size ? current : next;
@@ -277,12 +322,15 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                 preparationTargetKeyRef.current !== request.targetKey
                 || activeMutationRequestRef.current !== request
             ) return;
-            (addSourceRef.current ?? paneAddRef.current)?.focus();
+            // Its panel has nothing left to edit: close it, or leave the page that held it.
+            setOpenSourceId(null);
+            if (props.page) props.page.onClose();
+            else (addSourceRef.current ?? paneAddRef.current)?.focus();
         }
         else dispatchMutation({ kind: 'failed', error: true });
         activeMutationRequestRef.current = null;
         setSavingId(null);
-    }, [online, preparationTargetKey, props.destination.id, props.serverId, refresh, savingId]);
+    }, [online, preparationTargetKey, props.destination.id, props.page, props.serverId, refresh, savingId]);
 
     const updatePolicy = React.useCallback(async (sourceSessionId: string, policy: FollowPolicyV1) => {
         if (!online || !props.serverId || savingId) return;
@@ -449,6 +497,87 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         await refresh();
     });
 
+    const sourceIdentity = (source: SessionFollowSourceV1) => {
+        const session = homeSessions.find((candidate) => candidate.id === source.sourceSessionId);
+        return { session, sourceTitle: session ? getSessionName(session, serverId) : source.sourceSessionId };
+    };
+    const policyDisabled = !online || savingId !== null;
+    // A panel is open while its source is still listed; a mutation error belongs to that panel then, not to the list.
+    const panelOpen = anchored && sources.some((source) => source.sourceSessionId === openSourceId);
+    const closePanel = () => {
+        setOpenSourceId(null);
+        props.page?.onClose();
+    };
+    // Retry re-executes the exact operation that failed; only a failed list load retries by loading the list again.
+    const retryFailed = () => {
+        const intent = mutation.failed;
+        if (!intent) { void refresh(); return; }
+        if (intent.kind === 'remove') { void remove(intent.sourceSessionId); return; }
+        void updatePolicy(intent.sourceSessionId, intent.policy);
+    };
+    const errorRow = (look: typeof rowLook | Record<string, never>) => <Item
+        {...look}
+        testID="session-follow-sources-error"
+        title={t('errors.unknownError')}
+        detail={t('common.retry')}
+        accessibilityLiveRegion="polite"
+        onPress={retryFailed}
+    />;
+
+    // One source's panel (lab P2-S): who it hears from and how much, Stop updates quiet at the left, Done.
+    const panelPartsFor = (source: SessionFollowSourceV1): FollowSourcePanelParts => {
+        const { session, sourceTitle } = sourceIdentity(source);
+        const draft = mutation.pending ?? mutation.failed;
+        const policy = draft?.kind === 'policy' && draft.sourceSessionId === source.sourceSessionId
+            ? draft.policy : source.policy;
+        return {
+            title: t('session.follow.sources.row', { title: sourceTitle }),
+            subtitle: t('session.follow.sources.panelSubtitle'),
+            mark: <FollowSessionMark metadata={session?.metadata} serverId={serverId} />,
+            body: <>
+                {mutation.error !== null ? <ItemGroup>{errorRow({})}</ItemGroup> : null}
+                <FollowPolicySection>
+                    <FollowPolicyEditorBinding
+                        testID={`session-follow-source-${source.sourceSessionId}-policy`}
+                        receiver="session"
+                        model={projectFollowPolicyEditorV1(policy)}
+                        disabled={policyDisabled}
+                        onEditPolicy={(edit) => { void updatePolicy(source.sourceSessionId, editFollowPolicyV1(policy, edit)); }}
+                    />
+                </FollowPolicySection>
+            </>,
+            footer: <SectionButtonRow
+                trailing={<RoundButton testID={`session-follow-source-${source.sourceSessionId}-done`} title={t('common.done')} onPress={closePanel} />}
+            >
+                <RoundButton
+                    testID={`session-follow-source-${source.sourceSessionId}-remove`}
+                    display="inverted"
+                    title={t('session.follow.sources.stop')}
+                    accessibilityLabel={t('session.follow.sources.stopForSource', { title: sourceTitle })}
+                    disabled={policyDisabled}
+                    onPress={() => { void remove(source.sourceSessionId); }}
+                />
+            </SectionButtonRow>,
+        };
+    };
+
+    // A wide window anchors the panel to the row; a phone pushes the page, which mounts this editor for that source.
+    const openSource = (sourceSessionId: string) => {
+        if (anchored) { setOpenSourceId(sourceSessionId); return; }
+        router.push(buildScopedSessionRouteHref({
+            sessionId: props.destination.id,
+            serverId,
+            suffix: '/follow-source',
+            query: { source: sourceSessionId },
+        }) as Href);
+    };
+
+    if (props.page) {
+        const source = sources.find((candidate) => candidate.sourceSessionId === props.page?.sourceSessionId);
+        if (!source) return loading ? <Item title={t('common.loading')} loading showChevron={false} mode="info" /> : null;
+        return <>{props.page.frame(panelPartsFor(source))}</>;
+    }
+
     const sourceRows = <>
             {!online ? <Item
                 {...rowLook}
@@ -464,7 +593,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                 ? <View style={styles.paneEmpty}><EmptyState testID="session-follow-sources-empty" layout="line" title={t('session.follow.sources.empty')} /></View>
                 : <Item {...rowLook} testID="session-follow-sources-empty" title={t('session.follow.sources.empty')} showChevron={false} mode="info" />) : null}
             {sources.map((source) => {
-                const session = homeSessions.find((candidate) => candidate.id === source.sourceSessionId);
+                const { session, sourceTitle } = sourceIdentity(source);
                 const runtimeState = resolveSessionFollowSourceRuntimeState({
                     accountScope,
                     nowMs,
@@ -474,7 +603,6 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                     preparedInUiLifetime: preparedSourceKeys.has(sourcePreparationKey(preparationTargetKey, source.sourceSessionId)),
                     hasPendingUpdates: source.hasPendingUpdates,
                 });
-                const sourceTitle = session ? getSessionName(session, serverId) : source.sourceSessionId;
                 const preparationSourceKey = sourcePreparationKey(preparationTargetKey, source.sourceSessionId);
                 const currentFlightKey = `${preparationSourceKey}\u0000${edgeVersionBySourceIdRef.current.get(source.sourceSessionId) ?? 0}`;
                 const preparing = preparingFlightKeys.has(currentFlightKey);
@@ -486,23 +614,16 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                     || presentedRuntimeState === 'waiting_for_runtime'
                     || presentedRuntimeState === 'source_key_unavailable'
                     || preparationWaitingReason === 'runner_unreachable';
-                const draft = mutation.pending ?? mutation.failed;
-                const policy = draft?.kind === 'policy' && draft.sourceSessionId === source.sourceSessionId
-                    ? draft.policy : source.policy;
-                const policyEditor = projectFollowPolicyEditorV1(policy);
                 const statusText = presentedRuntimeState === 'eligible'
                     ? (pane ? describeSessionFollowLevel(source.policy.preset) : t(`session.follow.policy.${source.policy.preset}`))
                     : sessionFollowSourceRuntimeStateLabel(presentedRuntimeState);
-                const expandedKey = `${targetKey}\u0000${source.sourceSessionId}`;
-                return <ExpandableItem
+                const open = panelOpen && openSourceId === source.sourceSessionId;
+                return <SourceRowAnchor
                     key={source.sourceSessionId}
-                    expanded={expandedSourceKey === expandedKey}
-                    onExpandedChange={(expanded) => setExpandedSourceKey(expanded ? expandedKey : null)}
-                    header={({ headerProps }) => <Item
-                        {...headerProps}
+                    row={(triggerRef) => <Item
                         {...rowLook}
                         {...(pane ? { icon: <Icon name="stack" size={18} color={theme.colors.text.secondary} /> } : {})}
-                        accessibilityExpanded={expandedSourceKey === expandedKey}
+                        pressableRef={triggerRef}
                         testID={`session-follow-source-${source.sourceSessionId}`}
                         accessibilityLabel={[
                             t('session.follow.sources.row', { title: sourceTitle }),
@@ -513,55 +634,31 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                         subtitle={preparing ? t('session.follow.sources.sourceKeyPreparing') : statusText}
                         subtitleLines={0}
                         accessoryLayout="adaptive"
-                        disabled={!online || savingId !== null || preparing}
+                        onPress={() => openSource(source.sourceSessionId)}
                         rightElementOutsidePressable
                         keepChevronWithRightElement
-                        rightElement={<View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                            {canRetryPreparation ? <RoundButton
-                                testID={`session-follow-source-${source.sourceSessionId}-retry`}
-                                title={t('common.retry')}
-                                size="small"
-                                display="secondary"
-                                accessibilityLabel={`${t('common.retry')}. ${t('session.follow.sources.row', { title: sourceTitle })}`}
-                                disabled={!canPrepareSource || savingId !== null || preparing}
-                                onPress={() => { void prepareSource(source.sourceSessionId, 'retry'); }}
-                            /> : null}
-                            <IconButton
-                                testID={`session-follow-source-${source.sourceSessionId}-remove`}
-                                iconName="trash"
-                                accessibilityLabel={t('session.follow.sources.stopForSource', { title: sourceTitle })}
-                                disabled={!online || savingId !== null}
-                                onPress={() => { void remove(source.sourceSessionId); }}
-                            />
-                        </View>}
+                        rightElement={canRetryPreparation ? <RoundButton
+                            testID={`session-follow-source-${source.sourceSessionId}-retry`}
+                            title={t('common.retry')}
+                            size="small"
+                            display="secondary"
+                            accessibilityLabel={`${t('common.retry')}. ${t('session.follow.sources.row', { title: sourceTitle })}`}
+                            disabled={!canPrepareSource || savingId !== null || preparing}
+                            onPress={() => { void prepareSource(source.sourceSessionId, 'retry'); }}
+                        /> : undefined}
                     />}
-                >
-                    <CoreCollectionScope>
-                        <FollowPolicyEditorBinding
-                            testID={`session-follow-source-${source.sourceSessionId}-policy`}
-                            receiver="session"
-                            model={policyEditor}
-                            disabled={!online || savingId !== null}
-                            onEditPolicy={(edit) => { void updatePolicy(source.sourceSessionId, editFollowPolicyV1(policy, edit)); }}
-                        />
-                    </CoreCollectionScope>
-                </ExpandableItem>;
+                    panel={open ? ({ anchorRef, triggerRef }) => {
+                        const parts = panelPartsFor(source);
+                        return <FollowEditorPanel anchorRef={anchorRef} focusReturnRef={triggerRef} onRequestClose={closePanel}
+                            testID={`session-follow-source-${source.sourceSessionId}-panel`}
+                            accessibilityLabel={parts.title}
+                            title={parts.title} subtitle={parts.subtitle} mark={parts.mark} footer={parts.footer}>
+                            {parts.body}
+                        </FollowEditorPanel>;
+                    } : null}
+                />;
             })}
-            {failed || mutation.error !== null ? <Item
-                {...rowLook}
-                testID="session-follow-sources-error"
-                title={t('errors.unknownError')}
-                detail={t('common.retry')}
-                accessibilityLiveRegion="polite"
-                // Retry re-executes the exact operation that failed; only a failed list load
-                // retries by loading the list again.
-                onPress={() => {
-                    const intent = mutation.failed;
-                    if (!intent) { void refresh(); return; }
-                    if (intent.kind === 'remove') { void remove(intent.sourceSessionId); return; }
-                    void updatePolicy(intent.sourceSessionId, intent.policy);
-                }}
-            /> : null}
+            {failed || (mutation.error !== null && !panelOpen) ? errorRow(rowLook) : null}
     </>;
 
     if (pane) {

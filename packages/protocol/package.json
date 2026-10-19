@@ -7,6 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./sessions/follow/sessionFollowListV1": {
+      "happier-source": "./src/sessions/follow/sessionFollowListV1.ts",
+      "types": "./dist/sessions/follow/sessionFollowListV1.d.ts",
+      "default": "./dist/sessions/follow/sessionFollowListV1.js"
+    },
     "./tasks/entryRefV1": {
       "happier-source": "./src/tasks/entryRefV1.ts",
       "types": "./dist/tasks/entryRefV1.d.ts",
@@ -3349,6 +3354,11 @@
       "happier-source": "./src/sessions/follow/sessionFollowSourcesApi.ts",
       "types": "./dist/sessions/follow/sessionFollowSourcesApi.d.ts",
       "default": "./dist/sessions/follow/sessionFollowSourcesApi.js"
+    },
+    "./sessions/follow/followSourceRefPathV1": {
+      "happier-source": "./src/sessions/follow/followSourceRefPathV1.ts",
+      "types": "./dist/sessions/follow/followSourceRefPathV1.d.ts",
+      "default": "./dist/sessions/follow/followSourceRefPathV1.js"
     },
     "./sessions/follow/api": {
       "happier-source": "./src/sessions/follow/api.ts",

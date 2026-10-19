@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { decodeBase64 } from 'privacy-kit';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { parseSessionFollowActionResponse, resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -18,6 +21,7 @@ import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { auth } from '@/app/auth/auth';
 import { createAuthenticatedTestApp } from '../../testkit/sqliteFastify';
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 
 async function buildApp(accountId: string, sessionRuntimePrincipal?: VerifiedEphemeralSessionRunnerPrincipal) {
     const app = Fastify({ logger: false });
@@ -46,6 +50,104 @@ describe('Account Session Follow HTTP resource', () => {
         await db.account.deleteMany();
     });
     afterAll(async () => { await harness?.close(); });
+
+    it('keeps a Discussion personal Follow on the Account Follow owner', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const other = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const discussion = await db.discussion.create({ data: { ownerAccountId: owner.id,
+            encryptionMode: 'plain', dataEncryptionKey: decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+            creationLocalId: randomUUID(), creationEqualityEvidenceV1: {},
+            titleContent: { t: 'plain', v: 'Discussion' }, lastMessageAt: new Date(), messageSeq: 5,
+        } });
+        const source = { kind: 'discussion' as const, discussionId: discussion.id };
+        const receiver = { kind: 'account' as const };
+        const policy = { preset: 'important' as const };
+        const path = resolveSessionFollowActionRequest('follow.set', { receiver, source, policy }).path;
+        const app = await buildApp(owner.id);
+        const otherApp = await buildApp(other.id);
+        try {
+            const set = await app.inject({ method: 'PUT', url: path, payload: { policy } });
+            expect(set.statusCode, set.body).toBe(200);
+            expect(parseSessionFollowActionResponse('follow.set', { receiver, source, policy }, set.json()))
+                .toMatchObject({ changed: true, follow: { source, following: true, persistent: true, policy } });
+            expect(await db.accountSessionFollow.findUnique({ where: { accountId_sourceKey: {
+                accountId: owner.id, sourceKey: `discussion:${discussion.id}`,
+            } } })).toMatchObject({ sessionId: null, sourceDiscussionId: discussion.id, deliveredDiscussionSeq: 5 });
+            const get = await app.inject({ method: 'GET', url: path });
+            expect(parseSessionFollowActionResponse('follow.get', { receiver, source }, get.json()))
+                .toMatchObject({ follow: { source, policy } });
+            expect((await otherApp.inject({ method: 'GET', url: path })).statusCode).toBe(404);
+            const listed = await app.inject({ method: 'GET', url: '/v2/account/session-follows' });
+            expect(listed.statusCode, listed.body).toBe(200);
+            expect(listed.json().follows).toEqual([expect.objectContaining({ source })]);
+            const removed = await app.inject({ method: 'DELETE', url: path });
+            expect(parseSessionFollowActionResponse('follow.remove', { receiver, source }, removed.json())).toEqual({ changed: true });
+            expect((await app.inject({ method: 'GET', url: path })).json()).toMatchObject({ follow: { following: false } });
+            await db.discussion.update({ where: { id: discussion.id }, data: { messageSeq: 8 } });
+            expect((await app.inject({ method: 'PUT', url: path, payload: { policy } })).statusCode).toBe(200);
+            expect(await db.accountSessionFollow.findUnique({ where: { accountId_sourceKey: {
+                accountId: owner.id, sourceKey: `discussion:${discussion.id}`,
+            } } })).toMatchObject({ following: true, deliveredDiscussionSeq: 8 });
+        } finally { await app.close(); await otherApp.close(); }
+    });
+
+    it('keeps a Workflow Run personal Follow at its current revision', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const run = await db.automationRun.create({ data: { accountId: owner.id, originKind: 'direct',
+            automationId: null, causeKind: null, causeOccurredAt: null,
+            workflowAcceptedSnapshotEnvelope: '{}', state: 'running', workflowCustodyState: 'pending',
+            scheduledAt: new Date(), dueAt: new Date(), revision: 3 } });
+        const app = await buildApp(owner.id);
+        const source = { kind: 'workflow_run' as const, runId: run.id };
+        const receiver = { kind: 'account' as const };
+        const policy = { preset: 'important' as const };
+        const path = resolveSessionFollowActionRequest('follow.set', { receiver, source, policy }).path;
+        try {
+            const saved = await app.inject({ method: 'PUT', url: path, payload: { policy } });
+            expect(saved.statusCode, saved.body).toBe(200);
+            expect(parseSessionFollowActionResponse('follow.set', { receiver, source, policy }, saved.json()))
+                .toMatchObject({ changed: true, follow: { source, policy } });
+            expect(await db.accountSessionFollow.findUnique({ where: { accountId_sourceKey: {
+                accountId: owner.id, sourceKey: sourceKeyForSessionFollowSourceV1(source),
+            } } })).toMatchObject({ sessionId: null, sourceWorkflowRunId: run.id, deliveredWorkflowRunRevision: 3 });
+            const get = await app.inject({ method: 'GET', url: path });
+            expect(parseSessionFollowActionResponse('follow.get', { receiver, source }, get.json()))
+                .toMatchObject({ follow: { source, policy } });
+            const listed = await app.inject({ method: 'GET', url: '/v2/account/session-follows' });
+            expect(listed.statusCode, listed.body).toBe(200);
+            expect(listed.json().follows).toEqual([expect.objectContaining({ source })]);
+            expect((await app.inject({ method: 'DELETE', url: path })).json()).toEqual({ changed: true });
+            expect((await app.inject({ method: 'GET', url: path })).json()).toMatchObject({ follow: { following: false } });
+        } finally { await app.close(); }
+    });
+
+    it('continues the admitted personal source list without duplication and refuses another Account cursor', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const other = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const app = await buildApp(owner.id);
+        const otherApp = await buildApp(other.id);
+        try {
+            const sessions = await Promise.all(['a', 'b', 'c'].map(id => db.session.create({ data: {
+                id: `page-${id}`, accountId: owner.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain',
+            } })));
+            for (const session of sessions) {
+                expect((await app.inject({ method: 'PUT', url: `/v2/sessions/${session.id}/follow`,
+                    payload: { policy: { preset: 'important' } } })).statusCode).toBe(200);
+            }
+            const first = await app.inject({ method: 'GET', url: '/v2/account/session-follows?limit=1' });
+            expect(first.statusCode, first.body).toBe(200);
+            expect(first.json().follows.map((row: { sessionId: string }) => row.sessionId)).toEqual(['page-a']);
+            expect(first.json().continuation).toEqual(expect.any(String));
+            const cursor = encodeURIComponent(first.json().continuation);
+            const next = await app.inject({ method: 'GET', url: `/v2/account/session-follows?cursor=${cursor}&limit=1` });
+            expect(next.statusCode, next.body).toBe(200);
+            expect(next.json().follows.map((row: { sessionId: string }) => row.sessionId)).toEqual(['page-b']);
+            const last = await app.inject({ method: 'GET', url: `/v2/account/session-follows?cursor=${encodeURIComponent(next.json().continuation)}` });
+            expect(last.json().follows.map((row: { sessionId: string }) => row.sessionId)).toEqual(['page-c']);
+            expect(last.json().continuation).toBeUndefined();
+            expect((await otherApp.inject({ method: 'GET', url: `/v2/account/session-follows?cursor=${cursor}` })).statusCode).toBe(400);
+        } finally { await app.close(); await otherApp.close(); }
+    });
 
     it('admits generic Follow grants at both Session operands while keeping private rules Account-scoped', async () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' } });

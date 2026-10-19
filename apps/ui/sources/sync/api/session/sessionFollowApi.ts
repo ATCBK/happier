@@ -128,9 +128,10 @@ export async function executeSessionFollowAction<TActionId extends SessionFollow
                     if (!isCurrent()) return UNAVAILABLE;
                     rules = { status: 'unavailable', reason: classifyAccountStorageReadFailure(error, requestSignal) };
                 }
-                const { previewLoadedSessionFollowRule } = await import('./sessionFollowRulePreview');
-                const payload = previewLoadedSessionFollowRule({ serverId: context.targetServerId,
+                const { previewSessionFollowRule } = await import('./sessionFollowRulePreview');
+                const payload = await previewSessionFollowRule({ serverId: context.targetServerId,
                     accountId: context.targetAccountId, request: FollowPreviewActionInputV1Schema.parse(input), rules,
+                    signal: requestSignal,
                     assertCurrent: () => { if (!isCurrent()) throw new Error('scope-retired'); },
                 });
                 return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, payload) };
@@ -180,12 +181,13 @@ export async function executeSessionFollowAction<TActionId extends SessionFollow
                 const list = SessionFollowActionInputSchemasV1['follow.list'].parse(input);
                 if (list.direction === 'followers') return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, payload) };
                 const receiver = FollowReceiverRefV1Schema.parse(list.receiver);
-                const census = await readRules();
+                const census = list.cursor === undefined ? await readRules() : [];
                 const rows = receiver.kind === 'account'
-                    ? { follows: ListAccountSessionFollowsResponseV1Schema.parse(payload).follows, sources: [] }
-                    : { follows: [], sources: ListSessionFollowSourcesResponseSchema.parse(payload).sources };
+                    ? { ...ListAccountSessionFollowsResponseV1Schema.parse(payload), sources: [] }
+                    : { follows: [], ...ListSessionFollowSourcesResponseSchema.parse(payload) };
                 return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, { ...rows,
-                    rules: census.filter(rule => equalFollowRuleReceiverV1(rule.receiver, receiver)), coverage: 'complete',
+                    rules: census.filter(rule => equalFollowRuleReceiverV1(rule.receiver, receiver)),
+                    coverage: rows.continuation ? 'partial' : 'complete',
                 }) };
             }
             return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, payload) };

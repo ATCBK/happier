@@ -24,6 +24,7 @@ describe("schemaSync", () => {
         for (const field of ['followPolicy', 'notifyOnce']) {
             expect(follow).toMatch(new RegExp(`^\\s*${field}\\s+String\\?\\s+@db\\.LongText`, 'mu'));
         }
+        expect(follow).toMatch(/^\s*sourceKey\s+String\?\s+@db\.VarChar\(202\)/mu);
     });
     it("preserves exact retained KV identities within MySQL's full compound index capacity", () => {
         const postgres = readFileSync(join(serverRoot, "prisma/schema.prisma"), "utf8");

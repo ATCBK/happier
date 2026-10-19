@@ -12,6 +12,8 @@ vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/ico
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+// The anchored panel's portal and window measurement are the platform boundary; the panel's own parts stay real.
+vi.mock('@/components/ui/popover', async (importOriginal) => (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
 const network = await installSessionOpsNetworkBoundary();
 const { storage } = await import('@/sync/domains/state/storageStore');

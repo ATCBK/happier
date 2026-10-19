@@ -550,6 +550,8 @@ export const SESSION_RPC_METHODS = {
   SESSION_AGENT_TOOL_CALL_V1: 'session.agentTool.call.v1',
   /** Host-private Discussion publication through the exact authenticated Session client. */
   DISCUSSION_AGENT_POST_V1: 'discussion.agentPost.v1',
+  /** Explicit answer/pass through the exact receiving Session publisher. */
+  SESSION_MESSAGE_REPLY: 'session.message.reply',
   /** Original-source inline/release through its current authenticated Session publisher. */
   SESSION_MESSAGE_REPLY_OBSERVE_V1: 'session.message.reply.observe.v1',
   /** Host-private freshness hint; executable admission remains daemon-owned. */
@@ -609,6 +611,8 @@ export const SESSION_RPC_METHODS = {
   EXECUTION_RUN_STOP: 'execution.run.stop',
   EXECUTION_RUN_LIST: 'execution.run.list',
   EXECUTION_RUN_GET: 'execution.run.get',
+  /** Content-free exact retained occurrence for Follow baselines and admission. */
+  EXECUTION_RUN_FOLLOW_FRONTIER: 'execution.run.followFrontier',
   EXECUTION_RUN_WAIT: 'execution.run.wait',
   EXECUTION_RUN_ACTION: 'execution.run.action',
   SESSION_ROLLBACK: 'session.rollback',

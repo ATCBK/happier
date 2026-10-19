@@ -51,7 +51,10 @@ describe('Machine Run get through the shared registered handler', () => {
             structuredMeta: { kind: 'scm_diff_summary.v1', payload: output }, latestToolResult: output,
         } satisfies ExecutionRunState;
         await retainExecutionRunState(run);
-        await retainExecutionRunState({ ...run, runId: 'session-run', sessionId: 'hosting-session' });
+        await retainExecutionRunState({ ...run, runId: 'session-run', sessionId: 'hosting-session',
+            terminalOccurrenceId: 'terminal-original' });
+        await retainExecutionRunState({ ...run, runId: 'active-session-run', sessionId: 'hosting-session',
+            status: 'running', finishedAtMs: undefined });
         const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain' });
         registerExecutionRunHandlers(rpc, {
             sessionId: null, cwd: directory, machineId: 'machine', parentProvider: 'daemon.executionRuns', sendAcp: async () => {},
@@ -89,6 +92,18 @@ describe('Machine Run get through the shared registered handler', () => {
         expect(ScmDiffSummaryGenerateOutputSchema.parse(response.structuredMeta?.payload)).toEqual(output);
         expect(ScmDiffSummaryGenerateOutputSchema.parse(response.latestToolResult)).toEqual(output);
         expect(await invoke(SESSION_RPC_METHODS.EXECUTION_RUN_GET, { ...request, runId: 'session-run' }))
+            .toMatchObject({ ok: false, errorCode: 'execution_run_not_found' });
+        const frontier = await invoke(SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
+            { sessionId: 'hosting-session', runId: 'active-session-run' });
+        expect(frontier).toEqual({ sessionId: 'hosting-session', runId: 'active-session-run', status: 'running', terminalEventId: null });
+        expect(await invoke(SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
+            { sessionId: 'hosting-session', runId: 'session-run' }))
+            .toEqual({ sessionId: 'hosting-session', runId: 'session-run', status: 'succeeded', terminalEventId: 'terminal-original' });
+        expect(await invoke(SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
+            { sessionId: 'other-session', runId: 'active-session-run' }))
+            .toMatchObject({ ok: false, errorCode: 'execution_run_not_found' });
+        expect(await invoke(SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
+            { sessionId: 'hosting-session', runId: 'machine-run' }))
             .toMatchObject({ ok: false, errorCode: 'execution_run_not_found' });
         expect(await invoke(SESSION_RPC_METHODS.EXECUTION_RUN_STOP, { runId: run.runId }))
             .toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed' });
