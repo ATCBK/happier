@@ -1008,6 +1008,10 @@ const artifactsBrowserTranslations = { it: {
         },
         facts: {
             edited: ({ age }) => `Modificato ${age}`,
+            version: ({ n }) => `Versione ${n}`,
+            sharedWithTeam: ({ team }) => `Condiviso con ${team}`,
+            shared: 'Condiviso',
+            onlyYou: 'Solo tu',
             acceptedEdit: ({ who, age }) => `${who} · ${age}`,
         },
         passage: {
@@ -1020,6 +1024,8 @@ const artifactsBrowserTranslations = { it: {
             openRevision: ({ n }) => `Apri versione ${n}`,
             count: ({ count }) => `${count} ${count === 1 ? 'conversazione' : 'conversazioni'}`,
             countUnavailable: 'Numero di commenti non disponibile',
+            threadDetail: ({ who, n }) => n === 0 ? who : `${who} · ${n} ${n === 1 ? 'risposta' : 'risposte'}`,
+            acceptedToast: ({ n }) => `Accettata · versione ${n}`,
             youAccepted: ({ name }) => `Hai accettato la modifica di ${name}`,
             accepted: ({ name }) => `La modifica di ${name} è stata accettata`,
         },

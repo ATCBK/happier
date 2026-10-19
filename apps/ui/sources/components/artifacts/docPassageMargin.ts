@@ -53,6 +53,14 @@ export type DocPassageMarginAccepted = Readonly<{
   revision: ArtifactRevisionV1;
 }>;
 
+/** The words a thread is about as read now: the revised text once its edit is in this version. */
+export function readDocPassageThreadQuote(thread: DocPassageMarginThread): string {
+  const content = thread.proposal?.content;
+  return thread.location.state === 'revised' && content && 'kind' in content && content.kind === 'doc_edit_proposal'
+    ? content.proposal.after
+    : thread.passage.quote;
+}
+
 const sameRevision = (left: ArtifactRevisionV1, right: ArtifactRevisionV1) =>
   left.headerVersion === right.headerVersion &&
   left.bodyVersion === right.bodyVersion;

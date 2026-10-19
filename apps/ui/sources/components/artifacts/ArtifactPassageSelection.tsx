@@ -45,6 +45,8 @@ export type ArtifactPassageMargin = Readonly<{
   /** Narrow layouts have no margin: a passage opens its thread instead. */
   onOpen: (id: string) => void;
   renderCard: (id: string) => React.ReactNode;
+  /** Whether the threads sit beside the passages (wide) or open on their own (narrow). */
+  reportShown?: (shown: boolean) => void;
 }>;
 
 type Rect = Readonly<{
@@ -109,19 +111,6 @@ function domRangeAt(
   return null;
 }
 
-/** Free width between this element's right edge and the right edge of the pane that scrolls it. */
-function measureRoomRight(element: HTMLElement): number {
-  const right = element.getBoundingClientRect().right;
-  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
-    const overflow = getComputedStyle(parent).overflowY;
-    if (overflow === 'auto' || overflow === 'scroll') {
-      const box = parent.getBoundingClientRect();
-      return box.left + parent.clientWidth - right;
-    }
-  }
-  return 0;
-}
-
 function WebPassageSelection(
   props: Readonly<{
     artifactId: string;
@@ -137,8 +126,8 @@ function WebPassageSelection(
   const scope = useActiveServerAccountScope();
   const container = React.useRef<View>(null);
   const [selected, setSelected] = React.useState<Selected | null>(null);
-  const outer = React.useRef<View>(null);
-  const [layout, setLayout] = React.useState<Readonly<{ width: number; roomRight: number }>>({ width: 0, roomRight: 0 });
+  const [width, setWidth] = React.useState(0);
+  const cardViews = React.useRef(new Map<string, View>());
   const [marks, setMarks] = React.useState<
     ReadonlyMap<string, readonly Rect[]>
   >(new Map());
@@ -146,11 +135,20 @@ function WebPassageSelection(
     ReadonlyMap<string, number>
   >(new Map());
   const margin = props.margin;
-  // The margin sits inside a wide body, or beside a reading column in the page's free gutter.
-  const marginMode: 'none' | 'inline' | 'outside' = margin === undefined ? 'none'
-    : layout.width >= MARGIN_MIN_FRAME_WIDTH ? 'inline'
-      : layout.roomRight >= MARGIN_WIDTH + theme.space.s24 ? 'outside' : 'none';
-  const wide = marginMode !== 'none';
+  // The page widens its column while a Doc has threads (lab K1-A/R): the body keeps a reading measure
+  // on the left and the threads take a fixed margin beside it. Too narrow for both: no margin.
+  const wide = margin !== undefined && margin.passages.length > 0 && width >= MARGIN_MIN_FRAME_WIDTH;
+  const reportShown = margin?.reportShown;
+  React.useEffect(() => {
+    reportShown?.(wide);
+  }, [reportShown, wide]);
+  // A thread chosen from elsewhere (the comment list, a mark) is brought into view beside its passage.
+  const focusedId = margin?.focusedId ?? null;
+  React.useEffect(() => {
+    if (!wide || focusedId === null) return;
+    const node = cardViews.current.get(focusedId) as unknown as HTMLElement | undefined;
+    node?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }, [focusedId, wide]);
   const marksRef = React.useRef(marks);
   marksRef.current = marks;
   const marginRef = React.useRef(margin);
@@ -334,15 +332,10 @@ function WebPassageSelection(
   const placed = margin?.passages ?? [];
   return (
     <View
-      ref={outer}
-      style={[marginMode === 'inline' ? styles.row : null, marginMode === 'outside' ? { minHeight: marginHeight } : null]}
-      onLayout={(event) => {
-        const width = event.nativeEvent.layout.width;
-        const element = outer.current as unknown as HTMLElement | null;
-        setLayout({ width, roomRight: element ? measureRoomRight(element) : 0 });
-      }}
+      style={wide ? styles.row : null}
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
     >
-      <View ref={container} style={[styles.frame, marginMode === 'inline' ? styles.body : null]}>
+      <View ref={container} style={[styles.frame, wide ? styles.body : null]}>
         {placed.map((passage) => {
           const rects = marks.get(passage.id);
           if (!rects || passage.location.state === 'detached') return null;
@@ -422,13 +415,15 @@ function WebPassageSelection(
       {wide && margin ? (
         <View
           testID="artifact:passage-margin"
-          style={[styles.margin, marginMode === 'outside'
-            ? { position: 'absolute', top: 0, left: layout.width + theme.space.s24 }
-            : { minHeight: marginHeight }]}
+          style={[styles.margin, { minHeight: marginHeight }]}
         >
           {cards.map((card) => (
             <View
               key={card.id}
+              ref={(view) => {
+                if (view) cardViews.current.set(card.id, view);
+                else cardViews.current.delete(card.id);
+              }}
               style={[styles.card, { top: card.top }]}
               onLayout={(event) => onCardLayout(card.id, event)}
             >

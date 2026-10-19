@@ -119,6 +119,41 @@ describe('ArtifactEditProposal', () => {
     expect(screen.findByTestId('proposal.accept')).toBeNull();
   });
 
+  it('on a phone, confirms the accepted version in the app notice with an Undo that restores it', async () => {
+    const accepted = { headerVersion: 3, bodyVersion: 15 };
+    const { Dimensions } = await import('react-native');
+    const { readPresentationNotice, retirePresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
+    const window = vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 390, height: 844, scale: 3, fontScale: 1 } as never);
+    try {
+      const door = frontDoor({
+        'doc.read': docRead(base),
+        'doc.edit.accept': () => ({
+          ok: true,
+          result: { proposalRef, docEditProposalDispositionV1: {
+            state: 'accepted', acceptedRevision: accepted, decidedBy: { accountId: 'alice', atMs: 5 } } },
+        }),
+        'artifact.revisions.restore': () => ({ ok: true, result: { artifactId: 'runbook', revision: { headerVersion: 3, bodyVersion: 16 } } }),
+      });
+      const screen = await render(door.client);
+      await act(async () => {
+        await screen.pressByTestIdAsync('proposal.accept');
+      });
+      await flushHookEffects();
+      const notice = readPresentationNotice();
+      expect(notice?.message).toContain('15');
+      expect(notice?.undo).toBeDefined();
+      await act(async () => {
+        notice?.undo?.run();
+      });
+      await flushHookEffects();
+      expect(door.calls.find((call) => call.actionId === 'artifact.revisions.restore')?.input)
+        .toEqual({ artifactId: 'runbook', bodyVersion: base.bodyVersion, expectedRevision: accepted });
+    } finally {
+      window.mockRestore();
+      retirePresentationNotice();
+    }
+  });
+
   it('says nothing was applied when the document moved on, and never offers Accept on a stale basis', async () => {
     const door = frontDoor({
       'doc.read': docRead({ headerVersion: 3, bodyVersion: 16 }),

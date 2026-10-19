@@ -14,6 +14,8 @@ import { resolveThemeHairlineBorderStyle } from '@/components/ui/surfaces/resolv
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
+import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { readViewportClass } from '@/utils/platform/useViewportClass';
 import type { ArtifactActionsClient } from './artifactActionsClient';
 import { artifactViewRoute } from './artifactBrowserModel';
 
@@ -103,7 +105,12 @@ export function ArtifactEditProposal(
       setBusy(null);
       if ('approvalId' in outcome) return;
       if (outcome.ok) {
-        setAcknowledged(outcome.value.docEditProposalDispositionV1);
+        const decided = outcome.value.docEditProposalDispositionV1;
+        setAcknowledged(decided);
+        // On a phone the receipt scrolls away with the thread; the app's one notice confirms the new
+        // version and keeps Undo in reach (lab K1-Rp). Wider layouts show the receipt in place.
+        if (decided.state === 'accepted' && readViewportClass() === 'compact')
+          announceAccepted(client, artifactId, base.bodyVersion, decided.acceptedRevision);
         return;
       }
       const code = outcome.failure.code;
@@ -460,3 +467,26 @@ const stylesheet = StyleSheet.create((theme) => ({
   },
   lineText: { flex: 1, minWidth: 0 },
 }));
+
+const ACCEPTED_NOTICE_KEY = 'artifacts.proposal.accepted';
+
+/** The accepted-edit notice; its Undo restores the base version unless the Doc moved on since. */
+function announceAccepted(client: ArtifactActionsClient, artifactId: string, baseBodyVersion: number, accepted: Revision): void {
+  publishPresentationNotice({
+    key: ACCEPTED_NOTICE_KEY,
+    severity: 'info',
+    message: t('artifacts.browser.passage.acceptedToast', { n: accepted.bodyVersion }),
+    undo: {
+      label: t('artifacts.browser.proposal.undo'),
+      run: () => {
+        void client.restoreRevision({ artifactId, bodyVersion: baseBodyVersion, expectedRevision: accepted }).then((outcome) => {
+          if ('approvalId' in outcome) return;
+          publishPresentationNotice(outcome.ok
+            ? { key: ACCEPTED_NOTICE_KEY, severity: 'info', message: t('artifacts.browser.proposal.undone', { n: outcome.value.revision.bodyVersion }) }
+            : { key: ACCEPTED_NOTICE_KEY, severity: 'warning', message: outcome.failure.code === 'version-mismatch'
+              ? t('artifacts.browser.proposal.undoConflict') : t('artifacts.browser.proposal.failed') });
+        });
+      },
+    },
+  });
+}

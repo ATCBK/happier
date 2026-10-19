@@ -16,7 +16,7 @@ import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 
 import type { ArtifactActionsClient } from './artifactActionsClient';
 import { ArtifactEditProposal } from './ArtifactEditProposal';
-import type { DocPassageMarginThread } from './docPassageMargin';
+import { readDocPassageThreadQuote, type DocPassageMarginThread } from './docPassageMargin';
 
 const NO_SESSION_LABEL = () => null;
 
@@ -99,9 +99,7 @@ export function ArtifactPassageThreadCard(
           color={theme.colors.text.tertiary}
         />
         <Text variant="meta" numberOfLines={1} style={styles.quote}>
-          {thread.location.state === 'revised' && proposalContent
-            ? proposalContent.after
-            : thread.passage.quote}
+          {readDocPassageThreadQuote(thread)}
         </Text>
         {detached ? (
           <Text

@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { buildDiscussionRouteHref, buildDiscussionsRouteHref, readAnchoredDiscussionSourceLinks, readDiscussionRouteAnchor } from './discussionRoutes';
 import { upsertServerProfile, setServerProfileIdentityForUrl, areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { TriageEntryRefV1Schema } from '@happier-dev/protocol/tasks/entryRefV1';
 
 describe('Discussion routes', () => {
     it('round-trips a canonical Task anchor without turning its identity into source access or a provider URL', () => {
-        const anchor = { kind: 'task' as const, entry: { source: { pluginId: 'tracker', localId: 'issues' },
-            kindId: 'issue', collisionScope: 'project', entryId: 'task/42' } };
+        const anchor = { kind: 'task' as const, entry: TriageEntryRefV1Schema.parse({ source: { pluginId: 'acme.tasks', localId: 'issues' },
+            kindId: 'issue', collisionScope: 'project', entryId: 'task/42' }) };
         const href = buildDiscussionRouteHref({ target: { kind: 'new', address: { serverId: 'task-home' }, anchor } });
         const url = new URL(href, 'https://home.invalid');
         expect(url.pathname).toBe('/discussions/new');

@@ -49,9 +49,12 @@ export function readAnchoredDiscussionSourceLinks(input: Readonly<{
 export function buildDiscussionRouteHref(input: Readonly<{
     target: DiscussionDetailsTarget;
     sourceSurface?: DiscussionSourceSurface;
+    /** Opened from a passage in this Doc: Back names it and returns to it. */
+    returnArtifactId?: string;
 }>): string {
     const query = new URLSearchParams({ serverId: input.target.address.serverId });
     if (input.sourceSurface) query.set('sourceSurface', input.sourceSurface);
+    if (input.returnArtifactId) query.set('returnArtifactId', input.returnArtifactId);
     if (input.target.kind === 'discussion' && input.target.messageId) query.set('messageId', input.target.messageId);
     if (input.target.kind === 'new' && input.target.anchor) {
         const anchor = DiscussionAnchorV1Schema.parse(input.target.anchor);

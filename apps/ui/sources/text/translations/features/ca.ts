@@ -1008,6 +1008,10 @@ const artifactsBrowserTranslations = { ca: {
         },
         facts: {
             edited: ({ age }) => `Editat ${age}`,
+            version: ({ n }) => `Versió ${n}`,
+            sharedWithTeam: ({ team }) => `Compartit amb ${team}`,
+            shared: 'Compartit',
+            onlyYou: 'Només tu',
             acceptedEdit: ({ who, age }) => `${who} · ${age}`,
         },
         passage: {
@@ -1020,6 +1024,8 @@ const artifactsBrowserTranslations = { ca: {
             openRevision: ({ n }) => `Obre la versió ${n}`,
             count: ({ count }) => `${count} ${count === 1 ? 'conversa' : 'converses'}`,
             countUnavailable: 'Recompte de comentaris no disponible',
+            threadDetail: ({ who, n }) => n === 0 ? who : `${who} · ${n} ${n === 1 ? 'resposta' : 'respostes'}`,
+            acceptedToast: ({ n }) => `Acceptat · versió ${n}`,
             youAccepted: ({ name }) => `Has acceptat l’edició de ${name}`,
             accepted: ({ name }) => `S’ha acceptat l’edició de ${name}`,
         },

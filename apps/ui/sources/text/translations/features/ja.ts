@@ -1008,6 +1008,10 @@ const artifactsBrowserTranslations = { ja: {
         },
         facts: {
             edited: ({ age }) => `${age} に編集`,
+            version: ({ n }) => `バージョン ${n}`,
+            sharedWithTeam: ({ team }) => `${team} と共有`,
+            shared: '共有中',
+            onlyYou: '自分のみ',
             acceptedEdit: ({ who, age }) => `${who} · ${age}`,
         },
         passage: {
@@ -1020,6 +1024,8 @@ const artifactsBrowserTranslations = { ja: {
             openRevision: ({ n }) => `バージョン ${n} を開く`,
             count: ({ count }) => `${count}件の会話`,
             countUnavailable: 'コメント数を取得できません',
+            threadDetail: ({ who, n }) => n === 0 ? who : `${who} · 返信 ${n} 件`,
+            acceptedToast: ({ n }) => `承認済み · バージョン ${n}`,
             youAccepted: ({ name }) => `${name} の編集を承認しました`,
             accepted: ({ name }) => `${name} の編集が承認されました`,
         },

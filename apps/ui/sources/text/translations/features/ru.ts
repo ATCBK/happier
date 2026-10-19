@@ -1008,6 +1008,10 @@ const artifactsBrowserTranslations = { ru: {
         },
         facts: {
             edited: ({ age }) => `Изменено ${age}`,
+            version: ({ n }) => `Версия ${n}`,
+            sharedWithTeam: ({ team }) => `Доступно: ${team}`,
+            shared: 'Общий доступ',
+            onlyYou: 'Только вы',
             acceptedEdit: ({ who, age }) => `${who} · ${age}`,
         },
         passage: {
@@ -1020,6 +1024,8 @@ const artifactsBrowserTranslations = { ru: {
             openRevision: ({ n }) => `Открыть версию ${n}`,
             count: ({ count }) => `${count} ${count === 1 ? 'обсуждение' : 'обсуждений'}`,
             countUnavailable: 'Число комментариев недоступно',
+            threadDetail: ({ who, n }) => n === 0 ? who : `${who} · ответов: ${n}`,
+            acceptedToast: ({ n }) => `Принято · версия ${n}`,
             youAccepted: ({ name }) => `Вы приняли правку от ${name}`,
             accepted: ({ name }) => `Правка от ${name} принята`,
         },

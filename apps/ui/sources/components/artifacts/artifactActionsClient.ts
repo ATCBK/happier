@@ -3,6 +3,7 @@ import type { z } from 'zod/mini';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ArtifactActionOutputSchemasV1, type ArtifactActionInputV1, type ArtifactStorageUsageV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { DocCollaborationActionInputSchemasV1, DocCollaborationActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
+import { ArtifactAccessActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -28,8 +29,9 @@ export type ArtifactActionFailure = Readonly<{
 export type ArtifactActionOutcome<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; failure: ArtifactActionFailure }>;
 
 type SurfaceMutationActionId = 'artifact.create' | 'artifact.update' | 'artifact.revisions.restore' | 'artifact.delete' | 'doc.comment.reply' | 'doc.edit.propose' | 'doc.edit.accept' | 'doc.edit.decline';
-type SurfaceActionId = 'artifact.revisions.list' | 'artifact.storage.usage' | 'doc.read' | SurfaceMutationActionId;
-const SURFACE_OUTPUT_SCHEMAS = { ...ArtifactActionOutputSchemasV1, ...DocCollaborationActionOutputSchemasV1 };
+type SurfaceActionId = 'artifact.revisions.list' | 'artifact.storage.usage' | 'doc.read' | 'artifact.access.grants.list' | SurfaceMutationActionId;
+const SURFACE_OUTPUT_SCHEMAS = { ...ArtifactActionOutputSchemasV1, ...DocCollaborationActionOutputSchemasV1,
+    'artifact.access.grants.list': ArtifactAccessActionOutputSchemasV1['artifact.access.grants.list'] };
 type SurfaceActionResult<Id extends SurfaceActionId> = z.infer<(typeof SURFACE_OUTPUT_SCHEMAS)[Id]>;
 
 function readRecord(value: unknown): Record<string, unknown> {
@@ -94,6 +96,8 @@ export function createArtifactActionsClient(scope: ServerAccountScope, execute =
         updateArtifact: (input: ArtifactActionInputV1<'artifact.update'>) => runMutation('artifact.update', input),
         storageUsage: () => run('artifact.storage.usage', {}),
         listRevisions: (artifactId: string) => run('artifact.revisions.list', { artifactId }),
+        /** Who the document is shared with (its grant roster), for the page's audience line. */
+        listAccessGrants: (artifactId: string) => run('artifact.access.grants.list', { artifactId }),
         restoreRevision: (input: Readonly<{ artifactId: string; bodyVersion: number; expectedRevision: Readonly<{ headerVersion: number; bodyVersion: number }> }>) =>
             runMutation('artifact.revisions.restore', input),
         deleteArtifact: (input: Readonly<{ artifactId: string; expectedRevision: Readonly<{ headerVersion: number; bodyVersion: number }> }>,

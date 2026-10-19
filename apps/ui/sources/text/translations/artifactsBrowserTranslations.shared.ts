@@ -135,6 +135,10 @@ export type ArtifactsBrowserTranslations = Readonly<{
     facts: Readonly<{
         edited: (params: Readonly<{ age: string }>) => string;
         acceptedEdit: (params: Readonly<{ who: string; age: string }>) => string;
+        version: (params: Readonly<{ n: number }>) => string;
+        sharedWithTeam: (params: Readonly<{ team: string }>) => string;
+        shared: string;
+        onlyYou: string;
     }>;
     passage: Readonly<{
         comment: string;
@@ -146,6 +150,8 @@ export type ArtifactsBrowserTranslations = Readonly<{
         openRevision: (params: Readonly<{ n: number }>) => string;
         count: (params: Readonly<{ count: number }>) => string;
         countUnavailable: string;
+        threadDetail: (params: Readonly<{ who: string; n: number }>) => string;
+        acceptedToast: (params: Readonly<{ n: number }>) => string;
         youAccepted: (params: Readonly<{ name: string }>) => string;
         accepted: (params: Readonly<{ name: string }>) => string;
     }>;
@@ -312,6 +318,10 @@ export const artifactsBrowserTranslationsEnglish = { en: {
         },
         facts: {
             edited: ({ age }) => `Edited ${age}`,
+            version: ({ n }) => `Version ${n}`,
+            sharedWithTeam: ({ team }) => `Shared with ${team}`,
+            shared: 'Shared',
+            onlyYou: 'Only you',
             acceptedEdit: ({ who, age }) => `${who} · ${age}`,
         },
         passage: {
@@ -324,6 +334,8 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             openRevision: ({ n }) => `Open version ${n}`,
             count: ({ count }) => `${count} ${count === 1 ? 'conversation' : 'conversations'}`,
             countUnavailable: 'Comment count unavailable',
+            threadDetail: ({ who, n }) => n === 0 ? who : `${who} · ${n} ${n === 1 ? 'reply' : 'replies'}`,
+            acceptedToast: ({ n }) => `Accepted · version ${n}`,
             youAccepted: ({ name }) => `You accepted ${name}’s edit`,
             accepted: ({ name }) => `${name}’s edit was accepted`,
         },

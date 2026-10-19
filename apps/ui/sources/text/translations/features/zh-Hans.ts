@@ -1008,6 +1008,10 @@ const artifactsBrowserTranslations = { 'zh-Hans': {
         },
         facts: {
             edited: ({ age }) => `${age}编辑`,
+            version: ({ n }) => `版本 ${n}`,
+            sharedWithTeam: ({ team }) => `已与 ${team} 共享`,
+            shared: '已共享',
+            onlyYou: '仅你自己',
             acceptedEdit: ({ who, age }) => `${who} · ${age}`,
         },
         passage: {
@@ -1020,6 +1024,8 @@ const artifactsBrowserTranslations = { 'zh-Hans': {
             openRevision: ({ n }) => `打开版本 ${n}`,
             count: ({ count }) => `${count}个对话`,
             countUnavailable: '无法获取评论数',
+            threadDetail: ({ who, n }) => n === 0 ? who : `${who} · ${n} 条回复`,
+            acceptedToast: ({ n }) => `已接受 · 版本 ${n}`,
             youAccepted: ({ name }) => `你接受了 ${name} 的修改`,
             accepted: ({ name }) => `${name} 的修改已被接受`,
         },
