@@ -127,19 +127,61 @@ function axValue(node: Record<string, unknown>, field: string): string | undefin
     return clampString(wrapped?.value, field === 'role' ? MAX_ROLE_CHARS : SNAPSHOT_MAX_NAME_CHARS);
 }
 
+function editableDomNodes(document: unknown): ReadonlyMap<number, boolean> {
+    const nodes = new Map<number, boolean>();
+    const root = record(record(document)?.root);
+    const pending = root ? [{ node: root, editable: false, secret: false }] : [];
+    while (pending.length) {
+        const current = pending.pop()!;
+        const { node } = current;
+        const attributes = new Map<string, string>();
+        if (Array.isArray(node.attributes)) {
+            for (let index = 0; index + 1 < node.attributes.length; index += 2) {
+                const key = node.attributes[index];
+                const value = node.attributes[index + 1];
+                if (typeof key === 'string' && typeof value === 'string') attributes.set(key.toLowerCase(), value);
+            }
+        }
+        const contenteditable = attributes.get('contenteditable')?.toLowerCase();
+        const editable = contenteditable === 'false' ? false
+            : contenteditable === '' || contenteditable === 'true' || contenteditable === 'plaintext-only'
+                ? true : current.editable;
+        const type = (attributes.get('type') ?? 'text').toLowerCase();
+        const secret = current.secret || type === 'password'
+            || (attributes.get('autocomplete') ?? '').toLowerCase().split(/\s+/u).includes('one-time-code');
+        if (typeof node.backendNodeId === 'number' && Array.isArray(node.attributes)) {
+            const tag = typeof node.nodeName === 'string' ? node.nodeName.toLowerCase() : '';
+            const textInput = tag === 'input' && ['text', 'search', 'email', 'url', 'tel'].includes(type);
+            nodes.set(node.backendNodeId, !secret && !attributes.has('readonly') && !attributes.has('disabled')
+                && (textInput || tag === 'textarea' || editable));
+        }
+        for (const children of [node.children, node.shadowRoots, [node.contentDocument]]) {
+            if (!Array.isArray(children)) continue;
+            for (const child of children) {
+                const next = record(child);
+                if (next) pending.push({ node: next, editable, secret });
+            }
+        }
+    }
+    return nodes;
+}
+
 /**
- * Parses a CDP `Accessibility.getFullAXTree` result into a bounded `{ role, name }[]`. Ignored nodes
- * and nodes without a role are dropped; names are capped. The full tree can be large, so the count is
- * capped and truncation is flagged honestly.
+ * AX supplies current values; DOM metadata establishes which editable fields may disclose them.
+ * Unknown metadata fails closed for values while preserving the structural snapshot. Names and
+ * values share the existing per-node text budget; the node count remains bounded.
  */
 export function parseAxNodes(
     value: unknown,
     cap: number,
+    document?: unknown,
 ): Readonly<{ nodes: readonly BrowserContextSnapshotAxNodeV1[]; truncated: boolean }> {
     const raw = record(value)?.nodes;
     if (!Array.isArray(raw)) return { nodes: [], truncated: false };
     const nodes: BrowserContextSnapshotAxNodeV1[] = [];
+    const editable = editableDomNodes(document);
     let considered = 0;
+    let valuesTruncated = false;
     for (const entry of raw) {
         const node = record(entry);
         if (!node) continue;
@@ -149,7 +191,18 @@ export function parseAxNodes(
         considered += 1;
         if (nodes.length >= cap) continue;
         const name = axValue(node, 'name');
-        nodes.push({ role, ...(name ? { name } : {}) });
+        const rawValue = record(node.value)?.value;
+        const isEditable = Array.isArray(node.properties) && node.properties.some((property) => {
+            const entry = record(property);
+            const kind = record(entry?.value)?.value;
+            return entry?.name === 'editable' && (kind === 'plaintext' || kind === 'richtext');
+        });
+        const allowed = typeof node.backendDOMNodeId === 'number' ? editable.get(node.backendDOMNodeId) : undefined;
+        const fieldValue = isEditable && allowed === true && typeof rawValue === 'string'
+            ? rawValue.slice(0, SNAPSHOT_MAX_NAME_CHARS) : undefined;
+        if (isEditable && typeof rawValue === 'string'
+            && (allowed === undefined || (allowed && rawValue.length > SNAPSHOT_MAX_NAME_CHARS))) valuesTruncated = true;
+        nodes.push({ role, ...(name ? { name } : {}), ...(fieldValue !== undefined ? { value: fieldValue } : {}) });
     }
-    return { nodes, truncated: considered > nodes.length };
+    return { nodes, truncated: valuesTruncated || considered > nodes.length };
 }

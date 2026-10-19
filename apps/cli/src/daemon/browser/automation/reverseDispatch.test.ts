@@ -22,6 +22,19 @@ const args: RuntimeActionExecuteArgs = { actionId: 'browser.automation.click', i
   context: { surface: 'agent', authority: 'account_automation', defaultSessionId: 'happier-session' } };
 
 describe('daemon browser reverse dispatch protocol boundary', () => {
+  it('reports an unknown external-open effect after its client transport was issued', async () => {
+    const execute = createBrowserAutomationReverseDispatcher({ getMachineClient: () => ({
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (_method, payload, options) => {
+        expect(UiBrowserAutomationDispatchRequestV1Schema.parse(payload).actionId).toBe('browser.view.openExternal');
+        options?.onIssued?.();
+        throw new Error('Client disconnected after opening');
+      },
+    }) });
+    expect(await execute({ ...args, actionId: 'browser.view.openExternal', input: { ...view, commandId: 'open-external' } }))
+      .toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+  });
+
   it.each(['takeControl', 'handBack'] as const)('routes %s to a client-owned slot without provisioning', async kind => {
     const uiAutomation = createBrowserAutomationReverseDispatcher({ getMachineClient: () => ({
       hasConnectedClientRpcHandler: method => method === uiBrowserAutomationDispatchMethod(view),
@@ -141,7 +154,7 @@ describe('daemon browser reverse dispatch protocol boundary', () => {
         return { ok: true, result: UiBrowserAutomationDispatchResultV1Schema.parse(result) };
       },
     }) });
-    const provisionAutomationRuntime = vi.fn(async () => 'provisioning' as const);
+    const provisionAutomationRuntime = vi.fn(async () => 'unavailable' as const);
     const execute = createBrowserDaemonRuntimeActionExecutor({
       featureGate: { isEnabled: () => true, refresh: async () => {} }, ownsAutomationView: () => false,
       provisionAutomationRuntime, uiAutomation,
@@ -167,11 +180,11 @@ describe('daemon browser reverse dispatch protocol boundary', () => {
     try {
       expect(await broker.dispatchCommand({ kind: 'openView', commandId: 'open', ...daemonView, platform: 'desktop', focus: true,
         target: { kind: 'externalUrl', targetId: 'page', url: 'https://example.test/' } })).toMatchObject({ status: 'dispatched' });
-      const provisionAutomationRuntime = vi.fn(async () => 'provisioning' as const);
+      const provisionAutomationRuntime = vi.fn(async () => 'unavailable' as const);
       const execute = createBrowserDaemonRuntimeActionExecutor({ featureGate: { isEnabled: () => true, refresh: async () => {} },
         ownsAutomationView: broker.ownsView, provisionAutomationRuntime });
       expect(await execute({ ...args, input: { ...request, ...daemonView }, context: { ...args.context, defaultSessionId: daemonView.browserSessionId } }))
-        .toMatchObject({ error: 'runtime_action_disabled:browser:browser_automation_runtime_provisioning' });
+        .toMatchObject({ error: 'runtime_action_disabled:browser:browser_automation_route_unavailable' });
       expect(await execute({ ...args, input: { ...request, ...daemonView } })).toMatchObject({ errorCode: 'invalid_parameters' });
       expect(provisionAutomationRuntime).toHaveBeenCalledOnce();
       expect(await execute(args)).toMatchObject({ error: 'runtime_action_disabled:browser:browser_ui_automation_unavailable' });
@@ -180,7 +193,7 @@ describe('daemon browser reverse dispatch protocol boundary', () => {
   });
 
   it('rejects disconnected UI targets without provisioning when no daemon route exists', async () => {
-    const provisionAutomationRuntime = vi.fn(async () => 'provisioning' as const);
+    const provisionAutomationRuntime = vi.fn(async () => 'unavailable' as const);
     const execute = createBrowserDaemonRuntimeActionExecutor({
       featureGate: { isEnabled: () => true, refresh: async () => {} }, ownsAutomationView: () => false, provisionAutomationRuntime,
       uiAutomation: createBrowserAutomationReverseDispatcher({ getMachineClient: () => null }),

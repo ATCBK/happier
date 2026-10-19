@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { interactiveElementsExpression, parseInteractiveElements, SNAPSHOT_MAX_INTERACTIVE_ELEMENTS } from './snapshotEvaluators';
+import { interactiveElementsExpression, parseAxNodes, parseInteractiveElements, SNAPSHOT_MAX_INTERACTIVE_ELEMENTS } from './snapshotEvaluators';
+
+describe('CDP editable AX values', () => {
+  it('excludes secret fields and omits values without DOM evidence', () => {
+    const tree = { nodes: [1, 2, 3].map(id => ({ backendDOMNodeId: id, role: { value: 'textbox' },
+      value: { value: `field-${id}` }, properties: [{ name: 'editable', value: { value: 'plaintext' } }],
+    })) };
+    const document = { root: { children: [
+      { backendNodeId: 1, nodeName: 'INPUT', attributes: ['type', 'PASSWORD'] },
+      { backendNodeId: 2, nodeName: 'INPUT', attributes: ['autocomplete', 'one-time-code'] },
+      { backendNodeId: 3, nodeName: 'TEXTAREA', attributes: [] },
+    ] } };
+    expect(parseAxNodes(tree, 512, document).nodes).toEqual([
+      { role: 'textbox' }, { role: 'textbox' }, { role: 'textbox', value: 'field-3' },
+    ]);
+    expect(parseAxNodes(tree, 512).nodes).toEqual([
+      { role: 'textbox' }, { role: 'textbox' }, { role: 'textbox' },
+    ]);
+  });
+});
 
 describe('CDP interactive element extraction', () => {
   it('reports overflow at the existing interactive-element boundary', () => {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { computerTargetKeyV1 } from '@happier-dev/protocol/computer/v1';
+import { computerTargetKeyV1, resolveComputerAccess } from '@happier-dev/protocol/computer/v1';
 import { normalizeBrowserActiveTargetRect, BrowserActiveTargetV1Schema } from '@happier-dev/protocol/browser/events/activeTarget';
 import type { ComputerTargetV1, ComputerInputOperationV1, ComputerActionResultV1, ComputerAccessV1, BrowserActiveTargetV1, ComputerControlStatusResponseV1, ComputerCaptureGeometryV1, ComputerAccessibilityNodeV1, MachineLiveStreamControlSidebandV1, SessionImageMediaReferenceV1 } from '@happier-dev/protocol';
 import { createManagedComputerDriver } from './driver/managedComputerDriver';
@@ -32,7 +32,7 @@ export function createComputerCaptureSource(input: Readonly<{
   let agentCaptures = 0;
   let inputActivity: ComputerControlStatusResponseV1['activity'];
   let activeTarget: BrowserActiveTargetV1 | undefined;
-  const access = input.access ?? 'use';
+  const access = resolveComputerAccess(input.access);
   let closed = false;
   let consentGranted = false;
   let title = input.title ?? '';

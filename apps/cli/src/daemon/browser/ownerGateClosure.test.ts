@@ -33,13 +33,12 @@ const browserViewInput = {
 const browserGateCases: readonly BrowserGateCase[] = [
   {
     name: 'control',
-    actionId: 'browser.navigate',
+    actionId: 'browser.view.focus',
     input: {
-      kind: 'navigate',
+      kind: 'focusView',
       commandId: 'command_1',
       browserSessionId: browserViewInput.browserSessionId,
       viewId: browserViewInput.viewId,
-      url: 'https://browser.example.test',
     },
     disabledReason: 'browser_control_route_unavailable',
     routeCall: 'control',
@@ -124,7 +123,7 @@ function createExecutorInput(calls: BrowserRouteCalls): Omit<CreateBrowserDaemon
   return {
     control: { dispatchCommand: calls.control, listViews: () => [] },
     context: { dispatch: calls.context },
-    automation: { dispatch: calls.automation },
+    automation: { dispatch: calls.automation, prepareConfidentialFill: async () => { throw new Error('Unexpected confidential fill'); } },
     diagnostics: { dispatch: calls.diagnostics },
     recording: { dispatch: calls.recording },
     recordingAttach: calls.recordingAttach,

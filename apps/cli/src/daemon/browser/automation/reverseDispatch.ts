@@ -25,7 +25,7 @@ export function createBrowserAutomationReverseDispatcher(input: Readonly<{
     });
     if (!request.success) return unavailable;
     const actionKind = BrowserAutomationActionKindV1Schema.safeParse(record.actionKind);
-    const effectBearing = args.actionId === 'browser.automation.cancelActive'
+    const effectBearing = args.actionId === 'browser.view.openExternal' || args.actionId === 'browser.automation.cancelActive'
       || args.actionId === 'browser.control.takeControl' || args.actionId === 'browser.control.handBack'
       || (actionKind.success && isBrowserAutomationMutatingActionKind(actionKind.data));
     let issued = false;
@@ -33,7 +33,11 @@ export function createBrowserAutomationReverseDispatcher(input: Readonly<{
       v: 1, status: 'interrupted', completion: 'unknown',
       ...(typeof record.automationRequestId === 'string' ? { automationRequestId: record.automationRequestId } : {}),
     });
-    const failedTransport = () => issued && effectBearing ? interrupted() : unavailable;
+    const failedTransport = () => issued && effectBearing
+      ? args.actionId === 'browser.view.openExternal'
+        ? { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' } as const
+        : interrupted()
+      : unavailable;
     if (args.context.signal?.aborted) return unavailable;
     try {
       // Automation owns its execution budget; do not let the generic RPC default cut

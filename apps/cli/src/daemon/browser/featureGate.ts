@@ -1,4 +1,5 @@
 import { resolveCliFeatureDecision, type CliServerFeaturesSnapshot } from '@/features/featureDecisionService';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 
 /**
  * The privileged browser child gates enforced at the daemon execution boundary. These are the
@@ -27,7 +28,7 @@ export type BrowserDaemonFeatureGate = Readonly<{
 }>;
 
 export function createBrowserDaemonFeatureGate(params: {
-  env: NodeJS.ProcessEnv;
+  env: ProcessEnvInput;
   // The SAME async provider shape already used for local-services inventory + connected-services
   // quotas. The gate (not the call site) owns caching the resolved snapshot.
   resolveServerFeaturesSnapshot: () => Promise<CliServerFeaturesSnapshot | undefined> | CliServerFeaturesSnapshot | undefined;

@@ -7,6 +7,9 @@ import { createBrowserContextCaptureService, type BrowserContextRegionRect } fro
 import type { BrowserSidecarCdpCommandScope } from '../../sidecar/controlAdapter';
 import type { BrowserContextCdpPageHandle } from './transport';
 import type { BrowserContextScreenshotMediaWriter } from './screenshotMedia';
+import { BrowserContextSnapshotV1Schema } from '@happier-dev/protocol/browser/context/v1';
+import { browserContextSensitiveFieldsExpression } from '@happier-dev/protocol/browser/context/privacy';
+import { SNAPSHOT_MAX_NAME_CHARS } from './snapshotEvaluators';
 
 const VIEW = { browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 3 } as const;
 const HANDLE: BrowserContextCdpPageHandle = { targetId: 'target_1', sessionId: 'cdp_session_1' };
@@ -119,16 +122,21 @@ describe('cdp browser context source', () => {
         expect(writer.writes).toEqual([]);
     });
 
-    it('does not return a rich snapshot when the containing action is cancelled at the CDP boundary', async () => {
+    it.each(['before capture', 'during field metadata'] as const)('does not return a rich snapshot when cancelled %s', async (phase) => {
         const controller = new AbortController();
-        controller.abort();
+        if (phase === 'before capture') controller.abort();
+        const deadlineMs = Date.now() + 60_000;
         const writer = fakeMediaWriter();
         let receivedScope: BrowserSidecarCdpCommandScope | undefined;
-        const { transport } = fakeTransport((method, _params, scope) => {
+        const { transport } = fakeTransport((method, params, scope) => {
             // The actual CDP connection rejects aborted commands. Keep that external behavior
             // here while exercising the real route, service, and context producer beneath it.
             receivedScope = scope;
+            if (phase === 'during field metadata' && method === 'DOM.getDocument') controller.abort();
             if (scope.signal?.aborted) throw new Error('CDP command aborted');
+            if (method === 'Runtime.evaluate') return params?.expression === browserContextSensitiveFieldsExpression
+                ? { result: { type: 'boolean', value: false } }
+                : { result: { type: 'string', value: 'Page text' } };
             if (method === 'Page.getNavigationHistory') {
                 return { currentIndex: 0, entries: [{ url: 'https://example.test', title: 'Example' }] };
             }
@@ -147,13 +155,13 @@ describe('cdp browser context source', () => {
 
         const result = await routes.captureSnapshot?.({ ...VIEW, contextId: 'context_1' }, {
             signal: controller.signal,
-            deadlineMs: 0,
+            deadlineMs,
         });
 
         expect(result).toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
         expect(writer.writes).toEqual([]);
         expect(receivedScope?.signal).toBe(controller.signal);
-        expect(receivedScope?.deadlineMs).toBe(0);
+        expect(receivedScope?.deadlineMs).toBe(deadlineMs);
     });
 
     it('denies every context operation before reading CDP or persisting media when policy disallows capture', async () => {
@@ -597,6 +605,46 @@ describe('cdp browser context source', () => {
     // BA-2: the combined rich snapshot bundles AX tree + interactive elements + visible text + console
     // + screenshot in ONE op.
     describe('captureSnapshot', () => {
+        it('preserves non-secret editable AX values through capture and the strict snapshot consumer', async () => {
+            const fields = [
+                { id: 1, nodeName: 'INPUT', attributes: ['type', 'text'], value: 'QA58 input' },
+                { id: 2, nodeName: 'TEXTAREA', attributes: [], value: 'QA58 textarea' },
+                { id: 3, nodeName: 'DIV', attributes: ['contenteditable', 'true'], value: 'QA58 editable' },
+                { id: 5, nodeName: 'INPUT', attributes: ['type', 'text', 'autocomplete', 'section-login ONE-TIME-CODE'], value: 'fixture-otp' },
+                { id: 6, nodeName: 'INPUT', attributes: ['type', 'text'], value: 'x'.repeat(SNAPSHOT_MAX_NAME_CHARS + 1) },
+                { id: 7, nodeName: 'INPUT', attributes: ['type', 'text', 'readonly', ''], value: 'read only' },
+                { id: 8, nodeName: 'SELECT', attributes: [], value: 'not text' },
+                { id: 9, nodeName: 'TEXTAREA', attributes: [], value: '' },
+            ];
+            const { transport } = fakeTransport((method, params) => {
+                if (method === 'Runtime.evaluate') return params?.expression === browserContextSensitiveFieldsExpression
+                    ? { result: { type: 'boolean', value: false } }
+                    : { result: { type: 'string', value: 'Page title' } };
+                if (method === 'Accessibility.getFullAXTree') return { nodes: fields.map(field => ({
+                    backendDOMNodeId: field.id, role: { value: 'textbox' }, name: { value: `Field ${field.id}` },
+                    properties: [{ name: 'editable', value: { value: 'plaintext' } }], value: { value: field.value },
+                })) };
+                if (method === 'DOM.getDocument') return { root: { nodeName: '#document', children: fields.map(field => ({
+                    backendNodeId: field.id, nodeName: field.nodeName, attributes: field.attributes,
+                })) } };
+                return {};
+            });
+            // CDP is the external boundary. Real source, capture admission and strict wire
+            // consumer compose here; raw attributes/secret values must never reach the output.
+            const source = createCdpBrowserContextSource({ transport, resolveView: () => HANDLE, screenshotMediaWriter: fakeMediaWriter() });
+            const service = createBrowserContextCaptureService({ ownerAccountId: 'owner', source,
+                resolveGate: () => ({ featureEnabled: true, policyAllowed: true, runtimeAvailable: true }) });
+            const captured = await service.captureSnapshot({ ...VIEW, requesterAccountId: 'owner', contextId: 'field-values' });
+            expect(captured.status).toBe('captured');
+            if (captured.status !== 'captured') return;
+            const snapshot = BrowserContextSnapshotV1Schema.parse(captured.snapshot);
+            expect(snapshot.axNodes).toEqual(fields.map(field => ({ role: 'textbox', name: `Field ${field.id}`,
+                ...([1, 2, 3, 6, 9].includes(field.id) ? { value: field.value.slice(0, SNAPSHOT_MAX_NAME_CHARS) } : {}),
+            })));
+            expect(snapshot.axNodesTruncated).toBe(true);
+            expect(JSON.stringify(snapshot)).not.toContain('fixture-otp');
+        });
+
         it('captures AX tree, interactive elements, visible text, console and screenshot in one op', async () => {
             const writer = fakeMediaWriter();
             const { transport, calls } = fakeTransport((method, params) => {

@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "baseUrl": "../../../../../..",
+    "paths": {
+      "@/*": ["apps/cli/src/*"],
+      "@happier-dev/protocol": ["packages/protocol/src/index.ts"],
+      "@happier-dev/protocol/*": ["packages/protocol/src/*"]
+    }
+  }
+}
