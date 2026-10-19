@@ -4,6 +4,7 @@ import { backoff } from '@/utils/timing/time';
 import { createServerFetchAtEndpoint, createServerFetchForActiveServer, type ServerFetch } from '@/sync/http/client';
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import { invalidateAccountEncryptionModeCache } from './apiAccountEncryptionMode';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import {
   assertAccountEncryptionMigrationScopeCurrent,
   type AccountEncryptionMigrationScope,
@@ -34,6 +35,8 @@ export async function migrateAccountEncryptionMode(
   }> = {},
 ): Promise<import('@happier-dev/protocol').AccountEncryptionMigrateSuccessResponse> {
   if (options.scope) assertAccountEncryptionMigrationScopeCurrent(options.scope);
+  const targetServerId = options.scope?.scope.serverId ?? options.target?.serverId
+    ?? (!options.request ? getActiveServerSnapshot().serverId : undefined);
   const targetRequest = options.request ?? (options.target
       ? createServerFetchAtEndpoint({
           endpointUrl: options.target.serverUrl,
@@ -65,7 +68,7 @@ export async function migrateAccountEncryptionMode(
     const data: unknown = await response.json().catch(() => null);
     const success = AccountEncryptionMigrateSuccessResponseSchema.safeParse(data);
     if (response.ok && success.success) {
-      invalidateAccountEncryptionModeCache();
+      invalidateAccountEncryptionModeCache({ serverId: targetServerId });
       return success.data;
     }
     if (response.ok) {

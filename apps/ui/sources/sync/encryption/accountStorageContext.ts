@@ -1,4 +1,5 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { core } from 'zod/mini';
 import { isDataKeyAuthCredentials } from '@/auth/storage/tokenStorage';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
@@ -69,7 +70,7 @@ export function classifyAccountStorageReadFailure(error: unknown, signal?: Abort
             return 'encryption-material-unavailable';
         case 'account_settings_content_invalid': case 'account_settings_content_unreadable':
             return 'invalid-stored-content';
-        default: return error instanceof Error && error.name === 'ZodError' ? 'invalid-stored-content' : 'unreachable';
+        default: return error instanceof core.$ZodError ? 'invalid-stored-content' : 'unreachable';
     }
 }
 

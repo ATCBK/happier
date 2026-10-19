@@ -141,7 +141,8 @@ describe('content availability decision sites', () => {
     // Writers that compare only to copy the fact or to skip a redundant write of it.
     const allowedWriters = new Set([
         'sync/domains/state/warmCacheAdapters.ts',
-        'sync/sync.ts',
+        'sync/syncEngine.ts',
+        'sync/engine/sessions/sessionSnapshot.ts',
         'sync/domains/session/listing/sessionListRenderable.ts',
         'sync/domains/session/listing/sessionListRenderableSessionProjection.ts',
     ]);

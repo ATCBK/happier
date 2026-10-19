@@ -17,8 +17,13 @@ describe('persisted Session content', () => {
 
     it('rejects invalid envelopes while opening explicit Plain content directly', async () => {
         await expect(openSessionStoredContent({ mode: 'plain' }, { v: 1 })).resolves.toEqual({ status: 'malformed' });
-        await expect(openSessionStoredContent({ mode: 'plain' }, { t: 'plain', v: { v: 1 }, c: 'ambiguous' })).resolves.toEqual({ status: 'malformed' });
+        await expect(openSessionStoredContent({ mode: 'plain' }, { t: 'plain', c: 'ambiguous' })).resolves.toEqual({ status: 'malformed' });
         await expect(openSessionStoredContent({ mode: 'plain' }, { t: 'plain', v: { v: 1 } })).resolves.toEqual({
+            status: 'ready',
+            value: { v: 1 },
+        });
+        // Stored reads discard unknown envelope fields without changing explicit content or mode.
+        await expect(openSessionStoredContent({ mode: 'plain' }, { t: 'plain', v: { v: 1 }, c: 'future-field' })).resolves.toEqual({
             status: 'ready',
             value: { v: 1 },
         });

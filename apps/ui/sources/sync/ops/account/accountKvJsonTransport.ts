@@ -75,13 +75,17 @@ export function createAccountKvJsonTransport(params: Readonly<{
                 encryption: isRawAccountStorageEncryption(context.encryption) ? context.encryption : null,
             }));
             checkCurrent();
-            const result = await kvMutate(params.credentials, [{ key: params.key, value: encoded, version }], requestOptions);
-            checkCurrent();
+            // Currentness was checked immediately before issuance. Preserve an
+            // acknowledged write's receipt even if its captured scope then retires.
+            const result = await kvMutate(params.credentials, [{ key: params.key, value: encoded, version }], {
+                ...requestOptions, request: params.request,
+            });
             if (result.success) {
                 const stored = result.results.find(item => item.key === params.key);
                 if (!stored) throw new Error('KV mutation omitted its result');
                 return { success: true, version: stored.version };
             }
+            checkCurrent();
             const conflict = result.errors.find(item => item.key === params.key);
             if (!conflict) throw new Error('KV mutation omitted its conflict');
             const remoteValue = conflict.value === null ? null : await decode(conflict.value, context);

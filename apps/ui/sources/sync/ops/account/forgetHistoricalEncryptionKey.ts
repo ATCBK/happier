@@ -73,7 +73,7 @@ export async function forgetHistoricalEncryptionKey(params: Readonly<{
         const replacementCredentials = { token };
         captured.prepareCredentialAdoption(replacementCredentials);
         const replacement = await auth.loginWithCredentials(replacementCredentials,
-            { target: captured.target, expectedCredentials: credentials });
+            { target: captured.target, expectedCredentials: credentials, discardHistoricalEncryption: true });
         if (replacement.kind !== 'completed') throw new Error('Historical credentials could not be forgotten');
         if (!captured.isCurrent()) return scopeChanged();
         return { status: 'forgotten' };

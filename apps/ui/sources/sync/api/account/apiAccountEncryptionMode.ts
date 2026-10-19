@@ -2,6 +2,8 @@ import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage'
 import { decodeBase64 } from '@/encryption/base64';
 import { parseToken } from '@/utils/auth/parseToken';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
 import { backoff, backoffForever } from '@/utils/timing/time';
 import type { ApiChangeEntry } from '@/sync/api/types/apiTypes';
 import { createServerFetchForActiveServer, serverFetch } from '@/sync/http/client';
@@ -48,8 +50,19 @@ type AccountEncryptionModeCacheEntry = Readonly<{
 }>;
 
 const accountEncryptionModeCache = new Map<string, AccountEncryptionModeCacheEntry>();
-const accountEncryptionModeCacheInvalidationListeners = new Set<() => void>();
+type AccountEncryptionInvalidation = Readonly<{ reason?: 'scope-reset'; serverId?: string | null }>;
+type AccountEncryptionHomeBinding = Readonly<{ profileId: string; portableIdentity: string | null }>;
+type AccountEncryptionInvalidationEvent = AccountEncryptionInvalidation & Readonly<{
+    home: AccountEncryptionHomeBinding | null;
+}>;
+const accountEncryptionModeCacheInvalidationListeners = new Set<(invalidation: AccountEncryptionInvalidationEvent) => void>();
 let accountEncryptionModeCacheRevision = 0;
+
+function readAccountEncryptionHomeBinding(serverId?: string | null): AccountEncryptionHomeBinding | null {
+    const profile = getServerProfileById(serverId ?? '');
+    if (!profile) return null;
+    return { profileId: profile.id, portableIdentity: resolvePortableServerIdentityForRoutingId(serverId) };
+}
 
 function normalizeAccountEncryptionMode(raw: unknown): AccountEncryptionMode {
     const value = String(raw ?? '').trim();
@@ -87,12 +100,13 @@ function pruneAccountEncryptionModeCache(now: number): void {
     }
 }
 
-export function invalidateAccountEncryptionModeCache(): void {
+export function invalidateAccountEncryptionModeCache(options: AccountEncryptionInvalidation = {}): void {
     accountEncryptionModeCache.clear();
     accountEncryptionModeCacheRevision += 1;
+    const event: AccountEncryptionInvalidationEvent = { ...options, home: readAccountEncryptionHomeBinding(options.serverId) };
     for (const listener of [...accountEncryptionModeCacheInvalidationListeners]) {
         try {
-            listener();
+            listener(event);
         } catch {
             // One observer cannot block the incumbent cache owner from
             // withdrawing a stale Account disclosure for every other mount.
@@ -103,6 +117,7 @@ export function invalidateAccountEncryptionModeCache(): void {
 /** Account settings and Connected Service notifications do not change persisted Account mode. */
 export function invalidateAccountEncryptionModeCacheForChanges(
     changes: readonly Pick<ApiChangeEntry, 'kind' | 'entityId' | 'hint'>[],
+    target?: Readonly<{ serverId?: string | null }>,
 ): void {
     const requiresModeRead = changes.some(change => {
         if (change.kind !== 'account' || change.entityId !== 'self') return false;
@@ -117,12 +132,45 @@ export function invalidateAccountEncryptionModeCacheForChanges(
                 && Number.isSafeInteger(value) && value >= 0
         ));
     });
-    if (requiresModeRead) invalidateAccountEncryptionModeCache();
+    if (requiresModeRead) invalidateAccountEncryptionModeCache(target);
 }
 
 /** Owner-local revision for consumers that must withdraw stale disclosures. */
 export function getAccountEncryptionModeCacheRevision(): number {
     return accountEncryptionModeCacheRevision;
+}
+
+/** A finite observation belongs to its captured Home, not the ambient focus. */
+export function captureAccountEncryptionCurrentness(serverId?: string | null): Readonly<{
+    isCurrent: () => boolean;
+    dispose: () => void;
+}> {
+    const home = readAccountEncryptionHomeBinding(serverId);
+    let current = true;
+    const invalidate = (event: AccountEncryptionInvalidationEvent): void => {
+        if (event.reason === 'scope-reset') return;
+        if (home && event.home && home.profileId !== event.home.profileId) {
+            if (home.portableIdentity && event.home.portableIdentity) {
+                if (home.portableIdentity !== event.home.portableIdentity) return;
+            } else if (!home.portableIdentity && !event.home.portableIdentity) {
+                // The canonical routing scope owner uses established profile
+                // ids for legacy Homes without a portable identity.
+                return;
+            }
+        }
+        // Unknown or incomparable bindings remain conservative, including a
+        // legacy Home learning its portable identity during this operation.
+        current = false;
+        accountEncryptionModeCacheInvalidationListeners.delete(invalidate);
+    };
+    accountEncryptionModeCacheInvalidationListeners.add(invalidate);
+    return {
+        isCurrent: () => current,
+        dispose: () => {
+            current = false;
+            accountEncryptionModeCacheInvalidationListeners.delete(invalidate);
+        },
+    };
 }
 
 /**
@@ -419,6 +467,7 @@ export async function updateAccountEncryptionMode(
     mode: AccountEncryptionMode,
     opts: Readonly<{ retry?: 'default' | 'none' }> = {},
 ): Promise<AccountEncryptionModeResult> {
+    const target = getActiveServerSnapshot();
     const request = createServerFetchForActiveServer();
     const run = async (): Promise<AccountEncryptionModeResponse> => {
         const response = await request(
@@ -457,11 +506,11 @@ export async function updateAccountEncryptionMode(
 
     if (opts.retry === 'none') {
         const result = await run();
-        invalidateAccountEncryptionModeCache();
+        invalidateAccountEncryptionModeCache({ serverId: target.serverId });
         return result;
     }
 
     const result = await backoff(run);
-    invalidateAccountEncryptionModeCache();
+    invalidateAccountEncryptionModeCache({ serverId: target.serverId });
     return result;
 }

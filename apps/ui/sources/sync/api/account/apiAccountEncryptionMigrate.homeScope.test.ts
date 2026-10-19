@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -162,7 +165,7 @@ describe('Account encryption migration Home binding', () => {
         expect(captured).not.toBeNull();
         let finishBody!: (body: unknown) => void;
         http.mockImplementation(async (url) => {
-            if (String(url).endsWith('/v1/features')) return Response.json(createRootLayoutFeaturesResponse());
+            if (new URL(String(url)).pathname === '/v1/artifacts') return Response.json([]);
             const response = Response.json(success);
             response.json = () => new Promise((resolve) => { finishBody = resolve; });
             return response;
@@ -176,7 +179,11 @@ describe('Account encryption migration Home binding', () => {
             finishBody(success);
             await expect(pending).resolves.toEqual(success);
             expect(captured!.isCurrent()).toBe(false);
-            expect(http.mock.calls.every(([url]) => String(url).startsWith(homeA.target.serverUrl))).toBe(true);
+            const mutations = http.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/account/encryption/migrate');
+            expect(mutations).toHaveLength(1);
+            expect(String(mutations[0]![0])).toBe(`${homeA.target.serverUrl}/v1/account/encryption/migrate`);
+            expect(new Headers(mutations[0]![1]?.headers).get('Authorization')).toBe(`Bearer ${credentials.token}`);
+            expect(JSON.parse(String(mutations[0]![1]?.body))).toEqual(migration);
         } finally {
             captured!.dispose();
         }

@@ -57,9 +57,9 @@ export type MembershipSessionDataKeyEnvelopeTransport = Readonly<{
 }>;
 
 type RecipientUnavailableReason = Extract<
-    MembershipSessionDataKeyEnvelopePageV1,
-    { status: 'recipient_unavailable' }
->['contentKey']['reason'];
+    Extract<MembershipSessionDataKeyEnvelopePageV1, { status: 'recipient_unavailable' }>['contentKey'],
+    { status: 'unavailable' }
+>['reason'];
 
 export type MembershipHistoryPreparationStatus = TeamMembershipHistoryPreparationResultV1['status'];
 
@@ -152,7 +152,10 @@ export async function prepareMembershipHistorySessionDataKeyEnvelopes(
             // Fetch may resolve after a Home/Account switch: do not verify keys or publish status.
             if (!isScopeCurrent()) return { items: [], nextCursor: null };
             if (page.status === 'recipient_unavailable') {
-                stop.reason = { status: 'recipient_unavailable', recipientUnavailableReason: page.contentKey.reason };
+                stop.reason = {
+                    status: 'recipient_unavailable',
+                    recipientUnavailableReason: page.contentKey.status === 'unavailable' ? page.contentKey.reason : undefined,
+                };
                 return { items: [], nextCursor: null };
             }
             if (page.recipientAccountId !== scope.recipientAccountId) {

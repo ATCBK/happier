@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import * as z from 'zod/mini';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { installConnectedServicesCommonModuleMocks } from '@/components/settings/connectedServices/connectedServicesTestHelpers';
@@ -25,7 +26,7 @@ await import('@/sync/store/hooks');
 await import('@/sync/ops/actions/defaultActionExecutor');
 const runtime = await import('@/sync/syncEngine');
 const { Encryption } = await import('./encryption');
-const { AccountStorageCurrentnessUnavailableError, resolveAccountStorageContext } = await import('./accountStorageContext');
+const { AccountStorageCurrentnessUnavailableError, classifyAccountStorageReadFailure, resolveAccountStorageContext } = await import('./accountStorageContext');
 const { AccountEncryptionCurrentnessReadinessError, fetchAccountEncryptionCurrentness, invalidateAccountEncryptionModeCache } = await import('@/sync/api/account/apiAccountEncryptionMode');
 afterEach(() => resetRuntimeFetch());
 
@@ -63,6 +64,14 @@ async function captureCurrentnessFailure(operation: Promise<unknown>): Promise<C
 }
 
 describe('Account storage currentness failure fidelity', () => {
+    it('classifies native schema errors as invalid stored content while preserving transport failures', () => {
+        const malformed = z.object({ value: z.string() }).safeParse({ value: 1 });
+        if (malformed.success) throw new Error('Expected malformed stored content');
+        expect(malformed.error.issues).toMatchObject([{ code: 'invalid_type', path: ['value'] }]);
+        expect(classifyAccountStorageReadFailure(malformed.error)).toBe('invalid-stored-content');
+        expect(classifyAccountStorageReadFailure(new Error('ZodError'))).toBe('unreachable');
+    });
+
     it('admits and cancels currentness with the actual React Native AbortSignal implementation', async () => {
         await withCurrentnessHome({ body: currentness('plain', null) }, async request => {
             const controller = new ReactNativeAbortController();
@@ -76,9 +85,14 @@ describe('Account storage currentness failure fidelity', () => {
     });
     it('shares ambient reads only within the current scope revision and keeps captured transport separate', async () => {
         const response = createDeferred<void>();
+        const entered = createDeferred<void>();
         let version = 1;
-        await withCurrentnessHome({ select: () => ({ body: { ...currentness('plain', null), version }, respondAfter: response.promise }) }, async request => {
+        await withCurrentnessHome({ select: () => {
+            entered.resolve();
+            return { body: { ...currentness('plain', null), version }, respondAfter: response.promise };
+        } }, async request => {
             const first = fetchAccountEncryptionCurrentness({ token });
+            await entered.promise;
             const second = fetchAccountEncryptionCurrentness({ token });
             const captured = fetchAccountEncryptionCurrentness({ token }, { request });
             version = 2;

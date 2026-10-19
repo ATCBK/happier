@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionsCatalogV1Schema, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, openProviderConnectionsContentV1,
   type ProviderConnectionsContentV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { serializeModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model-selection';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { openAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
@@ -21,7 +22,7 @@ const catalog = ProviderConnectionsCatalogV1Schema.parse({
   secretBindingsByConnectionId: { pc_a: { account: { apiKey: formatSharedSavedSecretRefV1('secret-account') },
     byMachineId: { 'machine-a': { apiKey: formatSharedSavedSecretRefV1('secret-machine') } } } },
   manualModelsByConnectionId: { pc_a: [{ id: 'model/a', addedAt: 1 }] },
-  modelVisibilityByRef: { [serializeModelVisibilityRefV1({ scope: 'agent', agentTargetKey: 'agent:codex', providerConnectionId: 'pc_a', modelId: 'model/a' })]: 'hidden' },
+  modelVisibilityByRef: { [serializeModelVisibilityRefV1({ scope: 'agent', agentTargetKey: 'agent:codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_a'), modelId: 'model/a' })]: 'hidden' },
   experimentalBindingConfirmations: [{ v: 1, connectionId: 'pc_a', agentTargetKey: 'agent:codex', modelId: 'model/a', compatibilityFingerprint: 'compatibility', confirmedAt: 2 }],
   migration: { v: 1, completedSources: [], pendingCustomProfileIds: ['legacy-profile'], pendingConflicts: [] },
 });

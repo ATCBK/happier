@@ -14,9 +14,8 @@ export const NATIVE_CRYPTO_WORKER_PROBE_FAILURE_REASON = {
     wrongVersion: 3,
     unknown: 4,
     /**
-     * The platform has no native worker at all (web): the JS path is the intended implementation
-     * there, not a degradation. Kept distinct from `missing` so a native build whose worker module
-     * is genuinely absent stays loudly visible instead of being buried under web noise.
+     * The runtime has no worker API (for example web SSR or an older browser).
+     * Kept distinct from a native build whose worker module is missing.
      */
     unsupportedPlatform: 5,
 } as const;

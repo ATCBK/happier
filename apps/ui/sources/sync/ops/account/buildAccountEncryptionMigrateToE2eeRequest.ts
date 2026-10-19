@@ -31,6 +31,8 @@ import {
   type AccountEncryptionSessionDraftMigrationCandidate,
 } from './buildAccountEncryptionSessionDraftsDirective';
 import { buildAccountEncryptionAuthoringMemoryDirective, type AccountEncryptionAuthoringMemoryMigrationCandidate } from './buildAccountEncryptionAuthoringMemoryDirective';
+import { buildAccountEncryptionSessionFollowRulesDirective } from './buildAccountEncryptionSessionFollowRulesDirective';
+import type { OpenedSessionFollowRule } from '@/sync/api/session/sessionFollowRulesApi';
 import { buildAccountEncryptionProjectRowsDirective, type AccountEncryptionProjectRowMigrationCandidate } from './buildAccountEncryptionProjectRowsDirective';
 import { buildAccountEncryptionWorkspaceExecutionConfigDirective, type AccountEncryptionWorkspaceExecutionConfigMigrationCandidate } from './buildAccountEncryptionWorkspaceExecutionConfigDirective';
 import { buildAccountEncryptionProjectTrustDirective, type AccountEncryptionProjectTrustMigrationCandidate } from './buildAccountEncryptionProjectTrustDirective';
@@ -73,6 +75,7 @@ export async function buildAccountEncryptionMigrateToE2eeRequest(params: Readonl
   automations: ReadonlyArray<Readonly<{ id: string; templateVersion: number; templateCiphertext: string }>>;
   sessionDrafts?: readonly AccountEncryptionSessionDraftMigrationCandidate[];
   authoringMemory?: readonly AccountEncryptionAuthoringMemoryMigrationCandidate[];
+  sessionFollowRules?: readonly OpenedSessionFollowRule[];
   projectRows?: readonly AccountEncryptionProjectRowMigrationCandidate[];
   workspaceExecutionConfig?: readonly AccountEncryptionWorkspaceExecutionConfigMigrationCandidate[];
   projectTrust?: readonly AccountEncryptionProjectTrustMigrationCandidate[];
@@ -238,6 +241,7 @@ export async function buildAccountEncryptionMigrateToE2eeRequest(params: Readonl
   const authoringMemory = buildAccountEncryptionAuthoringMemoryDirective({
     candidates: params.authoringMemory ?? [], target: { mode: 'e2ee', material, randomBytes: getRandomBytes },
   });
+  const sessionFollowRules = buildAccountEncryptionSessionFollowRulesDirective({ candidates: params.sessionFollowRules ?? [], target: { mode: 'e2ee', material, randomBytes: getRandomBytes } });
   const projectRows = buildAccountEncryptionProjectRowsDirective({
     candidates: params.projectRows ?? [], target: { mode: 'e2ee', material, randomBytes: getRandomBytes },
   });
@@ -279,6 +283,7 @@ export async function buildAccountEncryptionMigrateToE2eeRequest(params: Readonl
       ...(params.passwordCredential ? { passwordCredential: params.passwordCredential } : {}),
       ...(sessionDrafts ? { sessionDrafts } : {}),
       ...(authoringMemory ? { authoringMemory } : {}),
+      ...(sessionFollowRules ? { sessionFollowRules } : {}),
       ...(projectRows ? { projectRows } : {}),
       ...(workspaceExecutionConfig ? { workspaceExecutionConfig } : {}),
       ...(projectTrust ? { projectTrust } : {}),

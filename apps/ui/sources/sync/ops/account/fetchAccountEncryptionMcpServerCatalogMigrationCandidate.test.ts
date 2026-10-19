@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import tweetnacl from 'tweetnacl';
-import { encodeBase64 } from 'privacy-kit';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { signAccountContentKeyBindingV1 } from '@happier-dev/protocol';
 import { openAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';

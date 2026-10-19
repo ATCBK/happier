@@ -12,7 +12,7 @@ import { encodeHex } from "@/encryption/hex";
 import { EncryptionCache } from "./encryptionCache";
 import { mapCryptoBatchWithYield } from "./cryptoBatchYield";
 import { SessionEncryption } from "./sessionEncryption";
-import { MachineEncryption } from "./machineEncryption";
+import { areMachineEncryptionContextInputsEqual, MachineEncryption } from "./machineEncryption";
 import { encodeBase64, decodeBase64 } from "@/encryption/base64";
 import sodium, { type LibsodiumKeyPair } from '@/encryption/libsodium.lib';
 import { decryptBox, encryptBox } from "@/encryption/libsodium";
@@ -549,9 +549,7 @@ export class Encryption {
 
     captureMachineEncryptionContext(machineId: string, input: MachineEncryptionContextInput): MachineEncryptionContext {
         const existing = this.machineEncryptionContexts.get(machineId);
-        if (existing && existing.dataEncryptionKey === input.dataEncryptionKey
-            && existing.expectedDataEncryptionKey === input.expectedDataEncryptionKey
-            && existing.resourceMode === input.resourceMode && existing.accessState === input.accessState) return existing;
+        if (existing && areMachineEncryptionContextInputsEqual(existing, input)) return existing;
         this.removeMachineEncryption(machineId);
         const context: MachineEncryptionContext = {
             ...input,
@@ -900,7 +898,7 @@ export class Encryption {
                     payloadBytes,
                     capabilityCacheKey: this.nativeCryptoWorker,
                     probe: () => this.nativeCryptoWorker.probe(),
-                    nativeRun: async () => {
+                    nativeRun: async (dispatchSignal) => {
                         const shouldMeasureSerialization = routing.telemetryEnabled && syncPerformanceTelemetry.isEnabled();
                         const serializeStartedAtMs = shouldMeasureSerialization ? nowMs() : 0;
                         let serializeMs = 0;
@@ -927,7 +925,7 @@ export class Encryption {
                                 items: nativeItems,
                                 telemetry: syncPerformanceTelemetry,
                                 telemetryEnabled: routing.telemetryEnabled,
-                                signal: scopeInput.signal,
+                                signal: dispatchSignal,
                                 dispatch: async (queuedItems, context) => {
                                     if (refreshCancellation() || context.signal?.aborted === true) {
                                         return queuedItems.map(() => null);

@@ -1,4 +1,5 @@
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
+import { log } from '@/log';
 import { ArtifactHeader, ArtifactBody } from '../domains/artifacts/artifactTypes';
 import { AES256Encryption } from './encryptor';
 import { getRandomBytes } from '@/platform/cryptoRandom';
@@ -113,7 +114,7 @@ export class ArtifactEncryption {
             }
             return header as Readonly<Record<string, unknown>>;
         } catch (error) {
-            console.error('Failed to decrypt artifact header:', error);
+            log.log(`Failed to decrypt artifact header: ${error}`);
             return null;
         }
     }
@@ -162,7 +163,7 @@ export class ArtifactEncryption {
             const parsed = ArtifactBodyEnvelopeV1StoredSchema.safeParse(body);
             return parsed.success ? parsed.data : null;
         } catch (error) {
-            console.error('Failed to decrypt artifact body:', error);
+            log.log(`Failed to decrypt artifact body: ${error}`);
             return null;
         }
     }

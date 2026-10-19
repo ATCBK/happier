@@ -30,6 +30,8 @@ import {
   type AccountEncryptionSessionDraftMigrationCandidate,
 } from './buildAccountEncryptionSessionDraftsDirective';
 import { buildAccountEncryptionAuthoringMemoryDirective, type AccountEncryptionAuthoringMemoryMigrationCandidate } from './buildAccountEncryptionAuthoringMemoryDirective';
+import { buildAccountEncryptionSessionFollowRulesDirective } from './buildAccountEncryptionSessionFollowRulesDirective';
+import type { OpenedSessionFollowRule } from '@/sync/api/session/sessionFollowRulesApi';
 import { buildAccountEncryptionProjectRowsDirective, type AccountEncryptionProjectRowMigrationCandidate } from './buildAccountEncryptionProjectRowsDirective';
 import { buildAccountEncryptionWorkspaceExecutionConfigDirective, type AccountEncryptionWorkspaceExecutionConfigMigrationCandidate } from './buildAccountEncryptionWorkspaceExecutionConfigDirective';
 import { buildAccountEncryptionProjectTrustDirective, type AccountEncryptionProjectTrustMigrationCandidate } from './buildAccountEncryptionProjectTrustDirective';
@@ -64,6 +66,7 @@ export async function buildAccountEncryptionMigrateToPlainRequest(params: Readon
   automations: ReadonlyArray<Readonly<{ id: string; templateVersion: number; templateCiphertext: string }>>;
   sessionDrafts?: readonly AccountEncryptionSessionDraftMigrationCandidate[];
   authoringMemory?: readonly AccountEncryptionAuthoringMemoryMigrationCandidate[];
+  sessionFollowRules?: readonly OpenedSessionFollowRule[];
   projectRows?: readonly AccountEncryptionProjectRowMigrationCandidate[];
   workspaceExecutionConfig?: readonly AccountEncryptionWorkspaceExecutionConfigMigrationCandidate[];
   projectTrust?: readonly AccountEncryptionProjectTrustMigrationCandidate[];
@@ -211,6 +214,7 @@ export async function buildAccountEncryptionMigrateToPlainRequest(params: Readon
   const authoringMemory = buildAccountEncryptionAuthoringMemoryDirective({
     candidates: params.authoringMemory ?? [], target: { mode: 'plain' },
   });
+  const sessionFollowRules = buildAccountEncryptionSessionFollowRulesDirective({ candidates: params.sessionFollowRules ?? [], target: { mode: 'plain' } });
   const projectRows = buildAccountEncryptionProjectRowsDirective({
     candidates: params.projectRows ?? [], target: { mode: 'plain' },
   });
@@ -243,6 +247,7 @@ export async function buildAccountEncryptionMigrateToPlainRequest(params: Readon
     ...connectedCatalogs,
     ...(sessionDrafts ? { sessionDrafts } : {}),
     ...(authoringMemory ? { authoringMemory } : {}),
+    ...(sessionFollowRules ? { sessionFollowRules } : {}),
     ...(projectRows ? { projectRows } : {}),
     ...(workspaceExecutionConfig ? { workspaceExecutionConfig } : {}),
     ...(projectTrust ? { projectTrust } : {}),

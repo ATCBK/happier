@@ -1,8 +1,8 @@
 import { ArtifactBodyEnvelopeV1Schema, ArtifactBodyEnvelopeV1StoredSchema, ArtifactPrivateRevisionMetadataV1Schema, ArtifactPrivateRevisionMetadataV1StoredSchema, type ArtifactRevisionProvenanceV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent, isPlainArtifactDataKeyMarker } from '@happier-dev/protocol/storage/artifactStoredContent';
 
-import { encodeBase64 } from '@/encryption/base64';
 import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
+import { createResourceDataKey, openResourceDataKey, type ResourceDataKeySealer, type ResourceDataKeyOpener } from '@/sync/encryption/resourceDataKey';
 
 import type { ArtifactBody, ArtifactHeader } from './artifactTypes';
 
@@ -46,13 +46,8 @@ export async function openArtifactPrivateRevisionMetadata(input: Readonly<{
     return metadata.provenance;
 }
 
-export type AccountArtifactEnvelopeKeySealer = (
-    dataKey: Uint8Array,
-) => Promise<Uint8Array | null>;
-
-export type AccountArtifactEnvelopeKeyOpener = (
-    encryptedDataKey: string,
-) => Promise<Uint8Array | null>;
+export type AccountArtifactEnvelopeKeySealer = ResourceDataKeySealer;
+export type AccountArtifactEnvelopeKeyOpener = ResourceDataKeyOpener;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -87,15 +82,13 @@ export async function createAccountArtifactStoredEnvelope(input: Readonly<{
                 dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
             });
         }
-        if (!input.encryptDataEncryptionKey) return null;
-        const dataKey = ArtifactEncryption.generateDataEncryptionKey();
-        const encryptedDataKey = await input.encryptDataEncryptionKey(dataKey);
-        if (!(encryptedDataKey instanceof Uint8Array)) return null;
-        const artifactEncryption = new ArtifactEncryption(dataKey);
+        const key = await createResourceDataKey(input);
+        if (key?.mode !== 'e2ee') return null;
+        const artifactEncryption = new ArtifactEncryption(key.dataKey);
         return Object.freeze({
             header: await artifactEncryption.encryptHeader(input.header),
             body: await artifactEncryption.encryptBody(body),
-            dataEncryptionKey: encodeBase64(encryptedDataKey, 'base64'),
+            dataEncryptionKey: key.dataEncryptionKey,
         });
     } catch {
         return null;
@@ -124,12 +117,11 @@ export async function openAccountArtifactStoredEnvelope(input: Readonly<{
             );
             return header && body ? Object.freeze({ header, body }) : null;
         }
-        if (isPlain || !input.decryptDataEncryptionKey) return null;
-        const dataKey = await input.decryptDataEncryptionKey(
-            input.envelope.dataEncryptionKey,
-        );
-        if (!(dataKey instanceof Uint8Array)) return null;
-        const artifactEncryption = new ArtifactEncryption(dataKey);
+        if (isPlain) return null;
+        const key = await openResourceDataKey({ mode: input.mode, dataEncryptionKey: input.envelope.dataEncryptionKey,
+            decryptDataEncryptionKey: input.decryptDataEncryptionKey });
+        if (key?.mode !== 'e2ee') return null;
+        const artifactEncryption = new ArtifactEncryption(key.dataKey);
         const [header, body] = await Promise.all([
             artifactEncryption.decryptHeader(input.envelope.header),
             artifactEncryption.decryptBody(input.envelope.body),

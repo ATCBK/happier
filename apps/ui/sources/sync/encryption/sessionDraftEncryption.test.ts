@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionDraftDocumentV1, StrictJsonValue } from '@happier-dev/protocol';
-import { NewSessionDraftDocumentV2Schema } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { NewSessionDraftDocumentV2Schema, DiscussionDraftDocumentV2Schema } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 import { SessionDraftStoredContentEnvelopeV1Schema } from '@happier-dev/protocol/drafts/sessionDrafts';
 
 import { createSessionDraftCipher } from './sessionDraftEncryption';
@@ -34,6 +34,20 @@ function document(kind: 'session' | 'newSession'): SessionDraftDocumentV1 {
 }
 
 describe('sessionDraftEncryption', () => {
+    it.each(['plain', 'e2ee'] as const)('keeps Discussion drafts under the Account cipher without a Session (%s)', async accountMode => {
+        const cipher = createSessionDraftCipher({ accountMode,
+            accountCryptoMaterial: accountMode === 'plain' ? null : { type: 'dataKey', machineKey: new Uint8Array(32).fill(42) },
+            getSessionContext: () => { throw new Error('Discussion drafts have no Session cipher'); },
+            randomBytes: length => new Uint8Array(length) });
+        const field = (value: unknown) => ({ mutationId: '00000000-0000-4000-8000-000000000010', value });
+        const document = DiscussionDraftDocumentV2Schema.parse({ v: 2, target: { kind: 'discussion' },
+            composer: { text: field('retained'), mentions: field([]), attachments: field([]) } });
+        const address = { kind: 'discussion' as const, discussionId: 'discussion-a' };
+        const envelope = await cipher.seal(address, document);
+        await expect(cipher.open(address, envelope)).resolves.toEqual(document);
+        await expect(cipher.open({ ...address, discussionId: 'discussion-b' }, envelope)).resolves.toBeNull();
+    });
+
     it.each(['plain', 'e2ee'] as const)('keeps agent-free Open under the Account cipher without a Session (%s)', async accountMode => {
         const cipher = createSessionDraftCipher({ accountMode,
             accountCryptoMaterial: accountMode === 'plain' ? null : { type: 'dataKey', machineKey: new Uint8Array(32).fill(42) },

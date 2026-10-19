@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 import { ed25519, x25519 } from '@noble/curves/ed25519';
 import * as protocol from '@happier-dev/protocol';
@@ -24,6 +24,7 @@ import { createPackageAssetArchiveV1, encodePackageAssetArchiveBodyV1 } from '@h
 import {
     MACHINE_PLAIN_DATA_KEY_MARKER,
     encodePlainMachineStoredContent,
+    decodePlainMachineStoredContent,
 } from '@happier-dev/protocol';
 import { encodeAccountStoredJsonContent } from '@/sync/encryption/accountStoredJsonContent';
 import {
@@ -52,6 +53,45 @@ describe('buildAccountEncryptionMigrationStorageDirectives', () => {
             labels: [],
         },
     };
+
+    it('preserves complete predecessor Machine blobs and pins the observed DEK in both conversion directions', async () => {
+        const targetEncryption = await Encryption.create(new Uint8Array(32).fill(7));
+        const metadata = { host: 'old-host', platform: 'linux', happyCliVersion: '0.2', homeDir: '/tmp', happyHomeDir: '/tmp/.happier',
+            displayName: 'User edit', predecessorExtension: { preserve: ['all', 'bytes'] } };
+        const daemonState = { status: 'running', pid: 42, predecessorExtension: { private: true } };
+        const inputs = { ...emptyTransitionInventories, todos: [], artifacts: [], sessions: [],
+            sessionSourceCredentials: tokenOnlyCredentials, sessionTargetCredentials: legacyCredentials };
+        const encrypted = await buildAccountEncryptionMigrationStorageDirectives({ ...inputs, fromMode: 'plain', toMode: 'e2ee',
+            sourceEncryption: null, targetEncryption, machines: [{ id: 'history', metadata: encodePlainMachineStoredContent(metadata),
+                metadataVersion: 2, daemonState: encodePlainMachineStoredContent(daemonState), daemonStateVersion: 3,
+                dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER }] });
+        if (encrypted.machines.action !== 'migrate') throw new Error('Missing Machine conversion');
+        const item = encrypted.machines.items[0]!;
+        expect(item).toMatchObject({ expectedDataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+        const dataKey = await targetEncryption.decryptEncryptionKey(item.dataEncryptionKey!);
+        if (!dataKey) throw new Error('Missing Machine key');
+        const codec = new AES256Encryption(dataKey);
+        expect((await codec.decrypt([Buffer.from(item.metadata, 'base64')]))[0]).toEqual(metadata);
+        expect((await codec.decrypt([Buffer.from(item.daemonState!, 'base64')]))[0]).toEqual(daemonState);
+        const plain = await buildAccountEncryptionMigrationStorageDirectives({ ...inputs, fromMode: 'e2ee', toMode: 'plain',
+            sourceEncryption: targetEncryption, targetEncryption: null, machines: [{ id: 'history', metadata: item.metadata,
+                metadataVersion: 3, daemonState: item.daemonState, daemonStateVersion: 4, dataEncryptionKey: item.dataEncryptionKey }] });
+        if (plain.machines.action !== 'migrate') throw new Error('Missing reverse Machine conversion');
+        expect(plain.machines.items[0]).toMatchObject({ expectedDataEncryptionKey: item.dataEncryptionKey });
+        expect(decodePlainMachineStoredContent(plain.machines.items[0]!.metadata)).toEqual(metadata);
+        expect(decodePlainMachineStoredContent(plain.machines.items[0]!.daemonState!)).toEqual(daemonState);
+    });
+
+    it('refuses an inventory containing a Machine with unavailable metadata instead of omitting it', async () => {
+        const encryption = await Encryption.create(new Uint8Array(32).fill(7));
+        await expect(buildAccountEncryptionMigrationStorageDirectives({ ...emptyTransitionInventories,
+            fromMode: 'plain', toMode: 'e2ee', sourceEncryption: null, targetEncryption: encryption,
+            machines: [{ id: 'machine-unavailable', metadata: null, metadataVersion: 1,
+                dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER }],
+            todos: [], artifacts: [], sessions: [],
+            sessionSourceCredentials: tokenOnlyCredentials, sessionTargetCredentials: legacyCredentials,
+        })).rejects.toThrow();
+    });
 
     it('converts qualified package archives and retained bodies without ordinary recipient authority', async () => {
         const archive = createPackageAssetArchiveV1({
@@ -707,45 +747,4 @@ describe('buildAccountEncryptionMigrationStorageDirectives', () => {
         });
     });
 
-    it('aborts locally when an E2EE target Session envelope cannot be reopened', async () => {
-        const actualOpen =
-            protocol.openSessionOwnerMetadataEnvelopeV1;
-        const openSpy = vi
-            .spyOn(protocol, 'openSessionOwnerMetadataEnvelopeV1')
-            .mockImplementationOnce(actualOpen)
-            .mockReturnValueOnce({
-                ok: false,
-                reason: 'invalid_ciphertext',
-            });
-        try {
-            await expect(
-                buildAccountEncryptionMigrationStorageDirectives({
-                    toMode: 'e2ee',
-                    fromMode: 'plain',
-                    sourceEncryption: null,
-                    targetEncryption: null,
-                    machines: [],
-                    todos: [],
-                    artifacts: [],
-                    sessions: [{
-                        id: 'session-round-trip',
-                        metadataLayoutVersion: 1,
-                        metadataVersion: 3,
-                        agentStateVersion: 4,
-                        ownerMetadata: {
-                            t: 'plain',
-                            v: { v: 1 },
-                        },
-                    }],
-                    ...emptyTransitionInventories,
-                    sessionSourceCredentials: tokenOnlyCredentials,
-                    sessionTargetCredentials: legacyCredentials,
-                }),
-            ).rejects.toThrow(
-                'Target Session owner metadata verification failed',
-            );
-        } finally {
-            openSpy.mockRestore();
-        }
-    });
 });

@@ -8,23 +8,40 @@ import { MachineKeyBasisStoredReadV1Schema } from '@happier-dev/protocol/machine
 import type { MachineEncryptionContextInput } from './encryption';
 import { parseMachinePublishedMetadataV1, parseMachinePublishedDaemonStateV1, StoredMachinePublishedDaemonStateV1Schema, type MachinePublishedDaemonStateV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 
+export function areMachineEncryptionContextInputsEqual(
+    previous: MachineEncryptionContextInput | null | undefined,
+    next: MachineEncryptionContextInput,
+): boolean {
+    return previous != null && previous.dataEncryptionKey === next.dataEncryptionKey
+        && previous.expectedDataEncryptionKey === next.expectedDataEncryptionKey
+        && previous.resourceMode === next.resourceMode && previous.accessState === next.accessState;
+}
+
 /** The recipient opening envelope and owner encoded-write identity have distinct jobs. */
 export function readMachineEncryptionContextInput(
     machine: Readonly<{ dataEncryptionKey?: unknown; keyBasis?: unknown; access?: unknown; isShared?: boolean }>,
     viewerAccountId: string | null,
+    retained?: MachineEncryptionContextInput | null,
 ): MachineEncryptionContextInput {
-    const dataEncryptionKey = typeof machine.dataEncryptionKey === 'string' ? machine.dataEncryptionKey : null;
+    // Socket content hints are patches: omission does not withdraw an admitted
+    // recipient envelope, owner basis or access context. Full-row reads omit
+    // retained and continue to classify absent material at their own boundary.
+    const dataEncryptionKey = 'dataEncryptionKey' in machine
+        ? typeof machine.dataEncryptionKey === 'string' ? machine.dataEncryptionKey : null
+        : retained?.dataEncryptionKey ?? null;
     const basis = MachineKeyBasisStoredReadV1Schema.safeParse(machine.keyBasis);
     const access = AccessibleMachineAccessStoredReadV1Schema.safeParse(machine.access);
     return {
         dataEncryptionKey,
         ...(access.success ? { resourceMode: access.data.resourceMode, accessState: access.data.accessState }
-            : machine.access !== undefined || machine.isShared ? { accessState: 'unavailable' as const } : {}),
+            : machine.access !== undefined || machine.isShared ? { accessState: 'unavailable' as const }
+                : retained ? { resourceMode: retained.resourceMode, accessState: retained.accessState } : {}),
         expectedDataEncryptionKey: machine.keyBasis !== undefined
             ? basis.success ? basis.data.dataEncryptionKey : undefined
-            : machine.isShared || (machine.access !== undefined && (!access.success || access.data.custodian.accountId !== viewerAccountId))
-                ? undefined
-                : dataEncryptionKey,
+            : retained ? retained.expectedDataEncryptionKey
+                : machine.isShared || (machine.access !== undefined && (!access.success || access.data.custodian.accountId !== viewerAccountId))
+                    ? undefined
+                    : dataEncryptionKey,
     };
 }
 
