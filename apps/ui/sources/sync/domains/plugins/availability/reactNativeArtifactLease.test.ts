@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { renderHook, flushHookEffects } from '@/dev/testkit';
 
 const activeAccountHostedArtifactSource = vi.hoisted(() => ({
     create: vi.fn(),
@@ -300,6 +302,53 @@ function fixture(input: Readonly<{
 }
 
 describe('React Native Artifact lease acquisition', () => {
+    it('reads immutable bytes once across mounted effects and reacquires after Account retirement', async () => {
+        const current = fixture();
+        const cache = createPluginReactNativeBundleCache();
+        const fetchDaemonArtifactBytes = vi.fn(async () => current.daemonResponse);
+        const producer = createPluginReactNativeArtifactAvailabilityProducer({
+            getCache: () => cache, appExact: inactiveAppExactSource, fetchDaemonArtifactBytes,
+        });
+        let account = createLifetime();
+        const mount = () => renderHook(() => {
+            const [ready, setReady] = React.useState(false);
+            React.useEffect(() => {
+                let handle: Awaited<ReturnType<typeof producer.acquire>> | undefined;
+                let mounted = true;
+                void producer.acquire({
+                    reader: current.reader, artifactGraph: current.graph, cacheIdentity: current.cacheIdentity,
+                    accountLifetime: account.lifetime,
+                    daemon: { machineId: current.origin.materializationRef.machineId, serverId: scope.serverId },
+                    isCurrent: () => mounted,
+                }).then(value => { handle = value; setReady(value.kind === 'available'); });
+                return () => { mounted = false; if (handle?.kind === 'available') handle.dispose(); };
+            }, []);
+            return ready;
+        });
+        for (let cohort = 0; cohort < 6; cohort++) {
+            const hooks = [await mount(), await mount(), await mount()];
+            for (const hook of hooks) {
+                await vi.waitFor(() => expect(hook.getCurrent()).toBe(true));
+                await hook.unmount();
+            }
+        }
+        expect(fetchDaemonArtifactBytes).toHaveBeenCalledTimes(1);
+        expect(cache.readInstalledArtifact(current.cacheIdentity, { ...scope, accountId: 'another-account' })).toBeNull();
+        await cache.removePersistentArtifact({ accountScope: scope, artifactDigest: current.cacheIdentity.artifactDigest });
+        const evicted = await mount();
+        await vi.waitFor(() => expect(evicted.getCurrent()).toBe(true));
+        expect(fetchDaemonArtifactBytes).toHaveBeenCalledTimes(2);
+        await evicted.unmount();
+        account.retire();
+        await flushHookEffects();
+        account = createLifetime();
+        const next = await mount();
+        await flushHookEffects();
+        await vi.waitFor(() => expect(next.getCurrent()).toBe(true));
+        expect(fetchDaemonArtifactBytes).toHaveBeenCalledTimes(3);
+        await next.unmount();
+    });
+
     it('materializes the Account-selected digest from another supplier when the primary daemon misses', async () => {
         const current = fixture();
         const reader = createPluginAccountAvailabilityReader({
