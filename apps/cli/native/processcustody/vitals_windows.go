@@ -79,12 +79,11 @@ func readNativeVitals(extras bool) (vitalsNativeSample, error) {
 	}
 	page := uint64(p.PageSize)
 	s.Memory.Swap = &vitalsSwap{Kind: "page_file", TotalBytes: uint64(p.CommitLimit) * page, UsedBytes: uint64(p.CommitTotal) * page}
-	if extras {
-		used := m.TotalPhys - m.AvailPhys
-		cached := min(used, uint64(p.SystemCache)*page)
-		system := min(used-cached, uint64(p.KernelTotal)*page)
-		s.Memory.Composition = []vitalsComposition{{"apps", used - cached - system}, {"system", system}, {"cached_files", cached}}
-	}
+	// Both APIs have already been read for this memory observation.
+	used := m.TotalPhys - m.AvailPhys
+	cached := min(used, uint64(p.SystemCache)*page)
+	system := min(used-cached, uint64(p.KernelTotal)*page)
+	s.Memory.Composition = []vitalsComposition{{"apps", used - cached - system}, {"system", system}, {"cached_files", cached}}
 	if handle, _, _ := procVitalsCreateMemoryNotification.Call(0); handle != 0 {
 		var signaled int32
 		if ok, _, _ := procVitalsQueryMemoryNotification.Call(handle, uintptr(unsafe.Pointer(&signaled))); ok != 0 {
