@@ -1814,9 +1814,12 @@ field `contextMode`; metric and breakdown retain their own presentation values.
 Accounting Usage builtins declare their consumed inputs against the canonical
 query schema: shared scope and cost basis, plus metric or grouping only when the
 body uses them. Period summary does not declare Group by. Sources declares only `agents`, `machines`
-and `sources`, through the inventory projection of that same schema. Its widget
-and Sources-only preset can be admitted without accounting period, metric,
-project, Session or cost-basis selections. Period and Session declare the narrow
+and `sources`, through the inventory projection of that same schema. Its inventory
+widget can be admitted without accounting period, metric, project, Session or
+cost-basis selections. The Sources host preset also contains Coverage and Unpriced
+accounting widgets; those follow the ordinary query scope and cost basis through
+the same batched Resource. They do not add native discovery or capture demand.
+Period and Session declare the narrow
 `{ hostType: 'usageQuery', field: 'period' | 'session' }` projections, so Add and
 Edit invoke the same typed picker owner without a raw JSON editor. Period uses
 semantic relative choices (`period: { relative: '7days' }`, for example); the
@@ -2211,7 +2214,15 @@ the host resolves it to opaque project identity and Account-mode labels before
 publication, and never includes that path in usage ingest. Only an `advanced` result
 acknowledges a new cursor; replacement and expired-cursor outcomes do not.
 `resolveSource.accountingSource` supplies canonical root and change-observation
-metadata without reading transcript records. Consented machine/source accounting
+metadata without reading transcript records. Its optional `discoveredFileCount`
+reports files already enumerated by metadata discovery. Watch targets alone do
+not establish a count, and file counts do not establish distinct Sessions or
+tokens. Claude, Codex and Pi supply this fact from their existing JSONL inventory;
+other sources omit it when unavailable. The host projects it through
+`usage.sources.discover` without persisting it in capture custody or retaining a
+second cache. Later source reads may omit the count when no discovery was run.
+Token counts require consented accounting, so pre-consent UI cannot estimate them.
+Consented machine/source accounting
 demand shares the incumbent resource reconciler with real Session links and can
 retain its watches without creating a Session identity.
 For a host-materialized native home, the host retains the state links it actually
