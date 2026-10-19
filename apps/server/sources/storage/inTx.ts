@@ -71,12 +71,9 @@ export class TransactionAcquisitionUnavailableError extends Error {
 }
 
 export class TransactionDeadlineExceededError extends Error {
-    readonly cause: unknown;
-
-    constructor(cause: unknown) {
+    constructor(readonly cause: unknown, readonly transactionClass?: string) {
         super("Database transaction request deadline expired");
         this.name = "TransactionDeadlineExceededError";
-        this.cause = cause;
     }
 }
 
@@ -197,11 +194,15 @@ function canStartAnotherSqliteTransactionAttempt(params: Readonly<{
     return elapsedMs + params.retryDelayMs + nextAttemptBudgetMs <= params.config.totalRetryBudgetMs;
 }
 
-async function prepareTransactionAttempt(prepare: NonNullable<InTxOptions["prepare"]>, deadlineAtMs?: number) {
+async function prepareTransactionAttempt(
+    prepare: NonNullable<InTxOptions["prepare"]>,
+    deadlineAtMs?: number,
+    transactionClass?: string,
+) {
     // Apply the same attempt-admission deadline before preparation does IO;
     // the remaining budget is measured again before opening the transaction.
     if (deadlineAtMs !== undefined && Math.floor(deadlineAtMs - Date.now()) < 2) {
-        throw new TransactionDeadlineExceededError(null);
+        throw new TransactionDeadlineExceededError(null, transactionClass);
     }
     return prepare();
 }
@@ -286,7 +287,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
     const provider = getDbProviderFromEnv(process.env, "postgres");
     if (provider === "sqlite" && options?.readOnly) {
         if (options.prepare) {
-            const fence = await prepareTransactionAttempt(options.prepare, options.deadlineAtMs);
+            const fence = await prepareTransactionAttempt(options.prepare, options.deadlineAtMs, options.transactionClass);
             return await withSqliteReadSnapshot(async tx => {
                 await fence(tx);
                 return fn(tx);
@@ -306,7 +307,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
             options?.deadlineAtMs !== undefined
             && Date.now() >= options.deadlineAtMs
         ) {
-            throw new TransactionDeadlineExceededError(null);
+            throw new TransactionDeadlineExceededError(null, options?.transactionClass);
         }
         if (provider === "postgres" && options?.readOnly) {
             await tx.$executeRaw`SET TRANSACTION READ ONLY`;
@@ -326,12 +327,14 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
     while (true) {
         transactionCallbackEntered = false;
         try {
-            const fence = options?.prepare ? await prepareTransactionAttempt(options.prepare, options.deadlineAtMs) : undefined;
+            const fence = options?.prepare
+                ? await prepareTransactionAttempt(options.prepare, options.deadlineAtMs, options.transactionClass)
+                : undefined;
             const remainingMs = options?.deadlineAtMs === undefined
                 ? null
                 : Math.floor(options.deadlineAtMs - Date.now());
             if (remainingMs !== null && remainingMs < 2) {
-                throw new TransactionDeadlineExceededError(null);
+                throw new TransactionDeadlineExceededError(null, options?.transactionClass);
             }
             const configuredMaxWaitMs = options?.maxWaitMs ?? transactionConfig.maxWaitMs;
             const configuredTimeoutMs = options?.timeoutMs ?? transactionConfig.timeoutMs;
@@ -397,10 +400,12 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
             }
             const throwExhausted = (): never => {
                 if (isTransactionDeadlineExceededError(e)) {
-                    throw ambiguousAttemptFailure ? new TransactionDeadlineExceededError(ambiguousAttemptFailure.error) : e;
+                    throw ambiguousAttemptFailure
+                        ? new TransactionDeadlineExceededError(ambiguousAttemptFailure.error, options?.transactionClass)
+                        : e;
                 }
                 if (acquisitionTimeout && options?.deadlineAtMs !== undefined) {
-                    throw new TransactionDeadlineExceededError(ambiguousAttemptFailure?.error ?? e);
+                    throw new TransactionDeadlineExceededError(ambiguousAttemptFailure?.error ?? e, options?.transactionClass);
                 }
                 if (ambiguousAttemptFailure) throw ambiguousAttemptFailure.error;
                 if (acquisitionTimeout) {
@@ -430,7 +435,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
                 && transactionCallbackEntered
                 && (Date.now() >= options.deadlineAtMs || isPrismaErrorCode(e, "P2028") || sqlState === "57014")
             ) {
-                throw new TransactionDeadlineExceededError(ambiguousAttemptFailure?.error ?? e);
+                throw new TransactionDeadlineExceededError(ambiguousAttemptFailure?.error ?? e, options?.transactionClass);
             }
             if (retryable && counter < transactionConfig.maxRetries) {
                 const nextAttempt = counter + 1;
@@ -451,7 +456,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
                     throwExhausted();
                 }
                 if (options?.deadlineAtMs !== undefined && Date.now() + retryDelayMs >= options.deadlineAtMs) {
-                    throw new TransactionDeadlineExceededError(ambiguousAttemptFailure?.error ?? e);
+                    throw new TransactionDeadlineExceededError(ambiguousAttemptFailure?.error ?? e, options?.transactionClass);
                 }
                 counter = nextAttempt;
                 recordDatabaseTransactionRetry(provider);

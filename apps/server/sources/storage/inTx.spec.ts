@@ -84,6 +84,20 @@ describe("inTx", () => {
         }
     });
 
+    it("carries the transaction owner on a request-deadline error", async () => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres" });
+        vi.spyOn(Date, "now").mockReturnValue(1_000);
+
+        await expect(inTx(async () => "unreachable", {
+            deadlineAtMs: 1_000,
+            transactionClass: "workflow-pull-run-origin-delivery",
+        })).rejects.toMatchObject({
+            name: "TransactionDeadlineExceededError",
+            transactionClass: "workflow-pull-run-origin-delivery",
+        });
+        expect(transaction).not.toHaveBeenCalled();
+    });
+
     it.each([
         { code: "P2028", message: "A query cannot be executed on an expired transaction.", isolationLevel: "RepeatableRead", readOnly: true },
         { code: "P2034", message: "Transaction failed due to a write conflict or a deadlock.", isolationLevel: "Serializable", readOnly: false },
