@@ -52,8 +52,14 @@ mod hosted_artifact_desktop;
 #[cfg(debug_assertions)]
 mod mcp_bridge;
 
+#[cfg(target_os = "linux")]
+mod linux_webkit_env;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    linux_webkit_env::apply_before_gtk_init();
+
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
