@@ -89,7 +89,9 @@ reads **Runs through** followed by where the session's models come from. Picking
 model from another source while the session runs works like choosing another Agent:
 the chip reads **Next via …**, the send button reads **Continue via …**, and nothing
 happens until you send. Sending restarts the Agent on that source and continues the
-same conversation; picking the current model again cancels the change. The
+same conversation. Before sending, use the cancel control beside the armed
+send button to un-arm the change and keep the applied model and source; picking
+the current model again also cancels it. The
 Account-wide visibility control is still being integrated, so this is not yet a
 released Settings workflow.
 
@@ -105,8 +107,10 @@ components together; older session processes and mixed 0.2/0.3 operation are
 unsupported. Unavailable applied state never falls back to Account defaults.
 
 Choosing another Agent still requires a compatible model and source. If that
-choice cannot be admitted, Happier asks for a choice instead of changing the
-model or billing source. Independent detached or scheduled work uses its own
+choice cannot be admitted, the development launcher shows a chooser for that
+child Agent: use its Account default, choose an exact model, or cancel without
+starting it. Composed live validation, including Reviews with multiple refused
+Agents, remains pending. Independent detached or scheduled work uses its own
 choices or Account defaults. Resuming a child keeps that child's retained choice,
 even after its parent changes.
 
