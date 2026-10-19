@@ -1,32 +1,32 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { ProcessCensusSnapshot } from './processCensus';
 
-const unsigned = z.number().int().nonnegative().safe();
-const principal = z.object({ kind: z.enum(['uid', 'sid']), value: z.string().min(1) }).strict();
-const ownershipEnvironment = z.object({
-    HAPPIER_HOME_DIR: z.string().optional(), HAPPIER_ACTIVE_SERVER_ID: z.string().optional(),
-    HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID: z.string().optional(), HAPPIER_SERVER_URL: z.string().optional(),
-    HAPPIER_WEBAPP_URL: z.string().optional(), HAPPIER_PUBLIC_SERVER_URL: z.string().optional(),
-}).strict();
-const rowSchema = z.object({
-    pid: unsigned.positive(), ppid: unsigned.nullable(), pgid: z.number().int().safe().optional(), sessionId: unsigned.positive().optional(),
-    start: z.object({ startTimeMs: unsigned, native: z.string().optional() }).strict(),
-    principal: principal.nullable(), name: z.string(),
-    executablePath: z.string().optional(), argv: z.array(z.string()).optional(), commandLine: z.string().optional(),
-    cwd: z.string().optional(), ownerTag: z.string().optional(), ownershipEnvironment: ownershipEnvironment.optional(),
-    memory: z.object({ bytes: unsigned, kind: z.enum(['rss', 'footprint', 'private', 'working_set']) }).strict().nullable(),
-    cpuTimeUs: unsigned.nullable(), cgroup: z.string().optional(), jobs: z.array(z.string()).optional(),
-    state: z.enum(['running', 'sleeping', 'stopped', 'zombie', 'other']).optional(), tpgid: z.number().int().safe().optional(),
-}).strict();
-const helperSchema = z.object({
-    v: z.literal(1), capturedAtMs: unsigned, logicalCpus: unsigned.positive(), rows: z.array(rowSchema),
-    partial: z.array(z.object({ pid: unsigned, missing: z.array(z.string()) }).strict()).optional(),
-    jobObservations: z.array(z.discriminatedUnion('state', [
-        z.object({ name: z.string().min(1), state: z.literal('live'), pids: z.array(unsigned.positive()).min(1) }).strict(),
-        z.object({ name: z.string().min(1), state: z.literal('absent'), pids: z.array(unsigned.positive()).max(0).optional() }).strict(),
-        z.object({ name: z.string().min(1), state: z.literal('unavailable') }).strict(),
-    ])).optional(),
-}).strict();
+const unsigned = z.number().check(z.int(), z.nonnegative(), z.int());
+const principal = z.strictObject({ kind: z.enum(['uid', 'sid']), value: z.string().check(z.minLength(1)) });
+const ownershipEnvironment = z.strictObject({
+    HAPPIER_HOME_DIR: z.optional(z.string()), HAPPIER_ACTIVE_SERVER_ID: z.optional(z.string()),
+    HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID: z.optional(z.string()), HAPPIER_SERVER_URL: z.optional(z.string()),
+    HAPPIER_WEBAPP_URL: z.optional(z.string()), HAPPIER_PUBLIC_SERVER_URL: z.optional(z.string()),
+});
+const rowSchema = z.strictObject({
+    pid: unsigned.check(z.positive()), ppid: z.nullable(unsigned), pgid: z.optional(z.number().check(z.int(), z.int())), sessionId: z.optional(unsigned.check(z.positive())),
+    start: z.strictObject({ startTimeMs: unsigned, native: z.optional(z.string()) }),
+    principal: z.nullable(principal), name: z.string(),
+    executablePath: z.optional(z.string()), argv: z.optional(z.array(z.string())), commandLine: z.optional(z.string()),
+    cwd: z.optional(z.string()), ownerTag: z.optional(z.string()), ownershipEnvironment: z.optional(ownershipEnvironment),
+    memory: z.nullable(z.strictObject({ bytes: unsigned, kind: z.enum(['rss', 'footprint', 'private', 'working_set']) })),
+    cpuTimeUs: z.nullable(unsigned), cgroup: z.optional(z.string()), jobs: z.optional(z.array(z.string())),
+    state: z.optional(z.enum(['running', 'sleeping', 'stopped', 'zombie', 'other'])), tpgid: z.optional(z.number().check(z.int(), z.int())),
+});
+const helperSchema = z.strictObject({
+    v: z.literal(1), capturedAtMs: unsigned, logicalCpus: unsigned.check(z.positive()), rows: z.array(rowSchema),
+    partial: z.optional(z.array(z.strictObject({ pid: unsigned, missing: z.array(z.string()) }))),
+    jobObservations: z.optional(z.array(z.discriminatedUnion('state', [
+        z.strictObject({ name: z.string().check(z.minLength(1)), state: z.literal('live'), pids: z.array(unsigned.check(z.positive())).check(z.minLength(1)) }),
+        z.strictObject({ name: z.string().check(z.minLength(1)), state: z.literal('absent'), pids: z.optional(z.array(unsigned.check(z.positive())).check(z.maxLength(0))) }),
+        z.strictObject({ name: z.string().check(z.minLength(1)), state: z.literal('unavailable') }),
+    ]))),
+});
 
 export function decodeHelperCensus(output: string, selfPid: number, verifiedJobNames?: readonly string[]): ProcessCensusSnapshot {
     try {

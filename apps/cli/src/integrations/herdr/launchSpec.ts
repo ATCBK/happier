@@ -6,6 +6,7 @@ export async function createHerdrLaunchSpec(input: Readonly<{
   spawnArgv: readonly string[];
   spawnEnv: Readonly<Record<string, string>>;
   unsetEnvKeys?: readonly string[];
+  windowsVerbatimArguments?: boolean;
 }>): Promise<TerminalLaunchSpec> {
   return await createTerminalLaunchSpec({
     ...input,

@@ -2,7 +2,6 @@ import { basename } from 'node:path';
 
 import {
   resolveTerminalPromptWriteTimeoutMs,
-  type TerminalHostAdapter,
   type TerminalHostHandle,
   type TerminalHostLivenessV1,
   type TerminalInjectionDuplicateRisk,
@@ -11,6 +10,7 @@ import {
   type TerminalInputState,
   type TerminalPromptInput,
 } from '@happier-dev/agents';
+import type { TerminalHostAdapter } from '@/integrations/terminal/host/_types';
 import type { TerminalPromptSubmitVerificationPolicy } from '../terminalHost/promptSubmitVerification';
 
 import {
@@ -461,6 +461,8 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
   return {
     kind: 'zellij',
     async createOrAttachHost(opts) {
+      // This path always runs a new command pane, even in an existing server.
+      if (opts.prepareLaunch) opts = { ...opts, ...await opts.prepareLaunch() };
       // Zellij panes inherit the server environment, not the later `run` client.
       // Native attach rejects a target advertised as the client's current session.
       // Creation names its target in argv; subsequent pane actions use the handle's name.

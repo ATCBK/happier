@@ -1,3 +1,5 @@
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
+
 export type ResolvedTerminalShell = Readonly<{
   file: string;
   args: readonly string[];
@@ -14,7 +16,7 @@ function shouldUseLoginArgs(file: string): boolean {
   return lower.endsWith('/zsh') || lower.endsWith('/bash') || lower === 'zsh' || lower === 'bash';
 }
 
-function shouldDisablePromptSpacing(file: string, env: NodeJS.ProcessEnv): boolean {
+function shouldDisablePromptSpacing(file: string, env: ProcessEnvInput): boolean {
   const lower = file.toLowerCase();
   const hasVisiblePromptEolMarkOverride =
     typeof env.HAPPIER_DAEMON_TERMINAL_PROMPT_EOL_MARK === 'string'
@@ -22,7 +24,7 @@ function shouldDisablePromptSpacing(file: string, env: NodeJS.ProcessEnv): boole
   return (lower.endsWith('/zsh') || lower === 'zsh') && !hasVisiblePromptEolMarkOverride;
 }
 
-export function resolveTerminalShell(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): ResolvedTerminalShell {
+export function resolveTerminalShell(env: ProcessEnvInput, platform: NodeJS.Platform): ResolvedTerminalShell {
   const override = normalizeNonEmptyString(env.HAPPIER_DAEMON_TERMINAL_SHELL);
   if (override) {
     return { file: override, args: [] };
@@ -42,7 +44,7 @@ export function resolveTerminalShell(env: NodeJS.ProcessEnv, platform: NodeJS.Pl
   return { file: shell, args };
 }
 
-export function resolveFiniteTerminalShell(command: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): ResolvedTerminalShell {
+export function resolveFiniteTerminalShell(command: string, env: ProcessEnvInput, platform: NodeJS.Platform): ResolvedTerminalShell {
   const { file } = resolveTerminalShell(env, platform);
   const shellName = file.replaceAll('\\', '/').split('/').at(-1)?.toLowerCase();
   if (platform === 'win32' && (shellName === 'cmd' || shellName === 'cmd.exe')) {

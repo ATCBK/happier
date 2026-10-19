@@ -328,7 +328,7 @@ async function promptViaProcessStdio(prompt: string, options: PromptOptions): Pr
 
 export async function promptInput(
   prompt: string,
-  options: Readonly<{ signal?: AbortSignal; animation?: PromptAnimation }> = {},
+  options: PromptOptions = {},
 ): Promise<string> {
   if (!isInteractiveTerminal()) {
     return promptViaProcessStdio(prompt, options);

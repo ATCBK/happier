@@ -1,9 +1,9 @@
 import type { ChildProcess } from 'node:child_process';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PROCESS_LAUNCH_NOTIFICATION_PATH = '/processes/launch-notify';
-export const ProcessLaunchNotificationRequestSchema = z.object({}).strict();
-export const ProcessLaunchNotificationResultSchema = z.object({ accepted: z.literal(true) }).strict();
+export const ProcessLaunchNotificationRequestSchema = z.strictObject({});
+export const ProcessLaunchNotificationResultSchema = z.strictObject({ accepted: z.literal(true) });
 
 const listeners = new Set<() => void>();
 const observedChildren = new WeakSet<Pick<ChildProcess, 'pid' | 'once'>>();

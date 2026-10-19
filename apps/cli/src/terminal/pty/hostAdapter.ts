@@ -3,7 +3,6 @@ import { Buffer } from 'node:buffer';
 import {
   resolveTerminalPromptWriteTimeoutMs,
   type TerminalControlPort,
-  type TerminalHostAdapter,
   type TerminalHostHandle,
   type TerminalHostKind,
   type TerminalHostLivenessV1,
@@ -14,6 +13,7 @@ import {
   type TerminalPromptInput,
   type TerminalSpecialKey,
 } from '@happier-dev/agents';
+import type { TerminalHostAdapter } from '@/integrations/terminal/host/_types';
 import { encodeTerminalPasteInput } from '@happier-dev/protocol/terminal/inputEncoding';
 
 import {
@@ -284,6 +284,7 @@ export function createPtyTerminalHostAdapter(params?: Readonly<{
           },
         };
       }
+      if (opts.prepareLaunch) opts = { ...opts, ...await opts.prepareLaunch() };
       if (existing) {
         cleanupSession(opts.sessionName, existing, { kill: false, retainExitState: true });
       }
@@ -304,7 +305,9 @@ export function createPtyTerminalHostAdapter(params?: Readonly<{
       await ptyProvider.prepare?.();
       const pty = ptyProvider.spawn({
         file: command,
-        args: [...opts.spawnArgv.slice(1)],
+        args: process.platform === 'win32' && opts.windowsVerbatimArguments
+          ? opts.spawnArgv.slice(1).join(' ')
+          : [...opts.spawnArgv.slice(1)],
         options: {
           name: 'xterm-256color',
           cols,

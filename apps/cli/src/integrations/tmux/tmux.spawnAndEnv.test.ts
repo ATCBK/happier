@@ -367,7 +367,7 @@ describe('TmuxUtilities.spawnInTmux', () => {
         if (!newWindowCall) return;
         const separatorIndex = newWindowCall.cmd.indexOf(';');
         const commandArg = newWindowCall.cmd[separatorIndex - 1];
-        expect(commandArg).toMatch(/^'\/bin\/sh' '.+\/happier-tmux-window-[^/]+\/launch\.sh'$/);
+        expect(commandArg).toMatch(/^'\/bin\/sh' '.+\/tmux-window-[^/]+\/launch\.sh'$/);
         expect(JSON.stringify(newWindowCall.cmd)).not.toContain('$(rm -rf /)');
     });
 

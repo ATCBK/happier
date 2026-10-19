@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 
 import {
   resolveTerminalPromptWriteTimeoutMs,
-  type TerminalHostAdapter,
   type TerminalHostHandle,
   type TerminalInjectionDuplicateRisk,
   type TerminalInjectionFailurePhase,
@@ -10,6 +9,7 @@ import {
   type TerminalInputState,
   type TerminalPromptInput,
 } from '@happier-dev/agents';
+import type { TerminalHostAdapter } from '@/integrations/terminal/host/_types';
 import {
   resolveTerminalPromptSubmissionFailureReason,
   type TerminalPromptSubmitVerificationPolicy,
@@ -203,6 +203,8 @@ export function createTmuxTerminalHostAdapter(params?: Readonly<{
   return {
     kind: 'tmux',
     async createOrAttachHost(opts) {
+      // requireNewSession below never attaches to an existing native process.
+      if (opts.prepareLaunch) opts = { ...opts, ...await opts.prepareLaunch() };
       const result = await tmux.spawnInTmux([...opts.spawnArgv], {
         sessionName: opts.sessionName,
         windowName: opts.sessionName,

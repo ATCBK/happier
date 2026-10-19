@@ -1,5 +1,7 @@
 import { HostTerminalTranscriptFollowAdmissionError } from '@/agent/runtime/session/terminal/contract';
 import { isPluginError } from '@happier-dev/plugin-sdk';
+import { logger } from '@/ui/logger';
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import {
   isAgentSessionContinuationUnreachableError,
   SESSION_RUNNER_EXIT_CODES,
@@ -21,4 +23,15 @@ export function resolveSessionRunnerFailureExitCode(error: unknown): number {
     return SESSION_RUNNER_EXIT_CODES.TERMINAL_FOLLOW_ADMISSION_FAILED;
   }
   return 1;
+}
+
+/** Report the command failure and preserve its existing supervised process exit. */
+export function reportSessionRunnerFailure(error: unknown): number {
+  const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error });
+  if (issue.source === 'dependency_failure' && issue.code === 'preparation_pending') {
+    logger.infoFile('[Session] Startup preparation pending', { code: issue.code, source: issue.source });
+  } else {
+    logger.fatal(error);
+  }
+  return resolveSessionRunnerFailureExitCode(error);
 }

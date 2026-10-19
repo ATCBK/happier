@@ -2,23 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const executable = vi.hoisted(() => ({ socketPath: '', spawn: vi.fn(), sessionList: vi.fn() }));
 
-// Only installed executable probes and foreground process creation are OS substitutes.
-// Admission, exact-socket transport, attachment planning and pane focus stay real.
+// Substitute executable session inventory and foreground process creation only.
+// Version probes, admission, exact-socket transport and pane focus stay real.
 vi.mock('node:child_process', async (importOriginal) => {
-  const { EventEmitter } = await import('node:events');
-  const { PassThrough } = await import('node:stream');
+  const actual = await importOriginal<typeof import('node:child_process')>();
   return {
-    ...await importOriginal<typeof import('node:child_process')>(),
-    execFile: Object.assign(vi.fn((_binary: string, args: readonly string[], _options: unknown, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
-      const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true });
-      setImmediate(() => {
-        child.emit('exit', 0, null);
-        callback(null, args[0] === '--version' ? 'herdr 0.9.2'
-          : JSON.stringify({ sessions: [{ name: 'default', socket_path: executable.socketPath, running: true }] }), '');
-        child.emit('close', 0, null);
-      });
-      return child;
-    }), {
+    ...actual,
+    execFile: Object.assign(vi.fn((...args: Parameters<typeof actual.execFile>) => actual.execFile(...args)), {
       [Symbol.for('nodejs.util.promisify.custom')]: async (_binary: string, _args: string[], options?: { env?: NodeJS.ProcessEnv }) => ({
         stdout: JSON.stringify({ sessions: executable.sessionList(options?.env) }),
         stderr: '',
@@ -39,7 +29,7 @@ import { withHerdrApi } from './herdrApi.testkit';
 
 const envScope = createEnvKeyScope(['HERDR_ENV', 'HERDR_SOCKET_PATH', 'HERDR_PANE_ID', 'HERDR_BIN_PATH', 'XDG_CONFIG_HOME']);
 beforeEach(() => {
-  envScope.patch({ HERDR_ENV: undefined, HERDR_SOCKET_PATH: undefined, HERDR_PANE_ID: undefined, HERDR_BIN_PATH: undefined });
+  envScope.patch({ HERDR_ENV: undefined, HERDR_SOCKET_PATH: undefined, HERDR_PANE_ID: undefined, HERDR_BIN_PATH: process.execPath });
   executable.spawn.mockReset();
   executable.sessionList.mockReset();
   executable.sessionList.mockImplementation(() => [{ name: 'default', socket_path: executable.socketPath, running: true }]);
@@ -87,7 +77,7 @@ describe('Herdr CLI entrypoint admission', () => {
       expect(launches).toContainEqual({ args: ['terminal', 'attach', 'terminal_1'], socketPath: api.socketPath, sessionName });
       expect(api.requests.some((request) => request.method === 'pane.close' || request.method === 'layout.apply')).toBe(false);
       } finally { await startup; }
-    }, { socketPath: join(root, relativeSessionDir, 'herdr.sock') }));
+    }, { socketPath: join(root, relativeSessionDir, 'herdr.sock') }), '/tmp');
   });
 
   it.skipIf(process.platform === 'win32').each(['custom_socket', 'mismatched_inventory'])('refuses unverified cold roots without contacting a live ambient server (%s)', async evidence => {
@@ -100,7 +90,7 @@ describe('Herdr CLI entrypoint admission', () => {
       } } })).rejects.toMatchObject({ code: 'recorded_server_root_unavailable' });
       expect(executable.spawn).not.toHaveBeenCalled();
       expect(ambient.requests).toEqual([]);
-    }));
+    }), '/tmp');
   });
 
   it('preserves a selected live endpoint without querying a same-name ambient server', async () => {

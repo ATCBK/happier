@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
 import { stripCliApiTokenEnvironment } from '@/auth/cliApiToken';
 import { randomUUID } from 'node:crypto';
@@ -344,7 +345,7 @@ function splitByApproxBytesUtf8(input: string, maxBytes: number): string[] {
   return out;
 }
 
-function resolveTerminalSpawnEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function resolveTerminalSpawnEnv(env: ProcessEnvInput): Record<string, string> {
   const configuredPromptEolMark = env.HAPPIER_DAEMON_TERMINAL_PROMPT_EOL_MARK;
   return stripCliApiTokenEnvironment({
     ...env,
@@ -414,7 +415,13 @@ function latestRetainedOutputLine(buffer: EventBuffer, maxLength: number): strin
     raw = event.data + raw;
     // Decode terminal controls across retained chunk boundaries; CR is an updated line.
     const lines = stripVTControlCharacters(raw).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').split(/\r\n|[\r\n]/);
-    const last = lines.findLastIndex(line => line.trim().length > 0);
+    let last = -1;
+    for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex -= 1) {
+      if (lines[lineIndex]!.trim().length > 0) {
+        last = lineIndex;
+        break;
+      }
+    }
     if (last < 0) continue;
     latest = lines[last]!.trim();
     // A preceding newline proves the full line; otherwise read earlier retained chunks.
@@ -431,7 +438,7 @@ export function createTerminalPtySessionManager(params: Readonly<{
   ptyProvider: PtyProvider;
   config: TerminalPtySessionManagerConfig;
   now?: () => number;
-  env?: NodeJS.ProcessEnv;
+  env?: ProcessEnvInput;
   platform?: NodeJS.Platform;
   readSpawnFailureLimits?: SpawnFailureLimitsReader;
   /**
