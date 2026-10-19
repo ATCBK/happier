@@ -3,13 +3,14 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { connect } from '@happier-dev/sdk';
-import { createFixtureStore, createCredentialIssuer, createLeadChat } from './fixture.mjs';
+import { buildFixtureHappierUrl, createFixtureStore, createCredentialIssuer, createLeadChat } from './fixture.mjs';
 import { FIXTURE_ORIGIN } from './leads-fixture/contracts.mjs';
 
 const token = process.env.HAPPIER_EMBED_KEY;
 const endpoint = process.env.HAPPIER_SERVER_URL;
-const happierUrl = process.env.HAPPIER_WEBAPP_URL;
-if (!token || !endpoint || !happierUrl) throw new Error('Set HAPPIER_EMBED_KEY, HAPPIER_SERVER_URL and HAPPIER_WEBAPP_URL.');
+const configuredHappierUrl = process.env.HAPPIER_WEBAPP_URL;
+if (!token || !endpoint || !configuredHappierUrl) throw new Error('Set HAPPIER_EMBED_KEY, HAPPIER_SERVER_URL and HAPPIER_WEBAPP_URL.');
+const happierUrl = buildFixtureHappierUrl(configuredHappierUrl, endpoint);
 const happier = connect({ endpoint, token });
 const store = createFixtureStore();
 const issuer = createCredentialIssuer({ embed: happier.embed, store,

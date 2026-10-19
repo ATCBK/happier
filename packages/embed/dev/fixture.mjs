@@ -1,9 +1,18 @@
+import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { EmbedCredentialRequestV1Schema } from '@happier-dev/protocol/embed';
 import { actionSchemas } from './leads-fixture/contracts.mjs';
 
+/** The fixture owns both endpoints, so every frame must select the same Home as its server SDK. */
+export function buildFixtureHappierUrl(happierUrl, serverUrl) {
+  const url = new URL(happierUrl);
+  url.searchParams.set('server', serverUrl);
+  return url.href;
+}
+
 /** CRM records are dev-only memory; host reloads retain them, server restarts reset them. */
 export function createFixtureStore() {
+  const requestNamespace = randomUUID();
   const leads = [
     { id: 'northstar', name: 'Northstar Labs', contact: 'Maya · Head of operations', ownerId: 'salesperson',
       notes: 'A 40-person research team wants to reduce manual inbound triage. Maya owns evaluation; budget review is next Tuesday.' },
@@ -24,6 +33,7 @@ export function createFixtureStore() {
     listLeads: (userId) => structuredClone(leads.filter((lead) => lead.ownerId === userId)),
     canOpenSession: (userId, sessionId) => sessionOwners.get(sessionId) === userId,
     copilotSessionId: (userId) => copilots.get(userId) ?? null,
+    leadCreationRequestId: (userId, leadId) => `fixture-lead-${requestNamespace}-${userId}-${leadId}`,
     attachLeadSession(userId, leadId, sessionId) {
       const lead = leads.find((entry) => entry.id === leadId && entry.ownerId === userId);
       if (!lead) throw new Error('lead_forbidden');
@@ -66,7 +76,7 @@ export async function createLeadChat({ happier, store, userId, leadId }) {
   const lead = store.listLeads(userId).find((entry) => entry.id === leadId);
   if (!lead) throw new Error('lead_forbidden');
   const session = lead.sessionId ? happier.sessions.get(lead.sessionId)
-    : await happier.embed.createSession({ title: lead.name }, { requestId: `fixture-lead-${userId}-${lead.id}` });
+    : await happier.embed.createSession({ title: lead.name }, { requestId: store.leadCreationRequestId(userId, lead.id) });
   store.attachLeadSession(userId, lead.id, session.id);
   const result = await session.send(
     `Analyze this lead. Call the Leads fixture record-analysis Action with leadId=${lead.id}, score (0-100), summary and nextStep.\n${lead.notes}`,

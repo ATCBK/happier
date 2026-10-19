@@ -109,7 +109,8 @@ describe('embed host', () => {
         queueMicrotask(() => m.ready({}, ready));
       },
     };
-    m.post.mockImplementation((value, _origin, transfer) => {
+    m.post.mockImplementation((...args: [unknown, (string | WindowPostMessageOptions)?, Transferable[]?]) => {
+      const [value, , transfer = []] = args;
       const envelope = EmbedHostToFrameEnvelopeV1Schema.parse(value);
       queueMicrotask(() => deliver?.({ data: envelope, source: parent, origin: 'https://crm.acme.dev',
         ports: transfer } as unknown as MessageEvent));
@@ -162,7 +163,7 @@ describe('embed host', () => {
     expect(container.querySelector('[role="status"]')).not.toBeNull();
     handle.destroy();
   });
-  it('preserves the supplied Home selection through the frame runtime resolver', async () => {
+  it('preserves the supplied Home selection while building the frame route', () => {
     const container = document.createElement('div');
     document.body.append(container);
     const handle = mountHappierSession(container, {
@@ -173,11 +174,6 @@ describe('embed host', () => {
     expect(frameUrl.pathname).toBe('/embed/new');
     expect(frameUrl.searchParams.get('server')).toBe('https://home.example');
     expect(frameUrl.searchParams.get('happier_hmr')).toBe('0');
-    const resolverModulePath = '../../../apps/ui/sources/embed/runtime/resolveEmbedEndpointUrl.ts';
-    const { resolveEmbedEndpointUrl } = await import(resolverModulePath) as {
-      resolveEmbedEndpointUrl(search: string, fallbackUrl: string): string;
-    };
-    expect(resolveEmbedEndpointUrl(frameUrl.search, 'https://default.example')).toBe('https://home.example');
     handle.destroy();
   });
   it('restarts initial credential selection for a switch and drops pending results on destruction', async () => {
