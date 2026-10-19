@@ -855,6 +855,8 @@ type WorkflowCoordinatorDependencies = Readonly<{
   allocateInvocationRecordId?: () => string;
   rootInvocationRecordId?: string;
   onReviewEntered?: (params: Readonly<{ runId: string; invocation: WorkflowCoordinatorInvocation }>) => Promise<void>;
+  /** Publish accepted leaf output; replay repairs its external acknowledgement without executing again. */
+  onInvocationCompleted?: (params: Readonly<{ runId: string; invocation: WorkflowCoordinatorInvocation }>) => Promise<void>;
 }>;
 
 export function createWorkflowCoordinator(deps: WorkflowCoordinatorDependencies): Readonly<{
@@ -2079,6 +2081,7 @@ async function executeStepBlock(
       });
     }
     const result = existing.result ?? null;
+    await context.deps.onInvocationCompleted?.({ runId: context.runId, invocation: existing });
     return result;
   }
   if (existing) {
@@ -2508,7 +2511,7 @@ async function executeStepBlock(
         await awaitReviewedInvocation(row, context);
         return await executeStepBlock(step, scope, frame, context, parentKey, memberOrdinal, supplementalInputValues);
       }
-      await context.deps.store.commitFact({
+      const completed = await context.deps.store.commitFact({
         key,
         lifecycle: 'completed',
         result,
@@ -2517,6 +2520,7 @@ async function executeStepBlock(
         ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}),
       });
       nativeTerminalCommitted = true;
+      await context.deps.onInvocationCompleted?.({ runId: context.runId, invocation: completed });
       return result;
     }
     const generationContinuationRefused = execution.kind === 'needs_attention' && !rejoining && !durableExecution

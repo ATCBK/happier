@@ -28,6 +28,7 @@ export type DiscussionReplyReturnPublication = Readonly<{
   requestLocalId: string;
   acceptedTurnId?: string;
   discussion: DiscussionAddressingV1;
+  workflow?: NonNullable<import('@happier-dev/protocol/sessions/messages/sessionMessageReplyV1').SessionMessageDiscussionReplyReturnV1['workflow']>;
   outcome: SessionMessageReplyOutcomeV1;
   actionRequestAttributionV1?: ActionRequestAttributionV1;
   message: string;

@@ -256,7 +256,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     const inputProvenance = readSessionMessageProvenance(message.meta, 'stored') ?? undefined;
     const authority = readSessionInputAuthority(message.meta, 'stored');
     const returnedAnswer = authority?.v === 1 ? authority.returnedAnswer : undefined;
-    const discussionAddressing = authority?.v === 1 ? authority.discussionAddressing : undefined;
+    const discussionAddressing = authority?.discussionAddressing;
     if (discussionAddressing) {
       try { assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: message.inputAdmissionReceipt }); }
       catch { return true; }

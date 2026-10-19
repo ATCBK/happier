@@ -16,6 +16,22 @@ import {
 const protocol = { ...sessionInputAdmission, SessionMessageMetaSchema };
 
 describe('session input admission metadata', () => {
+  it('retains a Workflow-selected Discussion cutoff only with the exact Machine receipt', () => {
+    const workflow = { purpose: 'invocation', runId: 'run', invocationRecordId: 'invocation' } as const;
+    const discussionAddressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: 'receiver' };
+    const request = protocol.SessionInputRequestV2Schema.parse({ v: 2, producer: 'workflow', caller: { kind: 'host' }, workflow,
+      permission: {}, replyIntent: { mode: 'wait' }, discussionAddressing });
+    const admittedTarget = { homeId: 'home', accountId: 'owner', sessionId: 'receiver', machineId: 'machine', installationId: 'installation' };
+    const receipt = { v: 1, issuer: 'authenticatedMachine', admittedTarget, discussionAddressing };
+    expect(protocol.settleSessionInputRequestV2({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: receipt }))
+      .toMatchObject({ workflow, discussionAddressing, replyIntent: { mode: 'wait' } });
+    expect(() => protocol.settleSessionInputRequestV2({ request, currentSessionPermissionCeiling: 'default',
+      inputAdmissionReceipt: { ...receipt, discussionAddressing: { ...discussionAddressing, throughSeq: 3 } } })).toThrow();
+    expect(() => protocol.settleSessionInputRequestV2({ request, currentSessionPermissionCeiling: 'default',
+      inputAdmissionReceipt: { ...receipt, admittedTarget: { ...admittedTarget, sessionId: 'other' } } })).toThrow();
+    expect(protocol.SessionInputRequestV2Schema.safeParse({ ...request, replyIntent: undefined }).success).toBe(false);
+    expect(protocol.deriveWorkflowSessionInputLocalIdV2(request.workflow)).toBe(protocol.deriveWorkflowSessionInputLocalIdV2(workflow));
+  });
   it('retains Workflow reply intent through protected V2 settlement without changing invocation identity', () => {
     const workflow = { purpose: 'invocation', runId: 'run', invocationRecordId: 'invocation' } as const;
     const request = { v: 2, producer: 'workflow', caller: { kind: 'host' }, workflow, permission: {},

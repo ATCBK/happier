@@ -2,7 +2,9 @@ import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { SessionIdSchema, TurnIdSchema } from '../idsV1.js';
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
-import { SessionInputSourceSessionV1Schema, SessionInputHumanReplyOriginV1Schema } from './sessionInputAdmission.js';
+import { SessionInputSourceSessionV1Schema, SessionInputHumanReplyOriginV1Schema, SessionInputWorkflowV2Schema } from './sessionInputAdmission.js';
+import { WorkflowRunIdV1Schema, WorkflowInvocationRecordIdSchema } from '../../workflows/workflowIdsV1.js';
+import { WorkflowDecimalV1Schema } from '../../workflows/workflowProgressV1.js';
 import { CoordinationMessageRefV1Schema } from '../../discussions/references.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { sha256 } from '@noble/hashes/sha2';
@@ -42,6 +44,8 @@ export const SessionMessageReplyAdmissionV1Schema = lazyZodSchema(() => z.strict
   humanOrigin: z.optional(SessionInputHumanReplyOriginV1Schema),
   /** The admitted question, participant and cutoff own this return destination. */
   discussion: z.optional(DiscussionAddressingV1Schema),
+  /** Protected Workflow custody, never inferred from the reply's prose. */
+  workflow: z.optional(SessionInputWorkflowV2Schema),
   actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
 }).check(z.refine(value => value.mode !== 'return' || value.sourceSession !== undefined || value.discussion !== undefined || value.humanOrigin !== undefined, 'Return requires an admitted destination'),
   z.refine(value => !value.humanOrigin || value.mode === 'return' && !value.sourceSession && !value.discussion, 'Human and agent reply destinations are distinct')));
@@ -61,6 +65,7 @@ export const SessionMessageReplyProgressV1Schema = lazyZodSchema(() => z.strictO
   sourceSession: z.optional(SessionInputSourceSessionV1Schema),
   humanOrigin: z.optional(SessionInputHumanReplyOriginV1Schema),
   discussion: z.optional(DiscussionAddressingV1Schema),
+  workflow: z.optional(SessionInputWorkflowV2Schema),
   actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
   acceptedTurnId: z.optional(TurnIdSchema),
   outcome: z.optional(SessionMessageReplyOutcomeV1Schema),
@@ -75,6 +80,12 @@ export const SessionMessageDiscussionReplyReturnV1Schema = lazyZodSchema(() => z
   serverId: DiscussionAddressV1Schema.shape.serverId,
   requestLocalId: PendingLocalIdSchema,
   acceptedTurnId: z.optional(TurnIdSchema),
+  /** The durable invocation index is checked before this original can publish. */
+  workflow: z.optional(z.strictObject({
+    runId: WorkflowRunIdV1Schema,
+    invocationRecordId: WorkflowInvocationRecordIdSchema,
+    invocationAttempt: WorkflowDecimalV1Schema,
+  })),
 }));
 export type SessionMessageDiscussionReplyReturnV1 = z.infer<typeof SessionMessageDiscussionReplyReturnV1Schema>;
 export type SessionMessageReplyProgressV1 = z.infer<typeof SessionMessageReplyProgressV1Schema>;

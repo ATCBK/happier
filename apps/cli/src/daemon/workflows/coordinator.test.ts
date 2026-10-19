@@ -80,6 +80,40 @@ async function admitPreparedInput(params: Parameters<WorkflowStepExecutor>[0]): 
 }
 
 describe('workflow coordinator', () => {
+  it.each(['sequence', 'parallel', 'items'] as const)('publishes only the durably completed leaf and repairs %s publication on replay without another execution', async shape => {
+    const store = createInMemoryWorkflowCoordinatorStore();
+    const leaf = freshStep('answer');
+    let executions = 0;
+    let loseResponse = true;
+    const published: string[] = [];
+    const blocks: WorkflowDefinitionV1['blocks'] = shape === 'sequence' ? [leaf] : shape === 'parallel'
+      ? [{ kind: 'parallel', id: 'parallel', failurePolicy: 'fail_stop', branches: [{ id: 'first', blocks: [leaf] }] }]
+      : [{ kind: 'loop', id: 'items', repetition: { kind: 'items', items: { kind: 'literal', value: ['one'] },
+        execution: 'parallel', failurePolicy: 'fail_stop' }, body: [leaf] }];
+    const run = { runId: 'discussion-publication-rejoin', inputs: {}, definition: definition(blocks), executionTarget, authorization,
+      materializedLeaves: [{ sourceKey: '$root', blockId: leaf.id, kind: 'step' as const,
+        selection: { agentTarget, conversation: { kind: 'fresh' as const } }, executionTarget,
+        authoredWorkspace: { kind: 'inherit' as const } }] };
+    const coordinator = createWorkflowCoordinator({ store, resolveWorkspace, isAcceptedAuthorizationCurrent: async () => true,
+      executeStep: async params => {
+        executions += 1;
+        await params.beforeInputAdmission();
+        await params.onInputAccepted({ kind: 'session', sessionId: 'participant', localInputId: 'exact-input' });
+        return { kind: 'completed', result: 'accepted answer' };
+      },
+      onInvocationCompleted: async ({ invocation }) => {
+        expect(await store.read(invocation.key)).toMatchObject({ lifecycle: 'completed', result: 'accepted answer',
+          execution: { kind: 'session', sessionId: 'participant', localInputId: 'exact-input' } });
+        published.push(invocation.recordId);
+        if (loseResponse) { loseResponse = false; throw new Error('post_committed_response_lost'); }
+      },
+    });
+    await expect(coordinator.run(run)).rejects.toThrow('post_committed_response_lost');
+    expect(await coordinator.run(run)).toMatchObject({ state: 'succeeded' });
+    expect(executions).toBe(1);
+    expect(published).toHaveLength(2);
+    expect(published[0]).toBe(published[1]);
+  });
   it('dispatches the full frozen model participant from the accepted leaf', async () => {
     const store = createInMemoryWorkflowCoordinatorStore();
     const launch = {

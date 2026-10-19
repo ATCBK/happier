@@ -10,8 +10,9 @@ import { WorkflowDirectRunAdmissionIdV1Schema, WorkflowInvocationRecordIdSchema 
 import { isWorkflowDraftPublicationLifecycleV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { type WorkflowRunRecipientKeyEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 import { type WorkflowRunWaitConditionV1 } from '@happier-dev/protocol/workflows/actionsV1';
-import { resolveWorkflowRunAdmissionVisibilityInTx, storeWorkflowRunInitialKeyEnvelopesInTx, resolveWorkflowRunRecipientAccountIdsInTx } from "./workflowRunAccess";
+import { resolveWorkflowRunAdmissionVisibilityInTx, storeWorkflowRunInitialKeyEnvelopesInTx, resolveWorkflowRunRecipientAccountIdsInTx, assertWorkflowDiscussionAdmissionInTx } from "./workflowRunAccess";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
+import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 
 import { markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { acquireWorkflowPublicationLocksInTx } from "./acquireWorkflowPublicationLocksInTx";
@@ -295,14 +296,16 @@ export type AdmitWorkflowRunInput = Readonly<{
     visibleTeamId?: string | null;
     authentication?: TeamOperationAuthenticationContext;
     recipientKeyEnvelopes?: readonly WorkflowRunRecipientKeyEnvelopeV1[];
-    resultDelivery?: Readonly<{ kind: "originating_session" }>;
+    resultDelivery?: Readonly<{ kind: "originating_session" | "originating_discussion" }>;
+    discussionTargetSessionIds?: readonly string[];
+    discussionAuthentication?: SessionAccessAuthentication;
 }>;
 
 function isExactWorkflowAdmission(row: WorkflowRunListRow, params: AdmitWorkflowRunInput): boolean {
     const sameOrigin = row.originKind === "direct"
         && row.automationId === null
         && row.originSessionId === (params.origin.originSessionId ?? null);
-    const sameDelivery = params.resultDelivery === undefined
+    const sameDelivery = params.resultDelivery?.kind !== 'originating_session'
         ? row.originDeliveryAckRevision === null
         : row.originDeliveryAckRevision !== null;
     return row.workflowCustodyState !== null
@@ -341,6 +344,12 @@ export async function admitWorkflowRunTx(tx: Tx, params: AdmitWorkflowRunInput):
         if (!WorkflowDirectRunAdmissionIdV1Schema.safeParse(params.runId).success) {
             throw new WorkflowRunServiceError("invalid_input");
         }
+        if (params.resultDelivery?.kind === 'originating_discussion' && !params.origin.discussion
+            || params.discussionTargetSessionIds !== undefined && !params.origin.discussion) throw new WorkflowRunServiceError('invalid_input');
+        if (params.origin.discussion) await withWorkflowRunAccess(() => assertWorkflowDiscussionAdmissionInTx(tx, {
+            accountId: params.accountId, origin: params.origin.discussion, targetSessionIds: params.discussionTargetSessionIds ?? [],
+            authentication: params.discussionAuthentication, publishes: params.resultDelivery?.kind === 'originating_discussion',
+        }));
         await withWorkflowRunAccess(() => acquireWorkflowPublicationLocksInTx(tx, {
             accountId: params.accountId, runIds: [params.runId], machineIds: [params.machineId],
             sessionIds: params.origin.originSessionId ? [params.origin.originSessionId] : [],
@@ -363,7 +372,7 @@ export async function admitWorkflowRunTx(tx: Tx, params: AdmitWorkflowRunInput):
         if (params.origin.originSessionId) {
             const session = await tx.session.findFirst({ where: { id: params.origin.originSessionId, accountId: params.accountId }, select: { id: true } });
             if (!session) throw new WorkflowRunServiceError("invalid_input");
-        } else if (params.resultDelivery !== undefined) {
+        } else if (params.resultDelivery?.kind === 'originating_session') {
             throw new WorkflowRunServiceError("invalid_input");
         }
         const visibleTeamId = await withWorkflowRunAccess(() => resolveWorkflowRunAdmissionVisibilityInTx(tx, {
@@ -395,7 +404,7 @@ export async function admitWorkflowRunTx(tx: Tx, params: AdmitWorkflowRunInput):
                     executionInputEnvelope: params.acceptedEnvelope,
                     workflowCheckpointEnvelope: null,
                     workflowCustodyState: "pending",
-                    originDeliveryAckRevision: params.resultDelivery ? 0 : null,
+                    originDeliveryAckRevision: params.resultDelivery?.kind === 'originating_session' ? 0 : null,
                     assignments: { create: { machineId: params.machineId, priority: 0 } },
                 },
                 select: workflowRunSelect,

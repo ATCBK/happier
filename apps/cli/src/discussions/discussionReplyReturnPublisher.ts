@@ -48,6 +48,7 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
           idOrPrefix: original.requestSessionId, signal });
         if (!transport.ok || transport.sessionId !== original.requestSessionId || !await current()) return denied();
         const replyReturn = { serverId: params.serverId, requestLocalId: original.requestLocalId,
+          ...(original.workflow ? { workflow: original.workflow } : {}),
           ...(original.acceptedTurnId ? { acceptedTurnId: original.acceptedTurnId } : {}) };
         phase = 'session_publisher';
         receipt.value = DiscussionAgentPostResponseV1Schema.parse(await callSessionRpc({
@@ -72,6 +73,7 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
       defaultSessionId: original.requestSessionId, defaultSessionMachineId: params.machineId,
       actionCaller: { kind: 'host' },
       discussionReplyReturn: { serverId: params.serverId, requestLocalId: original.requestLocalId,
+        ...(original.workflow ? { workflow: original.workflow } : {}),
         ...(original.acceptedTurnId ? { acceptedTurnId: original.acceptedTurnId } : {}) },
       actionRequestId: localId, signal, ...(sessionInputSource ? { sessionInputSource } : {}),
       ...(original.actionRequestAttributionV1 ? { actionRequestAttributionV1: original.actionRequestAttributionV1 } : {}),

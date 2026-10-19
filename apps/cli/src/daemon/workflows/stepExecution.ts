@@ -12,6 +12,7 @@ import {
 } from '@/session/services/sendSessionMessage';
 import type { SessionMessageModelSelectionInput } from '@/session/services/resolveSessionMessageModel';
 import type { SessionMessageReplyOutcomeV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import type { DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/references';
 import { resolveSessionMessageAdmissionTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import {
   buildWorkflowSessionInputAdmissionV2,
@@ -246,6 +247,7 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
   sourceAuthority?: SessionInputSourceAuthorityV1;
   /** Original accepted request cause, independent of the executing Session's owner. */
   actionRequestAttributionV1?: ActionRequestAttributionV1;
+  discussionAddressing?: DiscussionAddressingV1;
   /** Coordinator-resolved authoring selection; Session owns model normalization. */
   modelSelectionInput?: SessionMessageModelSelectionInput;
   modelSelectionUpdatedAt?: number;
@@ -275,6 +277,7 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
       : params.workflow,
     {
       replyIntent: { mode: 'wait' },
+      ...(params.discussionAddressing ? { discussionAddressing: params.discussionAddressing } : {}),
       ...(requestedPermissionCeiling ? { requestedPermissionCeiling } : {}),
       ...(params.sourceAuthority ? { sourceAuthority: params.sourceAuthority } : {}),
       ...(params.actionRequestAttributionV1 ? { actionRequestAttributionV1: params.actionRequestAttributionV1 } : {}),

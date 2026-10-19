@@ -1,5 +1,6 @@
 import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { WorkflowDiscussionOriginV1Schema } from './workflowDestinationsV1.js';
 import { SessionMessageReplyOutcomeV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
 import { z } from 'zod/mini';
 import { ActionCompletionStateV1Schema } from '../actions/actionCompletion.js';
@@ -101,6 +102,7 @@ export const WorkflowRunAutomationOriginV1Schema = lazyZodSchema(() => z.strictO
 export const WorkflowRunDirectOriginV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('direct'),
   originSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
+  discussion: z.optional(WorkflowDiscussionOriginV1Schema),
 }));
 export const WorkflowRunOriginV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   WorkflowRunAutomationOriginV1Schema,
