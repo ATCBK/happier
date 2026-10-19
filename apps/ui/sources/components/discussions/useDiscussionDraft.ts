@@ -127,6 +127,27 @@ function sameScope(left: ServerAccountScope, right: ServerAccountScope): boolean
 }
 
 /**
+ * An explicit "Ask <person>" from elsewhere in the app: fills an empty new Discussion with an addressed
+ * request the person still reads and sends. Words already in that draft are never replaced.
+ */
+export function seedNewDiscussionDraft(input: Readonly<{
+    scope: ServerAccountScope;
+    title: string;
+    text: string;
+    mentions: readonly DiscussionMentionSpan[];
+}>): boolean {
+    const address: DiscussionDraftAddress = { kind: 'newDiscussion' };
+    const current = readDiscussionDraftFields(input.scope, address);
+    if (current.text.trim() || current.title.trim()) return false;
+    writeDiscussionSessionDraft({
+        scope: input.scope,
+        address,
+        patch: { title: input.title, text: input.text, mentions: mentionValues(parseDiscussionMentionSpans(input.mentions, input.text)) },
+    });
+    return true;
+}
+
+/**
  * React projection over the synchronized V2 draft repository. This hook owns
  * no persistence, retry queue or draft lifecycle; desktop and mobile consumers
  * therefore observe the same exact Home/Account/address document.
