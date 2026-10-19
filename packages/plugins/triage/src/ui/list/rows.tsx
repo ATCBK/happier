@@ -48,11 +48,11 @@ import { TRIAGE_ENTRY_DRAG_SOURCE_ID_V1, TRIAGE_ENTRY_SESSION_DROP_TARGET_ID_V1 
  * file decides are which already-projected words go in which anatomy slot, and which single Pin/Unpin affordance
  * the row carries.
  *
- * There is exactly one such affordance per row, and it is never two states of two controls. A materialized row
- * offers it through the public secondary-action owner, which keeps the overflow outside the row press target and
- * owns the menu's focus and keyboard behavior. A pinned row this mount never materialized carries an inline
- * **Unpin** instead, because it has no detail panel to host the operation and dropping it would strand a pin the
- * reader cannot remove.
+ * There is exactly one such affordance per row, and it is never two states of two controls. Every row offers it
+ * through the public secondary-action owner, which keeps the overflow outside the row press target and owns the
+ * menu's focus and keyboard behavior. That includes a pinned row this mount never materialized: it has no detail
+ * panel to host the operation, so its row menu is where the reader removes the pin (an inline Unpin beside the
+ * shared row menu read as a stray word in the Age column and squeezed the place on a phone).
  */
 
 export type TriageRowPinHandlersV1 = Readonly<{
@@ -311,10 +311,8 @@ function useTriageListRowEnvironment(): TriageListRowEnvironmentV1 {
 }
 
 /**
- * The row's own controls beside its press target, which is the one Pin/Unpin affordance per row. A
- * materialized row offers Select and Pin through the public secondary-action owner; a pinned row this mount never
- * materialized carries an inline **Unpin**, because it has no detail to host the operation and dropping it would
- * strand a pin the reader cannot remove.
+ * The row's own controls beside its press target, which is the one Pin/Unpin affordance per row, offered through
+ * the public secondary-action owner for every row (a pin this mount never materialized included).
  *
  * It is the Collection's row-actions hook: called inside each row, so the shared selection owner's per-row
  * facts commit this row and the row that lost the anchor, not every mounted cell.
@@ -327,26 +325,9 @@ export function useTriageListRowActions(item: TriageListItemV1): CollectionRowAc
   const text = usePluginTranslation();
   const busy = handlers.busyKey === row.key;
   const disabled = handlers.unavailableReason !== null;
-  const label = readTriagePinActionLabelV1(row, text);
   const onSecondaryAction = React.useCallback((actionId: string) => {
     if (actionId === PIN_ACTION_ID) handlers.onSetPinned(row);
   }, [handlers, row]);
-  if (!row.materialized) {
-    return {
-      busy,
-      accessory: (
-        <Button
-          // A short visible verb; the full "Unpin {title}" stays the name a reader hears.
-          title={text('plugins.triage.surface.row.unpinShort', 'Unpin')}
-          accessibilityLabel={label}
-          variant="plain"
-          busy={busy}
-          disabled={disabled}
-          onPress={() => { handlers.onSetPinned(row); }}
-        />
-      ),
-    };
-  }
   return {
     busy,
     secondaryActions: triageListRowSecondaryActionsV1({

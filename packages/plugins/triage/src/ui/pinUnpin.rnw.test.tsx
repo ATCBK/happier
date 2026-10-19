@@ -190,6 +190,8 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
             surfaceContext: createSurfaceContextFixture(),
             adapter: createPluginUiRnwSemanticSurfaceAdapter({
                 ephemeralSharedScope: harness.ephemeralSharedScope,
+                // The row menu presents inline, so a test opens it the way a reader does.
+                overlays: true,
             }),
             handlers: {
                 publishCurrentUiContext: () => undefined,
@@ -220,6 +222,16 @@ async function liveMarkCount(harness: Harness): Promise<number> {
 afterEach(async () => {
     for (const fixture of mounted.splice(0)) await fixture.dispose();
 });
+
+/** Unpin a row the way a reader does: open its one row menu, then press Unpin. */
+async function unpinFromRowMenu(shell: PluginUiTestkit, title: string): Promise<void> {
+    await act(async () => {
+        await shell.press(await shell.getByRole('button', { name: `More actions for ${title}` }));
+    });
+    await act(async () => {
+        await shell.press(await shell.getByRole('menuitem', { name: 'Unpin' }));
+    });
+}
 
 describe('the mounted Pin/Unpin affordance', () => {
     it('lists a pinned entry once, under Pinned rather than its lane', async () => {
@@ -264,11 +276,9 @@ describe('the mounted Pin/Unpin affordance', () => {
         await expect(shell.getByText('Not yet synchronized'))
             .resolves.toEqual({ content: 'Not yet synchronized' });
 
-        await act(async () => {
-            await shell.press(await shell.getByRole('button', {
-                name: 'Unpin A change this device has not read',
-            }));
-        });
+        // The pin is removed from the row's one menu, like every other row: no inline control sits beside it.
+        await expect(shell.queryByRole('button', { name: 'Unpin A change this device has not read' })).resolves.toBeUndefined();
+        await unpinFromRowMenu(shell, 'A change this device has not read');
 
         // Settled at the writer, not optimistically in this mount.
         expect(await liveMarkCount(harness)).toBe(0);
@@ -375,8 +385,8 @@ describe('the mounted Pin/Unpin affordance', () => {
         // press time reaches the unavailable branch instead of telling the reader
         // to retry a write retrying cannot fix.
         const harness = createHarness();
-        // An UNWALKED pin, because that is the row that carries the inline Unpin
-        // (a walked row hosts its control in the detail panel instead).
+        // An UNWALKED pin: its row menu is the only place it can be unpinned
+        // (a walked row also offers it in the detail header).
         await seedPin(harness, entryRef('404'), {
             title: 'A change this device has not read',
             scopeLabel: 'example/other',
@@ -387,11 +397,7 @@ describe('the mounted Pin/Unpin affordance', () => {
         await expect(shell.queryByText('Happier cannot reach your account right now, so pins and saved views cannot be changed.')).resolves.toBeUndefined();
 
         harness.state.marksUnreachable = true;
-        await act(async () => {
-            await shell.press(await shell.getByRole('button', {
-                name: 'Unpin A change this device has not read',
-            }));
-        });
+        await unpinFromRowMenu(shell, 'A change this device has not read');
 
         // Said once, as the page's calm account notice, not as a separate card.
         // This harness answers no saved-views read either, so the one notice

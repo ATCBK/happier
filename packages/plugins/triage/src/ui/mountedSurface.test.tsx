@@ -492,8 +492,10 @@ describe('the mounted PRs & Issues surface', () => {
             'Older change',
         ]);
         // Healthy is quiet. A settled window stops being current after the refresh interval with nothing on
-        // screen changing, so a resting "Up to date" would soon be untrue; the toolbar says nothing at rest.
+        // screen changing, so a resting "Up to date" would soon be untrue. The toolbar states the read's age
+        // instead (lab "Updated just now"), from the time every configured source last completed a read.
         await expect(shell.queryByText('Up to date')).resolves.toBeUndefined();
+        await expect(shell.getByText('Updated just now')).resolves.toBeDefined();
         // The window is the aggregate's, not one source's: source A walked two
         // pages and source B one, all through a single Action invocation family.
         expect(harness.scanCalls.count).toBe(3);
