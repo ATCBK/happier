@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, standardCleanup } from '@/dev/testkit';
+import { act } from 'react-test-renderer';
 
 import { TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT } from '@/components/ui/forms/largeTextInputPolicy';
 import type { TextInputCaretRectHandle } from '../useTextInputCaretRect.types';
@@ -336,5 +337,38 @@ describe('useTextInputCaretRect (web)', () => {
 
         // Should compute a rect (enabled defaults to true)
         expect(hook.getCurrent()).not.toBeNull();
+    });
+    it('follows the textarea when a reflow moves it without a selection change', async () => {
+        let left = 100;
+        const pane = { parentElement: null };
+        const textarea = createMockTextarea();
+        (textarea as any).parentElement = pane;
+        (textarea.getBoundingClientRect as any).mockImplementation(() => ({ left, top: 200, right: left + 300, bottom: 300, width: 300, height: 100, x: left, y: 200, toJSON: () => ({}) }));
+        // jsdom/node have no layout engine: expose layout notifications at that boundary.
+        const observers: Array<{ elements: Set<unknown>; notify: () => void }> = [];
+        vi.stubGlobal('ResizeObserver', class {
+            elements = new Set<unknown>();
+            constructor(private callback: () => void) { observers.push(this); }
+            observe(element: unknown) { this.elements.add(element); }
+            unobserve(element: unknown) { this.elements.delete(element); }
+            disconnect() { this.elements.clear(); }
+            notify() { this.callback(); }
+        });
+        try {
+            const inputRef = createInputRef(createMockHandle(textarea));
+            const { useTextInputCaretRect } = await import('../useTextInputCaretRect.web');
+            const hook = await renderHook(() =>
+                useTextInputCaretRect({ inputRef, selection: { start: 1, end: 1 }, enabled: true }),
+            );
+            expect(hook.getCurrent()?.left).toBe(130);
+
+            left = 900;
+            await act(async () => {
+                for (const observer of observers) if (observer.elements.has(pane)) observer.notify();
+            });
+            expect(hook.getCurrent()?.left).toBe(930);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });
