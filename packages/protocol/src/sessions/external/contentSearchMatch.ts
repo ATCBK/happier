@@ -26,12 +26,18 @@ export function findExternalSessionContentMatchRange(text: string, query: string
 export function createExternalSessionContentMatchSnippet(text: string, query: string): string | null {
   const match = findExternalSessionContentMatchRange(text, query);
   if (!match) return null;
+  // Collapse context line breaks before windowing: otherwise the match can sit
+  // below the row's visible lines. Preserve the matched literal itself.
+  const before = text.slice(0, match.start).replace(/\s+/g, ' ');
+  const matched = text.slice(match.start, match.end);
+  const after = text.slice(match.end).replace(/\s+/g, ' ');
+  text = before + matched + after;
   // Browser and palette share a three-line subtitle. This is its compact
   // plain-text presentation window, not a resource or configurable limit.
   // Keep the complete literal match; the invocation byte budget may narrow it.
   const context = Math.max(0, Math.floor((240 - (match.end - match.start)) / 2));
-  let start = Math.max(0, match.start - context);
-  let end = Math.min(text.length, match.end + context);
+  let start = Math.max(0, before.length - context);
+  let end = Math.min(text.length, before.length + matched.length + context);
   if (start > 0 && /[\uDC00-\uDFFF]/.test(text[start]!)) start -= 1;
   if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1]!)) end += 1;
   return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`;

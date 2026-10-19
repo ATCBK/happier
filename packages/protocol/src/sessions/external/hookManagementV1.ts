@@ -122,23 +122,8 @@ export type PluginSessionHookInstallPreviewV1 = z.infer<
 >;
 
 const BoundedPluginContributionIdentityV1Schema =
-  asProtocolZod(PluginContributionIdentityV1Schema).check(zMini.superRefine((identity, context) => {
-    for (const [field, value] of [
-      ['pluginId', identity.pluginId],
-      ['localId', identity.localId],
-    ] as const) {
-      if (value.length > 512) {
-        context.addIssue({
-          code: 'too_big',
-          maximum: 512,
-          origin: 'string',
-          inclusive: true,
-          path: [field],
-          message: `${field} must contain at most 512 code units`,
-        });
-      }
-    }
-  }));
+  // The canonical identity owner already caps each ASCII field at 256 units.
+  asProtocolZod(PluginContributionIdentityV1Schema);
 
 const PluginSessionHookContributionTargetFieldsV1 = {
   machineId: BoundedIdSchema,

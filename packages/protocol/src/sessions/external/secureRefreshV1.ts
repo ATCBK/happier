@@ -8,6 +8,7 @@ import { LinkedExternalSessionQualifiedIdentityV1Schema } from './linkedSessionM
 import {
   createExternalSessionTranscriptSourceItemV1Schema,
   ExternalSessionTranscriptItemIdV1Schema,
+  ExternalSessionTranscriptDisplayUserTextV1Schema,
 } from './sourceTranscriptItemV1.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 import {
@@ -110,10 +111,10 @@ export type ExternalSessionTranscriptRefreshReadAfterRequestV1 = z.infer<
 >;
 
 export const ExternalSessionTranscriptRefreshItemV1Schema =
-  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(createExternalSessionTranscriptSourceItemV1Schema({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(createExternalSessionTranscriptSourceItemV1Schema({
     identifier: ExternalSessionTranscriptItemIdV1Schema,
     raw: AgentExternalSessionTranscriptRawRecordSchema,
-  }));
+  }), { displayUserText: z.optional(ExternalSessionTranscriptDisplayUserTextV1Schema) }));
 export type ExternalSessionTranscriptRefreshItemV1 = z.infer<
   typeof ExternalSessionTranscriptRefreshItemV1Schema
 >;

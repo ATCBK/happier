@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
@@ -25,8 +26,8 @@ export const MAX_EXTERNAL_SESSION_TRANSCRIPT_FOLLOW_CODE_CODE_UNITS = 256;
  */
 export const MAX_EXTERNAL_SESSION_TRANSCRIPT_FOLLOW_EVENT_SERIALIZED_BYTES = 1_048_576;
 
-function canonicalBoundedString(maxCodeUnits: number, description: string) {
-  return z.string().check(z.minLength(1), z.maxLength(maxCodeUnits), z.refine((value) => value === value.trim(), `${description} must already be trimmed.`));
+function canonicalBoundedString(maximumCodeUnits: number, description: string) {
+  return z.string().check(z.minLength(1), maxCodeUnits(maximumCodeUnits), z.refine((value) => value === value.trim(), `${description} must already be trimmed.`));
 }
 
 export const ExternalSessionTranscriptFollowCursorV1Schema = canonicalBoundedString(
