@@ -117,6 +117,13 @@ it('names a copy by its chosen option words or its typed text, never by a stored
   );
 });
 
+it('does not name a copy by a typed filesystem path, which is a location and not a name', async () => {
+  const typed: InputHints = { fields: [{ path: 'directory', widget: 'text', title: 'Directory' }] };
+  for (const path of ['/home/happier/happier-dev/packages', '~/work/happier', 'C:\\Users\\alice\\work', '\\\\server\\share'])
+    expect(await label(typed, { directory: { kind: 'value', value: path } })).toBeNull();
+  expect(await label(typed, { directory: { kind: 'value', value: 'happier-dev' } })).toBe('happier-dev');
+});
+
 it('resolves a JSON choice by the canonical option identity rather than raw object names', async () => {
   const inputs: InputHints = { fields: [{ path: 'filter', title: 'Filter', widget: 'json', options: [
     { value: { name: 'stored-id', period: 'month' }, label: 'Monthly costs' },

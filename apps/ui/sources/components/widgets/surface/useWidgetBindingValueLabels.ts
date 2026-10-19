@@ -16,6 +16,9 @@ import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { resolveExactServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
+/** A typed location (absolute, home-relative or UNC path) says where, not what: it never names a copy. */
+const TYPED_LOCATION = /^(?:[\\/~]|[A-Za-z]:[\\/])/;
+
 export type WidgetBindingValueLabels = Readonly<Record<string, string | null>>;
 
 const sessionName = (source: SessionDisplayNameSource | null) => source ? getSessionName(source, source.serverId) : null;
@@ -76,7 +79,9 @@ export function useWidgetBindingValueLabels(
             else if (value !== undefined && field) {
                 const option = field.options?.find(option => isSameInputOptionValue(option.value, value));
                 if (option) label = option.label;
-                else if (!field.options && !field.optionsSourceId && !field.inputType) label = describeWidgetBindingValue(value);
+                else if (!field.options && !field.optionsSourceId && !field.inputType) {
+                    label = typeof value === 'string' && TYPED_LOCATION.test(value) ? null : describeWidgetBindingValue(value);
+                }
             }
             return [entry.path, label];
         }));
