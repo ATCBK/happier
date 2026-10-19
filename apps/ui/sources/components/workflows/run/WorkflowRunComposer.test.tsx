@@ -347,6 +347,15 @@ describe('workflow composer admission', () => {
             onChangeValues={() => {}} onRun={() => {}} onCancel={() => {}} definition={definition} />);
         expect(screen.findByTestId('workflow-run-inputs-roles-chip')).not.toBeNull();
     });
+    it('never asks for the previous round: Another round fills it, a first start keeps its default', async () => {
+        const onRun = vi.fn();
+        const screen = await renderScreen(<WorkflowRunComposer inputs={[{ name: 'request', valueType: 'string', required: true },
+            { name: 'previousRoundContext', valueType: 'json', required: false, default: null }]}
+            values={{ request: 'Plan the release' }} onChangeValues={() => {}} onRun={onRun} onCancel={() => {}} />);
+        expect(screen.findAllByTestId('workflow-run-inputs-inputs-chip')).toHaveLength(0);
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        expect(onRun).toHaveBeenCalledWith({ request: 'Plan the release', previousRoundContext: null });
+    });
     it('keeps the needed-inputs chip visible when the missing field is the sole main text input', async () => {
         const screen = await renderScreen(<WorkflowRunComposer inputs={[{ name: 'brief', valueType: 'string', required: true }]}
             values={{}} onChangeValues={() => {}} onRun={() => {}} onCancel={() => {}} />);

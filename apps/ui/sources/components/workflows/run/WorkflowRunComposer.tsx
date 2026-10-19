@@ -32,7 +32,7 @@ import { useKeyboardShortcutHandlers } from '@/keyboard';
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
-import { buildWorkflowRunStartInputs, projectWorkflowRunInputFields, type WorkflowRunInputFieldState } from '@/sync/domains/workflows/workflowAuthoring';
+import { buildWorkflowRunStartInputs, projectWorkflowRunInputFields, WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT, type WorkflowRunInputFieldState } from '@/sync/domains/workflows/workflowAuthoring';
 import { formatWorkflowInputValue } from '@/sync/domains/workflows/workflowInputText';
 import { describeWorkflowCommandBlockedReason, describeWorkflowInputRepair } from '@/components/workflows/presentation/workflowBlockedReasonText';
 import { WorkflowAcceptedRunRoles, WorkflowRunRoles, workflowUsedRoleIds } from './WorkflowRunRoles';
@@ -152,7 +152,8 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
         inputs: props.inputs, values: props.values, rawTextValues, originSession: props.originSession,
     }), [props.inputs, props.values, props.originSession, rawTextValues]);
     const main = fields.find((field) => field.definition.valueType === 'string' && !isWorkflowChoiceInput(field.definition)) ?? null;
-    const remaining = fields.filter((field) => field !== main);
+    // The previous round is Another round's to fill; a first start keeps its default without asking.
+    const remaining = fields.filter((field) => field !== main && field.definition.name !== WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT);
     const missingFields = fields.filter((field) => field.errorCode === 'missing_required_input');
     const missing = missingFields.length;
     const inputTitle = (definition: WorkflowInputDefinition) => workflowInputTitle(definition, props.inputPresentation?.[definition.name]);
