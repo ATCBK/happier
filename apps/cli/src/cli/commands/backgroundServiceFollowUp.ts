@@ -22,15 +22,10 @@ export type ServerSelectionMutationMode = 'standalone' | 'mutation-only';
 type BackgroundServiceInventoryEntry = HappierService | DaemonServiceListEntry;
 
 function isInstalledDefaultFollowingDaemonService(service: BackgroundServiceInventoryEntry): boolean {
-    if ('serviceType' in service) {
-        return (
-            service.serviceType === 'daemon'
-            && service.verification === 'verified'
-            && (service.targetMode ?? 'pinned') === 'default-following'
-            && service.installed
-        );
-    }
-    return service.targetMode === 'default-following' && service.installed;
+    return (!('serviceType' in service) || service.serviceType === 'daemon')
+        && service.verification === 'verified'
+        && service.targetMode === 'default-following'
+        && service.installed;
 }
 
 function resolveBackgroundServiceMode(service: BackgroundServiceInventoryEntry): BackgroundServiceFollowUpMode {

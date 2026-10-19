@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { reloadConfiguration } from '@/configuration';
 
 describe('prepareRemoteEnrollmentHomeTarget', () => {
   let envScope = createEnvKeyScope([
@@ -17,6 +18,7 @@ describe('prepareRemoteEnrollmentHomeTarget', () => {
 
   afterEach(() => {
     envScope.restore();
+    reloadConfiguration();
     envScope = createEnvKeyScope([
       'HAPPIER_HOME_DIR',
       'HAPPIER_SERVER_URL',
@@ -38,6 +40,7 @@ describe('prepareRemoteEnrollmentHomeTarget', () => {
         HAPPIER_WEBAPP_URL: undefined,
         HAPPIER_ACTIVE_SERVER_ID: undefined,
       });
+      reloadConfiguration();
       const { prepareRemoteEnrollmentHomeTarget } = await import('./enrollRemote');
       const prepared = await prepareRemoteEnrollmentHomeTarget({
         kind: 'https_url',

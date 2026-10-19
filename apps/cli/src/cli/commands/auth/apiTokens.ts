@@ -11,7 +11,7 @@ import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { fetchAccountProfile } from '@/api/accountProfile';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import { isAuthenticationError } from '@/api/client/httpStatusError';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { hasStoredSessionCredentialProvenance, readStoredCredentials, type StoredCredentials } from '@/persistence';
@@ -177,7 +177,7 @@ export async function handleAuthApiTokens(args: string[], signal?: AbortSignal):
     }
     if (signal?.aborted) throw new ApiTokenCommandError('cancelled');
     const serverId = configuration.activeServerId;
-    const serverUrl = configuration.apiServerUrl;
+    const serverUrl = resolveServerHttpBaseUrl();
     const executor = createCliActionExecutorFromCredentials({
       credentials,
       serverId,

@@ -47,7 +47,7 @@ async function withHome<T>(options: Options, run: (fixture: Readonly<{
   const app = fastify();
   const writes: Write[] = [];
   const reads: string[] = [];
-  let features = options.features ?? currentFeatures;
+  let features: unknown = options.features ?? currentFeatures;
   let stored = options.credential;
   app.addHook('onRequest', async (request) => {
     if (!request.url.startsWith('/v1/features')) expect(request.headers.authorization).toBe(`Bearer ${auth.token}`);

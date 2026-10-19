@@ -1,4 +1,4 @@
-import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 import { resolveCliFeatureDecisionForServer } from './featureDecisionService';
 
@@ -25,7 +25,7 @@ export async function resolveUsageLimitRecoveryEnabled(params: Readonly<{
   const resolved = await resolveCliFeatureDecisionForServer({
     featureId: USAGE_LIMIT_RECOVERY_FEATURE_ID,
     env: params.env ?? process.env,
-    serverUrl: params.serverUrl ?? configuration.apiServerUrl,
+    serverUrl: params.serverUrl ?? resolveServerHttpBaseUrl(),
     timeoutMs: params.timeoutMs ?? USAGE_LIMIT_RECOVERY_FEATURE_GATE_TIMEOUT_MS,
   });
 

@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 
-const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_RELEASE_RING', 'SUDO_USER', 'SUDO_UID']);
+const envScope = createEnvKeyScope(['HOME', 'HAPPIER_HOME_DIR', 'HAPPIER_RELEASE_RING', 'SUDO_USER', 'SUDO_UID']);
 
 const argvSnapshot = [...process.argv];
 

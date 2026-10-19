@@ -13,6 +13,7 @@ import type { ActionExecuteResult, ActionId, AccountSecurityGetResponseV1, Accou
 
 import { isAuthenticationError } from '@/api/client/httpStatusError';
 import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { hasStoredSessionCredentialProvenance, readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { assertCommandArguments, readCommandPositionals, readFlagValue, readRawFlagValue } from '@/cli/commands/shared/argvFlags';
@@ -58,7 +59,7 @@ async function createAccountSecurityActionRuntime(
   );
   const serverId = configuration.activeServerId;
   const serverUrl = configuration.serverUrl;
-  const serverApiUrl = configuration.apiServerUrl;
+  const serverApiUrl = resolveServerHttpBaseUrl();
   const context = {
     surface: 'cli' as const,
     actionCaller: { kind: 'host' as const },
@@ -113,7 +114,7 @@ async function readSelectedAccountSecurity(credentials: StoredCredentials, signa
   if (hasStoredSessionCredentialProvenance(credentials)) {
     return await readAccountSecurityProjection(await createAccountSecurityActionRuntime(credentials, signal));
   }
-  return await readAccountSecurityRoute(configuration.apiServerUrl, credentials, signal);
+  return await readAccountSecurityRoute(resolveServerHttpBaseUrl(), credentials, signal);
 }
 
 function requireRecoverySecret(credentials: StoredCredentials): Uint8Array {
@@ -498,7 +499,7 @@ async function handleAuthPasswordEnrollEmailRequest(args: string[], signal?: Abo
       email: readFlagValue(args, '--email') ?? '',
     });
     const response = await axios.post<unknown>(
-      `${configuration.apiServerUrl}${ACCOUNT_PASSWORD_ENROLL_EMAIL_REQUEST_PATH_V1}`,
+      `${resolveServerHttpBaseUrl()}${ACCOUNT_PASSWORD_ENROLL_EMAIL_REQUEST_PATH_V1}`,
       request,
       {
         headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },

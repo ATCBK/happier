@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { reloadConfiguration } from '@/configuration';
-import { readStoredCredentials, readStoredCredentialsForServerId, writeCredentialsTokenOnlyForServerId } from '@/persistence';
+import { readStoredCredentials, readStoredCredentialsForServerId, updateSettings, writeCredentialsTokenOnlyForServerId } from '@/persistence';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
@@ -67,5 +67,10 @@ it('reads the daemon-established Home identity for a separately resolved CLI Act
       .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
     expect(await admitWidgetActionSurfaceV1(widgetDeps, { ...surface, serverId: 'srv_other_home' }, context))
       .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    await updateSettings(settings => ({ ...settings, servers: { ...settings.servers,
+      duplicate: { ...settings.servers![profile.id]!, id: 'duplicate' },
+    } }));
+    await expect(resolveActionCliCredentialTarget({ requestedServerId: profile.id, requireServerIdentityId: true, deps }))
+      .rejects.toMatchObject({ code: 'server_identity_unavailable' });
   });
 });

@@ -87,7 +87,9 @@ function normalizeDaemonProcessInheritedEnv(params: Readonly<{
 }
 
 class Configuration {
+  /** Canonical Home identity for profiles, enrollment and links; not the runtime HTTP destination. */
   public readonly serverUrl: string
+  /** Configured profile route. Runtime requests use resolveServerHttpBaseUrl() instead. */
   public readonly apiServerUrl: string
   /**
    * Deprecated alias: historically used as “public URL for QR/deep links”.

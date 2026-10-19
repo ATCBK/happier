@@ -1,9 +1,24 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DaemonServiceInventoryEntry, DaemonServiceListEntry } from '@/daemon/service/cli';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { captureConsoleJsonOutput, captureConsoleText } from '@/testkit/logger/captureOutput';
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
+    if (args[0] !== 'systemctl') return actual.spawnSync(...args);
+    return { pid: 123, output: [], stdout: 'UnitFileState=enabled\nActiveState=active\n',
+      stderr: '', status: 0, signal: null };
+  } };
+});
+
+// GitHub release lookup is a remote service boundary, not report policy.
+vi.mock('@happier-dev/release-runtime/github', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@happier-dev/release-runtime/github')>(),
+  fetchGitHubReleaseByTag: async () => { throw new Error('Fixture GitHub service is unavailable'); },
+}));
 
 const {
   applyBackgroundServiceRepairPlanMock,
@@ -184,7 +199,19 @@ vi.mock('../../server/commandUtilities', () => ({
   promptInput: (prompt: string) => promptInputMock(prompt),
 }));
 
+const defaultRuntime = resolveDaemonServiceCliRuntimeFromEnvMock.getMockImplementation()!;
+const defaultListEntries = resolveDaemonServiceListEntriesMock.getMockImplementation()!;
+const defaultInventoryEntries = resolveDaemonServiceInventoryEntriesMock.getMockImplementation()!;
+
 describe('handleServiceRepairCliCommand', () => {
+  beforeEach(() => {
+    resolveDaemonServiceCliRuntimeFromEnvMock.mockImplementation(defaultRuntime);
+    resolveDaemonServiceListEntriesMock.mockImplementation(defaultListEntries);
+    resolveDaemonServiceInventoryEntriesMock.mockImplementation(defaultInventoryEntries);
+    isInteractiveTerminalMock.mockReturnValue(false);
+    // Update checks are remote HTTP boundaries; keep the report owners real.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
+  });
   const envScope = createEnvKeyScope([
     'HAPPIER_HOME_DIR',
     'HAPPIER_ACTIVE_SERVER_ID',
@@ -196,6 +223,7 @@ describe('handleServiceRepairCliCommand', () => {
   afterEach(() => {
     envScope.restore();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     applyBackgroundServiceRepairPlanMock.mockClear();
     buildDoctorSnapshotMock.mockClear();
     readDoctorRuntimeInventoryMock.mockClear();
@@ -215,7 +243,7 @@ describe('handleServiceRepairCliCommand', () => {
       });
 
       expect(output.text()).toContain('Plugin recovery');
-      expect(output.text()).toContain('happier daemon start --plugin-recovery');
+      expect(output.text()).toContain('daemon start --plugin-recovery');
       expect(output.text()).toContain('does not modify the installed background service');
       expect(output.text()).toContain('Stop any currently running daemon or background service first');
       expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
@@ -280,10 +308,10 @@ describe('handleServiceRepairCliCommand', () => {
       });
       vi.resetModules();
 
-      const [{ writeDaemonState }, { handleServiceRepairCliCommand }] = await Promise.all([
-        import('@/persistence'),
-        import('./handleServiceRepairCliCommand'),
-      ]);
+      // These owners share the configuration/persistence import graph. Finish
+      // one fresh graph after resetModules before loading its consumer.
+      const { writeDaemonState } = await import('@/persistence');
+      const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
 
       writeDaemonState({
         pid: process.pid,
@@ -369,11 +397,8 @@ describe('handleServiceRepairCliCommand', () => {
       });
       vi.resetModules();
 
-      const [{ addServerProfile }, { handleServiceRepairCliCommand }] = await Promise.all([
-        import('@/server/serverProfiles'),
-        import('./handleServiceRepairCliCommand'),
-      ]);
-
+      const { addServerProfile } = await import('@/server/serverProfiles');
+      const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
       const created = await addServerProfile({
         name: 'remote-dev-tui',
         serverUrl: 'http://127.0.0.1:52753',
@@ -416,10 +441,8 @@ describe('handleServiceRepairCliCommand', () => {
       });
       vi.resetModules();
 
-      const [{ addServerProfile }, { handleServiceRepairCliCommand }] = await Promise.all([
-        import('@/server/serverProfiles'),
-        import('./handleServiceRepairCliCommand'),
-      ]);
+      const { addServerProfile } = await import('@/server/serverProfiles');
+      const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
 
       await addServerProfile({
         name: 'Other Server',
