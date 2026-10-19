@@ -139,7 +139,7 @@ describe('ProviderSettingsIndex', () => {
         await act(async () => { pending.resolve(); });
         await vi.waitFor(() => expect(screen.findByTestId('settings-providers-loading')).toBeNull());
         if (result === 'populated') {
-            expect(screen.findAll(node => typeof node.type === 'string' && node.type === 'Redirect')[0]?.props.href).toContain('pc_a');
+            expect(screen.findAllByType('Redirect')[0]?.props.href).toContain('pc_a');
             expect(screen.findByTestId('settings-providers-invitation')).toBeNull();
         } else if (result === 'empty') {
             expect(screen.findByTestId('settings-providers-invitation')).not.toBeNull();

@@ -1,17 +1,12 @@
 import * as React from 'react';
-import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import type { SettingValue } from '@/components/settings/catalog/settingDeclarations';
-import { Modal } from '@/modal';
-import { t } from '@/text';
 import { AGENT_SETTINGS } from './agentsSettings';
 
-/** Thin UI adapter; Action admission, approval and keyed mutation remain canonical. */
+/** Thin UI adapter; Action admission, approval, feedback and keyed mutation remain canonical. */
 export function useAgentPreferenceWriter() {
-    const write = useSettingActionWriter();
+    const { setSetting } = useSettingActionFeedback();
     return React.useCallback(async (setting: 'defaultPermission' | 'enabled' | 'executableSource', agentTargetKey: string, value: SettingValue) => {
-        try {
-            const result = await write(AGENT_SETTINGS.settings[setting], { agentTargetKey, value });
-            if (!result.ok) await Modal.alert(t('common.error'), t('common.unavailable'));
-        } catch { await Modal.alert(t('common.error'), t('common.unavailable')); }
-    }, [write]);
+        await setSetting(AGENT_SETTINGS.settings[setting], { agentTargetKey, value });
+    }, [setSetting]);
 }

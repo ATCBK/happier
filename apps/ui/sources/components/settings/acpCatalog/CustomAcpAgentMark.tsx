@@ -20,11 +20,9 @@ export const AcpAgentGlyph = React.memo(function AcpAgentGlyph(
     return (
       <Image
         source={{ uri: props.iconUrl }}
-        style={{
-          width: size,
-          height: size,
-          tintColor: theme.colors.text.primary,
-        }}
+        style={{ width: size, height: size }}
+        // The prop, not the style key: web drops `style.tintColor`, which left the mark black on dark.
+        tintColor={theme.colors.text.primary}
         onError={() => setFailed(true)}
         accessibilityIgnoresInvertColors
       />

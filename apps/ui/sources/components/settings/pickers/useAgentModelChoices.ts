@@ -32,6 +32,34 @@ function describeAgentStartFailure(failure: SpawnFailureV1): Readonly<{ title: s
     return { title: t('walkthroughSettings.startFailure.other.title'), next: t('walkthroughSettings.startFailure.other.next') };
 }
 
+type SummaryUnavailableReason = NonNullable<ReturnType<typeof ScmDiffSummaryModelCatalogObservationV1Schema.parse>['unavailableTargets']>[number]['reason'];
+
+/** Why the Machine's automatic choice skips an Agent whose explicit models stay selectable, with the next action; the section heading names the Agent. Account metadata is the catalog's notice, not the Agent's. */
+function describeAutomaticUnavailable(reason: SummaryUnavailableReason): string | null {
+    switch (reason) {
+        case 'native_sign_in_required': return t('walkthroughSettings.automaticUnavailable.signIn');
+        case 'native_auth_unavailable': return t('walkthroughSettings.automaticUnavailable.authUnknown');
+        case 'connected_default_unavailable': return t('walkthroughSettings.automaticUnavailable.connected');
+        case 'account_metadata_unavailable': return null;
+    }
+}
+
+type GroupedUnavailableReason = Exclude<SummaryUnavailableReason, 'account_metadata_unavailable'>;
+
+/** One message for several Agents the automatic choice skips for the same reason, with the next action. */
+function describeGroupedUnavailable(reason: GroupedUnavailableReason, count: number): Readonly<{ title: string; next: string }> {
+    switch (reason) {
+        case 'native_sign_in_required': return { title: t('walkthroughSettings.groupedUnavailable.signIn.title', { count }), next: t('walkthroughSettings.groupedUnavailable.signIn.next') };
+        case 'native_auth_unavailable': return { title: t('walkthroughSettings.groupedUnavailable.authUnknown.title', { count }), next: t('walkthroughSettings.groupedUnavailable.authUnknown.next') };
+        case 'connected_default_unavailable': return { title: t('walkthroughSettings.groupedUnavailable.connected.title', { count }), next: t('walkthroughSettings.groupedUnavailable.connected.next') };
+    }
+}
+
+/** The catalog notice row: pressing it reads the Machine's catalog again. */
+export const SCM_SUMMARY_CATALOG_NOTICE_ITEM_ID = 'catalog-refresh';
+/** The shared message for Agents that offer no model yet: pressing it reads the Machine's catalog again. */
+export const SCM_SUMMARY_GROUPED_AGENTS_RETRY_ITEM_ID = 'grouped-agents-refresh';
+
 /** One offered-model projection for Settings, the picker, and restored generation controls. */
 export function useAgentModelChoices(params: Readonly<{
     value: string;
@@ -72,6 +100,16 @@ export function useAgentModelChoices(params: Readonly<{
     const summaryServerId = params.serverId || getActiveServerSnapshot().serverId;
     const catalogBindings = useServerCredentialAccountScopeBindings([summaryServerId]);
     const catalogLifetime = catalogBindings.values().next().value ?? null;
+    // A failed read keeps the last observation of this same Account, Home and Machine; another identity retires it.
+    const catalogIdentity = React.useRef<Readonly<{ machineId: string | null; serverId: string; lifetime: ServerAccountScopeLifetime | null }> | null>(null);
+    React.useEffect(() => {
+        const previous = catalogIdentity.current;
+        if (previous && (previous.machineId !== (params.machineId ?? null) || previous.serverId !== summaryServerId || previous.lifetime !== catalogLifetime)) {
+            setSummaryCatalog(null);
+            setCatalogReadFailed(false);
+        }
+        catalogIdentity.current = { machineId: params.machineId ?? null, serverId: summaryServerId, lifetime: catalogLifetime };
+    }, [params.machineId, summaryServerId, catalogLifetime]);
     React.useEffect(() => {
         if (purpose !== 'walkthrough' || !observing || !params.machineId || !catalogLifetime) return;
         const machineId = params.machineId;
@@ -87,10 +125,10 @@ export function useAgentModelChoices(params: Readonly<{
                 const catalog = await readScmDiffSummaryModelCatalogForMachine(account, machineId, abort.signal,
                     { discoveryTargetKey: requestedDiscoveryTarget, modelSelector: decodeScmDiffSummaryModelOverride(params.value) });
                 if (!abort.signal.aborted && catalogLifetime.isCurrent()) {
-                    setSummaryCatalog(catalog ? { lifetime: catalogLifetime, machineId, serverId: summaryServerId, catalog } : null);
+                    if (catalog) setSummaryCatalog({ lifetime: catalogLifetime, machineId, serverId: summaryServerId, catalog });
                     setCatalogReadFailed(catalog === null);
                 }
-            } catch { if (!abort.signal.aborted) { setSummaryCatalog(null); setCatalogReadFailed(true); } }
+            } catch { if (!abort.signal.aborted) setCatalogReadFailed(true); }
             finally { account?.dispose(); }
         })();
         return () => { abort.abort(); account?.dispose(); };
@@ -99,7 +137,11 @@ export function useAgentModelChoices(params: Readonly<{
         && summaryCatalog.lifetime === catalogLifetime && summaryCatalog.lifetime.isCurrent() ? summaryCatalog.catalog : null;
     // Why an Agent could not list models, by target: the Machine's typed observation, never a path or native message.
     const probeFailures = new Map((executableCatalog?.probeFailures ?? []).map(failure => [failure.backendTargetKey, failure.spawnFailure]));
-    const catalogInput = { executableProfiles: executableCatalog?.profiles, automaticProfiles: executableCatalog?.automaticProfiles,
+    const unavailableTargets = new Map((executableCatalog?.unavailableTargets ?? []).map(target => [target.backendTargetKey, target.reason]));
+    const accountMetadataUnavailable = executableCatalog?.unavailableReason === 'account_metadata_unavailable'
+        || [...unavailableTargets.values()].includes('account_metadata_unavailable');
+    // Retained choices remain explicit options; a failed read cannot authorize an automatic choice.
+    const catalogInput = { executableProfiles: executableCatalog?.profiles, automaticProfiles: catalogReadFailed ? [] : executableCatalog?.automaticProfiles,
         discoveryTargetKeys: executableCatalog?.discoveryTargetKeys, probeFailureTargetKeys: [...probeFailures.keys()] };
     const selectedModelSelection = selected?.backendTargetKey && selected.modelId
         ? ProviderBoundModelRefSchema.parse({ agentTargetKey: selected.backendTargetKey, providerConnectionId: null, modelId: selected.modelId }) : null;
@@ -147,10 +189,16 @@ export function useAgentModelChoices(params: Readonly<{
     const costTierLabels = { low: t('walkthroughSettings.costLow'), standard: t('walkthroughSettings.costStandard'), premium: t('walkthroughSettings.costPremium') } as const;
     const items: DropdownMenuItem[] = [];
     const sections: Record<string, Readonly<{ icon: React.ReactNode; note?: string }>> = {};
-    for (const { entry, target, offered: usable, hiddenModelCount: hidden, discoverable, customModelIdAllowed } of projected.groups) {
+    // Agents that offer no model yet (they can be asked for one, or could not start) share one section when there are
+    // several, so a long list of empty Agents reads as one line per Agent and a reason most of them share is said once.
+    const modelLessGroups = purpose === 'walkthrough' && params.machineId ? projected.groups.filter(group => group.offered.length === 0
+        && (group.discoverable || probeFailures.has(group.targetKey)) && !group.customModelIdAllowed) : [];
+    const groupedTargetKeys = new Set(modelLessGroups.length >= 2 ? modelLessGroups.map(group => group.targetKey) : []);
+    for (const { entry, target, targetKey, offered: usable, hiddenModelCount: hidden, discoverable, customModelIdAllowed } of projected.groups) {
+        if (groupedTargetKeys.has(targetKey)) continue;
         // Only models that can write a walkthrough are offered. An agent with none keeps its section only where a
         // machine can ask it for models that could: one whose format supports it, a configured agent, or the one asked.
-        const startFailure = probeFailures.get(buildBackendTargetKeyV2(target));
+        const startFailure = probeFailures.get(targetKey);
         if (usable.length === 0 && !(params.machineId && discoverable) && !startFailure) continue;
         sections[entry.title] = { icon: React.createElement(AgentIcon, { agentId: entry.agentId, size: 18 }),
             ...(hidden > 0 ? { note: t('walkthroughSettings.hiddenModels', { count: hidden }) } : {}) };
@@ -161,7 +209,6 @@ export function useAgentModelChoices(params: Readonly<{
             items.push({ id: profile.catalogId, title: profile.title, category: entry.title, subtitle: meta });
         }
         if (customModelIdAllowed) {
-            const targetKey = buildBackendTargetKeyV2(target);
             const id = `backend-custom-model:${targetKey}`;
             customModelTargets.set(id, targetKey);
             items.push({ id, category: entry.title, title: t('settingsSession.replayResume.summaryRunner.customTitle'),
@@ -169,19 +216,54 @@ export function useAgentModelChoices(params: Readonly<{
         }
         // Finding more models is one operation at the end of its agent's section, offered only where a machine can answer it.
         if (!params.machineId || !discoverable && !startFailure) continue;
-        const targetKey = buildBackendTargetKeyV2(target);
         const id = `backend-discovery:${targetKey}`;
         discoveryTargets.set(id, targetKey);
         const probing = probeEntry === entry;
         const failed = purpose === 'runner' && probing && probe.probe.failed;
         // The row keeps its height while discovery runs: only its trailing spinner and, on failure, its wording change.
         // An Agent that could not start says so in this row, under its known models, and pressing it asks again.
+        // An Agent the automatic choice skips keeps its explicit models and says why here, with what to do about it.
         const row = startFailure ? describeAgentStartFailure(startFailure) : null;
+        const automaticReason = !row && unavailableTargets.has(targetKey) ? describeAutomaticUnavailable(unavailableTargets.get(targetKey)!) : null;
         items.push({ id, category: entry.title,
             title: row?.title ?? (failed ? t('walkthroughSettings.loadModelsFailed') : t('walkthroughSettings.loadModels')),
-            ...(row ? { subtitle: row.next } : {}),
+            ...(row ? { subtitle: row.next } : automaticReason ? { subtitle: automaticReason } : {}),
             rightElement: purpose === 'runner' && probing && !failed && probe.probe.phase !== 'idle' ? React.createElement(ActivitySpinner, { size: 'small' }) : undefined });
     }
+    if (groupedTargetKeys.size > 0) {
+        const category = t('walkthroughSettings.moreAgents');
+        const reasonCounts = new Map<GroupedUnavailableReason, number>();
+        for (const group of modelLessGroups) {
+            const reason = unavailableTargets.get(group.targetKey);
+            if (reason && reason !== 'account_metadata_unavailable') reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+        }
+        const [sharedReason, sharedCount] = [...reasonCounts].sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
+        const shared = sharedReason && sharedCount >= 2 ? sharedReason : null;
+        // The shared reason leads the section as one row with its count and next action; pressing it tries again.
+        if (shared) {
+            const copy = describeGroupedUnavailable(shared, sharedCount);
+            items.push({ id: SCM_SUMMARY_GROUPED_AGENTS_RETRY_ITEM_ID, category, title: copy.title, subtitle: copy.next });
+        }
+        for (const { entry, targetKey, hiddenModelCount: hidden } of modelLessGroups) {
+            const id = `backend-discovery:${targetKey}`;
+            discoveryTargets.set(id, targetKey);
+            // Each Agent is one row named for itself; pressing it asks that Agent for its models. Only a reason the
+            // section has not already said, or the count of models it hides, stays on its row.
+            const startFailure = probeFailures.get(targetKey);
+            const failure = startFailure ? describeAgentStartFailure(startFailure) : null;
+            const reason = unavailableTargets.get(targetKey);
+            const own = failure ? `${failure.title}. ${failure.next}` : reason && reason !== shared ? describeAutomaticUnavailable(reason) : null;
+            const subtitle = own ?? (hidden > 0 ? t('walkthroughSettings.hiddenModels', { count: hidden }) : undefined);
+            items.push({ id, category, title: entry.title, icon: React.createElement(AgentIcon, { agentId: entry.agentId, size: 18 }),
+                accessibilityLabel: t('walkthroughSettings.findModelsFor', { agent: entry.title }), ...(subtitle ? { subtitle } : {}) });
+        }
+    }
+    // The catalog's own state is one quiet row above the Agents: the list is long, and the end of it is never seen.
+    // A failed refresh wins: the last readable choices stay, and the row says they may be out of date.
+    const catalogNotice = purpose !== 'walkthrough' || !executableCatalog ? null
+        : catalogReadFailed ? { title: t('walkthroughSettings.catalogNotice.refreshFailed.title'), subtitle: t('walkthroughSettings.catalogNotice.refreshFailed.next') }
+            : accountMetadataUnavailable ? { title: t('walkthroughSettings.catalogNotice.accountMetadata.title'), subtitle: t('walkthroughSettings.catalogNotice.accountMetadata.next') } : null;
+    if (catalogNotice) items.unshift({ id: SCM_SUMMARY_CATALOG_NOTICE_ITEM_ID, ...catalogNotice });
     const defaultSelection = defaultProfile ? selections.get(defaultProfile.catalogId) : undefined;
     // An unset choice follows the default: it resolves to that row's selection without writing it.
     if (defaultSelection && purpose === 'walkthrough') selections.set('', defaultSelection);

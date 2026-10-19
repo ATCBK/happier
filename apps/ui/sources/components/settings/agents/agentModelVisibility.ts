@@ -15,12 +15,23 @@ export function resolveAgentNativeModels(params: Readonly<{
     runtimeAgentId: string | null;
     agentTargetKey: string;
     modelVisibilityByRef: Readonly<Record<string, unknown>>;
+    observedModels?: ReadonlyArray<Readonly<{
+        id: string;
+        name: string;
+        description?: string | null;
+        contextWindowTokens?: number;
+    }>>;
 }>): ProviderModelManagerNativeModel[] {
     if (!params.runtimeAgentId || !isBundledAgentId(params.runtimeAgentId)) return [];
-    return getAgentStaticModels(params.runtimeAgentId).map((model) => ({
+    const models = params.observedModels === undefined
+        ? getAgentStaticModels(params.runtimeAgentId)
+        : params.observedModels.length > 0
+            ? params.observedModels
+            : getAgentStaticModels(params.runtimeAgentId, { catalogOnly: true });
+    return models.map((model) => ({
         id: model.id,
         name: model.name || model.id,
-        description: model.description,
+        ...(typeof model.description === 'string' ? { description: model.description } : {}),
         ...(typeof model.contextWindowTokens === 'number' ? { contextWindowTokens: model.contextWindowTokens } : {}),
         hidden: Object.prototype.hasOwnProperty.call(params.modelVisibilityByRef, serializeModelVisibilityRefV1({
             scope: 'agent', agentTargetKey: params.agentTargetKey, providerConnectionId: null, modelId: model.id,

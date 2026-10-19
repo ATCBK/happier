@@ -64,6 +64,15 @@ export function useProviderConnectionModelsSection(input: Readonly<{
     const manualModelsRef = React.useRef<React.ElementRef<typeof TextInput>>(null);
     const modelSettingsQueue = React.useRef<Promise<unknown>>(Promise.resolve());
     const manualDraftDirtyRef = React.useRef(false);
+    const pendingProbe = React.useRef<AbortController | null>(null);
+
+    React.useEffect(() => {
+        setRefreshingCatalog(false);
+        return () => {
+            pendingProbe.current?.abort();
+            pendingProbe.current = null;
+        };
+    }, [connectionId, input.active, machineId, serverId]);
 
     const discardManualModelDraft = React.useCallback(() => {
         setManualModelText('');
@@ -202,6 +211,7 @@ export function useProviderConnectionModelsSection(input: Readonly<{
         return accountStillCurrent() && result.models.some((model) => model.id === modelId && model.loadState === 'loaded');
     }, [accountStillCurrent, catalog.refreshWithResult, connectionId]);
     const modelLoad = useProviderModelLoadAction({
+        active: input.active,
         machineId,
         serverId,
         refresh: refreshLoadedModel,
@@ -305,15 +315,18 @@ export function useProviderConnectionModelsSection(input: Readonly<{
 
     const refreshCatalog = React.useCallback(async () => {
         const target = resolveCurrentTarget();
-        if (!accountStillCurrent() || !machineId || refreshingCatalog || !target || target.machineId !== machineId) return;
+        if (input.active === false || !accountStillCurrent() || !machineId || refreshingCatalog || !target || target.machineId !== machineId) return;
+        pendingProbe.current?.abort();
+        const controller = new AbortController();
+        pendingProbe.current = controller;
         setRefreshingCatalog(true);
         try {
             const result = await probeProviderConnection({
                 machineId: target.machineId,
                 serverId: target.serverId,
                 connectionId,
-            });
-            if (!accountStillCurrent()) return;
+            }, { signal: controller.signal });
+            if (controller.signal.aborted || !accountStillCurrent()) return;
             if (result.status === 'error') {
                 showError(result.error, { retry: refreshCatalog });
                 return;
@@ -327,11 +340,14 @@ export function useProviderConnectionModelsSection(input: Readonly<{
             setOperationError(null);
             await catalog.refresh();
         } catch (caught) {
-            if (accountStillCurrent()) showTransportError(caught, refreshCatalog);
+            if (!controller.signal.aborted && accountStillCurrent()) showTransportError(caught, refreshCatalog);
         } finally {
-            if (accountStillCurrent()) setRefreshingCatalog(false);
+            if (pendingProbe.current === controller) {
+                pendingProbe.current = null;
+                if (accountStillCurrent()) setRefreshingCatalog(false);
+            }
         }
-    }, [accountStillCurrent, catalog.refresh, connectionId, machineId, probeProviderConnection, refreshingCatalog, resolveCurrentTarget, showError, showTransportError]);
+    }, [accountStillCurrent, catalog.refresh, connectionId, input.active, machineId, probeProviderConnection, refreshingCatalog, resolveCurrentTarget, showError, showTransportError]);
 
     const retryCatalog = React.useCallback(async (): Promise<void> => {
         if (!accountStillCurrent()) return;

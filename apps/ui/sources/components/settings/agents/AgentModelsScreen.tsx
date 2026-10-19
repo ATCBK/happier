@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useIsFocused, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { createProviderErrorV1, type ProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import type { ModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model-selection';
 import type { ProviderModelPickerSourceKind } from '@happier-dev/protocol/providers/catalog/modelPickerVisibility';
@@ -53,6 +53,7 @@ import { isMachineAdministrationExecutionTargetCurrent } from '@/sync/domains/ma
 import { t } from '@/text';
 import { resolveAgentModelsSettingsAccess } from './resolveAgentModelsSettingsAccess';
 import { resolveAgentNativeModels, summarizeAgentModelVisibility } from './agentModelVisibility';
+import { useMachineAgentModels } from '@/components/sessions/actions/useMachineAgentModels';
 
 function AgentSourceVisibility(props: Readonly<{
     connectionId: string;
@@ -89,6 +90,7 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
     runtimeAgentId: string | null;
 }>) {
     const router = useRouter();
+    const focused = useIsFocused();
     const enabled = useFeatureEnabled('providers');
     const administration = useAgentAdministrationCatalog({ loadProjection: false });
     const administrationTargetSelection = administration.targetSelection;
@@ -116,6 +118,7 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
         };
     }, [administrationTargetSelection, executionTarget]);
     const projection = useAgentModelsProjection({
+        active: focused,
         enabled, machineId, serverId, agentTargetKey: props.agentTargetKey, connectionIds: modelConnectionIds,
     });
     const settingsAccess = React.useMemo(
@@ -159,11 +162,18 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
     }> | null>(null);
     const retireOperationError = React.useCallback(() => setOperationError(null), []);
     const accountLifetime = useRetireProviderStateOnAccountChange(retireOperationError);
+    const observedNativeModels = useMachineAgentModels({
+        agentTargetKey: props.agentTargetKey,
+        machineId,
+        serverId,
+        enabled: focused && executionTarget !== null,
+    });
     const nativeModels = React.useMemo(() => resolveAgentNativeModels({
         runtimeAgentId: props.runtimeAgentId,
         agentTargetKey: props.agentTargetKey,
         modelVisibilityByRef,
-    }), [props.agentTargetKey, props.runtimeAgentId, modelVisibilityByRef]);
+        ...(observedNativeModels ? { observedModels: observedNativeModels } : {}),
+    }), [props.agentTargetKey, props.runtimeAgentId, modelVisibilityByRef, observedNativeModels]);
 
     const showError = React.useCallback((
         error: ProviderErrorV1,
@@ -253,6 +263,7 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
         return group?.rows.some((row) => row.ref.modelId === modelId && row.loadState === 'loaded') === true;
     }, [projection.refreshWithResult, resolveCurrentExecutionTarget]);
     const modelLoad = useProviderModelLoadAction({
+        active: focused,
         machineId,
         serverId,
         refresh: refreshLoadedModel,

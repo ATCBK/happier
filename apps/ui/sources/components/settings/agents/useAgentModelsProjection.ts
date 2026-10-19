@@ -56,6 +56,7 @@ function augmentAccountModels(account: Projection, machine: Projection | null, c
 
 export function useAgentModelsProjection(input: Readonly<{
     enabled: boolean;
+    active?: boolean;
     machineId: string | null;
     serverId: string | null;
     agentTargetKey: string;

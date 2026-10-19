@@ -246,6 +246,10 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
         initiatingLifetime: accountAddressAvailable ? undefined : null,
         refresh: refreshConnectionQuery,
     });
+    // The unknown-outcome notice asks for a fresh read; once one lands, the question is answered.
+    const reviewMutationOutcome = React.useCallback(async (): Promise<void> => {
+        if (await query.refresh()) mutation.clearError();
+    }, [mutation.clearError, query.refresh]);
     const mutationApprovalHref = mutation.pendingApproval?.href ?? null;
     const mutationApproval = React.useMemo(() => mutationApprovalHref ? {
         onOpen: () => router.pushRetainingCurrent(mutationApprovalHref as never),
@@ -269,6 +273,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
     const managedPurposeDraftDirtyRef = React.useRef(false);
     const ignoreManagedPurposeGuardRef = React.useRef(false);
     const probeGenerationRef = React.useRef(0);
+    const pendingProbe = React.useRef<AbortController | null>(null);
     const connectionShown = connection !== null;
     // The wide collection lands on the connection opened last, whichever layout opened it.
     React.useEffect(() => {
@@ -366,6 +371,8 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
 
     const invalidateProbe = React.useCallback(() => {
         probeGenerationRef.current += 1;
+        pendingProbe.current?.abort();
+        pendingProbe.current = null;
         setProbeState('idle');
         setProbeError(null);
     }, []);
@@ -386,14 +393,22 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
 
     React.useEffect(() => {
         invalidateProbe();
-    }, [invalidateProbe, probeScope]);
+        return () => {
+            probeGenerationRef.current += 1;
+            pendingProbe.current?.abort();
+            pendingProbe.current = null;
+        };
+    }, [focused, invalidateProbe, probeScope, serverId]);
 
     const runProbe = React.useCallback(async () => {
         // Re-resolve immediately before the probe: the rendered target may have
         // moved to another machine or server profile since this row rendered.
         const target = resolveCurrentTarget();
-        if (!machineId || !target || target.machineId !== machineId) return;
+        if (!focused || !machineId || !target || target.machineId !== machineId) return;
         const generation = ++probeGenerationRef.current;
+        pendingProbe.current?.abort();
+        const controller = new AbortController();
+        pendingProbe.current = controller;
         const requestScope = probeScope;
         setProbeState('probing');
         setProbeError(null);
@@ -402,7 +417,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
                 machineId: target.machineId,
                 serverId: target.serverId,
                 connectionId: props.connectionId,
-            });
+            }, { signal: controller.signal });
             if (probeGenerationRef.current !== generation || activeProbeScopeRef.current !== requestScope) return;
             if (result.status === 'error') {
                 setProbeState('idle');
@@ -418,8 +433,10 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
                 connectionId: props.connectionId,
                 machineId,
             }));
+        } finally {
+            if (pendingProbe.current === controller) pendingProbe.current = null;
         }
-    }, [machineId, probeProviderConnection, probeScope, props.connectionId, query.refresh, resolveCurrentTarget]);
+    }, [focused, machineId, probeProviderConnection, probeScope, props.connectionId, query.refresh, resolveCurrentTarget]);
 
     const bindSecret = React.useCallback((scope: 'account' | 'machine', targetMachineId: string | null) => {
         if (scope === 'machine' && !targetMachineId) return;
@@ -863,7 +880,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
         ? {
             error: mutation.error,
             retry: mutation.retry,
-            reviewCurrentState: refreshConnectionQuery,
+            reviewCurrentState: reviewMutationOutcome,
         }
         : query.error
             ? { error: query.error, retry: refreshConnectionQuery }
@@ -874,6 +891,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
     const failureItems = displayError ? (
         <ProviderErrorItems
             error={displayError}
+            layout="inline"
             retry={displayFailure?.retry}
             reviewCurrentState={displayFailure && 'reviewCurrentState' in displayFailure
                 ? displayFailure.reviewCurrentState
@@ -1145,6 +1163,16 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
         ? advancedNeedsAttention
         : availabilityVisible || machineSectionVisible || teamsSharingAvailable || connection.endpoints.length > 0;
     const advancedShown = advancedAvailable && (advancedOpen || advancedNeedsAttention);
+    // A failed write from a control inside Advanced (account access, a machine grant) keeps its status, with
+    // its retry or fresh-read action, right under that control rather than far above it.
+    const accountAccessShown = connection.scope === 'account' || connection.grants.accountState !== 'absent';
+    const mutationFailureKey = displayFailure?.error === mutation.error ? mutation.errorKey : null;
+    const failureBesideKey = advancedShown && mutationFailureKey !== null
+        && (mutationFailureKey === 'enable:account'
+            ? accountAccessShown
+            : machineSectionVisible && readableMachineRows.some((row) => `machine:${row.target.machineId}` === mutationFailureKey))
+        ? mutationFailureKey
+        : null;
     // Peer reachability is owner-originated evidence, never inferred from machine presence.
     const gatewayReachability: ProviderGatewayHubReachability = gatewayRuntime?.reachability ?? 'not_checked';
     const gatewayUnavailableMachineName = gatewayChosenMachine?.machine && !gatewayChosenMachine.machine.online
@@ -1233,7 +1261,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
                 )}
             />
 
-            {failureItems ? <ItemGroup>{failureItems}</ItemGroup> : null}
+            {failureItems && failureBesideKey === null ? <ItemGroup>{failureItems}</ItemGroup> : null}
 
             {gatewayUnavailableMachineName ? (
                 <AttentionBanner
@@ -1293,9 +1321,15 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
                     models={gatewayModels}
                     onChangeHelperModels={(claudeHelperModels) => changeGatewayConfiguration({ claudeHelperModels })}
                     disabled={!connectedAccountScopeMatchesTarget || query.loading || query.catalog === null}
-                    disabledReason={connectedAccountScopeMatchesTarget
-                        ? undefined
-                        : t('settingsProviders.local.accountScopeMismatchDescription')}
+                    // Read-only (another Account's machine) and not ready (still reading, or never read) say
+                    // different things: only the first explains a limit the user cannot lift here.
+                    disabledReason={!connectedAccountScopeMatchesTarget
+                        ? t('settingsProviders.local.accountScopeMismatchDescription')
+                        : query.loading
+                            ? t('common.loading')
+                            : query.catalog === null
+                                ? t('common.unavailable')
+                                : undefined}
                     nameRow={nameRow}
                     pickerRows={(
                         <>
@@ -1543,6 +1577,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
                                     }} />}
                                 rightElementOutsidePressable
                             />
+                            {failureBesideKey === 'enable:account' ? failureItems : null}
                         </ItemGroup>
                     ) : null}
 
@@ -1596,6 +1631,7 @@ export const ProviderConnectionDetailScreen = React.memo(function ProviderConnec
                                                     : undefined}
                                             />
                                         ) : null}
+                                        {failureBesideKey === `machine:${rowMachineId}` ? failureItems : null}
                                     </React.Fragment>
                                 );
                             })}

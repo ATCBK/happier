@@ -9,6 +9,7 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
 
+import { SCM_SUMMARY_CATALOG_NOTICE_ITEM_ID, SCM_SUMMARY_GROUPED_AGENTS_RETRY_ITEM_ID } from '@/components/settings/pickers/useAgentModelChoices';
 import { useScmDiffSummaryModelChoices, type ScmDiffSummaryModelSelection } from './useScmDiffSummaryModelChoices';
 export type { ScmDiffSummaryModelSelection } from './useScmDiffSummaryModelChoices';
 
@@ -68,6 +69,7 @@ function ModelPickerChoices(props: ScmDiffSummaryModelPickerProps & Readonly<{ m
         variant="selectable" closeOnSelect={false} showCategoryTitles categoryDecorations={choices.sections}
         {...(inline ? inlineTrigger : { matchTriggerWidth: true, connectToTrigger: true, ...rowTrigger })}
         onSelect={(id) => {
+            if (id === SCM_SUMMARY_CATALOG_NOTICE_ITEM_ID || id === SCM_SUMMARY_GROUPED_AGENTS_RETRY_ITEM_ID) { choices.onRefresh?.(); return; }
             const discoveryTarget = choices.discoveryTargets.get(id);
             if (discoveryTarget) {
                 if (!props.machineId) return;

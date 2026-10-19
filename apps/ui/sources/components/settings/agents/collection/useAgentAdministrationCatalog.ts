@@ -16,7 +16,7 @@ import {
     type MachineAdministrationTargetSelectionV1,
 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { t } from '@/text';
-import { describeMachineLockedReason, getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { describeMachineLockedReason, getMachineSentenceName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { presentMachineAdministrationTargetState } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 
 /**
@@ -71,11 +71,13 @@ export function useAgentsMachineScope(targetSelection: MachineAdministrationTarg
     const serverId = executionTarget?.serverId ?? selectedRow?.serverId ?? null;
     const machine = executionTarget?.machine ?? selectedRow?.machine ?? null;
     // Named as the picker chip names it: same-name machines of one Home carry their disambiguator.
+    // The label only appears in copy ("On {machine}", "Install on {machine}"), so a machine whose name
+    // is still loading reads "this machine" rather than its placeholder title.
     const machineLabel = machine && serverId
-        ? resolveMachineDisplayNames(targetSelection.pickerRows
+        ? getMachineSentenceName(machine, resolveMachineDisplayNames(targetSelection.pickerRows
             .filter((row) => row.serverId === serverId)
-            .map((row) => row.machine)).get(machine.id) ?? getMachineDisplayName(machine)
-        : getMachineDisplayName(machine);
+            .map((row) => row.machine)).get(machine.id))
+        : machine ? getMachineSentenceName(machine) : null;
     return {
         executionTarget,
         /** Presence comes from the canonical target state, not execution admission. */
