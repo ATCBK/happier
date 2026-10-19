@@ -1,3 +1,4 @@
+import { LlmTaskRunnerConfigV1Schema } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
@@ -16,7 +17,7 @@ vi.mock('@/track', () => ({
     getTrackingAnonymousUserId: () => 'anon-user',
 }));
 
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import {
     readLocalConversationVoiceSettings,
@@ -70,13 +71,13 @@ describe('emitAccountSettingChangedEvents', () => {
     it('does not emit the opaque provider settings subtree', () => {
         emitAccountSettingChangedEvents({
             previousSettings: settingsDefaults,
-            nextSettings: {
+            nextSettings: settingsParse({
                 ...settingsDefaults,
                 providerSettingsV1: {
                     v: 1,
                     providers: { opencode: { serverBaseUrl: 'https://example.com/' } },
                 },
-            },
+            }),
             source: 'ui',
         });
 
@@ -115,7 +116,7 @@ describe('emitAccountSettingChangedEvents', () => {
         expect(mocks.tracking.flush).toHaveBeenCalledTimes(1);
     });
 
-    it('captures configured backend transcript-storage overrides through canonical target-key analytics', () => {
+    it('does not emit transcript-storage target identities as account analytics', () => {
         const configuredTargetKey = resolveBackendTargetKeyV2({ kind: 'configuredAcpBackend', backendId: 'review-bot' });
         emitAccountSettingChangedEvents({
             previousSettings: settingsDefaults,
@@ -129,28 +130,8 @@ describe('emitAccountSettingChangedEvents', () => {
             source: 'ui',
         });
 
-        expect(mocks.tracking.capture).toHaveBeenCalledWith(
-            'setting_changed',
-            expect.objectContaining({
-                setting_key: `newSessionDefaultPersistenceModeByTargetKeyV1__${configuredTargetKey}`,
-                scope: 'account_setting',
-                identity_scope: 'person',
-                source: 'ui',
-                prev_value: null,
-                next_value: 'direct',
-            }),
-        );
-        expect(mocks.tracking.capture).toHaveBeenCalledWith(
-            'setting_changed',
-            expect.objectContaining({
-                setting_key: 'newSessionDefaultPersistenceModeV1',
-                scope: 'account_setting',
-                identity_scope: 'person',
-                source: 'ui',
-                prev_value: 'persisted',
-                next_value: 'direct',
-            }),
-        );
+        expect(mocks.tracking.capture).not.toHaveBeenCalled();
+        expect(mocks.tracking.flush).not.toHaveBeenCalled();
     });
 
     it('captures structured voice settings through canonical account analytics serializers', () => {
@@ -244,16 +225,19 @@ describe('emitAccountSettingChangedEvents', () => {
             previousSettings: settingsDefaults,
             nextSettings: {
                 ...settingsDefaults,
-                sessionReplaySummaryRunnerV1: {
+                sessionReplaySummaryRunnerV1: LlmTaskRunnerConfigV1Schema.parse({
                     v: 1,
-                    backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-                    modelId: 'claude-sonnet-4-5',
-                },
+                    modelSelection: {
+                        agentTargetKey: 'agent:happier.agent.claude/claude',
+                        providerConnectionId: null,
+                        modelId: 'claude-sonnet-4-5',
+                    },
+                }),
                 sessionTmuxIsolated: false,
                 toolViewDetailLevelByToolName: {
                     ReadFile: 'summary',
                 },
-            } as typeof settingsDefaults,
+            },
             source: 'ui',
         });
 
@@ -298,10 +282,10 @@ describe('emitAccountSettingChangedEvents', () => {
     it('does not flush when no tracked analytics properties changed', () => {
         emitAccountSettingChangedEvents({
             previousSettings: settingsDefaults,
-            nextSettings: {
+            nextSettings: settingsParse({
                 ...settingsDefaults,
                 inferenceOpenAIKey: 'sk-test',
-            },
+            }),
             source: 'ui',
         });
 

@@ -1,3 +1,4 @@
+import { LlmTaskRunnerConfigV1Schema } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
 import { describe, expect, it } from 'vitest';
 
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
@@ -63,11 +64,14 @@ describe('buildAccountSettingsSnapshot', () => {
     it('tracks runtime and tool override summaries from canonical analytics serializers', () => {
         const snapshot = buildAccountSettingsSnapshot({
             ...settingsDefaults,
-            sessionReplaySummaryRunnerV1: {
+            sessionReplaySummaryRunnerV1: LlmTaskRunnerConfigV1Schema.parse({
                 v: 1,
-                backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-                modelId: 'claude-sonnet-4-5',
-            },
+                modelSelection: {
+                    agentTargetKey: 'agent:happier.agent.claude/claude',
+                    providerConnectionId: null,
+                    modelId: 'claude-sonnet-4-5',
+                },
+            }),
             sessionTmuxIsolated: false,
             toolViewDetailLevelByToolName: {
                 ReadFile: 'summary',
@@ -76,7 +80,7 @@ describe('buildAccountSettingsSnapshot', () => {
             toolViewExpandedDetailLevelByToolName: {
                 ReadFile: 'full',
             },
-        } as typeof settingsDefaults);
+        });
 
         expect(snapshot.properties.acct_setting__sessionReplaySummaryRunnerV1).toBe(true);
         expect(snapshot.properties.acct_setting__sessionTmuxIsolated).toBe(false);

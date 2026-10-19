@@ -1,5 +1,5 @@
 import React from 'react';
-import renderer, { act } from 'react-test-renderer';
+import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
@@ -126,8 +126,7 @@ describe('SettingsAnalyticsRuntime', () => {
         trackingMock.flush.mockReset();
         trackingMock.flush.mockResolvedValue(undefined);
 
-        let tree: renderer.ReactTestRenderer;
-        tree = (await renderScreen(<SettingsAnalyticsRuntime />)).tree;
+        const screen = await renderScreen(<SettingsAnalyticsRuntime />);
 
         analyticsRuntimeState.settings = {
             ...analyticsRuntimeState.settings!,
@@ -144,8 +143,8 @@ describe('SettingsAnalyticsRuntime', () => {
         await act(async () => {
             storage.getState().applySettings(analyticsRuntimeState.settings!, 2);
             storage.getState().applyLocalSettings(analyticsRuntimeState.localSettings!, { persist: false });
-            tree!.update(<SettingsAnalyticsRuntime />);
         });
+        await screen.update(<SettingsAnalyticsRuntime />);
 
         expect(trackingMock.identify).toHaveBeenCalledTimes(1);
         expect(trackingMock.group).toHaveBeenCalledTimes(1);
@@ -184,14 +183,13 @@ describe('SettingsAnalyticsRuntime', () => {
         trackingMock.flush.mockReset();
         trackingMock.flush.mockResolvedValue(undefined);
 
-        let tree: renderer.ReactTestRenderer;
-        tree = (await renderScreen(<SettingsAnalyticsRuntime />)).tree;
+        const screen = await renderScreen(<SettingsAnalyticsRuntime />);
 
         trackingAnonymousUserId = 'anon-user-2';
         await act(async () => {
             trackingIdentityListeners.forEach((listener) => listener());
-            tree!.update(<SettingsAnalyticsRuntime />);
         });
+        await screen.update(<SettingsAnalyticsRuntime />);
 
         expect(trackingMock.identify).toHaveBeenNthCalledWith(
             2,

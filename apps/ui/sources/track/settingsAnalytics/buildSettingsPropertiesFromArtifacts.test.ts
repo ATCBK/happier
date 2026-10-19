@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { describe, expect, it } from 'vitest';
 import { buildSettingArtifacts, defineSettingDefinitions } from '@happier-dev/protocol';
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol';
 
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 
 import { buildAccountSettingsSnapshot } from './buildAccountSettingsSnapshot';
 
@@ -18,7 +18,7 @@ describe('buildAccountSettingsSnapshot', () => {
     });
 
     it('does not expose legacy compatibility fields or raw feature toggle storage in current-state account analytics', () => {
-        const snapshot = buildAccountSettingsSnapshot({
+        const snapshot = buildAccountSettingsSnapshot(settingsParse({
             ...settingsDefaults,
             featureToggles: { voice: true, sessions: false },
             usePickerSearch: true,
@@ -27,7 +27,7 @@ describe('buildAccountSettingsSnapshot', () => {
             lastUsedAgent: 'codex',
             lastUsedPermissionMode: 'plan',
             lastUsedModelMode: 'openrouter',
-        });
+        }));
 
         expect(snapshot.properties).not.toHaveProperty('acct_setting__featureToggles');
         expect(snapshot.properties).not.toHaveProperty('acct_setting__usePickerSearch');
@@ -90,7 +90,7 @@ describe('buildAccountSettingsSnapshot', () => {
     });
 
     it('does not expose the opaque provider settings subtree to account analytics', () => {
-        const snapshot = buildAccountSettingsSnapshot({
+        const snapshot = buildAccountSettingsSnapshot(settingsParse({
             ...settingsDefaults,
             providerSettingsV1: {
                 v: 1,
@@ -99,12 +99,12 @@ describe('buildAccountSettingsSnapshot', () => {
                     opencode: { serverBaseUrl: 'https://example.com/' },
                 },
             },
-        });
+        }));
 
         expect(snapshot.properties).not.toHaveProperty('acct_setting__providerSettingsV1');
     });
 
-    it('tracks transcript storage overrides for configured backend targets using canonical target keys', () => {
+    it('does not expose transcript storage target identities in account analytics', () => {
         const configuredTargetKey = buildBackendTargetKeyV2({
             kind: 'backend',
             backendId: 'review-bot',
@@ -119,7 +119,7 @@ describe('buildAccountSettingsSnapshot', () => {
             },
         });
 
-        expect(snapshot.properties.acct_setting__newSessionDefaultPersistenceModeV1).toBe('direct');
-        expect(snapshot.properties[`acct_setting__newSessionDefaultPersistenceModeByTargetKeyV1__${configuredTargetKey}`]).toBe('direct');
+        expect(snapshot.properties).not.toHaveProperty('acct_setting__newSessionDefaultPersistenceModeV1');
+        expect(Object.keys(snapshot.properties).some((key) => key.startsWith('acct_setting__newSessionDefaultPersistenceModeByTargetKeyV1'))).toBe(false);
     });
 });
