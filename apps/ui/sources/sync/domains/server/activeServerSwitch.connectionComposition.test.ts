@@ -9,6 +9,10 @@ import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage
 
 installTokenStorageWebPlatformMocks();
 
+const initialNetwork = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+await initialNetwork.dispose();
+
 describe('active focus transaction with the production connection manager and Sync', () => {
     let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>> | null = null;
     let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | null = null;

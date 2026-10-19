@@ -312,6 +312,9 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdFo
     resolvePreferredServerIdForSessionIdSpy(sessionId),
 }));
 
+// Compile the real message graph during collection, after installing its boundaries.
+await import('./MessageView');
+
 describe('MessageView (fork button)', () => {
   beforeEach(() => {
     committedActionsEnabled = true;

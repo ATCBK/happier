@@ -55,6 +55,10 @@ vi.mock('@/sync/domains/state/agentStateCapabilities', () => ({
     getPermissionsInUiWhileLocal: () => ({}),
 }));
 
+// Compile the real transcript graph during collection, after installing its boundaries.
+resetChatListHarness({ platformOs: 'ios' });
+await import('./ChatList');
+
 describe('ChatList native screen-reveal viewport revalidation (S-E route-pop blank)', () => {
     beforeEach(() => {
         resetChatListHarness({ platformOs: 'ios' });

@@ -115,6 +115,8 @@ vi.mock('@/log', () => ({
     log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+await loadSyncSingletonForTests();
+
 describe('sync AppState pause/resume', () => {
     beforeEach(() => {
         vi.resetModules();

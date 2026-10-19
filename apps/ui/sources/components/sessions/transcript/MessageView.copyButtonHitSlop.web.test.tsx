@@ -19,6 +19,9 @@ vi.mock('@expo/vector-icons', () => ({
     Octicons: 'Octicons',
 }));
 
+// Compile the real message graph during collection, after installing its boundaries.
+await import('./MessageView');
+
 function findAncestor(instance: any, predicate: (node: any) => boolean) {
     let current = instance?.parent ?? null;
     while (current) {

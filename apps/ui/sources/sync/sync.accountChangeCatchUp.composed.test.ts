@@ -146,6 +146,8 @@ async function loadTestSync(): Promise<void> {
     syncRuntime = (await import('./syncEngine')).sync;
 }
 
+await loadTestSync();
+
 async function restoreTestAccount(options: {
     mountAuth?: boolean;
     credentials?: AuthCredentials;
