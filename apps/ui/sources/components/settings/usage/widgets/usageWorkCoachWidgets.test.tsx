@@ -31,6 +31,7 @@ import { UsageParallelWidget } from './UsageParallelWidget';
 import { UsageOutcomesWidget } from './UsageOutcomesWidget';
 import { UsageCoachWidget } from './UsageCoachWidget';
 import { storage } from '@/sync/domains/state/storage';
+import { formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { UsagePlanFitWidget } from './UsagePlanFitWidget';
@@ -175,6 +176,21 @@ describe('Work and Coach widget bodies', () => {
       expect(hook.getCurrent().summary?.projects).toMatchObject([{ projectKey: null, unnamedProjectCount: 1 }]);
       await hook.unmount();
     }
+  });
+  it('tells apart Sessions that share a title and folders that share a name by where and when they ran', async () => {
+    const rows: UsageWorkContribution[] = [
+      { ...contribution('u1', 'untitled-1', 't1'), machineId: 'machine-a', observedAtMs: 1_700_000_000_000 },
+      { ...contribution('u2', 'untitled-2', 't1'), machineId: 'machine-b', observedAtMs: 1_700_000_900_000 },
+      { ...contribution('u3', 'lone-session', 't1'), machineId: 'machine-a' },
+    ];
+    const projection = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions: rows, evidence: [] }));
+    const hook = await renderHook(() => useUsageWork({ ...slice, work: projection }, query, 'home'));
+    const { sessionLabel } = hook.getCurrent();
+    const [first, second] = [sessionLabel('untitled-1'), sessionLabel('untitled-2')];
+    expect(first).not.toBe(second);
+    expect(first.startsWith(t('session.untitled'))).toBe(true);
+    expect(first.length).toBeGreaterThan(t('session.untitled').length);
+    await hook.unmount();
   });
   it('keeps an unanswered first Coach evaluation pending instead of claiming there are no findings', async () => {
     const pendingSlice = resolveUsagePageAggregation({ queries: [query],
@@ -337,6 +353,8 @@ describe('Work and Coach widget bodies', () => {
     expect(screen.findHostByTestId('coach.finding.context_bloat.trend')).toBeTruthy();
     // The spark's caption says it is the latest sample, not the finding's headline figure.
     expect(screen.getTextContent()).toContain(t('usage.board.coach.latestSample', { value: '' }).trim());
+    // ...and says when that sample was taken, so a latest 0 beside a larger headline reads as a later moment.
+    expect(screen.getTextContent()).toContain(formatUsageObservedAt(50));
   });
   it('does not open digest scheduling without a captured Account', async () => {
     const digestSlice = resolveUsagePageAggregation({ queries: [query],
@@ -686,6 +704,15 @@ describe('Work and Coach widget bodies', () => {
     );
     expect(screen.findByTestId('outcomes.funnel')).toBeTruthy();
     expect(screen.getTextContent()).toContain('2493');
+  });
+
+  it('outcomes with no PR evidence says so once instead of drawing a funnel that stops at its first step', async () => {
+    const bare = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions, evidence: [] }));
+    const screen = await renderScreen(
+      <UsageOutcomesWidget {...props} slice={{ ...slice, work: bare }} id="usage_outcomes" testID="outcomes" />,
+    );
+    expect(screen.findByTestId('outcomes.funnel')).toBeFalsy();
+    expect(screen.findByTestId('outcomes.noPrs')).toBeTruthy();
   });
 
   it('coach on Overview is the findings alone: no facts band, checks, digest or preferences', async () => {

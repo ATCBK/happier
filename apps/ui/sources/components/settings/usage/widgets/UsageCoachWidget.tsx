@@ -44,7 +44,8 @@ import {
   useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
-import { formatUsageDuration } from './usageHowYouWorkPresentation';
+import { formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
+import { formatUsageDuration, formatUsageLookbackPeriod } from './usageHowYouWorkPresentation';
 import {
   createUsageCoachController,
   type UsageCoachAppliedEntry,
@@ -127,7 +128,10 @@ function UsageCoachFindingTrend(props: Readonly<{ finding: UsageCoachFinding; te
   if (!sample) return null;
   const last = sample.points[sample.points.length - 1]!;
   // The headline measurement is the finding's own figure; this line is the series' latest sample, which may differ.
-  const caption = t('usage.board.coach.latestSample', { value: formatMeasurement({ ...sample, value: last.value }) });
+  // Dated, so a latest reading of 0 beside a headline of 56.3k reads as a later moment, not a contradiction.
+  const caption = t('usage.board.coach.latestSample', {
+    value: `${formatMeasurement({ ...sample, value: last.value })} · ${formatUsageObservedAt(last.observedAtMs)}`,
+  });
   return (
     <View style={styles.trend} testID={props.testID}>
       <StackedSeriesChart theme={chartTheme} variant="line" size="inline" viewportHeight={24} label={caption}
@@ -440,7 +444,7 @@ function UsageCoachDigestSuggestionRow(props: Readonly<{
       <View style={styles.digestText}>
         <Text style={[styles.checkName, subtitle]} accessibilityRole="header">{t('usage.board.coach.digestTitle')}</Text>
         <Text style={[styles.quiet, subtitle]}>{t('usage.board.coach.digestDescription', {
-          duration: formatUsageDuration(suggestion.lookbackMs),
+          duration: formatUsageLookbackPeriod(suggestion.lookbackMs),
         })}</Text>
       </View>
       {approval ? (

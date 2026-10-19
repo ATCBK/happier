@@ -79,6 +79,8 @@ export type UsageWorkProjectRow = MoneyDisplay & Readonly<{
   allocatedBasis: UsageWorkMoneyBasis | null;
   unallocatedBasis: UsageWorkMoneyBasis | null;
   sessionIds: readonly string[];
+  /** Machines that contributed to this project, in id order; what tells same-named folders on two machines apart. */
+  machineIds: readonly string[];
   agentIds: readonly string[];
   providers: readonly UsageWorkProvider[];
   outcomes: readonly UsageWorkOutcomeRow[];
@@ -90,6 +92,9 @@ export type UsageWorkProjectRow = MoneyDisplay & Readonly<{
 
 export type UsageWorkSessionRow = MoneyDisplay & Readonly<{
   sessionId: string;
+  /** Machines the Session's usage came from, in id order, and when it was last observed: what tells untitled Sessions apart. */
+  machineIds: readonly string[];
+  lastObservedAtMs: number;
   amount: number | null;
   agentIds: readonly string[];
   providers: readonly UsageWorkProvider[];
@@ -252,6 +257,7 @@ export function summarizeUsageWork(
       allocated: AmountAccumulator;
       unallocated: AmountAccumulator;
       sessions: Set<string>;
+      machines: Set<string>;
       agents: Set<string>;
       providers: Map<string, UsageWorkProvider>;
       outcomes: Set<string>;
@@ -263,6 +269,8 @@ export function summarizeUsageWork(
     string,
     {
       amount: AmountAccumulator;
+      machines: Set<string>;
+      lastObservedAtMs: number;
       agents: Set<string>;
       providers: Map<string, UsageWorkProvider>;
       outcomes: Map<string, UsageWorkOutcome>;
@@ -283,6 +291,7 @@ export function summarizeUsageWork(
       allocated: newAmount(),
       unallocated: newAmount(),
       sessions: new Set(),
+      machines: new Set(),
       agents: new Set(),
       providers: new Map(),
       outcomes: new Set(),
@@ -293,6 +302,7 @@ export function summarizeUsageWork(
     accumulate(project.amount, row, basis);
     addPart(project.parts, contribution.sessionId, row, basis);
     if (contribution.sessionId) project.sessions.add(contribution.sessionId);
+    if (contribution.machineId) project.machines.add(contribution.machineId);
     if (contribution.agentId) project.agents.add(contribution.agentId);
     const provider = contribution.providerId ? { providerId: contribution.providerId, machineId: contribution.machineId } : null;
     if (provider) project.providers.set(JSON.stringify(provider), provider);
@@ -300,6 +310,8 @@ export function summarizeUsageWork(
     if (contribution.sessionId) {
       const session = sessionRows.get(contribution.sessionId) ?? {
         amount: newAmount(),
+        machines: new Set(),
+        lastObservedAtMs: 0,
         agents: new Set(),
         providers: new Map(),
         outcomes: new Map(),
@@ -307,6 +319,8 @@ export function summarizeUsageWork(
         reasons: new Set(),
       };
       accumulate(session.amount, row, basis);
+      if (contribution.machineId) session.machines.add(contribution.machineId);
+      session.lastObservedAtMs = Math.max(session.lastObservedAtMs, contribution.observedAtMs);
       if (contribution.agentId) session.agents.add(contribution.agentId);
       if (provider) session.providers.set(JSON.stringify(provider), provider);
       session.witnessed ||= row.evidence.length > 0;
@@ -360,6 +374,7 @@ export function summarizeUsageWork(
       allocatedBasis: row.allocated.moneyBasis,
       unallocatedBasis: row.unallocated.moneyBasis,
       sessionIds: sorted(row.sessions),
+      machineIds: sorted(row.machines),
       agentIds: sorted(row.agents),
       providers: [...row.providers.values()].sort((a, b) => a.providerId.localeCompare(b.providerId)),
       outcomes: [...row.outcomes]
@@ -372,6 +387,8 @@ export function summarizeUsageWork(
   const sessions = [...sessionRows.entries()]
     .map(([sessionId, row]): UsageWorkSessionRow => ({
       sessionId,
+      machineIds: sorted(row.machines),
+      lastObservedAtMs: row.lastObservedAtMs,
       amount: row.amount.amount,
       moneyBasis: row.amount.moneyBasis,
       agentIds: sorted(row.agents),
