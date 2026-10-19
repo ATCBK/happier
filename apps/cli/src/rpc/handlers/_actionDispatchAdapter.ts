@@ -3,11 +3,14 @@ import type { createCliActionExecutor } from '@/session/actions/createCliActionE
 import type { RpcLocalActionContext, RpcHandlerContext } from '@/api/rpc/types';
 import type { SessionActionRpcOriginV1 } from '@happier-dev/protocol/socketRpc';
 import { WorkspaceSyncSourceContextV1Schema } from '@happier-dev/protocol/socketRpc';
-import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
+import { readProjectServiceMoveChildEffectV1 } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 type CliActionExecutorParams = Parameters<typeof createCliActionExecutor>[0];
 
 type HostRequesterContext = Pick<RpcHandlerContext, 'machineAdmission' | 'verifyMachineAdmissionCurrent'
+    | 'requesterApprovalDecision'
     | 'requesterSessionBootstrap' | 'sessionActionOrigin' | 'callerInputAuthorization' | 'callerInputConstraints'
     | 'workspaceSyncSourceRouting' | 'workspaceSyncTargetRouting' | 'workspaceSyncSourceWriterTargetRouting' | 'workspaceSyncSeedRouting'
     | 'originalActionEnvelope' | 'workspaceSyncSourceExecution' | 'deadlineAtMs' | 'requestStartedAtMs'>;
@@ -88,6 +91,10 @@ export function buildActionExecutorContextForRpc(
     const requesterInvocation = requesterAuthorization && !params.sessionActionOrigin
         && !requesterAuthorization.binding.workflowActionOrigin
         ? readRequesterAccountActionContext(requesterAuthorization)?.invocation : undefined;
+    const workflowAuthorization = params.callerInputAuthorization;
+    const workflowBinding = workflowAuthorization?.binding;
+    const workflowOrigin = workflowBinding?.workflowActionOrigin;
+    const workflowWitness = workflowOrigin?.sessionAuthority;
     const originalHandoffAuthorization = (() => {
         const authorization = params.callerInputAuthorization;
         const binding = authorization?.binding;
@@ -107,8 +114,18 @@ export function buildActionExecutorContextForRpc(
     })();
     const workspaceSourceContext = params.workspaceSyncSourceWriterTargetRouting?.source.sourceContext
         ?? params.workspaceSyncSeedRouting?.sourceWriterTarget.source.sourceContext;
+    const movePacket = params.workspaceSyncSourceExecution;
+    const admittedMoveChild = (requesterAuthorization?.binding.actionId === 'projects.service.relocate'
+      || requesterAuthorization?.binding.actionId === 'discussion.second_opinion.start'
+        && movePacket?.method === `${params.machineAdmission?.machineId}:${RPC_METHODS.SESSION_SPAWN_NEW}`)
+        && movePacket?.originalActionEnvelope && params.verifyMachineAdmissionCurrent && params.machineAdmission
+        && params.machineAdmission.actorAccountId === requesterAuthorization.binding.accountId
+        && movePacket.externalActionExecution.authorization.token === requesterAuthorization.token
+        && params.actionId === (requesterAuthorization.binding.actionId === 'discussion.second_opinion.start' ? 'session.spawn_new'
+            : readProjectServiceMoveChildEffectV1(movePacket.method.slice(movePacket.method.indexOf(':') + 1)));
 
     return {
+        ...(params.requesterApprovalDecision ? { requesterApprovalDecision: params.requesterApprovalDecision } : {}),
         ...(params.deadlineAtMs === undefined ? {} : { deadlineAtMs: params.deadlineAtMs }),
         ...(params.requestStartedAtMs === undefined ? {} : { requestStartedAtMs: params.requestStartedAtMs }),
         ...(params.machineAdmission ? { machineAdmission: params.machineAdmission } : {}),
@@ -144,6 +161,9 @@ export function buildActionExecutorContextForRpc(
         ...(localActionContext?.operationAcceptance
             ? { operationAcceptance: localActionContext.operationAcceptance }
             : {}),
+        ...(localActionContext?.runActionOperation
+            ? { runActionOperation: localActionContext.runActionOperation }
+            : {}),
         ...(localActionContext?.operationCancellation
             ? { operationCancellation: localActionContext.operationCancellation }
             : {}),
@@ -162,10 +182,15 @@ export function buildActionExecutorContextForRpc(
         ...(localActionContext?.executionRunWorkflowRunId
             ? { executionRunWorkflowRunId: localActionContext.executionRunWorkflowRunId }
             : {}),
+        ...(localActionContext?.executionRunWorkflowScope
+            ? { executionRunWorkflowScope: localActionContext.executionRunWorkflowScope }
+            : {}),
         ...(localActionContext?.executionRunTargetMachineId
             ? { executionRunTargetMachineId: localActionContext.executionRunTargetMachineId }
             : {}),
         surface,
+        ...(admittedMoveChild && params.actionId ? { bypassApprovals: true,
+            presentUserConfirmation: { actionId: params.actionId } } : {}),
         authority: params.callerAuthority ?? localActionContext?.authority ?? 'account_automation',
         // The installed TARGET hop retains the Home-admitted SOURCE ceilings.
         // Explicit local and invocation-origin ceilings below still take precedence.
@@ -192,12 +217,17 @@ export function buildActionExecutorContextForRpc(
             externalActionExecutionAuthorization: originalHandoffAuthorization,
             externalActionTarget: originalHandoffAuthorization.binding.target,
         } : {}),
-        ...(requesterAuthorization && !params.sessionActionOrigin ? {
-            surface: 'authentication' in requesterAuthorization.binding ? 'ui' as const : 'api' as const,
+        ...(requesterAuthorization ? {
             actionRequestId: requesterAuthorization.binding.requestId,
             serverId: requesterAuthorization.requesterAccountProjection!.serverId,
             serverIdentityId: requesterAuthorization.binding.serverIdentityId,
             externalActionTarget: requesterAuthorization.binding.target,
+        } : {}),
+        ...(requesterAuthorization && !params.sessionActionOrigin ? {
+            surface: 'authentication' in requesterAuthorization.binding ? 'ui' as const : 'api' as const,
+            ...('authentication' in requesterAuthorization.binding
+                && !requesterAuthorization.binding.sessionActionOrigin && !requesterAuthorization.binding.workflowActionOrigin
+                ? { defaultSessionMachineId: requesterAuthorization.binding.machineId } : {}),
             ...('grant' in requesterAuthorization.binding ? { externalActionCredential: {
                 accountId: requesterAuthorization.binding.accountId,
                 principalId: requesterAuthorization.binding.principalId,
@@ -230,6 +260,22 @@ export function buildActionExecutorContextForRpc(
                 sourceTurnId: params.sessionActionOrigin.sourceTurnId, via: 'action' as const },
             ...(params.sessionActionOrigin.workspaceWrites ? { workspaceWrites: params.sessionActionOrigin.workspaceWrites } : {}),
         } : {}),
+        ...(workflowAuthorization && workflowBinding && workflowOrigin && workflowWitness ? {
+            surface: 'agent' as const,
+            authority: 'account_automation' as const,
+            actionCaller: { kind: 'workflowRun' as const, runId: workflowOrigin.runId,
+                authorization: workflowWitness.authorization },
+            actionRequestId: workflowOrigin.requestId,
+            executionRunWorkflowRunId: workflowOrigin.runId,
+            executionRunTargetMachineId: workflowBinding.machineId,
+            callerPermissionMode: workflowWitness.authorization.admittedPermissionCeiling,
+            workspaceWrites: workflowWitness.workspaceWrites,
+            externalActionExecutionAuthorization: workflowAuthorization,
+            externalActionTarget: workflowBinding.target,
+            serverIdentityId: workflowBinding.serverIdentityId,
+            runtimeAccountId: workflowBinding.accountId,
+            defaultSessionId: workflowWitness.runOriginSessionId ?? null,
+        } : {}),
     };
 }
 
@@ -240,7 +286,7 @@ export function buildActionExecutorDepsForRpc(
 }
 
 async function resolveRpcActionExecutor<TActionId extends ActionId>(params: RpcActionDispatchRequest<TActionId>): Promise<RpcActionExecutor<TActionId>> {
-    const requester = params.callerInputAuthorization?.requesterAccountExecutor;
+    const requester = readRequesterAccountRpcActionExecutor(params);
     if (requester) return requester;
     if (params.executor) {
         return params.executor;
@@ -250,6 +296,14 @@ async function resolveRpcActionExecutor<TActionId extends ActionId>(params: RpcA
     }
     const module = await import('@/session/actions/createCliActionExecutor');
     return module.createCliActionExecutor(buildActionExecutorDepsForRpc({ executorParams: params.executorParams }));
+}
+
+/** A requester confirms a Bot's effect; its Account executor never replaces the Bot's custody. */
+export function readRequesterAccountRpcActionExecutor(
+    params: Pick<RpcActionDispatchRequest, 'actionId' | 'requesterApprovalDecision' | 'callerInputAuthorization'>,
+) {
+    return params.actionId === 'approval.request.decide' && params.requesterApprovalDecision
+        ? undefined : params.callerInputAuthorization?.requesterAccountExecutor;
 }
 
 export async function dispatchActionFromRpc<TActionId extends ActionId>(

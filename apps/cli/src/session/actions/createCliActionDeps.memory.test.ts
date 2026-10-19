@@ -40,6 +40,65 @@ import { MemorySettingsV1Schema } from '@happier-dev/protocol/memory/memorySetti
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
 describe('createCliActionDeps memory bindings', () => {
+  it.each(['keep_both', 'update', 'replace'] as const)('resubmits %s through the real CLI bindings on the reviewed Team-shared Memory document', async kind => {
+    const serverHttpBaseUrl = 'https://qa-memory-home.test';
+    const serverId = 'qa-memory-home';
+    const artifactId = '74a91a24-de24-424e-831c-2ffd6aff956a';
+    const original = { id: 'e5b7472e-ff36-441e-96a1-8dcff5a0c022', createdAtMs: 1, sourceSessionRef: null,
+      text: 'QA N3 payments runbook: verify webhook signatures before acknowledgement and reuse one stable idempotency key across settlement retries.' };
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'qa-owner' })).toString('base64url')}.signature`;
+    const credentials = { token, encryption: null };
+    let stored = { id: artifactId, ownerAccountId: 'qa-owner', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+      headerVersion: 2, bodyVersion: 2, seq: 1, createdAt: 1, updatedAt: 1,
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+      header: encodePlainArtifactStoredContent({ v: 1, kind: 'memory_doc.v1', title: 'QA N3 Team payment runbook' }),
+      body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, index: [original], topics: [] }) }) };
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      expect(new URL(String(url)).origin).toBe(serverHttpBaseUrl);
+      const path = new URL(String(url)).pathname;
+      if (path === `/v1/artifacts/${artifactId}`) return { status: 200, data: stored };
+      if (path === `/v1/artifacts/${artifactId}/access/grants`) return { status: 200, data: {
+        artifactId, ownerAccountId: 'qa-owner', access: 'owner', grants: [{ principal: { kind: 'team', teamId: 'qa-team' },
+          accessLevel: 'view', createdByAccountId: 'qa-owner', createdAt: 1, display: { name: null } }],
+      } };
+      if (path === '/v1/public-shares') return { status: 200, data: { publicShares: [] } };
+      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (path.endsWith('/encryption/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } };
+      throw new Error(`Unexpected boundary read: ${path}`);
+    });
+    const post = vi.spyOn(axios, 'post').mockImplementation(async (url, wire) => {
+      expect(String(url)).toBe(`${serverHttpBaseUrl}/v1/artifacts/${artifactId}`);
+      expect(wire).toMatchObject({ expectedHeaderVersion: 2, expectedBodyVersion: 2 });
+      stored = { ...stored, header: wire.header, body: wire.body, headerVersion: 3, bodyVersion: 3 };
+      return { status: 200, data: { success: true, headerVersion: 3, bodyVersion: 3 } };
+    });
+    const { executor } = createCliActionExecutorHarness({ token, credentials, sessionId: 'cli-global',
+      serverId, serverHttpBaseUrl, mode: 'plain', ctx: null });
+    // Waive only confirmation, never access/exposure admission or the reviewed CAS.
+    const context = { surface: 'cli' as const, authority: 'account_automation' as const, serverId,
+      actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'memory.remember': ['cli'] } }) };
+    const input = { ref: { kind: 'doc' as const, artifactId, serverId }, expectedRevision: { headerVersion: 2, bodyVersion: 2 },
+      topic: 'operations', text: 'QA N3 payment triage: verify webhook signatures and keep the settlement idempotency key in incident notes.' };
+    const review = await executor.execute('memory.remember', input, context);
+    expect(review, JSON.stringify(review)).toMatchObject({ ok: true, result: { ok: false, errorCode: 'memory_duplicate_choice_required',
+      ref: input.ref, revision: input.expectedRevision, candidates: [{ factId: original.id }] } });
+    expect(post).not.toHaveBeenCalled();
+    const result = await executor.execute('memory.remember', { ...input, duplicateChoice: {
+      kind, expectedRevision: input.expectedRevision, ...(kind === 'keep_both' ? {} : { factId: original.id }),
+    } }, context);
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { ok: true, revision: { headerVersion: 3, bodyVersion: 3 } } });
+    const envelope = decodePlainArtifactStoredContent(stored.body);
+    if (!envelope || typeof envelope !== 'object' || !('body' in envelope) || typeof envelope.body !== 'string') throw new Error('Expected a text Memory body');
+    const saved = MemoryDocBodyV1Schema.parse(JSON.parse(envelope.body));
+    expect(saved.topics.find(topic => topic.title === 'operations')?.facts).toEqual([
+      expect.objectContaining({ text: input.text, ...(kind === 'keep_both' ? {} : { supersedes: original.id }) }),
+    ]);
+    expect(kind === 'keep_both' ? saved.index : saved.topics.find(topic => topic.title === 'archive')?.facts).toEqual([original]);
+    expect(get.mock.calls.every(([url]) => new URL(String(url)).origin === serverHttpBaseUrl)).toBe(true);
+  });
+
   it('preserves admitted native search hits while rechecking only Happier Session ranges', async () => {
     const nativeHit = { type: 'external_transcript' as const,
       source: { type: 'external_transcript' as const, agentId: 'pi', sourceKey: 'local', nativeSessionId: 'native' },
@@ -210,7 +269,7 @@ describe('createCliActionDeps memory bindings', () => {
         .rejects.toMatchObject({ code: 'server_target_mismatch' });
     } else {
       await expect(deps.sessionStateFieldSet!({ actionId: 'session.context.update', context: { surface: 'cli' },
-        sessionId: 'cmemorysession000000000001', serverId: 'srv_memory_home', fieldId: 'intent.context',
+        sessionId: 'cmemorysession000000000001', serverId: 'srv_memory_home', fieldId: 'intent.context', expectedMetadataRevision: 3,
         value: { kind: 'attach', entry: { id: 'session.memory', ref, enabled: true, placement: 'system_append' } },
       })).resolves.toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
     }
@@ -463,7 +522,7 @@ describe('createCliActionDeps memory bindings', () => {
     });
   });
 
-  it('pins document negotiation, search, and transcript hydration to the same exact Home', async () => {
+  it.each(['global', 'project'] as const)('pins %s document negotiation, search, and transcript hydration to the same exact Home', async (type) => {
     const credentials = {
       token: 'token',
       encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
@@ -475,9 +534,11 @@ describe('createCliActionDeps memory bindings', () => {
       embeddingsModelId: null, embeddingsRuntimeState: 'unavailable', embeddingsUsingFallback: false,
       tier1DbPath: null, deepDbPath: '/memory/deep.sqlite', tier1DbBytes: null, deepDbBytes: 1,
       documentSearchSupported: true,
+      projectSearchSupported: true,
     };
     const result = {
       v: 1, ok: true, documents: { state: 'ready' },
+      ...(type === 'project' ? { project: { state: 'ready' } } : {}),
       hits: [{ sessionId: 'session-a', seqFrom: 1, seqTo: 2, createdAtFromMs: 1,
         createdAtToMs: 2, summary: 'Retained transcript', score: 0.5 }],
     };
@@ -494,17 +555,19 @@ describe('createCliActionDeps memory bindings', () => {
     });
     await expect(deps.daemonMemorySearch({
       machineId: 'machine-a', serverId: 'home-a', signal: controller.signal,
-      query: { v: 1, query: 'fact', scope: { type: 'global' }, mode: 'auto', corpora: ['sessions', 'documents'] },
+      query: { v: 1, query: 'fact', scope: type === 'project'
+        ? { type, projectRef: { serverId: 'home-a', projectKey: 'payments' } } : { type },
+        mode: 'auto', corpora: ['sessions', 'documents'] },
     })).resolves.toEqual(result);
     expect(callMachineRpc).not.toHaveBeenCalled();
     expect(callExactMachineRpc.mock.calls.map(([request]) => ({
       serverUrl: request.serverUrl, machineId: request.machineId,
-      method: request.method, credentials: request.credentials, signal: request.signal,
+      method: request.method, credentials: request.credentials, signal: request.signal, timeoutMs: request.timeoutMs,
     }))).toEqual([
       { serverUrl: 'https://home-a.test', machineId: 'machine-a', method: RPC_METHODS.DAEMON_MEMORY_STATUS,
-        credentials, signal: controller.signal },
+        credentials, signal: controller.signal, timeoutMs: null },
       { serverUrl: 'https://home-a.test', machineId: 'machine-a', method: RPC_METHODS.DAEMON_MEMORY_SEARCH,
-        credentials, signal: controller.signal },
+        credentials, signal: controller.signal, timeoutMs: null },
     ]);
     expect(fetchSessionById).toHaveBeenCalledWith({
       token: credentials.token, sessionId: 'session-a', serverUrl: 'https://home-a.test', signal: controller.signal,
@@ -702,6 +765,7 @@ describe('createCliActionDeps memory bindings', () => {
         machineId: 'machine-1',
         method: RPC_METHODS.DAEMON_MEMORY_SEARCH,
         request: query,
+        timeoutMs: null,
       }],
       [{
         credentials,

@@ -5,17 +5,21 @@ import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actio
 import type { ActionId, ActionsSettingsV1, FeatureId, CodingPromptBehaviorV1 } from '@happier-dev/protocol';
 import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import type { AgentSessionNativeToolDescriptor } from '@happier-dev/plugin-sdk/agents/runtime';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { projectSessionBoundActionToolInputSchema } from './actionToolContext';
 import { listBuiltInHappierTools } from './listBuiltInHappierTools';
 import { resolveActionsSettingsWithEnvironmentOverride } from '@/settings/actionsSettings';
+import { projectMcpToolInputJsonSchema } from '@/mcp/server/projectMcpToolInputJsonSchema';
 
 function projectJsonSchema(schema: unknown) {
-  const jsonSchema = schema instanceof z.ZodType
+  const jsonSchema = schema instanceof z.core.$ZodType
     ? zodSchemaToJsonSchemaObject(schema)
     : schema;
-  return AgentRuntimeJsonValueV1Schema.parse(jsonSchema);
+  const objectSchema = jsonSchema && typeof jsonSchema === 'object' && !Array.isArray(jsonSchema)
+    ? projectMcpToolInputJsonSchema(jsonSchema as Readonly<Record<string, unknown>>)
+    : jsonSchema;
+  return AgentRuntimeJsonValueV1Schema.parse(objectSchema);
 }
 
 function isSessionAgentChangeTitleToolAvailableWithSettings(params: Readonly<{

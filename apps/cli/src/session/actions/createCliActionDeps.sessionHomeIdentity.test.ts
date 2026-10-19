@@ -25,9 +25,9 @@ describe('Session Action Home identity admission', () => {
       throw new Error(`Unexpected HTTP read: ${url}`);
     });
     const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
-      expect(String(url)).toBe(`${home}/v1/sessions/${sessionId}/reports-to`);
-      expect(body).toEqual({ leadSessionId: null, expectedLeadSessionId: null });
-      return { status: 200, data: { ok: true, sessionId, leadSessionId: null, attachedAt: null } };
+      expect(String(url)).toBe(`${home}/v1/sessions/${sessionId}/manager`);
+      expect(body).toEqual({ managerSessionId: null, expectedManagerSessionId: null });
+      return { status: 200, data: { ok: true, sessionId, managerSessionId: null, attachedAt: null } };
     });
     const put = vi.spyOn(axios, 'put').mockImplementation(async (url, body) => {
       expect(String(url)).toBe(`${home}/v2/session-organization/attention-standings/${sessionId}`);
@@ -46,11 +46,11 @@ describe('Session Action Home identity admission', () => {
       serverIdentityId: 'srv_memory_home', serverHttpBaseUrl: home }));
     const context = { surface: 'cli', authority: 'present_user', ...(serverId ? { serverId } : {}),
       actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
-        'session.reports_to.set': ['cli'], 'session.approval_reviewer.set': ['cli'],
+        'session.manager.set': ['cli'], 'session.approval_reviewer.set': ['cli'],
       } }),
     } as const;
     const results = [
-      await executor.execute('session.reports_to.set', { sessionId, leadSessionId: null, expectedLeadSessionId: null }, context),
+      await executor.execute('session.manager.set', { sessionId, managerSessionId: null, expectedManagerSessionId: null }, context),
       await executor.execute('session.attention.set', { sessionId, standing: false }, context),
       await executor.execute('session.approval_reviewer.set', { sessionId, enabled: true }, context),
     ];
@@ -58,7 +58,7 @@ describe('Session Action Home identity admission', () => {
       for (const result of results) expect(result).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
       for (const boundary of [get, post, put, patch]) expect(boundary).not.toHaveBeenCalled();
     } else {
-      expect(results, JSON.stringify(results)).toMatchObject([{ ok: true, result: { ok: true, leadSessionId: null } },
+      expect(results, JSON.stringify(results)).toMatchObject([{ ok: true, result: { ok: true, managerSessionId: null } },
         { ok: true, result: { standing: null } }, { ok: true, result: { updated: true } }]);
     }
   });

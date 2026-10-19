@@ -58,9 +58,9 @@ describe('Session access discovery HTTP adapter', () => {
         .toEqual({ query: 'a & b', purpose: 'collaboration', cursor: 'opaque-cursor' });
       return UsersSearchResponseSchema.parse({ users: [], nextCursor: null });
     });
-    const executor = createActionExecutor(createAccountServerActionDeps({
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createAccountServerActionDeps({
       token: 'bound-home-token', serverId: 'home', serverHttpBaseUrl: 'http://access.test',
-    }));
+    }) });
     const context = { surface: 'agent' as const, authority: 'account_automation' as const, serverId: 'home' };
     await expect(executor.execute('session.access.candidates.inspect', {
       v: 1, sessionId: 'session', subjects: [{ kind: 'account', accountId: 'recipient' }],

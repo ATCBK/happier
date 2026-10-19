@@ -11,7 +11,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { WorkspaceExecutionConfigMutationRequestV1Schema, type WorkspaceExecutionConfigContentV1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
-import { createLocalServiceActionConfirmationNonceV1 } from '@happier-dev/protocol/local/services/actions/v1';
+import { createLocalServiceActionConfirmationNonceV1, LocalServiceActionRequestV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
 import type { PluginActionInputById } from '@happier-dev/plugin-sdk/actions';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
@@ -137,9 +137,9 @@ function authorHost(respond: (method: string, request: unknown) => unknown | Pro
 }
 
 function serviceControl(action: 'stop_managed' | 'restart_managed') {
-    const request = { requestId: `author-${action}`, action, target: { kind: 'managed_service' as const,
+    const request = LocalServiceActionRequestV1Schema.parse({ requestId: `author-${action}`, action, target: { kind: 'managed_service' as const,
         machineId: workspace.machineId, managedServiceId: 'actual-instance', cwd: workspace.rootPath,
-        declaration: { workspaceRefId: workspace.workspaceId, selection: { kind: 'manifest' as const, name: 'web' } } } };
+        declaration: { workspaceRefId: workspace.workspaceId, selection: { kind: 'manifest' as const, name: 'web' } } } });
     return { ...request, confirmationNonce: createLocalServiceActionConfirmationNonceV1(request) };
 }
 
@@ -182,14 +182,14 @@ describe('public Project author Actions through the real CLI host', () => {
         };
         const activate = (generation: number) => activatePluginRuntimeRegistry({ contributes, generation,
             occurrenceIdsByPluginId: new Map([[pixiAdapter.pluginId, createPluginRuntimeOccurrenceId(pixiAdapter.pluginId)]]),
-            resolveActivationSource: () => ({ kind: 'bundled', moduleId: `@acme/pixi-native/${generation}`, load: async () => pixiPlugin }),
+            resolveActivationSource: () => ({ kind: 'bundled', moduleId: `@acme/pixi-native/${generation}`, load: async () => ({ activate: pixiPlugin.activate }) }),
         });
         const original = await activate(1);
         let replacement: Awaited<ReturnType<typeof activate>> | undefined;
         const releases: Array<() => Promise<void>> = [];
         try {
             const selected = await resolveProjectNativeAdapter({ reference: pixiAdapter, role: 'nativeServiceLifecycle', targets, registry: original, createInvocationContext });
-            expect(selected.kind).toBe('ready');
+            expect(selected.kind, JSON.stringify(selected)).toBe('ready');
             if (selected.kind !== 'ready') throw new Error(selected.code);
             const captured = selected.lease.captureNativeServiceLifecycle(instance, { root });
             if (captured.kind !== 'ready') throw new Error(captured.code);
@@ -259,7 +259,8 @@ describe('public Project author Actions through the real CLI host', () => {
         expect(host.readContent()).toMatchObject({ t: 'plain', v: { ...next, services: { web: initialPlacement } } });
         expect(await inspectProjectWorker(host.actions, { workspace: address,
             destination: { kind: 'machine', machineId: workspace.machineId }, purpose: 'finite' })).toEqual(advisory);
-        expect(await host.actions.execute('projects.service.placement.get', { workspace: address, serviceName: 'web' }))
+        const observedPlacement = await host.actions.execute('projects.service.placement.get', { workspace: address, serviceName: 'web' });
+        expect(observedPlacement, JSON.stringify(observedPlacement))
             .toMatchObject({ status: 'ready', placement: initialPlacement, actual: { status: 'absent' } });
         const placement = { runsOn: { kind: 'workers' as const, destination: next.destination }, unavailable: 'fail' as const };
         expect(await configureProjectServicePlacement(host.actions, { workspace: address, serviceName: 'web' }, placement))

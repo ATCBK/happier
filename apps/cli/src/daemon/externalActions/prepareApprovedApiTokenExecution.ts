@@ -44,7 +44,7 @@ export function createApprovedApiTokenExecutionPreparer(input: Readonly<{
     const abort = () => { void dispose(); };
     input.signal?.addEventListener('abort', abort, { once: true });
     if (input.signal?.aborted) await dispose();
-    return Object.freeze({ settled, dispose, execute: (value: unknown, signal?: AbortSignal) => {
+    return Object.freeze({ settled, dispose, execute: (value: unknown, signal?: AbortSignal): Promise<ActionExecuteResult> => {
       if (result) return Promise.resolve({ ok: false, errorCode: 'approval_stale', error: 'approval_stale' });
       result = (async (): Promise<ActionExecuteResult> => {
         const operationSignal = signal && input.signal && signal !== input.signal

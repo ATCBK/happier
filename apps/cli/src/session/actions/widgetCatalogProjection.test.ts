@@ -37,12 +37,13 @@ describe('headless widget catalog projection', () => {
         const projection = buildPluginProjectionV2({ registry, generation: 1,
             pluginUiHostRuntime: { declarative: { modelsByRendererKey: { [`${pluginId}\0content`]: model } } },
         });
-        expect(readCliWidgetCatalogProjectionV1(projection).filter(candidate => 'definition' in candidate)).toMatchObject([
-            { definition: { kind: 'builtin', id: 'session_summary' }, target: 'session', sessionInputPath: 'session' },
-            { definition: { kind: 'builtin', id: 'agent_plan' } },
-            { definition: { kind: 'builtin', id: 'changes' } },
-            { definition: { kind: 'builtin', id: 'local_services' } },
-        ]);
+        expect(readCliWidgetCatalogProjectionV1(projection).filter(candidate => 'definition' in candidate)).toEqual(expect.arrayContaining([
+            expect.objectContaining({ definition: { kind: 'builtin', id: 'session_summary' }, target: 'session',
+                fields: expect.arrayContaining([expect.objectContaining({ path: 'session', inputType: { hostType: 'session' }, required: true })]) }),
+            expect.objectContaining({ definition: { kind: 'builtin', id: 'agent_plan' } }),
+            expect.objectContaining({ definition: { kind: 'builtin', id: 'changes' } }),
+            expect.objectContaining({ definition: { kind: 'builtin', id: 'local_services' } }),
+        ]));
         expect(readCliWidgetCatalogProjectionV1(projection).filter(candidate => candidate.surface)).toMatchObject([
             { key: `${pluginId}/app`, title: 'App widget', target: 'app', availability: 'available' },
             { key: `${pluginId}/session`, title: 'Session widget', target: 'session', availability: 'available' },

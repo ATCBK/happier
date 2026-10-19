@@ -1,5 +1,5 @@
 import { decodeArtifactUploadMetadataV1 } from '@happier-dev/transfers';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** Model the HTTP boundary's published byte carrier while retaining real document codecs. */
 export function readCarrierMutation(input: unknown): Record<string, unknown> {

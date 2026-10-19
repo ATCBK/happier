@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import Ajv2020 from 'ajv/dist/2020.js';
+import Ajv from 'ajv';
 import {
   ActionsSettingsV1Schema,
   ActionDefinitionV1Schema,
@@ -8,12 +8,14 @@ import {
 } from '@happier-dev/protocol';
 
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { createActionToolExecutorBridge } from './createActionToolExecutorBridge';
 import { createChangeTitleToolHandler } from './createChangeTitleToolHandler';
 
 import { listBuiltInHappierTools } from './listBuiltInHappierTools';
 import { dispatchBuiltInHappierTool } from './dispatchBuiltInHappierTool';
 import type { HappierBuiltInToolDispatchResult } from './types';
+import { PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
 
 function ok(result: unknown): HappierBuiltInToolDispatchResult {
   return { ok: true, result };
@@ -155,6 +157,25 @@ describe('built-in Happier tools', () => {
       surface: 'agent',
       executor: createActionExecutor(createUnavailableActionTransportDeps()),
     });
+    const readCompleteInputSchema = async (result: unknown) => {
+      // The real Action discovery boundary returns the canonical named-section
+      // projection. Fetch its definitions before compiling its local references.
+      const root = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(result);
+      const definition = ActionDefinitionV1Schema.parse(root.actionSpec);
+      const definitions: Record<string, unknown> = {};
+      for (const section of (root.schemaSections ?? []).filter(section => section.path.startsWith('/inputSchema/'))) {
+        const fetched = await dispatchBuiltInHappierTool({ toolName: 'action_spec_get',
+          args: { id: definition.id, schemaPath: section.path }, sessionId: 'sess-1',
+          deps: { changeTitle: async () => ({ success: true }), executeActionByToolName } });
+        if (!fetched.ok) throw new Error(`Action section unavailable: ${fetched.errorCode}`);
+        const response = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(fetched.result);
+        if (!response.schemaSection) throw new Error('Action discovery omitted its requested schema section');
+        expect(response.schemaSection.path).toBe(section.path);
+        const name = section.path.split('/').at(-1)!.replace(/~1/g, '/').replace(/~0/g, '~');
+        definitions[name] = response.schemaSection.schema;
+      }
+      return { ...definition.inputSchema, ...(Object.keys(definitions).length ? { definitions } : {}) };
+    };
     const listResult = await dispatchBuiltInHappierTool({
       toolName: 'action_spec_search',
       args: { query: 'review' },
@@ -165,7 +186,7 @@ describe('built-in Happier tools', () => {
       },
     });
 
-    expect(listResult.ok).toBe(true);
+    expect(listResult.ok, JSON.stringify(listResult)).toBe(true);
     if (!listResult.ok) {
       throw new Error(`expected action_spec_search to succeed: ${listResult.errorCode}`);
     }
@@ -182,32 +203,16 @@ describe('built-in Happier tools', () => {
       },
     });
 
-    expect(getResult).toEqual(expect.objectContaining({
-      ok: true,
-      result: expect.objectContaining({
-        actionSpec: expect.objectContaining({
-          id: 'subagents.plan.start',
-          kindVersion: 1,
-          inputSchema: expect.objectContaining({
-            properties: expect.objectContaining({
-              backendTargetKeys: expect.objectContaining({
-                type: 'array',
-                minItems: 1,
-                items: expect.objectContaining({
-                  anyOf: expect.arrayContaining([
-                    expect.objectContaining({
-                      type: 'string',
-                      pattern: '^(agent|acpBackend):.+$',
-                    }),
-                  ]),
-                }),
-              }),
-              permissionMode: expect.objectContaining({ description: expect.any(String) }),
-            }),
-          }),
-        }),
-      }),
-    }));
+    if (!getResult.ok) throw new Error('Expected plan Action discovery');
+    const planDefinition = ActionDefinitionV1Schema.parse((getResult.result as { actionSpec: unknown }).actionSpec);
+    expect(planDefinition).toMatchObject({ id: 'subagents.plan.start', kindVersion: 1 });
+    if (!planDefinition.inputSchema) throw new Error('Expected plan input schema');
+    const validatePlan = new Ajv({ strict: false, validateFormats: false }).compile(await readCompleteInputSchema(getResult.result));
+    const planInput = { backendTargetKeys: [buildBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' })],
+      instructions: 'Plan the workspace change.' };
+    expect(validatePlan(planInput), JSON.stringify(validatePlan.errors)).toBe(true);
+    expect(validatePlan({ ...planInput, backendTargetKeys: [] })).toBe(false);
+    expect(validatePlan({ ...planInput, backendTargetKeys: [42] })).toBe(false);
 
     const spawnGetResult = await dispatchBuiltInHappierTool({
       toolName: 'action_spec_get',
@@ -225,7 +230,7 @@ describe('built-in Happier tools', () => {
     expect(definition.kindVersion).toBe(1);
     if (!definition.inputSchema) throw new Error('Expected spawn input schema');
     // Exercise the published schema, including references, rather than requiring inline serialization.
-    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(definition.inputSchema);
+    const validate = new Ajv({ strict: false, validateFormats: false }).compile(await readCompleteInputSchema(spawnGetResult.result));
     const input = SessionSpawnNewInputV2Schema.parse({
       executionTarget: { serverId: 'active', machineId: 'machine-1' },
       directory: { kind: 'path', path: '/workspace/project' },

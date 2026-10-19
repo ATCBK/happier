@@ -1,12 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const { executePluginDevLoopAction } = vi.hoisted(() => ({
-  executePluginDevLoopAction: vi.fn(),
-}));
-
-vi.mock('@/plugins/devLoop/actions', () => ({
-  executePluginDevLoopAction,
-}));
+import { describe, expect, it } from 'vitest';
 
 import { createCliActionExecutor } from './createCliActionExecutor';
 
@@ -24,33 +16,19 @@ function createExecutor(credentialProvenance: 'api_token' | 'stored_session') {
     sessionId: 'sess-1',
     mode: 'plain',
     ctx: null,
+    pluginActionExecutionOwner: 'current_process',
   });
 }
 
 describe('createCliActionExecutor credential authority', () => {
-  beforeEach(() => {
-    executePluginDevLoopAction.mockReset();
-  });
-
-  it('fails closed for API-token credentials before present-user actions reach their dependencies', async () => {
-    executePluginDevLoopAction.mockResolvedValue({
-      ok: true,
-      kind: 'plugins_install',
-      outcome: 'applied',
-    });
+  it('refuses present-user approval preparation for API-token credentials even with an authority claim', async () => {
     const executor = createExecutor('api_token');
-
-    await expect(executor.execute(
-      'plugins.install',
-      { path: '/tmp/plugin' },
-      { surface: 'cli', authority: 'present_user', presentUserConfirmation: { actionId: 'plugins.install' } },
-    )).resolves.toEqual({
-      ok: false,
-      errorCode: 'present_user_required',
-      error: 'present_user_required',
+    await expect(executor.prepare('approval.request.decide',
+      { artifactId: 'approval-1', decision: 'approve' },
+      { surface: 'cli', authority: 'present_user' },
+    )).resolves.toMatchObject({
+      kind: 'settled', result: { ok: false, errorCode: 'present_user_required' },
     });
-    expect(executePluginDevLoopAction).not.toHaveBeenCalled();
-
     await expect(executor.execute(
       'approval.request.decide',
       { artifactId: 'approval-1', decision: 'approve' },
@@ -63,25 +41,9 @@ describe('createCliActionExecutor credential authority', () => {
   });
 
   it('keeps an authenticated stored CLI session eligible for present-user actions', async () => {
-    executePluginDevLoopAction.mockResolvedValue({
-      ok: true,
-      kind: 'plugins_install',
-      outcome: 'applied',
-    });
     const executor = createExecutor('stored_session');
-
-    await expect(executor.execute(
-      'plugins.install',
-      { path: '/tmp/plugin' },
-      { surface: 'cli', presentUserConfirmation: { actionId: 'plugins.install' } },
-    )).resolves.toMatchObject({
-      ok: true,
-      result: {
-        ok: true,
-        kind: 'plugins_install',
-        outcome: 'applied',
-      },
-    });
-    expect(executePluginDevLoopAction).toHaveBeenCalledOnce();
+    expect((await executor.prepare('approval.request.decide',
+      { artifactId: 'approval-1', decision: 'approve' }, { surface: 'cli' },
+    )).kind).toBe('ready');
   });
 });

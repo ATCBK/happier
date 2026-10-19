@@ -23,7 +23,7 @@ import type { Fastify } from '../../../../server/sources/app/api/types';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createAccountEncryptionCurrentnessFixture, createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
 import { createExternalActionAuthorizedRequestHeaders, prepareExternalActionRequesterAccountAuthorization, resolveExternalActionServerRequestHeaders } from '@/api/externalActionExecutionAuthorization';
-import { createSessionListActionDependency } from '@/session/actions/sessionListActionDependency';
+import { createSessionListActionDeps } from '@/session/actions/sessionListActionDependency';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet';
 import { logger } from '@/ui/logger';
@@ -43,8 +43,8 @@ import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemon
   removeAgentRuntimeDaemonServiceAuthorityIfOwned } from './sessionBridgeAuthorization';
 import * as machineRpc from '@/session/transport/rpc/machineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { prepareInstalledRequesterAccountActionContext, prepareRequesterAccountActionContext,
-  readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { prepareInstalledRequesterAccountActionContext, prepareRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionProjection";
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 import * as installationStore from '@/daemon/identity/store';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
@@ -59,6 +59,15 @@ import { buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/pl
 import { projectAgentRuntimeDaemonServiceTurnWitnessV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceTurnWitness';
 import { createNativeAgentRuntimeSessionPlanFixture, createNativeSessionClientTestPort,
   createExternalContributionFixtures, createLease, createSessionHostServiceOwners } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import type { ActionExecutorDeps } from '@happier-dev/protocol';
+import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
+import { resolveCliAgentStartContextV1 } from '@/session/actions/resolveCliAgentStartContextV1';
+import { resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
+import { inheritedCodexInput } from '@/session/actions/sessionSpawnNew.agent.testkit';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionCurrentSessionScopeFailureDetailsV1Schema } from '@happier-dev/protocol/actions/executor/sessionListAccess';
 
 const processIdentity = vi.hoisted(() => vi.fn());
 vi.mock('@/daemon/processIdentity', () => ({ readProcessIdentityByPid: processIdentity }));
@@ -85,7 +94,7 @@ beforeAll(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
 afterAll(() => vi.unstubAllEnvs());
 
-async function fixture(metadataLayout: 0 | 1 = 1) {
+async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Promise<void>, bypassActionInterception = false) {
   storage.state.sessionId = sessionId;
   storage.state.bound = true;
   storage.state.publisherBound = true;
@@ -95,12 +104,20 @@ async function fixture(metadataLayout: 0 | 1 = 1) {
   const credentials = { token, encryption: null };
   const scopeKey = runWithServerHttpBaseUrl(serverHttpBaseUrl, () => resolveAccountSettingsScopeKey(credentials));
   let rawSettings: { actionsSettingsV1?: ActionsSettingsV1 } = {};
+  let authorizationStatus: 401 | 403 | 503 | undefined;
+  let cancelAuthorization: (() => void) | undefined;
   let settingsVersion = 0;
   const publishSettings = () => setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse(rawSettings), rawSettings, scopeKey,
     settingsVersion: ++settingsVersion, loadedAtMs: 1, settingsSecretsReadKeys: [], promptLibraryCatalog: { status: 'loading' } });
   publishSettings();
   const actionsSettingsProvider = createActionSettingsProvider({ scopeKey });
   const app: Fastify = createAuthenticatedTestApp({ authentication: 'real' });
+  app.addHook('onRequest', async (request, reply) => {
+    if (request.url.endsWith('/execution-authorization') && authorizationStatus) {
+      cancelAuthorization?.();
+      return reply.code(authorizationStatus).send({ error: 'private-error-body' });
+    }
+  });
   app.decorate('resolveCurrentSessionMachine', async () => storage.state.bound ? storage.state.machineId : null);
   registerExternalActionRoutes(app, { dispatch: async () => { throw new Error('Unexpected external dispatch'); } });
   const observations: { method: string; path: string; status: number; code?: string; signed: boolean; bearer: boolean }[] = [];
@@ -119,7 +136,7 @@ async function fixture(metadataLayout: 0 | 1 = 1) {
   });
   const members = new Set([childId]);
   let currentnessRefused = false;
-  let subtreeRefused = false;
+  let subtreeRefused: false | true | 'active' | 'archived' = false;
   let callerWorkspaceMissing = false;
   let inactive = false;
   let childArchived = false;
@@ -136,7 +153,7 @@ async function fixture(metadataLayout: 0 | 1 = 1) {
         metadata: JSON.stringify(projectSessionSharedMetadataV1({ metadata })),
         ownerMetadata: { t: 'plain' as const, v: owner.ownerMetadata },
       }),
-      ...(id === childId ? { reportsTo: { sessionId } } : {}) };
+      ...(id === childId ? { manager: { sessionId } } : {}) };
   };
   app.get('/v1/account/encryption/currentness', { preHandler: app.authenticate }, async (_request, reply) =>
     currentnessRefused ? reply.code(401).send({ error: 'private-error-body' }) : createAccountEncryptionCurrentnessFixture());
@@ -156,7 +173,9 @@ async function fixture(metadataLayout: 0 | 1 = 1) {
   app.post('/v2/sessions/query', { preHandler: app.authenticate }, async (request, reply) => {
     const query = SessionListQueryV1Schema.parse(request.body);
     expect(query.underSessionId).toBe(sessionId);
-    if (subtreeRefused) return reply.code(401).send({ error: 'private-error-body' });
+    await observeSubtreeQuery?.();
+    if (subtreeRefused === true) return reply.code(401).send({ error: 'private-error-body' });
+    if (subtreeRefused === query.storage) return reply.code(503).send({ error: 'private-error-body' });
     return SessionListQueryResponseV1Schema.parse({ sessions: query.storage === (childArchived ? 'archived' : 'active') ? [...members].map(row) : [],
       nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false });
   });
@@ -204,7 +223,8 @@ async function fixture(metadataLayout: 0 | 1 = 1) {
         externalActionMachineRequestPrivateKey: installation.secretKey, externalActionMachineInstallationId: storage.state.installationId,
         actionsSettingsProvider,
       });
-      return executor;
+      return { execute: (actionId, input, context) => executor.execute(actionId, input,
+        bypassActionInterception ? { ...context, bypassActionInterception: true } : context) };
     },
   });
   const operation = (actionId: Operation['actionId'], input: Operation['input']): Operation => ({ kind: 'action.execute',
@@ -212,14 +232,133 @@ async function fixture(metadataLayout: 0 | 1 = 1) {
     witness: { turnId: 'turn', inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1], workDepth: 0, callerPermissionMode: 'default',
       agentStartCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 } } });
   return { credentials, app, observations, members, prepare, execute, operation, actionsSettingsProvider, lifecycleEffects,
+    failAuthorization: (status?: 401 | 403 | 503, cancel?: () => void) => {
+      authorizationStatus = status; cancelAuthorization = cancel;
+    },
     setActionsSettings: (actionsSettingsV1: ActionsSettingsV1) => { rawSettings = { actionsSettingsV1 }; publishSettings(); },
     markInactive: () => { inactive = true; },
     markChildArchived: () => { childArchived = true; },
     refuseCurrentness: () => { currentnessRefused = true; },
-    refuseSubtree: () => { subtreeRefused = true; },
+    refuseSubtree: (storage?: 'active' | 'archived') => { subtreeRefused = storage ?? true; },
+    allowSubtree: () => { subtreeRefused = false; },
     omitCallerWorkspace: () => { callerWorkspaceMissing = true; },
     close: async () => { restore(); await app.close(); } };
 }
+
+it.each([503, 401, 403] as const)('keeps Home mint availability distinct from authorization denial (%s), then recovers', async status => {
+  const f = await fixture();
+  try {
+    f.setActionsSettings(normalizeActionsSettingsV1({ v: 1, actions: { 'session.archive': { disabledSurfaces: [] } } }));
+    f.failAuthorization(status);
+    const outcome = await f.execute(f.operation('session.archive', { sessionId: childId }), { sessionId, isCurrent: async () => true });
+    expect(outcome).toMatchObject(status === 503
+      ? { ok: false, errorCode: 'project_requester_home_unavailable' }
+      : { ok: false, errorCode: 'target_unavailable', details: { reason: 'external_authorization_refused' } });
+    expect(ActionExecuteFailureSchema.parse(outcome)).toEqual(outcome);
+    expect(f.lifecycleEffects).toEqual([]);
+    f.failAuthorization();
+    expect(await f.execute(f.operation('session.archive', { sessionId: childId }), { sessionId, isCurrent: async () => true }))
+      .toMatchObject({ ok: true });
+  } finally { await f.close(); }
+});
+
+it('keeps cancellation distinct when Home authorization becomes unavailable', async () => {
+  const f = await fixture();
+  const controller = new AbortController();
+  try {
+    f.failAuthorization(503, () => controller.abort());
+    expect(await f.execute(f.operation('session.archive', { sessionId: childId }), {
+      sessionId, signal: controller.signal, isCurrent: async () => true,
+    })).toMatchObject({ ok: false, errorCode: 'cancelled' });
+    expect(f.lifecycleEffects).toEqual([]);
+  } finally { await f.close(); }
+});
+
+it('admits cont6 inherited spawn through MCP, daemon custody and signed Home minting', async () => {
+  const f = await fixture();
+  const command = 'node /runtime/.runner-snapshots/inherited-spawn/dist/index.mjs';
+  const runner = { pid: process.pid, processStartTimeMs: 23348,
+    processCommandHash: hashProcessCommand(command), snapshotIdentity: 'snapshot:inherited-spawn' };
+  processIdentity.mockResolvedValue({ pid: runner.pid, processStartTimeMs: runner.processStartTimeMs, command });
+  const path = await createAgentRuntimeDaemonServiceAuthorityPath(configuration);
+  const authority = { happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+    path, sessionId, runner, retainedAgent: createAgentSessionRunnerFactoryBinding({
+      v: 1, pluginId: 'acme.plugin', pluginVersion: '1.2.3', agentId: 'acme-agent', localAgentId: 'acme-agent',
+      sourceCustody: { kind: 'managed', immutableGenerationId: `sha256:${'1'.repeat(64)}`, installSource: 'localPath' },
+      locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+      normalizedModulePath: '/immutable/acme/runtime.mjs', loadMode: 'immutable-js',
+    }) };
+  await publishAgentRuntimeDaemonServiceAuthority({ ...authority, httpPort: 31002, capability: 'B'.repeat(43) });
+  const previousAuthorityPath = process.env.HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE;
+  process.env.HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE = path;
+  const startContext = resolveCliAgentStartContextV1({ sessionId, machineId: storage.state.machineId,
+    directory: '/tmp', backendTarget: resolveBackendTargetFromSessionMetadata({ flavor: 'codex' }),
+    metadata: {}, starterDepth: 0, turnDepth: 0, callerPermissionMode: 'default', settings: accountSettingsParse({}),
+    roles: resolveRolesSnapshotV1({ defaultEngine: { agentTargetKey: inheritedCodexInput.modelSelection.ref.agentTargetKey,
+      modelId: inheritedCodexInput.modelSelection.ref.modelId } }),
+  });
+  if (!startContext) throw new Error('Missing real CLI caller facts');
+  // Native process creation is the effect boundary. Keep both parsers, caller
+  // projection, admission, requester producer and actual Home authorization real.
+  const spawn = vi.fn<ActionExecutorDeps['sessionSpawnNew']>(async () => ({
+    type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted',
+  }));
+  const execute = createDaemonSessionAccountActionExecutor({ serverId, serverHttpBaseUrl,
+    token: f.credentials.token, machineId: storage.state.machineId,
+    prepareExternalActionAuthorization: ({ operation, sessionActionOrigin }) => f.prepare(operation, sessionActionOrigin),
+    createExecutor: () => {
+      const executor = createActionExecutor({ sessionSpawnNew: spawn, observeActionExecution: async () => {} } as unknown as ActionExecutorDeps);
+      return { execute: (actionId, input, context) => executor.execute(actionId, input, {
+        ...context, runtimeAccountId: storage.account.id, agentStartContext: startContext,
+      }) };
+    },
+  });
+  vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
+    const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(String(init?.body)));
+    expect(request.context).toEqual({ token: 'B'.repeat(43), sessionId });
+    if (request.operation.kind !== 'action.execute') throw new Error('Expected Action envelope');
+    const outcome = await execute(request.operation, { sessionId, isCurrent: async () => true });
+    return Response.json({ ok: true, result: { kind: 'action.execution', requestId: request.operation.requestId, outcome } });
+  });
+  const witness = { turnId: 'turn', inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1], callerPermissionMode: 'default',
+    causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'default' },
+    agentStartCaller: { kind: 'session' as const, sessionId, starterDepth: 0, turnDepth: 0 } };
+  const runtime = createHappierMcpServer({ sessionId,
+    getServerBinding: () => ({ serverId, serverUrl: serverHttpBaseUrl }),
+    rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
+    updateMetadata() {}, getWorkDepth: () => 0, getHostTurnWorkDepth: () => 0, getPermissionMode: () => 'default',
+    getActiveTurnAdmissionWitness: () => witness, getActiveTurnPermissionWitness: () => witness,
+  }, { authorityScope: 'session', actionsSettingsProvider: f.actionsSettingsProvider });
+  const client = new Client({ name: 'inherited-spawn', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await runtime.mcp.connect(serverTransport);
+    await client.connect(clientTransport);
+    const response = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
+      arguments: { actionId: 'session.spawn_new', input: inheritedCodexInput } }));
+    const content = response.content.find(block => block.type === 'text');
+    if (content?.type !== 'text') throw new Error('Missing MCP result');
+    expect(response.isError, content.text).not.toBe(true);
+    expect(JSON.parse(content.text)).toMatchObject({ type: 'pending', outcome: 'accepted' });
+    const child = spawn.mock.calls[0]?.[0];
+    expect(SessionSpawnNewInputV2Schema.safeParse({ ...inheritedCodexInput, executionTarget: child?.executionTarget,
+      agentTarget: child?.agentTarget, manager: child?.manager }).success).toBe(true);
+    expect(child).toMatchObject({ executionTarget: { serverId, machineId: storage.state.machineId },
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } }, manager: { sessionId } });
+    expect(f.observations).toContainEqual(expect.objectContaining({
+      path: '/v1/actions/session.spawn_new/execution-authorization', status: 200,
+    }));
+    expect(f.observations).toContainEqual(expect.objectContaining({
+      path: '/v1/actions/session.spawn_new/execution-authorization/verify', signed: true, bearer: false, status: 200,
+    }));
+  } finally {
+    await client.close(); await runtime.mcp.close();
+    await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ ...authority, capabilityDigest: hashPrivateBearer('B'.repeat(43)) });
+    if (previousAuthorityPath === undefined) delete process.env.HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE;
+    else process.env.HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE = previousAuthorityPath;
+    await f.close();
+  }
+});
 
 it('reuses admitted Stop custody for signed observations and freshly verifies the native effect', async () => {
   const f = await fixture();
@@ -445,6 +584,13 @@ it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
         ? { ok: true, sessionId: target, stopOutcome: { status: 'already_stopped' } }
         : { ok: true, sessionId: target, archivedAt: actionId === 'session.archive' ? 123 : null });
     }
+    expect(lifecycleDiagnostics.mock.calls).toEqual(expect.arrayContaining([
+      ['[external-action-stage]', expect.objectContaining({ actionId,
+        stage: 'action_execution.phase', phase: 'caller_session', elapsedMs: expect.any(Number) })],
+      ['[external-action-stage]', expect.objectContaining({ actionId, stage: 'session_action.execute.end' })],
+      ['[external-action-stage]', expect.objectContaining({ actionId,
+        stage: actionId === 'session.stop' ? 'stop.owner_rpc.end' : 'session_archive.http.end' })],
+    ]));
     // Lifecycle scope needs fresh caller/subtree facts, not Role authoring or
     // Agent launch catalogs. Each catalog read fans out through requester custody.
     expect(f.observations.slice(admissionStart).filter(row =>
@@ -485,6 +631,77 @@ it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
     else process.env.HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE = previousAuthorityPath;
     await f.close();
   }
+});
+
+it.each([false, true])('resolves one lifecycle caller snapshot per Action while reobserving led membership (direct=%s)', async direct => {
+  const f = await fixture(1, undefined, direct);
+  f.markInactive();
+  f.setActionsSettings(normalizeActionsSettingsV1({ v: 1,
+    actions: { 'session.archive': { disabledSurfaces: [] } } }));
+  const diagnostics = vi.spyOn(logger, 'warnLocalFile');
+  const callerPhases = () => diagnostics.mock.calls.flatMap(([label, data]) => label === '[external-action-stage]'
+    && data && typeof data === 'object' && 'phase' in data && data.phase === 'caller_session' && 'elapsedMs' in data
+    ? [data.elapsedMs] : []);
+  const run = () => f.execute({ ...f.operation('session.archive', { sessionId: childId }),
+    requestId: '11600000-0000-4000-8000-000000000001' }, { sessionId, isCurrent: async () => true });
+  try {
+    expect(await run()).toMatchObject({ ok: true });
+    console.info('DF116 caller snapshot elapsedMs', { direct, phases: callerPhases() });
+    expect(callerPhases()).toHaveLength(1);
+    expect(f.observations.filter(row => row.path === '/v2/sessions/query').length).toBeGreaterThan(2);
+    f.members.clear();
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'unsupported_action',
+      details: { cause: 'target_outside_led_subtree' } });
+    expect(f.lifecycleEffects).toHaveLength(1);
+    f.members.add(childId);
+    f.omitCallerWorkspace();
+    expect(await run()).toMatchObject({ ok: false, details: { cause: 'caller_context_unavailable' } });
+    expect(f.lifecycleEffects).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
+  'reports unavailable lifecycle scope as retryable without authorizing an effect: %s', async actionId => {
+  const f = await fixture();
+  const stop = vi.spyOn(machineRpc, 'callMachineRpc').mockResolvedValue({ status: 'not_found' });
+  f.markInactive();
+  f.setActionsSettings(normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { disabledSurfaces: [] } } }));
+  f.refuseSubtree('archived');
+  try {
+    const failure = ActionExecuteFailureSchema.parse(await f.execute(f.operation(actionId, { sessionId: childId }),
+      { sessionId, isCurrent: async () => true }));
+    expect(ActionCurrentSessionScopeFailureDetailsV1Schema.parse(failure.details))
+      .toEqual({ cause: 'subtree_observation_unavailable', retryable: true });
+    expect(failure)
+      .toMatchObject({ ok: false, errorCode: 'target_unavailable',
+        details: { cause: 'subtree_observation_unavailable', retryable: true } });
+    expect(stop).not.toHaveBeenCalled();
+    expect(f.lifecycleEffects).toEqual([]);
+    f.allowSubtree();
+    expect(await f.execute(f.operation(actionId, { sessionId: childId }), { sessionId, isCurrent: async () => true }))
+      .toMatchObject({ ok: true });
+  } finally { await f.close(); }
+});
+
+it('overlaps independent active and archived Home scope reads without skipping either corpus', async () => {
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  const f = await fixture(1, async () => {
+    maximumInFlight = Math.max(maximumInFlight, ++inFlight);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    inFlight--;
+  });
+  f.markInactive();
+  f.markChildArchived();
+  f.setActionsSettings(normalizeActionsSettingsV1({ v: 1,
+    actions: { 'session.unarchive': { disabledSurfaces: [] } } }));
+  try {
+    expect(await f.execute(f.operation('session.unarchive', { sessionId: childId }), { sessionId, isCurrent: async () => true }))
+      .toMatchObject({ ok: true });
+    expect(maximumInFlight).toBe(2);
+    expect(inFlight).toBe(0);
+    expect(f.lifecycleEffects).toEqual([`/v2/sessions/${childId}/unarchive`]);
+  } finally { await f.close(); }
 });
 
 it.each([
@@ -600,7 +817,7 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
     const prepared = await f.prepare(op, { v: 1, caller: op.witness.agentStartCaller,
       sourceTurnId: 'turn', callerPermissionMode: null, requestId: op.requestId });
     if (!prepared) throw new Error('Missing original root');
-    const list = createSessionListActionDependency({ credentials: f.credentials, serverId,
+    const { sessionList: list } = createSessionListActionDeps({ credentials: f.credentials, serverId,
       serverIdentityId: storage.state.homeId, serverHttpBaseUrl,
       resolveAccountSettings: () => accountSettingsParse({}),
       externalActionMachineRequestPrivateKey: installation.secretKey, externalActionMachineInstallationId: storage.state.installationId });
@@ -679,18 +896,19 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
   } finally { await f.close(); }
 });
 
-it.each(['session.spawn_new', 'session.follow.sources.set', 'session.reports_to.set'] as const)(
+it.each(['session.spawn_new', 'follow.set', 'session.manager.set'] as const)(
   'uses the original %s root for post-commit source/destination transport reads', async actionId => {
   const f = await fixture();
   try {
-    const sourceSessionId = actionId === 'session.reports_to.set' ? sessionId : childId;
-    const destinationSessionId = actionId === 'session.reports_to.set' ? childId : sessionId;
+    const sourceSessionId = actionId === 'session.manager.set' ? sessionId : childId;
+    const destinationSessionId = actionId === 'session.manager.set' ? childId : sessionId;
     const operation = f.operation(actionId, actionId === 'session.spawn_new'
       ? { creationKey: 'signed-source-key-child', executionTarget: { serverId, machineId: storage.state.machineId },
         directory: { kind: 'path', path: '/workspace' },
         agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
-        reportsTo: { sessionId } }
-      : actionId === 'session.follow.sources.set' ? { sourceSessionId, destinationSessionId }
+        manager: { sessionId } }
+      : actionId === 'follow.set' ? { receiver: { kind: 'session', sessionId: destinationSessionId },
+        source: { kind: 'session', sessionId: sourceSessionId }, policy: { preset: 'important' } }
         : { sessionId: sourceSessionId, leadSessionId: destinationSessionId, expectedLeadSessionId: null });
     const prepared = await f.prepare(operation, { v: 1, caller: operation.witness.agentStartCaller,
       sourceTurnId: 'turn', callerPermissionMode: null, requestId: operation.requestId });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { accountSettingsParse, admitAgentStartV1, buildBackendTargetKeyV2, BUILT_IN_ROLES_V1, ConnectedServiceBindingsV2Schema, createRoleSourceReaderV1 } from '@happier-dev/protocol';
 import { resolveCliAgentStartContextV1 } from './resolveCliAgentStartContextV1';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 
 const backendTarget = { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } as const;
 const input = {
@@ -23,7 +24,7 @@ describe('host agent-start snapshots', () => {
   });
   it('builds live role defaults from the applied child selection rather than pending parent intent', () => {
     const agentTargetKey = buildBackendTargetKeyV2(backendTarget);
-    const applied = { agentTargetKey, providerConnectionId: 'applied-provider', modelId: 'applied-model' };
+    const applied = { agentTargetKey, providerConnectionId: ProviderConnectionIdSchema.parse('applied-provider'), modelId: 'applied-model' };
     const pending = { agentTargetKey, providerConnectionId: 'pending-provider', modelId: 'pending-model' };
     const context = resolveCliAgentStartContextV1({ ...input,
       metadata: { modelSelectionIntentV1: { v: 1, selection: pending, updatedAt: 10 },
@@ -73,7 +74,7 @@ describe('host agent-start snapshots', () => {
     const recordActionStartDiagnostic = (event: unknown) => reasons.push(event);
     expect(resolveCliAgentStartContextV1({ ...input, recordActionStartDiagnostic,
       roleSourceInventory: { status: 'partial', entries: input.roleSourceInventory.entries,
-        diagnostics: [{ source: 'artifact', reason: 'unavailable' }] },
+        diagnostics: [{ source: 'artifact', artifactId: 'unavailable-role', reason: 'unavailable' }] },
     })).toBeNull();
     expect(reasons).toEqual([{ phase: 'agent_start_context', refusalReason: 'role_source_incomplete' }]);
     reasons.length = 0;

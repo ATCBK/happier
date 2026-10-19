@@ -2,8 +2,9 @@ import { ArtifactActionInputSchemasV1, projectArtifactHeaderV1 } from '@happier-
 import { artifactSavedByFromActionContextV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { isArtifactHtmlHeaderV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { getArtifactKindPolicyV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
-import type { ActionExecutorContext, ArtifactActionIdV1, ArtifactPublicLinkIssuedV1 } from '@happier-dev/protocol';
-import type { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import type { ActionExecutorContext, ArtifactPublicLinkIssuedV1 } from '@happier-dev/protocol';
+import { DocEditAcceptHostInputV1Schema, DocEditDeclineInputV1Schema, type ArtifactHostActionInvocationV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
+import type { createAccountArtifactStore, ArtifactRequestAuthorizationHeaders } from '@/api/artifacts/accountArtifactStore';
 import { publishArtifactFromWorkspaceFile, readArtifactWorkspaceFile, writeArtifactWorkspaceFile } from './publishArtifactFromWorkspaceFile';
 
 type ArtifactPublishCaller = Readonly<{ sessionId: string; machineId: string; directory: string; runId?: string }>;
@@ -14,6 +15,7 @@ export function createCliArtifactActions(params: Readonly<{
   beforeDelete: (input: Readonly<{ artifactId: string; signal?: AbortSignal }>) => Promise<void>;
   resolvePublishCaller: (context: ActionExecutorContext) => Promise<ArtifactPublishCaller | null>;
   onPublicLinkIssued?: (link: ArtifactPublicLinkIssuedV1) => void | Promise<void>;
+  authorizationHeaders?: (context: ActionExecutorContext, effectActionId: string) => ArtifactRequestAuthorizationHeaders;
 }>) {
   const readUpload = async (context: ActionExecutorContext, input: Readonly<{ uploadPath: string; mime?: string; header: Readonly<Record<string, unknown>> }>, signal?: AbortSignal) => {
     const caller = await params.resolvePublishCaller(context);
@@ -22,12 +24,25 @@ export function createCliArtifactActions(params: Readonly<{
     return { binary: { bytes, mime: input.mime ?? (isArtifactHtmlHeaderV1(input.header)
       ? typeof input.header.mime === 'string' ? input.header.mime : 'text/html' : 'application/octet-stream') } };
   };
-  return async (args: Readonly<{ actionId: ArtifactActionIdV1; input: unknown; context: ActionExecutorContext; signal?: AbortSignal }>): Promise<unknown> => {
+  return async (args: ArtifactHostActionInvocationV1 & Readonly<{ context: ActionExecutorContext; signal?: AbortSignal }>): Promise<unknown> => {
     const signal = args.signal ?? args.context.signal;
     const savedBy = artifactSavedByFromActionContextV1(args.context);
+    const resolveAuthorization = args.actionId === 'doc.edit.accept' || args.actionId === 'doc.edit.decline'
+      || args.context.externalActionCredential || args.context.externalActionExecutionAuthorization
+      ? params.authorizationHeaders : undefined;
     signal?.throwIfAborted();
     try {
+      if ((args.context.externalActionCredential || args.context.externalActionExecutionAuthorization) && !resolveAuthorization) {
+        return { ok: false, errorCode: 'execution_not_authorized', error: 'execution_not_authorized' };
+      }
       switch (args.actionId) {
+        case 'doc.edit.accept':
+          return await params.store.decideDocEditProposal({ actionId: args.actionId, input: DocEditAcceptHostInputV1Schema.parse(args.input), signal,
+            ...(resolveAuthorization ? { authorizationHeaders: async request => resolveAuthorization(args.context,
+              request.method === 'GET' ? 'artifact.get' : args.actionId)(request) } : {}) });
+        case 'doc.edit.decline':
+          return await params.store.decideDocEditProposal({ actionId: args.actionId, input: DocEditDeclineInputV1Schema.parse(args.input), signal,
+            ...(resolveAuthorization ? { authorizationHeaders: resolveAuthorization(args.context, args.actionId) } : {}) });
         case 'artifact.public_link.create':
         case 'artifact.public_link.list':
         case 'artifact.public_link.revoke':
@@ -43,7 +58,9 @@ export function createCliArtifactActions(params: Readonly<{
         }
         case 'artifact.get': {
           const input = ArtifactActionInputSchemasV1[args.actionId].parse(args.input);
-          const artifact = await params.store.read(input.artifactId, { signal, includeSharedAudience: false });
+          const artifact = await params.store.read(input.artifactId, { signal, includeSharedAudience: false,
+            ...('readOnly' in args && args.readOnly ? { prepareRecipients: false } : {}),
+            ...(resolveAuthorization ? { authorizationHeaders: resolveAuthorization(args.context, args.actionId) } : {}) });
           return { artifact };
         }
         case 'artifact.export': {

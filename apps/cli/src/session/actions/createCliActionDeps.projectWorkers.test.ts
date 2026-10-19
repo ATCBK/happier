@@ -6,14 +6,56 @@ import { createCliActionDeps } from './createCliActionDeps';
 import { getActionSpec, ProjectWorkerActionInputSchemasV1 } from '@happier-dev/protocol';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import axios from 'axios';
+import { createProjectWorkerAction } from '@/workspaces/execution/projectWorkerAction';
+import { createProjectWorkerAdmission } from '@/workspaces/execution/projectWorkerAdmission';
+import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
 const input = { workspace: { serverId: 'home', refId: 'checkout' },
   destination: { kind: 'machine' as const, machineId: 'worker' }, purpose: 'finite' as const };
 const params = { token: 'requester-token', credentials: { token: 'requester-token', encryption: null },
   sessionId: 'cli-global', mode: 'plain' as const, ctx: null, serverId: 'home', serverHttpBaseUrl: 'https://home.test' };
+const installedSettings = { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1,
+  approvalWaivedSurfaces: { 'projects.worker.copy.retire': ['cli', 'agent', 'mcp'] } }), getAccountSettings: () => null };
 afterEach(() => vi.restoreAllMocks());
 
 describe('worker Actions through requester CLI composition', () => {
+  it.each(['cli', 'agent', 'mcp'] as const)('keeps installed worker status/retire, Sync inspection and Account preferences composed on %s', async surface => {
+    const request = ProjectWorkerActionInputSchemasV1['projects.worker.copy.inspect'].parse(
+      JSON.parse(getActionSpec('projects.worker.copy.inspect').examples!.voice!.argsExample!),
+    );
+    const preview = { ok: true, preview: { targetMachineId: request.targetMachineId,
+      workspaceRefId: request.targetWorkspaceRefId, rootFingerprint: 'b'.repeat(64), sizeBytes: 42 } };
+    // Exact Machine RPC and Account HTTP are the only substituted boundaries.
+    const transport = vi.spyOn(machineTransport, 'callExactMachineRpc').mockResolvedValue(preview);
+    vi.spyOn(axios, 'request').mockImplementation(async config => {
+      if (config.url === 'https://home.test/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      expect(config.url).toBe('https://home.test/v1/projects/execution/config/read');
+      expect(config.data).toEqual({ address: request.workspace });
+      return { status: 200, data: { status: 'absent' } };
+    });
+    const installed = createProjectWorkerAction({ machineId: request.machineId, serverId: 'home',
+      serverHttpBaseUrl: 'https://home.test', credentials: params.credentials,
+      admission: createProjectWorkerAdmission({ machineId: request.machineId, admissionDrain: createDaemonAdmissionDrain(),
+        readPolicy: async () => ({ status: 'unavailable' }) }), isFiniteExecutionLive: () => false });
+    const owner = createCliActionExecutor({ ...params, accountServerActionDeps: createAccountServerActionDeps(params),
+      pluginActionExecutionOwner: 'current_process', projectWorkerAction: installed, actionsSettingsProvider: installedSettings });
+    const context = { surface, authority: 'present_user' as const };
+    expect(await owner.execute('projects.worker.status', { ...input, destination: { kind: 'machine', machineId: request.machineId } }, context))
+      .toMatchObject({ ok: true, result: { eligible: false, explanation: 'unsupported' } });
+    expect(await owner.execute('projects.worker.copy.inspect', request, context)).toEqual({ ok: true, result: preview });
+    expect(transport).toHaveBeenCalledWith(expect.objectContaining({ machineId: request.machineId,
+      method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT, request }));
+    expect(await owner.execute('projects.worker.copy.retire', { workspace: request.workspace, machineId: request.machineId,
+      expectedRelationship: request.expectedRelationship }, { ...context,
+      presentUserConfirmation: { actionId: 'projects.worker.copy.retire' } }))
+      .toMatchObject({ ok: false, errorCode: 'workspace_sync_unavailable' });
+    expect(await owner.execute('projects.worker.preferences.get', { workspace: request.workspace }, context))
+      .toMatchObject({ ok: true, result: { status: 'ready', revision: 'absent' } });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
   it('reads the current exact-copy removal identity through the public Action and refuses another target', async () => {
     const retirement = JSON.parse(getActionSpec('projects.worker.copy.retire').examples!.voice!.argsExample!);
     const request = { ...retirement, kind: 'preview', targetMachineId: 'worker', targetWorkspaceRefId: 'copy' };

@@ -126,6 +126,71 @@ describe('Home family CLI adapter', () => {
     },
   );
 
+  it('settles an approved Session delete as a typed failure when Home confirms transaction rollback', async () => {
+    let deletes = 0;
+    app.delete('/v1/sessions/:sessionId', async (request, reply) => {
+      deletes += 1;
+      expect(request.params).toEqual({ sessionId: 'session-1' });
+      return reply.code(503).send({ error: 'database_transaction_conflict_exhausted', statusCode: 503 });
+    });
+    let stored: ApprovalRequest | null = null;
+    const { executor } = createCliActionExecutorHarness({ token: 'bound', sessionId: 'cli-global',
+      serverId: 'home', serverHttpBaseUrl: 'http://home.test', mode: 'plain', ctx: null,
+    }, {
+      ...createAccountServerActionDeps({ token: 'bound', serverId: 'home', serverHttpBaseUrl: 'http://home.test' }),
+      approvalsCreate: async ({ request }) => {
+        stored = ApprovalRequestV2Schema.parse(request);
+        return { artifactId: 'session-delete-approval' };
+      },
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => {
+        if (!stored) return { ok: false, errorCode: 'not_found', error: 'not_found' };
+        const transition = decideApprovalRequestTransition(stored, request);
+        if (!transition.ok) return transition;
+        stored = ApprovalRequestV2Schema.parse(request);
+        return { ok: true };
+      },
+      isApprovalExecutionOriginCurrent: async () => true,
+    });
+    const proposed = await executor.execute('session.delete', { sessionId: 'session-1' }, {
+      surface: 'agent', authority: 'account_automation', serverId: 'home', runtimeAccountId: 'account-1',
+      actionRequestId: 'delete-request', actionCaller: { kind: 'host' },
+    });
+    expect(proposed).toMatchObject({ ok: true,
+      result: { kind: 'approval_request_created', artifactId: 'session-delete-approval' } });
+    expect(deletes).toBe(0);
+
+    const decided = await executor.execute('approval.request.decide', {
+      artifactId: 'session-delete-approval', decision: 'approve',
+    }, { surface: 'ui', authority: 'present_user', serverId: 'home', runtimeAccountId: 'account-1',
+      actionCaller: { kind: 'host' } });
+    expect(decided).toMatchObject({ ok: true, result: { status: 'failed', execution: {
+      ok: false, errorCode: 'database_transaction_conflict_exhausted',
+    } } });
+    expect(stored).toMatchObject({ status: 'failed', execution: {
+      ok: false, errorCode: 'database_transaction_conflict_exhausted',
+    } });
+    expect(deletes).toBe(1);
+  });
+
+  it('projects an active Session delete refusal through the shared Home Action result', async () => {
+    app.delete('/v1/sessions/:sessionId', async (_request, reply) =>
+      reply.code(409).send({ error: 'Session is active' }));
+    const deps = createAccountServerActionDeps({
+      token: 'bound', serverId: 'home', serverHttpBaseUrl: 'http://home.test',
+    });
+
+    await expect(deps.homeDomainAction!({
+      actionId: 'session.delete', input: { sessionId: 'session-1' },
+      context: { surface: 'cli', serverId: 'home' } as never,
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'session_active',
+      error: 'session_active',
+      details: { error: 'Session is active' },
+    });
+  });
+
   it('rebuilds only the bound Personal Home index through Action admission and retains server refusals', async () => {
     let rebuilt = false;
     app.post('/v1/home/search/rebuild', async () => { rebuilt = true; return { ok: true }; });
@@ -468,7 +533,7 @@ describe('Home family CLI adapter', () => {
     const authorization = {
       v: 1 as const,
       token: 'external-authorization',
-      binding: {
+      binding: { custodianAccountId: 'account-1', installationId: 'installation-1',
         serverIdentityId: 'srv-cryptographic-home',
         accountId: 'account-1',
         principalId: 'principal-1',
@@ -523,7 +588,8 @@ describe('Home family CLI adapter', () => {
       actionId: 'teams.archive',
       input: { v: 1, teamId: 'team-1' },
       context: { surface: 'cli', serverId: 'home-a' } as never,
-    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown',
+      details: { category: 'transport_error' } });
     await expect(deps.homeDomainAction!({
       actionId: 'home.governance.get',
       input: {},
@@ -569,7 +635,8 @@ describe('Home family CLI adapter', () => {
       input: { v: 1, teamId: 'team-1' },
       context: { surface: 'cli', serverId: 'home-a' } as never,
       signal: afterDispatch.signal,
-    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown',
+      details: { category: 'transport_error' } });
     request.mockRestore();
   });
 });

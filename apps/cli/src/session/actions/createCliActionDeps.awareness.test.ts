@@ -40,21 +40,38 @@ function collaborationFeatures() {
 describe('CLI activity compatibility awareness', () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => { vi.useRealTimers(); socketBoundary.socket = null; });
-  it('publishes only the bound child own report under fresh reportsTo and refuses workflow steps', async () => {
-    const row = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadata: '{}', reportsTo: { sessionId: 'lead' } });
+  it('persists a caller-bound update without a manager and refuses foreign deliverables and workflow steps', async () => {
+    const row = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadata: '{}' });
     vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { session: row } });
     const committed: unknown[] = [];
     const deliverables = [{ kind: 'workspace_file' as const, sessionId, path: 'docs/result.md' }, { kind: 'artifact' as const, artifactId: 'document-1' }];
     const owner = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
-      publishWorkerReport: async (report) => { committed.push(report); return { persisted: true, localId: 'worker-report-1' }; } });
-    expect(await owner.sessionWorkerPublish!({ context, summary: 'Partial finding', deliverables })).toEqual({ sessionId, leadSessionId: 'lead', localId: 'worker-report-1' });
-    expect(await owner.sessionWorkerPublish!({ context, summary: 'Foreign source', deliverables: [{ kind: 'workspace_file', sessionId: 'other', path: 'docs/result.md' }] })).toMatchObject({ ok: false, errorCode: 'session_worker_deliverable_scope_mismatch' });
-    delete row.reportsTo;
-    expect(await owner.sessionWorkerPublish!({ context, summary: 'Unrelated' })).toMatchObject({ ok: false, errorCode: 'session_worker_requires_reports_to' });
-    row.reportsTo = { sessionId: 'lead' };
+      postSessionUpdate: async (report) => { committed.push(report); return { persisted: true, localId: 'worker-report-1' }; } });
+    expect(await owner.sessionUpdatePost!({ context, summary: 'Partial finding', deliverables })).toEqual({ sessionId, localId: 'worker-report-1', persisted: true });
+    expect(await owner.sessionUpdatePost!({ context, summary: 'Foreign source', deliverables: [{ kind: 'workspace_file', sessionId: 'other', path: 'docs/result.md' }] })).toMatchObject({ ok: false, errorCode: 'session_update_deliverable_scope_mismatch' });
     row.origin = { kind: 'run_step', runId: 'workflow-run' };
-    expect(await owner.sessionWorkerPublish!({ context, summary: 'Wrong carrier' })).toMatchObject({ ok: false, errorCode: 'session_worker_run_step_requires_publish_draft' });
+    expect(await owner.sessionUpdatePost!({ context, summary: 'Wrong carrier' })).toMatchObject({ ok: false, errorCode: 'session_update_run_step_requires_publish_draft' });
     expect(committed).toEqual([{ summary: 'Partial finding', deliverables }]);
+  });
+  it('never reports an update as persisted without its original committed reference', async () => {
+    const row = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadata: '{}' });
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { session: row } });
+    const owner = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
+      postSessionUpdate: async () => ({ persisted: false }),
+    });
+    expect(await owner.sessionUpdatePost!({ context, summary: 'Uncommitted finding' }))
+      .toMatchObject({ ok: false, errorCode: 'session_update_not_committed' });
+  });
+  it('refuses a session caller publishing as a different bound source', async () => {
+    const posted: unknown[] = [];
+    const owner = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
+      postSessionUpdate: async report => { posted.push(report); return { persisted: true, localId: 'update-1' }; },
+    });
+    expect(await owner.sessionUpdatePost!({ summary: 'Wrong source', context: {
+      actionCaller: { kind: 'session', sessionId: 'other-session', starterDepth: 0, turnDepth: 0 },
+    } })).toMatchObject({ ok: false, errorCode: 'session_update_source_mismatch' });
+    expect(posted).toEqual([]);
+    expect(vi.mocked(axios.get)).not.toHaveBeenCalled();
   });
   it('projects status through awareness while retaining released pending count fields', async () => {
     const now = Date.now();

@@ -257,6 +257,11 @@ export function createActionOperationStore(options?: Readonly<{
       }));
     },
 
+    updateCancellation(operationId: string, cancellation: ActionOperationSnapshotV1['cancellation']): ActionOperationSnapshotV1 | null {
+      return mutate(operationId, current => current.cancellation === cancellation ? current
+        : { ...current, revision: current.revision + 1, cancellation });
+    },
+
     updateObservation(operationId: string, observation: NonNullable<ActionOperationSnapshotV1['observation']> | null): ActionOperationSnapshotV1 | null {
       return mutate(operationId, (current) => {
         const { observation: _observation, ...retained } = current;
@@ -326,7 +331,9 @@ export function createActionOperationStore(options?: Readonly<{
       requestId: string,
     ): ActionOperationSnapshotV1 | null {
       prune();
-      return [...snapshots.values()].find((snapshot) => (
+      // Explicit retryable creation attempts retain earlier terminal receipts.
+      // Join or replay the newest receipt for that unchanged logical request.
+      return [...snapshots.values()].reverse().find((snapshot) => (
         inScope(snapshot, scope)
         && snapshot.actionId === actionId
         && snapshot.requestId === requestId

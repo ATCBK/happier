@@ -30,6 +30,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import type { ApprovalStaleReason } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 
 import type { ResolveExternalActionTarget } from './executeExternalAction';
+import { rethrowRequesterHomeReadFailure } from "@/daemon/sessionEncryption/requesterCurrentness";
 
 type CurrentMachineExecutionOrigin = Readonly<{
   serverIdentityId: string;
@@ -133,6 +134,9 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
           ? currentMachineOrigin.serverIdentityId !== origin.serverIdentityId
           : origin.serverId !== input.serverId) return stale('home_changed');
       const externalAuthorization = origin.externalActionExecutionAuthorization;
+      // Requester identity in editable Artifact content is not an immutable
+      // subject unless the original installation signed that exact subject.
+      if (request?.v === 2 && request.requesterConfirmation && !externalAuthorization) return stale('credential_changed');
       let hasVerifiedManagedGuestSource = false;
       if (externalAuthorization) {
         const binding = externalAuthorization.binding;
@@ -168,6 +172,8 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
             actionId: origin.actionId,
             target: origin.target,
             input: request ? request.actionArgs : actionInput,
+            ...(request?.v === 2 && request.requesterConfirmation ? { requesterConfirmation: request.requesterConfirmation } : {}),
+            ...(origin.sessionTargetsV1 ? { sessionTargetsV1: origin.sessionTargetsV1 } : {}),
             publicKey: input.externalActionMachinePublicKey,
             signature: origin.externalActionInputSignature,
           })
@@ -313,7 +319,7 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
       // eligibility; the authenticated Account owner must prove that instead.
       if (origin.credentialId === undefined) {
         try { return await input.isAccountCurrent(signal) || stale('account_changed'); }
-        catch { return stale('account_unavailable'); }
+        catch (error) { rethrowRequesterHomeReadFailure(error); return stale('account_unavailable'); }
       }
       const tokenList = await input.listAccountApiTokens(signal);
       if (
@@ -326,7 +332,8 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
       if (!token) return stale('credential_changed');
       if (token.expiresAt !== null && Date.parse(token.expiresAt) <= now()) return stale('credential_expired');
       return true;
-    } catch {
+    } catch (error) {
+      rethrowRequesterHomeReadFailure(error);
       return stale('currentness_read_failed');
     }
   };

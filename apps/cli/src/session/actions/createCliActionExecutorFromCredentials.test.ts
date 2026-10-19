@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import axios, { AxiosHeaders, type AxiosResponse } from 'axios';
-import { createCliActionExecutorFromCredentials } from './createCliActionExecutorFromCredentials';
+import {
+  createCliActionExecutorFromCredentials,
+  resolveProtectedSessionInputActionTarget,
+} from './createCliActionExecutorFromCredentials';
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import {
   FeaturesResponseSchema,
@@ -108,6 +111,14 @@ describe('createCliActionExecutorFromCredentials', () => {
     readSettings.mockClear();
   });
 
+  it('routes protected inactive Session input to its owning Machine without changing the live path', () => {
+    const input = { sessionId: 'session-1', machineId: 'machine-1' };
+    expect(resolveProtectedSessionInputActionTarget({ ...input, active: false }))
+      .toEqual({ kind: 'machine', machineId: 'machine-1' });
+    expect(resolveProtectedSessionInputActionTarget({ ...input, active: true }))
+      .toEqual({ kind: 'session', sessionId: 'session-1' });
+  });
+
   it('requires and propagates one qualified Home identity with a fixed endpoint', async () => {
     const credentials = {
       token: 'token_test',
@@ -145,6 +156,7 @@ describe('createCliActionExecutorFromCredentials', () => {
     });
     expect(createSessionFollowActionDeps).toHaveBeenLastCalledWith({
       token: 'token_test',
+      credentials,
       serverId: 'home-b',
       serverHttpBaseUrl: 'https://home-b.example.test',
       prepareSourceKeyAfterSet: expect.any(Function),

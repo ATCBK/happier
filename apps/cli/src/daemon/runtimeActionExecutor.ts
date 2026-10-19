@@ -1,5 +1,10 @@
 import { createUnavailableRuntimeActionExecutor, resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
 import type { RuntimeActionExecute } from '@happier-dev/protocol';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { BrowserCommandDispatchResultV1Schema } from '@happier-dev/protocol/browser/control/v1';
+import type { HostActionOperationRuntime } from './actionOperations/createHostActionOperationRuntime';
+import type { RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 
 import {
   createBrowserDaemonRuntimeActionExecutor,
@@ -28,6 +33,7 @@ import {
 } from './peer/mediation/observability/runtimeActionExecutor';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import type { ComputerRoutes } from './computer/routes';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 
 export type BrowserUiAutomationRouteOwner = Readonly<{
   ownsAutomationView: (view: Readonly<{ browserSessionId: string; viewId: string }>) => boolean;
@@ -61,11 +67,13 @@ export type DaemonRuntimeActionRouteOwners = Readonly<{
 }>;
 
 export type CreateDaemonRuntimeActionExecutorInput = Readonly<{
-  env: NodeJS.ProcessEnv;
+  env: ProcessEnvInput;
   /** Resolve at dispatch time so route replacement cannot leave plugin actions stale. */
   resolveRouteOwners: () => DaemonRuntimeActionRouteOwners;
   /** The daemon's cached, synchronous server feature snapshot accessor. */
   resolveServerFeaturesSnapshot: () => CliServerFeaturesSnapshot | undefined;
+  /** Existing Machine operation owner observes every admitted Browser open. */
+  observeExecution?: HostActionOperationRuntime['observeExecution'];
 }>;
 
 /**
@@ -89,7 +97,7 @@ export function createDaemonRuntimeActionExecutor(
     resolveServerFeaturesSnapshot: input.resolveServerFeaturesSnapshot,
   });
 
-  return async (args) => {
+  const execute: RuntimeActionExecute = async (args) => {
     args.context.signal?.throwIfAborted();
     // Native target availability/OS grants and consent have their own canonical owners;
     // browser/server feature bits do not decide native computer-use admission.
@@ -150,8 +158,10 @@ export function createDaemonRuntimeActionExecutor(
       : undefined;
     const browserRuntimeActionExecutor = createBrowserDaemonRuntimeActionExecutor({
       ...(routes.browserControl ? { control: routes.browserControl } : {}),
+      resolveControl: () => input.resolveRouteOwners().browserControl,
       ...(routes.browserContext ? { context: routes.browserContext } : {}),
       ...(routes.browserAutomation ? { automation: routes.browserAutomation } : {}),
+      resolveAutomation: () => input.resolveRouteOwners().browserAutomation,
       // Without a current daemon ownership source, an unknown view must never provision Chromium.
       ownsAutomationView: routes.browserUiAutomation?.ownsAutomationView ?? (() => false),
       ...(routes.browserUiAutomation ? { uiAutomation: routes.browserUiAutomation.uiAutomation } : {}),
@@ -167,5 +177,36 @@ export function createDaemonRuntimeActionExecutor(
     // Once dispatched, the owning leaf settles cancellation and effect completion. Admission
     // aborts above must not overwrite an acknowledged or explicitly uncertain owner result.
     return browserRuntimeActionExecutor(args);
+  };
+
+  return async args => {
+    args.context.signal?.throwIfAborted();
+    // Route availability changes provisioning, not operation ownership. Approval
+    // replay and Session dispatch must observe installed opens through this same
+    // runner; an already-observed RPC carries its acceptance port instead.
+    if (args.actionId !== 'browser.view.open' || !input.observeExecution
+      || args.context.operationAcceptance?.actionId === args.actionId) return await execute(args);
+    const context: RpcActionExecutorContext = args.context;
+    const observed = await input.observeExecution({ actionId: args.actionId, input: args.input,
+      ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}),
+      ...(context.defaultSessionId ? { sessionId: context.defaultSessionId } : {}),
+      rpcContext: context,
+      execute: async operation => {
+        // Acceptance returns before installation settles. Keep the admitted
+        // requester alive through this operation's actual effect and completion.
+        const release = readRequesterAccountActionContext(context.externalActionExecutionAuthorization)?.retain();
+        try {
+          const result = await execute({ ...args, context: { ...context, ...operation } });
+          const failure = ActionExecuteFailureSchema.safeParse(result);
+          if (failure.success) return failure.data;
+          const terminal = BrowserCommandDispatchResultV1Schema.safeParse(result);
+          if (!terminal.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+          // A typed command failure is still the Action's valid result. Retain
+          // its completion and retryability facts for callers and bound get readers.
+          return { ok: true, result: terminal.data };
+        } finally { await release?.(); }
+      },
+    });
+    return observed.ok ? observed.result : observed;
   };
 }

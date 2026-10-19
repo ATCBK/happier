@@ -1,3 +1,5 @@
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+
 export type HappierBuiltInToolDefinition = Readonly<{
   name: string;
   title: string;
@@ -13,7 +15,7 @@ export type HappierBuiltInToolDefinition = Readonly<{
   promptSnippet?: string;
   promptGuidelines?: readonly string[];
   availability?: unknown;
-  annotations?: unknown;
+  annotations?: ToolAnnotations;
   _meta?: Readonly<Record<string, unknown>>;
 }>;
 

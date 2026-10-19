@@ -1,6 +1,7 @@
 import axios from 'axios';
 import nacl from 'tweetnacl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { ApiTokenGrantV1Schema } from '@happier-dev/protocol/auth/apiTokenGrant';
@@ -8,14 +9,40 @@ import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { bindRequesterSessionCredentialScope, sameStoredCredentials, type StoredCredentials } from '@/persistence';
 import { projectRequesterAccountActionAuthorization } from './requesterSessionCredentials';
-import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
+import { createExternalActionMachineRpcExecution, dispatchOriginalAccountAction, projectExternalActionRequesterHttpAuthorization, isReviewedSecondOpinionModelSpawnChild, createReviewedSecondOpinionSessionCreationAuthorization } from '@/api/externalActionExecutionAuthorization';
+import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { buildDiscussionModelSessionCreationProofPayloadV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationAuthorizationV1';
+import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
+import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import * as requesterAccountOwner from './requesterAccountActionProjection';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createActionOperationRunner } from '../actionOperations/actionOperationRunner';
 import { createActionOperationStore } from '../actionOperations/actionOperationStore';
-import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { deriveAccountMachineKeyFromRecoverySecret, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
+import { openExternalActionRequesterAccountContextV1, sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import * as installationStore from '@/daemon/identity/store';
+import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { configuration } from '@/configuration';
+import { logger } from '@/ui/logger';
+import { publishServerHttpRuntimeOrigin, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { encodeStoredCredentials } from '@/persistence';
+import { createActionExecutor, computeExternalActionRequestEnvelopeDigestV1,
+  sealExternalActionRequestV2, openExternalActionRequestV2, openExternalActionResponseV2 } from '@happier-dev/protocol/actions';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { executeExternalAction } from '@/daemon/externalActions/executeExternalAction';
+import { registerExternalActionRpcHandler } from '@/rpc/handlers/externalAction';
+import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, ExternalActionRequestEnvelopeSchema, parseExternalActionDaemonDispatchResultV1,
+  projectExternalActionHttpError } from '@happier-dev/protocol/actions/externalActionApi';
+import { ACTION_API_SERVER_ORIGIN } from '@happier-dev/protocol/socketRpc';
+import type { RpcHandler } from '@/api/rpc/types';
+import { createDaemonExternalActionTargetResolver } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 
 let channel: Awaited<ReturnType<typeof createRequesterCurrentnessSocketHarness>>;
 beforeEach(async () => { channel = await createRequesterCurrentnessSocketHarness(); });
@@ -37,8 +64,610 @@ function bootstrap(credentials: StoredCredentials, isCurrent = async () => true)
 }
 
 describe('admitted requester Action projection', () => {
-  it('evaluates distinct Account and bootstrap facts once on each side of Home verification', async () => {
-    const root = { ...authorization, binding: { ...authorization.binding, accountEncryptionMode: 'plain' as const } };
+  it('opens the immutable opinion root and proves the creator-bound current model slot for public spawn and read-only preflight', async () => {
+    const launch = { executionTarget: { serverId: 'home-profile', machineId: 'model-machine' },
+      directory: { kind: 'path', path: '/reviewed' },
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } } as const;
+    const source = { kind: 'session', message: { kind: 'session', session: { serverId: 'home-profile', sessionId: 'source-session' }, messageId: 'answer' } } as const;
+    const reviewer = { selection: { kind: 'model', launch }, participantSlotId: 'reviewed-slot', sourceAccess: 'read' } as const;
+    const input = { intent: 'ask', source, title: 'Review', question: 'Check this', reviewers: [reviewer],
+      retry: { creationLocalId: 'opinion-create', quoteLocalId: 'opinion-quote', questionLocalId: 'opinion-question' },
+      confirmedPreview: { source, sourceAudienceAccountIds: ['bob'], sourceContentReady: true,
+        discussionAudienceAccountIds: ['bob'], missingDiscussionSourceAccountIds: [], discussionDisclosure: { ok: true }, canGrantSource: true,
+        reviewers: [{ ...reviewer, runtimeAccountId: 'bob', audienceAccountIds: ['bob'], missingSourceAccountIds: [],
+          canGrantSource: true, disclosure: { ok: true } }] } };
+    const envelope = ExternalActionRequestEnvelopeSchema.parse({ v: 1, requestId: 'reviewed-opinion',
+      target: { kind: 'machine', machineId: 'source-machine' }, input });
+    const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'opinion-root', binding: {
+      accountId: 'bob', custodianAccountId: 'source-owner', authentication: { kind: 'account', tokenEpoch: 1 },
+      serverIdentityId: 'stable-home', machineId: 'source-machine', installationId: 'source-installation', accountEncryptionMode: 'plain',
+      actionId: 'discussion.second_opinion.start', requestId: envelope.requestId, target: envelope.target,
+      requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+    } });
+    let current = true, archivedAt: number | null = null, creationLocalId = input.retry.creationLocalId, slotPath = launch.directory.path;
+    const summary = () => ({ id: 'created-opinion', ownerAccountId: 'bob', encryptionMode: 'plain', anchor: null,
+      access: 'owner', keyReadiness: true, dataEncryptionKey: null, creationLocalId,
+      titleContent: { t: 'plain', v: { v: 1, title: 'Review' } },
+      latestMessage: { id: 'quote', localId: 'opinion-quote', seq: 1, authorAccountId: null, accountActor: null, producerV1: null, createdAt: 1 },
+      messageSeq: 1, lastReadSeq: 0, unreadCount: 0, unreadMentionCount: 0, recentAuthorAccountIds: [], archivedAt,
+      capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false } });
+    // HTTP and current installed custody are the boundaries; original-envelope
+    // opening, strict child derivation and the retained Account owner stay real.
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+      if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (url.endsWith('/v1/discussions?creationLocalId=opinion-create')) return { status: 200, data: { discussions: [summary()], nextCursor: null } };
+      if (url.endsWith('/v1/discussions/created-opinion')) return { status: 200, data: { discussion: summary() } };
+      if (url.endsWith('/v1/discussions/created-opinion/participants')) return { status: 200, data: {
+        discussionId: 'created-opinion', ownerAccountId: 'bob', access: 'owner', grants: [], participants: [{
+          participant: { kind: 'model', participantSlotId: 'reviewed-slot' }, sessionId: null, createdAt: 1,
+          answerPolicy: 'when_addressed', launch: { ...launch, directory: { kind: 'path', path: slotPath } } }] } };
+      throw new Error(`Unexpected opinion custody HTTP ${url}`);
+    });
+    const admitted = await requesterAccountOwner.admitRequesterAccountActionContext({ authorization: root,
+      credentials: { token: 'bob-private', encryption: null }, serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: 'https://requester-home.test', isCurrent: async () => current });
+    if (!admitted) throw new Error('Missing opinion requester custody');
+    const spawn = { ...launch, creationKey: 'reviewed-slot', initialTriggers: [],
+      discussionParticipant: { discussionId: 'created-opinion', participantSlotId: 'reviewed-slot' } };
+    const verify = (params: unknown = spawn, method: string = RPC_METHODS.SESSION_SPAWN_NEW, original: unknown = envelope) =>
+      isReviewedSecondOpinionModelSpawnChild({ authorization: admitted.authorization, envelope: original,
+        machineId: 'model-machine', actionId: 'session.spawn_new', params, method });
+    try {
+      expect(await verify()).toBe(true);
+      expect(await verify({ directory: launch.directory }, RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT)).toBe(true);
+      expect(await verify({ ...spawn, initialInput: { text: 'unreviewed work' } })).toBe(false);
+      expect(await verify({ ...spawn, creationKey: 'another-slot' })).toBe(false);
+      expect(await verify({ directory: { kind: 'path', path: '/unreviewed' } }, RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT)).toBe(false);
+      expect(await verify(spawn, RPC_METHODS.SPAWN_HAPPY_SESSION)).toBe(false);
+      expect(await verify(spawn, RPC_METHODS.SESSION_SPAWN_NEW, { ...envelope, requestId: 'another-root' })).toBe(false);
+      creationLocalId = 'unrelated-opinion'; expect(await verify()).toBe(false); creationLocalId = input.retry.creationLocalId;
+      archivedAt = 1; expect(await verify()).toBe(false); archivedAt = null;
+      slotPath = '/changed'; expect(await verify()).toBe(false); slotPath = launch.directory.path;
+      current = false; expect(await verify()).toBe(false);
+      current = true;
+      const [{ RpcHandlerManager }, machineAdmission] = await Promise.all([
+        import('@/api/rpc/RpcHandlerManager'), import('@/api/machine/machineRpcAuthorization'),
+      ]);
+      const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(51));
+      const installation = { version: 1 as const, installationId: 'model-installation', createdAt: 1,
+        publicKey: Buffer.from(keys.publicKey).toString('base64url'), privateKey: Buffer.from(keys.secretKey).toString('base64url') };
+      vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue(installation);
+      vi.spyOn(axios, 'post').mockImplementation(async url => {
+        if (String(url).endsWith('/v1/machines/model-machine/admission/verify')) return { status: 200, data: { v: 1, ok: current } };
+        throw new Error(`Unexpected native opinion admission ${url}`);
+      });
+      const nativeDiagnostics: unknown[] = [];
+      const rpc = new RpcHandlerManager({ scopePrefix: 'model-machine', localMachineId: 'model-machine',
+        encryptionMode: 'plain', logger: (_message, detail) => { nativeDiagnostics.push(detail); }, authorizeRequest: request => machineAdmission.authorizeMachineRpcRequest(request, {
+          machineId: 'model-machine', resolveCustodianAccountId: async () => 'model-owner', resolveInstallationId: () => installation.installationId,
+          verifyMachineAdmission: request => machineAdmission.verifyMachineRpcAdmissionCurrent({ ...request,
+            privateKey: keys.secretKey, daemonToken: 'model-owner-token', serverHttpBaseUrl: 'https://requester-home.test' }),
+        }), prepareRequesterAccountContext: request => requesterAccountOwner.prepareInstalledRequesterAccountActionContext({
+          ...request, purpose: request.purpose ?? { kind: 'external_action' }, machineId: 'model-machine',
+          serverId: 'home-profile', serverHttpBaseUrl: 'https://requester-home.test',
+          resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'model-machine', serverIdentityId: 'stable-home' }),
+          createExecutor: () => ({ execute: async () => ({ ok: false, errorCode: 'unused', error: 'unused' }) }),
+        }) });
+      let effects = 0;
+      rpc.registerHandler(RPC_METHODS.SESSION_SPAWN_NEW, async (_value, context) => {
+        if (!context) throw new Error('Missing native custody');
+        const creation = createReviewedSecondOpinionSessionCreationAuthorization({ context: {
+          ...context, externalActionExecutionAuthorization: context.callerInputAuthorization,
+          originalActionEnvelope: context.workspaceSyncSourceExecution?.originalActionEnvelope,
+        }, publicInput: SessionSpawnNewInputV2Schema.parse(_value), installationId: installation.installationId, privateKey: keys.secretKey });
+        expect(creation?.token).toBe(root.token);
+        const body = { originKind: 'discussion', discussionParticipant: spawn.discussionParticipant,
+          discussionParticipantLaunch: launch, tag: deriveSessionCreationTagV1({
+            callerCreationNamespace: JSON.stringify(['discussion-participant', spawn.discussionParticipant.discussionId]),
+            creationKey: spawn.discussionParticipant.participantSlotId }) };
+        const proof = await creation?.prepareRequestProof?.(body);
+        expect(proof).toBeTruthy();
+        if (!proof) throw new Error('Missing selected receiver proof');
+        const payload = buildDiscussionModelSessionCreationProofPayloadV1({ ...proof, body });
+        expect(verifyMachineInstallationProof({ publicKey: keys.publicKey, proof: proof.proof, payload })).toBe(true);
+        expect(verifyMachineInstallationProof({ publicKey: keys.publicKey, proof: proof.proof,
+          payload: buildDiscussionModelSessionCreationProofPayloadV1({ ...proof, body: { ...body, tag: 'another-session' } }) })).toBe(false);
+        await expect(creation?.prepareRequestProof?.({ ...body, discussionParticipantLaunch: { ...launch,
+          directory: { kind: 'path', path: '/unreviewed' } } })).rejects.toThrow();
+        effects += 1;
+        return { accepted: true, rootAction: context?.callerInputAuthorization?.binding.actionId };
+      });
+      const native = async (value: unknown) => {
+        const method = `model-machine:${RPC_METHODS.SESSION_SPAWN_NEW}`;
+        const sealed = sealExternalActionRequesterAccountContextV1({ authorization: root,
+          purpose: { kind: 'machine_rpc', method: RPC_METHODS.SESSION_SPAWN_NEW, params: value,
+            recipient: { machineId: 'model-machine', installationId: installation.installationId } },
+          credentials: { token: 'bob-private', secret: null, encryption: null },
+          installationPublicKey: keys.publicKey, randomBytes: nacl.randomBytes });
+        const execution = createExternalActionMachineRpcExecution({ context: { externalActionExecutionAuthorization: sealed,
+          externalActionTarget: root.binding.target }, effectActionId: 'session.spawn_new', installationId: root.binding.installationId,
+          method, requestId: 'native-opinion', params: value, privateKey: nacl.sign.keyPair().secretKey });
+        if (!execution) throw new Error('Missing installed source proof');
+        return rpc.handleRequest({ method, params: value, requestId: 'native-opinion', originalActionEnvelope: envelope,
+          callerAuthority: 'present_user', callerInputAuthorization: sealed,
+          workspaceSyncSourceExecution: { method, params: value, requestId: 'native-opinion', originalActionEnvelope: envelope,
+            externalActionExecution: execution }, machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'model-owner',
+            machineId: 'model-machine', installationId: installation.installationId, role: 'use', encryptionMode: 'plain' } });
+      };
+      expect(await native(spawn), JSON.stringify(nativeDiagnostics)).toEqual({ accepted: true, rootAction: 'discussion.second_opinion.start' });
+      expect(await native({ ...spawn, initialInput: { text: 'unreviewed work' } })).toMatchObject({ errorCode: 'RPC_FORBIDDEN' });
+      expect(effects).toBe(1);
+    } finally { await admitted.dispose(); }
+  });
+  it.each([
+    { mode: 'plain', failure: 'network', expected: 'target_unavailable' },
+    { mode: 'e2ee', failure: 'network', expected: 'target_unavailable' },
+    { mode: 'plain', failure: 'authentication', expected: 'invalid_envelope' },
+    { mode: 'e2ee', failure: 'authentication', expected: 'invalid_encrypted_envelope' },
+  ] as const)('preserves unavailable Home admission without accepting refused custody ($mode/$failure)', async ({ mode, failure, expected }) => {
+    const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(45));
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob', tokenEpoch: 7,
+      provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
+    const credentials: StoredCredentials = { token,
+      encryption: mode === 'plain' ? null : { type: 'legacy', secret: new Uint8Array(32).fill(46) } };
+    const target = { kind: 'session' as const, sessionId: 'c123456789012345678901234' };
+    const executor = createActionExecutor(createUnavailableActionTransportDeps());
+    const input = { sessionId: target.sessionId, message: 'Correction', localId: 'correction', modelOverride: 'claude-haiku-4-5' };
+    const failures: string[] = [];
+    // Only Home HTTP is substituted. The real CLI producer, strict envelope
+    // consumer and private requester admission run together before any effect.
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode, updatedAt: 1 } };
+      if (url.endsWith('/v1/account/profile')) {
+        if (failure === 'authentication') return { status: 401, data: { error: 'invalid_token' } };
+        throw new axios.AxiosError('Home read unavailable', 'ECONNRESET');
+      }
+      throw new Error('Unexpected Home read');
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, raw) => {
+      if (url.endsWith('/verify')) return { status: 200, data: { ok: true } };
+      const envelope = ExternalActionRequestEnvelopeSchema.parse(raw);
+      expect(envelope.v).toBe(mode === 'plain' ? 1 : 2);
+      const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'send-root', binding: {
+        accountId: 'bob', custodianAccountId: 'bob', authentication: { kind: 'account', tokenEpoch: 7 },
+        accountEncryptionMode: mode, serverIdentityId: 'srv_fx45_home', machineId: 'machine', installationId: 'installation',
+        actionId: 'session.message.send', requestId: envelope.requestId, target,
+        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+      } });
+      if (envelope.v === 2) {
+        if (credentials.encryption?.type !== 'legacy') throw new Error('Expected fixture encryption material');
+        expect(openExternalActionRequestV2({ envelope, binding: { serverIdentityId: 'srv_fx45_home', accountId: 'bob',
+          authentication: { kind: 'account', tokenEpoch: 7 }, actionId: 'session.message.send', requestId: 'correction', target },
+          material: { type: 'dataKey', machineKey: deriveAccountMachineKeyFromRecoverySecret(credentials.encryption.secret) } }))
+          .toEqual({ input });
+      } else expect(envelope.input).toEqual(input);
+      const result = await executeExternalAction({ actionId: root.binding.actionId, envelope,
+        principal: { accountId: 'bob', authentication: { kind: 'account', tokenEpoch: 7 }, authority: 'present_user' },
+        currentMachineId: 'machine', currentServerId: 'home-profile', currentInstallationId: 'installation',
+        executionAuthorization: root, externalActionMachineRequestPrivateKey: keys.secretKey,
+        verifyExecutionAuthorization: request => verifyExternalActionExecutionAuthorizationCurrent({ ...request,
+          installationId: 'installation', privateKey: keys.secretKey, serverHttpBaseUrl: 'https://requester-home.test' }),
+        prepareRequesterAccountContext: request => requesterAccountOwner.prepareRequesterAccountActionContext({
+          authorization: request.authorization, purpose: { kind: 'external_action' }, machineId: 'machine',
+          installationId: 'installation', installationPrivateKey: keys.secretKey, serverId: 'home-profile',
+          serverIdentityId: 'srv_fx45_home', serverHttpBaseUrl: 'https://requester-home.test', ownCredentials: credentials,
+          isCurrent: () => verifyExternalActionExecutionAuthorizationCurrent({ authorization: request.authorization,
+            effectActionId: root.binding.actionId, target, installationId: 'installation',
+            privateKey: keys.secretKey, serverHttpBaseUrl: 'https://requester-home.test' }), createExecutor: () => executor,
+        }), executor,
+        resolveTarget: createDaemonExternalActionTargetResolver({ credentials }),
+      });
+      if (result.kind !== 'invalid_request') throw new Error('Unavailable admission must refuse before the effect');
+      failures.push(result.errorCode);
+      const projected = projectExternalActionHttpError(result.errorCode, envelope.requestId);
+      return { status: projected.statusCode, data: projected.payload };
+    });
+    expect(await dispatchOriginalAccountAction({ actionId: 'session.message.send', input, requestId: 'correction', target,
+      credentials, serverIdentityId: 'srv_fx45_home', serverHttpBaseUrl: 'https://requester-home.test' }))
+      .toEqual({ ok: false, errorCode: expected, error: expected });
+    expect(failures).toEqual([expected]);
+  });
+  it.each(['projects.prepare', 'projects.script.run', 'projects.compute.exec', 'projects.inspect', 'projects.worker.status',
+    'execution.run.start', 'execution.run.ensure', 'execution.run.send', 'execution.run.ensure_or_start'] as const)('uses retained requester custody only for private Project preparation reads on %s', async actionId => {
+    const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'finite-root', binding: {
+      accountId: 'bob', custodianAccountId: 'alice', authentication: { kind: 'account', tokenEpoch: 1 },
+      accountEncryptionMode: 'plain', serverIdentityId: 'stable-home', machineId: 'machine', installationId: 'installation',
+      actionId, requestId: 'finite-request', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: 'machine' },
+    } });
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+      if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      throw new Error('Unexpected requester read');
+    });
+    vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true } });
+    const admitted = await requesterAccountOwner.admitRequesterAccountActionContext({ authorization: root,
+      credentials: { token: 'bob-preparation', encryption: null }, serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: 'https://requester-home.test', isCurrent: async () => true });
+    if (!admitted) throw new Error('Missing admitted requester custody');
+    const input = { serverId: 'home-profile', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://requester-home.test',
+      target: root.binding.target, installationId: 'installation', privateKey: nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31)).secretKey };
+    try {
+      const carrier = await projectExternalActionRequesterHttpAuthorization({ ...input, authorization: admitted.authorization });
+      if (!carrier?.requesterHttpProjection) throw new Error('Missing requester HTTP port');
+      const headers = (method: string, path: string) => carrier.requesterHttpProjection!.createRequestHeaders({ effectActionId: actionId, method, path });
+      const machineRead = await headers('GET', '/v1/machines/source-machine');
+      if (actionId === 'projects.prepare' || actionId === 'projects.inspect') {
+        expect(machineRead).toMatchObject({ [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token });
+      } else expect(machineRead).toEqual({ Authorization: 'Bearer bob-preparation' });
+      for (const path of ['/v1/account/project-rows/read', '/v1/account/project-rows/list']) {
+        expect(await headers('POST', path)).toEqual({ Authorization: 'Bearer bob-preparation' });
+        expect(await carrier.requesterHttpProjection.createRequestHeaders({ effectActionId: 'projects.open', method: 'POST', path }))
+          .toMatchObject({ [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token });
+        expect(await headers('GET', path)).toMatchObject({ [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token });
+      }
+      for (const [method, path] of [['GET', '/v1/machines/machine'], ['POST', '/v1/machines/source-machine'],
+        ['GET', '/v1/account/profile'], ['POST', '/v1/account/project-rows/mutate'],
+        ['POST', '/v1/account/project-trust/read'], ['POST', '/v1/projects/execution/config/read']] as const) {
+        const signed = await headers(method, path);
+        if (actionId.startsWith('execution.run.') && (method === 'GET' && path === '/v1/machines/machine'
+          || method === 'POST' && (path === '/v1/account/project-trust/read' || path === '/v1/projects/execution/config/read'))) {
+          expect(signed).toEqual({ Authorization: 'Bearer bob-preparation' });
+          continue;
+        }
+        expect(signed).toMatchObject({ [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token });
+        expect(signed).not.toHaveProperty('Authorization');
+      }
+      const wire = await projectExternalActionRequesterHttpAuthorization({ ...input, authorization: root });
+      expect(await wire?.requesterHttpProjection?.createRequestHeaders({ effectActionId: actionId, method: 'GET', path: '/v1/machines/source-machine' }))
+        .toMatchObject({ [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token });
+      expect(await wire?.requesterHttpProjection?.createRequestHeaders({ effectActionId: actionId, method: 'POST', path: '/v1/account/project-rows/list' }))
+        .toMatchObject({ [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token });
+      const rpc = createExternalActionMachineRpcExecution({ context: { externalActionExecutionAuthorization: carrier, externalActionTarget: root.binding.target },
+        installationId: input.installationId, privateKey: input.privateKey, effectActionId: actionId,
+        method: 'machine:projects.worker.status', requestId: 'rpc-read', params: {} });
+      expect(rpc).not.toBeNull();
+      expect(JSON.stringify(rpc)).not.toContain('bob-preparation');
+      expect(JSON.stringify(rpc)).not.toContain('requesterHttpProjection');
+      await admitted.dispose();
+      expect(await headers('GET', '/v1/machines/source-machine')).toBeNull();
+      expect(await headers('POST', '/v1/account/project-rows/list')).toBeNull();
+    } finally { await admitted.dispose(); }
+  });
+  it('publishes retained finite requester Settings over envelopes, hints and reconnect without per-Action reads', async () => {
+    let version = 1;
+    let settings = { experiments: false };
+    let reads = 0;
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+      if (url.endsWith('/v2/account/settings')) {
+        reads++;
+        return { status: 200, data: { content: { t: 'plain', v: settings }, version } };
+      }
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      throw new Error('Unexpected private requester read');
+    });
+    const context = await requesterAccountOwner.admitRequesterAccountActionContext({
+      authorization: { ...authorization, binding: { ...authorization.binding, accountEncryptionMode: 'plain' } },
+      credentials: { token: 'bob-settings', encryption: null }, serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: 'https://requester-home.test', isCurrent: async () => true,
+    });
+    if (!context) throw new Error('Missing requester custody');
+    const release = context.retain();
+    try {
+      expect(await context.refreshAccountSettings()).toBe(true);
+      const initialReads = reads;
+      expect(await context.refreshAccountSettings()).toBe(true);
+      expect(reads).toBe(initialReads);
+      await context.dispose();
+      settings = { experiments: true };
+      version++;
+      await channel.pushSettings('bob', settings, version);
+      expect(await context.refreshAccountSettings()).toBe(true);
+      expect(context.savedSecretOperationContext.readSnapshot()).toMatchObject({ settingsVersion: version, settings });
+      expect(reads).toBe(initialReads);
+      await channel.pushSettings('other-account', {}, version + 100);
+      expect(await context.refreshAccountSettings()).toBe(true);
+      expect(reads).toBe(initialReads);
+      version++;
+      await channel.hintSettings(version);
+      expect(await context.refreshAccountSettings()).toBe(true);
+      expect(context.savedSecretOperationContext.readSnapshot()?.settingsVersion).toBe(version);
+      expect(reads).toBe(initialReads + 1);
+      await channel.pushInvalidSettings('bob');
+      expect(await context.refreshAccountSettings()).toBe(false);
+      await channel.pushSettings('bob', settings, ++version);
+      expect(await context.refreshAccountSettings()).toBe(true);
+      await channel.disconnect();
+      expect(await context.refreshAccountSettings()).toBe(false);
+      version++;
+      await channel.reconnect();
+      expect(await context.refreshAccountSettings()).toBe(true);
+      expect(context.savedSecretOperationContext.readSnapshot()?.settingsVersion).toBe(version);
+    } finally { await context.dispose(); await release(); }
+    expect(await context.refreshAccountSettings()).toBe(false);
+    expect(context.savedSecretOperationContext.readSnapshot()).toBeNull();
+  });
+  it.each([
+    ['daemon', new URL('../startDaemon.ts', import.meta.url)],
+    ['Machine Session handlers', new URL('../../api/apiMachine.ts', import.meta.url)],
+  ])('admits installed E2EE custody through the %s runtime HTTP origin in a non-default home', async (_name, sourcePath) => {
+    // Generated fixtures only: no installed user identity, Account or endpoint is read.
+    const home = mkdtempSync(join(tmpdir(), 'happier-fx18-runtime-origin-'));
+    const previous = { happyHomeDir: configuration.happyHomeDir,
+      installationIdentityFile: configuration.installationIdentityFile,
+      serverUrl: configuration.serverUrl, apiServerUrl: configuration.apiServerUrl };
+    const secret = nacl.randomBytes(32);
+    const credentials: StoredCredentials = { token: 'fx18-test-requester', encryption: { type: 'legacy', secret } };
+    const settings = { experiments: true };
+    const settingsContent = { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'account_settings',
+      material: { type: 'legacy', secret }, payload: settings, randomBytes: nacl.randomBytes }) };
+    const currentness = { mode: 'e2ee', version: 1, signingKeyFingerprint: 'test-signing',
+      contentKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(nacl.box.keyPair.fromSecretKey(
+        deriveAccountMachineKeyFromRecoverySecret(secret)).publicKey), updatedAt: 1 };
+    const features = FeaturesResponseSchema.parse({ features: {},
+      capabilities: { serverIdentity: { serverIdentityId: 'srv_fx18_test_home' } } });
+    const requestedPaths: string[] = [];
+    const http = createServer((request, response) => {
+      requestedPaths.push(request.url ?? '');
+      response.setHeader('Content-Type', 'application/json');
+      const data = request.url === '/v1/features' ? features
+        : request.url === '/v1/account/profile' ? { id: 'bob' }
+        : request.url === '/v1/account/encryption/currentness' ? currentness
+        : request.url === '/v2/account/settings' ? { content: settingsContent, version: 1 }
+        : request.url?.endsWith('/verify') ? { ok: true } : null;
+      response.statusCode = data ? 200 : 404;
+      response.end(JSON.stringify(data));
+    });
+    let release: (() => void) | undefined;
+    let prepared: Awaited<ReturnType<typeof requesterAccountOwner.prepareInstalledRequesterAccountActionContext>> = null;
+    const phaseLog = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    try {
+      // Close an ephemeral listener to obtain a genuinely unreachable canonical address.
+      await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
+      const canonicalAddress = http.address();
+      if (!canonicalAddress || typeof canonicalAddress === 'string') throw new Error('Missing test listener');
+      const canonical = `http://127.0.0.1:${canonicalAddress.port}`;
+      await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
+      await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
+      const runtimeAddress = http.address();
+      if (!runtimeAddress || typeof runtimeAddress === 'string') throw new Error('Missing test listener');
+      const runtime = `http://127.0.0.1:${runtimeAddress.port}`;
+      Object.assign(configuration, { happyHomeDir: home, installationIdentityFile: join(home, 'installation-identity.json'),
+        serverUrl: canonical, apiServerUrl: canonical });
+      const installation = installationStore.readOrCreateInstallationIdentitySync();
+      release = publishServerHttpRuntimeOrigin(runtime, 'iroh');
+      const material = { type: 'dataKey' as const, machineKey: deriveAccountMachineKeyFromRecoverySecret(secret) };
+      const binding = { accountId: 'bob', credentialId: '00000000-0000-4000-8000-000000000018', actionId: 'browser.diagnostics.snapshot',
+        requestId: 'fx18-test-request', serverIdentityId: 'srv_fx18_test_home', target: { kind: 'machine' as const, machineId: 'machine' } };
+      const envelope = sealExternalActionRequestV2({ binding, material, randomBytes: nacl.randomBytes,
+        input: { browserSessionId: 'test-browser', viewId: 'test-view' } });
+      const grant = ApiTokenGrantV1Schema.parse({ v: 1, actions: { families: [], ids: [binding.actionId] },
+        targets: { sessions: [], machines: ['machine'] }, approve: false, origins: [], models: null,
+        permissionModes: null, create: null });
+      const root = ExternalActionExecutionAuthorizationV1Schema.parse({ ...authorization, binding: { ...authorization.binding,
+        ...binding, grant, installationId: installation.installationId, accountEncryptionMode: 'e2ee',
+        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope) } });
+      const purpose = { kind: 'external_action' } as const;
+      const sealed = sealExternalActionRequesterAccountContextV1({ authorization: root, purpose,
+        credentials: encodeStoredCredentials(credentials), installationPublicKey: Buffer.from(installation.publicKey, 'base64url'),
+        randomBytes: nacl.randomBytes });
+      // Exercise the exact production initializer without starting a daemon or its background services.
+      // This remains sensitive to either call site being wired to the canonical identity address.
+      const source = readFileSync(sourcePath, 'utf8');
+      const initializer = source.match(/const resolveCurrentMachineExecutionOriginContext\s*=\s*(createCurrentMachineExecutionOriginContextResolver\(\{[\s\S]*?\}\));/u)?.[1];
+      if (!initializer) throw new Error('Missing production origin composition');
+      const resolveOrigin = new Function('createCurrentMachineExecutionOriginContextResolver', 'configuration',
+        'resolveServerHttpBaseUrl', 'machineId', `return ${initializer};`).call({ machine: { id: 'machine' } },
+          createCurrentMachineExecutionOriginContextResolver, configuration, resolveServerHttpBaseUrl, 'machine') as
+          ReturnType<typeof createCurrentMachineExecutionOriginContextResolver>;
+      const executor = createActionExecutor(createUnavailableActionTransportDeps());
+      prepared = await requesterAccountOwner.prepareInstalledRequesterAccountActionContext({ authorization: sealed, purpose,
+        machineId: 'machine', serverId: 'fx18-test-profile', serverHttpBaseUrl: resolveServerHttpBaseUrl(),
+        resolveCurrentMachineExecutionOriginContext: resolveOrigin, createExecutor: () => executor });
+      const phases = phaseLog.mock.calls.map(([, value]) => (value as { phase?: string }).phase);
+      expect(phases).not.toContain('requester_origin_unavailable');
+      expect(Boolean(prepared)).toBe(true);
+      const custody = requesterAccountOwner.readRequesterAccountActionContext(prepared?.authorization);
+      expect(custody?.accountSettingsContext.source).toBe('network');
+      expect(custody?.accountSettingsContext.settings.experiments).toBe(true);
+      expect(prepared?.authorization.requesterAccountProjection?.accountEncryptionMode).toBe('e2ee');
+      expect(await custody?.isCurrent()).toBe(true);
+      const result = await executeExternalAction({ actionId: binding.actionId, envelope,
+        principal: { accountId: 'bob', principalId: 'bob', credentialId: binding.credentialId, grant, authority: 'account_automation' },
+        currentMachineId: 'machine', currentServerId: 'fx18-test-profile', currentInstallationId: installation.installationId,
+        executionAuthorization: sealed, externalActionMachineRequestPrivateKey: installation.privateKey,
+        verifyExecutionAuthorization: request => verifyExternalActionExecutionAuthorizationCurrent({ ...request,
+          installationId: installation.installationId, privateKey: installation.privateKey, serverHttpBaseUrl: resolveServerHttpBaseUrl() }),
+        prepareRequesterAccountContext: request => requesterAccountOwner.prepareInstalledRequesterAccountActionContext({
+          authorization: request.authorization, purpose, machineId: 'machine', serverId: 'fx18-test-profile',
+          serverHttpBaseUrl: resolveServerHttpBaseUrl(), resolveCurrentMachineExecutionOriginContext: resolveOrigin,
+          createExecutor: () => executor }),
+        resolveTarget: async () => binding.target, executor });
+      expect(result.kind).toBe('response');
+      if (result.kind !== 'response') throw new Error('Test diagnostics request failed before dispatch');
+      // No Browser host is installed in this fixture: preserve the real, protected typed refusal.
+      expect(openExternalActionResponseV2({ envelope: result.response, request: envelope, binding, material }))
+        .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+      expect(requestedPaths).toContain('/v1/features');
+      expect(requestedPaths).toContain('/v2/account/settings');
+      expect(requestedPaths.some(path => path.endsWith('/verify'))).toBe(true);
+      expect(await prepared?.authorization.requesterHttpProjection?.createRequestHeaders({
+        effectActionId: root.binding.actionId, method: 'POST', path: '/v1/account/project-rows/list',
+      })).toHaveProperty(EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER);
+    } finally {
+      await prepared?.dispose();
+      release?.();
+      Object.assign(configuration, previous);
+      http.closeAllConnections();
+      await new Promise<void>(resolve => http.close(() => resolve()));
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('identifies a missing installation without obscuring it as an origin refusal', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'happier-fx18-missing-installation-'));
+    const previous = configuration.installationIdentityFile;
+    Object.assign(configuration, { installationIdentityFile: join(home, 'installation-identity.json') });
+    const phaseLog = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    try {
+      expect(await requesterAccountOwner.prepareInstalledRequesterAccountActionContext({
+        authorization, purpose: { kind: 'external_action' }, machineId: 'machine', serverId: 'home-profile',
+        serverHttpBaseUrl: '', resolveCurrentMachineExecutionOriginContext: async () => null,
+        createExecutor: () => { throw new Error('Missing installation cannot execute'); },
+      })).toBeNull();
+      expect(phaseLog).toHaveBeenCalledWith('[external-action-phase]', expect.objectContaining({
+        machineId: 'machine', phase: 'requester_installation_missing',
+      }));
+    } finally {
+      Object.assign(configuration, { installationIdentityFile: previous });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+  it('uses local Move custody for private reads without spending its fresh SOURCE proof', async () => {
+    const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'local-move-root', binding: {
+      accountId: 'bob', custodianAccountId: 'alice', authentication: { kind: 'account', tokenEpoch: 1 },
+      accountEncryptionMode: 'plain', serverIdentityId: 'stable-home', machineId: 'source', installationId: 'source-installation',
+      actionId: 'projects.service.relocate', requestId: 'move', requestEnvelopeDigest: 'a'.repeat(43),
+      target: { kind: 'machine', machineId: 'source' },
+    } });
+    // Home HTTP and installed authority observations are the boundaries; custody stays real.
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+      if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      throw new Error('Unexpected requester read');
+    });
+    let sourceCurrent = true;
+    let custodyCurrent = true;
+    const admitted = await requesterAccountOwner.admitRequesterAccountActionContext({ authorization: root,
+      credentials: { token: 'bob-local-private', encryption: null }, serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: 'https://requester-home.test', isCurrent: async () => sourceCurrent,
+      isCustodyCurrent: async () => custodyCurrent });
+    if (!admitted) throw new Error('Missing local Move custody');
+    try {
+      const carrier = await projectExternalActionRequesterHttpAuthorization({ authorization: admitted.authorization,
+        serverId: 'home-profile', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://requester-home.test',
+        target: root.binding.target, installationId: 'source-installation', privateKey: nacl.sign.keyPair().secretKey });
+      const http = carrier?.requesterHttpProjection;
+      if (!http) throw new Error('Missing local Move HTTP port');
+      const read = () => http.createRequestHeaders({ effectActionId: root.binding.actionId,
+        method: 'POST', path: '/v1/account/project-rows/list' });
+      sourceCurrent = false;
+      expect(await admitted.isCurrent()).toBe(false);
+      expect(await admitted.isCustodyCurrent?.()).toBe(true);
+      expect(await read()).toEqual({ Authorization: 'Bearer bob-local-private' });
+      custodyCurrent = false;
+      expect(await read()).toBeNull();
+    } finally { await admitted.dispose(); }
+  });
+
+  it('separates installed Move recipient custody from its fresh retained SOURCE proof', async () => {
+    const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(30));
+    const installed = { version: 1 as const, installationId: 'recipient-installation', createdAt: 1,
+      publicKey: Buffer.from(keys.publicKey).toString('base64url'), privateKey: Buffer.from(keys.secretKey).toString('base64url') };
+    const installation = vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue(installed);
+    const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'move-root', binding: {
+      accountId: 'bob', custodianAccountId: 'alice', authentication: { kind: 'account', tokenEpoch: 1 },
+      accountEncryptionMode: 'plain', serverIdentityId: 'stable-home', machineId: 'source', installationId: 'source-installation',
+      actionId: 'projects.service.relocate', requestId: 'move', requestEnvelopeDigest: 'a'.repeat(43),
+      target: { kind: 'machine', machineId: 'source' },
+    } });
+    const purpose = { kind: 'machine_rpc', method: 'projects.worker.status', params: {},
+      recipient: { machineId: 'recipient', installationId: installed.installationId } } as const;
+    const sealed = sealExternalActionRequesterAccountContextV1({ authorization: root, purpose,
+      credentials: { token: 'bob-private', secret: null, encryption: null }, installationPublicKey: keys.publicKey,
+      randomBytes: nacl.randomBytes });
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+      if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      throw new Error('Unexpected requester read');
+    });
+    let sourceCurrent = true;
+    const prepared = await requesterAccountOwner.prepareInstalledRequesterAccountActionContext({ authorization: sealed, purpose,
+      machineId: 'recipient', serverId: 'home-profile', serverHttpBaseUrl: 'https://requester-home.test',
+      verifyServiceMoveChildCurrent: async () => sourceCurrent,
+      resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'recipient', serverIdentityId: 'stable-home' }),
+      createExecutor: () => ({ execute: async () => ({ ok: false, errorCode: 'unused', error: 'unused' }) }) });
+    expect(prepared).not.toBeNull();
+    try {
+      const custody = requesterAccountOwner.readRequesterAccountActionContext(prepared?.authorization);
+      expect(await custody?.isCustodyCurrent?.()).toBe(true);
+      expect(await prepared?.authorization.requesterHttpProjection?.createRequestHeaders({ effectActionId: 'localServices.launcher.start',
+        method: 'POST', path: '/v1/account/project-rows/list' })).toEqual({ Authorization: 'Bearer bob-private' });
+      sourceCurrent = false;
+      expect(await custody?.isCurrent()).toBe(false);
+      expect(await custody?.isCustodyCurrent?.()).toBe(true);
+      expect(await prepared?.authorization.requesterHttpProjection?.createRequestHeaders({ effectActionId: 'localServices.launcher.start',
+        method: 'POST', path: '/v1/account/project-rows/list' })).toBeNull();
+      sourceCurrent = true;
+      installation.mockReturnValue({ ...installed, installationId: 'replaced' });
+      expect(await custody?.isCustodyCurrent?.()).toBe(false);
+      expect(await custody?.isCurrent()).toBe(false);
+      expect(await prepared?.authorization.requesterHttpProjection?.createRequestHeaders({ effectActionId: 'localServices.launcher.start',
+        method: 'POST', path: '/v1/account/project-rows/list' })).toBeNull();
+    } finally { await prepared?.dispose(); }
+  });
+
+  it('opens finite preparation custody at its controller, keeps the worker root, and retires its private Account reads', async () => {
+    const controller = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(30));
+    vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue({ version: 1,
+      installationId: 'controller-installation', createdAt: 1, publicKey: Buffer.from(controller.publicKey).toString('base64url'),
+      privateKey: Buffer.from(controller.secretKey).toString('base64url') });
+    const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'finite-root', binding: {
+      accountId: 'bob', custodianAccountId: 'alice', authentication: { kind: 'terminal', tokenEpoch: 1 },
+      accountEncryptionMode: 'plain', serverIdentityId: 'stable-home', machineId: 'worker', installationId: 'worker-installation',
+      actionId: 'projects.compute.exec', requestId: 'run', requestEnvelopeDigest: 'a'.repeat(43),
+      target: { kind: 'machine', machineId: 'worker' },
+    } });
+    const purpose = { kind: 'workspace_sync_prepare', controller: { machineId: 'controller', installationId: 'controller-installation' },
+      request: { sourceWorkspaceRefId: 'source', targetWorkspaceRefId: 'target' } } as const;
+    const sealed = sealExternalActionRequesterAccountContextV1({ authorization: root, purpose,
+      credentials: { token: 'bob-private', secret: null, encryption: null }, installationPublicKey: controller.publicKey,
+      randomBytes: nacl.randomBytes });
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+      if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      throw new Error('Unexpected requester read');
+    });
+    // The controller must never try spending the worker's effect as its own HTTP signature.
+    const writes = vi.spyOn(axios, 'post').mockRejectedValue(new Error('unexpected controller effect proof'));
+    let current = true;
+    const input: Parameters<typeof requesterAccountOwner.prepareInstalledRequesterAccountActionContext>[0] = {
+      authorization: sealed, purpose, machineId: 'controller', serverId: 'home-profile',
+      serverHttpBaseUrl: 'https://requester-home.test', verifyWorkspaceSyncPrepareCurrent: async () => current,
+      resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'controller', serverIdentityId: 'stable-home' }),
+      ownCredentials: { token: 'alice-own', encryption: null },
+      createExecutor: () => ({ execute: async () => ({ ok: false, errorCode: 'unused', error: 'unused' }) }),
+    };
+    const prepared = await requesterAccountOwner.prepareInstalledRequesterAccountActionContext(input);
+    expect(prepared).not.toBeNull();
+    try {
+      expect(prepared?.authorization.binding).toEqual(root.binding);
+      expect(prepared?.authorization.requesterHttpProjection).toBeUndefined();
+      const custody = requesterAccountOwner.readRequesterAccountActionContext(prepared?.authorization);
+      expect(custody?.credentials.token).toBe('bob-private');
+      expect(await custody?.isCurrent()).toBe(true);
+      current = false;
+      expect(await custody?.isCurrent()).toBe(false);
+      expect(writes).not.toHaveBeenCalled();
+    } finally { await prepared?.dispose(); }
+    current = true;
+    expect(await requesterAccountOwner.prepareInstalledRequesterAccountActionContext({ ...input, authorization: root })).toBeNull();
+    expect(await requesterAccountOwner.prepareInstalledRequesterAccountActionContext({ ...input, authorization: {
+      ...root, binding: { ...root.binding, custodianAccountId: 'bob' },
+    }, ownCredentials: { token: 'bob-own', encryption: null } })).toBeNull();
+    expect(await requesterAccountOwner.prepareInstalledRequesterAccountActionContext({ ...input,
+      verifyWorkspaceSyncPrepareCurrent: undefined })).toBeNull();
+  });
+  it('uses observed custody for signed HTTP and retains explicit fresh Home verification', async () => {
+    const envelope = { v: 1 as const, requestId: authorization.binding.requestId,
+      target: authorization.binding.target, input: {} };
+    const root = { ...authorization, binding: { ...authorization.binding, accountEncryptionMode: 'plain' as const,
+      serverIdentityId: 'srv_current_machine_fixture', requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope) } };
     const privateKey = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31)).secretKey;
     const reads = vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
       if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
@@ -48,29 +677,113 @@ describe('admitted requester Action projection', () => {
       throw new Error(`Unexpected requester GET ${url}`);
     });
     const posts = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true } });
-    // The installed bootstrap checks its root at Home. Keep that real owner;
-    // only its HTTP reply is replaced, so nested bootstrap reads are counted.
-    const admitted = await requesterAccountOwner.admitRequesterAccountActionContext({ authorization: root,
-      credentials: { token: 'bob-ordinary', encryption: null }, serverId: 'home-profile', serverIdentityId: 'stable-home',
-      serverHttpBaseUrl: 'https://requester-home.test', isCurrent: () => verifyExternalActionExecutionAuthorizationCurrent({
-        authorization: root, effectActionId: root.binding.actionId, target: root.binding.target,
-        installationId: 'installation', privateKey, serverHttpBaseUrl: 'https://requester-home.test',
-      }) });
+    const installation = nacl.sign.keyPair.fromSecretKey(privateKey);
+    vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue({ version: 1,
+      installationId: 'installation', createdAt: 1, publicKey: Buffer.from(installation.publicKey).toString('base64url'),
+      privateKey: Buffer.from(privateKey).toString('base64url') });
+    const purpose = { kind: 'external_action' } as const;
+    let homeIdentity = 'srv_current_machine_fixture';
+    const homeReads = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(FeaturesResponseSchema.parse({
+      features: {}, capabilities: { serverIdentity: { serverIdentityId: homeIdentity } },
+    })), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const sealed = sealExternalActionRequesterAccountContextV1({ authorization: root, purpose,
+      credentials: { token: 'bob-ordinary', secret: null, encryption: null }, installationPublicKey: installation.publicKey,
+      randomBytes: nacl.randomBytes });
+    // Use the installed owner; only HTTP and installation/origin OS boundaries
+    // are substituted, including the real split of root and local custody.
+    const prepared = await requesterAccountOwner.prepareInstalledRequesterAccountActionContext({ authorization: sealed,
+      purpose, machineId: 'machine', serverId: 'home-profile', serverHttpBaseUrl: 'https://requester-home.test',
+      resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({
+        serverUrl: 'https://requester-home.test', resolveCurrentMachineId: () => 'machine',
+      }),
+      createExecutor: () => ({ execute: async () => ({ ok: false, errorCode: 'unused', error: 'unused' }) }) });
+    const admitted = requesterAccountOwner.readRequesterAccountActionContext(prepared?.authorization);
     if (!admitted) throw new Error('Missing real private custody');
     try {
+      // One admission decision opens this operation's custody. Constructing
+      // its HTTP ports must reuse that decision; native effects reverify below.
+      expect(posts.mock.calls.filter(([url]) => String(url).endsWith('/verify'))).toHaveLength(1);
+      posts.mockClear();
       const carrier = await projectExternalActionRequesterHttpAuthorization({ authorization: admitted.authorization,
-        serverId: 'home-profile', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://requester-home.test',
-        target: root.binding.target, installationId: 'installation', privateKey, isCurrent: admitted.isCurrent });
+        serverId: 'home-profile', serverIdentityId: root.binding.serverIdentityId, serverHttpBaseUrl: 'https://requester-home.test',
+        target: root.binding.target, installationId: 'installation', privateKey, isCurrent: admitted.isCustodyCurrent });
       if (!carrier?.requesterHttpProjection) throw new Error('Missing real HTTP projection');
-      reads.mockClear(); posts.mockClear();
-      expect(await carrier.requesterHttpProjection.isCurrent()).toBe(true);
+      expect(posts).not.toHaveBeenCalled();
+      const substituted = Object.defineProperty({ ...admitted.authorization, token: 'different-operation-root' },
+        'requesterAccountProjection', { value: admitted.authorization.requesterAccountProjection });
+      expect(await projectExternalActionRequesterHttpAuthorization({ authorization: substituted,
+        serverId: 'home-profile', serverIdentityId: root.binding.serverIdentityId, serverHttpBaseUrl: 'https://requester-home.test',
+        target: root.binding.target, installationId: 'installation', privateKey, isCurrent: admitted.isCustodyCurrent })).toBeNull();
+      expect(posts).not.toHaveBeenCalled();
+      reads.mockClear(); posts.mockClear(); homeReads.mockClear();
+      expect(await admitted.isCurrent()).toBe(true);
+      expect(homeReads.mock.calls).toHaveLength(1);
       expect({ encryption: reads.mock.calls.filter(([url]) => String(url).endsWith('/currentness')).length,
-        verify: posts.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length }).toEqual({ encryption: 0, verify: 3 });
+        verify: posts.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length }).toEqual({ encryption: 0, verify: 1 });
+      posts.mockClear(); homeReads.mockClear();
+      posts.mockImplementation(async () => {
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return { status: 200, data: { ok: true } };
+      });
+      const headerStarted = performance.now();
+      const headers = await carrier.requesterHttpProjection.createRequestHeaders({ effectActionId: root.binding.actionId,
+        method: 'POST', path: '/v1/account/project-rows/list' });
+      const headerMeasurement = { elapsedMs: Math.round(performance.now() - headerStarted),
+        verify: posts.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length };
+      console.info('Signed requester header latency (20ms Home boundary)', headerMeasurement);
+      expect(headers?.[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]).toBe(root.token);
+      // Home validates the signed effect at its destination; local signing
+      // consumes this operation's admitted custody and pushed invalidation.
+      expect(headerMeasurement.verify).toBe(0);
+      expect(homeReads.mock.calls).toHaveLength(0);
+      const handlers = new Map<string, RpcHandler>();
+      const executor = createActionExecutor(createUnavailableActionTransportDeps());
+      registerExternalActionRpcHandler({ registerHandler: (method, handler) => { handlers.set(method, handler); } }, {
+        machineId: 'machine', currentServerId: 'home-profile', currentServerHttpBaseUrl: 'https://requester-home.test',
+        resolveAccountId: async () => 'alice', resolveInstallationId: () => 'installation',
+        externalActionMachineRequestPrivateKey: privateKey, executor,
+        resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'unused-custodian', encryption: null } }),
+        verifyExecutionAuthorization: input => verifyExternalActionExecutionAuthorizationCurrent({ ...input,
+          installationId: 'installation', privateKey, serverHttpBaseUrl: 'https://requester-home.test' }),
+        prepareRequesterAccountContext: input => requesterAccountOwner.prepareInstalledRequesterAccountActionContext({
+          ...input, purpose, machineId: 'machine', serverId: 'home-profile', serverHttpBaseUrl: 'https://requester-home.test',
+          resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({
+            serverUrl: 'https://requester-home.test', resolveCurrentMachineId: () => 'machine',
+          }), createExecutor: () => executor }),
+      });
+      if (!('grant' in root.binding)) throw new Error('Fixture requires a scoped API principal');
+      posts.mockClear();
+      const dispatch = {
+        actionId: root.binding.actionId, envelope, executionAuthorization: sealed,
+        principal: { accountId: 'bob', principalId: 'bob', credentialId: 'pat', grant: root.binding.grant, authority: 'account_automation' },
+        placement: { machineId: 'machine', target: root.binding.target },
+      };
+      const relay = () => handlers.get(EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1)?.(dispatch,
+        { authorization: ACTION_API_SERVER_ORIGIN, signal: new AbortController().signal });
+      const relayed = parseExternalActionDaemonDispatchResultV1(await relay());
+      expect(relayed?.kind).toBe('response');
+      if (relayed?.kind !== 'response') throw new Error('Registered ingress did not reach the Action owner');
+      expect(relayed.prepared.response).toMatchObject({ execution: { ok: false, errorCode: 'invalid_parameters' } });
+      // Private custody admission owns the pre-open root proof. The resolved
+      // effect is checked separately after preparation and target resolution.
+      expect(posts.mock.calls.filter(([url]) => String(url).endsWith('/verify'))).toHaveLength(2);
+      posts.mockResolvedValueOnce({ status: 403, data: { ok: false } });
+      reads.mockClear();
+      expect(await relay())
+        .toMatchObject({ kind: 'invalid_request', errorCode: 'invalid_envelope' });
+      // The canonical custody admission must refuse a retired root before
+      // requester profile/settings reads, without a redundant outer verifier.
+      expect(reads).not.toHaveBeenCalled();
+      posts.mockClear();
+      homeIdentity = 'srv_replaced_machine_fixture';
+      expect(await admitted.isCurrent()).toBe(false);
+      expect(posts).not.toHaveBeenCalled();
+      homeIdentity = root.binding.serverIdentityId;
       // A different Machine/local guard is a separate fact, even with the same
       // Account facet. It must still veto headers before any Home request.
       let installedCurrent = true;
       const distinct = await projectExternalActionRequesterHttpAuthorization({ authorization: admitted.authorization,
-        serverId: 'home-profile', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://requester-home.test',
+        serverId: 'home-profile', serverIdentityId: root.binding.serverIdentityId, serverHttpBaseUrl: 'https://requester-home.test',
         target: root.binding.target, installationId: 'installation', privateKey, isCurrent: async () => installedCurrent });
       expect(distinct).not.toBeNull();
       installedCurrent = false;
@@ -214,10 +927,26 @@ describe('admitted requester Action projection', () => {
       mode, version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
     } });
     const posts = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true } });
-    const accountInput = { authorization: root, serverIdentityId: 'stable-home', bootstrap: bootstrap(credentials) };
+    let current = true;
+    const accountInput = { authorization: root, serverIdentityId: 'stable-home', bootstrap: bootstrap(credentials, async () => current) };
     const account = await projectRequesterAccountActionAuthorization(accountInput);
     expect(account?.requesterAccountProjection).toMatchObject({ accountId: 'bob', accountEncryptionMode: mode });
     if (!account) throw new Error('Expected admitted Project Open Account custody');
+    const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31));
+    const seal = account.requesterAccountProjection?.sealRequesterAccountContext;
+    if (!seal) throw new Error('Expected admitted requester sealing port');
+    const sealInput = { authorization: root, purpose: { kind: 'external_action' as const }, installationPublicKey: installation.publicKey };
+    const sealed = await seal(sealInput);
+    if (!sealed) throw new Error('Expected same-destination requester custody');
+    const openInput = { authorization: sealed, purpose: sealInput.purpose, machineId: 'machine', installationId: 'installation',
+      serverIdentityId: 'stable-home', installationPrivateKey: installation.secretKey };
+    expect(openExternalActionRequesterAccountContextV1(openInput)).toEqual({
+      ...encodeStoredCredentials(credentials), token: credentials.token,
+    });
+    expect(openExternalActionRequesterAccountContextV1({ ...openInput, installationId: 'another-installation' })).toBeNull();
+    for (const binding of [{ ...root.binding, accountId: 'alice' }, { ...root.binding, serverIdentityId: 'another-home' }]) {
+      expect(await seal({ ...sealInput, authorization: { ...root, binding } })).toBeNull();
+    }
     const httpInput = { authorization: account, serverId: 'home-profile', serverIdentityId: 'stable-home',
       serverHttpBaseUrl: 'https://requester-home.test', target: root.binding.target, installationId: 'installation',
       privateKey: nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31)).secretKey };
@@ -236,6 +965,8 @@ describe('admitted requester Action projection', () => {
     expect(posts).not.toHaveBeenCalled();
     expect(ExternalActionExecutionAuthorizationV1Schema.safeParse({ ...root,
       requesterHttpProjection: { ...carrier?.requesterHttpProjection, serverIdentityId: 'another-home' } }).success).toBe(false);
+    current = false;
+    expect(await seal(sealInput)).toBeNull();
   });
 
   it('keeps private custody current across unrelated Account sequence updates but retires it on encryption transitions', async () => {
@@ -258,6 +989,57 @@ describe('admitted requester Action projection', () => {
     updatedAt = 2;
     expect(await projected?.requesterAccountProjection?.isCurrent()).toBe(false);
   });
+  it.each(['retained', 'denied'] as const)('retires Session input source custody at its Account Action lifetime boundary (%s)', async outcome => {
+    const sessionId = 'requester-input-session';
+    const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'session-input-root', binding: {
+      accountId: 'bob', custodianAccountId: 'alice', authentication: { kind: 'account', tokenEpoch: 1 },
+      accountEncryptionMode: 'plain', serverIdentityId: 'stable-home', machineId: 'machine', installationId: 'installation',
+      actionId: 'session.message.send', requestId: 'session-input', requestEnvelopeDigest: 'a'.repeat(43),
+      target: { kind: 'session', sessionId },
+    } });
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+      if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      throw new Error('Unexpected private requester read');
+    });
+    vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true } });
+    // Use another genuine Account context as source custody: its private ports
+    // prove retirement without replacing the lifecycle owner with a spy.
+    const source = await requesterAccountOwner.admitRequesterAccountActionContext({ authorization: root,
+      credentials: { token: 'bob-session-input', encryption: null }, serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: 'https://requester-home.test', isCurrent: async () => true });
+    if (!source) throw new Error('Missing real Session input source custody');
+    let prepared: Awaited<ReturnType<typeof requesterAccountOwner.prepareRequesterAccountActionContext>> = null;
+    let release: (() => Promise<void>) | undefined;
+    try {
+      prepared = await requesterAccountOwner.prepareRequesterAccountActionContext({
+        authorization: outcome === 'denied' ? { ...root, binding: { ...root.binding, installationId: 'other-installation' } } : root,
+        purpose: { kind: 'external_action' }, machineId: 'machine', installationId: 'installation',
+        installationPrivateKey: nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31)).secretKey,
+        serverId: 'home-profile', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://requester-home.test',
+        requesterSessionBootstrap: { ...bootstrap(source.credentials, source.isCurrent), getBoundSessionId: () => sessionId,
+          release: source.dispose },
+        isCurrent: source.isCurrent,
+        createExecutor: () => ({ execute: async () => ({ ok: false, errorCode: 'unused', error: 'unused' }) }),
+      });
+      if (outcome === 'denied') {
+        expect(prepared).toBeNull();
+        expect(await source.isCurrent()).toBe(false);
+        return;
+      }
+      const custody = requesterAccountOwner.readRequesterAccountActionContext(prepared?.authorization);
+      if (!prepared || !custody) throw new Error('Missing real Account Action custody');
+      release = custody.retain();
+      await prepared.dispose();
+      expect(await custody.isCurrent()).toBe(true);
+      expect(await source.isCurrent()).toBe(true);
+      await release();
+      expect(await custody.isCurrent()).toBe(false);
+      expect(await source.isCurrent()).toBe(false);
+    } finally { await prepared?.dispose(); await release?.(); await source.dispose(); }
+  });
   it('keeps accepted private work current after the ingress releases custody and retires it on actual settlement', async () => {
     const admit = Reflect.get(requesterAccountOwner, 'admitRequesterAccountActionContext');
     expect(typeof admit).toBe('function');
@@ -273,6 +1055,7 @@ describe('admitted requester Action projection', () => {
       credentials: { token: 'bob-ordinary', encryption: null }, serverId: 'home-profile', serverIdentityId: 'stable-home',
       serverHttpBaseUrl: 'https://requester-home.test', isCurrent: async () => true });
     expect(admitted).not.toBeNull();
+    if (!admitted?.authorization.requesterAccountProjection) throw new Error('Missing admitted requester projection');
     const scope = { accountId: 'bob', machineId: 'machine' };
     const runner = createActionOperationRunner({ store: createActionOperationStore(), generateOperationId: () => 'private-operation',
       resolveAction: actionId => ({ actionId, title: 'Script', operation: {
@@ -314,6 +1097,7 @@ describe('admitted requester Action projection', () => {
       serverHttpBaseUrl: 'https://requester-home.test', isCurrent: async () => live });
     expect(context?.authorization.requesterAccountProjection?.accountId).toBe('bob');
     expect(context?.accountSettingsContext.source).toBe('network');
+    if (!context?.authorization.requesterAccountProjection) throw new Error('Missing admitted requester projection');
     const readContext = Reflect.get(requesterAccountOwner, 'readRequesterAccountActionContext');
     expect(typeof readContext).toBe('function');
     if (typeof readContext !== 'function') throw new Error('Missing admitted private custody consumer port');

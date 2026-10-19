@@ -4,6 +4,8 @@ import { createCliWidgetAreaActionDepsV1 } from './widgetAreaActionDeps';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { buildWidgetDefinitionArtifactHeaderV1, createWidgetDefinitionArtifactPortV1, type WidgetDefinitionV1 } from '@happier-dev/protocol/widgets';
 import { readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
+import { createWorkBoardArtifactBoundary } from '@happier-dev/protocol/boards/workBoardArtifactV1.testkit';
+import { createWorkBoardArtifactPortV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
 
 describe('Widget Action input transport authority', () => {
     it('admits a local Session profile pin only when the captured Home owner proves equivalence', async () => {
@@ -89,34 +91,50 @@ describe('Widget Action input transport authority', () => {
             definition: { kind: 'installed', surface: definition }, bindings: { chosen: { kind: 'value', value: { serverId: 'home', sessionId: 'B' } } } },
             context: { surface: 'cli' } })).toMatchObject({ status: 'unavailable' });
     });
-    it('admits only the exact declared Workspace present in current surface context', async () => {
+    it('admits the authorized checkout on every host and refuses changed, removed or retired authority', async () => {
         const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'project' as const, projectId: 'project' } };
         const checkout = { id: 'checkout', serverId: 'home', machineId: 'machine', rootPath: '/repo', createdAtMs: 1 };
-        const area = createCliWidgetAreaActionDepsV1({ scope: surface, isCurrent: () => true, transport: {
+        let current = true;
+        let workspaceRefs = [checkout];
+        const boards = createWorkBoardArtifactPortV1(createWorkBoardArtifactBoundary().transport, { shouldContinue: () => current });
+        await boards.apply({ kind: 'create', board: { id: 'board', name: 'Board' } });
+        const area = createCliWidgetAreaActionDepsV1({ scope: surface, isCurrent: () => current, transport: {
             read: async () => null,
             create: async () => { throw new Error('Input resolution must not create an Artifact'); },
             update: async () => { throw new Error('Input resolution must not update an Artifact'); },
         } });
         const deps = createCliWidgetInputActionDepsV1({ serverId: 'home', accountId: 'viewer',
-            getDeps: () => ({ ...createUnavailableActionTransportDeps(), ...area, widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) }),
+            getDeps: () => ({ ...createUnavailableActionTransportDeps(), ...area, workBoardArtifacts: boards,
+                widgetAccountScope: () => current ? { serverId: 'home', accountId: 'viewer' } : null }),
             readCandidates: async () => { throw new Error('Native metadata has no plugin discovery'); },
             validateSession: async () => { throw new Error('A checkout grants no Session access'); },
+            readWorkspaceRefs: async () => workspaceRefs,
         });
         const request = { ref: { surface, instanceId: 'copy' }, instance: { v: 1 as const, id: 'copy', definition: { kind: 'builtin' as const, id: 'project_code' },
             bindings: { checkout: { kind: 'value' as const, value: checkout } } },
             context: { surface: 'cli' as const, widgetAreaContext: { surface, values: { checkout: [checkout] } } } };
         expect(await deps.widgetInputs!.resolve(request)).toEqual({ status: 'ready', input: { checkout } });
-        const home = { ...surface, owner: { kind: 'home' as const } };
-        expect(await deps.widgetInputs!.resolve({ ...request, ref: { ...request.ref, surface: home },
-            context: { ...request.context, widgetAreaContext: { surface: home, values: { checkout: [checkout] } } } }))
-            .toMatchObject({ status: 'denied', fields: [{ reasonCode: 'widget_target_surface_unsupported' }] });
+        for (const owner of [{ kind: 'home' }, { kind: 'workBoard', boardId: 'board' },
+            { kind: 'pluginArea', pluginId: 'acme.page', pageId: 'page', area: 'main' },
+            { kind: 'corePage', pageId: 'usage', area: 'main' }] as const) {
+            expect(await deps.widgetInputs!.resolve({ ...request, ref: { ...request.ref, surface: { ...surface, owner } },
+                context: { surface: 'cli' } })).toEqual({ status: 'ready', input: { checkout } });
+        }
         expect(await deps.widgetInputs!.resolve({ ...request, instance: { ...request.instance,
             bindings: { checkout: { kind: 'value', value: { ...checkout, rootPath: '/other' } } } } })).toMatchObject({ status: 'denied',
             fields: [{ path: 'checkout', reasonCode: 'widget_target_identity_mismatch' }] });
-        expect(await deps.widgetInputs!.resolve({ ...request, context: { surface: 'cli' } })).toMatchObject({ status: 'denied' });
+        expect(await deps.widgetInputs!.resolve({ ...request, context: { surface: 'cli' } })).toMatchObject({ status: 'ready' });
         expect(await deps.widgetInputs!.resolve({ ...request, context: { surface: 'cli' },
             instance: { ...request.instance, bindings: { checkout: { kind: 'context', slot: 'checkout' } } },
-            groupBindings: { checkout: { kind: 'value', value: checkout } } })).toMatchObject({ status: 'denied' });
+            groupBindings: { checkout: { kind: 'value', value: checkout } } })).toMatchObject({ status: 'ready' });
+        expect(await deps.widgetInputs!.resolve({ ...request, instance: { ...request.instance,
+            bindings: { checkout: { kind: 'value', value: { ...checkout, serverId: 'foreign-home' } } } } }))
+            .toMatchObject({ status: 'denied', fields: [{ reasonCode: 'widget_target_scope_mismatch' }] });
+        workspaceRefs = [];
+        expect(await deps.widgetInputs!.resolve(request)).toMatchObject({ status: 'denied' });
+        workspaceRefs = [checkout];
+        current = false;
+        expect(await deps.widgetInputs!.resolve(request)).not.toMatchObject({ status: 'ready' });
     });
     it('resolves app-read fields without Session or credential authority and refuses ambiguous target declarations', async () => {
         const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };

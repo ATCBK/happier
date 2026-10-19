@@ -150,7 +150,7 @@ describe('registerDaemonExternalActionRoute', () => {
     let current = false;
     const app = await createApp({
       executor: createActionExecutor({ ...createUnavailableActionTransportDeps(), sessionSpawnNew }),
-      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'daemon-token' } }),
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'daemon-token', encryption: null } }),
       mintExecutionAuthorization: async () => ({ ok: true, authorization }),
       externalActionMachineRequestPrivateKey: tweetnacl.sign.keyPair().secretKey,
       resolveInstallationId: () => 'installation-1',
@@ -261,6 +261,7 @@ describe('registerDaemonExternalActionRoute', () => {
             accountId: 'account-1',
             principalId: 'principal-1',
             credentialId: 'credential-1',
+            grant: API_TOKEN_FULL_GRANT_V1,
           },
         }),
       );
@@ -360,7 +361,7 @@ describe('registerDaemonExternalActionRoute', () => {
         actionId: 'memory.search',
         input: actionInput,
         surface: 'cli',
-        authority: 'present_user',
+        authority: undefined,
         caller: undefined,
       },
       {

@@ -138,7 +138,7 @@ describe('createCliActionDeps plugin caller forwarding', () => {
       actionId: 'plugins.install',
       input: { path: '/tmp/acme-dev', dev: true },
       context: { surface: 'agent', actionCaller: { kind: 'host' } },
-      defaultPreview: { actionId: 'plugins.install' },
+      defaultPreview: { actionId: 'plugins.install', actionArgs: { path: '/tmp/acme-dev', dev: true }, summary: 'Install plugin' },
     })).resolves.toMatchObject({
       pluginInstall: {
         permissionsDisclosure: 'daemonEvaluated',
@@ -152,7 +152,8 @@ describe('createCliActionDeps plugin caller forwarding', () => {
     pluginChange.request.mockResolvedValue({ kind: 'failed', code: 'registry_unavailable', message: 'Registry is unavailable' });
     const deps = createCliActionDeps({ token: 'token', sessionId: 'cli-global', mode: 'plain', ctx: null });
     await expect(deps.buildApprovalPreview?.({ actionId: 'plugins.install', input: { kind: 'npm', path: '@acme/external' },
-      context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } }, defaultPreview: { actionId: 'plugins.install' },
+      context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } },
+      defaultPreview: { actionId: 'plugins.install', actionArgs: { kind: 'npm', path: '@acme/external' }, summary: 'Install plugin' },
     })).resolves.toMatchObject({ ok: false, errorCode: 'registry_unavailable', error: 'Registry is unavailable' });
     expect(pluginChange.decide).not.toHaveBeenCalled();
   });
@@ -166,7 +167,7 @@ describe('createCliActionDeps plugin caller forwarding', () => {
     const input = { kind, path: kind === 'npm' ? '@acme/plugin' : '/tmp/acme-plugin.tgz', dryRun: true };
     const context = { surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
     await expect(deps.buildApprovalPreview?.({ actionId: 'plugins.install', input, context,
-      defaultPreview: { actionId: 'plugins.install' },
+      defaultPreview: { actionId: 'plugins.install', actionArgs: input, summary: 'Install plugin' },
     })).resolves.toMatchObject({ pluginInstall: { ok: true, source: { kind } } });
     await expect(deps.pluginsDevLoopAction?.({ actionId: 'plugins.install', input, context }))
       .resolves.toMatchObject({ ok: true, kind: 'plugins_install', dryRun: true });
@@ -184,7 +185,7 @@ describe('createCliActionDeps plugin caller forwarding', () => {
     });
     await expect(deps.buildApprovalPreview?.({ actionId: 'plugins.install', input: { source: { kind, pluginId: review.pluginId } },
       context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } },
-      defaultPreview: { actionId: 'plugins.install' },
+      defaultPreview: { actionId: 'plugins.install', actionArgs: { source: { kind, pluginId: review.pluginId } }, summary: 'Install plugin' },
     })).resolves.toMatchObject({ pluginInstall: { source: { kind } } });
     expect(workspaceReads).toBe(0);
   });

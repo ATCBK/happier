@@ -41,6 +41,7 @@ import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalA
 import { ManagedMachineActionIdV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { refreshAccountSettingsForMinimumVersion } from '@/settings/accountSettings/refreshAccountSettingsForMinimumVersion';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
+import { bindDiscussionDraftReply } from '@/discussions/bindDiscussionDraftReply';
 
 type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>[0]
   & CliTranscriptActionExecutorOptions
@@ -73,6 +74,8 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     workflowAction?: ActionExecutorDeps['workflowAction'];
     managedMachineAction?: ActionExecutorDeps['managedMachineAction'];
     machineEnvironmentApply?: ActionExecutorDeps['machineEnvironmentApply'];
+    /** Receiving daemon's native Stop effect, after requester policy and scope admission. */
+    sessionStop?: ActionExecutorDeps['sessionStop'];
     /** Installed exact-target worker Status/retirement producer, overriding only those IDs. */
     projectWorkerAction?: ActionExecutorDeps['projectWorkerAction'];
     /** The canonical prepared filesystem owner installed by the daemon. */
@@ -189,6 +192,7 @@ export function createCliActionExecutor(
       ...(params.workflowAction ? { workflowAction: params.workflowAction } : {}),
       ...(params.managedMachineAction ? { managedMachineAction: params.managedMachineAction } : {}),
       ...(params.machineEnvironmentApply ? { machineEnvironmentApply: params.machineEnvironmentApply } : {}),
+      ...(params.sessionStop ? { sessionStop: params.sessionStop } : {}),
       ...(params.hostActionApprovalLifetime ? { hostActionApprovalLifetime: params.hostActionApprovalLifetime } : {}),
       ...(params.runActionOperation ? { runActionOperation: params.runActionOperation } : {}),
       ...(params.filesystemActionExecute ? { filesystemActionExecute: async (request) => {
@@ -361,11 +365,12 @@ export function createCliActionExecutor(
     const signExternalActionApprovalInput: ActionExecutorContext['signExternalActionApprovalInput'] =
       context?.signExternalActionApprovalInput
       ?? ((ordinaryUiBinding || canSignOriginalSessionApproval || admittedReceiver && runtimeAccountId === sessionBinding?.accountId)
-        && approvalAuthorization && privateKey ? ({ actionId, input, target, authorization: suppliedAuthorization }) => {
+        && approvalAuthorization && privateKey ? ({ actionId, input, target, authorization: suppliedAuthorization, requesterConfirmation, sessionTargetsV1 }) => {
         if (suppliedAuthorization.token !== approvalAuthorization.token
           || !sameStrictJsonValue(target, approvalAuthorization.binding.target)) throw new Error('approval_origin_unavailable');
         return signExternalActionApprovalInputV1({ authorizationToken: approvalAuthorization.token,
-          actionId, input, target, privateKey });
+          actionId, input, target, privateKey, ...(requesterConfirmation ? { requesterConfirmation } : {}),
+          ...(sessionTargetsV1 ? { sessionTargetsV1 } : {}) });
       } : undefined);
     return ({
     ...(context ?? {}),
@@ -396,7 +401,10 @@ export function createCliActionExecutor(
       const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));
       if (!resolvedContext) return { kind: 'settled' as const,
         result: actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable') };
-      return await base.prepare(actionId, input, resolvedContext);
+      const bound = await bindDiscussionDraftReply({ actionId, input, context: resolvedContext,
+        serverId: params.serverId ?? configuration.activeServerId, discussionAction: harness.deps.discussionAction });
+      if ('failure' in bound) return { kind: 'settled' as const, result: bound.failure };
+      return await base.prepare(bound.actionId, bound.input, bound.context);
     },
     execute: async (actionId, input, context) => {
       const denied = filesystemRequesterAuthorityFailure(actionId, context)
@@ -404,7 +412,10 @@ export function createCliActionExecutor(
       if (denied) return denied;
       const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));
       if (!resolvedContext) return actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable');
-      return await daemonAware.execute(actionId, input, resolvedContext);
+      const bound = await bindDiscussionDraftReply({ actionId, input, context: resolvedContext,
+        serverId: params.serverId ?? configuration.activeServerId, discussionAction: harness.deps.discussionAction });
+      if ('failure' in bound) return bound.failure;
+      return await daemonAware.execute(bound.actionId, bound.input, bound.context);
     },
     continueConfidentialApprovalRequest: async (input, context) => {
       const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));

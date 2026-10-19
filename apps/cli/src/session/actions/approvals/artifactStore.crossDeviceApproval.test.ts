@@ -13,14 +13,15 @@ import {
   type ApprovalRequest,
 } from '@happier-dev/protocol';
 import { libsodiumPublicKeyFromSecretKey } from '@/api/encryption';
+import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import type { Credentials } from '@/persistence';
-import { configuration } from '@/configuration';
 
 import { createCliApprovalsArtifactStore } from './artifactStore';
 
-const { mockGet, mockPost } = vi.hoisted(() => ({
+const { mockGet, mockPost, fixtureConfiguration } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockPost: vi.fn(),
+  fixtureConfiguration: { apiServerUrl: 'http://127.0.0.1:24599', activeServerDir: '' },
 }));
 
 vi.mock('axios', () => ({
@@ -31,10 +32,7 @@ vi.mock('axios', () => ({
 }));
 
 vi.mock('@/configuration', () => ({
-  configuration: {
-    apiServerUrl: 'http://127.0.0.1:24599',
-    activeServerDir: '',
-  },
+  configuration: fixtureConfiguration,
 }));
 
 type StoredArtifact = {
@@ -54,9 +52,11 @@ type StoredArtifact = {
 
 describe('approval Artifact cross-device decision', () => {
   let artifacts: Map<string, StoredArtifact>;
+  let fixtureDirectory: string;
 
   beforeEach(async () => {
-    configuration.activeServerDir = await mkdtemp(join(tmpdir(), 'happier-approval-cross-device-'));
+    fixtureDirectory = await mkdtemp(join(tmpdir(), 'happier-approval-cross-device-'));
+    fixtureConfiguration.activeServerDir = fixtureDirectory;
     artifacts = new Map();
     mockGet.mockReset();
     mockPost.mockReset();
@@ -77,6 +77,7 @@ describe('approval Artifact cross-device decision', () => {
     mockPost.mockImplementation(async (url: string, body: Record<string, unknown>) => {
       if (url.endsWith('/v1/artifacts')) {
         const id = String(body.id);
+        if (artifacts.has(id)) return { status: 409, data: { error: 'conflict' } };
         artifacts.set(id, {
           id,
           ownerAccountId: 'account', access: 'owner', encryptionMode: 'e2ee',
@@ -123,7 +124,80 @@ describe('approval Artifact cross-device decision', () => {
   });
 
   afterEach(async () => {
-    await rm(configuration.activeServerDir, { recursive: true, force: true });
+    await rm(fixtureDirectory, { recursive: true, force: true });
+  });
+
+  it('retains the first private Discussion draft across explicit/final retries and terminal settlement', async () => {
+    const machineKey = new Uint8Array(32).fill(7);
+    const credentials: Credentials = { token: 'account-token', encryption: {
+      type: 'dataKey', machineKey, publicKey: libsodiumPublicKeyFromSecretKey(machineKey),
+    } };
+    const createStore = () => createCliApprovalsArtifactStore({ credentials, getAccountEncryptionMode: async () => 'e2ee' });
+    const store = createStore();
+    const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'receiver', localId: 'original-input', acceptedTurnId: 'turn' });
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'agent', sessionId: 'receiver' }, actionId: 'discussion.reply', summary: 'Review answer',
+      approval: { flow: 'deferred', result: 'required' },
+      actionArgs: { discussionId: 'discussion', localId, replyTarget: { kind: 'message', messageId: 'question' },
+        content: { v: 1, parts: [{ t: 'text', text: 'Captured explicit draft' }] } },
+      executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent',
+        caller: { kind: 'session', sessionId: 'receiver', starterDepth: 0, turnDepth: 0 },
+        sessionId: 'receiver', serverId: 'profile-a', serverIdentityId: 'stable-home', machineId: 'machine', accountId: 'account',
+        actionId: 'discussion.reply', requestId: localId,
+        discussionReplyReturn: { serverId: 'profile-a', requestLocalId: 'original-input', acceptedTurnId: 'turn' },
+        sessionInputSource: { sourceSessionId: 'receiver', sourceInputId: 'original-input', sourceTurnId: 'turn', via: 'action',
+          discussionAddressing: { discussionId: 'discussion', messageId: 'question', throughSeq: 1, participantSessionId: 'receiver' } },
+      } });
+    const first = await store.approvalsCreate({ request, serverId: 'profile-a' });
+    const retry = ApprovalRequestV2Schema.parse({ ...request, createdAtMs: 5, updatedAtMs: 5,
+      actionArgs: { ...request.actionArgs as object, content: { v: 1, parts: [{ t: 'text', text: 'Later terminal fallback' }] } },
+      executionOriginV1: { ...request.executionOriginV1, caller: { kind: 'host' }, serverId: 'profile-b',
+        discussionReplyReturn: { ...request.executionOriginV1.discussionReplyReturn, serverId: 'profile-b' } } });
+    expect(await createStore().approvalsCreate({ request: retry, serverId: 'profile-b' })).toEqual(first);
+    expect(await store.approvalsGet(first)).toEqual(request);
+    expect(artifacts.size).toBe(1);
+    const approved = ApprovalRequestV2Schema.parse({ ...request, status: 'approved', updatedAtMs: 2,
+      decision: { kind: 'approve', authority: 'present_user', decidedAtMs: 2 } });
+    const executing = ApprovalRequestV2Schema.parse({ ...approved, status: 'executing', updatedAtMs: 3 });
+    const executed = ApprovalRequestV2Schema.parse({ ...executing, status: 'executed', updatedAtMs: 4,
+      execution: { executedAtMs: 4, ok: true, result: { published: true } } });
+    for (const settled of [approved, executing, executed]) {
+      expect(await store.approvalsUpdate({ ...first, request: settled })).toEqual({ ok: true });
+      expect(await createStore().approvalsCreate({ request: retry, serverId: 'profile-b' })).toEqual(first);
+      expect(await store.approvalsGet(first)).toEqual(settled);
+    }
+    expect(artifacts.size).toBe(1);
+    const differentQuestion = ApprovalRequestV2Schema.parse({ ...retry, actionArgs: { ...request.actionArgs as object,
+      discussionId: 'another-discussion' } });
+    await expect(createStore().approvalsCreate({ request: differentQuestion, serverId: 'profile-b' }))
+      .rejects.toMatchObject({ code: 'subject_mismatch' });
+    expect(await store.approvalsGet(first)).toEqual(executed);
+    await expect(store.approvalsCreate({ request: ApprovalRequestV2Schema.parse({ ...request,
+      actionArgs: { ...request.actionArgs as object, localId: 'unbound-tool-call' } }), serverId: 'profile-a' }))
+      .rejects.toMatchObject({ code: 'subject_mismatch' });
+
+    const nextLocalId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'receiver', localId: 'next-input', acceptedTurnId: 'next-turn' });
+    const nextQuestion = ApprovalRequestV2Schema.parse({ ...request, actionArgs: { ...request.actionArgs as object, localId: nextLocalId,
+      replyTarget: { kind: 'message', messageId: 'next-question' } },
+      executionOriginV1: { ...request.executionOriginV1, requestId: nextLocalId,
+        discussionReplyReturn: { serverId: 'profile-a', requestLocalId: 'next-input', acceptedTurnId: 'next-turn' },
+        sessionInputSource: { ...request.executionOriginV1.sessionInputSource,
+          sourceInputId: 'next-input', sourceTurnId: 'next-turn', discussionAddressing: {
+            discussionId: 'discussion', messageId: 'next-question', throughSeq: 2, participantSessionId: 'receiver' } } } });
+    // A concurrent creator commits the same row before returning its conflict.
+    const createAtBoundary = mockPost.getMockImplementation()!;
+    mockPost.mockImplementationOnce(async (url: string, body: Record<string, unknown>) => {
+      await createAtBoundary(url, body);
+      return { status: 409, data: { error: 'conflict' } };
+    });
+    const next = await createStore().approvalsCreate({ request: nextQuestion, serverId: 'profile-a' });
+    expect(next).not.toEqual(first);
+    const rejected = ApprovalRequestV2Schema.parse({ ...nextQuestion, status: 'rejected', updatedAtMs: 2,
+      decision: { kind: 'reject', authority: 'present_user', decidedAtMs: 2 } });
+    expect(await store.approvalsUpdate({ ...next, request: rejected })).toEqual({ ok: true });
+    expect(await createStore().approvalsCreate({ request: nextQuestion, serverId: 'profile-a' })).toEqual(next);
+    expect(await store.approvalsGet(next)).toEqual(rejected);
+    expect(artifacts.size).toBe(2);
   });
 
   it('decides a creator-profile artifact from another profile on the same Home exactly once', async () => {
@@ -311,11 +385,12 @@ describe('approval Artifact cross-device decision', () => {
     const sessionStateFieldSet = vi.fn(async () => ({ updated: true }));
     const executor = createActionExecutor({ ...store, sessionStateFieldSet } as unknown as ActionExecutorDeps);
 
-    await expect(executor.execute(
+    const decision = await executor.execute(
       'approval.request.decide',
       { artifactId: created.artifactId, decision: 'approve' },
       { surface: 'ui', authority: 'present_user', serverId: 'profile-creator-a' },
-    )).resolves.toMatchObject({
+    );
+    expect(decision, JSON.stringify(decision)).toMatchObject({
       ok: true,
       result: {
         status: 'failed',

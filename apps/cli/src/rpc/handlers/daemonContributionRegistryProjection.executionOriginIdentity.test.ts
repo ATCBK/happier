@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import { MachineAdministrationSelectionsV1Schema } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
+import { MachineAdministrationTargetsV1Schema } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { normalizePluginUiProjection } from '../../../../ui/sources/sync/domains/plugins/ui/projection';
 import { readPluginUiContributionOrigin, readPluginUiContributionSupplies, readPluginUiExecutionOriginCandidates, unionPluginUiProjections } from '../../../../ui/sources/sync/domains/plugins/ui/projectionUnion';
-import { setPluginMachineExecutionOriginPreference } from '../../../../ui/sources/sync/domains/machines/administration/selectionPreferences';
+import { setPluginMachineExecutionOriginPreference, readPluginMachineExecutionTargetPreference } from '../../../../ui/sources/sync/domains/machines/administration/selectionPreferences';
 import { resolvePluginMachineExecutionOriginState } from '../../../../ui/sources/sync/domains/machines/administration/pluginExecutionOrigin';
 import { invalidateDaemonContributionRegistryProjectionCache, registerDaemonContributionRegistryProjectionHandler } from './daemonContributionRegistryProjection';
 
@@ -44,15 +44,19 @@ vi.mock('../../../../ui/node_modules/expo-file-system/src/index.ts', async () =>
 
 describe('execution origin identity from daemon publication to Administration and surface binding', () => {
     it('binds the saved real source choice to its real supply and refuses a materialization mis-binding', async () => {
-        const pluginId = 'happier.triage';
+        const pluginId = 'happier.inspector';
         const machineId = 'machine-origin-identity';
         const serverIdentityId = 'srv_origin_identity';
         const fixture = await createAdmittedPluginRuntimeFixture({ runtimeOptions: {
             pluginIds: [pluginId, 'happier.scm.forge.github'], resolveCurrentMachineId: () => machineId,
         } });
         try {
+            expect(await fixture.registry.activatePluginsForValidation?.([pluginId, 'happier.scm.forge.github'])).toEqual([
+                { pluginId, diagnostics: [] },
+                { pluginId: 'happier.scm.forge.github', diagnostics: [] },
+            ]);
             const custody = fixture.registry.readPluginSourceCustody?.(pluginId);
-            expect(custody).toBeDefined();
+            expect(custody).toBeTruthy();
             const exactOrigin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId,
                 sourceRef: { pluginId, machineId, sourceCustody: custody } });
             const handlers = new Map<string, RpcHandler>();
@@ -73,9 +77,9 @@ describe('execution origin identity from daemon publication to Administration an
             const candidates = readPluginUiExecutionOriginCandidates({ projection: initial.pluginUiProjection,
                 pluginId, members: [member] }).sourceCandidates;
             expect(candidates.map(candidate => candidate.source.origin)).toContainEqual(exactOrigin);
-            const preferences = setPluginMachineExecutionOriginPreference(MachineAdministrationSelectionsV1Schema.parse({}), pluginId, exactOrigin);
+            const preferences = setPluginMachineExecutionOriginPreference(MachineAdministrationTargetsV1Schema.parse({}), pluginId, exactOrigin);
             const selected = resolvePluginMachineExecutionOriginState({ pluginId,
-                storedOrigin: preferences.pluginExecutionOriginsByPluginId[pluginId]!, candidates });
+                storedOrigin: null, storedTarget: readPluginMachineExecutionTargetPreference(preferences, pluginId), candidates });
             expect(selected.kind).toBe('selected');
             if (selected.kind !== 'selected') throw new Error('The real source choice must be admitted');
             const githubId = 'happier.scm.forge.github';
@@ -86,10 +90,10 @@ describe('execution origin identity from daemon publication to Administration an
                 pluginId: githubId, members: [member] }).sourceCandidates;
             const githubPreferences = setPluginMachineExecutionOriginPreference(preferences, githubId, githubOrigin);
             expect(resolvePluginMachineExecutionOriginState({ pluginId: githubId,
-                storedOrigin: githubPreferences.pluginExecutionOriginsByPluginId[githubId]!,
+                storedOrigin: null, storedTarget: readPluginMachineExecutionTargetPreference(githubPreferences, githubId),
                 candidates: githubCandidates }).kind).toBe('selected');
             const selectedUnion = unionPluginUiProjections([member], new Map([[pluginId, selected.origin]]));
-            const pageId = `surfacePlacement:${pluginId}:triage`;
+            const pageId = `surfacePlacement:${pluginId}:inspector-page`;
             const page = selectedUnion.pluginUiProjection?.surfacePlacementsById[pageId];
             expect(readPluginUiContributionOrigin(page)?.executionOrigin).toEqual(exactOrigin);
             expect(readPluginUiContributionSupplies(page)).toEqual(expect.arrayContaining([

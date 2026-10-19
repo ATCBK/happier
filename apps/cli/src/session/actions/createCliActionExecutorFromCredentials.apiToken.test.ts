@@ -7,12 +7,15 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { API_TOKEN_FULL_GRANT_V1, ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1 } from '@happier-dev/protocol';
+import { API_TOKEN_FULL_GRANT_V1, ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1, FeaturesResponseSchema, normalizeActionsSettingsV1, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
+import { projectSessionSummaryV1, SessionStatusActionResultV1Schema } from '@happier-dev/protocol/sessions/control/contract';
 
 import { configuration, reloadConfiguration } from '@/configuration';
 import { registerDaemonExternalActionRoute } from '@/daemon/externalActions/registerDaemonExternalActionRoute';
 import { installDaemonMachineAdmissionTransport } from '@/daemon/machineAdmissionTransport';
 import { SIGNED_ROOT_ACTION_EXECUTE_PATH } from '@/daemon/externalActions/signedRootActionControl';
+import { createAccountEncryptionCurrentnessFixture, createCurrentSessionProjectionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { encodeBase64, encryptLegacy } from '@/api/encryption';
 
 const {
   createCliActionExecutor,
@@ -46,7 +49,8 @@ vi.mock('./ensureCliActionPolicySettings', () => ({
   ensureCliActionPolicySettings,
 }));
 
-vi.mock('@/session/transport/http/sessionsHttp', () => ({
+vi.mock('@/session/transport/http/sessionsHttp', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/session/transport/http/sessionsHttp')>(),
   fetchSessionById,
   fetchSessionsPage,
   importHistoricalSessionTranscript,
@@ -58,7 +62,8 @@ vi.mock('@/persistence', async (importOriginal) => ({
   readSettings,
 }));
 
-vi.mock('@/api/machine/resolveCurrentAccountMachineTarget', () => ({
+vi.mock('@/api/machine/resolveCurrentAccountMachineTarget', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/api/machine/resolveCurrentAccountMachineTarget')>(),
   resolveCurrentAccountMachineTarget,
 }));
 
@@ -78,7 +83,8 @@ const exactSessionId = 'c123456789012345678901234';
 
 function syntheticAccountToken(accountId: string): string {
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
-  return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: accountId })}.signature`;
+  return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: accountId,
+    provenance: { v: 1, kind: 'account', authority: 'present_user' } })}.signature`;
 }
 
 async function withPublishedAccountDaemon(run: (fixture: Readonly<{
@@ -190,6 +196,16 @@ function sessionListItem(id: string, tag?: string) {
   };
 }
 
+function sessionStatusResult(active = true) {
+  return SessionStatusActionResultV1Schema.parse({
+    session: projectSessionSummaryV1({
+      row: { ...sessionListItem(exactSessionId), active },
+      metadata: null,
+      encryption: null,
+    }),
+  });
+}
+
 // The PAT route executes through the SDK, which settles every success through
 // the Action's own declared output schema. A stub standing in for a successful
 // execution has to be a real result of that Action; `PARSED_*` is what the
@@ -228,6 +244,25 @@ function apiFailure(actionId: string, errorCode: string, details?: unknown): Moc
 }
 
 describe('createCliActionExecutorFromCredentials API Token transport', () => {
+  it('keeps caller-bound update routing outside its strict semantic publication input', async () => {
+    const requests: unknown[] = [];
+    installPatActionTransportMock((_url, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return apiSuccess('session.update.post', { sessionId: exactSessionId, persisted: true, localId: 'update-1' });
+    });
+    const executor = createCliActionExecutorFromCredentials({ credentials: {
+      token: SYNTHETIC_API_TOKEN, encryption: null, credentialProvenance: 'api_token',
+    } });
+    expect(await executor.execute('session.update.post', { summary: 'Progress' }, {
+      surface: 'cli', authority: 'account_automation', defaultSessionId: exactSessionId,
+    })).toEqual({ ok: true, result: { sessionId: exactSessionId, persisted: true, localId: 'update-1' } });
+    expect(requests).toEqual([{
+      v: 1,
+      requestId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+      target: { kind: 'session', sessionId: exactSessionId },
+      input: { summary: 'Progress' },
+    }]);
+  });
   it('refuses a qualified copy with unavailable exact Home credentials before remote effects', async () => {
     installPatActionTransportMock(() => { throw new Error('Missing Home copy reached the Action transport'); });
     const executor = createCliActionExecutorFromCredentials({ credentials: { token: SYNTHETIC_API_TOKEN, encryption: null } });
@@ -246,20 +281,35 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
     expect(prepared).toMatchObject({ kind: 'settled', result });
   });
   it('uses the daemon-owned Machine admission transport for credential-backed Actions without per-caller wiring', async () => {
+    const actual = await vi.importActual<typeof import('./createCliActionExecutor')>('./createCliActionExecutor');
+    createCliActionExecutor.mockImplementation(actual.createCliActionExecutor);
+    const sessionsHttp = await vi.importActual<typeof import('@/session/transport/http/sessionsHttp')>('@/session/transport/http/sessionsHttp');
+    fetchSessionById.mockImplementation(sessionsHttp.fetchSessionById);
+    const secret = new Uint8Array(32).fill(3);
+    const session = createCurrentSessionProjectionRecordFixture({ id: exactSessionId, encryptionMode: 'e2ee', active: true,
+      metadata: encodeBase64(encryptLegacy({ v: 1, machineId: 'machine-1' }, secret)),
+      effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) } });
+    const get = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'e2ee' }) };
+      if (String(url).includes(`/v2/sessions/${exactSessionId}`)) return { status: 200, data: { session } };
+      throw new Error(`Unexpected fixture HTTP path: ${new URL(String(url)).pathname}`);
+    });
+    onTestFinished(() => get.mockRestore());
     const machineAdmissionTransport = vi.fn(async () => ({ status: 'accepted' as const, localId: 'input-1' }));
     const release = installDaemonMachineAdmissionTransport({
       serverId: configuration.activeServerId,
       transport: machineAdmissionTransport,
     });
     try {
-      createCliActionExecutorFromCredentials({
-        credentials: { token: syntheticAccountToken('account-1'), encryption: null },
+      const executor = createCliActionExecutorFromCredentials({
+        credentials: { token: syntheticAccountToken('account-1'), encryption: { type: 'legacy', secret }, credentialProvenance: 'stored_session' },
+        machineId: 'machine-1', serverIdentityId: 'srv_test',
+        actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1, actions: {} }) },
+        resolveServerFeaturesSnapshot: async () => ({ status: 'ready', provenance: 'authenticated', features: FeaturesResponseSchema.parse({ features: {}, capabilities: {} }) }),
       });
-      const admitted = createCliActionExecutor.mock.calls.at(-1)?.[0]?.machineAdmissionTransport;
-      expect(admitted).toEqual(expect.any(Function));
-      await expect(admitted?.({ v: 1, sessionId: 'session-1', targetMachineId: 'machine-1', localId: 'input-1' }))
-        .resolves.toEqual({ status: 'accepted', localId: 'input-1' });
-      expect(machineAdmissionTransport).toHaveBeenCalledOnce();
+      await expect(executor.execute('session.message.send', { sessionId: exactSessionId, message: 'Admit this input', localId: 'input-1', wait: false },
+        { surface: 'cli', authority: 'present_user' })).resolves.toMatchObject({ ok: true, result: { status: 'accepted', localId: 'input-1' } });
+      expect(machineAdmissionTransport).toHaveBeenCalledWith(expect.objectContaining({ sessionId: exactSessionId, targetMachineId: 'machine-1', localId: 'input-1' }), expect.anything());
     } finally {
       release();
     }
@@ -324,7 +374,10 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
   });
 
   it('composes Account-server-owned Actions into the executor used by the daemon ingress', async () => {
+    const actual = await vi.importActual<typeof import('./createCliActionExecutor')>('./createCliActionExecutor');
+    createCliActionExecutor.mockImplementation(actual.createCliActionExecutor);
     const selectedServerApiUrl = 'https://selected-home.example.test';
+    const token = syntheticAccountToken('account-1');
     // The canonical Account-server adapter issues `axios.request`, so the
     // interception must sit there. Only the selected Home with the executor's
     // own bearer answers; every other endpoint or credential is unreachable,
@@ -335,7 +388,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
       const headers = (config as { headers?: Record<string, unknown> } | undefined)?.headers ?? {};
       if (
         url !== `${selectedServerApiUrl}${ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1}`
-        || headers.Authorization !== 'Bearer signed-daemon-account-token'
+        || headers.Authorization !== `Bearer ${token}`
       ) {
         throw Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' });
       }
@@ -343,59 +396,52 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
     });
     onTestFinished(() => request.mockRestore());
 
-    createCliActionExecutorFromCredentials({
+    const executor = createCliActionExecutorFromCredentials({
       credentials: {
-        token: 'signed-daemon-account-token',
+        token,
         encryption: null,
         credentialProvenance: 'stored_session',
       },
       serverId: 'selected-home',
       serverApiUrl: selectedServerApiUrl,
+      serverIdentityId: 'srv_selected',
+      actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1, actions: {} }) },
     });
 
     process.env.HAPPIER_SERVER_URL = 'https://post-construction-attacker.example.test';
     reloadConfiguration();
 
-    const accountApiTokensListAction = createCliActionExecutor.mock.calls.at(-1)?.[0]
-      ?.accountServerActionDeps?.accountApiTokensListAction;
-    expect(accountApiTokensListAction).toEqual(expect.any(Function));
-    await expect(accountApiTokensListAction?.({
-      input: {},
-      context: { surface: 'api', authority: 'account_automation' },
-    })).resolves.toEqual({ tokens: [] });
+    await expect(executor.execute('account.apiTokens.list', {}, { surface: 'cli', authority: 'present_user' }))
+      .resolves.toEqual({ ok: true, result: { tokens: [] } });
   });
 
-  it('binds approval-origin currentness to the exact executor credentials', async () => {
-    createCliActionExecutorFromCredentials({
-      credentials: {
-        token: syntheticAccountToken('account-1'),
-        encryption: null,
-        credentialProvenance: 'stored_session',
-      },
-      machineId: 'machine-1',
-      serverId: 'home-profile-1',
-      serverApiUrl: 'https://home.example.test',
+  it.each([
+    { name: 'completed local confirmation', external: false, explicitAsk: false, confirmed: true, authority: 'present_user', nativeRequests: 1 },
+    { name: 'explicit Ask policy', external: false, explicitAsk: true, confirmed: true, authority: 'present_user', nativeRequests: 0 },
+    { name: 'a different Action confirmation', external: false, explicitAsk: false, confirmed: false, authority: 'present_user', nativeRequests: 0 },
+    { name: 'automation authority', external: false, explicitAsk: false, confirmed: true, authority: 'account_automation', nativeRequests: 0 },
+    { name: 'explicit external requester custody', external: true, explicitAsk: false, confirmed: true, authority: 'present_user', nativeRequests: 0 },
+  ] as const)('uses current approval policy for show-once requester placement: $name', async ({ external, explicitAsk, confirmed, authority, nativeRequests }) => {
+    const actual = await vi.importActual<typeof import('./createCliActionExecutor')>('./createCliActionExecutor');
+    createCliActionExecutor.mockImplementation(actual.createCliActionExecutor);
+    const daemon = await vi.importActual<typeof import('@/daemon/multiDaemon')>('@/daemon/multiDaemon');
+    resolveLiveDaemonControlTargetForServer.mockImplementation(daemon.resolveLiveDaemonControlTargetForServer);
+    // Native Home HTTP is the boundary. Reaching its refusal proves that the
+    // confirmed local caller retained execution; no fixture ever mints a secret.
+    const request = vi.spyOn(axios, 'request').mockResolvedValue({ status: 403, data: { error: 'present_user_required' } });
+    const admission = vi.spyOn(axios, 'post').mockResolvedValue({ status: 503, data: { error: 'admission_unavailable' } });
+    onTestFinished(() => { request.mockRestore(); admission.mockRestore(); });
+    const executor = createCliActionExecutorFromCredentials({
+      credentials: { token: syntheticAccountToken('account-1'), encryption: null, credentialProvenance: 'stored_session' },
+      machineId: 'machine-local', serverId: 'selected-home', serverApiUrl: 'https://selected-home.example.test', serverIdentityId: 'srv_selected',
+      ...(external ? { externalActionClient: true } : {}),
+      actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1,
+        actions: explicitAsk ? { 'account.apiTokens.create': { approvalRequiredSurfaces: ['cli'] } } : {} }) },
     });
-
-    const isApprovalExecutionOriginCurrent = createCliActionExecutor.mock.calls.at(-1)?.[0]
-      ?.isApprovalExecutionOriginCurrent;
-    expect(isApprovalExecutionOriginCurrent).toEqual(expect.any(Function));
-    await expect(isApprovalExecutionOriginCurrent?.({
-      origin: {
-        v: 1,
-        authority: 'account_automation',
-        surface: 'api',
-        caller: { kind: 'host' },
-        serverId: 'home-profile-1',
-        accountId: 'account-1',
-        principalId: 'account-1',
-        credentialId: '11111111-1111-4111-8111-111111111111',
-        machineId: 'machine-1',
-        target: { kind: 'machine', machineId: 'machine-1' },
-        actionId: 'machine.list',
-        requestId: 'request-1',
-      },
-    })).resolves.toBe(false);
+    await expect(executor.execute('account.apiTokens.create', { tokenId: '11111111-1111-4111-8111-111111111111', label: 'Local custody' },
+      { surface: 'cli', authority, presentUserConfirmation: { actionId: confirmed ? 'account.apiTokens.create' : 'account.apiTokens.revoke' } }))
+      .resolves.toMatchObject({ ok: false, ...(nativeRequests ? { errorCode: 'present_user_required' } : {}) });
+    expect(request.mock.calls).toHaveLength(nativeRequests);
   });
 
   it('routes only ordinary attested stored-session CLI root clients through their captured Account daemon', async () => {
@@ -421,10 +467,18 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
     });
   });
 
-  it('keeps present-user Actions on signed daemon control while PAT transport refuses them', async () => {
+  it('keeps stored-session plugin installation on signed daemon control and refuses its excluded PAT Action transport', async () => {
     daemonPost.mockResolvedValue({
       ok: true,
       result: { installed: true },
+    });
+
+    const patRequests: URL[] = [];
+    installPatActionTransportMock(url => {
+      if (url.pathname === '/v1/features/authenticated') return { statusCode: 200,
+        body: FeaturesResponseSchema.parse({ features: {}, capabilities: {} }) };
+      patRequests.push(url);
+      return apiFailure('plugins.install', 'present_user_required');
     });
     await withPublishedAccountDaemon(async ({ credentials, serverId, serverApiUrl, daemonTarget }) => {
       const signedRoot = createCliActionExecutorFromCredentials({ credentials, serverId, serverApiUrl, externalActionClient: true });
@@ -448,6 +502,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
       { source: '/workspace/plugin' },
       { surface: 'cli', authority: 'present_user' },
     )).resolves.toEqual({ ok: false, errorCode: 'unsupported', error: 'unsupported' });
+    expect(patRequests).toEqual([]);
   });
 
   it('pins a fixed-Home stored-session root client to that Home daemon and fails closed when it is unavailable', async () => {
@@ -511,9 +566,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
   });
 
   it('passes an exact full Session id directly to the PAT Action route without a lookup request', async () => {
-    const fetch = vi.fn<FetchLike>(() => apiSuccess('session.status.get', {
-      session: { id: exactSessionId, active: true },
-    }));
+    const fetch = vi.fn<FetchLike>(() => apiSuccess('session.status.get', sessionStatusResult()));
     installPatActionTransportMock(fetch);
 
     const executor = createCliActionExecutorFromCredentials({
@@ -530,7 +583,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
       { surface: 'cli', actionRequestId: 'request-1' },
     )).resolves.toEqual({
       ok: true,
-      result: { session: { id: exactSessionId, active: true } },
+      result: sessionStatusResult(),
     });
 
     expect(createCliActionExecutor).not.toHaveBeenCalled();
@@ -872,9 +925,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
           hasNext: false,
         });
       }
-      return apiSuccess('session.status.get', {
-        session: { id: exactSessionId, active: true },
-      });
+      return apiSuccess('session.status.get', sessionStatusResult());
     });
     installPatActionTransportMock(fetch);
 
@@ -892,7 +943,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
       { surface: 'cli' },
     )).resolves.toEqual({
       ok: true,
-      result: { session: { id: exactSessionId, active: true } },
+      result: sessionStatusResult(),
     });
 
     expect(fetch).toHaveBeenCalledTimes(3);
@@ -1115,7 +1166,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
         }
       : {
           ok: true as const,
-          result: { session: { id: exactSessionId, active: true } },
+          result: sessionStatusResult(),
         });
     const verifyPat = vi.fn(async () => ({
       ok: true as const,
@@ -1157,7 +1208,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
         { surface: 'cli' },
       )).resolves.toEqual({
         ok: true,
-        result: { session: { id: exactSessionId, active: true } },
+        result: sessionStatusResult(),
       });
 
       expect(verifyPat).toHaveBeenCalledTimes(3);
@@ -1219,9 +1270,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
   });
 
   it('defers PAT Action execution until its prepared invocation runs', async () => {
-    const fetch = vi.fn<FetchLike>(() => apiSuccess('session.status.get', {
-      session: { id: exactSessionId, active: true },
-    }));
+    const fetch = vi.fn<FetchLike>(() => apiSuccess('session.status.get', sessionStatusResult()));
     installPatActionTransportMock(fetch);
 
     const executor = createCliActionExecutorFromCredentials({
@@ -1246,7 +1295,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
     expect(prepared.invocation.run()).toBe(firstRun);
     await expect(firstRun).resolves.toEqual({
       ok: true,
-      result: { session: { id: exactSessionId, active: true } },
+      result: sessionStatusResult(),
     });
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(createCliActionExecutor).not.toHaveBeenCalled();
@@ -1355,9 +1404,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
           nextCursor: null,
           hasNext: false,
         })
-      : apiSuccess('session.status.get', {
-          session: { id: exactSessionId, active: false },
-        }));
+      : apiSuccess('session.status.get', sessionStatusResult(false)));
     installPatActionTransportMock(fetch);
 
     const executor = createCliActionExecutorFromCredentials({
@@ -1374,7 +1421,7 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
       { surface: 'mcp', defaultSessionId: 'active-work' },
     )).resolves.toEqual({
       ok: true,
-      result: { session: { id: exactSessionId, active: false } },
+      result: sessionStatusResult(false),
     });
 
     expect(createCliActionExecutor).not.toHaveBeenCalled();

@@ -1,5 +1,6 @@
 export {
   createHostActionOperationRuntime,
+  runHostActionOperation,
   type HostActionOperationRuntime,
 } from './createHostActionOperationRuntime';
 export {

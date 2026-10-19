@@ -2,10 +2,12 @@ import axios from 'axios';
 import nacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol';
-import { createActionExecutor, getActionSpec, type ActionExecutorContext } from '@happier-dev/protocol/actions';
+import { createActionExecutor, type ActionExecutorContext } from '@happier-dev/protocol/actions';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
   ExternalActionExecutionAuthorizationV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema,
   projectExternalActionPendingResetStartAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { projectExternalActionHttpError } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1, verifyExternalActionMachineRequestV1, verifyExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import * as executionAuthorizationOwner from './externalActionExecutionAuthorization';
 import { openExternalActionRequestV2, sealExternalActionRequestV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
@@ -38,6 +40,64 @@ const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({
 
 describe('requester HTTP authority on the existing external Action carrier', () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(['action_not_admitted', 'action_outcome_unknown'] as const)('preserves original Account correlation for %s and refuses a mismatched reply', async code => {
+    const machine = { id: target.machineId, kind: 'persistent', active: true, installationId: 'installation',
+      revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
+      access: { custodian: { accountId: 'bob', displayName: 'Bob' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } };
+    vi.spyOn(axios, 'get').mockImplementation(async url => url.endsWith('/v1/account/encryption')
+      ? { status: 200, data: { mode: 'plain', updatedAt: 1 } } : { status: 200, data: [machine] });
+    const response = (id: string) => {
+      const refusal = projectExternalActionHttpError(code, id);
+      return { status: refusal.statusCode, data: refusal.payload };
+    };
+    vi.spyOn(axios, 'post').mockResolvedValueOnce(response(envelope.requestId)).mockResolvedValueOnce(response('other-request'));
+    const request = { actionId: 'notifications.notify_me', input: envelope.input, requestId: envelope.requestId,
+      target, credentials: { token: accountToken, encryption: null, credentialProvenance: 'stored_session' as const },
+      serverHttpBaseUrl: 'https://home.example', serverIdentityId: 'srv_bob_home' };
+    expect(await executionAuthorizationOwner.dispatchOriginalAccountAction(request))
+      .toMatchObject({ ok: false, errorCode: code, details: { requestId: envelope.requestId } });
+    expect(await executionAuthorizationOwner.dispatchOriginalAccountAction(request))
+      .toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
+  });
+
+  it('preserves retryable Home mint transport failure during requester preparation', async () => {
+    const post = vi.spyOn(axios, 'post').mockRejectedValue(Object.assign(new Error('private connection detail'), { code: 'ECONNRESET' }));
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob', tokenEpoch: 7,
+      provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
+    const outcome = await prepareExternalActionRequesterAccountAuthorization({
+      actionId: 'session.archive', input: { sessionId: 'session' }, requestId: 'mint-transport',
+      target, machineId: target.machineId, accountId: 'bob', accountEncryptionMode: 'plain', tokenEpochHint: 7,
+      token, serverId: 'home', serverIdentityId: 'srv_bob_home', serverHttpBaseUrl: 'https://home.test',
+      installationId: 'installation', privateKey: keys.secretKey,
+    }).catch((error: unknown) => error);
+    expect(post).toHaveBeenCalled();
+    expect(outcome).toMatchObject({ code: 'project_requester_home_unavailable', retryable: true });
+  });
+
+  it.each([503, 'ECONNRESET'] as const)('preserves unavailable Home evidence (%s) instead of rejecting the signed root', async failure => {
+    const post = vi.spyOn(axios, 'post');
+    if (typeof failure === 'number') post.mockResolvedValue({ status: failure, data: { error: 'database_connection_unavailable' } });
+    else post.mockRejectedValue(Object.assign(new Error('private connection detail'), { code: failure }));
+    await expect(verifyExternalActionExecutionAuthorizationCurrent({ authorization, effectActionId: authorization.binding.actionId,
+      target, privateKey: keys.secretKey, installationId: authorization.binding.installationId,
+      serverHttpBaseUrl: 'https://home.test' })).rejects.toMatchObject({ code: 'project_requester_home_unavailable', retryable: true });
+  });
+
+  it.each([401, 403])('keeps a definitive Home refusal (%s) closed', async status => {
+    vi.spyOn(axios, 'post').mockResolvedValue({ status, data: { error: 'invalid_token' } });
+    await expect(verifyExternalActionExecutionAuthorizationCurrent({ authorization, effectActionId: authorization.binding.actionId,
+      target, privateKey: keys.secretKey, installationId: authorization.binding.installationId,
+      serverHttpBaseUrl: 'https://home.test' })).resolves.toBe(false);
+  });
+
+  it('preserves an authenticated authorization scope refusal instead of reporting an invalid token', async () => {
+    vi.spyOn(axios, 'post').mockResolvedValue({ status: 403, data: { error: 'credential_scope_denied' } });
+    await expect(executionAuthorizationOwner.mintExternalActionExecutionAuthorization({
+      actionId: 'approval.request.decide', machineId: target.machineId, envelope,
+      pat: 'terminal-credential', serverHttpBaseUrl: 'https://home.test',
+    })).resolves.toEqual({ ok: false, code: 'credential_scope_denied' });
+  });
 
   it.each(['plain', 'e2ee'] as const)('prepares signed fresh-reset admission from exactly the %s input', async mode => {
     const reset = { source: { bindingKind: 'account' as const, ref: { service: { pluginId: 'example.usage', localId: 'quota' }, accountId: 'connected' } },
@@ -183,7 +243,20 @@ describe('requester HTTP authority on the existing external Action carrier', () 
       accountId: 'bob', accountEncryptionMode: 'plain' as const, tokenEpochHint: 7, token: accountToken,
       serverId: 'bob-profile', serverIdentityId: 'srv_bob_home', serverHttpBaseUrl: 'https://bob-home.test',
       installationId: 'source-installation', privateKey: keys.secretKey };
+    const events: string[] = [];
+    let current = true;
+    let retireDuringMint = false;
+    // Currentness may read Home. Keep its real asynchronous boundary so this
+    // distinguishes duplicate reads around purely local envelope construction.
+    vi.spyOn(axios, 'get').mockImplementation(async () => {
+      events.push('currentness');
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return { status: 200, data: { current } };
+    });
+    const isCurrent = async () => (await axios.get<{ current: boolean }>('https://bob-home.test/currentness')).data.current;
     vi.spyOn(axios, 'post').mockImplementation(async (_url, body) => {
+      events.push('mint');
+      if (retireDuringMint) current = false;
       const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
       return { status: 200, data: { v: 1, token: 'original-source-proof', binding: {
         accountId: args.accountId, authentication: { kind: 'account', tokenEpoch: 7 },
@@ -193,18 +266,25 @@ describe('requester HTTP authority on the existing external Action carrier', () 
         sessionActionOrigin: origin, sessionActionSource: { machineId: args.sourceMachineId, installationId: args.installationId },
       } } };
     });
-    const admitted = await prepareExternalActionRequesterAccountAuthorization(args);
+    const started = performance.now();
+    const admitted = await prepareExternalActionRequesterAccountAuthorization({ ...args, isCurrent });
+    console.info('Remote source authorization latency (20ms Home currentness)', {
+      elapsedMs: Math.round(performance.now() - started), currentnessReads: events.filter(event => event === 'currentness').length,
+    });
     expect(admitted).not.toBeNull();
+    expect(events).toEqual(['currentness', 'mint', 'currentness']);
+    if (!admitted) throw new Error('Original source authorization was not admitted');
     expect(admitted?.requesterHttpProjection).toBeUndefined();
     const createSourceExecution = Reflect.get(executionAuthorizationOwner, 'createExternalActionSourceMachineRpcExecution');
     expect(typeof createSourceExecution).toBe('function');
     if (typeof createSourceExecution !== 'function') return;
     const rpc = { authorization: admitted, effectActionId: args.actionId, target,
       sourceMachineId: args.sourceMachineId, sourceInstallationId: args.installationId,
-      method: `${target.machineId}:${getActionSpec('projects.open').bindings.rpcMethod}`, requestId: 'rpc-move', params: { sealed: 'ciphertext' },
+      method: `${target.machineId}:${RPC_METHODS.PROJECTS_OPEN}`, requestId: 'rpc-move', params: { sealed: 'ciphertext' },
       privateKey: keys.secretKey };
     const execution = createSourceExecution(rpc);
     expect(execution).toMatchObject({ authorization: admitted, installationId: 'destination-installation' });
+    if (!execution) throw new Error('Original source execution was not signed');
     const verification = { authorizationToken: admitted!.token, effectActionId: args.actionId, target,
       installationId: 'destination-installation', event: SOCKET_RPC_EVENTS.CALL, method: rpc.method,
       requestId: rpc.requestId, params: rpc.params, signature: execution.machineSignature };
@@ -212,6 +292,18 @@ describe('requester HTTP authority on the existing external Action carrier', () 
     expect(verifyExternalActionMachineRpcRequestV1({ ...verification, publicKey: destination.publicKey })).toBe(false);
     expect(createSourceExecution({ ...rpc, sourceMachineId: 'different-source' })).toBeNull();
     expect(createSourceExecution({ ...rpc, sourceInstallationId: 'retired-installation' })).toBeNull();
+    events.length = 0;
+    current = false;
+    expect(await prepareExternalActionRequesterAccountAuthorization({ ...args, isCurrent })).toBeNull();
+    expect(events).toEqual(['currentness']);
+    events.length = 0;
+    current = true;
+    retireDuringMint = true;
+    expect(await prepareExternalActionRequesterAccountAuthorization({ ...args, isCurrent })).toBeNull();
+    expect(events).toEqual(['currentness', 'mint', 'currentness']);
+    events.length = 0;
+    expect(await prepareExternalActionRequesterAccountAuthorization({ ...args, isCurrent, signal: AbortSignal.abort() })).toBeNull();
+    expect(events).toEqual([]);
   });
 
   it.each(['current', 'changed-origin'] as const)('authenticates the admitted Session origin with the incumbent installation proof and refuses %s mint substitution', async (resultKind) => {
@@ -234,6 +326,7 @@ describe('requester HTTP authority on the existing external Action carrier', () 
       expect(body).toMatchObject({ sessionActionOrigin, sessionActionSource: { machineId: args.sourceMachineId, installationId: args.installationId } });
       // The intercepted HTTP body is unknown transport data; parse the real
       // proof schema before using it at the installation authentication boundary.
+      if (!body || typeof body !== 'object') throw new Error('Missing installation-authenticated HTTP carrier');
       const proof = MachineInstallationProofV1Schema.parse(Reflect.get(body, 'installationProof'));
       const payload = { version: 1 as const, machineId: args.machineId, installationId: args.installationId, accountId: args.accountId,
         externalActionOrigin: { homeId: args.serverIdentityId, actionId: args.actionId, requestId: args.requestId,
@@ -288,7 +381,7 @@ describe('requester HTTP authority on the existing external Action carrier', () 
       externalActionMachineRequestPrivateKey: keys.secretKey,
       verifyExecutionAuthorization: (input) => verifyExternalActionExecutionAuthorizationCurrent({ ...input,
         installationId: 'alice-installation', privateKey: keys.secretKey, serverHttpBaseUrl: 'https://bob-home.test' }),
-      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'alice-daemon' } }), executor,
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'alice-daemon', encryption: null } }), executor,
     });
     expect(result).toMatchObject({ kind: 'response', response: { execution: {
       ok: true, result: { attemptedChannels: 1, deliveredChannels: 1 },
@@ -328,7 +421,7 @@ describe('requester HTTP authority on the existing external Action carrier', () 
       externalActionMachineRequestPrivateKey: keys.secretKey,
       verifyExecutionAuthorization: (input) => verifyExternalActionExecutionAuthorizationCurrent({ ...input,
         installationId: 'alice-installation', privateKey: keys.secretKey, serverHttpBaseUrl: 'https://bob-home.test' }),
-      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'alice-daemon' } }), executor,
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'alice-daemon', encryption: null } }), executor,
     });
     expect(retired).toBe(true);
   });

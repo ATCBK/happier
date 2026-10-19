@@ -109,9 +109,13 @@ describe('client Action reverse delivery', () => {
     } },
     { actionId: 'ui.current_context.command.invoke', input: { commandId: 'current-ui:usage:period' }, result: null },
   ] as const)('delivers Usage mounted $actionId from CLI through its canonical answering client', async request => {
+    const expectedMethod = request.actionId === 'ui.current_context.read'
+      ? `${RPC_METHODS.UI_ACTION_EXECUTE}.current-context.read`
+      : `${RPC_METHODS.UI_ACTION_EXECUTE}.current-context.command.${encodeURIComponent(JSON.stringify(request.input.commandId))}`;
     const client: ClientActionMachineRpc = {
-      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
-      callConnectedClientRpc: async (_method, payload, options) => {
+      hasConnectedClientRpcHandler: method => method === expectedMethod,
+      callConnectedClientRpc: async (method, payload, options) => {
+        expect(method).toBe(expectedMethod);
         expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({
           actionId: request.actionId, input: request.input, context: { surface: 'cli', authority: 'account_automation' },
         });
@@ -122,6 +126,26 @@ describe('client Action reverse delivery', () => {
     const context = { surface: 'cli', authority: 'account_automation', serverId: 'home' } as const;
     expect(await executor(client).execute(request.actionId, request.input, context)).toEqual({ ok: true, result: request.result });
     expect(await executor(null).execute(request.actionId, request.input, context)).toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+  });
+
+  it('delivers a direct Home continuation to the App that owns its opaque current-context command', async () => {
+    const input = { operation: 'refresh' as const, commandId: 'current-ui:home:refresh' };
+    const expectedMethod = `${RPC_METHODS.UI_ACTION_EXECUTE}.current-context.command.${encodeURIComponent(JSON.stringify(input.commandId))}`;
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: method => method === expectedMethod,
+      callConnectedClientRpc: async (method, payload, options) => {
+        expect(method).toBe(expectedMethod);
+        expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({
+          actionId: 'account.home_continuation.invoke', input,
+          context: { surface: 'agent', authority: 'present_user' },
+        });
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: { status: 'completed' } } } };
+      },
+    };
+    const context = { surface: 'agent', authority: 'present_user', bypassApprovals: true, serverId: 'home' } as const;
+    await expect(executor(client).execute('account.home_continuation.invoke', input, context))
+      .resolves.toEqual({ ok: true, result: { status: 'completed' } });
   });
 
   it.each([
@@ -140,7 +164,8 @@ describe('client Action reverse delivery', () => {
       result: { status: 'appended', sessionId: 'lead', createdAtMs: 10 },
       absent: { ok: true, result: { status: 'unavailable' } } },
     { actionId: 'session.draft.delete', input: { draftId: '00000000-0000-4000-8000-000000000001' },
-      result: { status: 'deleted' }, absent: { ok: true, result: { status: 'unavailable' } } },
+      result: { status: 'deleted' }, absent: expect.objectContaining({ ok: false, errorCode: 'unavailable', error: 'noClient',
+        details: expect.objectContaining({ reason: 'client_unavailable', recovery: expect.objectContaining({ kind: 'connect_client' }) }) }) },
     { actionId: 'session.draft.directory.set', input: { ref: { kind: 'newSession', instanceId: 'new-composer' },
       directory: { kind: 'path', path: '/checkout' } }, result: { status: 'applied' },
       absent: { ok: true, result: { status: 'unavailable' } } },

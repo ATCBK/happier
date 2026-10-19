@@ -117,7 +117,7 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
           expect.objectContaining({ operationId: 'portable-sync' }),
           expect.objectContaining({ localActionContext: expect.objectContaining({ surface: 'agent' }) }),
         );
-        const syncRead = await actions.workspaceSyncConflictsList!({ input: { workspaceRefId: refB.id, relationshipId: 'rel-ab', limit: 50 } })
+        const syncRead = await actions.workspaceSyncConflictsList!({ input: { controllerMachineId: ref.machineId, relationshipId: 'rel-ab', limit: 50 } })
           .catch(error => ({ errorCode: error.code }));
         expect.soft(syncRead).toMatchObject({ status: 'page', relationshipId: 'rel-ab' });
         const usage = await actions.usageSourceAction!({ actionId: 'usage.sources.discover', input: { serverId: homeId, machineId: 'machine-a' } }, context)
@@ -129,11 +129,25 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
             { serverId: homeId, projectKey: { serverId: homeId, id: ref.id } },
             { serverId: homeId, projectKey: { serverId: homeId, id: refB.id } },
           ] } });
-        expect(await executor.execute('projects.workspace.update', { serverId: homeId, workspaceId: ref.id, label: 'Portable' }, context))
-          .toMatchObject({ ok: true, result: { workspaceRef: { ...portableRef, label: 'Portable' } } });
-        expect(boundary.writes()[0]?.[1]).toMatchObject({ mutations: [{ key: { serverId: homeId } }] });
+        expect(await executor.execute('projects.list', { serverId: profileId }, { ...context, serverId: profileId }))
+          .toMatchObject({ ok: true, result: { items: [
+            { serverId: homeId, projectKey: { serverId: homeId, id: ref.id } },
+            { serverId: homeId, projectKey: { serverId: homeId, id: refB.id } },
+          ] } });
+        expect(await executor.execute('projects.workspace.update', { serverId: profileId, workspaceId: ref.id, label: 'Portable', pinned: true }, context))
+          .toMatchObject({ ok: true, result: { workspaceRef: { ...portableRef, label: 'Portable' }, organization: { pinned: true } } });
+        expect(boundary.writes()[0]?.[1]).toMatchObject({ mutations: [
+          { key: { kind: 'workspace-ref', serverId: homeId } },
+          { key: { kind: 'project-organization', serverId: homeId } },
+        ] });
+        expect(await executor.execute('projects.visibility.set', {
+          target: { serverId: profileId, projectKey: ref.projectKey }, expectedRevision: 0, hidden: true,
+        }, context)).toMatchObject({ ok: true, result: { revision: 1, row: { pinned: true, hidden: true } } });
+        expect(boundary.writes()[1]?.[1]).toMatchObject({ mutations: [
+          { key: { kind: 'project-organization', serverId: homeId } },
+        ] });
         for (const scenario of ['wrong', 'ambiguous', 'retired'] as const) {
-          await updateSettings(settings => ({ ...settings, servers: scenario === 'retired' ? {} : scenario === 'ambiguous'
+          await updateSettings((settings): typeof settings => ({ ...settings, servers: scenario === 'retired' ? {} : scenario === 'ambiguous'
             ? { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } } : { [profileId]: profile } }));
           const rejectedHome = scenario === 'wrong' ? 'srv_wrongRows' : homeId;
           expect(await executor.execute('projects.list', { serverId: rejectedHome }, { ...context, serverId: rejectedHome }))
@@ -149,7 +163,7 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
             input: { serverId: rejectedHome, machineId: 'machine-a' } }, { ...context, serverId: rejectedHome }))
             .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
         }
-        expect(boundary.writes()).toHaveLength(1);
+        expect(boundary.writes()).toHaveLength(2);
       } finally { scope.restore(); reloadConfiguration(); }
     });
   });
@@ -269,7 +283,7 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
     accountRows([refRow(), refRow(refB), graphRow()]);
     const invoke = vi.fn().mockResolvedValue({ status: 'page', relationshipId: 'rel-ab', conflicts: [], totalCount: 0, nextCursor: null });
     const signal = new AbortController().signal;
-    await expect(dependencies(invoke).workspaceSyncConflictsList!({ input: { relationshipId: 'rel-ab', limit: 50 }, signal })).resolves.toMatchObject({ status: 'page' });
+    await expect(dependencies(invoke).workspaceSyncConflictsList!({ input: { controllerMachineId: ref.machineId, relationshipId: 'rel-ab', limit: 50 }, signal })).resolves.toMatchObject({ status: 'page' });
     expect(invoke).toHaveBeenCalledWith(RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICTS_LIST, { relationshipId: 'rel-ab', limit: 50 }, { signal });
   });
 

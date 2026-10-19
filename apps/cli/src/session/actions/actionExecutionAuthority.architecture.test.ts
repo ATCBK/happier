@@ -26,6 +26,27 @@ function isNoninteractiveContext(context: ts.ObjectLiteralExpression): boolean {
     );
 }
 
+/** A typed executor adapter forwards the caller's authority rather than minting another one. */
+function forwardsExecutorContext(context: ts.ObjectLiteralExpression): boolean {
+    if (context.properties.some(property => propertyName(property) === 'surface')) return false;
+    const forwardedNames = context.properties.filter(ts.isSpreadAssignment)
+        .flatMap(property => ts.isIdentifier(property.expression) ? [property.expression.text] : []);
+    if (forwardedNames.length === 0) return false;
+    let ancestor: ts.Node | undefined = context.parent;
+    while (ancestor) {
+        if (ts.isArrowFunction(ancestor) || ts.isFunctionExpression(ancestor)
+            || ts.isFunctionDeclaration(ancestor) || ts.isMethodDeclaration(ancestor)) {
+            return ancestor.parameters.some(parameter => ts.isIdentifier(parameter.name)
+                && forwardedNames.includes(parameter.name.text)
+                && parameter.type && ts.isTypeReferenceNode(parameter.type)
+                && ts.isIdentifier(parameter.type.typeName)
+                && parameter.type.typeName.text === 'ActionExecutorContext');
+        }
+        ancestor = ancestor.parent;
+    }
+    return false;
+}
+
 describe('Action execution authority architecture', () => {
     it('requires direct noninteractive production execute callsites to stamp authority explicitly', () => {
         const files = ts.sys.readDirectory(CLI_SOURCE_ROOT, ['.ts', '.tsx'], undefined, undefined)
@@ -52,6 +73,7 @@ describe('Action execution authority architecture', () => {
                 ) {
                     const context = node.arguments[2];
                     if (isNoninteractiveContext(context)
+                        && !forwardsExecutorContext(context)
                         && !context.properties.some((property) => propertyName(property) === 'authority')) {
                         const position = source.getLineAndCharacterOfPosition(context.getStart(source));
                         missing.push(`${relative(CLI_SOURCE_ROOT, file)}:${position.line + 1}`);

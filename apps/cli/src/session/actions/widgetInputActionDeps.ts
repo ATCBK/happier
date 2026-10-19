@@ -10,11 +10,14 @@ import { readWidgetDefinitionResourcesV1 } from '@happier-dev/protocol/widgets/w
 import { createWidgetActionInputResolverV1, composeWidgetGroupContextV1 } from '@happier-dev/protocol/widgets/widgetActionInputResolverV1';
 import { readWidgetInputTargetV1, resolveConfiguredWidgetTargetInputV1, validateWidgetWorkspaceInputV1 } from '@happier-dev/protocol/widgets/widgetInputAdmissionV1';
 import { isWidgetConnectedAccountSelectionEligibleV1, resolveWidgetViewerPurposeValuesV1, resolveWidgetConnectedAccountOptionsV1 } from '@happier-dev/protocol/widgets/widgetViewerPurposeV1';
-import { findWidgetLayoutParentV1, readWidgetActionSurfacePortV1, WidgetSurfaceReadV1Schema, type WidgetInputBindingsV1, type WidgetCandidateIdentityV1, type WidgetActionInputResolverV1, type WidgetInputDescriptorV1 } from '@happier-dev/protocol/widgets';
+import { findWidgetLayoutParentV1 } from '@happier-dev/protocol/widgets/widgetLayoutItemV1';
+import { readWidgetActionSurfacePortV1 } from '@happier-dev/protocol/widgets/executeWidgetInstanceActionV1';
+import { WidgetSurfaceReadV1Schema, readWidgetActionSessionTargetV1 } from '@happier-dev/protocol/widgets/actionsV1';
+import type { WidgetInputBindingsV1, WidgetCandidateIdentityV1, WidgetActionInputResolverV1, WidgetInputDescriptorV1 } from '@happier-dev/protocol/widgets';
 import { readInputPath } from '@happier-dev/protocol/inputs/inputPredicates';
-import { admitWidgetActionSurfaceV1 } from '@happier-dev/protocol/widgets';
+import { admitWidgetActionSurfaceV1 } from '@happier-dev/protocol/widgets/widgetActionScopeV1';
 import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
-import { readWidgetActionSessionTargetV1 } from '@happier-dev/protocol/widgets/actionsV1';
+import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 
 type Request = Parameters<WidgetActionInputResolverV1['resolve']>[0];
 type Descriptor = WidgetInputDescriptorV1 & Readonly<{ resources?: readonly PluginContributionIdentityV1[]; resourceDeclarations?: readonly PluginProjectedResourceV2[];
@@ -32,6 +35,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
     readInputTypes?(signal?: AbortSignal, session?: Readonly<{ serverId: string; sessionId: string }>): Promise<PluginProjectionV2['familiesById']['inputTypes'] | undefined>;
     readViewerPurposeContext?(signal: AbortSignal | undefined, context: ActionExecutorContext): Promise<Readonly<{ profile: AccountProfile; purposeBindings: QualifiedConnectedAccountPurposeBindingsV1 }> | null>;
     validateSession(session: Readonly<{ serverId: string; sessionId: string }>, signal?: AbortSignal): Promise<boolean>;
+    readWorkspaceRefs?(signal: AbortSignal | undefined, context: ActionExecutorContext): Promise<readonly WorkspaceRefV1[] | null>;
 }>): Pick<ActionExecutorDeps, 'widgetInputs' | 'widgetConnectedAccountOptions'> {
     const descriptors = new WeakMap<Request, Descriptor>();
     const isSessionHomeAdmitted = (serverId: string) => input.getDeps().widgetAccountScope?.()?.isSameServerId?.(serverId)
@@ -234,8 +238,14 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             const target = descriptor ? readWidgetInputTargetV1(descriptor) : null;
             if (target?.kind === 'invalid') return { status: 'unavailable', reasonCode: target.reasonCode };
             if (target?.kind === 'workspace' && target.path === field.path) {
-                return validateWidgetWorkspaceInputV1({ value, serverId: input.serverId,
-                    contextValues: readContext(request)[target.path] ?? [] });
+                const workspaceRefs = await input.readWorkspaceRefs?.(request.signal, request.context);
+                request.signal?.throwIfAborted();
+                if (await admitWidgetActionSurfaceV1(input.getDeps(), request.ref.surface, { ...request.context, signal: request.signal }))
+                    return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+                if (!workspaceRefs) return { status: 'unavailable', reasonCode: 'widget_workspace_authority_unavailable' };
+                return validateWidgetWorkspaceInputV1({ value, serverId: input.serverId, workspaceRefs }, {
+                    normalizeServerId: serverId => isSessionHomeAdmitted(serverId) ? input.serverId : serverId,
+                });
             }
             if (target?.kind !== 'session' || target.path !== field.path) return { status: 'valid' };
             const session = VoiceTrackedSessionAddressV1Schema.safeParse(value);

@@ -450,7 +450,7 @@ describe('listBuiltInHappierTools', () => {
     const actionsSettings = ActionsSettingsV1Schema.parse({
       v: 1,
       actions: {
-        'session.discussion.get': { disabledSurfaces: ['agent'] },
+        'discussion.get': { disabledSurfaces: ['agent'] },
       },
     });
     const tools = listBuiltInHappierTools({
@@ -459,18 +459,18 @@ describe('listBuiltInHappierTools', () => {
       actionsSettings,
       requiredDirectActionIds: [
         'session.transcript.get',
-        'session.discussion.list',
-        'session.discussion.get',
-        'session.discussion.read',
-        'session.discussion.post',
+        'discussion.list',
+        'discussion.get',
+        'discussion.read',
+        'discussion.post',
       ],
     });
 
     expect(tools.map((tool) => tool.name)).toContain('acme_review_start');
     expect(listAdmittedSessionRunReadActionIds(tools)).toEqual([
       'session.transcript.get',
-      'session.discussion.list',
-      'session.discussion.read',
+      'discussion.list',
+      'discussion.read',
     ]);
   });
 

@@ -2,7 +2,7 @@ import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/pro
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createMcpServerActionExecuteV1, projectMcpServerActionFailureV1,
   MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { StoredCredentials } from '@/persistence';
@@ -14,6 +14,7 @@ import { listCurrentAccountMachines, resolveCurrentAccountAdministrationMachine 
 import { CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, ConnectedAccountControlCommandRequestSchema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
 import { readCatalogEntriesSnapshot } from '@/agent/catalog/registry';
 import { readPluginMcpServerMetadata } from '@/mcp/runtime/pluginMcpServerItems';
+import { resolveCliHomeTarget } from '@/server/homeTarget';
 
 /** Catalog and Machine operations retain the exact CLI invocation's Home and Account. */
 export function createCliMcpServerActionExecuteV1(params: Readonly<{
@@ -22,7 +23,6 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
   connectedServiceAction?: ActionExecutorDeps['connectedServiceAction'];
   registryActionExecute?: ActionExecutorDeps['registryActionExecute'];
   personalSavedSecretActionExecute?: ActionExecutorDeps['personalSavedSecretActionExecute'];
-  preferredMachineId?: string | null;
   callMachineAction(input: Readonly<{
     machineId: string; serverId?: string; method: string; request: unknown; signal?: AbortSignal;
     authority?: ActionExecutorContext['authority']; authorization?: ActionExecutorContext['rpcSessionAuthorization'];
@@ -59,6 +59,14 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
         return snapshot;
       };
       return await createMcpServerActionExecuteV1({
+        resolveWebappUrl: async () => {
+          const target = await resolveCliHomeTarget({ kind: 'saved_profile', profileRef: params.serverId }).catch(cause => {
+            if (!cause || typeof cause !== 'object' || !('code' in cause) || cause.code !== 'profile_missing') throw cause;
+            return resolveCliHomeTarget({ kind: 'https_url', url: params.serverHttpBaseUrl });
+          });
+          await assertCurrent();
+          return target.webappUrl;
+        },
         registryActionExecute: params.registryActionExecute,
         personalSavedSecretActionExecute: params.personalSavedSecretActionExecute,
         readImportLink: async url => {
@@ -72,9 +80,12 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
         connectedServiceAction: params.connectedServiceAction,
         resolveAdministrationMachine: async () => {
           await assertCurrent();
+          const requestedMachineId = context.externalActionTarget?.kind === 'machine'
+            ? context.externalActionTarget.machineId : context.defaultSessionMachineId ?? undefined;
           const machineId = await resolveCurrentAccountAdministrationMachine({ token: params.credentials.token,
-            authorization: context.rpcSessionAuthorization, effectActionId: request.actionId,
-            serverHttpBaseUrl: params.serverHttpBaseUrl, signal: context.signal, preferredMachineId: params.preferredMachineId });
+            authorization: context.externalActionExecutionAuthorization, effectActionId: request.actionId,
+            serverHttpBaseUrl: params.serverHttpBaseUrl, signal: context.signal,
+            ...(requestedMachineId === undefined ? {} : { requestedMachineId }) });
           await assertCurrent();
           return machineId;
         },
@@ -92,7 +103,7 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
         readToolAgentFacts: async () => {
           await assertCurrent();
           const machines = await listCurrentAccountMachines({ token: params.credentials.token, credentials: params.credentials,
-            authorization: context.rpcSessionAuthorization, effectActionId: request.actionId,
+            authorization: context.externalActionExecutionAuthorization, effectActionId: request.actionId,
             serverHttpBaseUrl: params.serverHttpBaseUrl, signal: context.signal }).catch((cause: unknown) => {
               context.signal?.throwIfAborted();
               if (cause && typeof cause === 'object' && 'code' in cause && cause.code === 'machine_inventory_unavailable') return null;

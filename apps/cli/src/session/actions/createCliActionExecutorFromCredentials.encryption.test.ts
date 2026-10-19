@@ -198,8 +198,8 @@ describe('CLI encrypted SDK transport through real HTTP', () => {
         });
         expect(failures).toEqual([]);
         expect(captured.map(({ path }) => path)).toEqual([
-          '/v1/auth/api-tokens/encryption-access',
           '/v1/machines',
+          '/v1/auth/api-tokens/encryption-access',
           '/v1/actions/session.board.item.upsert',
         ]);
         expect(JSON.stringify(captured)).not.toContain('sentinel');

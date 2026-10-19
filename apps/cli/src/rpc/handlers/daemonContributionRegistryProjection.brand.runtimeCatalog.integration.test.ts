@@ -1,5 +1,7 @@
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
-import { describe, expect, it, vi } from 'vitest';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import * as credentialPersistence from '@/persistence';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { type PluginUiArtifactDigestV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -10,6 +12,18 @@ import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
+
+let managedServicesFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => {
+    // Only credential persistence is substituted; the registry and managed owners stay real.
+    const credentials = vi.spyOn(credentialPersistence, 'readStoredCredentials').mockResolvedValue(null);
+    try {
+        managedServicesFixture = await createAdmittedPluginRuntimeFixture({ runtimeOptions: {
+            contributes: createResolvedContributionRegistry({}), pluginIds: [],
+        } });
+    } finally { credentials.mockRestore(); }
+});
+afterAll(async () => { await managedServicesFixture?.dispose(); });
 
 import {
     invalidateDaemonContributionRegistryProjectionCache,
@@ -88,6 +102,8 @@ describe('portable plugin brand projection handler', () => {
         const runtimeRegistry: ResolvedExecutablePluginRuntimeRegistry = {
             claimReleaseLessDeclarations: async () => undefined,
             contributes: registry,
+            declarationContributes: registry,
+            projectManagedServices: managedServicesFixture.registry.projectManagedServices,
             generation: 7,
             hookHandlersByHookId: new Map(),
             agentRuntimesByAgentId: new Map(),

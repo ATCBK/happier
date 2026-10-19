@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { buildAgentBackendInventoryItems } from './buildAgentBackendInventoryItems';
 import { buildReviewEngineInventoryItems } from './buildReviewEngineInventoryItems';
 
-const emptyCatalog = { status: 'ready', revision: 1, record: { v: 1 as const, definitions: [] } } as const;
+const emptyCatalog = { status: 'ready' as const, revision: 1, record: { v: 1 as const, definitions: [] } };
 const definitions = ['review-a', 'review-b'].map((id) => AcpBackendDefinitionV1Schema.parse({
   id, name: id, title: id, launch: { kind: 'command' as const, command: id, args: [] }, env: {}, createdAt: 1, updatedAt: 1,
 }));

@@ -3,7 +3,7 @@ import { SESSION_METADATA_LAYOUT_VERSION_V1, SessionOwnerMetadataEnvelopeV1Schem
 import { readAcpConfiguredBackendV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/acpConfiguredBackendV1';
 import { readLegacyConfiguredAcpBackendId } from '@happier-dev/protocol/backends/targets/compat/customAcp';
 import { resolveLinkedExternalSessionMetadataV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
-import type { BackendTargetRefV1, SessionOwnerMetadataEnvelopeV1, SessionOwnerMetadataV1, AccountEncryptionCurrentnessResponse, SessionReportsToV1, SessionAwarenessOriginV1 } from '@happier-dev/protocol';
+import type { BackendTargetRefV1, SessionOwnerMetadataEnvelopeV1, SessionOwnerMetadataV1, AccountEncryptionCurrentnessResponse, SessionManagerV1, SessionAwarenessOriginV1 } from '@happier-dev/protocol';
 import type { SessionAttachFilePayload } from '@/agent/runtime/sessionAttachPayload';
 import type { AgentState, Metadata } from '@/api/types';
 import type { StoredCredentials } from '@/persistence';
@@ -147,7 +147,7 @@ function tryReadExistingSessionAgentState(params: Readonly<{
 
 function buildAttachSnapshot(params: Readonly<{
   rawSession: Readonly<{
-    reportsTo?: SessionReportsToV1;
+    manager?: SessionManagerV1;
     origin?: SessionAwarenessOriginV1;
     metadata?: unknown;
     metadataVersion?: unknown;
@@ -177,7 +177,7 @@ function buildAttachSnapshot(params: Readonly<{
   const pendingExecutionRunIds = readPendingExecutionRunIds(params.rawSession);
 
   return {
-    ...(params.rawSession.reportsTo ? { reportsTo: params.rawSession.reportsTo } : {}),
+    ...(params.rawSession.manager ? { manager: params.rawSession.manager } : {}),
     ...(params.rawSession.origin ? { origin: params.rawSession.origin } : {}),
     metadata: params.metadataRecord as Metadata,
     metadataVersion,

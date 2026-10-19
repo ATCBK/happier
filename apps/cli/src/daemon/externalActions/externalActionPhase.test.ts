@@ -2,13 +2,13 @@ import { expect, it, vi } from 'vitest';
 
 import { logger } from '@/ui/logger';
 
-import { refuseExternalActionPhase, runTracedExternalActionStage, traceExternalActionStage } from './externalActionPhase';
+import { refuseExternalActionPhase, runTracedExternalActionStage, runTracedExternalActionInnerStage, traceExternalActionStage } from './externalActionPhase';
 import { executeExternalAction } from './executeExternalAction';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { createDaemonExternalActionTargetResolver } from './daemonExternalActionTargetResolver';
 
-it.each(['session.stop', 'session.status.get', 'projects.script.run', 'projects.compute.exec', 'approval.request.decide', 'plugins.list'])('traces %s admission and real executor phases without caller content', async actionId => {
-  vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', actionId === 'plugins.list' ? '0' : '1');
+it.each(['session.stop', 'session.archive', 'session.unarchive', 'session.status.get', 'projects.script.run', 'projects.compute.exec', 'approval.request.decide', 'plugins.list'])('traces %s admission and real executor phases without caller content', async actionId => {
+  vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', actionId === 'plugins.list' || actionId === 'session.archive' || actionId === 'session.unarchive' ? '0' : '1');
   const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
   const rootRequestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
   try {
@@ -43,6 +43,21 @@ it('does not disclose a changing Error name through private diagnostics', () => 
   } finally { log.mockRestore(); }
 });
 
+it.each([false, true])('excludes multiline exception content from the real phase log (unproven stack: %s)', unproven => {
+  const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+  const error = new Error('private message\n    at /CREDENTIAL_SENTINEL.js:7:9');
+  if (unproven) error.stack = '    at /UNPROVEN_SENTINEL.js:1:2';
+  try {
+    refuseExternalActionPhase('requester_settings', 'machine', error);
+    expect(JSON.stringify(log.mock.calls)).not.toContain('SENTINEL');
+    expect(log.mock.calls).toEqual(expect.arrayContaining([
+      [expect.any(String), expect.objectContaining({ stackFrames: unproven ? [] : expect.arrayContaining([
+        expect.objectContaining({ file: expect.stringContaining('externalActionPhase.test.ts') }),
+      ]) })],
+    ]));
+  } finally { log.mockRestore(); }
+});
+
 it('joins contributed stages by the RPC UUID and preserves thrown values without logging them', async () => {
   const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
   const requestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
@@ -57,6 +72,37 @@ it('joins contributed stages by the RPC UUID and preserves thrown values without
     expect(log.mock.calls).toHaveLength(2);
     expect(JSON.stringify(log.mock.calls)).not.toContain('private-');
   } finally { log.mockRestore(); }
+});
+
+it('correlates overlapping inner phases with their own ingress and preserves boundary failure identity', async () => {
+  vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+  const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+  const first = '70cc64d3-0386-4914-b7d8-713b7879e99f';
+  const second = 'fd0b0146-17a5-431c-bc69-3a3fa865b1d7';
+  let release!: () => void;
+  const boundary = new Promise<void>(resolve => { release = resolve; });
+  const failure = new Error('private-boundary-error');
+  try {
+    const pending = runTracedExternalActionStage('action.invoke', `rpc_${first}`, 'contributed.target_invoke', () =>
+      runTracedExternalActionInnerStage('collection.http.query', async () => { await boundary; throw failure; }));
+    const outcome = pending.then(() => null, error => error);
+    await runTracedExternalActionStage('action.invoke', `rpc_${second}`, 'contributed.target_invoke', () =>
+      runTracedExternalActionInnerStage('contributed.handler', () => 'private-result'));
+    release();
+    expect(await outcome).toBe(failure);
+    const ends = log.mock.calls.filter(([, record]) => record && typeof record === 'object'
+      && 'stage' in record && typeof record.stage === 'string'
+      && record.stage.endsWith('.end') && 'elapsedMs' in record);
+    expect(ends).toEqual(expect.arrayContaining([
+      ['[external-action-stage]', expect.objectContaining({ rootRequestId: first, stage: 'collection.http.query.end', elapsedMs: expect.any(Number) })],
+      ['[external-action-stage]', expect.objectContaining({ rootRequestId: second, stage: 'contributed.handler.end', elapsedMs: expect.any(Number) })],
+    ]));
+    expect(JSON.stringify(log.mock.calls)).not.toContain('private-');
+    log.mockClear();
+    vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '0');
+    await runTracedExternalActionInnerStage('contributed.handler', () => null);
+    expect(log).not.toHaveBeenCalled();
+  } finally { release(); log.mockRestore(); vi.unstubAllEnvs(); }
 });
 
 it.each(['machines.provisioners.list', 'machines.provisioners.check', 'machines.provisioners.options'])(

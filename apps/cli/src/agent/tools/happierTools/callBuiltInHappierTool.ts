@@ -6,9 +6,10 @@ import { createCliActionExecutorFromCredentials } from '@/session/actions/create
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { readDaemonPluginCatalog } from '@/daemon/controlClient';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { resolveMcpToolCallRequestTimeoutMs } from '@/mcp/mcpToolCallRequestOptions';
 import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -40,9 +41,12 @@ export async function callBuiltInHappierTool(params: Readonly<{
   args: unknown;
   surface?: 'cli' | 'agent';
   toolCallId?: string | null;
+  /** Tool-call or command cancellation; omitted programmatic callers live until process exit. */
+  signal?: AbortSignal;
   /** Live credential reader for the one-shot CLI fence; omitted callers retain their existing fixed snapshot. */
   readCredentials?: () => Promise<StoredCredentials | null>;
 }>): Promise<Awaited<ReturnType<typeof dispatchBuiltInHappierTool>>> {
+  params.signal?.throwIfAborted();
   const credentialSnapshot = params.readCredentials
     ? await params.readCredentials().catch(() => null)
     : params.credentials;
@@ -52,6 +56,7 @@ export async function callBuiltInHappierTool(params: Readonly<{
   const sessionTarget = await resolveSessionTransportContext({
     credentials: credentialSnapshot,
     idOrPrefix: params.sessionId,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
   if (params.readCredentials) {
     const currentCredentials = await params.readCredentials().catch(() => null);
@@ -102,6 +107,7 @@ export async function callBuiltInHappierTool(params: Readonly<{
         toolName: params.toolName,
         args: params.args,
       }),
+      ...(params.signal ? { signal: params.signal } : {}),
     };
     const response = await callSessionRpc(sessionTarget.mode === 'plain'
       ? { ...request, mode: 'plain', ctx: null }
@@ -128,7 +134,7 @@ export async function callBuiltInHappierTool(params: Readonly<{
     credentials: credentialSnapshot,
     actionsSettingsProvider,
     serverId: configuration.activeServerId,
-    serverApiUrl: configuration.apiServerUrl,
+    serverApiUrl: resolveServerHttpBaseUrl(),
     ...(params.readCredentials
       ? {
           readCredentials: async () => {
@@ -164,6 +170,7 @@ export async function callBuiltInHappierTool(params: Readonly<{
     sessionId,
     sessionMachineId,
     surface,
+    ...(params.signal ? { signal: params.signal } : {}),
     getActionsSettings: actionsSettingsProvider.getActionsSettings,
     pluginToolCatalog,
     deps: {

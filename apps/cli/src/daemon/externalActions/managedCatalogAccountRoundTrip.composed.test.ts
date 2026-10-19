@@ -32,7 +32,8 @@ import { createReleaseLessDeclarationV1 } from '../../../../server/sources/app/p
 import { createExternalActionDaemonDispatcher } from '../../../../server/sources/app/api/socket/externalActionDispatcher';
 import { db } from '../../../../server/sources/storage/db';
 import { getOrCreateServerIdentityId } from '../../../../server/sources/app/serverIdentity/serverIdentity';
-import { prepareRequesterAccountActionContext, type RequesterAccountActionContext } from '../sessionEncryption/requesterAccountActionProjection';
+import { prepareRequesterAccountActionContext } from "../sessionEncryption/requesterAccountActionProjection";
+import { type RequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 import { executeExternalAction } from './executeExternalAction';
 import { createDaemonExternalActionTargetResolver } from './daemonExternalActionTargetResolver';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
@@ -194,7 +195,8 @@ describe('managed catalog original Account transport', () => {
     } });
     try {
       const result = kind === 'account'
-        ? await provisionerCatalog.read({ serverId: uiServerId, accountId: account.id }, { homeId, controller })
+        ? await provisionerCatalog.read({ serverId: uiServerId, accountId: account.id }, { homeId, controller,
+            contribution: { pluginId: 'acme.compute', localId: 'vm' } })
         : await (async () => {
           // Paired CLI credentials use the real authorization client. UI login
           // deliberately requires an Account token rather than a terminal token.
@@ -225,6 +227,14 @@ describe('managed catalog original Account transport', () => {
       expect(catalog.provisioners[0]).toMatchObject({ contribution: { pluginId: 'acme.compute', localId: 'vm' },
         descriptor: { title: 'Virtual machine' } });
       expect(MachineProvisionersListResultV1Schema.safeParse({ ...catalog, unexpected: true }).success).toBe(false);
+      if (kind === 'account') {
+        // This must traverse the same UI -> encrypted Home -> installed daemon
+        // owner. Dropping the contribution at any seam would return the VM.
+        const missing = await provisionerCatalog.read({ serverId: uiServerId, accountId: account.id }, {
+          homeId, controller, contribution: { pluginId: 'acme.compute', localId: 'missing' },
+        });
+        expect(missing).toMatchObject({ kind: 'succeeded', value: { controller, provisioners: [] } });
+      }
     } finally { restoreHttp(); await app.close(); await io.close(); }
   });
 

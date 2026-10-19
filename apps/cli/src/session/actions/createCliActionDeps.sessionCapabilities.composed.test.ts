@@ -7,6 +7,7 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { McpServersSettingsV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { SpawnCapabilitiesPreviewSuccessV1Schema, SessionCapabilitiesGetOutputV1Schema } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
 import { PromptLibraryCatalogKeyV1Schema, PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityMaterializationsReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
@@ -19,13 +20,14 @@ import { createSessionRecordFixture, createSessionNotificationContextFixture } f
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
-import { reloadConfiguration } from '@/configuration';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { createCliActionDeps } from './createCliActionDeps';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
-import { writeCapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { writeCapabilitySelectionApplyV1, writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { refreshActiveMcpServerCatalog } from '@/settings/mcp/hydrateMcpServerCatalog';
 import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { readRpcErrorCode, RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
@@ -41,7 +43,9 @@ describe('Session capabilities composed Account and Machine seam', () => {
       db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, metadata TEXT NOT NULL, revision INTEGER NOT NULL, ownerMetadata TEXT NOT NULL, agentState TEXT, agentRevision INTEGER NOT NULL)');
       const sessionId = 'c111111111111111111111111';
       const machineId = 'capabilities-machine';
-      const metadata = writeCapabilitySelectionApplyV1(createTestMetadata({ path: home, host: 'fixture', machineId, flavor: 'codex' }), {
+      const metadata = writeCapabilitySelectionApplyV1(createTestMetadata({ path: home, host: 'fixture', machineId, flavor: 'codex',
+        agentRuntimeCapabilitiesV1: { capabilitySelection: { vendorResume: 'supported', skillsLiveReload: 'supported' } },
+      }), {
         skills: { source: 'rules', reason: 'restart_to_apply', restartBy: 'user' },
       });
       const owner = createSessionOwnerMetadataV1({ metadata });
@@ -65,8 +69,12 @@ describe('Session capabilities composed Account and Machine seam', () => {
       const failures: unknown[] = [];
       const rpcResponses: unknown[] = [];
       let machineOnline = true;
+      let sessionActive = false;
       let accountSessionReadable = true;
+      let acknowledgeNextRead = false;
       let relayMethodNotFound = false;
+      let relayRequestTimeout = false;
+      let waitForDetection: (() => Promise<void>) | undefined;
       const server = createServer((request, response) => { void (async () => {
         const path = new URL(request.url ?? '/', 'http://fixture.test').pathname;
         let text = ''; for await (const chunk of request) text += String(chunk);
@@ -77,7 +85,18 @@ describe('Session capabilities composed Account and Machine seam', () => {
           signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 };
         else if (path === '/v1/account/encryption') result = { mode: 'plain', updatedAt: 0 };
         else if (path === '/v2/account/settings') result = { version: 1, content: { t: 'plain', v: {} } };
+        else if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) {
+          const serverId = configuration.activeServerId;
+          const key = { kind: 'workspace-ref', serverId, id: 'project-checkout' };
+          result = ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [{ key, revision: 1,
+            content: { t: 'plain', v: { key, value: { id: key.id, serverId, machineId, rootPath: home,
+              projectKey: 'account-project', createdAtMs: 1 } } } }] });
+        }
         else if (path === '/v1/account/entity-rows/mcp') result = { status: 'present', revision: catalogRevision, content: { t: 'plain', v: catalog } };
+        else if (path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']) {
+          result = PluginAvailabilityMaterializationsReadActionOutputV1Schema.parse({ availabilityCursor: 0,
+            inventoryComplete: true, snapshots: [], releases: [] });
+        }
         else if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) result = { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
           key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) };
         else if (path === '/v1/artifacts') result = [];
@@ -87,11 +106,18 @@ describe('Session capabilities composed Account and Machine seam', () => {
           const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId);
           if (!row) throw new Error('Missing test Session');
           if (!accountSessionReadable) { status = 503; result = { error: 'Session read unavailable' }; }
-          else result = { session: V2SessionRecordSchema.parse(createSessionRecordFixture({ id: sessionId, active: false, encryptionMode: 'plain', share: null,
+          else result = { session: V2SessionRecordSchema.parse(createSessionRecordFixture({ id: sessionId, active: sessionActive, encryptionMode: 'plain', share: null,
             metadataLayoutVersion: 1, metadata: String(row.metadata), metadataVersion: Number(row.revision),
             effectiveAccess: createSessionNotificationContextFixture(sessionId).effectiveAccess,
             ownerMetadata: StoredSessionOwnerMetadataEnvelopeV1Schema.parse(JSON.parse(String(row.ownerMetadata))),
             agentState: row.agentState === null ? null : String(row.agentState), agentStateVersion: Number(row.agentRevision) })) };
+          if (acknowledgeNextRead) {
+            acknowledgeNextRead = false;
+            const acknowledged = createSessionOwnerMetadataV1({ metadata: { ...persistedMetadata(), hostPid: 42 } });
+            if (!acknowledged.ok) throw new Error('Invalid runtime acknowledgment');
+            db.prepare('UPDATE sessions SET ownerMetadata = ?, revision = revision + 1 WHERE id = ?').run(
+              JSON.stringify(createPlainSessionOwnerMetadataEnvelopeV1(acknowledged.ownerMetadata)), sessionId);
+          }
         } else if (path === `/v2/sessions/${sessionId}` && request.method === 'PATCH') {
           const body = SessionMetadataOwnerPatchV1Schema.parse(JSON.parse(text));
           const updated = db.prepare('UPDATE sessions SET metadata = ?, revision = revision + 1, ownerMetadata = ?, agentState = ?, agentRevision = agentRevision + 1 WHERE id = ? AND revision = ? AND agentRevision = ? AND ownerMetadata = ?')
@@ -111,6 +137,7 @@ describe('Session capabilities composed Account and Machine seam', () => {
       socketServer.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL, (request, ack) => {
         if (!machineOnline) { ack({ ok: false, error: 'RPC target unavailable', errorCode: 'target_unavailable' }); return; }
         if (relayMethodNotFound) { ack({ ok: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }); return; }
+        if (relayRequestTimeout) { ack({ ok: false, error: 'Deadline exceeded', errorCode: 'RPC_REQUEST_TIMEOUT' }); return; }
         void manager.handleRequest(request).then(result => { rpcResponses.push(result); ack({ ok: true, result }); }, error => ack({
           ok: false, error: error instanceof Error ? error.message : 'RPC call failed',
           ...(readRpcErrorCode(error) ? { errorCode: readRpcErrorCode(error) } : {}),
@@ -127,7 +154,7 @@ describe('Session capabilities composed Account and Machine seam', () => {
         resetInMemoryAccountSettingsContextForTests();
         runtime = await createAdmittedPluginRuntimeFixture({ happyHomeDir: home, controller: pluginReloadController, runtimeOptions: { pluginIds: ['codex'] } });
         registerMachineMcpServersRpcHandlers({ rpcHandlerManager: manager, deps: { readCredentials: async () => credentials,
-          detectProviderMcpServers: async () => ({ servers: [], warnings: [] }),
+          detectProviderMcpServers: async () => { await waitForDetection?.(); return { servers: [], warnings: [] }; },
           bootstrapAccountSettingsContext: input => runWithServerHttpBaseUrl(base, () => bootstrapAccountSettingsContext(input)),
         } });
         await runWithServerHttpBaseUrl(base, () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' }));
@@ -141,6 +168,18 @@ describe('Session capabilities composed Account and Machine seam', () => {
         SpawnCapabilitiesPreviewSuccessV1Schema.parse(preview.result);
         const selection = { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['mcp-linear'], forceExcludeServerIds: [] } };
         const defaultBindings = catalog.bindings;
+        // Directory-only spawn and real stored Session metadata use the same
+        // Account checkout resolver through the registered Machine handler.
+        catalog.bindings = [{ ...defaultBindings[0]!, target: { t: 'project', projectKey: 'account-project' }, enabled: true }];
+        catalogRevision++;
+        await runWithServerHttpBaseUrl(base, () => refreshActiveMcpServerCatalog({ credentials }));
+        const projectPreview = await executor.execute('sessions.spawn.capabilities.preview', { machineId, agentId: 'codex', directory: home }, context);
+        const projectSession = await executor.execute('session.capabilities.get', { sessionId }, context);
+        for (const output of [projectPreview, projectSession]) expect(output, JSON.stringify(failures)).toMatchObject({ ok: true, result: {
+          ok: true, mcp: { items: [{ id: 'mcp-linear', selected: true, reason: 'rule_on' }] },
+        } });
+        if (projectPreview.ok) SpawnCapabilitiesPreviewSuccessV1Schema.parse(projectPreview.result);
+        if (projectSession.ok) SessionCapabilitiesGetOutputV1Schema.parse(projectSession.result);
         for (const bindings of [[], [{ ...defaultBindings[0]!, target: { t: 'machine' as const, machineId: 'elsewhere' } }],
           [{ ...defaultBindings[0]!, agentId: 'gemini' }]]) {
           catalog.bindings = bindings; catalogRevision++;
@@ -167,14 +206,85 @@ describe('Session capabilities composed Account and Machine seam', () => {
         expect(stopped).toMatchObject({ ok: true, result: { ok: true,
           pendingApply: { mcp: false, skills: true, reason: 'restart_to_apply', restartBy: 'user' } } });
         expect(stopped).not.toHaveProperty('result.pendingApply.source');
+        const prior = db.prepare('SELECT metadata, ownerMetadata FROM sessions WHERE id = ?').get(sessionId)!;
+        try {
+          const bothPending = writeCapabilitySelectionApplyV1(writeSessionCapabilitySelectionToMetadataV1(persistedMetadata(), {
+            mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['mcp-linear'], forceExcludeServerIds: [] },
+          }, { sessionActive: true }), { skills: { source: 'rules', reason: 'missing_resume_snapshot' } });
+          const owner = createSessionOwnerMetadataV1({ metadata: bothPending });
+          if (!owner.ok) throw new Error('Invalid aggregate capability fixture');
+          db.prepare('UPDATE sessions SET metadata = ?, ownerMetadata = ? WHERE id = ?').run(
+            JSON.stringify(projectSessionSharedMetadataV1({ metadata: bothPending })),
+            JSON.stringify(createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata)), sessionId);
+          const aggregate = await executor.execute('session.capabilities.get', { sessionId }, context);
+          expect(aggregate).toMatchObject({ ok: true, result: { ok: true, pendingApply: { mcp: true, skills: true } } });
+          expect(aggregate).not.toHaveProperty('result.pendingApply.reason');
+        } finally {
+          db.prepare('UPDATE sessions SET metadata = ?, ownerMetadata = ? WHERE id = ?').run(prior.metadata, prior.ownerMetadata, sessionId);
+        }
+        sessionActive = true;
+        relayRequestTimeout = true;
+        const timedOut = await executor.execute('session.capabilities.get', { sessionId }, context);
+        expect(timedOut).toMatchObject({ ok: true, result: { ok: false, code: 'preview_timeout' } });
+        if (timedOut.ok) SessionCapabilitiesGetOutputV1Schema.parse(timedOut.result);
+        relayRequestTimeout = false;
+        let releaseDetection!: () => void;
+        let enteredDetection = 0;
+        let allEntered!: () => void;
+        const detectionEntered = new Promise<void>(resolve => { allEntered = resolve; });
+        const detectionReleased = new Promise<void>(resolve => { releaseDetection = resolve; });
+        // Native configuration I/O can legitimately outlive the generic 20s RPC
+        // default. The containing Action, including its signal, owns this read.
+        waitForDetection = async () => { if (++enteredDetection === 3) allEntered(); await detectionReleased; };
+        const slowReads = Promise.all([
+          executor.execute('session.capabilities.get', { sessionId }, context),
+          executor.execute('sessions.spawn.capabilities.preview', { machineId, agentId: 'codex' }, context),
+          executor.execute('sessions.spawn.mcp_servers.preview', { machineId, agentId: 'codex', directory: home }, context),
+        ]);
+        try {
+          await detectionEntered;
+          await new Promise(resolve => setTimeout(resolve, 21_000));
+          releaseDetection();
+          const [running, spawn, legacy] = await slowReads;
+          expect(running).toMatchObject({ ok: true, result: { ok: true, applyTiming: { mcp: { t: 'next_turn' } } } });
+          if (running.ok) SessionCapabilitiesGetOutputV1Schema.parse(running.result);
+          expect(spawn).toMatchObject({ ok: true, result: { ok: true } });
+          if (spawn.ok) SpawnCapabilitiesPreviewSuccessV1Schema.parse(spawn.result);
+          expect(legacy).toMatchObject({ ok: true, result: { ok: true, preview: { ok: true } } });
+        } finally {
+          releaseDetection();
+          await slowReads;
+          waitForDetection = undefined;
+          sessionActive = false;
+        }
+        let cancellationDetectionEntered!: () => void;
+        let releaseCancelledDetection!: () => void;
+        let cancelledReadsEntered = 0;
+        const cancellationEntered = new Promise<void>(resolve => { cancellationDetectionEntered = resolve; });
+        const cancellationReleased = new Promise<void>(resolve => { releaseCancelledDetection = resolve; });
+        waitForDetection = async () => { if (++cancelledReadsEntered === 3) cancellationDetectionEntered(); await cancellationReleased; };
+        const controller = new AbortController();
+        const cancelledReads = Promise.all([
+          executor.execute('session.capabilities.get', { sessionId }, { ...context, signal: controller.signal }),
+          executor.execute('sessions.spawn.capabilities.preview', { machineId, agentId: 'codex' }, { ...context, signal: controller.signal }),
+          executor.execute('sessions.spawn.mcp_servers.preview', { machineId, agentId: 'codex', directory: home }, { ...context, signal: controller.signal }),
+        ]);
+        try {
+          await cancellationEntered;
+          controller.abort();
+          releaseCancelledDetection();
+          expect((await cancelledReads).map(result => result.ok)).toEqual([false, false, false]);
+        } finally { releaseCancelledDetection(); await cancelledReads; waitForDetection = undefined; }
         machineOnline = false;
         const changed = await executor.execute('session.capabilities.set', { sessionId, kind: 'mcp_server', id: 'linear', state: 'on' }, context);
         expect(changed, JSON.stringify({ changed, failures: failures.map(error => error instanceof Error ? error.message : error) }))
           .toMatchObject({ ok: true, result: { ok: true, previous: 'inherit', applyTiming: { t: 'session_not_running' } } });
         expect(persistedMetadata()).toMatchObject({ mcpSelectionV1: { forceIncludeServerIds: ['mcp-linear'] } });
+        acknowledgeNextRead = true;
         expect(await executor.execute('session.capabilities.set', { sessionId, kind: 'native_skill', id: 'native-from-offline-machine', state: 'off' }, context))
           .toMatchObject({ ok: true, result: { ok: true, previous: 'inherit', applyTiming: { t: 'session_not_running' } } });
-        expect(persistedMetadata()).toMatchObject({ skillSelectionV1: { excludeNativeSkillNames: ['native-from-offline-machine'] } });
+        expect(persistedMetadata()).toMatchObject({ hostPid: 42,
+          skillSelectionV1: { excludeNativeSkillNames: ['native-from-offline-machine'] } });
         expect(await executor.execute('session.capabilities.get', { sessionId }, context))
           .toMatchObject({ ok: true, result: { ok: false, code: 'session_unavailable' } });
         machineOnline = true;
@@ -204,5 +314,5 @@ describe('Session capabilities composed Account and Machine seam', () => {
         db.close();
       }
     });
-  });
+  }, 60_000);
 });

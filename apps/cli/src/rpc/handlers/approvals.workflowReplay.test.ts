@@ -15,7 +15,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { configuration, reloadConfiguration } from '@/configuration';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
-import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 
 // Only true system boundaries are replaced: the daemon's credential/settings
 // files, the Account server's HTTP routes (Axios and `fetch`), and nothing else.
@@ -89,6 +89,12 @@ function tokenSummary(tokenId: string): AccountApiTokenSummaryV1 {
 
 function installAccountServer(): void {
   vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+    if (url === `${HOME_URL}/v1/account/profile`) {
+      return { status: 200, data: { id: ACCOUNT_ID } };
+    }
+    if (url === `${HOME_URL}/v2/account/settings`) {
+      return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+    }
     if (url === `${HOME_URL}/v1/account/encryption`) {
       return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
     }
@@ -169,16 +175,16 @@ afterAll(() => {
   reloadConfiguration();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   rows.clear();
   poolDeletes.length = 0;
   currentTokens = [tokenSummary(WORKFLOW_CREDENTIAL_ID)];
-  vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'never');
   resetInMemoryAccountSettingsContextForTests();
   resetServerFeaturesClientForTests();
   files.readStoredCredentials.mockResolvedValue(credentials);
   files.readSettings.mockResolvedValue({ machineId: MACHINE_ID });
   installAccountServer();
+  await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' });
 });
 
 afterEach(() => {

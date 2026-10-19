@@ -1,7 +1,10 @@
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '@happier-dev/protocol/actions/actionSpecs';
 import { readLocalServiceControlActionRequest } from '@happier-dev/protocol/actions/specs/localServices';
 import { ManagedAcquireInputV1Schema, resolveManagedAcquireReviewV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { SessionSpawnNewAgentAuthoringInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import type { ActionExecuteResult, ActionExecutorContext, ExternalActionTargetV1, ActionId } from '@happier-dev/protocol/actions';
+import { readActionSessionTargetField } from '@happier-dev/protocol/actions/executor/sessionTargets';
+import { normalizeSessionTargetV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 
 /**
  * The external ingress has one deliberately bounded selector vocabulary. It
@@ -24,6 +27,14 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Readonly<Record<string, unknown>>
     : null;
+}
+
+function parseActionTargetInput(actionId: ActionId, input: unknown) {
+  // Target selection precedes Session inheritance and creation admission. Read
+  // the same strict authoring shape without resolving either launch choice here.
+  const schema = actionId === 'session.spawn_new'
+    ? SessionSpawnNewAgentAuthoringInputV2Schema : getActionSpec(actionId).inputSchema;
+  return schema.safeParse(input);
 }
 
 function readSessionSelectorIds(
@@ -100,7 +111,7 @@ export function reconcileExternalActionTarget(input: Readonly<{
   currentMachineId: string;
 }>): ExternalActionTargetReconciliation {
   const spec = getActionSpec(input.actionId);
-  const parsed = spec.inputSchema.safeParse(input.rawInput);
+  const parsed = parseActionTargetInput(input.actionId, input.rawInput);
 
   // The canonical executor owns malformed Action input errors. Do not create a
   // second parser/error vocabulary at ingress; only route validated input.
@@ -121,6 +132,19 @@ export function reconcileExternalActionTarget(input: Readonly<{
       context: {},
       executionRunRequiresMachineTarget: false,
     };
+  }
+
+  if (spec.sessionTarget) {
+    const target = readActionSessionTargetField(parsedInput, spec.sessionTarget.field);
+    // The strict Action schema has admitted the operand. A selector is intent
+    // for the shared resolver, not an exact Session transport destination.
+    let selectorIntent = false;
+    try { selectorIntent = target !== undefined && target !== null && typeof normalizeSessionTargetV1(target) !== 'string'; }
+    catch { /* The canonical Action executor owns malformed shorthand. */ }
+    if (selectorIntent) {
+      if (input.target?.kind === 'session') return { kind: 'rejected', execution: targetRequired() };
+      return { kind: 'ready', target: input.target, context: {}, executionRunRequiresMachineTarget: false };
+    }
   }
 
   const sessionSelectorIds = readSessionSelectorIds(input.actionId, parsedInput);
@@ -201,7 +225,7 @@ export function resolveExternalActionMachineTarget(input: Readonly<{
   /** Authenticated Session ownership, when the semantic Action addresses a linked Session. */
   ownerMachineId?: string | null;
 }>): Readonly<{ kind: 'ready'; machineId: string }> | Readonly<{ kind: 'rejected'; execution: ActionExecuteResult }> {
-  const parsed = getActionSpec(input.actionId).inputSchema.safeParse(input.rawInput);
+  const parsed = parseActionTargetInput(input.actionId, input.rawInput);
   if (!parsed.success) return { kind: 'rejected', execution: { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' } };
   const machineIds = readMachineSelectorIds(input.actionId, asRecord(parsed.data) ?? {});
   const explicitMachineId = input.target?.kind === 'machine' ? input.target.machineId : null;

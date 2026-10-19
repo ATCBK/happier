@@ -41,6 +41,22 @@ describe('buildReviewEngineInventoryItems', () => {
     registryMocks.isRuntimeRegistryCurrent.mockReturnValue(true);
   });
 
+  it('projects the Account model resolved by the Run launch owner and omits the bare Agent default', async () => {
+    registryMocks.getResolvedContributionRegistry.mockReturnValue({
+      agentDefinitionsById: new Map(['claude', 'codex'].map(id => [id, {
+        id, definition: { id, title: id }, richDefinition: { definition: runCapableDefinition({ id, title: id }) },
+      }])), executionRunProfiles: [],
+    });
+    const accountSettings = AccountSettingsSchema.parse({ providerDefaultModelSelectionsByAgentTargetKeyV1: {
+      'agent:happier.agent.claude/claude': { v: 1, updatedAt: 1, ref: {
+        agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'account-review-model',
+      } },
+    } });
+    const items = await buildReviewEngineInventoryItems({ accountSettings });
+    expect(items.find(item => item.engineId === 'claude')).toMatchObject({ launchModelId: 'account-review-model' });
+    expect(items.find(item => item.engineId === 'codex')).not.toHaveProperty('launchModelId');
+  });
+
   it('projects narration through real admitted Agent declarations without inferring it from engine identity or Session resume', async () => {
     const project = (id: string, structured: boolean) => projectManifestAgentContribution({
       pluginId: 'acme.review', provenance: 'external', source: { kind: 'path' },
@@ -161,7 +177,6 @@ describe('buildReviewEngineInventoryItems', () => {
       catalogEntriesById: {},
       executionRunProfiles: [],
     });
-    const accountSettings = AccountSettingsSchema.parse({});
     const acpCatalogSnapshot = { status: 'ready', revision: 3, record: AcpCatalogRecordV1Schema.parse({
       v: 1, definitions: [{
         id: 'review-bot', name: 'review-bot', title: 'Review Bot', launch: { kind: 'command' as const, command: 'review-bot', args: [] },
@@ -172,10 +187,13 @@ describe('buildReviewEngineInventoryItems', () => {
     const targetKey = buildBackendTargetKeyV2({
       kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured',
     });
+    const accountSettings = AccountSettingsSchema.parse({ providerDefaultModelSelectionsByAgentTargetKeyV1: {
+      [targetKey]: { v: 1, updatedAt: 1, ref: { agentTargetKey: targetKey, providerConnectionId: null, modelId: 'configured-review-model' } },
+    } });
 
     expect(await buildReviewEngineInventoryItems({ accountSettings, acpCatalogSnapshot })).toContainEqual(
       expect.objectContaining({ engineId: targetKey, value: targetKey, label: 'Review Bot',
-        capabilities: { structuredNarration: false } }),
+        capabilities: { structuredNarration: false }, launchModelId: 'configured-review-model' }),
     );
     expect(await buildReviewEngineInventoryItems({
       acpCatalogSnapshot,
@@ -187,23 +205,19 @@ describe('buildReviewEngineInventoryItems', () => {
   });
 
   it('labels an installed external review Agent with its own declared title', async () => {
-    registryMocks.getResolvedContributionRegistry.mockReturnValue({
-      agentDefinitionsById: new Map([
-        ['acme.reviewer', {
-          id: 'acme.reviewer',
-          identity: { pluginId: 'acme', localId: 'acme.reviewer' },
-          definition: { id: 'acme.reviewer' },
-          richDefinition: { definition: runCapableDefinition({ id: 'acme.reviewer', title: { key: 'acme.reviewer.title', fallback: 'Acme Reviewer' } }) },
-          runtimeSpec: null,
-        }],
-      ]),
-      executionRunProfiles: [
-        { pluginId: 'acme', definition: { id: 'review', intent: 'review', compatibleAgents: ['acme.reviewer'] } },
-      ],
+    const contribution = projectManifestAgentContribution({ pluginId: 'acme.review', provenance: 'external', source: { kind: 'path' },
+      definition: PluginAgentContributionV2Schema.parse({ id: 'reviewer', title: 'Acme Reviewer', primary: 'sessions',
+        runtime: { kind: 'custom' }, capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } }),
     });
-
-    expect(await buildReviewEngineInventoryItems({})).toEqual([
-      expect.objectContaining({ engineId: 'acme.reviewer', label: 'Acme Reviewer' }),
+    registryMocks.getResolvedContributionRegistry.mockReturnValue({
+      agentDefinitionsById: new Map([[contribution.id, contribution]]), executionRunProfiles: [],
+    });
+    const targetKey = buildBackendTargetKeyV2({ kind: 'agent', identity: contribution.identity! });
+    const accountSettings = AccountSettingsSchema.parse({ providerDefaultModelSelectionsByAgentTargetKeyV1: {
+      [targetKey]: { v: 1, updatedAt: 1, ref: { agentTargetKey: targetKey, providerConnectionId: null, modelId: 'external-review-model' } },
+    } });
+    expect(await buildReviewEngineInventoryItems({ accountSettings })).toEqual([
+      expect.objectContaining({ engineId: 'acme.review/reviewer', label: 'Acme Reviewer', launchModelId: 'external-review-model' }),
     ]);
   });
 

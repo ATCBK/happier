@@ -75,7 +75,7 @@ describe('credentialed CLI relation source-key preparation composition', () => {
     ...(['source_missing', 'destination_missing', 'source_read_failed', 'destination_read_failed',
       'destination_locality_missing', 'machine_read_failed', 'invalid_response'] as const)
       .map(fault => ({ name: fault, fixed: true, provenance: 'public' as const, plain: false, prepares: false, fault })),
-  ] as const).flatMap((scenario) => (['follow', 'reports_to', 'spawn'] as const).map((relation) => ({
+  ] as const).flatMap((scenario) => (['follow', 'manager', 'spawn'] as const).map((relation) => ({
     persistent: false, standaloneSourceKey: true, layoutOne: false, fault: undefined, ...scenario, relation,
   }))))('$name ($relation)', async ({ fixed, provenance, plain, prepares, persistent, standaloneSourceKey, layoutOne, relation, fault }) => {
     const serverUrl = normalizeServerHttpBaseUrl(fixed ? 'https://fixed-follow.example.test' : configuration.apiServerUrl);
@@ -85,7 +85,7 @@ describe('credentialed CLI relation source-key preparation composition', () => {
     // composition, so the assertion reaches the Follow key-preparation seam.
     const actionsSettings = normalizeActionsSettingsV1({
       v: 1,
-      approvalWaivedSurfaces: { 'session.follow.sources.set': ['cli'], 'session.reports_to.set': ['cli'], 'session.spawn_new': ['cli'] },
+      approvalWaivedSurfaces: { 'follow.set': ['cli'], 'session.manager.set': ['cli'], 'session.spawn_new': ['cli'] },
     });
     const app = fastify();
     const restore = installAxiosFastifyAdapter({ app, origin: new URL(serverUrl).origin });
@@ -104,10 +104,10 @@ describe('credentialed CLI relation source-key preparation composition', () => {
       events.push('edge_committed');
       return { changed: true, source };
     });
-    const reportsTo = { ok: true, sessionId: sourceSessionId, leadSessionId: destinationSessionId, attachedAt: 100 };
-    app.post(`/v1/sessions/${sourceSessionId}/reports-to`, async () => {
+    const manager = { ok: true, sessionId: sourceSessionId, managerSessionId: destinationSessionId, attachedAt: 100 };
+    app.post(`/v1/sessions/${sourceSessionId}/manager`, async () => {
       events.push('edge_committed');
-      return reportsTo;
+      return manager;
     });
     app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'e2ee' }));
     app.get('/v2/sessions/:sessionId', async (request, reply) => {
@@ -224,13 +224,14 @@ describe('credentialed CLI relation source-key preparation composition', () => {
       : executorBase);
     try {
       const result = relation === 'follow'
-        ? await executor.execute('session.follow.sources.set', { sourceSessionId, destinationSessionId }, { surface: 'cli' })
-        : relation === 'reports_to'
-          ? await executor.execute('session.reports_to.set', { sessionId: sourceSessionId, leadSessionId: destinationSessionId, expectedLeadSessionId: null }, { surface: 'cli' })
+        ? await executor.execute('follow.set', { receiver: { kind: 'session', sessionId: destinationSessionId },
+          source: { kind: 'session', sessionId: sourceSessionId }, policy: { preset: 'important' } }, { surface: 'cli' })
+        : relation === 'manager'
+          ? await executor.execute('session.manager.set', { sessionId: sourceSessionId, managerSessionId: destinationSessionId, expectedManagerSessionId: null }, { surface: 'cli' })
           : await executor.execute('session.spawn_new', { creationKey: 'source-key-child',
             executionTarget: { serverId: fixed ? 'fixed-home' : configuration.activeServerId, machineId: 'sender-machine' },
             directory: { kind: 'path', path: '/repo' }, agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
-            connectedServices: { v: 2, bindingsByServiceId: {} }, reportsTo: { sessionId: destinationSessionId },
+            connectedServices: { v: 2, bindingsByServiceId: {} }, manager: { sessionId: destinationSessionId },
           }, { surface: 'cli' });
       if (fault) {
         const preparation = { kind: 'waiting', reason: fault === 'source_missing' ? 'source_key_unavailable' : 'runner_unreachable',
@@ -258,16 +259,16 @@ describe('credentialed CLI relation source-key preparation composition', () => {
           sourceKeyPreparation: prepares ? { kind: 'prepared' } : plain || persistent ? { kind: 'not_needed' }
             : { kind: 'waiting', reason: standaloneSourceKey ? 'runner_unreachable' : 'source_key_unavailable' },
         } });
-      } else if (relation === 'reports_to') {
+      } else if (relation === 'manager') {
         expect(result, JSON.stringify({ result, events })).toMatchObject({ ok: true, result: {
-          ...reportsTo,
+          ...manager,
           ...(!prepares && !plain && !persistent ? { sourceKeyPreparation: {
             kind: 'waiting', reason: standaloneSourceKey ? 'runner_unreachable' : 'source_key_unavailable',
           } } : {}),
         } });
       } else if (prepares || plain || persistent) {
         expect(result, JSON.stringify({ result, events })).toMatchObject({ ok: true, result: relation === 'follow' ? { changed: true, source }
-          : relation === 'reports_to' ? reportsTo : { type: 'success', sessionId: sourceSessionId } });
+          : relation === 'manager' ? manager : { type: 'success', sessionId: sourceSessionId } });
       } else {
         expect(result, JSON.stringify({ result, events })).toMatchObject({ ok: false, errorCode: 'session_follow_source_key_preparation_waiting',
           details: { edgeCommitted: true, reason: standaloneSourceKey ? 'runner_unreachable' : 'source_key_unavailable' } });

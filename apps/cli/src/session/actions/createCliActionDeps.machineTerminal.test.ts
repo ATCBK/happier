@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios, { AxiosHeaders } from 'axios';
-import { createActionExecutor } from '@happier-dev/protocol';
+import { ActionIdSchema, createActionExecutor } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
@@ -47,10 +47,40 @@ describe('CLI machine terminal Action', () => {
     }));
   });
   afterEach(() => { releaseHome(); vi.restoreAllMocks(); });
+  it.each(['session', 'different-session', 'busy', 'activity_unavailable'])('preserves exact refresh acknowledgement and diagnostics (%s)', async scenario => {
+    const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32) } };
+    const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
+      sessionId: 'session', serverId: 'home', serverHttpBaseUrl: 'https://home.invalid', mode: 'plain', ctx: null }));
+    const restartResult = scenario === 'busy'
+      ? { ok: false, status: 'busy', sessionId: 'session', reasonCode: 'turn_in_progress',
+        diagnostics: { busySource: 'foreground_turn', turnId: 'active-turn' } }
+      : scenario === 'activity_unavailable'
+        ? { ok: false, status: 'partial_failure', sessionId: 'session', diagnostics: { activityObservation: 'unavailable' } }
+        : { ok: true, status: 'restarted', sessionId: scenario };
+    responses.push({ v: 1, sessionId: 'session', machineId: 'worker', daemonId: 'daemon', observedAtMs: 1,
+      runner: { pid: 123, runtimeId: 'old-runtime', cliVersion: '1', entrypointVersion: 'old',
+        processCommandHash: 'old-command', entrypointSource: 'process_command', startedBy: 'daemon', startingMode: 'remote' },
+      daemon: { cliVersion: '2', startedWithCliVersion: '2', currentEntrypointVersion: 'current-runtime', currentEntrypointSource: 'packaged_runtime' },
+      versionState: 'stale', statusSource: 'daemon_tracking', plannedRestart: { supported: true, eligible: true, disabledReason: null },
+    }, restartResult);
+    expect(await executor.execute(ActionIdSchema.parse('session.runtime.refresh'), {
+      sessionId: 'session', machineId: 'worker', serverId: 'home',
+    }, { surface: 'cli', authority: 'present_user', serverId: 'home' }))
+      .toEqual({ ok: true, result: scenario === 'different-session'
+        ? { ok: false, status: 'partial_failure', sessionId: 'session', diagnostics: { errorCode: 'invalid_response' } }
+        : restartResult });
+    expect(requests).toEqual([
+      { method: `worker:${RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_GET}`, params: { sessionId: 'session' } },
+      { method: `worker:${RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART}`, params: {
+        sessionId: 'session', mode: 'if_stale', reason: 'ui_stale_runner_banner', expectedRunnerPid: 123,
+        expectedProcessCommandHash: 'old-command', expectedRunnerEntrypointIdentity: 'old-runtime',
+      } },
+    ]);
+  });
   it('keeps retained observation, explicit Stop and output bytes on their original Machines after replacement', async () => {
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32) } };
     const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
-      sessionId: 'session', serverId: 'home', mode: 'plain', ctx: null }));
+      sessionId: 'session', serverId: 'home', serverHttpBaseUrl: 'https://home.invalid', mode: 'plain', ctx: null }));
     replacementRows.push({ id: 'custodian', replacedByMachineId: 'replacement-custodian' },
       { id: 'replacement-custodian' }, { id: 'worker', replacedByMachineId: 'replacement-worker' }, { id: 'replacement-worker' });
     const unavailable = { ok: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE };
@@ -94,7 +124,7 @@ describe('CLI machine terminal Action', () => {
   it('reads failed command output through the stored attachment and incumbent byte cursor', async () => {
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32) } };
     const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
-      sessionId: 'session', serverId: 'home', mode: 'plain', ctx: null }));
+      sessionId: 'session', serverId: 'home', serverHttpBaseUrl: 'https://home.invalid', mode: 'plain', ctx: null }));
     const snapshot = { version: 1, operationId: 'operation', revision: 2, actionId: 'projects.script.run', state: 'failed',
       scope: { accountId: 'account', machineId: 'custodian' }, title: 'Run', createdAt: 1, startedAt: 2, settledAt: 3,
       cancellation: 'supported', error: { errorCode: 'process_exited', error: 'Exit 1' },
@@ -174,7 +204,7 @@ describe('CLI machine terminal Action', () => {
     expect(await executor.execute('machines.terminal.list', { serverId: 'home', machineId: 'machine' }, { surface: 'cli', authority: 'present_user', serverId: 'home' }))
       .toEqual({ ok: true, result: { ok: true, terminals: [] } });
     expect(requests).toEqual([{ method: `machine:${RPC_METHODS.DAEMON_TERMINAL_LIST}`, params: {} }]);
-    const restricted = createActionExecutor(createCliActionDeps({ token: 'token', sessionId: 'session', serverId: 'home', mode: 'plain', ctx: null }));
+    const restricted = createActionExecutor(createCliActionDeps({ token: 'token', sessionId: 'session', serverId: 'home', serverHttpBaseUrl: 'https://home.invalid', mode: 'plain', ctx: null }));
     expect(await restricted.execute('machines.terminal.list', { serverId: 'home', machineId: 'other' }, { surface: 'cli', authority: 'present_user', serverId: 'home' }))
       .toMatchObject({ ok: false, errorCode: 'terminal_transport_unavailable' });
   });
@@ -191,7 +221,7 @@ describe('CLI machine terminal Action', () => {
   });
   it('refuses another unauthenticated machine instead of borrowing a direct transport', async () => {
     const invoke = vi.fn(async () => ({ ok: true, terminalId: 'pty', reused: false }));
-    const executor = createActionExecutor({ ...createCliActionDeps({ token: 'token', sessionId: 'session', serverId: 'home', mode: 'plain', ctx: null,
+    const executor = createActionExecutor({ ...createCliActionDeps({ token: 'token', sessionId: 'session', serverId: 'home', serverHttpBaseUrl: 'https://home.invalid', mode: 'plain', ctx: null,
       machineActionDirectTargetTransport: { machineId: 'exact', invoke } }) });
     expect(await executor.execute('machines.terminal.open', { serverId: 'home', machineId: 'other', terminalKey: 'shell' }, { surface: 'cli', serverId: 'home', authority: 'present_user', presentUserConfirmation: { actionId: 'machines.terminal.open' } }))
       .toMatchObject({ ok: false, errorCode: 'terminal_transport_unavailable' });

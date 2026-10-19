@@ -1,7 +1,8 @@
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { afterEach, expect, it, vi } from 'vitest';
 import fastify from 'fastify';
-import { z } from 'zod';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { z } from 'zod/mini';
+import { createActionExecutor } from '@happier-dev/protocol';
 import { normalizeUsageQuery, resolveUsageQueryPeriod } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageAnalyticsQueryRequestSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
@@ -12,11 +13,11 @@ import { createAccountServerActionDeps } from './accountServerActionDeps';
 let cleanup: (() => void) | undefined;
 afterEach(() => { cleanup?.(); cleanup = undefined; vi.restoreAllMocks(); });
 
-it('uses one relative read range for accounting, comparison and quota history through the CLI HTTP boundary', async () => {
+it.each([true, false])('uses one relative read range through the CLI HTTP boundary with accounting demand=%s', async includeAccounting => {
   const nowMs = Date.UTC(2026, 9, 12, 12);
   let readClockMs = nowMs;
   vi.spyOn(Date, 'now').mockImplementation(() => readClockMs);
-  const query = normalizeUsageQuery({ period: { relative: '7days' } });
+  const query = normalizeUsageQuery({ period: { relative: '7days' }, includeAccounting });
   const period = resolveUsageQueryPeriod(query, nowMs);
   const source = { bindingKind: 'account' as const, ref: { service: { pluginId: 'example.usage', localId: 'quota' }, accountId: 'work' } };
   const key = { providerId: 'test', accountSubjectId: 'subject', subjectKind: 'account' as const, quotaScope: 'account' as const };
@@ -47,24 +48,24 @@ it('uses one relative read range for accounting, comparison and quota history th
   app.get('/v4/connect/qualified/provider-account-usage/record', async () => record);
   app.get('/v4/connect/qualified/provider-account-usage/history', async request => {
     const encoded = z.object({ query: z.string() }).parse(request.query);
-    const historyRequest = z.object({ history: z.object({ range: z.object({ startAtMs: z.number(), endAtMs: z.number() }) }).passthrough() })
-      .passthrough().parse(JSON.parse(encoded.query));
+    const historyRequest = z.looseObject({ history: z.looseObject({ range: z.object({ startAtMs: z.number(), endAtMs: z.number() }) }) }).parse(JSON.parse(encoded.query));
     historyRanges.push(historyRequest.history.range);
     return { entries: [{ id: 'history', observedAtMs: nowMs - 1, record }], nextCursor: null };
   });
   app.post('/v2/pending/reset-starts/read', async () => ({ entries: [] }));
   cleanup = installAxiosFastifyAdapter({ app, origin: 'http://usage-relative.test' });
   const credentials = { token: 'owner-token', encryption: null };
-  const executor = createActionExecutor({ ...createAccountServerActionDeps({ token: credentials.token, credentials,
-    serverId: 'home', serverHttpBaseUrl: 'http://usage-relative.test' }), isActionApprovalRequired: () => false } as ActionExecutorDeps);
+  const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createAccountServerActionDeps({ token: credentials.token, credentials,
+    serverId: 'home', serverHttpBaseUrl: 'http://usage-relative.test' }), isActionApprovalRequired: () => false });
   const result = await executor.execute('usage.query', { queries: [query] }, { surface: 'cli', serverId: 'home' });
   expect(result.ok, JSON.stringify(result)).toBe(true);
   const slice = UsageQueryBatchResultSchema.parse(result.ok ? result.result : undefined).results[0]!;
-  expect(requests.map(request => request.dateRange)).toEqual([period,
-    { startMs: period.startMs! - (period.endMs! - period.startMs!), endMs: period.startMs }]);
+  expect(requests.map(request => request.dateRange)).toEqual(includeAccounting ? [period,
+    { startMs: period.startMs! - (period.endMs! - period.startMs!), endMs: period.startMs }] : []);
   expect(historyRanges).toEqual([{ startAtMs: period.startMs, endAtMs: period.endMs }]);
   expect(slice.requestedQuery.period).toEqual({ relative: '7days' });
   expect(slice.shownQuery.period).toEqual({ relative: '7days' });
   expect(slice.quota?.[0]?.history?.entries).toHaveLength(1);
-  expect(slice.comparison?.query.period).toEqual(requests[1]!.dateRange);
+  if (includeAccounting) expect(slice.comparison?.query.period).toEqual(requests[1]!.dateRange);
+  else expect(slice).not.toHaveProperty('comparison');
 });

@@ -5,7 +5,7 @@ import { resolveActionSurfaceAvailability } from '@happier-dev/protocol/actions/
 import { listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { ActionId, ActionSurfaceAvailability, ActionSurfaces, ActionsSettingsV1 } from '@happier-dev/protocol';
-import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { formatQualifiedPluginActionId, parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import type {
@@ -202,7 +202,8 @@ function resolvePluginActionSettings(
   settingsState: ActionToolCatalogAvailability['settingsState'];
   effectiveToolExposureMode: 'direct' | 'discoverable_only';
 }> {
-  const settingsActionId = parseQualifiedPluginActionId(actionId) ? actionId : null;
+  const identity = parseQualifiedPluginActionId(actionId);
+  const settingsActionId = identity ? formatQualifiedPluginActionId(identity) : null;
   const override = settingsActionId ? settings?.actions[settingsActionId] : undefined;
   const enabled = settingsActionId !== null && (
     !settings

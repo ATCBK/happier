@@ -144,7 +144,7 @@ export function registerDaemonExternalActionRoute(
       signal?: AbortSignal;
     }>) => Promise<
       | Readonly<{ ok: true; authorization: ExternalActionExecutionAuthorizationV1 }>
-      | Readonly<{ ok: false; code: 'invalid_token' | 'auth_unavailable' | 'server_unavailable' }>
+      | Readonly<{ ok: false; code: 'invalid_token' | 'credential_scope_denied' | 'auth_unavailable' | 'server_unavailable' }>
     >;
     externalActionMachineRequestPrivateKey?: string | Uint8Array;
     resolveInstallationId?: () => string | null;
@@ -237,8 +237,8 @@ export function registerDaemonExternalActionRoute(
             signal: admission.lifetime.signal,
           })
         : null;
-      if (minted && !minted.ok && minted.code === 'invalid_token') {
-        return sendExternalActionHttpError(reply, 'invalid_token');
+      if (minted && !minted.ok && (minted.code === 'invalid_token' || minted.code === 'credential_scope_denied')) {
+        return sendExternalActionHttpError(reply, minted.code);
       }
       const installationId = input.resolveInstallationId?.();
       const verifyExecutionAuthorization = input.verifyExecutionAuthorization;

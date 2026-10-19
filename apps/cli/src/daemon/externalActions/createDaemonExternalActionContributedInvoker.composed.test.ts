@@ -45,6 +45,7 @@ import {
   type TargetActionApprovalReplayPlacementV1,
   type TargetActionApprovalRequestV1,
   type WorkflowDefinitionV1,
+  type PluginActionContributionV2,
 } from '@happier-dev/protocol';
 import {
   createActionExecutor,
@@ -55,6 +56,7 @@ import {
   type ActionExecutorDeps,
   createWorkflowAccountRunActionOwner,
   type WorkflowAccountRunActionDeps,
+  type ActionExecutorContext,
 } from '@happier-dev/protocol/actions';
 import type {
   JsonValue,
@@ -86,6 +88,7 @@ import {
   createUnavailablePluginServicesFactory,
 } from '@/plugins/runtime/invocation/services/factory';
 import { createProductionPluginInvocationServiceOwners } from '@/plugins/runtime/invocation/services/production';
+import { createPluginActionCallerMaterializationFixture } from '@/plugins/runtime/invocation/services/actionCaller.testkit';
 import {
   createUnavailablePluginServices,
 } from '@/plugins/runtime/invocation/services/unavailable';
@@ -146,6 +149,48 @@ function createApiActionApprovalOrigin(defaultSessionId?: string): ApprovalExecu
   };
 }
 
+function createSharedBotContributedContext(sourceKind: 'pat' | 'session' = 'pat', workspaceWrites?: 'allow' | 'deny') {
+  const installationKeyPair = tweetnacl.sign.keyPair();
+  const target = { kind: 'machine' as const, machineId: 'machine-local' };
+  const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-admitted-bot-action', binding: {
+    serverIdentityId: 'server-external', accountId: 'alice', custodianAccountId: 'alice', installationId: 'bot-installation',
+    machineId: 'machine-local', actionId: 'action.invoke', requestId: 'bot-action-request',
+    requestEnvelopeDigest: 'A'.repeat(43), target,
+    ...(sourceKind === 'pat' ? { principalId: 'alice-principal', credentialId: '11111111-1111-4111-8111-111111111111', grant: API_TOKEN_FULL_GRANT_V1 }
+      : { authentication: { kind: 'account', tokenEpoch: 7 }, sessionActionOrigin: { v: 1,
+          caller: { kind: 'session', sessionId: 'bot-session', starterDepth: 0, turnDepth: 0 },
+          sourceTurnId: 'bot-turn', callerPermissionMode: 'yolo', requestId: 'bot-action-request',
+          ...(workspaceWrites === undefined ? {} : { workspaceWrites }) },
+          sessionActionSource: { machineId: 'machine-local', installationId: 'bot-installation' } }),
+  } });
+  const context: ActionExecutorContext = {
+    surface: 'agent', authority: 'account_automation', serverId: 'server-external', serverIdentityId: 'server-external',
+    runtimeAccountId: 'alice', defaultSessionId: 'bot-session', actionRequestId: 'bot-action-request',
+    ...('grant' in authorization.binding ? { actionCaller: { kind: 'host' as const },
+      externalActionCredential: { accountId: 'alice', principalId: 'alice-principal',
+        credentialId: '11111111-1111-4111-8111-111111111111', grant: authorization.binding.grant } }
+      : { actionCaller: authorization.binding.sessionActionOrigin!.caller,
+          callerPermissionMode: 'yolo' as const,
+          ...(workspaceWrites === undefined ? {} : { workspaceWrites }),
+          sessionInputSource: { sourceSessionId: 'bot-session', sourceTurnId: 'bot-turn', via: 'action' as const } }),
+    externalActionExecutionAuthorization: authorization, externalActionTarget: target,
+    signExternalActionApprovalInput: ({ actionId, input, target: signedTarget, requesterConfirmation }) => signExternalActionApprovalInputV1({
+      authorizationToken: authorization.token, actionId, input, target: signedTarget, privateKey: installationKeyPair.secretKey,
+      ...(requesterConfirmation ? { requesterConfirmation } : {}),
+    }),
+  };
+  const isApprovalExecutionOriginCurrent: NonNullable<Parameters<typeof createDaemonExternalActionContributedApprovalReplay>[0]['isApprovalExecutionOriginCurrent']> = async ({ origin, request }) => (
+    origin.accountId === 'alice' && request?.v === 2 && origin.externalActionInputSignature !== undefined
+    && origin.target !== undefined && origin.externalActionExecutionAuthorization !== undefined
+    && verifyExternalActionApprovalInputV1({ authorizationToken: origin.externalActionExecutionAuthorization.token,
+      actionId: origin.actionId, target: origin.target, input: request.actionArgs,
+      ...(request.requesterConfirmation ? { requesterConfirmation: request.requesterConfirmation } : {}),
+      publicKey: installationKeyPair.publicKey, signature: origin.externalActionInputSignature })
+  );
+  return { context, isApprovalExecutionOriginCurrent, readInstallationIdentity: () => ({ version: 1 as const, installationId: 'bot-installation', createdAt: 1,
+    publicKey: encodeBase64(installationKeyPair.publicKey, 'base64url'), privateKey: encodeBase64(installationKeyPair.secretKey, 'base64url') }) };
+}
+
 function createExternalActionRuntime(
   scope: 'global' | 'session' = 'session',
   pluginId = 'acme.external',
@@ -165,6 +210,7 @@ function createExternalActionRuntime(
     pluginVersion?: string; inputSchema?: object; resultSchema?: object; occurrenceId?: PluginRuntimeOccurrenceId;
     inputHints?: { fields: readonly { path: string; title: string; widget: 'secret' }[] };
     onInput?: (input: JsonValue) => void;
+    confirmationWhen?: PluginActionContributionV2['confirmationWhen'];
   }> = {},
 ): ResolvedExecutablePluginRuntimeRegistry {
   const localId = actionOptions.localId ?? 'inspect';
@@ -200,6 +246,7 @@ function createExternalActionRuntime(
           ...(actionOptions.inputSchema === undefined ? {} : { inputSchema: actionOptions.inputSchema }),
           ...(actionOptions.resultSchema === undefined ? {} : { resultSchema: actionOptions.resultSchema }),
           ...(actionOptions.inputHints === undefined ? {} : { inputHints: actionOptions.inputHints }),
+          ...(actionOptions.confirmationWhen === undefined ? {} : { confirmationWhen: actionOptions.confirmationWhen }),
           ...(actionOptions.unavailable ? { availability: { when: { fact: 'plugin.enabled', operator: 'equals', value: false } } } : {}),
           ...(dangerLevel === 'safe' ? {} : { confirmation: { title: 'Write', body: 'Write provider state?', confirmLabel: 'Write' } }),
         })),
@@ -438,6 +485,206 @@ function createExternalActionIngressExecutor(scope: 'global' | 'session' = 'sess
 
 describe('createDaemonExternalActionContributedInvoker', () => {
   afterEach(() => { vi.restoreAllMocks(); });
+
+  it.each(['pat', 'session'] as const)('retains signed %s source custody through nested production services', async sourceKind => {
+    const source = createSharedBotContributedContext(sourceKind);
+    let approval: unknown;
+    let effects = 0;
+    const executor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
+      isActionApprovalRequired: () => false,
+      approvalsCreate: async ({ request }) => { approval = request; return { artifactId: 'signed-nested-preview' }; },
+      sessionSendMessage: async () => { effects++; return { status: 'accepted', localId: 'effect' }; },
+    });
+    const owners = createProductionPluginInvocationServiceOwners({ actionExecutor: executor,
+      invokeContributedAction: async () => { throw new Error('No contributed effect expected'); } });
+    const id = `nested-${sourceKind}`;
+    const services = owners.createServices({ plugin: { id: 'acme.external', version: '1.0.0' },
+      resolveCurrentPluginMaterializationRef: createPluginActionCallerMaterializationFixture('acme.external', { machineId: 'machine-local' }).resolveCurrentPluginMaterializationRef,
+      contribution: { id: 'inspect', qualifiedId: 'acme.external/actions/inspect' },
+      occurrenceId: id, correlationId: id, surface: 'plugin', session: { id: 'bot-session' },
+      sourceCustody: { kind: 'development', registeredRootId: 'fixture-root:acme.external' },
+      approvalContext: { ...source.context, actionRequestAttributionV1: { requestRef: 'bob-input',
+        requester: { serverId: 'server-external', accountId: 'bob' },
+        persona: { serverId: 'server-external', sessionId: 'original-manager-session' }, origin: null } },
+      signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+    }, owners.createOrdinaryServiceBinding(id, id));
+    try {
+      await services.actions.execute('session.message.send', {
+        sessionId: 'bot-session', message: 'Review this update', idempotencyKey: id,
+      });
+      expect(approval).toMatchObject({ requesterConfirmation: { requesterAccountId: 'bob', executionAccountId: 'alice',
+          personaSessionRef: { serverId: 'server-external', sessionId: 'bot-session' } },
+        executionOriginV1: { accountId: 'alice', caller: { kind: 'plugin', pluginId: 'acme.external' },
+          actionRequestAttributionV1: { persona: { sessionId: 'original-manager-session' } },
+          externalActionExecutionAuthorization: source.context.externalActionExecutionAuthorization } });
+      expect(effects).toBe(0);
+    } finally { await owners.dispose(); }
+  });
+
+  it('rechecks the live requester after confirming confidential contributed operands', async () => {
+    const source = createSharedBotContributedContext();
+    const controller = new AbortController();
+    let effects = 0;
+    let entitled = true;
+    let stored: TargetActionApprovalRequestV1 | null = null;
+    const runtime = createExternalActionRuntime('global', 'acme.external', () => { effects++; },
+      undefined, undefined, undefined, undefined, 'writesRemote', undefined, {
+        inputSchema: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'], additionalProperties: false },
+        surfaces: ['agent'], inputHints: { fields: [{ path: 'token', title: 'Token', widget: 'secret' }] },
+      });
+    const lease: PluginRuntimeRegistryLease = { registry: runtime, source: 'ephemeral',
+      durableRevision: runtime.durableRevision ?? -1, release: async () => {} };
+    const executor = createExternalActionExecutor(createDaemonExternalActionContributedInvoker({
+      acquireRuntimeRegistryLease: async () => lease,
+      requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+        create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { artifactId: 'bob-confidential' }; },
+        read: async () => stored,
+      }),
+    }));
+    const pending = executor.execute('action.invoke', { action: { pluginId: 'acme.external', localId: 'inspect' },
+      input: { token: 'synthetic-confidential-operand' } }, {
+      ...source.context,
+      signal: controller.signal,
+      actionRequestAttributionV1: { requestRef: 'bob-secret-request', requester: { serverId: 'server-external', accountId: 'bob' },
+        persona: { serverId: 'server-external', sessionId: 'bot-session' }, origin: null },
+    });
+    try {
+    await vi.waitFor(() => expect(stored).not.toBeNull());
+    expect(stored).toMatchObject({ approvalInputCustody: 'live_only', requesterConfirmation: { requesterAccountId: 'bob' } });
+    expect(JSON.stringify(stored)).not.toContain('synthetic-confidential-operand');
+    const replay = createDaemonExternalActionContributedApprovalReplay({
+      readInstallationIdentity: source.readInstallationIdentity,
+      isApprovalExecutionOriginCurrent: source.isApprovalExecutionOriginCurrent,
+      credentials: { token: 'alice-token', encryption: null } as never,
+      targetActionApprovals: {
+        targetActionApprovalsGet: async () => stored,
+        targetActionApprovalsUpdate: async ({ request }) => {
+          stored = TargetActionApprovalRequestV1Schema.parse(request);
+          if (request.status === 'approved') entitled = false;
+          return { ok: true };
+        },
+      },
+    });
+    await replay({ artifactId: 'bob-confidential', decision: 'approve', context: {
+      surface: 'ui', authority: 'present_user', runtimeAccountId: 'alice',
+      requesterApprovalDecision: { sessionId: 'bot-session', actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' },
+        isCurrent: async () => entitled },
+    } });
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'approval_stale' });
+    expect(effects).toBe(0);
+    } finally {
+      controller.abort();
+      await pending;
+    }
+  });
+
+  it.each([
+    { dangerLevel: 'writesRemote', waive: false, readArm: false, sourceKind: 'pat', cancel: false },
+    { dangerLevel: 'writesRemote', waive: true, readArm: false, sourceKind: 'pat', cancel: false },
+    { dangerLevel: 'safe', waive: false, readArm: false, sourceKind: 'pat', cancel: false },
+    { dangerLevel: 'writesRemote', waive: false, readArm: true, sourceKind: 'pat', cancel: false },
+    { dangerLevel: 'writesRemote', waive: false, readArm: false, sourceKind: 'session', cancel: false },
+    { dangerLevel: 'writesRemote', waive: false, readArm: false, sourceKind: 'session', cancel: false, workspaceWrites: 'allow' },
+    { dangerLevel: 'writesRemote', waive: false, readArm: false, sourceKind: 'pat', cancel: true },
+  ] as const)('binds a shared requester to the contributed effect (effect=$dangerLevel, waive=$waive, read=$readArm, source=$sourceKind, cancel=$cancel, writes=$workspaceWrites)', async scenario => {
+    const { dangerLevel, waive, readArm, sourceKind, cancel } = scenario;
+    const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+    process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({ v: 1,
+      ...(waive ? { approvalWaivedSurfaces: { 'acme.external/actions/inspect': ['agent'] } } : {}),
+    });
+    try {
+      const source = createSharedBotContributedContext(sourceKind, 'workspaceWrites' in scenario ? scenario.workspaceWrites : undefined);
+      let effects = 0;
+      const runtime = createExternalActionRuntime('global', 'acme.external', () => { effects++; },
+        undefined, undefined, undefined, undefined, dangerLevel, undefined, { surfaces: ['agent'],
+          ...(readArm ? { confirmationWhen: { op: 'eq', path: 'mode', value: 'write' } } : {}) });
+      const lease: PluginRuntimeRegistryLease = { registry: runtime, source: 'ephemeral',
+        durableRevision: runtime.durableRevision ?? -1, release: async () => {} };
+      let stored: TargetActionApprovalRequestV1 | null = null;
+      const invoker = createDaemonExternalActionContributedInvoker({
+        acquireRuntimeRegistryLease: async () => lease,
+        requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+          create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { artifactId: 'bob-write' }; },
+          read: async () => stored,
+        }),
+      });
+      const attribution = { requestRef: 'bob-request', requester: { serverId: 'server-external', accountId: 'bob' },
+        persona: { serverId: 'server-external', sessionId: 'original-manager-session' }, origin: null } as const;
+      const executor = createExternalActionExecutor(invoker);
+      const result = await executor.execute('action.invoke', {
+        action: { pluginId: 'acme.external', localId: 'inspect' }, input: { title: 'Approved release' },
+      }, { ...source.context, actionRequestAttributionV1: attribution });
+      if (waive || readArm || dangerLevel === 'safe') {
+        expect(result.ok).toBe(true);
+        expect(stored).toBeNull();
+        expect(effects).toBe(1);
+        return;
+      }
+      expect(result).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'bob-write' } });
+      expect(stored).toMatchObject({ requesterConfirmation: { requestRef: 'bob-request', requesterAccountId: 'bob',
+        executionAccountId: 'alice', personaSessionRef: { serverId: 'server-external', sessionId: 'bot-session' } },
+        executionOriginV1: { accountId: 'alice', actionRequestAttributionV1: attribution } });
+      expect(effects).toBe(0);
+      const replay = createDaemonExternalActionContributedApprovalReplay({
+        readInstallationIdentity: source.readInstallationIdentity,
+        credentials: { token: 'alice-token', encryption: null } as never,
+        isApprovalExecutionOriginCurrent: source.isApprovalExecutionOriginCurrent,
+        acquireRuntimeRegistryLease: async () => lease,
+        targetActionApprovals: {
+          targetActionApprovalsGet: async () => stored,
+          targetActionApprovalsUpdate: async ({ request }) => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { ok: true }; },
+        },
+      });
+      let entitled = true;
+      const bobContext: ActionExecutorContext = { surface: 'ui', authority: 'present_user', runtimeAccountId: 'alice',
+        requesterApprovalDecision: { sessionId: 'bot-session', actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' },
+          isCurrent: async () => entitled } };
+      const original = TargetActionApprovalRequestV1Schema.parse(stored);
+      if (!original.executionOriginV1?.actionRequestAttributionV1 || !original.requesterConfirmation) throw new Error('Missing requester subject');
+      stored = TargetActionApprovalRequestV1Schema.parse({ ...original,
+        requesterConfirmation: { ...original.requesterConfirmation, requesterAccountId: 'carol' },
+        executionOriginV1: { ...original.executionOriginV1, actionRequestAttributionV1: {
+          ...original.executionOriginV1.actionRequestAttributionV1, requester: { serverId: 'server-external', accountId: 'carol' },
+        } },
+      });
+      await expect(replay({ artifactId: 'bob-write', decision: 'approve', context: { ...bobContext,
+        requesterApprovalDecision: { ...bobContext.requesterApprovalDecision!, actor: { kind: 'accountUser', accountId: 'carol', relationship: 'sharedApprover' } } } }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'approval_stale' });
+      expect(effects).toBe(0);
+      stored = original;
+      await expect(replay({ artifactId: 'bob-write', decision: 'approve', context: { surface: 'agent', bypassApprovals: true } }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      await expect(replay({ artifactId: 'bob-write', decision: 'reject', context: { ...bobContext,
+        requesterApprovalDecision: { ...bobContext.requesterApprovalDecision!, actor: { kind: 'accountUser', accountId: 'carol', relationship: 'sharedApprover' } } } }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      entitled = false;
+      await expect(replay({ artifactId: 'bob-write', decision: 'approve', context: bobContext }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'approval_stale' });
+      expect(stored).toMatchObject({ status: 'open' });
+      expect(effects).toBe(0);
+      entitled = true;
+      if (cancel) {
+        await expect(replay({ artifactId: 'bob-write', decision: 'cancel', context: { surface: 'agent', bypassApprovals: true } }))
+          .resolves.toMatchObject({ ok: false, errorCode: 'present_user_required' });
+        await expect(replay({ artifactId: 'bob-write', decision: 'cancel', context: bobContext }))
+          .resolves.toMatchObject({ ok: true, result: { status: 'canceled' } });
+        expect(stored).toMatchObject({ status: 'canceled' });
+        expect(effects).toBe(0);
+        return;
+      }
+      const replayResult = await replay({ artifactId: 'bob-write', decision: 'approve', context: bobContext });
+      expect(replayResult, JSON.stringify(replayResult)).toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(stored).toMatchObject({ status: 'executed', decision: { authority: 'present_user', decidingAccountId: 'bob' },
+        executionOriginV1: { accountId: 'alice', actionRequestAttributionV1: attribution } });
+      await expect(replay({ artifactId: 'bob-write', decision: 'approve', context: bobContext }))
+        .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(effects).toBe(1);
+    } finally {
+      if (previousSettings === undefined) delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+      else process.env.HAPPIER_ACTIONS_SETTINGS_V1 = previousSettings;
+    }
+  });
 
   it.each([{ viaMeta: false, fails: false }, { viaMeta: true, fails: false },
     { viaMeta: false, fails: true }, { viaMeta: true, fails: true }])(
@@ -1090,8 +1337,12 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     }
   });
 
-  it.each(['safe', 'writesRemote'] as const)('executes a discovered %s qualified Action through the real credentialed CLI caller and daemon adapter', async dangerLevel => {
-    const runtime = createExternalActionRuntime('global', 'acme.external', undefined, undefined, undefined, undefined, undefined, dangerLevel);
+  it.each([
+    { surface: 'cli', dangerLevel: 'safe' }, { surface: 'cli', dangerLevel: 'writesRemote' },
+    { surface: 'mcp', dangerLevel: 'writesRemote' }, { surface: 'agent', dangerLevel: 'writesRemote' },
+  ] as const)('executes a discovered $dangerLevel qualified Action through the real credentialed $surface caller and daemon adapter', async ({ surface, dangerLevel }) => {
+    const runtime = createExternalActionRuntime('global', 'acme.external', undefined, undefined, undefined, undefined, undefined, dangerLevel,
+      undefined, { surfaces: ['cli', 'mcp', 'agent'] });
     let stored: TargetActionApprovalRequestV1 | undefined;
     const lease = { registry: runtime, source: 'ephemeral', durableRevision: -1, release: async () => {} } satisfies PluginRuntimeRegistryLease;
     const listDefinitions = createDaemonExternalActionContributedDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
@@ -1115,16 +1366,16 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       resolveServerFeaturesSnapshot: async () => undefined,
       actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({ actionsSettingsV1: settings }) }),
     });
-    const bridge = createActionToolExecutorBridge({ surface: 'cli', executor, pluginToolCatalog: [] });
+    const bridge = createActionToolExecutorBridge({ surface, executor, pluginToolCatalog: [] });
     await expect(dispatchBuiltInHappierTool({ toolName: 'action_execute', args: { actionId: 'acme.external/actions/inspect', input: {} },
-      sessionId: 'session-1', surface: 'cli', pluginToolCatalog: [],
+      sessionId: 'session-1', surface, pluginToolCatalog: [],
       deps: { changeTitle: async () => { throw new Error('Unexpected title change'); }, executeActionByToolName: bridge.executeActionByToolName } })).resolves.toMatchObject({
-      ok: true, result: dangerLevel === 'safe' ? { surface: 'cli', caller: null }
+      ok: true, result: dangerLevel === 'safe' ? { surface, caller: null }
         : { kind: 'approval_request_created', artifactId: 'qualified-approval', actionId: 'action.invoke' },
     });
-    if (dangerLevel !== 'safe') expect(stored).toMatchObject({ requestedSurface: 'cli',
+    if (dangerLevel !== 'safe') expect(stored).toMatchObject({ requestedSurface: surface,
       replayPlacement: { serverId: 'server-external', machineId: 'machine-local' },
-      executionOriginV1: { actionId: 'action.invoke', surface: 'cli' } });
+      executionOriginV1: { actionId: 'action.invoke', surface } });
   });
 
   it('allows a source read but rejects writes under the same current read-only invocation lease', async () => {
@@ -2088,13 +2339,21 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     }
   });
 
-  it('replays a managed API target-action artifact exactly once at its stamped daemon', async () => {
+  it.each([
+    { surface: 'api', authority: 'account_automation', changedAuthority: false, localId: 'inspect' },
+    { surface: 'api', authority: 'present_user', changedAuthority: false, localId: 'inspect' },
+    { surface: 'cli', authority: 'present_user', changedAuthority: false, localId: 'inspect' },
+    { surface: 'cli', authority: 'present_user', changedAuthority: false, localId: 'actions/remove' },
+    { surface: 'mcp', authority: 'account_automation', changedAuthority: false, localId: 'inspect' },
+    { surface: 'agent', authority: 'account_automation', changedAuthority: false, localId: 'inspect' },
+    { surface: 'cli', authority: 'present_user', changedAuthority: true, localId: 'inspect' },
+  ] as const)('replays a managed $surface $localId target-action artifact with $authority authority exactly once at its stamped daemon (changed authority: $changedAuthority)', async ({ surface, authority, changedAuthority, localId }) => {
     const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
     process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({
       v: 1,
       actions: {
-        'acme.managed/actions/inspect': {
-          approvalRequiredSurfaces: ['api'],
+        [`acme.managed/actions/${localId}`]: {
+          approvalRequiredSurfaces: [surface],
         },
       },
     });
@@ -2102,7 +2361,8 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       let actionInvocations = 0;
       const runtime = createExternalActionRuntime('global', 'acme.managed', () => {
         actionInvocations += 1;
-      });
+      }, undefined, undefined, undefined, undefined, 'safe', undefined,
+      { localId, surfaces: ['cli', 'mcp', 'agent'] });
       const lease: PluginRuntimeRegistryLease = {
         registry: runtime,
         source: 'ephemeral',
@@ -2139,12 +2399,12 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       });
 
       await expect(deferred({
-        action: { pluginId: 'acme.managed', localId: 'inspect' },
-        input: {},
-        approvalExecutionOrigin: createApiActionApprovalOrigin('session-1'),
+        action: { pluginId: 'acme.managed', localId },
+        input: { sessionId: 'session-to-unlink', entryId: '540' },
+        approvalExecutionOrigin: { ...createApiActionApprovalOrigin('session-1'), surface, authority },
         context: {
-          surface: 'api',
-          authority: 'account_automation',
+          surface,
+          authority,
           actionCaller: { kind: 'host' },
           defaultSessionId: 'session-1',
         },
@@ -2190,6 +2450,18 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       expect(actionInvocations).toBe(0);
       persisted = currentApproval;
 
+      if (changedAuthority) {
+        if (!currentApproval.executionOriginV1) throw new Error('Expected the admitting authority');
+        persisted = { ...currentApproval, executionOriginV1: {
+          ...currentApproval.executionOriginV1, authority: 'account_automation',
+        } };
+        await expect(replay({ artifactId: 'approval-api-exact-1', decision: 'approve' }))
+          .resolves.toMatchObject({ ok: false, errorCode: 'plugin_action_current_intent_mismatch' });
+        expect(persisted).toMatchObject({ status: 'failed', execution: { ok: false } });
+        expect(actionInvocations).toBe(0);
+        return;
+      }
+
       await expect(replay({
         artifactId: 'approval-api-exact-1',
         decision: 'approve',
@@ -2200,7 +2472,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
           status: 'executed',
           execution: {
             ok: true,
-            result: { surface: 'api', caller: null, sessionId: 'session-1' },
+            result: { surface, caller: null, sessionId: 'session-1' },
           },
         },
       });
@@ -2210,7 +2482,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         decision: { kind: 'approve' },
         execution: {
           ok: true,
-          result: { surface: 'api', caller: null, sessionId: 'session-1' },
+          result: { surface, caller: null, sessionId: 'session-1' },
         },
       });
 
@@ -2392,6 +2664,108 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       publicKey: installationKeyPair.publicKey,
       signature,
     })).toBe(true);
+    } finally {
+      if (previousSettings === undefined) delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+      else process.env.HAPPIER_ACTIONS_SETTINGS_V1 = previousSettings;
+    }
+  });
+
+  it.each(['unavailable', 'stale'] as const)(
+    'classifies contributed approval origin currentness before execution custody (%s)',
+    async scenario => {
+    const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+    process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({
+      v: 1,
+      actions: {
+        'acme.external/actions/inspect': {
+          approvalRequiredSurfaces: ['api'],
+        },
+      },
+    });
+    try {
+      let actionInvocations = 0;
+      let homeAvailable = false;
+      const runtime = createExternalActionRuntime(
+        'global',
+        'acme.external',
+        () => { actionInvocations += 1; },
+      );
+      const lease: PluginRuntimeRegistryLease = {
+        registry: runtime,
+        source: 'ephemeral',
+        durableRevision: runtime.durableRevision ?? -1,
+        release: async () => {},
+      };
+      let persisted: TargetActionApprovalRequestV1 | null = null;
+      const targetActionApprovals = {
+        targetActionApprovalsGet: async () => persisted,
+        targetActionApprovalsUpdate: async (args: Readonly<{
+          artifactId: string;
+          request: TargetActionApprovalRequestV1;
+        }>) => {
+          persisted = TargetActionApprovalRequestV1Schema.parse(args.request);
+          return { ok: true as const };
+        },
+      };
+      const defer = createDaemonExternalActionContributedInvoker({
+        acquireRuntimeRegistryLease: async () => lease,
+        requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+          now: () => 1,
+          create: async (request) => {
+            persisted = TargetActionApprovalRequestV1Schema.parse(request);
+            return { artifactId: 'approval-api-home-recovery-1' };
+          },
+          read: async () => persisted,
+        }),
+      });
+      await expect(defer({
+        action: { pluginId: 'acme.external', localId: 'inspect' },
+        input: {},
+        approvalExecutionOrigin: createApiActionApprovalOrigin(),
+        context: {
+          surface: 'api',
+          authority: 'account_automation',
+          actionCaller: { kind: 'host' },
+        },
+        signal: new AbortController().signal,
+      })).resolves.toMatchObject({
+        ok: true,
+        result: { kind: 'approval_request_created', artifactId: 'approval-api-home-recovery-1' },
+      });
+      const replay = createDaemonExternalActionContributedApprovalReplay({
+        credentials: { token: 'daemon-token', encryption: null } as never,
+        isApprovalExecutionOriginCurrent: async ({ reportStale }) => {
+          if (scenario === 'unavailable' && !homeAvailable) {
+            throw Object.assign(new Error('project_requester_home_unavailable'), {
+              code: 'project_requester_home_unavailable',
+            });
+          }
+          if (scenario === 'stale') reportStale?.('origin_not_current');
+          return scenario === 'unavailable';
+        },
+        acquireRuntimeRegistryLease: async () => lease,
+        targetActionApprovals,
+        now: () => 2,
+      });
+
+      await expect(replay({ artifactId: 'approval-api-home-recovery-1', decision: 'approve' }))
+        .resolves.toMatchObject({ ok: false, errorCode: scenario === 'unavailable'
+          ? 'project_requester_home_unavailable' : 'approval_stale' });
+      expect(persisted).toMatchObject({ status: scenario === 'unavailable' ? 'approved' : 'failed',
+        decision: { kind: 'approve' } });
+      expect(actionInvocations).toBe(0);
+
+      if (scenario === 'stale') {
+        await expect(replay({ artifactId: 'approval-api-home-recovery-1', decision: 'approve' }))
+          .resolves.toMatchObject({ ok: true, result: { status: 'failed' } });
+        expect(actionInvocations).toBe(0);
+        return;
+      }
+      homeAvailable = true;
+      await expect(replay({ artifactId: 'approval-api-home-recovery-1', decision: 'approve' }))
+        .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(persisted).toMatchObject({ status: 'executed' });
+      expect(actionInvocations).toBe(1);
     } finally {
       if (previousSettings === undefined) delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
       else process.env.HAPPIER_ACTIONS_SETTINGS_V1 = previousSettings;

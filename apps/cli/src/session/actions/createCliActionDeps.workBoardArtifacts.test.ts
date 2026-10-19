@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { x25519 } from '@noble/curves/ed25519';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, decodePlainArtifactStoredContent,
     WorkBoardV1Schema, buildHomeHubArtifactIdV1, buildWorkBoardItemKeyV1, createActionExecutor, createWorkBoardV1 } from '@happier-dev/protocol';
@@ -23,13 +23,13 @@ describe('CLI Board Actions through the Artifact owner', () => {
         const credentials = { token, encryption: mode === 'plain' ? null
             : { type: 'dataKey' as const, machineKey: secret, publicKey: x25519.getPublicKey(secret) } };
         const privateRevisionMetadata = {
-            provenance: z.string().nullable().optional(),
-            provenanceDataEncryptionKey: z.string().nullable().optional(),
+            provenance: z.optional(z.nullable(z.string())),
+            provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),
         };
-        const createSchema = z.object({ id: z.string(), header: z.string(), body: z.string(), dataEncryptionKey: z.string(),
-            ...privateRevisionMetadata }).strict();
-        const updateSchema = z.object({ header: z.string(), body: z.string(), expectedHeaderVersion: z.number(), expectedBodyVersion: z.number(),
-            ...privateRevisionMetadata }).strict();
+        const createSchema = z.strictObject({ id: z.string(), header: z.string(), body: z.string(), dataEncryptionKey: z.string(),
+            ...privateRevisionMetadata });
+        const updateSchema = z.strictObject({ header: z.string(), body: z.string(), expectedHeaderVersion: z.number(), expectedBodyVersion: z.number(),
+            ...privateRevisionMetadata });
         const rows = new Map<string, z.infer<typeof createSchema> & { headerVersion: number; bodyVersion: number; seq: number; createdAt: number; updatedAt: number;
             ownerAccountId: string; access: 'owner'; encryptionMode: 'plain' | 'e2ee' }>();
         const homeArtifactId = buildHomeHubArtifactIdV1('owner');
@@ -111,7 +111,7 @@ describe('CLI Board Actions through the Artifact owner', () => {
             inputTypes: [{ provenance: 'external', source: { kind: 'path' }, pluginId: inputType.pluginId,
                 identity: inputType, manifestPath: '/plugins/directory/plugin.json', definition: type.definition }],
             resources: [{ provenance: 'external', source: { kind: 'path' }, pluginId: inputType.pluginId,
-                definition: { id: 'count-kinds', source: 'dynamic', kind: 'config', scope: 'global', contentType: 'application/json' } }],
+                definition: { kindVersion: 1, id: 'count-kinds', source: 'dynamic', type: 'config', scope: 'global', contentType: 'application/json' } }],
         });
         const inputTypeDeps = createRegistryInputTypeDeps({ contributes: registry, readUiResource: async () => ({
             resource: { pluginId: inputType.pluginId, localId: 'count-kinds' }, kind: 'config',

@@ -1,6 +1,6 @@
 import { getActionSpec } from '@happier-dev/protocol';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 import { bindContextualActionToolInput, projectSessionBoundActionToolInputSchema } from './actionToolContext';
@@ -16,6 +16,21 @@ import { LocalServicePreviewResourceV1Schema } from '@happier-dev/protocol/local
 import { DaemonLocalServicePublicPreviewCreateRequestV1Schema, DaemonLocalServicePublicPreviewRevokeRequestV1Schema, DaemonLocalServicePublicPreviewStatusRequestV1Schema, LocalServicePublicPreviewSnapshotV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 
 describe('session-bound Action tool context', () => {
+  it.each([
+    ['session.capabilities.get', {}],
+    ['session.capabilities.set', { kind: 'mcp_server', id: 'catalog-server', state: 'on' }],
+  ] as const)('defaults %s to the invoking session before strict input validation', (actionId, input) => {
+    const context = { defaultSessionId: 'invoking-session' };
+    const schema = getActionSpec(actionId).inputSchema;
+    const projected = projectSessionBoundActionToolInputSchema({ actionId, inputSchema: schema, context }) as z.ZodMiniType;
+    expect(projected.safeParse(input).success).toBe(true);
+    expect(schema.parse(bindContextualActionToolInput({ actionId, input, context })))
+      .toEqual({ ...input, sessionId: 'invoking-session' });
+    expect(schema.parse(bindContextualActionToolInput({ actionId, input: { ...input, sessionId: 'another-session' }, context })))
+      .toEqual({ ...input, sessionId: 'another-session' });
+    expect(projectSessionBoundActionToolInputSchema({ actionId, inputSchema: schema, context: {} })).toBe(schema);
+    expect(schema.safeParse(bindContextualActionToolInput({ actionId, input, context: {} })).success).toBe(false);
+  });
   it('uses the page Session Machine for omitted Storage targets while preserving an explicitly requested Machine', () => {
     const context = { defaultSessionId: 'page-session', defaultSessionMachineId: 'page-machine' };
     const refs = [{ itemId: '/scanned/cache', path: '/scanned/cache' }];
@@ -35,7 +50,7 @@ describe('session-bound Action tool context', () => {
     const actionId = 'workflow.events.list';
     const context = { defaultSessionId: 'session_current', defaultSessionMachineId: 'f8748a14-65ec-42f1-a3f9-4e70a63f793c' };
     const schema = getActionSpec(actionId).inputSchema;
-    const projected = projectSessionBoundActionToolInputSchema({ actionId, inputSchema: schema, context }) as z.ZodType;
+    const projected = projectSessionBoundActionToolInputSchema({ actionId, inputSchema: schema, context }) as z.ZodMiniType;
     expect(projected.safeParse({}).success).toBe(true);
     expect(schema.parse(bindContextualActionToolInput({ actionId, input: {}, context })))
       .toEqual({ machineId: context.defaultSessionMachineId });
@@ -163,7 +178,7 @@ describe('session-bound Action tool context', () => {
     const context = { defaultSessionId: 'happier_session' };
     const projected = projectSessionBoundActionToolInputSchema({
       actionId: 'browser.automation.snapshot', inputSchema: schema, context,
-    }) as z.ZodType;
+    }) as z.ZodMiniType;
     expect(projected.safeParse(input).success).toBe(true);
     expect(schema.safeParse(bindContextualActionToolInput({
       actionId: 'browser.automation.snapshot', input, context,
@@ -208,7 +223,7 @@ describe('session-bound Action tool context', () => {
       actionId: 'memory.search',
       inputSchema: getActionSpec('memory.search').inputSchema,
       context: { defaultSessionId: 'current-session', defaultSessionMachineId: 'machine-1' },
-    }) as z.ZodType;
+    }) as z.ZodMiniType;
     expect(search.safeParse({
       query: { v: 1, query: 'handoff', scope: { type: 'global' }, mode: 'hints' },
     }).success).toBe(true);
@@ -219,7 +234,7 @@ describe('session-bound Action tool context', () => {
     const context = { defaultSessionId: 'current-session', defaultSessionMachineId: 'machine-1' };
     const window = projectSessionBoundActionToolInputSchema({
       actionId: 'memory.get_window', inputSchema: schema, context,
-    }) as z.ZodType;
+    }) as z.ZodMiniType;
     const native = { source: { type: 'external_transcript', agentId: 'pi', sourceKey: 'local', nativeSessionId: 'native' },
       sourceItemId: 'message', cursor: 'older' };
     const historical = { sessionId: 'historical-session', seqFrom: 1, seqTo: 2 };

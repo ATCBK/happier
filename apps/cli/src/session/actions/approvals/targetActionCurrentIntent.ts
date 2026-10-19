@@ -5,6 +5,8 @@ import type { TargetActionCurrentIntentRequest, TargetActionCurrentIntentResult 
 import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
 import { targetActionApprovalSubjectsEqual } from './targetActionApprovalSubject';
 import { projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { admitApprovalRequesterDecisionV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { projectTargetActionApprovalInvocationV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 
 function resolveLocalizedConfirmationText(value: PluginLocalizedStringV2): string {
   return typeof value === 'string' ? value : value.fallback;
@@ -21,6 +23,7 @@ function createTargetActionApprovalRequestCandidate(
     invocationSurface,
     replayPlacement,
     executionOriginV1,
+    requesterConfirmation,
   } = currentIntent;
   const requestedSurface = invocationSurface ?? surface;
   const approvalRequiredByActionSettings = action.approvalRequiredByActionSettings === true;
@@ -51,7 +54,8 @@ function createTargetActionApprovalRequestCandidate(
     input: projected.input,
     secretInputPaths: action.secretInputPaths ?? [],
     ...(action.secretInputLabels === undefined ? {} : { secretInputLabels: action.secretInputLabels }),
-    ...(projected.confidentialPaths.length ? { approvalInputCustody: 'live_only' } : {}),
+    ...(projected.confidentialPaths.length || requesterConfirmation && requestedSurface === 'plugin'
+      ? { approvalInputCustody: 'live_only' } : {}),
     ...(action.accountId ? { accountId: action.accountId } : {}),
     ...(action.resourceId ? { resourceId: action.resourceId } : {}),
     sourceCustody: action.sourceCustody,
@@ -59,6 +63,7 @@ function createTargetActionApprovalRequestCandidate(
     subjectFingerprint: fingerprint,
     ...(replayPlacement === undefined ? {} : { replayPlacement }),
     ...(executionOriginV1 === undefined ? {} : { executionOriginV1 }),
+    ...(requesterConfirmation === undefined ? {} : { requesterConfirmation }),
     summary: action.confirmation
       ? resolveLocalizedConfirmationText(action.confirmation.title)
       : 'Action approval required',
@@ -149,7 +154,16 @@ export function createTargetActionCurrentIntentAdapter(deps: Readonly<{
       return { status: 'unavailable', code: 'plugin_action_current_intent_mismatch' };
     }
     return result.decision === 'approve'
-      ? { status: 'approved', fingerprint, artifactId }
+      ? { status: 'approved', fingerprint, artifactId,
+          ...(request.requesterConfirmation ? { revalidateRequesterDecision: async () => {
+            const invocation = projectTargetActionApprovalInvocationV1(request);
+            return invocation !== null && (await admitApprovalRequesterDecisionV1({
+              request: { ...request, ...invocation },
+              context: { authority: 'present_user', surface: 'ui', runtimeAccountId: request.requesterConfirmation!.executionAccountId,
+                requesterApprovalDecision: result.requesterApprovalDecision },
+            })).ok;
+          } } : {}),
+        }
       : { status: 'rejected', code: PLUGIN_ACTION_CURRENT_INTENT_REJECTED_CODE };
   };
 }

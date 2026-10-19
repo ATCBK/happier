@@ -1,5 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { accountSettingsParse, normalizeActionsSettingsV1 } from '@happier-dev/protocol';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { accountSettingsParse, normalizeActionsSettingsV1, RoleActionOutputSchemasV1, readSessionRoleIdV1, createRoleSourceReaderV1, SessionRolesV1Schema } from '@happier-dev/protocol';
+import tweetnacl from 'tweetnacl';
+import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { ACCOUNT_SECURITY_PATH_V1 } from '@happier-dev/protocol/auth/accountSecurity';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema, PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
@@ -10,22 +15,259 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { prepareRequesterSessionBootstrap } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { createCliActionExecutorFromCredentials } from './createCliActionExecutorFromCredentials';
+import { buildWorkflowActionContext, createWorkflowAcceptedAuthorizationCurrentness } from '@/daemon/workflows/daemonRuntime';
+import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
+import { resolveCliAgentStartContextV1 } from './resolveCliAgentStartContextV1';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { createCliActionExecutor } from './createCliActionExecutor';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { registerActionSpecRpcHandlers } from '@/rpc/handlers/registerActionSpecRpcHandlers';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
+import { applyRegisteredSessionStateFieldMutationToMetadata } from '@/api/session/client/transport/mutations/applyRegisteredSessionStateFieldMutation';
+import { registerSessionClientRuntimeHandlers } from '@/api/session/client/executionRuns/registerSessionClientRuntimeHandlers';
+import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { readAuthoritativePluginSlotOccurrence } from '@/plugins/runtime/reload/runtimeLease';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 
 const axiosGet = vi.hoisted(() => vi.fn());
+const axiosPost = vi.hoisted(() => vi.fn());
 
 vi.mock('axios', async (importOriginal) => {
   const original = await importOriginal<typeof import('axios')>();
-  return { ...original, default: { ...original.default, get: axiosGet } };
+  return { ...original, default: { ...original.default, get: axiosGet, post: axiosPost } };
 });
 
 afterEach(() => {
   resetInMemoryAccountSettingsContextForTests();
   axiosGet.mockReset();
+  axiosPost.mockReset();
   vi.unstubAllEnvs();
 });
 
 describe('credentialed Action policy binding before settings bootstrap', () => {
+  it.each(['api', 'plugin'] as const)('admits a genuine Workflow Run role write through the credentialed cli-global composition (%s source)', async sourceKind => {
+    resetInMemoryAccountSettingsContextForTests();
+    vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'auto');
+    vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', '');
+    const origin = 'c123456789012345678901234';
+    const child = 'c123456789012345678901235';
+    const homeId = 'workflow-home';
+    const base = 'https://workflow-role.example.invalid';
+    const signing = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(38));
+    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'workflow-role-owner', tokenEpoch: 0 })).toString('base64url')}.signature`,
+      encryption: null, credentialProvenance: 'stored_session' as const };
+    const pluginId = 'happier.sender-only';
+    const pluginFixture = { manifest: createPluginManifestV2Fixture({ id: pluginId, entrypoints: {} }), files: {} };
+    const senderRuntime = sourceKind === 'plugin'
+      ? await createAuthoredAdmittedPluginRuntimeFixture({ plugins: [pluginFixture], coldStart: true }) : null;
+    if (senderRuntime) onTestFinished(() => senderRuntime.dispose());
+    let senderController = senderRuntime?.controller;
+    const acceptedCustody = senderController && readAuthoritativePluginSlotOccurrence(pluginId, { controller: senderController })?.sourceCustody;
+    if (sourceKind === 'plugin' && !acceptedCustody) throw new Error('Expected admitted sender plugin custody');
+    const rawSettings = { actionsSettingsV1: { v: 1, actions: {},
+      approvalWaivedSurfaces: { 'session.role.set': ['agent'], 'session.notes.set': ['agent'],
+        'session.roles.apply_to_reports': ['agent'] } } };
+    const settings = accountSettingsParse(rawSettings);
+    const scopeKey = runWithServerHttpBaseUrl(base, () => resolveAccountSettingsScopeKey(credentials));
+    setActiveAccountSettingsSnapshot({ scopeKey, source: 'network',
+      settings, rawSettings, settingsVersion: 1, settingsSecretsReadKeys: [], loadedAtMs: 1,
+      promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
+    const agentStartContext = resolveCliAgentStartContextV1({ sessionId: 'detached-step', machineId: 'machine', directory: '/repo',
+      backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, metadata: null,
+      starterDepth: 0, turnDepth: 0, callerPermissionMode: 'default', settings, roles: {},
+      runCaller: { runId: 'workflow-run', runDepth: 4, runOriginSessionId: origin } });
+    if (!agentStartContext) throw new Error('Expected host-produced originless caller');
+    let metadata = createTestMetadata();
+    let childMetadata = createTestMetadata();
+    let authorityCurrent = true;
+    let revokeOnDelivery = false;
+    let revokeDuringSigning = false;
+    let misbindDelivery = false;
+    const isAcceptedAuthorizationCurrent = createWorkflowAcceptedAuthorizationCurrentness({ accountId: 'workflow-role-owner',
+      // The token registry is the external credential store; its canonical
+      // accepted-authority evaluator remains real at the assigned Run executor.
+      listAccountApiTokens: async () => ({ tokens: authorityCurrent ? [{ tokenId: 'workflow-api-token', label: 'Workflow',
+        displayPrefix: 'hap_v1_test', createdAt: '2026-01-01T00:00:00.000Z', lastUsedAt: null, expiresAt: null,
+        hasEncryptionAccess: false, hasUnattendedTeamAccess: false, grant: API_TOKEN_FULL_GRANT_V1,
+        parentTokenId: null, activeChildCount: 0, embedConfig: null }] : [] }),
+      resolveCurrentPluginOccurrenceId: async id => senderController
+        ? readAuthoritativePluginSlotOccurrence(id, { controller: senderController })?.occurrenceId ?? null : null,
+      resolveCurrentPluginSourceCustody: async id => senderController
+        ? readAuthoritativePluginSlotOccurrence(id, { controller: senderController })?.sourceCustody ?? null : null,
+      isMediatedSourceCurrent: async () => false });
+    const mutations: string[] = [];
+    const provider = createActionSettingsProvider({ scopeKey });
+    const row = (sessionId = origin) => ({ ...createSessionNotificationContextFixture(sessionId), encryptionMode: 'plain' as const,
+      metadata: JSON.stringify(sessionId === child ? childMetadata : metadata),
+      ...(sessionId === child ? { manager: { sessionId: origin } } : {}) });
+    axiosGet.mockImplementation(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === '/v1/account/encryption/currentness') {
+        if (revokeDuringSigning) {
+          authorityCurrent = false;
+          await senderRuntime?.lease.release();
+          await senderController?.shutdown();
+        }
+        return { status: 200, data: { mode: 'plain', version: 1,
+          settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      }
+      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/account/profile') return { status: 200, data: { id: 'workflow-role-owner' } };
+      if (path === ACCOUNT_SECURITY_PATH_V1) return { status: 404, data: {} };
+      if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: rawSettings } } };
+      if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows:
+        PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
+          content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) } };
+      if (path === '/v1/account/entity-rows/profiles/transfer') return { status: 200, data: { status: 'absent' } };
+      if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+      if (path === `/v2/sessions/${origin}`) return { status: 200, data: { session: row() } };
+      if (path === `/v2/sessions/${child}`) return { status: 200, data: { session: row(child) } };
+      throw new Error(`Unexpected Workflow Role HTTP read ${path}`);
+    });
+    axiosPost.mockImplementation(async (url: string, body: unknown) => {
+      const path = new URL(url).pathname;
+      if (path === '/v2/sessions/query') {
+        const query = SessionListQueryV1Schema.parse(body);
+        return { status: 200, data: SessionListQueryResponseV1Schema.parse({ sessions:
+          query.storage === 'active' && query.underSessionId === origin ? [row(child)] : [],
+          nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false }) };
+      }
+      if (path.endsWith('/execution-authorization')) {
+        const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+        const actionId = decodeURIComponent(path.split('/')[3]!);
+        expect(verifyMachineInstallationProof({ publicKey: encodeBase64(signing.publicKey, 'base64url'),
+          proof: request.installationProof!, payload: { version: 1, accountId: 'workflow-role-owner', machineId: 'machine',
+            installationId: 'installed', externalActionOrigin: { homeId, actionId, requestId: request.envelope.requestId!,
+              requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), origin: request.workflowActionOrigin! } } })).toBe(true);
+        return { status: 200, data: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-signed-workflow',
+          binding: { accountId: 'workflow-role-owner', custodianAccountId: 'workflow-role-owner',
+            authentication: { kind: 'account', tokenEpoch: 0 }, accountEncryptionMode: 'plain', serverIdentityId: homeId,
+            machineId: 'machine', installationId: 'installed', actionId, requestId: request.envelope.requestId!,
+            requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), target: request.envelope.target,
+            workflowActionOrigin: request.workflowActionOrigin } }) };
+      }
+      if (path.endsWith('/verify')) return { status: 200, data: { ok: true } };
+      throw new Error(`Unexpected Workflow Role HTTP write ${path}`);
+    });
+    const receiver = createCliActionExecutor({ credentials, token: credentials.token, sessionId: origin,
+      serverId: 'workflow-home-profile', serverHttpBaseUrl: base, serverIdentityId: homeId,
+      mode: 'plain', ctx: null, actionsSettingsProvider: provider, pluginActionExecutionOwner: 'current_process',
+      getCurrentSessionMetadata: () => metadata, readRoleSources: createRoleSourceReaderV1({}),
+      stageSessionStateMutation: async mutation => {
+        mutations.push(mutation.fieldId);
+        metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation);
+      } });
+    const rpc = new RpcHandlerManager({ scopePrefix: origin, encryptionMode: 'plain', logger: () => {} });
+    registerActionSpecRpcHandlers({ rpcHandlerManager: rpc, actionExecutor: receiver,
+      actionIds: ['session.role.set', 'session.notes.set'] });
+    const childRpc = new RpcHandlerManager({ scopePrefix: child, encryptionMode: 'plain', logger: () => {} });
+    const unexpectedTranscriptWrite = async (): Promise<never> => { throw new Error('Unexpected transcript write'); };
+    // Use the actual Session receiving registration, including its credentialed
+    // Role factory and configuration currentness/relation bindings.
+    const childRegistration = registerSessionClientRuntimeHandlers({ rpcHandlerManager: childRpc, sessionId: child,
+      token: credentials.token, serverId: 'workflow-home-profile', serverUrl: base,
+      readOwnerAccountCredentials: async () => credentials, actionsSettingsProvider: provider,
+      metadataPath: childMetadata.path, metadata: childMetadata, getSessionMetadata: () => childMetadata,
+      readRoleSources: createRoleSourceReaderV1({}),
+      enqueueRegisteredSessionStateFieldMutation: async mutation => {
+        childMetadata = applyRegisteredSessionStateFieldMutationToMetadata(childMetadata, mutation);
+      },
+      enqueueSessionUserMessage: unexpectedTranscriptWrite, enqueueUserTextMessageCommitted: unexpectedTranscriptWrite,
+      enqueueAgentMessageCommitted: unexpectedTranscriptWrite, enqueueVoiceAgentTranscriptTurnCommitted: unexpectedTranscriptWrite,
+      sendAgentMessageEphemeral: () => { throw new Error('Unexpected ephemeral write'); },
+      getTranscriptQueryContext: () => ({ encryptionMode: 'plain' }),
+      persistVoiceAgentRunMetadataFromPublicRun: () => {}, socketEmitExecutionRunUpdated: () => {},
+    });
+    onTestFinished(() => childRegistration.dispose());
+    // HTTP and the authenticated RPC relay are genuine system boundaries; both
+    // credentialed composition and receiving Role/admission/outbox owners stay real.
+    const executor = createCliActionExecutorFromCredentials({ credentials,
+      serverId: 'workflow-home-profile', serverApiUrl: base, serverIdentityId: homeId,
+      externalActionMachineInstallationId: 'installed', externalActionMachineRequestPrivateKey: signing.secretKey,
+      actionsSettingsProvider: provider, workflowAcceptedAuthorizationCurrentness: isAcceptedAuthorizationCurrent,
+      sessionActionRpcTransport: async request => {
+        expect(request.executionAuthorization?.binding.workflowActionOrigin?.runId).toBe('workflow-run');
+        // Home's assignment recheck is the transport boundary (its real SQLite
+        // route suite separately exercises removal before forwarding).
+        if (revokeOnDelivery) return { ok: false, errorCode: 'run_access_denied', error: 'run_access_denied' };
+        const manager = request.sessionId === child ? childRpc : rpc;
+        return await manager.handleRequest({ method: `${misbindDelivery ? 'wrong-session' : request.sessionId}:${request.method}`, params: request.input,
+          callerAuthority: 'account_automation', callerInputAuthorization: request.executionAuthorization });
+      },
+      pluginActionExecutionOwner: 'current_process', readCredentials: async () => credentials });
+    const context = { ...buildWorkflowActionContext({ runId: 'workflow-run',
+      authorization: { principal: sourceKind === 'plugin'
+        ? { kind: 'plugin', pluginId, sourceCustody: acceptedCustody! }
+        : { kind: 'api', accountId: 'workflow-role-owner', principalId: 'workflow-role-owner', credentialId: 'workflow-api-token' },
+        admittedPermissionCeiling: 'default' } }),
+      agentStartContext, workspaceWrites: 'allow' as const, actionRequestId: 'run-role-write' };
+    const result = await executor.execute('session.role.set', { sessionId: origin, roleId: 'builder' }, context);
+    expect(result).toEqual({ ok: true, result: { updated: true } });
+    if (!result.ok) throw new Error('Expected admitted Workflow role write');
+    expect(RoleActionOutputSchemasV1['session.role.set'].parse(result.result)).toEqual(result.result);
+    expect(readSessionRoleIdV1(metadata)).toBe('builder');
+    expect(await executor.execute('session.notes.set', { sessionId: origin, notes: 'Run brief' }, context))
+      .toEqual({ ok: true, result: { updated: true } });
+    expect(SessionRolesV1Schema.parse(metadata.work?.sessionRolesV1).notes).toBe('Run brief');
+    expect(mutations).toEqual(['intent.role', 'intent.sessionRoles']);
+    const copied = await executor.execute('session.roles.apply_to_reports', { sessionId: origin }, context);
+    expect(copied).toEqual({ ok: true, result: { updatedSessionIds: [child] } });
+    if (!copied.ok) throw new Error('Expected admitted Workflow configuration copy');
+    expect(RoleActionOutputSchemasV1['session.roles.apply_to_reports'].parse(copied.result)).toEqual(copied.result);
+    expect(SessionRolesV1Schema.parse(childMetadata.work?.sessionRolesV1)).toMatchObject({ notes: 'Run brief', inheritedFrom: origin });
+    expect(await executor.execute('session.role.set', { sessionId: origin, roleId: 'builder' }, { ...context, workspaceWrites: 'deny' }))
+      .toMatchObject({ ok: false, errorCode: 'role_policy_denied' });
+    const noOrigin = { ...agentStartContext, caller: { kind: 'originless' as const, runId: 'workflow-run', runDepth: 4 } };
+    expect(await executor.execute('session.notes.set', { sessionId: origin, notes: 'Missing origin' }, { ...context, agentStartContext: noOrigin }))
+      .toMatchObject({ ok: false, errorCode: 'subtree_denied' });
+    expect(await executor.execute('session.notes.set', { sessionId: 'unrelated', notes: 'Wrong target' }, context))
+      .toMatchObject({ ok: false, errorCode: 'subtree_denied' });
+    misbindDelivery = true;
+    expect(await executor.execute('session.notes.set', { sessionId: origin, notes: 'Wrong binding' }, context))
+      .toMatchObject({ ok: false });
+    misbindDelivery = false;
+    revokeOnDelivery = true;
+    expect(await executor.execute('session.notes.set', { sessionId: origin, notes: 'Revoked' }, context))
+      .toMatchObject({ ok: false, errorCode: 'run_access_denied' });
+    expect(SessionRolesV1Schema.parse(metadata.work?.sessionRolesV1).notes).toBe('Run brief');
+    revokeOnDelivery = false;
+    if (sourceKind === 'plugin') {
+      // This is a distinct installed receiver, with its own real controller
+      // and committed filesystem source. It cannot replace sender custody.
+      const receiverRuntime = await createAuthoredAdmittedPluginRuntimeFixture({ plugins: [pluginFixture], controller: pluginReloadController,
+        coldStart: true });
+      onTestFinished(() => receiverRuntime.dispose());
+      expect(readAuthoritativePluginSlotOccurrence(pluginId)?.sourceCustody).toBeTruthy();
+      const replacementRuntime = await createAuthoredAdmittedPluginRuntimeFixture({ plugins: [pluginFixture], coldStart: true });
+      onTestFinished(() => replacementRuntime.dispose());
+      expect(readAuthoritativePluginSlotOccurrence(pluginId, { controller: replacementRuntime.controller })?.sourceCustody)
+        .not.toEqual(acceptedCustody);
+      const originalController = senderController;
+      senderController = replacementRuntime.controller;
+      expect(await executor.execute('session.notes.set', { sessionId: origin, notes: 'Replaced source' }, context))
+        .toMatchObject({ ok: false, errorCode: 'run_access_denied' });
+      senderController = undefined;
+      expect(await executor.execute('session.roles.apply_to_reports', { sessionId: origin }, context))
+        .toMatchObject({ ok: false, errorCode: 'run_access_denied' });
+      senderController = originalController;
+      revokeDuringSigning = true;
+      expect(await executor.execute('session.notes.set', { sessionId: origin, notes: 'Revoked during signing' }, context))
+        .toMatchObject({ ok: false, errorCode: 'run_access_denied' });
+      expect(SessionRolesV1Schema.parse(metadata.work?.sessionRolesV1).notes).toBe('Run brief');
+      expect(SessionRolesV1Schema.parse(childMetadata.work?.sessionRolesV1).notes).toBe('Run brief');
+    }
+    await rpc.waitForIdle();
+    await childRpc.waitForIdle();
+  });
+
   it('hydrates Role admission into the admitted requester snapshot rather than the ambient Account', async () => {
+    const currentness = await createRequesterCurrentnessSocketHarness();
+    onTestFinished(() => currentness.close());
     resetInMemoryAccountSettingsContextForTests();
     vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'auto');
     vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', '');

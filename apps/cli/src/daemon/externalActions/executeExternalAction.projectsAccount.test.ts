@@ -18,22 +18,28 @@ import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { createExternalActionAuthorizedRequestHeaders } from '@/api/externalActionExecutionAuthorization';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { updateSettings } from '@/persistence';
 import { reloadConfiguration } from '@/configuration';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
-import { prepareRequesterAccountActionContext, type RequesterAccountActionContext } from '../sessionEncryption/requesterAccountActionProjection';
+import { prepareRequesterAccountActionContext } from "../sessionEncryption/requesterAccountActionProjection";
+import { type RequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 import { executeExternalAction } from './executeExternalAction';
+import type { JsonValue } from '@happier-dev/protocol';
 
 // Database I/O and HTTP are the only substitutes. Home token minting, signed
 // request verification, private custody, Action policy and row semantics stay real.
 const storage = vi.hoisted(() => {
   const account = { id: 'project-owner', status: 'active', tokenEpoch: 1, encryptionMode: 'plain', terminalPresentUserPolicy: 'never' };
-  const state = { publicKey: new Uint8Array(), revokedAt: null as Date | null };
+  const state: { publicKey: Uint8Array; revokedAt: Date | null } = { publicKey: new Uint8Array(), revokedAt: null };
   const machine = () => ({ id: 'project-machine', accountId: account.id, kind: 'persistent', active: true,
     installationId: 'project-installation', installationPublicKey: state.publicKey, revokedAt: state.revokedAt,
     metadata: encodePlainMachineStoredContent({}), daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
     replacedByMachineId: null, account, accountGrants: [], teamGrants: [], groupGrants: [] });
-  const reader = { account: { findUnique: async () => account },
+  const reader = { $executeRaw: async () => 0,
+    $queryRaw: async () => [{ statement_timeout: '0' }],
+    $executeRawUnsafe: async () => 0,
+    account: { findUnique: async () => account },
     machine: { findUnique: async () => machine(), findFirst: async () => machine() },
     simpleCache: { findUnique: async () => ({ value: 'srv_PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP' }) } };
   return { state, account, db: { ...reader, $transaction: async <T>(run: (tx: typeof reader) => Promise<T>) => run(reader) } };
@@ -67,6 +73,7 @@ afterAll(() => vi.unstubAllEnvs());
 async function withHome(run: () => Promise<void>) {
   await withTempDir('project-terminal-home-', async home => {
     const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
+    const currentness = await createRequesterCurrentnessSocketHarness();
     try {
       env.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: profileId });
       reloadConfiguration();
@@ -77,7 +84,7 @@ async function withHome(run: () => Promise<void>) {
           endpoints: [{ kind: 'https', url: serverUrl }] }),
       } } }));
       await run();
-    } finally { env.restore(); reloadConfiguration(); }
+    } finally { await currentness.close(); env.restore(); reloadConfiguration(); }
   });
 }
 
@@ -143,7 +150,7 @@ function httpBoundary() {
   return { rows, admitted, request };
 }
 
-async function original(actionId: SignedRootActionId, input: Record<string, unknown>, kind: 'account' | 'terminal' = 'terminal') {
+async function original(actionId: SignedRootActionId, input: Readonly<Record<string, JsonValue>>, kind: 'account' | 'terminal' = 'terminal') {
   const envelope = { v: 1 as const, requestId: `request-${actionId}`, target, input };
   const authentication = { kind, tokenEpoch: 1 };
   const authorization = await auth.mintExternalActionExecutionAuthorization({ accountId: 'project-owner', authentication,
@@ -153,7 +160,7 @@ async function original(actionId: SignedRootActionId, input: Record<string, unkn
     authority: kind === 'terminal' ? 'account_automation' as const : 'present_user' as const } };
 }
 
-async function run(actionId: SignedRootActionId, input: Record<string, unknown>, kind: 'account' | 'terminal' = 'terminal') {
+async function run(actionId: SignedRootActionId, input: Readonly<Record<string, JsonValue>>, kind: 'account' | 'terminal' = 'terminal') {
   const request = await original(actionId, input, kind);
   expect(await verifyExternalActionExecutionAuthorizationCurrentness({ ...signedProof(request.authorization,
     'POST', bindExternalActionExecutionAuthorizationVerifyHttpPathV1(actionId), { v: 1, effectActionId: actionId, target }),

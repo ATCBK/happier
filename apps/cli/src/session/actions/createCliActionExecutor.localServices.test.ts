@@ -229,8 +229,9 @@ describe('credentialed CLI Local Services runtime dispatch', () => {
         const input = LocalServiceActionRequestV1Schema.parse({ requestId: 'client-effect', action,
             target: { kind: 'managed_service', managedServiceId: 'actual-instance', machineId: 'machine-a',
                 workspaceId: 'accepted', cwd: '/accepted/web' } });
-        expect(await executor.execute(actionId, input, context)).toMatchObject({ ok: false, errorCode: 'action_disabled',
-            details: { reason: 'unsupported_surface', surface: 'cli' } });
+        expect(await executor.execute(actionId, input, context)).toMatchObject(actionId === 'localServices.actions.copyUrl'
+            ? { ok: false, errorCode: 'action_disabled', details: { reason: 'unsupported_surface', surface: 'cli' } }
+            : { ok: false, errorCode: 'runtime_action_disabled', error: 'runtime_action_disabled:localServices:runtime_family_unimplemented' });
         expect(requests).toEqual([]);
         expect(get).not.toHaveBeenCalled();
     });

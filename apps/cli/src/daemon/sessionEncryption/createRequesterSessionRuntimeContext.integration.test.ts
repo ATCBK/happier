@@ -1,7 +1,7 @@
 import axios from 'axios';
 import fastify from 'fastify';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { buildProviderAccountUsageRecordId, type ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol';
+import { buildProviderAccountUsageRecordId, FeaturesResponseSchema, type ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,7 @@ import { createProviderAccountUsagePersistenceScheduler, flushProviderAccountUsa
 import { fetchConnectedServiceProjectionForSession } from '../connectedServices/accountGroups/generation/connectedServiceProjectionSnapshot';
 import { registerExecutionRunConnectedServicesTarget } from '../connectedServices/runs/executionRunMaterialization';
 import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
-import { admitRequesterSessionBootstrap, assertRequesterSessionAccountContextCurrent } from './requesterSessionCredentials';
+import { admitRequesterSessionBootstrap, assertRequesterSessionAccountContextCurrent, createRequesterSessionCredentialCustody, listRequesterSessionCredentialBindings } from './requesterSessionCredentials';
 import { createRequesterSessionRuntimeContext } from './createRequesterSessionRuntimeContext';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
@@ -31,11 +31,152 @@ import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExec
   bindExternalActionExecutionAuthorizationHttpPathV1, bindExternalActionExecutionAuthorizationVerifyHttpPathV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { createDaemonQualifiedRequestAuthCallbacks } from '../connectedServices/requestAuth/createDaemonQualifiedRequestAuthCallbacks';
+import { scopeConnectedAccountPurposeBindingLease } from '../connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { bootstrapMachineSyncRuntime, retireMachineSyncRuntimeAttempt, type BootstrapMachineSyncRuntimeParams } from '../machine/bootstrapMachineSyncRuntime';
+import { createApiMachineTransportFixture } from '@/testkit/apiMachineTransport';
+import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
+import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+import { SessionFollowObserveInactiveResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { readInstallationIdentityIfExistsSync, readOrCreateInstallationIdentity } from '@/daemon/identity/store';
+import { ApiMachineClient } from '@/api/apiMachine';
+import { configuration } from '@/configuration';
+import { writeStoredCredentialsForServerId } from '@/persistence';
+import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { sealSessionFollowRuleContentV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleContentCodecV1';
+import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
+import { buildSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/follow/changes';
+import type { ChangeEntry } from '@happier-dev/protocol/changes';
+import { DELIVERY_MUTE_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+
+it('returns installed Account personal ready policy through startup and refuses retired or foreign custody', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'installed-personal-follow-'));
+  const home = 'https://installed-personal.test';
+  const serverId = 'installed-personal-home';
+  const sessionId = 'c555555555555555555555555';
+  const token = `e30.${Buffer.from(JSON.stringify({ sub: 'installed', tokenEpoch: 0,
+    provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.fixture`;
+  const credentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
+  const tracked: TrackedSession = { pid: process.pid, startedBy: 'daemon', happySessionId: sessionId,
+    spawnOptions: { directory } };
+  const control: { routes?: Parameters<typeof controlServer.startDaemonControlServer>[0] } = {};
+  const listening = vi.spyOn(controlServer, 'startDaemonControlServer').mockImplementation(async routes => {
+    control.routes = routes;
+    return { port: 43127, stop: async () => {} };
+  });
+  const reads: string[] = [];
+  const writes: string[] = [];
+  const policy = { preset: 'everything' as const };
+  const receiver = { kind: 'account' as const };
+  const definition = { v: 1 as const, enabled: true,
+    filter: normalizeSessionListFilterV1({ homeServerIds: [serverId], scope: 'all_accessible' }), policy };
+  const get = vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
+    const path = new URL(String(url)).pathname;
+    reads.push(path);
+    expect(new URL(String(url)).origin).toBe(home);
+    expect(config?.headers?.Authorization).toBe(`Bearer ${token}`);
+    if (path.endsWith('/profile')) return { status: 200, data: { id: 'installed', connectedServices: [] } };
+    if (path.endsWith('/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path.endsWith('/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+    if (path === '/v2/account/session-follow-rules') return { status: 200, data: { rules: [{
+      ruleId: 'installed-private-rule', version: 1, receiver,
+      content: sealSessionFollowRuleContentV1({ ruleId: 'installed-private-rule', receiver, definition, mode: 'plain', material: null }),
+    }] } };
+    if (path === '/v2/account/session-follow-preferences') return { status: 200, data: { assigned: true, direct: false, team: false, group: false } };
+    if (path === DELIVERY_MUTE_HTTP_PATHS_V1.account || path.endsWith('/delivery-mutes')) return { status: 200, data: { scopes: [] } };
+    if (path === `/v2/sessions/${sessionId}`) return { status: 200, data: { session: createSessionRecordFixture({
+      id: sessionId, ownerAccountId: 'installed', encryptionMode: 'plain', active: true, archivedAt: null,
+      origin: { kind: 'none' }, metadata: JSON.stringify({ machineId: 'machine', path: '/repo' }),
+      dataEncryptionKey: null, share: null,
+    }) } };
+    throw new Error(`Unexpected installed Follow read ${path}`);
+  });
+  const post = vi.spyOn(axios, 'post').mockImplementation(async (url, _body, config) => {
+    const path = new URL(String(url)).pathname;
+    writes.push(path);
+    expect(new URL(String(url)).origin).toBe(home);
+    expect(config?.headers?.Authorization).toBe(`Bearer ${token}`);
+    if (path.endsWith('/follows/occurrence-routes')) return { status: 200, data: { ok: true, v: 1, sourceSessionId: sessionId, routes: [] } };
+    if (path.endsWith('/session-follow-rules/personal-progress')) return { status: 200, data: { accepted: true, alreadyRepresented: false } };
+    throw new Error(`Unexpected installed Follow write ${path}`);
+  });
+  const machine: { current: ApiMachineClient | null } = { current: null };
+  let host: Awaited<ReturnType<typeof createRequesterSessionControlRuntimeFixture>> | null = null;
+  let app: ReturnType<typeof controlServer.createDaemonControlApp> | null = null;
+  let snapshot: ReturnType<typeof getActiveAccountSettingsSnapshot> = null;
+  try {
+    host = await createRequesterSessionControlRuntimeFixture({ happyHomeDir: directory, activeServerDir: directory,
+      serverId, serverHttpBaseUrl: home, machineId: 'machine', custodianAccountId: 'installed', credentials,
+      connectedServicesMaterializationBaseDir: join(directory, 'materialized'), registry: new ConnectedServiceRuntimeRegistry(),
+      trackedSessions: new Map([[tracked.pid, tracked]]), getRequester: () => null,
+      getApiMachineForSessions: () => machine.current, resolveQualifiedConnectedAccountV4Support: () => 'indeterminate',
+      startup: { resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'machine', serverIdentityId: serverId }) },
+      beforeStartup: async () => {
+        await writeStoredCredentialsForServerId(serverId, credentials);
+        await readOrCreateInstallationIdentity();
+        setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1,
+          loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+        snapshot = getActiveAccountSettingsSnapshot();
+        machine.current = runWithServerHttpBaseUrl(home, () => new ApiMachineClient(token, { id: 'machine', encryptionMode: 'plain',
+          metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 }));
+      },
+    });
+    if (!control.routes?.onSessionActivityChanged) throw new Error('Missing actual installed source callback');
+    const installed = await machine.current!.resolveInstalledAccountObservationRuntime(new AbortController().signal);
+    expect(installed, JSON.stringify(reads)).toMatchObject({ accountId: 'installed', serverId, machineId: 'machine' });
+    expect(installed?.credentials).toEqual(credentials);
+    expect(await installed?.isCurrent?.()).toBe(true);
+    expect(configuration.activeServerId).toBe(serverId);
+    expect(getActiveAccountSettingsSnapshot()).toBe(snapshot);
+    const routes = control.routes;
+    app = controlServer.createDaemonControlApp(routes);
+    const occurrence = { sourceSessionId: sessionId,
+      sourcePublisher: { machineId: 'machine', committedFenceMs: 1, publisherGeneration: '1' },
+      sourceMessage: { localId: 'installed-ready-original', seq: 3 }, evidence: { v: 1 as const, ownerAccountId: 'installed',
+        event: { kind: 'finished' as const }, facts: { serverId, kind: 'session' as const } } };
+    const notify = () => app!.inject({ method: 'POST', url: '/session-activity-changed',
+      headers: { 'x-happier-daemon-token': routes.controlToken! }, payload: { sessionId, followOccurrence: occurrence } });
+    const current = await notify();
+    expect(current.statusCode, current.body).toBe(200);
+    expect(current.json()).toEqual({ ok: true, personalFollow: { sourceSessionId: sessionId, accepted: true,
+      sourceMessage: { localId: 'installed-ready-original', seq: 3, policies: [policy] } } });
+    expect(getActiveAccountSettingsSnapshot()).toBe(snapshot);
+    const personalProgressWrites = () => writes.filter(path => path === '/v2/account/session-follow-rules/personal-progress').length;
+    const admittedPersonalWrites = personalProgressWrites();
+    expect(admittedPersonalWrites).toBeGreaterThan(0);
+    resetActiveAccountSettingsSnapshotForTests();
+    expect((await notify()).json()).toEqual({ ok: true });
+    expect(personalProgressWrites()).toBe(admittedPersonalWrites);
+    const sourceReads = reads.length;
+    const sourceWrites = writes.length;
+    if (!snapshot) throw new Error('Missing installed Account snapshot');
+    setActiveAccountSettingsSnapshot(snapshot);
+    tracked.requesterWorkAttributionV1 = { accountId: 'foreign', serverId, machineId: 'machine', installationId: 'foreign-installation' };
+    const foreign = await notify();
+    expect(foreign.statusCode).toBe(500);
+    expect(foreign.json()).not.toHaveProperty('personalFollow');
+    expect(reads).toHaveLength(sourceReads);
+    expect(writes).toHaveLength(sourceWrites);
+    delete tracked.requesterWorkAttributionV1;
+    await writeStoredCredentialsForServerId(serverId, { token: 'retired-installed-credential', encryption: null });
+    expect((await notify()).json()).toEqual({ ok: true });
+    expect(writes).toHaveLength(sourceWrites);
+  } finally {
+    await app?.close();
+    await host?.dispose();
+    await machine.current?.shutdown();
+    get.mockRestore(); post.mockRestore(); listening.mockRestore(); resetActiveAccountSettingsSnapshotForTests();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 let channel: Awaited<ReturnType<typeof createRequesterCurrentnessSocketHarness>>;
 beforeEach(async () => { channel = await createRequesterCurrentnessSocketHarness(); });
 afterEach(async () => { await channel.close(); });
-it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'warm-account', 'refresh-observations'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
+it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'authorization-observations', 'warm-account', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
+  const actionPolicySurface = surface === 'action-policy' || surface === 'action-home-recovery' || surface === 'authorization-observations';
   const directory = await mkdtemp(join(tmpdir(), 'requester-profiles-'));
   let current = true;
   let revision = 2;
@@ -44,26 +185,39 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
   let settingsVersion = 1;
   let settingsReads = 0;
   let sessionReads = 0;
+  let authorizationStartReads = 0;
+  const authorizationMintReads: number[] = [];
+  let authorizationProfileReads = 0;
+  let failActionHomeRead = false;
+  let holdAuthorizationProfile = false;
+  const authorizationProfileGate: { release?: () => void } = {};
+  const releaseAuthorizationProfile = () => authorizationProfileGate.release?.();
   let connectedCatalogReads = 0;
   let holdSettings = false;
   let failSettings = false;
-  let releaseSettings: (() => void) | undefined;
+  const settingsGate: { release?: () => void } = {};
+  const releaseSettingsRead = () => settingsGate.release?.();
   let savedSettings: Record<string, unknown> = {};
-  const requesterToken = surface === 'action-policy'
-    ? `e30.${Buffer.from(JSON.stringify({ sub: 'bob', tokenEpoch: 0,
-      provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.fixture`
-    : 'bob';
+  let sourceProject = 'other';
+  let freshFollowRule = false;
+  let followAccountChanges: ChangeEntry[] = [];
+  const requesterSessionId = surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' ? 'c123456789012345678901234' : 'bob-session';
+  const followDestinationId = surface === 'follow-receiver' ? requesterSessionId : 'c222222222222222222222222';
+  const followSourceId = surface === 'follow-receiver' ? 'c333333333333333333333333' : requesterSessionId;
+  const requesterToken = `e30.${Buffer.from(JSON.stringify({ sub: 'bob', tokenEpoch: 0,
+    provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.fixture`;
   const control: { routes?: Parameters<typeof controlServer.startDaemonControlServer>[0] } = {};
   // The loopback HTTP server is the boundary; retain the real startup Action factory.
-  const controlBoundary = surface === 'action-policy' ? vi.spyOn(controlServer, 'startDaemonControlServer')
+  const controlBoundary = actionPolicySurface || surface === 'follow-source' ? vi.spyOn(controlServer, 'startDaemonControlServer')
     .mockImplementation(async input => { control.routes = input; return { port: 43127, stop: async () => {} }; }) : null;
   const approvalIds: string[] = [];
-  const artifactBoundary = surface === 'action-policy' ? vi.spyOn(axios, 'post').mockImplementation(async (url, data, config) => {
+  const artifactBoundary = actionPolicySurface ? vi.spyOn(axios, 'post').mockImplementation(async (url, data, config) => {
     const mintPath = bindExternalActionExecutionAuthorizationHttpPathV1('workflow.authoring.draft.discard');
     const verifyPath = bindExternalActionExecutionAuthorizationVerifyHttpPathV1('workflow.authoring.draft.discard');
     if (url === `https://bob-home.test${verifyPath}`) return { status: 200, data: { ok: true } };
     expect(config?.headers?.Authorization).toBe(`Bearer ${requesterToken}`);
     if (url === `https://bob-home.test${mintPath}`) {
+      authorizationMintReads.push(sessionReads - authorizationStartReads);
       const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(data);
       return { status: 200, data: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'fixture-home-proof', binding: {
         accountId: 'bob', authentication: { kind: 'account', tokenEpoch: 0 }, accountEncryptionMode: 'plain',
@@ -75,15 +229,16 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       } }) };
     }
     expect(url).toBe('https://bob-home.test/v1/artifacts');
-    const id: unknown = data?.id;
+    const id = typeof data === 'object' && data !== null && 'id' in data ? data.id : undefined;
     if (typeof id !== 'string') throw new Error('Missing Artifact identity');
     approvalIds.push(id);
     return { status: 200, data: { id, headerVersion: 1, bodyVersion: 1 } };
   }) : null;
   const profileReads: string[] = [];
+  const followReads: string[] = [];
   const record = ProfileRecordV1Schema.parse({ v: 1, id: 'bob-profile', enabled: true, promptStack: [], secretBindings: {},
     definition: { kind: 'legacy', profile: { id: 'bob-profile', name: 'Bob native', createdAt: 1, updatedAt: 2 } } });
-  const aliceCredentials = { token: surface === 'action-policy'
+  const aliceCredentials = { token: actionPolicySurface || surface === 'follow-wake'
     ? `e30.${Buffer.from(JSON.stringify({ sub: 'alice', tokenEpoch: 0,
       provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.fixture`
     : 'alice', encryption: null };
@@ -96,12 +251,47 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
   // owners, the full Profile pager and requester runtime stay real.
   const get = vi.spyOn(axios, 'get').mockImplementation(async (url: string, config) => {
     const path = new URL(url).pathname;
-    if (path === '/v2/sessions/bob-session') sessionReads++;
+    if (path === '/v2/changes') {
+      const after = Number(config?.params?.after ?? new URL(url).searchParams.get('after') ?? 0);
+      return { status: 200, data: { changes: followAccountChanges.filter(change => change.cursor > after),
+        nextCursor: followAccountChanges.at(-1)?.cursor ?? after } };
+    }
+    if (path === '/v2/account/session-follow-rules' || path === '/v2/account/session-follow-preferences') {
+      expect(config?.headers?.Authorization).toBe(`Bearer ${requesterToken}`);
+      expect(new URL(url).origin).toBe('https://bob-home.test');
+      followReads.push(path);
+      if (path.endsWith('/session-follow-preferences')) return { status: 200, data: { assigned: true, direct: false, team: false, group: false } };
+      const receiver = { kind: 'session' as const, sessionId: surface === 'follow-source' || surface === 'follow-receiver' ? followDestinationId : requesterSessionId };
+      const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1({ homeServerIds: ['bob-home'],
+        scope: 'all_accessible', ...(surface === 'follow-source' || surface === 'follow-receiver' ? { projects: { include: [{ serverId: 'bob-home', projectKey: 'payments' }], exclude: [] } } : {}) }), policy: { preset: 'important' as const } };
+      const ruleId = freshFollowRule ? 'bob-fresh-rule' : 'bob-private-rule';
+      return { status: 200, data: { rules: [{ ruleId, version: freshFollowRule ? 0 : 1, receiver,
+        ...(freshFollowRule ? { inception: { createdAt: 20, accountChangeCursor: 0 } } : surface === 'follow-pending' ? { sources: [{ sourceSessionId: 'bob-follow-source',
+          delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 1 } }] } : {}),
+        content: sealSessionFollowRuleContentV1({ ruleId, receiver, definition, mode: 'plain', material: null }) },
+        ...(surface === 'follow-source' ? [{ ruleId: 'bob-personal-rule', version: 1, receiver: { kind: 'account' as const },
+          content: sealSessionFollowRuleContentV1({ ruleId: 'bob-personal-rule', receiver: { kind: 'account' },
+            definition: { ...definition, policy: { preset: 'custom', events: { finished: { delivery: 'quiet' } } } },
+            mode: 'plain', material: null }) }] : []),
+      ], ...(freshFollowRule && new URL(url).searchParams.has('destinationSessionId') ? { sourceRanges: { status: 'available', sources: [{
+        sourceSessionId: 'bob-follow-source', delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 2 }, throughSeq: 3,
+      }] } } : {}) } };
+    }
+    if (path === DELIVERY_MUTE_HTTP_PATHS_V1.account || path.endsWith('/delivery-mutes')) return { status: 200, data: { scopes: [] } };
+    if (surface === 'follow-receiver' && path === `/v2/sessions/${followSourceId}`) return { status: 200, data: { session: createSessionRecordFixture({
+      id: followSourceId, active: false, archivedAt: null, encryptionMode: 'plain', share: null,
+      ownerAccountId: 'bob', origin: { kind: 'none' }, metadata: JSON.stringify({ machineId: 'offline-source-machine', projectId: sourceProject }),
+    }) } };
+    if (surface === 'follow-source' && path === `/v2/sessions/${followDestinationId}`) return { status: 200, data: { session: createSessionRecordFixture({
+      id: followDestinationId, active: true, archivedAt: null, encryptionMode: 'plain', share: null,
+      ownerAccountId: 'bob', origin: { kind: 'none' }, metadata: JSON.stringify({ machineId: 'machine', path: '/repo' }),
+    }) } };
+    if (path === `/v2/sessions/${requesterSessionId}`) sessionReads++;
     if (path.startsWith('/v4/connect/')) connectedCatalogReads++;
     if (path === '/v2/account/settings') {
       settingsReads++;
       if (failSettings) throw new axios.AxiosError('Settings transport unavailable', 'ECONNRESET');
-      if (holdSettings) await new Promise<void>(resolve => { releaseSettings = resolve; });
+      if (holdSettings) await new Promise<void>(resolve => { settingsGate.release = resolve; });
     }
     const profilePath = path.startsWith('/v1/account/entity-rows/profiles');
     if (profilePath) {
@@ -110,9 +300,23 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       profileReads.push(path);
       if (surface === 'profile-unavailable') return { status: 404, data: { error: 'not_found' } };
     }
-    if (path.endsWith('/profile')) return { status: 200, data: { id: 'bob' } };
-    if (path === '/v2/sessions/bob-session') return { status: 200, data: { session: createSessionRecordFixture({
-      id: 'bob-session', encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: '/repo' }),
+    if (path.endsWith('/profile')) {
+      authorizationProfileReads++;
+      if (failActionHomeRead) {
+        failActionHomeRead = false;
+        throw new axios.AxiosError('Requester Home read timed out', 'ECONNABORTED');
+      }
+      // The fixture substitutes admitted Machine access. The initial bound
+      // requester proof reads one Profile; the next is preparation's own read.
+      if (holdAuthorizationProfile && authorizationProfileReads === 2)
+        await new Promise<void>(resolve => { authorizationProfileGate.release = resolve; });
+      return { status: 200, data: { id: 'bob' } };
+    }
+    if (path === `/v2/sessions/${requesterSessionId}`) return { status: 200, data: { session: createSessionRecordFixture({
+      id: requesterSessionId, encryptionMode: 'plain', ownerAccountId: 'bob', origin: { kind: 'none' },
+      metadata: JSON.stringify({ machineId: 'machine', path: '/repo', ...(surface === 'follow-source' ? { projectId: sourceProject } : {}),
+        ...(surface === 'follow-wake' || surface === 'follow-pending' ? { flavor: 'claude', claudeSessionId: 'bob-native',
+          runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } } : {}) }),
       dataEncryptionKey: null, share: null,
     }) } };
     if (path.endsWith('/currentness')) return { status: 200, data: {
@@ -132,6 +336,24 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
     return { status: 200, data: { content: { t: 'plain', v: savedSettings }, version: settingsVersion } };
   });
   let runtime: Awaited<ReturnType<typeof createRequesterSessionRuntimeContext>> = null;
+  const followEnqueued: unknown[] = [];
+  const followPost = surface === 'follow-source' || surface === 'follow-receiver' ? vi.spyOn(axios, 'post').mockImplementation(async (url, body, config) => {
+    expect(config?.headers?.Authorization).toBe(`Bearer ${requesterToken}`);
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith('/follows/occurrence-routes')) {
+      if (surface === 'follow-receiver') { expect(body).toHaveProperty('destinationSessionId', requesterSessionId); expect(body).not.toHaveProperty('sourcePublisher'); }
+      const original = body && typeof body === 'object' && 'sourceMessage' in body ? body.sourceMessage : null;
+      const seq = original && typeof original === 'object' && 'seq' in original ? original.seq : null;
+      return { status: 200, data: { ok: true, v: 1, sourceSessionId: followSourceId,
+        routes: seq === 1 ? [] : ['follower', 'manager'].map(relation => ({ sourceSessionId: followSourceId,
+          destinationSessionId: followDestinationId, relation, ...(relation === 'manager' ? { attachedAt: 10 } : {}),
+          policy: { preset: 'important' }, delivered: SESSION_FOLLOW_ZERO_FRONTIER_V1,
+          observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: seq } })) } };
+    }
+    if (path === `/v2/sessions/${followDestinationId}/pending`) { followEnqueued.push(body); return { status: 200, data: { didWrite: true } }; }
+    if (path.endsWith('/session-follow-rules/personal-progress')) return { status: 200, data: { accepted: true, alreadyRepresented: false } };
+    throw new Error(`Unexpected write: ${path}`);
+  }) : null;
   let host: Awaited<ReturnType<typeof createRequesterSessionControlRuntimeFixture>> | null = null;
   try {
     const registry = new ConnectedServiceRuntimeRegistry();
@@ -140,11 +362,13 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', machineId: 'machine', custodianAccountId: 'alice',
       credentials: aliceCredentials, connectedServicesMaterializationBaseDir: join(directory, 'materialized'),
       registry, trackedSessions, getRequester: () => runtime, resolveQualifiedConnectedAccountV4Support: () => 'indeterminate',
-      ...(surface === 'action-policy' ? { startup: { resolveCurrentMachineExecutionOriginContext: async () => ({
-        machineId: 'machine', serverIdentityId: 'bob-home',
-      }) } } : {}) });
+      ...(actionPolicySurface || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' ? { startup: { resolveCurrentMachineExecutionOriginContext: async () => {
+        authorizationStartReads = sessionReads;
+        authorizationProfileReads = 0;
+        return { machineId: 'machine', serverIdentityId: 'bob-home' };
+      } } } : {}) });
     const admitted = await admitRequesterSessionBootstrap({ bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: requesterToken } },
-      ...(surface === 'action-policy' || surface === 'refresh-observations' ? { existingSessionId: 'bob-session' } : {}),
+      ...(actionPolicySurface || surface === 'refresh-observations' || surface === 'request-auth-observations' || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' ? { existingSessionId: requesterSessionId } : {}),
       boundary: { serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', happyHomeDir: directory },
       context: { signal: new AbortController().signal, machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'alice',
         machineId: 'machine', installationId: host.installation?.installationId ?? 'installation', role: 'use', encryptionMode: 'plain' },
@@ -162,6 +386,295 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
         pidToTrackedSession: trackedSessions, connectedServiceRuntimeRegistry: registry,
         connectedServiceAuthGroupPreTurnSwitchCoordinator: host.runtime.connectedServiceAuthGroupPreTurnSwitchCoordinator } });
     if (!runtime) throw new Error('Missing real requester runtime');
+    if (surface === 'follow-source' || surface === 'follow-receiver') {
+      const notify = control.routes?.onSessionActivityChanged;
+      if (surface === 'follow-source' && !notify) throw new Error('Missing real source IPC receiver');
+      const occurrence = { sourceSessionId: followSourceId,
+        sourcePublisher: { machineId: 'machine', committedFenceMs: 1, publisherGeneration: '1' },
+        sourceMessage: { localId: 'moved-out-original', seq: 1 }, evidence: { v: 1 as const, ownerAccountId: 'bob',
+          event: { kind: 'failed_or_stopped' as const }, facts: { serverId: 'bob-home', kind: 'session' as const, startedBy: 'you' as const } } };
+      const deliver = async (original: typeof occurrence) => {
+        if (surface === 'follow-source') await notify!(requesterSessionId, original);
+        else { const { sourcePublisher: _publisher, ...receiverOriginal } = original;
+          await host!.runtime.dispatchSessionFollowOccurrence({ destinationSessionId: requesterSessionId, occurrence: receiverOriginal }); }
+      };
+      await deliver(occurrence);
+      expect(followEnqueued).toEqual([]);
+      sourceProject = 'payments';
+      await deliver({ ...occurrence, sourceMessage: { localId: 'moved-in-original', seq: 2 } });
+      expect(followEnqueued).toHaveLength(1);
+      expect(followEnqueued[0]).toMatchObject({ followSources: [{ rule: { ruleId: 'bob-private-rule', ruleVersion: 1 } }],
+        followRelations: [{ relation: 'follower' }, { relation: 'manager', attachedAt: 10 }],
+        followDeliveryV1: { original: { sourceSessionId: followSourceId, sourceMessage: { localId: 'moved-in-original', seq: 2 } }, delivery: 'wake' } });
+      if (surface === 'follow-receiver') {
+        expect(followEnqueued[0]).toMatchObject({ followSources: [{ evaluation: 'receiver' }] });
+        expect(JSON.stringify(followEnqueued)).not.toContain('expectedSourcePublisherGeneration');
+      }
+      if (surface === 'follow-source') {
+        const result = await notify!(requesterSessionId, { ...occurrence,
+          sourceMessage: { localId: 'completed-original', seq: 3 },
+          evidence: { ...occurrence.evidence, event: { kind: 'finished' } } });
+        expect(result).toMatchObject({ personalFollow: { sourceSessionId: followSourceId,
+          sourceMessage: { localId: 'completed-original', seq: 3,
+            policies: [{ preset: 'custom', events: { finished: { delivery: 'quiet' } } }] } } });
+      }
+      expect(followReads.filter(path => path.endsWith('/session-follow-rules'))).toHaveLength(1);
+      expect(getActiveAccountSettingsSnapshot()).toBe(alice);
+      return;
+    }
+    if (surface === 'follow-rules') {
+      expect(await runtime.sessionFollowRuleCache.read()).toMatchObject({ status: 'available', rules: [{ ruleId: 'bob-private-rule' }] });
+      expect(followReads).toContain('/v2/account/session-follow-rules');
+      expect(getActiveAccountSettingsSnapshot()).toBe(alice);
+      current = false;
+      expect(await runtime.sessionFollowRuleCache.read()).toMatchObject({ status: 'unavailable' });
+      return;
+    }
+    if (surface === 'follow-wake' || surface === 'follow-pending') {
+      const requester = runtime;
+      const installationId = host.installation?.installationId;
+      if (!installationId) throw new Error('Missing real installation');
+      const custody = await createRequesterSessionCredentialCustody({ happyHomeDir: directory, sessionId: requesterSessionId,
+        attribution: requester.bootstrap.attribution, credentials: requester.bootstrap.credentials });
+      const homeGet = get.getMockImplementation()!;
+      const requests: string[] = [];
+      type MachineClient = NonNullable<Awaited<ReturnType<BootstrapMachineSyncRuntimeParams['createConnectedApiMachine']>>>;
+      let changedSession: Parameters<MachineClient['onSessionChanged']>[0] | undefined;
+      let running = false;
+      let homeIdentity = 'srv_bob_home';
+      const launches: string[] = [];
+      const originReads: string[] = [];
+      const fetchBoundary = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+        originReads.push(String(input));
+        expect(['https://alice-home.test/v1/features', 'https://bob-home.test/v1/features']).toContain(String(input));
+        return new Response(JSON.stringify(FeaturesResponseSchema.parse({ features: {},
+          capabilities: { serverIdentity: { serverIdentityId: String(input).startsWith('https://alice-home.test/')
+            ? 'srv_alice_home' : homeIdentity } } })), { status: 200,
+            headers: { 'Content-Type': 'application/json' } });
+      });
+      const resolveOrigin = createCurrentMachineExecutionOriginContextResolver({ serverUrl: 'https://bob-home.test',
+        resolveCurrentMachineId: () => 'machine' });
+      const resolveAmbientOrigin = createCurrentMachineExecutionOriginContextResolver({ serverUrl: 'https://alice-home.test',
+        resolveCurrentMachineId: () => 'machine' });
+      const transport = { ...createApiMachineTransportFixture(),
+        setRPCHandlers: (..._args: Parameters<MachineClient['setRPCHandlers']>) => ({} as ReturnType<MachineClient['setRPCHandlers']>),
+        registerLiveStreamRelayRoutes: vi.fn(), connect: vi.fn(),
+        updateDaemonState: async () => 'published' as const, updateMachineMetadata: async () => 'published' as const,
+        onSessionChanged: (listener: NonNullable<typeof changedSession>) => { changedSession = listener; return () => { changedSession = undefined; }; },
+        emitExternalSessionTranscriptUpdate: vi.fn(), sendMachineTransferEnvelope: vi.fn(), sendTransferRelayV2Envelope: vi.fn(),
+        sendMachineLiveStreamRelayEnvelope: vi.fn(),
+        getPeerMediationMachineRpcHandlerManager: () => ({ invokeLocal: async () => ({ ok: true }) }),
+      };
+      const machine = await runWithServerHttpBaseUrl('https://alice-home.test', () => bootstrapMachineSyncRuntime({
+        cliVersion: 'test', machineId: 'machine', credentials: aliceCredentials,
+        machine: { id: 'machine', encryptionMode: 'plain', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 },
+        preferredHost: 'host', happyHomeDir: directory, happyLibDir: directory, filesystemAccessPolicy: { kind: 'osUser' },
+        takeoverRequested: false, isShuttingDown: () => false, createConnectedApiMachine: () => transport as unknown as MachineClient,
+        attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
+        startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
+        spawnSession: async options => {
+          expect(options.requesterSessionBootstrap).toBe(requester.bootstrap);
+          expect(options.requesterSessionRuntimeContext).toBe(requester);
+          expect(options.executionAuthorization).toBeUndefined();
+          launches.push(options.existingSessionId!); running = true;
+          return { type: 'success', sessionId: requesterSessionId };
+        }, stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => running,
+        resolveCurrentMachineExecutionOriginContext: resolveAmbientOrigin,
+        readRequesterSessionCredentialBindings: () => listRequesterSessionCredentialBindings({ happyHomeDir: directory,
+          serverId: 'bob-home', machineId: 'machine', installationId }),
+        resolveRequesterSessionRuntimeContext: async (sessionId, attribution) => {
+          expect(sessionId).toBe(requesterSessionId); expect(attribution).toEqual(requester.bootstrap.attribution); return requester;
+        }, releaseRequesterSessionRuntimeContext: async context => { expect(context).toBe(requester); },
+        ...(surface === 'follow-pending' ? { dispatchSessionFollowOccurrence: host.runtime.dispatchSessionFollowOccurrence } : {}),
+        loadLocalSessionMetadataForHandoff: async () => null, beforeShutdown: async () => {}, requestShutdown: () => {},
+        directPeerServerLifecycle: null, directTransferRegistryHost: createCliRegistryHostV1(),
+        connectedServiceRefreshLoopHandle: null, connectedServiceQuotasLoopHandle: null, daemonServerWorkScheduler: {} as never,
+      }));
+      get.mockRestore();
+      const http = fastify();
+      let sourceAgentStateVersion = 0;
+      let sourceTranscriptSeq = 1;
+      let sourceRequests: Record<string, { tool: string; arguments: object; createdAt: number; turnId: string }> = {};
+      http.addHook('onRequest', async request => { requests.push(request.url); expect(request.headers.authorization).toBe(`Bearer ${requesterToken}`); });
+      http.get('/*', async (request, reply) => {
+        if (request.url === '/v2/sessions/bob-follow-source') return { session: createSessionRecordFixture({
+          id: 'bob-follow-source', encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: '/repo' }),
+          dataEncryptionKey: null, share: null, ownerAccountId: 'bob', origin: { kind: 'none' }, seq: surface === 'follow-pending' ? sourceTranscriptSeq : 0,
+          agentStateVersion: sourceAgentStateVersion, agentState: JSON.stringify({ requests: sourceRequests, completedRequests: {} }),
+          latestTurnId: surface === 'follow-pending' ? null : 'failed-turn', latestTurnStatus: surface === 'follow-pending' ? null : 'failed' }) };
+        if (request.url.startsWith('/v1/sessions/bob-follow-source/messages')) return { messages: surface === 'follow-pending' ? [{
+          id: 'source-message', seq: 1, localId: 'source-failed-original', createdAt: 1, updatedAt: 1, sidechainId: null, messageRole: 'agent',
+          content: { t: 'plain', v: buildAcpAgentMessageEnvelope({ provider: 'claude', body: { type: 'turn_failed', id: 'failed-turn' } }) },
+        }, ...(sourceTranscriptSeq >= 2 ? [{ id: 'source-next-message', seq: 2, localId: 'encountered-rule-original', createdAt: 2,
+          updatedAt: 2, sidechainId: null, messageRole: 'agent',
+          content: { t: 'plain', v: buildAcpAgentMessageEnvelope({ provider: 'claude', body: { type: 'turn_failed', id: 'next-failed-turn' } }) } }] : []),
+        ...(sourceTranscriptSeq === 3 ? [{ id: 'fresh-source-message', seq: 3, localId: 'fresh-rule-original', createdAt: 30,
+          updatedAt: 30, sidechainId: null, messageRole: 'agent',
+          content: { t: 'plain', v: buildAcpAgentMessageEnvelope({ provider: 'claude', body: { type: 'turn_failed', id: 'fresh-failed-turn' } }) } }] : [])]
+          .filter(row => row.seq > Number(new URL(request.url, 'https://bob-home.test').searchParams.get('afterSeq') ?? 0)) : [], hasMore: false,
+          nextBeforeSeq: null, nextAfterSeq: null };
+        const response = await homeGet(new URL(request.url, 'https://bob-home.test').href,
+          { headers: { Authorization: request.headers.authorization } });
+        if (!response || typeof response !== 'object' || !('status' in response) || typeof response.status !== 'number'
+          || !('data' in response)) throw new Error('Invalid Home response');
+        return reply.code(response.status).send(response.data);
+      });
+      const sourceObservations = ['manager', ...(surface === 'follow-pending' ? ['follower'] : [])].map(relation => ({
+        sourceSessionId: 'bob-follow-source', destinationSessionId: requesterSessionId, relation,
+        ...(relation === 'manager' ? { attachedAt: 1 } : {}), policy: { preset: 'important' },
+        delivered: SESSION_FOLLOW_ZERO_FRONTIER_V1, observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1,
+          ...(surface === 'follow-pending' ? { transcriptSeq: 1 } : { turn: { id: 'failed-turn', status: 'failed' } }) },
+      }));
+      http.post(`/v2/sessions/${requesterSessionId}/follows/inactive-observations`, async () => SessionFollowObserveInactiveResponseV1Schema.parse({
+        ok: true, v: 1, sessionId: requesterSessionId, target: { homeId: 'srv_bob_home', accountId: 'bob', sessionId: requesterSessionId,
+          machineId: 'machine', installationId }, currentSourceSessionIds: ['bob-follow-source'], observations: sourceObservations }));
+      const acceptedOriginals: unknown[] = [];
+      http.post('/v2/sessions/bob-follow-source/follows/occurrence-routes', async request => {
+        expect(request.body).toMatchObject({ destinationSessionId: requesterSessionId });
+        if (request.body && typeof request.body === 'object' && 'sourceRequests' in request.body) {
+          expect(request.body).toMatchObject({ sourceRequests: { agentStateVersion: sourceAgentStateVersion } });
+        } else expect(request.body).toMatchObject({ sourceMessage: sourceTranscriptSeq === 3 ? { localId: 'fresh-rule-original', seq: 3 }
+          : sourceTranscriptSeq === 2 ? { localId: 'encountered-rule-original', seq: 2 } : { localId: 'source-failed-original', seq: 1 } });
+        expect(request.body).not.toHaveProperty('sourcePublisher');
+        return { ok: true, v: 1, sourceSessionId: 'bob-follow-source', originalCreatedAt: sourceTranscriptSeq === 3 ? 30 : sourceTranscriptSeq,
+          routes: sourceObservations };
+      });
+      const pendingIds = new Set<string>();
+      http.post(`/v2/sessions/${requesterSessionId}/pending`, async request => {
+        const body = request.body as { localId: string };
+        const didWrite = !pendingIds.has(body.localId);
+        if (didWrite) { pendingIds.add(body.localId); acceptedOriginals.push(request.body); }
+        return { didWrite };
+      });
+      await http.ready();
+      const restoreHttp = installAxiosFastifyAdapter({ app: http, origin: 'https://bob-home.test' });
+      try {
+        if (!changedSession) throw new Error('Missing exact Session subscription');
+        expect(readInstallationIdentityIfExistsSync()?.installationId).toBe(installationId);
+        expect(await requester.isCurrent()).toBe(true);
+        expect(await resolveOrigin()).toEqual({ machineId: 'machine', serverIdentityId: 'srv_bob_home' });
+        expect(await resolveAmbientOrigin()).toEqual({ machineId: 'machine', serverIdentityId: 'srv_alice_home' });
+        const activeAlice = getActiveAccountSettingsSnapshot();
+        const originBeforeWake = originReads.length;
+        await changedSession({ sessionId: requesterSessionId, cursor: 1 });
+        if (surface === 'follow-pending') {
+          expect(acceptedOriginals).toHaveLength(1);
+          expect(acceptedOriginals[0]).toMatchObject({ followRelations: [{ relation: 'manager', attachedAt: 1 }, { relation: 'follower' }],
+            followSources: [{ evaluation: 'receiver', rule: { ruleId: 'bob-private-rule', ruleVersion: 1 } }],
+            followDeliveryV1: { original: { sourceSessionId: 'bob-follow-source', sourceMessage: { localId: 'source-failed-original', seq: 1 } }, delivery: 'wake' } });
+          sourceAgentStateVersion = 4;
+          sourceRequests = { approvalA: { tool: 'Bash', arguments: {}, createdAt: 10, turnId: 'current-turn' } };
+          for (const observation of sourceObservations) observation.observed.agentStateVersion = sourceAgentStateVersion;
+          await changedSession({ sessionId: requesterSessionId, cursor: 2 });
+          expect(acceptedOriginals).toHaveLength(2);
+          sourceAgentStateVersion = 7;
+          sourceRequests = { ...sourceRequests, approvalB: { tool: 'Bash', arguments: {}, createdAt: 20, turnId: 'current-turn' } };
+          for (const observation of sourceObservations) observation.observed.agentStateVersion = sourceAgentStateVersion;
+          await changedSession({ sessionId: requesterSessionId, cursor: 3 });
+          expect(acceptedOriginals).toHaveLength(3);
+          expect(acceptedOriginals.slice(1)).toMatchObject([
+            { followDeliveryV1: { original: { sourceRequests: { requests: [{ requestId: 'approvalA', createdAt: 10, turnId: 'current-turn' }] } } } },
+            { followDeliveryV1: { original: { sourceRequests: { requests: [{ requestId: 'approvalB', createdAt: 20, turnId: 'current-turn' }] } } } },
+          ]);
+          // An encountered rule's existing private cursor can drive catch-up
+          // without an ordinary edge. It is not an initial-history baseline.
+          sourceTranscriptSeq = 2;
+          sourceObservations.splice(0);
+          await changedSession({ sessionId: requesterSessionId, cursor: 4 });
+          expect(acceptedOriginals).toHaveLength(4);
+          expect(acceptedOriginals[3]).toMatchObject({ followSources: [{ evaluation: 'receiver' }],
+            followDeliveryV1: { original: { sourceSessionId: 'bob-follow-source',
+              sourceMessage: { localId: 'encountered-rule-original', seq: 2 } } } });
+          expect(acceptedOriginals[3]).not.toHaveProperty('followRelations');
+          expect(requests.some(path => {
+            const url = new URL(path, 'https://bob-home.test');
+            return url.pathname === '/v1/sessions/bob-follow-source/messages' && url.searchParams.get('afterSeq') === '1';
+          })).toBe(true);
+          // The retained requester Home source feed discovers a brand-new
+          // rule with no edge/progress; Alice's installed Account is never used.
+          freshFollowRule = true;
+          sourceTranscriptSeq = 3;
+          followAccountChanges = [{ cursor: 1, kind: 'account', entityId: 'session-follows', changedAt: 30,
+            hint: buildSessionFollowChangeHintV1() }, { cursor: 2, kind: 'session', entityId: 'bob-follow-source', changedAt: 30 }];
+          await channel.hintAccountChange();
+          await vi.waitFor(() => expect(acceptedOriginals).toHaveLength(5));
+          expect(acceptedOriginals[4]).toMatchObject({ followSources: [{ evaluation: 'receiver', rule: { ruleId: 'bob-fresh-rule', ruleVersion: 0 } }],
+            followDeliveryV1: { original: { sourceSessionId: 'bob-follow-source', sourceMessage: { localId: 'fresh-rule-original', seq: 3 } } } });
+        }
+        const expectedLaunches = surface === 'follow-pending' ? [] : [requesterSessionId];
+        // The migrated producer commits the input first; only the incumbent
+        // Pending activation/acceptance owner may launch it. It must not also
+        // take the removed direct observation→hydrate→wake path.
+        expect(launches, JSON.stringify({ requests, originReads })).toEqual(expectedLaunches);
+        expect(originReads.slice(originBeforeWake)).toEqual(expect.arrayContaining(['https://bob-home.test/v1/features']));
+        expect(originReads.slice(originBeforeWake)).not.toContain('https://alice-home.test/v1/features');
+        expect(requests).toContain('/v2/sessions/bob-follow-source');
+        expect(originReads.length).toBeGreaterThan(0);
+        // Alice's own asynchronous catalog read may settle during the wake.
+        // Bob must preserve her Account identity and preferences independently.
+        expect(getActiveAccountSettingsSnapshot()).toMatchObject({ scopeKey: activeAlice?.scopeKey,
+          settings: activeAlice?.settings, rawSettings: activeAlice?.rawSettings, settingsVersion: activeAlice?.settingsVersion });
+        running = false;
+        homeIdentity = 'srv_replaced_home';
+        await changedSession({ sessionId: requesterSessionId, cursor: 2 });
+        expect(launches).toEqual(expectedLaunches);
+        homeIdentity = 'srv_bob_home';
+        current = false;
+        const beforeRetired = requests.length;
+        await changedSession({ sessionId: requesterSessionId, cursor: 3 });
+        // A fresh authority probe may discover retirement. It must not be
+        // followed by private rules, source reads, input admission or wake.
+        expect(requests.slice(beforeRetired).filter(path => path !== '/v1/account/encryption/currentness')).toEqual([]);
+        expect(launches).toEqual(expectedLaunches);
+      } finally {
+        await retireMachineSyncRuntimeAttempt(machine); restoreHttp(); await http.close(); fetchBoundary.mockRestore(); await custody.cleanup();
+      }
+      return;
+    }
+    if (surface === 'request-auth-observations') {
+      const requester = runtime;
+      if (!requester.activatePurposeBindings) throw new Error('Missing requester purpose bindings owner');
+      const purpose = { consumer: { pluginId: 'happier.agent.codex', localId: 'codex' }, purpose: 'primary' };
+      const binding = { purpose, target: { kind: 'account' as const,
+        account: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' } } };
+      const lease = requester.activatePurposeBindings({ subject: { kind: 'execution_run', runId: 'requester-read',
+        runnerPid: process.pid, agentId: 'codex', isCurrent: () => true }, purposes: [purpose], bindings: [binding] });
+      const subject = scopeConnectedAccountPurposeBindingLease({ lease, subjectId: lease.subjectId,
+        parentSessionId: 'bob-session', uses: [{ purpose, materialization: { kind: 'httpHeaders',
+          origin: 'https://chatgpt.com', headerNames: ['authorization'] } }], registerRedaction: () => {} });
+      const callbacks = createDaemonQualifiedRequestAuthCallbacks<typeof requester>({
+        withSessionAccountContext: async (_sessionId, operation) => await operation(requester),
+        assertSessionAccountCurrent: async (_sessionId, expected) => await assertRequesterSessionAccountContextCurrent({
+          expected, resolveCurrent: async () => requester, readTrackedContext: () => requester,
+        }),
+      });
+      const callbackWithoutAssertion = createDaemonQualifiedRequestAuthCallbacks({
+        withSessionAccountContext: async (_sessionId, operation) => await operation(requester),
+      });
+      try {
+        // The actual requester, assertion and purpose owner run beneath HTTP.
+        // An indeterminate service refuses before credential reads. It still
+        // needs fresh entry admission, once rather than both assertion and a
+        // repeated same-context read. Later requests and the assertion-free
+        // adapter must each perform their own fresh admission.
+        for (const callback of [callbacks, callbackWithoutAssertion]) {
+          for (let operation = 0; operation < 2; operation++) {
+            const before = sessionReads;
+            await expect(callback.resolveCurrentBinding({ subject, binding,
+              signal: new AbortController().signal })).rejects.toMatchObject({ code: 'request_auth_binding_unavailable',
+                diagnostic: { causeCode: 'binding_resolution_failed' } });
+            expect(sessionReads - before).toBe(1);
+          }
+        }
+        current = false;
+        for (const callback of [callbacks, callbackWithoutAssertion]) {
+          await expect(callback.resolveCurrentBinding({ subject, binding,
+            signal: new AbortController().signal })).rejects.toMatchObject({ code: 'request_auth_binding_unavailable',
+              diagnostic: { causeCode: 'requester_session_not_current' } });
+        }
+      } finally { await lease.dispose(); }
+      return;
+    }
     if (surface === 'refresh-observations') {
       // Exercise the real HTTP client and Home routes; only Home responses
       // and admitted Machine access are substituted. Internal Profile paging,
@@ -172,6 +685,8 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       http.get('/*', async (request, reply) => {
         const response = await homeGet(new URL(request.url, 'https://bob-home.test').href,
           { headers: { Authorization: request.headers.authorization } });
+        if (!response || typeof response !== 'object' || !('status' in response) || typeof response.status !== 'number'
+          || !('data' in response)) throw new Error('Invalid Home HTTP fixture response');
         return reply.code(response.status).send(response.data);
       });
       await http.ready();
@@ -231,7 +746,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       } finally { reader.abort(); release(); }
       return;
     }
-    if (surface === 'action-policy') {
+    if (actionPolicySurface) {
       await channel.pushSettings('bob', savedSettings, ++settingsVersion);
       await vi.waitFor(() => expect(runtime!.readAccountSettingsSnapshot().settingsVersion).toBe(settingsVersion));
       const service = control.routes?.agentRuntimeDaemonServices;
@@ -251,11 +766,59 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
         }), { sessionId: 'bob-session', retainedAgent, runner: { pid: process.pid, processStartTimeMs: 1,
           processCommandHash: 'a'.repeat(64), snapshotIdentity: 'fixture-runner' },
           invocationContext: { cwd: directory, environment: {}, providerBindingActive: false },
-          ...(signal ? { signal } : {}), isCurrent: async () => current });
+          ...(signal ? { signal } : {}), isCurrent: async () => surface === 'authorization-observations'
+            ? await runtime!.isCurrent(signal) : current });
         if (!result.ok) return result;
         if (result.result.kind !== 'action.execution') throw new Error('Missing Action outcome');
         return result.result.outcome;
       };
+      if (surface === 'action-home-recovery') {
+        failActionHomeRead = true;
+        const lifetime = new AbortController();
+        expect(await invoke('agent', lifetime.signal)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        expect(failActionHomeRead).toBe(false);
+        expect(approvalIds).toHaveLength(1);
+        expect(getActiveAccountSettingsSnapshot()).toMatchObject({ scopeKey: alice?.scopeKey });
+        return;
+      }
+      if (surface === 'authorization-observations') {
+        const homeGet = get.getMockImplementation()!;
+        const homePost = artifactBoundary!.getMockImplementation()!;
+        get.mockRestore();
+        artifactBoundary!.mockRestore();
+        const http = fastify();
+        http.route({ method: ['GET', 'POST'], url: '/*', handler: async (request, reply) => {
+          const url = new URL(request.url, 'https://bob-home.test').href;
+          const config = { headers: { Authorization: request.headers.authorization } };
+          const response = request.method === 'GET' ? await homeGet(url, config) : await homePost(url, request.body, config);
+          if (!response || typeof response !== 'object' || !('status' in response) || typeof response.status !== 'number'
+            || !('data' in response)) throw new Error('Invalid Home HTTP fixture response');
+          return reply.code(response.status).send(response.data);
+        } });
+        await http.ready();
+        const restoreHttp = installAxiosFastifyAdapter({ app: http, origin: 'https://bob-home.test' });
+        try {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            expect(await invoke('agent')).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+            expect(authorizationMintReads[attempt]).toBe(6);
+          }
+          for (const refusal of ['cancelled', 'revoked'] as const) {
+            holdAuthorizationProfile = true;
+            authorizationProfileGate.release = undefined;
+            const cancellation = new AbortController();
+            const preparing = invoke('agent', cancellation.signal);
+            await vi.waitFor(() => expect(authorizationProfileGate.release).toBeDefined());
+            if (refusal === 'cancelled') cancellation.abort();
+            else current = false;
+            releaseAuthorizationProfile();
+            expect(await preparing).toMatchObject({ ok: false,
+              errorCode: refusal === 'cancelled' ? 'cancelled' : 'target_unavailable' });
+            expect(authorizationMintReads).toHaveLength(2);
+            expect(approvalIds).toHaveLength(2);
+          }
+        } finally { releaseAuthorizationProfile(); restoreHttp(); await http.close(); }
+        return;
+      }
       for (const callerSurface of ['agent', 'mcp'] as const) {
         const admittedReads = settingsReads;
         const admittedProfileReads = profileReads.length;
@@ -310,13 +873,13 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       await channel.hintSettings(settingsVersion);
       const cancellation = new AbortController();
       const cancelledAction = invoke('agent', cancellation.signal);
-      await vi.waitFor(() => expect(releaseSettings).toBeDefined());
+      await vi.waitFor(() => expect(settingsGate.release).toBeDefined());
       cancellation.abort();
       expect(await cancelledAction).toMatchObject({ ok: false, errorCode: 'cancelled' });
       expect(approvalIds).toHaveLength(4);
       holdSettings = false;
-      releaseSettings?.();
-      releaseSettings = undefined;
+      releaseSettingsRead();
+      settingsGate.release = undefined;
       expect(await invoke('mcp')).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
       expect(approvalIds).toHaveLength(5);
       // Retirement during a hinted settings refresh cannot republish private policy.
@@ -324,10 +887,10 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       settingsVersion++;
       await channel.hintSettings(settingsVersion);
       const pending = invoke('agent');
-      await vi.waitFor(() => expect(releaseSettings).toBeDefined());
+      await vi.waitFor(() => expect(settingsGate.release).toBeDefined());
       await runtime.dispose();
       holdSettings = false;
-      releaseSettings?.();
+      releaseSettingsRead();
       expect(await pending).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
       expect(approvalIds).toHaveLength(5);
       expect(() => runtime!.readAccountSettingsSnapshot()).toThrow('requester_account_context_unavailable');
@@ -375,14 +938,14 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
     expect(getActiveAccountSettingsSnapshot()).toBe(alice);
   } finally {
     releaseRows?.();
-    releaseSettings?.();
+    settingsGate.release?.();
     try {
       await runtime?.dispose();
     } finally {
       try {
         await host?.dispose();
       } finally {
-        get.mockRestore(); controlBoundary?.mockRestore(); artifactBoundary?.mockRestore(); resetActiveAccountSettingsSnapshotForTests();
+        get.mockRestore(); controlBoundary?.mockRestore(); artifactBoundary?.mockRestore(); followPost?.mockRestore(); resetActiveAccountSettingsSnapshotForTests();
         await rm(directory, { recursive: true, force: true });
       }
     }
@@ -442,9 +1005,12 @@ it.each(['generation', 'usage', 'reconnect', 'run_custody'] as const)('keeps req
       const exactRuntime = runtime;
       const registration = { runKey: 'cold-bob-run', runnerPid: process.pid, agentId: 'codex' as const,
         materializationKey: 'cold-bob-run', connectedServicesBindingsRaw: {}, connectedServiceSelectionsEnv: {}, sessionId: 'cold-bob' };
-      const input = { registry, registration, resolveSessionAccountContext: async () => exactRuntime,
+      const input = { registry, registration,
+        withSessionAccountContext: async <T>(_sessionId: string | null, operation: (context: typeof exactRuntime | null) => Promise<T>) => await operation(exactRuntime),
         assertSessionAccountCurrent: async () => { if (!await exactRuntime.isCurrent()) throw new Error('requester_session_not_current'); } };
+      const before = get.mock.calls.length;
       await registerExecutionRunConnectedServicesTarget(input);
+      expect(get.mock.calls.slice(before).filter(([url]) => String(url).endsWith('/profile'))).toHaveLength(1);
       expect(registry.getRunTargetByRunKey('cold-bob-run')?.requesterWorkAttributionV1).toEqual(exactRuntime.bootstrap.attribution);
       expect(runtime.connectedServiceRuntimeRegistry?.getRunTargetByRunKey('cold-bob-run')?.sessionId).toBe('cold-bob');
       current = false;
@@ -461,9 +1027,13 @@ it.each(['generation', 'usage', 'reconnect', 'run_custody'] as const)('keeps req
     }
     if (surface === 'generation') {
       const exactRuntime = runtime;
-      const input = { token: 'alice', sessionId: 'bob-session', resolveSessionAccountContext: async () => exactRuntime,
+      const input = { token: 'alice', sessionId: 'bob-session',
+        withSessionAccountContext: async <T>(_sessionId: string | null, operation: (context: typeof exactRuntime | null) => Promise<T>) => await operation(exactRuntime),
         assertSessionAccountCurrent: async () => { if (!await exactRuntime.isCurrent()) throw new Error('requester_session_not_current'); } };
+      const before = get.mock.calls.length;
       const projection = await fetchConnectedServiceProjectionForSession(input);
+      // Two fresh assertion boundaries plus the actual projection read.
+      expect(get.mock.calls.slice(before).filter(([url]) => String(url).endsWith('/profile'))).toHaveLength(3);
       expect(projection.snapshot.groups).toEqual([{ serviceId: 'happier.agent.codex/openai-codex', groupId: 'main', activeProfileId: 'work', generation: 2 }]);
       expect(projection.requester).toBe(true);
       const bobProfileUrls = new Set(get.mock.calls.filter(([url, config]) => String(url).endsWith('/profile')
@@ -493,7 +1063,7 @@ it.each(['generation', 'usage', 'reconnect', 'run_custody'] as const)('keeps req
       const exactRuntime = runtime;
       const reconnect = () => flushProviderAccountUsagePersistenceForTrackedSessions({ ownedScheduler: alice,
         trackedSessions: [{ happySessionId: 'bob-session' }, { happySessionId: 'bob-session' }],
-        resolveSessionAccountContext: async () => exactRuntime, timeoutMs: 1_000 });
+        withSessionAccountContext: async (_sessionId, operation) => await operation(exactRuntime), timeoutMs: 1_000 });
       await runWithServerHttpBaseUrl('https://alice-home.test', reconnect);
       expect(writes).toEqual([{ url: 'https://bob-home.test/v4/connect/qualified/provider-account-usage', token: 'Bearer bob',
         data: expect.objectContaining({ snapshot }) }]);

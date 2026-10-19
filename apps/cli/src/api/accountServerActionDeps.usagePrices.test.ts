@@ -1,7 +1,7 @@
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { afterEach, describe, expect, it } from 'vitest';
 import fastify from 'fastify';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
-import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
@@ -29,8 +29,8 @@ describe('CLI and MCP model prices through captured Account Actions', () => {
       return { ...catalog, provenance: { ...catalog.provenance, revision: 'refreshed' } };
     });
     cleanup = installAxiosFastifyAdapter({ app, origin: 'http://usage.test' });
-    const executor = createActionExecutor({ ...createAccountServerActionDeps({ token: 'owner-token', serverId: 'home',
-      serverHttpBaseUrl: 'http://usage.test', isCredentialCurrent: () => current }), isActionApprovalRequired: () => false } as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createAccountServerActionDeps({ token: 'owner-token', serverId: 'home',
+      serverHttpBaseUrl: 'http://usage.test', isCredentialCurrent: () => current }), isActionApprovalRequired: () => false });
     const initial = await executor.execute('usage.prices.get', {}, { surface: 'mcp', serverId: 'home' });
     expect(initial, JSON.stringify(initial))
       .toMatchObject({ ok: true, result: { provenance: catalog.provenance } });
@@ -69,11 +69,11 @@ describe('CLI and MCP model prices through captured Account Actions', () => {
     });
     cleanup = installAxiosFastifyAdapter({ app, origin: 'http://usage.test' });
     const credentials = { token: 'owner-token', encryption: null };
-    const executor = createActionExecutor({ ...createAccountServerActionDeps({ token: credentials.token, credentials,
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createAccountServerActionDeps({ token: credentials.token, credentials,
       serverId: 'home', serverHttpBaseUrl: 'http://usage.test', isCredentialCurrent: () => current }),
       settingsDeclarationAction: createCliSettingsDeclarationAction({ credentials, serverHttpBaseUrl: 'http://usage.test' }),
       isActionApprovalRequired: () => false,
-    } as ActionExecutorDeps);
+    });
     const query = { queries: [normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } })] };
     const read = async () => {
       const result = await executor.execute('usage.query', query, { surface: 'mcp', serverId: 'home' });

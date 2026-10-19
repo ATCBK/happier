@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createActionExecutor, createProviderErrorV1, getActionSpec } from '@happier-dev/protocol';
 import { DaemonProviderModelProjectionResponseV1Schema, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { AgentModelsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
 
 import { createCliActionDeps } from './createCliActionDeps';
 
@@ -27,17 +28,26 @@ const projection = DaemonProviderModelProjectionResponseV1Schema.parse({
   }],
 });
 
-function host(invoke: (method: string, request: unknown) => Promise<unknown>) {
+const nativeProbe = AgentModelsProbeObservationSchema.parse({
+  agentId: 'codex', source: 'dynamic', supportsFreeform: false,
+  availableModels: [{ id: 'default', name: 'Default' }, { id: 'native-model', name: 'Native model' }],
+});
+
+function host(invokeProviderProjection: (method: string, request: unknown) => Promise<unknown>, nativeRequests: unknown[] = []) {
   return createActionExecutor(createCliActionDeps({
     token: 'account-token', sessionId: 'session-1', mode: 'plain', ctx: null,
-    // The requested Machine is remote to the observed Session. Native discovery
-    // therefore uses the real retained Session catalog, without launching an Agent.
-    rawSession: { machineId: 'session-machine', metadata: { sessionModelsV1: {
-      provider: 'codex', availableModels: [{ id: 'native-model', name: 'Native model' }],
-    } } },
+    rawSession: { machineId: 'session-machine', metadata: {} },
     // Machine transport is the system boundary. Inventory, Agent resolution,
-    // Action admission, normalization and output validation remain real.
-    machineActionDirectTargetTransport: { machineId: 'machine-1', invoke },
+    // Action admission, normalization and output validation remain real. Native
+    // probing is independent of the Provider projection failures exercised here.
+    machineActionDirectTargetTransport: { machineId: 'machine-1', invoke: async (method, request) => {
+      if (method === RPC_METHODS.CAPABILITIES_INVOKE) {
+        nativeRequests.push(request);
+        return { ok: true, result: nativeProbe };
+      }
+      if (method !== RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION) throw new Error(`unexpected_machine_method:${method}`);
+      return await invokeProviderProjection(method, request);
+    } },
   }));
 }
 
@@ -95,7 +105,8 @@ describe('CLI admitted spawn model catalog', () => {
 
   it('requires the owning spawn Action grant before resolving its Provider catalog', async () => {
     const requests: string[] = [];
-    const executor = host(async (method) => { requests.push(method); return projection; });
+    const nativeRequests: unknown[] = [];
+    const executor = host(async (method) => { requests.push(method); return projection; }, nativeRequests);
     const context = { surface: 'api' as const, authority: 'account_automation' as const,
       defaultSessionId: 'session-1', externalActionTarget: { kind: 'machine' as const, machineId: 'machine-1' },
       externalActionCredential: { accountId: 'account-1', principalId: 'token-1', credentialId: 'token-1', grant: {
@@ -108,10 +119,14 @@ describe('CLI admitted spawn model catalog', () => {
       ok: false, errorCode: 'credential_scope_denied',
     });
     expect(requests).toEqual([]);
+    expect(nativeRequests).toEqual([]);
     context.externalActionCredential.grant.actions.ids = ['session.spawn_new'];
     await expect(executor.execute('action.options.resolve', request, context)).resolves.toMatchObject({
-      ok: true, result: { modelCatalog: { nativeModels, providerProjection: projection } },
+      // A raw discovery grant is not opened execution authority for a native
+      // Machine probe. Provider discovery remains separately grant-admitted.
+      ok: true, result: { modelCatalog: { nativeModels: [], providerProjection: projection } },
     });
     expect(requests).toEqual([RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION]);
+    expect(nativeRequests).toEqual([]);
   });
 });

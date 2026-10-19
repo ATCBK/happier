@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import axios from 'axios';
 import { buildApprovalExecutionOriginV1, createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
@@ -116,6 +117,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
     let approval: ApprovalRequest | null = null;
     const readApproval = (): ApprovalRequest | null => approval;
     await createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       approvalsCreate: async ({ request }) => { approval = request; return { artifactId: 'approval' }; },
       isActionApprovalRequired: () => false,
     }).execute('computer.secret.fill', {

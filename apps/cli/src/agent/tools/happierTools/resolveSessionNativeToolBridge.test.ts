@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 import { resolveSessionNativeToolDescriptors } from './resolveSessionNativeToolBridge';
 
@@ -14,6 +16,21 @@ afterEach(() => {
 });
 
 describe('resolveSessionNativeToolDescriptors', () => {
+  it('advertises only provider-compatible object roots through the real native tool catalog', () => {
+    const tools = resolveSessionNativeToolDescriptors({
+      accountSettings: {}, sessionId: 'session-1', sessionMachineId: 'machine-1',
+      memoryRecallGuidanceEnabled: true, sessionMemoryEnabled: true, isServerFeatureEnabled: () => true,
+    });
+    expect(tools.length).toBeGreaterThan(0);
+    const incompatible = tools.flatMap((tool, index) => {
+      const schema = tool.inputSchema;
+      return !schema || typeof schema !== 'object' || Array.isArray(schema) || !('type' in schema) || schema.type !== 'object'
+        || ['oneOf', 'anyOf', 'allOf'].some(key => key in schema)
+        ? [{ index, name: tool.name }] : [];
+    });
+    expect(incompatible).toEqual([]);
+  });
+
   it('omits memory writes when the host Session choice is off and restores only policy-admitted writes', () => {
     const accountSettings = {
       actionsSettingsV1: { v: 1, actions: {
@@ -63,8 +80,13 @@ describe('resolveSessionNativeToolDescriptors', () => {
     const search = withMemory.find((tool) => tool.name === 'memory_search');
     const window = withMemory.find((tool) => tool.name === 'memory_get_window');
     expect(search?.inputSchema).not.toMatchObject({ required: expect.arrayContaining(['machineId']) });
-    expect(window?.inputSchema).toMatchObject({ required: expect.arrayContaining(['sessionId']) });
-    expect(window?.inputSchema).not.toMatchObject({ required: expect.arrayContaining(['machineId']) });
+    if (!window?.inputSchema || typeof window.inputSchema !== 'object') throw new Error('Missing memory window schema');
+    const validateWindow = new Ajv2020({ strict: false }).compile(window.inputSchema);
+    // Presentation is a field union; cross-field requirements remain with the Action parser.
+    expect(getActionSpec('memory.get_window').inputSchema.safeParse({ seqFrom: 1, seqTo: 2 }).success).toBe(false);
+    expect(validateWindow({ sessionId: 'historical-session', seqFrom: 1, seqTo: 2 })).toBe(true);
+    expect(validateWindow({ source: { type: 'external_transcript', agentId: 'pi', sourceKey: 'local', nativeSessionId: 'native' },
+      sourceItemId: 'message', cursor: 'older' })).toBe(true);
   });
 
   it('exposes the current-Session presentation Action to the real native Agent tool catalog', () => {

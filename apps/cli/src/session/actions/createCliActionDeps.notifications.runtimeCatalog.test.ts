@@ -32,14 +32,15 @@ import { createDaemonSessionAccountActionExecutor } from '@/daemon/agentRuntime/
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { publishServerHttpRuntimeOrigin, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { NotificationChannelRecordV1Schema } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 import { bindAutomationWorkflowInputs } from '@/daemon/workflows/input';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { notificationSettingsFixture as accountSettingsParse, notificationCatalogFixture } from '@/notifications/activity/activityNotification.testkit';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
+import { configuration } from '@/configuration';
 
 function hostParams(settings = accountSettingsParse({}), workflowAction?: ActionExecutorDeps['workflowAction']) {
   if (getActiveAccountSettingsSnapshot()?.settings !== settings) {
@@ -205,13 +206,23 @@ describe('CLI Notify me host composition', () => {
   });
 
   it('dispatches through policy and suppresses a replay with the same Action request id', async () => {
+    const release = publishServerHttpRuntimeOrigin('http://127.0.0.1:48189', 'iroh');
+    try {
     const deps = host();
+    await expect(deps.notificationChannelsList?.({ surface: 'cli' })).resolves.toMatchObject({ items: [
+      { value: 'builtin:expo_push', disabled: false },
+    ] });
     const input = { message: 'Deployment ready', title: 'Deploy', channels: ['builtin:expo_push'] };
     const context = { surface: 'cli' as const, actionRequestId: 'notification-host-replay-1' };
     await expect(deps.notificationsNotifyMe?.(input, context)).resolves.toEqual({ attemptedChannels: 1, deliveredChannels: 1 });
     await expect(deps.notificationsNotifyMe?.(input, context)).resolves.toEqual({ attemptedChannels: 0, deliveredChannels: 0 });
     expect(boundary.send.mock.calls[0]?.[0]).toMatchObject([{ title: 'Deploy', body: 'Deployment ready' }]);
+    expect(boundary.send.mock.calls[0]?.[0]).toMatchObject([{ data: { serverUrl: configuration.serverUrl } }]);
     expect(boundary.send).toHaveBeenCalledTimes(1);
+    const tokenReads = boundary.get.mock.calls.filter(([url]) => String(url).endsWith('/v1/push-tokens'));
+    expect(tokenReads.length).toBeGreaterThan(0);
+    expect(tokenReads.every(([url]) => url === 'http://127.0.0.1:48189/v1/push-tokens')).toBe(true);
+    } finally { release(); }
   });
 
   it('runs authenticated Session notifications through agent policy and refuses non-Account placement', async () => {
@@ -227,7 +238,7 @@ describe('CLI Notify me host composition', () => {
       actionId: 'notifications.notify_me', input: { message: 'ready', channels: ['builtin:expo_push'] }, witness }, authority))
       .resolves.toMatchObject({ ok: false, errorCode: 'action_disabled' });
     await expect(execute({ kind: 'action.execute', requestId: 'foreign-placement',
-      actionId: 'session.message.send', input: { text: 'hello' }, witness }, authority))
+      actionId: 'session.message.send', input: { sessionId: 'session-1', message: 'hello' }, witness }, authority))
       .resolves.toMatchObject({ ok: false, errorCode: 'target_unavailable' });
     expect(boundary.send).not.toHaveBeenCalled();
     const allowed = createDaemonSessionAccountActionExecutor({ ...sessionHome,
@@ -327,6 +338,7 @@ describe('CLI Notify me host composition', () => {
       deps: { currentMachineId: 'notification-machine', externalAction: {
         machineId: 'notification-machine', currentServerId: 'notification-home',
         resolveAccountId: async () => 'notification-account',
+        resolveInstallationId: () => 'notification-installation', verifyExecutionAuthorization: async () => false,
         resolveTarget: async () => ({ kind: 'machine', machineId: 'notification-machine' }),
         executor: createActionExecutor(host()),
       } },

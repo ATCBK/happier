@@ -1,6 +1,9 @@
 import fastify from 'fastify';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import tweetnacl from 'tweetnacl';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import type { SocketRpcMachineAdmissionContextV1 } from '@happier-dev/protocol/machines/machineAccessV1';
 import { SessionCreationCorrespondenceV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
@@ -8,7 +11,18 @@ import { encodeBase64, encryptLegacy } from '@/api/encryption';
 import type { Credentials } from '@/persistence';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
-import { verifyRequesterSessionCredentialBinding, verifyRequesterSessionMachineAdmissionCurrent } from './requesterSessionCredentials';
+import { createActionExecutor, type ActionExecutorContext } from '@happier-dev/protocol';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { refreshActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
+import { bindRequesterSessionRuntimeMachineAdmissionCurrentness, prepareRequesterSessionBootstrap,
+  verifyRequesterSessionCredentialBinding, verifyRequesterSessionMachineAdmissionCurrent } from './requesterSessionCredentials';
+
+// The socket transport is unavailable in this HTTP custody composition.
+vi.mock('socket.io-client', () => ({ io: () => { throw new Error('Socket unavailable'); } }));
 
 it('opens owner metadata only for creation correspondence while retaining fresh requester authorization', async () => {
   const app = fastify();
@@ -39,6 +53,8 @@ it('opens owner metadata only for creation correspondence while retaining fresh 
   app.get('/v1/account/profile', async () => ({ id: 'bob' }));
   app.get('/v1/account/encryption/currentness', async () => ({ mode, version: 1, updatedAt: 1,
     signingKeyFingerprint: null, contentKeyFingerprint: null }));
+  app.get('/v2/account/settings', async () => ({ content: null, version: 1 }));
+  app.get('/v1/access-keys/session/machine', async () => ({ accessKey: { id: 'existing' } }));
   app.get('/v1/machines/machine/access', async (_request, reply) => access ? {
     machineId: 'machine', custodian: { accountId: 'alice', displayName: 'Custodian' },
     access: { custodian: { accountId: 'alice', displayName: 'Custodian' }, role: 'use', resourceMode: 'plain', accessState: 'ready' },
@@ -61,6 +77,8 @@ it('opens owner metadata only for creation correspondence while retaining fresh 
   }) }));
   await app.ready();
   const restore = installAxiosFastifyAdapter({ app, origin });
+  const directory = await mkdtemp(join(tmpdir(), 'requester-binding-performance-'));
+  let bootstrap: Awaited<ReturnType<typeof prepareRequesterSessionBootstrap>> = null;
   try {
     const binding = { credentials, attribution, sessionId: 'session', serverHttpBaseUrl: origin,
       verifyMachineAdmissionCurrent: () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution,
@@ -76,6 +94,31 @@ it('opens owner metadata only for creation correspondence while retaining fresh 
     expect(await verifyRequesterSessionCredentialBinding({ ...binding, expectedSessionCreationTag: `create:v1:${'b'.repeat(43)}` })).toBe(false);
     expect(await verifyRequesterSessionCredentialBinding({ ...binding, attribution: { ...attribution, machineId: 'other-machine' },
       expectedSessionCreationTag: correspondence.sessionCreationTag })).toBe(false);
+    bootstrap = await prepareRequesterSessionBootstrap({ credentials, attribution,
+      preparedSessionId: 'session', boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory },
+      verifyMachineAdmissionCurrent: binding.verifyMachineAdmissionCurrent });
+    expect(bootstrap).not.toBeNull();
+    bindRequesterSessionRuntimeMachineAdmissionCurrentness({ bootstrap: bootstrap!.admitted,
+      boundary: { machineId: 'machine', daemonToken: 'alice-daemon', isHomeCurrent: () => true,
+        readInstallation: () => ({ installationId: 'installation', privateKey: installation.secretKey }) } });
+    expect(await bootstrap!.admitted.bindSession('session', `create:v1:${'b'.repeat(43)}`)).toBeNull();
+    expect(await bootstrap!.admitted.bindSession('session', correspondence.sessionCreationTag)).not.toBeNull();
+    materialReads = 0;
+    requests.length = 0;
+    expect(await bootstrap!.admitted.isCurrent()).toBe(true);
+    // Binding already proved immutable creation correspondence. Runtime checks
+    // still prove fresh authority without opening owner content on every field.
+    expect(materialReads).toBe(0);
+    expect(requests).toEqual(expect.arrayContaining(['/v1/account/profile', '/v1/account/encryption/currentness',
+      '/v2/sessions/session', '/v1/machines/machine/admission/verify']));
+    expect(await bootstrap!.admitted.bindSession('session', `create:v1:${'b'.repeat(43)}`)).toBeNull();
+    role = 'view';
+    expect(await bootstrap!.admitted.isCurrent()).toBe(false);
+    role = 'owner'; access = false;
+    expect(await bootstrap!.admitted.isCurrent()).toBe(false);
+    access = true; mode = 'plain';
+    expect(await bootstrap!.admitted.isCurrent()).toBe(false);
+    mode = 'e2ee';
     materialReads = 0;
     role = 'view';
     expect(await verifyRequesterSessionCredentialBinding(binding)).toBe(false);
@@ -86,5 +129,116 @@ it('opens owner metadata only for creation correspondence while retaining fresh 
     access = true;
     expect(await verifyRequesterSessionCredentialBinding({ ...binding, signal: AbortSignal.abort() })).toBe(false);
     expect(materialReads).toBe(0);
-  } finally { restore(); await app.close(); }
+  } finally { await bootstrap?.cleanupOnFailure(); restore(); await app.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+it.each(['spawn preparation', 'unknown Profile'] as const)('bounds Home verification reads for %s, retaining held-read fences', async scenario => {
+  const app = fastify();
+  const origin = 'http://requester-preparation.test';
+  const directory = await mkdtemp(join(tmpdir(), 'requester-preparation-'));
+  const token = `e30.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.fixture`;
+  const credentials = { token, encryption: null };
+  let current = true;
+  let hold: string | undefined;
+  let entered: (() => void) | undefined;
+  let release: (() => void) | undefined;
+  const requests: string[] = [];
+  app.addHook('onRequest', async request => {
+    requests.push(`${request.method} ${request.url}`);
+    if (request.url === hold) {
+      entered?.();
+      await new Promise<void>(resolve => { release = resolve; });
+    }
+  });
+  app.get('/v1/account/profile', async () => ({ id: 'bob' }));
+  app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1, updatedAt: 1,
+    signingKeyFingerprint: null, contentKeyFingerprint: null }));
+  app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
+  app.get('/v2/sessions/session', async () => ({ session: createSessionRecordFixture({ id: 'session',
+    encryptionMode: 'plain', ownerAccountId: 'bob', dataEncryptionKey: null, share: null,
+    origin: { kind: 'none' }, metadata: JSON.stringify({ machineId: 'machine', path: '/workspace', flavor: 'codex' }),
+  }) }));
+  app.get('/v1/account/entity-rows/acp', async () => ({ status: 'present', revision: 1,
+    content: { t: 'plain', v: { v: 1, definitions: [] } } }));
+  app.get('/v1/account/entity-rows/prompt-library', async () => ({ status: 'listed',
+    rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
+      content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })),
+  }));
+  app.get('/v1/artifacts', async () => []);
+  app.get('/v1/account/entity-rows/profiles', async () => ({ status: 'listed', rows: [], nextCursor: null,
+    complete: true, diagnostics: [], referenceGuardRevision: 1, transferControl: { status: 'absent' } }));
+  app.get('/v1/account/entity-rows/profiles/reference-guard', async () => ({ status: 'ready', revision: 1 }));
+  app.get('/v1/account/entity-rows/profiles/transfer', async () => ({ status: 'absent' }));
+  await app.ready();
+  const restore = installAxiosFastifyAdapter({ app, origin });
+  let prepared: Awaited<ReturnType<typeof prepareRequesterSessionBootstrap>> = null;
+  try {
+    // Only Home responses and admitted Machine access are substituted. The
+    // requester verifier, private Account custody, catalogs and Action deps run.
+    prepared = await prepareRequesterSessionBootstrap({ credentials,
+      attribution: { serverId: 'bob-home', accountId: 'bob', machineId: 'machine', installationId: 'installation' },
+      boundary: { serverId: 'bob-home', serverHttpBaseUrl: origin, happyHomeDir: directory },
+      preparedSessionId: 'session', boundSessionId: 'session', verifyMachineAdmissionCurrent: async () => current,
+    });
+    if (!prepared) throw new Error('Missing real requester bootstrap');
+    const bootstrap = prepared.admitted;
+    const deps = createCliActionDeps({ token, credentials: bootstrap.credentials, sessionId: 'session', mode: 'plain', ctx: null,
+      serverId: 'bob-home', serverHttpBaseUrl: origin, rawSession: { workDepth: 0 },
+      getCurrentSessionMetadata: () => ({ machineId: 'machine', path: '/workspace', flavor: 'codex' }),
+      savedSecretOperationContext: bootstrap.savedSecretOperationContext,
+      actionsSettingsProvider: createActionSettingsProvider({ scopeKey: bootstrap.savedSecretOperationContext.readSnapshot()?.scopeKey,
+        getAccountSettings: () => bootstrap.savedSecretOperationContext.readSnapshot()?.settings ?? null }),
+    });
+    const diagnostics: unknown[] = [];
+    const context = { surface: 'agent', authority: 'account_automation', callerPermissionMode: 'default', defaultSessionId: 'session', serverId: 'bob-home',
+      runtimeAccountId: 'bob', actionCaller: { kind: 'session', sessionId: 'session', starterDepth: 0, turnDepth: 0 },
+      recordActionStartDiagnostic: value => diagnostics.push(value),
+    } satisfies ActionExecutorContext;
+    const sessionReads = () => requests.filter(path => path === 'GET /v2/sessions/session').length;
+    await runWithServerHttpBaseUrl(origin, async () => {
+      requests.length = 0;
+      if (scenario === 'spawn preparation') {
+        const start = await deps.resolveAgentStartContext!(context);
+        expect(start, JSON.stringify(diagnostics)).toMatchObject({ baseline: { machineId: 'machine', directory: '/workspace' } });
+      } else {
+        const refused = await createActionExecutor(deps).execute('session.spawn_new', { creationKey: 'unknown-profile', profileId: 'missing-profile',
+        executionTarget: { serverId: 'bob-home', machineId: 'machine' }, directory: { kind: 'path', path: '/workspace' },
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+        }, context);
+        expect(refused, JSON.stringify(refused)).toMatchObject({ ok: false, errorCode: 'target_unavailable',
+          details: { reason: 'profile_unavailable' } });
+      }
+      const verificationReads = sessionReads();
+      console.info('requester preparation HTTP reads', { scenario, session: verificationReads,
+        profile: requests.filter(path => path === 'GET /v1/account/profile').length,
+        encryption: requests.filter(path => path === 'GET /v1/account/encryption/currentness').length });
+      expect(verificationReads).toBe(scenario === 'spawn preparation' ? 19 : 10);
+      expect(requests.filter(path => path.startsWith('POST '))).toEqual([]);
+      for (const cancel of [true, false]) {
+        const controller = new AbortController();
+        const previousProfileCatalog = bootstrap.savedSecretOperationContext.readSnapshot()?.profileCatalog;
+        hold = scenario === 'spawn preparation' ? '/v1/account/entity-rows/acp' : '/v1/account/entity-rows/profiles';
+        const held = new Promise<void>(resolve => { entered = resolve; });
+        const pending = scenario === 'spawn preparation'
+          ? deps.resolveAgentStartContext!({ ...context, signal: controller.signal })
+          : refreshActiveProfileCatalog({ credentials: bootstrap.credentials, signal: controller.signal,
+            operationContext: bootstrap.savedSecretOperationContext });
+        await held;
+        if (cancel) controller.abort(); else current = false;
+        hold = undefined;
+        release?.();
+        if (scenario === 'unknown Profile') {
+          await expect(pending).resolves.toMatchObject({ status: 'unavailable' });
+          if (cancel) expect(bootstrap.savedSecretOperationContext.readSnapshot()?.profileCatalog).toBe(previousProfileCatalog);
+        } else if (cancel) await expect(pending).rejects.toBeDefined();
+        else await expect(pending).rejects.toMatchObject({ code: 'ACP_CATALOG_UNAVAILABLE', reason: 'scope-retired' });
+        if (!cancel) expect(bootstrap.savedSecretOperationContext.readSnapshot()).toBeNull();
+        current = true;
+      }
+    });
+  } finally {
+    release?.();
+    await prepared?.cleanupOnFailure();
+    restore(); await app.close(); await rm(directory, { recursive: true, force: true });
+  }
 });

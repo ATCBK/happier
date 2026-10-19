@@ -4,7 +4,7 @@ import { ActionIdSchema, createActionExecutor } from '@happier-dev/protocol';
 import { createCliActionDeps } from './createCliActionDeps';
 import { createCapabilitiesService } from '@/capabilities/service';
 import { createAcpAgentInventoryCapability } from '@/capabilities/registry/machineAgentsInventory';
-import type { CapabilitiesDetectRequest } from '@happier-dev/protocol/capabilities';
+import type { CapabilitiesDetectRequest } from '@/capabilities/types';
 
 const facts = {
   installed: false, version: null, latestVersion: null,
@@ -18,7 +18,7 @@ const facts = {
 describe('CLI machine Agent inventory Action transport', () => {
   it('observes a normalized draft through the registered remote capability without an Account catalog read', async () => {
     const service = createCapabilitiesService({ capabilities: [createAcpAgentInventoryCapability({ accountId: 'alice' })],
-      checklists: {}, buildContext: async () => ({ cliSnapshot: null }) });
+      checklists: { 'machine-details': [], 'new-session': [] }, buildContext: async () => ({ cliSnapshot: null }) });
     const deps = createCliActionDeps({ token: 'admitted-token', sessionId: '', mode: 'plain', ctx: null,
       serverId: 'home-1', serverHttpBaseUrl: 'http://home-1.test', machineActionDirectTargetTransport: {
         machineId: 'machine-1', invoke: async (method, request) => {

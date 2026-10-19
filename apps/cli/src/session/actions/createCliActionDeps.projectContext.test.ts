@@ -1,25 +1,28 @@
 import axios from 'axios';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { ProjectAccountRowMutationRequestV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { createCliActionDeps } from './createCliActionDeps';
 import { reloadConfiguration } from '@/configuration';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 
 let taskHome: string;
 beforeEach(async () => {
   taskHome = await createTempDir('happier-project-context-');
   vi.stubEnv('HAPPIER_HOME_DIR', taskHome);
-  for (const key of ['HAPPIER_SERVER_URL', 'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_SERVER_ID', 'HAPPIER_WEBAPP_URL']) vi.stubEnv(key, '');
+  for (const key of ['HAPPIER_SERVER_URL', 'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_ID', 'HAPPIER_WEBAPP_URL']) vi.stubEnv(key, '');
 });
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); reloadConfiguration(); await removeTempDir(taskHome); });
 const token = (accountId: string) => `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
 
 describe('CLI personal context qualified Artifact transport', () => {
   it('reads a foreign attachment with its own saved Home authority and never lends it to delegated provenance', async () => {
+    const currentness = await createRequesterCurrentnessSocketHarness();
+    onTestFinished(() => currentness.close());
     const homeToken = token('account-a');
     const foreignToken = token('account-b');
     const homes = [{ id: 'home-a', url: 'https://context-home-a.test', token: homeToken },
@@ -39,6 +42,12 @@ describe('CLI personal context qualified Artifact transport', () => {
     // HTTP is the boundary: saved Home selection, credential reads, Account mode,
     // Artifact decoding, semantic admission and organization CAS remain real.
     vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
+      if (String(url).endsWith('/v1/account/profile')) return { status: 200, data: {
+        id: options?.headers?.Authorization === `Bearer ${foreignToken}` ? 'account-b' : 'account-a',
+      } };
+      if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
       if (String(url).endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 0 } };
       artifactRequests.push({ url: String(url), token: options?.headers?.Authorization });
       if (String(url) !== 'https://context-home-b.test/v1/artifacts/doc' || options?.headers?.Authorization !== `Bearer ${foreignToken}`) throw new Error('Wrong Artifact authority');
@@ -71,7 +80,8 @@ describe('CLI personal context qualified Artifact transport', () => {
     } } })).toEqual({ ok: false, errorCode: 'project_context_access_denied' });
     expect(artifactRequests).toEqual([]);
     expect(writes).toBe(0);
-    expect(await action(input, { surface: 'cli' })).toMatchObject({ ok: true, revision: 4,
+    const attached = await action(input, { surface: 'cli' });
+    expect(attached, JSON.stringify({ attached, artifactRequests })).toMatchObject({ ok: true, revision: 4,
       row: { hidden: true, pinned: true, promptStack: [{ id: 'new', ref: { serverId: 'home-b', artifactId: 'doc' } }] } });
     expect(artifactRequests).toEqual([{ url: 'https://context-home-b.test/v1/artifacts/doc', token: `Bearer ${foreignToken}` }]);
     expect(writes).toBe(1);

@@ -178,7 +178,7 @@ function projectStructuredMessageActionFailure(result: Readonly<{
     errorCode: string;
     error: string;
     retryable?: boolean;
-    data?: unknown;
+    data?: JsonValue;
 }>) {
     const authorPayload = readPluginActionFailureAuthorPayload(result.data);
     // Target invocation already redacts its failures; the same canonical
@@ -1608,7 +1608,7 @@ async function describeProjection(
         try {
             signal?.throwIfAborted();
             const skills = request.selection === 'skills';
-            const registry = skills && request.skillIds ? { ...lease.registry, skills: lease.registry.skills.filter(
+            const registry = skills && request.skillIds ? { ...lease.registry, skills: (lease.registry.skills ?? []).filter(
                 entry => request.skillIds!.includes(pluginSkillIdV1(entry.identity))) } : lease.registry;
             const pluginExecutionOriginsByPluginId = skills ? await resolvePluginExecutionOriginsForProjection(
                 opts, registry, lease.runtimeRegistry) : undefined;
@@ -2662,6 +2662,15 @@ export function registerDaemonContributionRegistryProjectionHandler(
                 });
             }
             let defaultSessionId = request.data.sessionId;
+            if (request.data.resolveClientMessageContext) {
+                if (resolvedAction?.definition.execution?.target !== 'client'
+                    || !resolvedAction.definition.contributionSurfaces?.includes('ui')) {
+                    return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({ ok: false, code: 'plugin_action_unavailable' });
+                }
+                if (!isExpectedPluginOccurrenceCurrent(lease.registry, resolvedAction.pluginId, request.data.expectedContributorOccurrenceId)) {
+                    return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({ ok: false, code: 'plugin_occurrence_stale' });
+                }
+            }
             let messageAction: Extract<MessageActionResolutionV1, { status: 'available' }>['snapshot'] | undefined;
             if (request.data.messageActionReference) {
                 const resolution = opts?.resolveMessageActionReference
@@ -2687,6 +2696,14 @@ export function registerDaemonContributionRegistryProjectionHandler(
                 }
                 defaultSessionId = resolution.snapshot.sessionId;
                 messageAction = resolution.snapshot;
+            }
+            if (request.data.resolveClientMessageContext) {
+                if (!messageAction || !resolvedAction
+                    || !isExpectedPluginOccurrenceCurrent(lease.registry, resolvedAction.pluginId, request.data.expectedContributorOccurrenceId)
+                    || context?.signal?.aborted) {
+                    return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({ ok: false, code: 'plugin_message_action_unavailable' });
+                }
+                return DaemonPluginStructuredMessageActionExecuteResponseSchema.parse({ ok: true, result: messageAction });
             }
             const mountedCaller = await traceStage('contributed.mounted_caller', () => deriveMountedPluginInvocationCaller({
                 request: {

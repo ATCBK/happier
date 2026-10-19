@@ -625,7 +625,13 @@ describe('action operation canonical execution observer', () => {
     expect(store.list(scope).items).toEqual([]);
   });
 
-  it('returns the terminal result for an exact replay without invoking the Action again', async () => {
+  it.each([
+    { actionId: 'session.spawn_new', result: { type: 'success', disposition: 'created', sessionId: 'created-session',
+      executionTarget: { serverId: 'home', machineId: 'machine-1' }, organizationPlacement: { folderId: null, tagIds: [] },
+      initialInput: { status: 'notRequested' } } },
+    { actionId: 'session.spawn_new', result: { type: 'error', code: 'permission_denied', retryable: false } },
+    { actionId: 'session.fork', result: { type: 'error', code: 'spawn_failed', retryable: true } },
+  ])('returns the terminal $actionId result for an exact replay without invoking the Action again ($result.type)', async ({ actionId, result }) => {
     const published: Array<{ operationId: string }> = [];
     const store = createActionOperationStore({ onSnapshot: (snapshot) => published.push(snapshot) });
     const runner = createActionOperationRunner({
@@ -639,12 +645,12 @@ describe('action operation canonical execution observer', () => {
       }),
       generateOperationId: vi.fn(() => 'operation-1'),
     });
-    const execute = vi.fn(async () => ({ ok: true as const, result: { type: 'success' } }));
+    const execute = vi.fn(async () => ({ ok: true as const, result }));
 
-    await runner.observe({ actionId: 'session.spawn_new', requestId: 'creation-1', input: { target: 'machine-1' }, scope, execute });
+    await runner.observe({ actionId, requestId: 'creation-1', input: { target: 'machine-1' }, scope, execute });
     await expect(runner.observe({
-      actionId: 'session.spawn_new', requestId: 'creation-1', input: { target: 'machine-1' }, scope, execute,
-    })).resolves.toEqual({ ok: true, result: { type: 'success' } });
+      actionId, requestId: 'creation-1', input: { target: 'machine-1' }, scope, execute,
+    })).resolves.toEqual({ ok: true, result });
 
     expect(execute).toHaveBeenCalledTimes(1);
     expect(store.list(scope).items).toHaveLength(1);

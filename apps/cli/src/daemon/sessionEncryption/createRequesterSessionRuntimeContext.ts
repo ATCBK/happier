@@ -19,13 +19,15 @@ import { createProviderAccountUsagePersistenceScheduler } from '../connectedServ
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../connectedServices/accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import { startDaemonConnectedServiceRuntime } from '../startup/startDaemonRuntimeBootstrap';
 import type { AdmittedRequesterSessionBootstrap, RequesterSessionRuntimeContext } from './requesterSessionCredentials';
-import { rethrowRequesterHomeReadFailure, runWithRequesterSessionCurrentnessCheckpoint } from './requesterSessionCredentials';
+import { rethrowRequesterHomeReadFailure, runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
 import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
 import { createCliProfileStoreForOperation } from '@/settings/profiles/profileStore';
 import { ProfileCatalogUnavailableError, readProfilesFromAccountSettings,
   readProfileSettingsFromAccountSnapshot } from '@/settings/profiles/readProfilesFromAccountSettings';
 import { readAuthoringMemoryLastUsedProfile } from '@/settings/profiles/readAuthoringMemoryLastUsedProfile';
 import type { ProfileCatalogSnapshotV1, ProfileCatalogUnavailableReasonV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
+import { createAccountSessionFollowRuleCache } from '@/agent/runtime/session/follow/accountSessionFollowRuleCache';
+import { logger } from '@/ui/logger';
 
 type CoordinatorInput = Parameters<typeof startDaemonConnectedServiceRuntime>[0];
 
@@ -79,6 +81,23 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     } catch (error) { rethrowRequesterHomeReadFailure(error); return false; }
   };
   if (!await isCurrent()) return null;
+  const sessionFollowRuleCache = createAccountSessionFollowRuleCache({ accountId: bootstrap.attribution.accountId,
+    credentials: bootstrap.credentials, serverHttpBaseUrl: bootstrap.serverHttpBaseUrl,
+    signal: lifetime.signal, isCurrent, subscribeInvalidation: bootstrap.subscribeSessionFollowRules });
+  let followSourceBinding: Readonly<{ reconcile: (sourceSessionId: string | null) => Promise<void>; signal: AbortSignal }> | null = null;
+  const releaseFollowSources = bootstrap.subscribeSessionFollowSources(sourceSessionId => {
+    const binding = followSourceBinding;
+    if (!binding || binding.signal.aborted || disposed) return;
+    void (async () => {
+      if (!await isCurrent()) return;
+      const opened = await sessionFollowRuleCache.read();
+      const destinationSessionId = bootstrap.getBoundSessionId();
+      if (opened.status !== 'available' || !destinationSessionId || !await isCurrent()
+        || !opened.rules.some(rule => rule.definition.enabled && rule.receiver.kind === 'session'
+          && rule.receiver.sessionId === destinationSessionId)) return;
+      if (binding === followSourceBinding && !binding.signal.aborted) await binding.reconcile(sourceSessionId);
+    })().catch(() => { if (!disposed) logger.warn('[Session Follow] Requester source recovery remains pending'); });
+  });
   const connectedServiceRuntimeRegistry = input.coordinatorInput.connectedServiceRuntimeRegistry.scopeToRequester(target => {
     const tracked = [...input.coordinatorInput.pidToTrackedSession.values()].find(candidate => candidate.happySessionId === target.sessionId);
     const stamp = target.requesterWorkAttributionV1 ?? tracked?.requesterWorkAttributionV1;
@@ -181,7 +200,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   });
   const purposes = createDaemonConnectedAccountPurposeBindingRuntime({ establishedRuntimeOwner: established,
     workerMachineId: bootstrap.attribution.machineId, store, reloadController: pluginReloadController,
-    allowNativeAccountCredentials: false, openTeamDirect: directMaterial.open,
+    allowNativeAccountCredentials: bootstrap.allowNativeAccountCredentials === true, openTeamDirect: directMaterial.open,
     resolveQualifiedConnectedAccountV4Support: input.resolveQualifiedConnectedAccountV4Support,
     resolveConnectedAccountEndpoints: async request => await withHome(() => established.readConfiguredEndpoints(request)),
     qualifiedApi: { listAccounts: async (service, signal) => await qualifiedConnectedAccountApi.listAccounts({ service, signal }),
@@ -213,6 +232,9 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   const dispose = () => retirement ??= (async () => {
     disposed = true;
     lifetime.abort();
+    sessionFollowRuleCache.dispose();
+    followSourceBinding = null;
+    releaseFollowSources();
     releaseSettingsPublication();
     profileProjection = null;
     savedSecrets.withdrawCatalog();
@@ -232,7 +254,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     activeServerDir, api, credentials: bootstrap.credentials, accountSettingsSnapshot: () => savedSecrets.readSnapshot(),
     connectedServiceRuntimeRegistry,
     connectedServicesMaterializationBaseDir, isAccountRuntimeCurrent: isCurrent, runAccountOperation: withHome,
-    allowNativeAccountState: false,
+    allowNativeAccountState: bootstrap.allowNativeAccountCredentials === true,
     connectedAccountsOwner: purposes.owner,
     activatePurposeBindings: purposes.activatePurposeBindings,
     providerAccountUsageStore, connectedServiceRuntimeQuotaSnapshots, daemonSessionMutationCustody,
@@ -252,7 +274,11 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     await dispose();
     return null;
   }
-  return Object.freeze({ bootstrap, isCurrent, api, readAccountSettingsSnapshot: readSnapshot, refreshAccountSettings, readAccountLaunchProfiles,
+  return Object.freeze({ bootstrap, isCurrent, api, sessionFollowRuleCache,
+    bindSessionFollowSourceReconciliation: (reconcile: (sourceSessionId: string | null) => Promise<void>, signal: AbortSignal) => {
+      if (!disposed && !signal.aborted && followSourceBinding?.signal !== signal) followSourceBinding = { reconcile, signal };
+    },
+    readAccountSettingsSnapshot: readSnapshot, refreshAccountSettings, readAccountLaunchProfiles,
     subscribeAccountSettingsSnapshot: (listener: () => void) => {
       if (disposed) throw requesterAccountContextUnavailable();
       listeners.add(listener);

@@ -6,11 +6,12 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import { AccountSettingsV2HistoryMutationRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { ACP_CATALOG_ROWS_ROUTE_V1, type AcpCatalogRecordV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, emptyConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createCliActionInventoryDeps } from './createCliActionInventoryDeps';
 import { createCliActionDeps } from '../createCliActionDeps';
@@ -44,6 +45,7 @@ async function createInventory(status: 'ready' | 'partial' | 'unavailable' = 're
   history?: 'complete' | 'unavailable';
   initialRowAbsent?: boolean;
   interleaveOnHistoryRead?: boolean;
+  admitPurposes?: boolean;
 }> = {}) {
   const requests: string[] = [];
   const writes: unknown[] = [];
@@ -53,12 +55,18 @@ async function createInventory(status: 'ready' | 'partial' | 'unavailable' = 're
   let revision = options.initialRowAbsent ? -1 : options.initialRevision ?? 4;
   let current = true;
   let interleaved = false;
+  let purposeStatus: 'ready' | 'unavailable' | 'absent' = 'ready';
   const server = createServer((request, response) => {
     requests.push(`${request.method} ${request.url}`);
     expect(request.headers.authorization, request.url).toBe('Bearer requester-acp');
     response.setHeader('Content-Type', 'application/json');
     if (request.url === '/v1/account/encryption/currentness') {
       response.end(JSON.stringify({ mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+    } else if (options.admitPurposes && request.url === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`) {
+      if (purposeStatus === 'unavailable') { response.statusCode = 503; response.end('{}'); }
+      else response.end(JSON.stringify(purposeStatus === 'absent' ? { status: 'absent' } : {
+        status: 'present', revision: 1, content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') },
+      }));
     } else if (request.url === ACP_CATALOG_ROWS_ROUTE_V1) {
       if (request.method === 'POST') {
         let body = '';
@@ -99,7 +107,7 @@ async function createInventory(status: 'ready' | 'partial' | 'unavailable' = 're
         const mutation = AccountSettingsV2HistoryMutationRequestSchema.parse(JSON.parse(body));
         historyWrites.push(mutation);
         if (options.history === 'unavailable') { response.statusCode = 503; response.end('{}'); return; }
-        if (mutation.operation.kind !== 'normalize' || mutation.operation.content.t !== 'plain') throw new Error('Expected plain history normalization');
+        if (mutation.operation.kind !== 'normalize' || mutation.operation.content?.t !== 'plain') throw new Error('Expected plain history normalization');
         historySettings = mutation.operation.content.v;
         response.end(JSON.stringify({ status: 'applied' }));
       });
@@ -124,6 +132,7 @@ async function createInventory(status: 'ready' | 'partial' | 'unavailable' = 're
     sessionId: 'requester-session', mode: 'plain', ctx: null, rawSession: { metadata: { sessionModelsV1: {
       provider: 'customAcp', availableModels: [{ id: 'stale-model', name: 'Stale model' }] } } } });
   return { deps, requests, writes, historyWrites, incumbent, operationContext, credentials,
+    setPurposeStatus: (status: typeof purposeStatus) => { purposeStatus = status; },
     readRow: () => ({ record: currentRecord, revision }), readHistory: () => historySettings };
 }
 
@@ -167,7 +176,9 @@ describe('ACP Action inventory row authority', () => {
       const initialRecord = { v: 1, definitions: [{ ...record.definitions[0],
         launch: { kind: 'command', command: process.execPath, args: [script] },
       }] } satisfies AcpCatalogRecordV1;
-      const { credentials, operationContext, requests, incumbent } = await createInventory('ready', { initialRecord });
+      const { credentials, operationContext, requests, incumbent, setPurposeStatus } = await createInventory('ready', {
+        initialRecord, admitPurposes: kind === 'summary',
+      });
       if (kind === 'summary') {
         const snapshot = operationContext.readSnapshot();
         if (!snapshot) throw new Error('Requester snapshot retired');
@@ -192,6 +203,7 @@ describe('ACP Action inventory row authority', () => {
           modelSelector: { backendTargetKey: targetKey, modelId: 'agent-model' } })]));
         expect(catalog.automaticProfiles).toEqual([]);
         expect(catalog.discoveryTargetKeys).toContain(targetKey);
+        expect.soft(requests).not.toContain('GET /v2/account/settings');
         // Runtime import follows the cross-App parity harness convention: the
         // pure picker consumer runs here without adding UI aliases to CLI compilation.
         const picker: { projectAgentModelChoices(input: Readonly<{ purpose: 'walkthrough'; sources: readonly unknown[];
@@ -209,6 +221,29 @@ describe('ACP Action inventory row authority', () => {
         expect(project(catalog.profiles).defaultProfile).toBeNull();
         expect(project([]).groups).toMatchObject([{ discoverable: true }]);
         expect(await read(true)).toMatchObject({ profiles: catalog.profiles });
+        const beforeFailure = operationContext.readSnapshot();
+        if (!beforeFailure) throw new Error('Requester retired before metadata failure');
+        await operationContext.replaceAccountSettings({ ...beforeFailure, settings: accountSettingsParse({
+          ...beforeFailure.settings, backendEnabledByTargetKey: { ...beforeFailure.settings.backendEnabledByTargetKey,
+            'agent:happier.agent.codex/codex': true },
+        }) });
+        for (const status of ['unavailable', 'absent'] as const) {
+          setPurposeStatus(status);
+          const incomplete = await read();
+          expect(incomplete).toMatchObject({ profiles: catalog.profiles, automaticProfiles: [],
+            unavailableReason: 'account_metadata_unavailable' });
+          expect(incomplete).not.toHaveProperty('probeFailures');
+        }
+        const afterFailure = operationContext.readSnapshot();
+        if (!afterFailure) throw new Error('Requester retired during metadata failure');
+        await operationContext.replaceAccountSettings({ ...afterFailure, settings: beforeFailure.settings });
+        setPurposeStatus('ready');
+        const recovered = await read();
+        expect(recovered.profiles).toEqual(catalog.profiles);
+        expect(recovered).not.toHaveProperty('unavailableReason');
+        expect(requests).not.toContain('GET /v2/account/settings');
+        expect(requests).not.toContain('GET /v1/account/encryption');
+        expect(requests.filter(request => request.startsWith('POST '))).toEqual([]);
         const current = operationContext.readSnapshot();
         if (!current) throw new Error('Requester retired before the disabled-target check');
         await operationContext.replaceAccountSettings({ ...current, settingsVersion: current.settingsVersion + 1, settings: accountSettingsParse({

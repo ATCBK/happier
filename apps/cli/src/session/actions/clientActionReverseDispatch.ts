@@ -1,6 +1,13 @@
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
-import { UiActionDispatchRequestV1Schema, clientActionUnavailable, parseClientActionDispatchResult, mountedWorkReadClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
+import {
+  UiActionDispatchRequestV1Schema,
+  clientActionUnavailable,
+  currentUiContextCommandClientRpcMethod,
+  currentUiContextReadClientRpcMethod,
+  mountedWorkReadClientRpcMethod,
+  parseClientActionDispatchResult,
+} from '@happier-dev/protocol/actions/clientDispatchV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { projectApprovalExecutionOriginCaller } from '@happier-dev/protocol/actions/actionExecutor';
 import { isWorkflowAuthoringActionId, workflowDraftClientRpcMethod, WorkflowDraftGetInputV1Schema } from '@happier-dev/protocol/actions/workflowAuthoringAction';
@@ -32,6 +39,11 @@ export function createClientActionReverseDispatcher(
       && typeof Reflect.get(input, 'sessionId') === 'string'
       ? mountedWorkReadClientRpcMethod(actionId, Reflect.get(input, 'sessionId'))
       : actionId === 'inbox.get' ? mountedWorkReadClientRpcMethod(actionId)
+      : actionId === 'ui.current_context.read' ? currentUiContextReadClientRpcMethod()
+      : (actionId === 'ui.current_context.command.invoke' || actionId === 'account.home_continuation.invoke')
+        && input && typeof input === 'object'
+        && typeof Reflect.get(input, 'commandId') === 'string'
+        ? currentUiContextCommandClientRpcMethod(Reflect.get(input, 'commandId'))
       : address?.success ? workflowDraftClientRpcMethod(address.data) : RPC_METHODS.UI_ACTION_EXECUTE;
     if (!client?.hasConnectedClientRpcHandler(method)) return unavailable();
     if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };

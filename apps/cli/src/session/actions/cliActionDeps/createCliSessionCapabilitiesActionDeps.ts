@@ -1,5 +1,5 @@
 import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
-import { resolveSessionCapabilityItemIdentityV1 } from '@happier-dev/protocol/actions/executor/sessionCapabilities';
+import { resolveSessionCapabilityItemIdentityV1, resolveSessionCapabilitiesGetFailureV1 } from '@happier-dev/protocol/actions/executor/sessionCapabilities';
 import { SpawnCapabilitiesPreviewSuccessV1Schema } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
 import { readCapabilityLaunchRestartFromMetadataV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 import { readPendingCapabilityApplyV1, readCapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
@@ -29,7 +29,8 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
     method: 'GET' | 'POST' | 'PATCH'; path: string; body?: unknown;
   }>) => Readonly<Record<string, string>> | null;
   callMachineAction: (input: Readonly<{ machineId: string; serverId?: string; method: string; request: unknown;
-    context?: ActionExecutorContext; effectActionId?: string; exactMachine?: true; signal?: AbortSignal }>) => Promise<unknown>;
+    context?: ActionExecutorContext; effectActionId?: string; exactMachine?: true; signal?: AbortSignal;
+    timeoutMs?: number | null }>) => Promise<unknown>;
 }>): CapabilityDeps {
   const withinHome = <T>(run: () => Promise<T>) => runWithServerHttpBaseUrl(params.serverHttpBaseUrl, run);
   const read = async (sessionId: string, context: ActionExecutorContext, actionId: 'session.capabilities.set' | 'session.capabilities.get' = 'session.capabilities.set') => {
@@ -52,7 +53,8 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
     try {
       const result = await params.callMachineAction({ machineId: input.machineId, serverId: context.serverId ?? params.serverId,
         method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, request: input, context,
-        effectActionId: 'sessions.spawn.capabilities.preview', exactMachine: true, signal: context.signal });
+        // Account/native inventory preparation belongs to the containing Action's lifetime.
+        effectActionId: 'sessions.spawn.capabilities.preview', exactMachine: true, timeoutMs: null, signal: context.signal });
       const wire = result !== null && typeof result === 'object' ? result as Record<string, unknown> : {};
       // A machine reply proves reachability; producer/preparation failures are not transport failures.
       if (wire.ok !== true) return { ok: false, reason: 'invalid_input' } as const;
@@ -74,18 +76,19 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
         if (!machineId || agent?.kind !== 'backend') return { ok: false, code: 'session_unavailable' };
         const wire = await params.callMachineAction({ machineId, serverId: context.serverId ?? params.serverId,
           method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, request: { machineId, agentId: agent.backendId, sessionId: input.sessionId },
-          context, effectActionId: 'session.capabilities.get', exactMachine: true, signal: context.signal });
+          context, effectActionId: 'session.capabilities.get', exactMachine: true, timeoutMs: null, signal: context.signal });
         const result = wire !== null && typeof wire === 'object' ? wire as Record<string, unknown> : {};
-        if (result.ok !== true) return { ok: false, code: 'session_unavailable' };
+        if (result.ok !== true) return resolveSessionCapabilitiesGetFailureV1(result);
         const generic = SpawnCapabilitiesPreviewSuccessV1Schema.parse({ ok: true, machinePlatform: result.machinePlatform,
           mcp: result.mcp, skills: result.skills, applyTiming: result.applyTiming });
         const apply = readCapabilitySelectionApplyV1(session.metadata);
-        const refusal = apply.mcp ?? apply.skills;
+        const pendingApply = readPendingCapabilityApplyV1(session.metadata);
+        const refusal = pendingApply.mcp ? apply.mcp : apply.skills;
         return { ok: true, mcp: { items: generic.mcp.items }, skills: generic.skills,
-          pendingApply: { ...readPendingCapabilityApplyV1(session.metadata), ...(refusal ? {
+          pendingApply: { ...pendingApply, ...(refusal ? {
             reason: refusal.reason, ...(refusal.restartBy ? { restartBy: refusal.restartBy } : {}),
           } : {}) }, applyTiming: generic.applyTiming };
-      } catch { context.signal?.throwIfAborted(); return { ok: false, code: 'session_unavailable' }; }
+      } catch (error) { context.signal?.throwIfAborted(); return resolveSessionCapabilitiesGetFailureV1(error); }
     },
     sessionCapabilities: {
       readSession: async (input, context) => {
@@ -95,7 +98,7 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
         if (target?.kind !== 'backend') throw Object.assign(new Error('Session Agent is unavailable'), { code: 'session_unavailable' });
         const entry = findCatalogEntry(target.backendId);
         if (!entry) throw Object.assign(new Error('Session Agent is unavailable'), { code: 'session_unavailable' });
-        return { metadata: session.metadata, revision: session.transport.rawSession.metadataVersion,
+        return { metadata: session.metadata,
           sessionRunning: session.transport.rawSession.active === true,
           agent: await resolveCapabilityApplyAgentFacts({ agentId: target.backendId, metadata: session.metadata,
             sessionRunning: session.transport.rawSession.active === true }),
@@ -119,10 +122,10 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
       writeMetadata: async (input, context) => withinHome(async () => {
         let result;
         try { result = await updateSessionMetadataForTarget({ credentials: params.credentials, idOrPrefix: input.sessionId,
-          expectedSessionId: input.sessionId, expectedMetadataRevision: input.expectedRevision,
+          expectedSessionId: input.sessionId,
           currentness: { signal: context.signal },
           resolveAuthorizationHeaders: request => params.resolveAuthorizationHeaders('session.capabilities.set', context, request),
-          updater: () => ({ ...input.metadata }) }); }
+          updater: metadata => ({ ...input.update(metadata) }) }); }
         catch (error) { context.signal?.throwIfAborted();
           if (error && typeof error === 'object' && Reflect.get(error, 'code') === 'conflict') return 'conflict';
           throw error;

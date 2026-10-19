@@ -53,8 +53,8 @@ describe('session.list Action dependency for a current-Session principal', () =>
   it('reports a query arm the admitted row cannot answer as the shared typed unsupported result', async () => {
     const { SessionListAdmittedQueryUnsupportedError } = await import('@/session/services/listSessions');
     listSessions.mockRejectedValue(new SessionListAdmittedQueryUnsupportedError(['scope']));
-    const { createSessionListActionDependency } = await import('./sessionListActionDependency');
-    const sessionList = createSessionListActionDependency({ credentials, serverId: 'home-a' });
+    const { createSessionListActionDeps } = await import('./sessionListActionDependency');
+    const { sessionList } = createSessionListActionDeps({ credentials, serverId: 'home-a' });
 
     await expect(sessionList({
       context: currentSessionContext as never,

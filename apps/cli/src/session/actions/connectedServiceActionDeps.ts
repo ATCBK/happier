@@ -23,7 +23,8 @@ import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol
 import { DaemonContributionRegistryProjectionDescribeRequestSchema, DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { captureSavedSecretReferencesForOperation, promoteSavedSecretsWithConnectedAccountCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { captureSavedSecretReferencesForOperation } from "@/settings/secrets/savedSecretCatalogRead";
+import { promoteSavedSecretsWithConnectedAccountCatalog } from "@/settings/secrets/hydrateSavedSecretCatalog";
 import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
 import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 import { commitActiveConnectedAccountCatalog, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -131,7 +132,8 @@ export function createCliConnectedServiceAction(params: Readonly<{
         signal?.throwIfAborted();
         const response = await axios.request<unknown>({
           url: `${serverHttpBaseUrl}${request.path}`,
-          method: request.method, headers: { ...headers, 'Content-Type': 'application/json' },
+          method: request.method, headers: { ...headers,
+            ...(request.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
           ...(request.body === undefined ? {} : { data: request.body }),
           timeout: resolveConnectedServicesServerApiTimeoutMs(),
           ...(signal ? { signal } : {}), validateStatus: () => true,
