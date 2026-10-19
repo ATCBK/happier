@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { decodeBase64 } from 'privacy-kit';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
@@ -6,6 +7,7 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import { NotificationChannelRecordV1Schema } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { readAccountNoticeArtifactV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
+import { SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { db } from '@/storage/db';
 import { changeDeliveryMute } from '@/app/session/follow/sessionDeliveryMuteService';
@@ -14,6 +16,7 @@ import { createAuthenticatedTestApp } from '../../testkit/sqliteFastify';
 import { registerSessionFollowSourceRoutes } from './registerSessionFollowSourceRoutes';
 import { registerSessionFollowRoutes } from './registerSessionFollowRoutes';
 import { artifactsRoutes } from '../artifacts/artifactsRoutes';
+import { registerDiscussionRoutes } from '../discussions/registerDiscussionRoutes';
 import { createDiscussion, postDiscussionMessage } from '@/app/discussions/mutations';
 import { DISCUSSION_DEFAULT_PAGE_SIZE_V1 } from '@happier-dev/protocol/discussions/api';
 import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
@@ -23,6 +26,7 @@ describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () =>
     beforeAll(async () => {
         harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-account-run-follow-', initEncrypt: true, env: {
             HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED: 'true', HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional',
+            HAPPIER_FEATURE_SESSIONS__ENABLED: 'true', HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED: 'true',
             HAPPIER_SERVER_IDENTITY_ID: 'srv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         } });
     }, 180_000);
@@ -46,18 +50,42 @@ describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () =>
         const discussionId = created.value.discussion.id;
         const source = { kind: 'discussion' as const, discussionId };
         const app = createAuthenticatedTestApp();
-        app.addHook('onRequest', async request => { request.headers['x-test-user-id'] = receiver.id; });
+        app.addHook('onRequest', async (request: FastifyRequest) => { request.headers['x-test-user-id'] = receiver.id; });
         registerSessionFollowSourceRoutes(app);
         registerSessionFollowRoutes(app);
+        registerDiscussionRoutes(app);
         artifactsRoutes(app);
         const serverHttpBaseUrl = await app.listen({ host: '127.0.0.1', port: 0 });
         try {
             const path = resolveSessionFollowActionRequest('follow.set', { receiver: { kind: 'account' }, source, policy }).path;
             expect((await app.inject({ method: 'PUT', url: path, payload: { policy } })).statusCode).toBe(200);
+            if (kind === 'human') {
+                await db.accountSessionFollow.updateMany({ where: { accountId: receiver.id, sourceDiscussionId: discussionId },
+                    data: { deliveredDiscussionSeq: null } });
+                const unavailable = await app.inject({ method: 'POST', url: SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.runOccurrenceRoutes,
+                    payload: { v: 1, source } });
+                expect(unavailable.statusCode).toBe(409);
+                expect(unavailable.json()).toMatchObject({ ok: false, error: 'source_unavailable' });
+                await db.accountSessionFollow.updateMany({ where: { accountId: receiver.id, sourceDiscussionId: discussionId },
+                    data: { deliveredDiscussionSeq: created.value.discussion.messageSeq } });
+            }
             const posted = await postDiscussionMessage({ actorAccountId: author.id, authentication, discussionId, ...(producer ? { producer } : {}), request: {
                 localId: randomUUID(), content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Original human text stays private' }] } }, mentionedAccountIds: [],
             } });
             if (!posted.ok) throw new Error(posted.error);
+            // Opening Inbox without a receiver daemon reads the original C3
+            // message through the existing source/read-cursor owner.
+            const attention = await app.inject({ method: 'GET', url: '/v1/discussions/attention' });
+            expect(attention.statusCode).toBe(200);
+            expect(attention.json()).toMatchObject({ discussions: expect.arrayContaining([expect.objectContaining({
+                discussion: expect.objectContaining({ id: discussionId }),
+                occurrences: expect.arrayContaining([expect.objectContaining({ message: expect.objectContaining({
+                    id: posted.value.message.id, seq: posted.value.message.seq,
+                }) })]),
+            })]) });
+            const readState = await db.discussionReadState.findUniqueOrThrow({
+                where: { discussionId_accountId: { discussionId, accountId: receiver.id } },
+            });
             const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: receiver.id })).toString('base64url')}.fixture`, encryption: null };
             const { createInvocationSavedSecretOperationContextV1 } = await vi.importActual<{
                 createInvocationSavedSecretOperationContextV1(input: unknown): unknown;
@@ -93,13 +121,16 @@ describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () =>
             try {
                 await Promise.all([dispatcher.dispatchAccountSourceRange({ discussionIds: [discussionId] }), dispatcher.dispatchAccountSourceRange({ discussionIds: [discussionId] })]);
                 const notices = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.list());
-                expect(notices.items).toHaveLength(1);
-                const stored = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.read(notices.items[0]!.artifactId));
-                expect(readAccountNoticeArtifactV1(stored!)).toMatchObject({
-                    notice: { topic: 'follow_update', follow: { original: { kind: 'discussion', discussion: { serverId: 'home', discussionId },
-                        messageId: posted.value.message.id }, event: { kind: kind === 'agent' ? 'message' : 'person_wrote' } } },
-                });
+                expect(notices.items).toHaveLength(0);
                 expect(pushes).toHaveLength(kind === 'agent' ? 1 : 0);
+                if (kind === 'agent') expect(pushes[0]?.[2]).toMatchObject({
+                    followOriginal: { kind: 'discussion', discussion: { serverId: 'home', discussionId }, messageId: posted.value.message.id },
+                });
+                await dispatcher.dispatchAccountSourceRange({ discussionIds: [discussionId] });
+                expect(pushes).toHaveLength(kind === 'agent' ? 1 : 0);
+                expect(await db.discussionReadState.findUniqueOrThrow({
+                    where: { discussionId_accountId: { discussionId, accountId: receiver.id } },
+                })).toEqual(readState);
                 expect((await db.accountSessionFollow.findFirstOrThrow({ where: { accountId: receiver.id } })).deliveredDiscussionSeq).toBe(posted.value.message.seq);
                 expect(await db.sessionPendingMessage.count({ where: agent ? { sessionId: agent.id } : {} })).toBe(0);
                 if (kind === 'human') {
@@ -115,21 +146,23 @@ describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () =>
                     const late = await post(author.id);
                     await dispatcher.dispatchAccountSourceRange({ discussionIds: [discussionId] });
                     const caughtUp = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.list());
-                    expect(caughtUp.items).toHaveLength(3);
-                    const originals = await Promise.all(caughtUp.items.map(async item =>
-                        readAccountNoticeArtifactV1((await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.read(item.artifactId)))!)));
-                    expect(originals).toEqual(expect.arrayContaining([early, late].map(message => expect.objectContaining({ notice: expect.objectContaining({
-                        follow: expect.objectContaining({ original: expect.objectContaining({ messageId: message.id }) }),
-                    }) }))));
+                    expect(caughtUp.items).toHaveLength(0);
+                    const sourceItems = await app.inject({ method: 'GET', url: '/v1/discussions/attention' });
+                    expect(sourceItems.statusCode).toBe(200);
+                    expect(sourceItems.json()).toMatchObject({ discussions: expect.arrayContaining([expect.objectContaining({
+                        occurrences: expect.arrayContaining([early, late].map(message => expect.objectContaining({
+                            message: expect.objectContaining({ id: message.id, seq: message.seq }),
+                        }))),
+                    })]) });
                     expect((await db.accountSessionFollow.findFirstOrThrow({ where: { accountId: receiver.id } })).deliveredDiscussionSeq).toBe(late.seq);
                     await changeDeliveryMute({ accountId: receiver.id, receiver: { kind: 'account' }, scope: { kind: 'source', source }, authentication, operation: 'set' });
                     await post(author.id);
                     await dispatcher.dispatchAccountSourceRange({ discussionIds: [discussionId] });
-                    expect((await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.list())).items).toHaveLength(3);
+                    expect((await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.list())).items).toHaveLength(0);
                     await changeDeliveryMute({ accountId: receiver.id, receiver: { kind: 'account' }, scope: { kind: 'source', source }, authentication, operation: 'remove' });
                     expect((await app.inject({ method: 'DELETE', url: path })).statusCode).toBe(200);
                     await dispatcher.dispatchAccountSourceRange({ discussionIds: [discussionId] });
-                    expect((await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.list())).items).toHaveLength(3);
+                    expect((await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.list())).items).toHaveLength(0);
                     expect((await db.accountSessionFollow.findFirstOrThrow({ where: { accountId: receiver.id } })).deliveredDiscussionSeq).toBe(late.seq);
                 }
             } finally { dispatcher.dispose(); }
@@ -158,10 +191,10 @@ describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () =>
         let terminalEventId = 'exact-terminal';
         const app = createAuthenticatedTestApp();
         const failures: unknown[] = [];
-        app.addHook('onSend', async (request, reply, payload) => {
+        app.addHook('onSend', async (request: FastifyRequest, reply: FastifyReply, payload: unknown) => {
             if (reply.statusCode >= 400 && request.method === 'POST') failures.push({ path: request.url, status: reply.statusCode, payload });
         });
-        app.addHook('onRequest', async request => { request.headers['x-test-user-id'] = account.id; });
+        app.addHook('onRequest', async (request: FastifyRequest) => { request.headers['x-test-user-id'] = account.id; });
         // The retained Run RPC is an external Machine transport boundary. All
         // source admission, policy, HTTP, persistence and delivery logic is real.
         app.decorate('forwardRpcForUser', async () => ({ ok: true, result: { sessionId: parent.id, runId: 'exact-run',
