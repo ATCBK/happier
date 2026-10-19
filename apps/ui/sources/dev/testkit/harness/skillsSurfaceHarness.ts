@@ -43,3 +43,55 @@ export async function createSkillsSurfaceHarness(origin: string, records: readon
     storage.getState().applyLocalSettings({ skillsFirstRunDecidedAt: null });
     return { ...home, scope, catalog, storage };
 }
+
+export type SeededSkill = Readonly<{
+    id: string;
+    /** SKILL.md text; defaults to a minimal skill named after the id. */
+    text?: string;
+    /** Extra header fields, such as a `skillLock` for a skill added from a link. */
+    header?: Record<string, unknown>;
+    /** With a `skillLock` header: imported from exactly this content, so the library reads it unmodified. */
+    unmodified?: boolean;
+}>;
+
+/**
+ * A Home whose library holds real stored skills: the artifact store and prompt-library catalog are the
+ * HTTP boundaries, so `useSkillsLibrary` and every mounted skill Action run their production path.
+ */
+export async function createSeededSkillsHome(origin: string, options: Readonly<{
+    skills: readonly SeededSkill[];
+    records?: readonly PromptLibraryRecordV1[];
+    handleExternalRequest?: (url: string) => Promise<Response | null>;
+}>) {
+    const [{ PromptBundleArtifactHeaderV1Schema, PromptBundleBodyV1Schema }, { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent },
+        { encodeBase64 }, { computePromptBundleDigestV1 }] = await Promise.all([
+        import('@happier-dev/protocol/prompts/library/promptBundleSchemas'),
+        import('@happier-dev/protocol/storage/artifactStoredContent'),
+        import('@happier-dev/protocol/crypto/base64'),
+        import('@happier-dev/protocol/prompts/library/promptLibraryDigests'),
+    ]);
+    const catalog = createPromptLibraryCatalogBoundary({ records: options.records });
+    const home = await createPlainArtifactHomeFixture(origin, {
+        serverFeatures: createRootLayoutFeaturesResponse(),
+        handleExternalRequest: options.handleExternalRequest,
+        handleRequest: async (path, init) => path === '/v2/account/settings/history'
+            ? Response.json({ snapshots: [] }) : catalog.handle(path, init),
+    });
+    for (const skill of options.skills) {
+        const text = skill.text ?? `---\nname: ${skill.id}\ndescription: ${skill.id} instructions.\n---\n\n# ${skill.id}\n`;
+        const body = PromptBundleBodyV1Schema.parse({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [{ path: 'SKILL.md',
+            contentKind: 'utf8', contentBase64: encodeBase64(new TextEncoder().encode(text)) }] });
+        const lock = skill.header?.skillLock as Record<string, unknown> | undefined;
+        const header = PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2', title: skill.id,
+            bundleSchemaId: 'skills.skill_md_v1', ...skill.header,
+            ...(lock && skill.unmodified ? { skillLock: { ...lock, importedDigest: computePromptBundleDigestV1(body) } } : {}) });
+        const seeded = await home.boundary.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({ id: skill.id,
+            header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body: JSON.stringify(body) }),
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER }) });
+        if (seeded?.status !== 200) throw new Error(`Could not seed skill ${skill.id}`);
+    }
+    const { storage } = await import('@/sync/domains/state/storage');
+    // Seeding the Home does not publish the client's complete Artifact inventory.
+    storage.setState({ isDataReady: true, artifactsLoaded: false });
+    return { ...home, catalog, storage };
+}
