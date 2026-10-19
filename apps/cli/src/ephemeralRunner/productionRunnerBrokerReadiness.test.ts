@@ -9,8 +9,10 @@ import {
   ProviderConnectionIdSchema,
   ProviderSettingsV1Schema,
   createEmptyProviderRuntimeStateFileV1,
-  encryptSecretStringV1,
+  formatSharedSavedSecretRefV1,
   normalizeActionsSettingsV1,
+  sealSavedSecretResourceStoredContentV1,
+  splitProviderSettingsV1,
 } from '@happier-dev/protocol';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { signRunnerClaimV1 } from '@happier-dev/protocol/ephemeralRunner/endpoint';
@@ -20,6 +22,8 @@ import tweetnacl from 'tweetnacl';
 import { describe, expect, it, vi } from 'vitest';
 
 import { bindPluginRuntimeSourceAuthority } from '@/plugins/runtime/sourceAuthority';
+import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { seedCurrentLocalPathPluginFixture } from '@/plugins/store/registry/currentState.testkit';
 import { resolveRunnerCredentialSelectionCurrentness } from '@/providers/broker/daemonProviderBrokerRuntime';
 import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
@@ -27,6 +31,9 @@ import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { resolveProviderContributionRegistryView } from '@/providers/registry/contributions';
 import type { ProviderRuntimeStateStore } from '@/providers/runtimeState';
 import { createScopedRuntimeActionSettingsProvider } from '@/settings/scopedRuntimeActionSettingsProvider';
+import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
+import packageJson from '../../package.json';
 
 import { acquireReviewedRunnerPluginRuntimeLease } from './runnerPluginRuntimeLease';
 import { checkProductionRunnerBrokerReadiness } from './productionRunnerBrokerReadiness';
@@ -107,6 +114,7 @@ describe('production Runner broker readiness', () => {
         credentialSelectionBinding: selection,
         reviewedProviderModel: {
           selection: { modelId: 'gpt-5' },
+          descriptor: { id: 'gpt-5', name: 'GPT-5' },
         },
       } as never,
       launchManifestCommitment: encodeBase64(new Uint8Array(32).fill(89), 'base64url'),
@@ -160,7 +168,7 @@ describe('production Runner broker readiness', () => {
     // The external author's entire declaration uses the public SDK. The host
     // fixture below loads it through the ordinary immutable-generation catalog.
     const { manifest: providerManifest } = definePlugin({
-      id: 'acme.runner-models', version: '1.0.0', engines: { happier: '*' },
+      id: 'acme.runner-models', version: '1.0.0', engines: { happier: `^${packageJson.version}` },
       providers: {
         gateway: { declaration: {
           v: 1, name: 'Runner fixture models', kind: 'cloud',
@@ -184,52 +192,74 @@ describe('production Runner broker readiness', () => {
     const brokerHome = join(root, 'broker');
     const runnerHome = join(root, 'runner');
     const pluginRoot = join(root, 'provider');
+    const resolveDevelopmentSourceAuthority = ({ rootPath }: Readonly<{ rootPath: string }>) => {
+      const authority = bindPluginRuntimeSourceAuthority({
+        custody: { kind: 'development', registeredRootId: 'runner-readiness-fixture' },
+        resolvedRoot: rootPath, observedRevision: 1,
+      });
+      return authority.kind === 'development' ? authority : null;
+    };
     const acquire = (happyHomeDir: string) => acquireReviewedRunnerPluginRuntimeLease({
       happyHomeDir, target: agentTarget,
-      resolveDevelopmentSourceAuthority: ({ rootPath }) => {
-        const authority = bindPluginRuntimeSourceAuthority({
-          custody: { kind: 'development', registeredRootId: 'runner-readiness-fixture' },
-          resolvedRoot: rootPath, observedRevision: 1,
-        });
-        return authority.kind === 'development' ? authority : null;
-      },
+      resolveDevelopmentSourceAuthority,
       scopedActionRuntime: {
         credentials: null,
         actionsSettingsProvider: createScopedRuntimeActionSettingsProvider(normalizeActionsSettingsV1({ v: 1, actions: {} })),
       },
     });
     let runner: Awaited<ReturnType<typeof acquire>> | null = null;
+    let broker: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
     try {
       await mkdir(join(pluginRoot, '.happier-plugin'), { recursive: true });
       await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify(providerManifest));
       await seedCurrentLocalPathPluginFixture({ happyHomeDir: brokerHome, pluginRoot, pluginId: providerManifest.id, manifestVersion: providerManifest.version });
       runner = await acquire(runnerHome);
       expect(runner.lease.registry.contributes.providersByContributionKey?.has('acme.runner-models/gateway') ?? false).toBe(false);
-      const broker = await acquire(brokerHome);
-      const generation = broker.lease.registry.generation;
+      // A broker discovers its installed Providers. The Runner lease deliberately
+      // selects only the reviewed executable Agent and cannot stand in for it.
+      broker = await createAdmittedPluginRuntimeFixture({
+        happyHomeDir: brokerHome,
+        runtimeOptions: {
+          scopedActionRuntime: {
+            credentials: null,
+            actionsSettingsProvider: createScopedRuntimeActionSettingsProvider(normalizeActionsSettingsV1({ v: 1, actions: {} })),
+          },
+        },
+      });
+      const brokerController = broker.controller;
+      const generation = broker.registry.generation;
       if (generation === undefined) throw new Error('Reviewed Runner registry has no generation');
-      const registry = resolveProviderContributionRegistryView(broker.lease.registry.contributes, generation, broker.lease.registry.readPluginOccurrenceId);
-      expect(registry.providersByContributionKey.get('acme.runner-models/gateway')?.provenance).toBe('external');
-      await broker.release();
+      const registry = resolveProviderContributionRegistryView(broker.registry.contributes, generation, broker.registry.readPluginOccurrenceId);
+      expect(registry.providersByContributionKey.get('acme.runner-models/gateway')?.provenance,
+        JSON.stringify(broker.registry.contributes.pluginDiagnosticsByPluginId?.['acme.runner-models'] ?? []),
+      ).toBe('external');
 
       const baseSettings = ProviderSettingsV1Schema.parse({
         ...DEFAULT_PROVIDER_SETTINGS_V1,
         connections: [{ v: 1, id: 'fixture-connection', source: { kind: 'contribution', contributionKey: 'acme.runner-models/gateway' }, role: 'default', displayName: 'Fixture', displayNameMode: 'automatic', revision: 1, createdAt: 1, updatedAt: 1 }],
       });
       const resolved = resolveProviderConnectionForMachine({
-        connectionId: 'fixture-connection', machineId: 'broker-machine', accountSettings: { providerSettingsV1: baseSettings }, registry,
+        connectionId: 'fixture-connection', machineId: 'broker-machine', providerSettings: baseSettings, registry,
         dnsEvidenceByEndpointUrl: new Map([['https://models.example.test/v1', ['1.1.1.1']]]),
       });
       if (resolved.status !== 'resolved') throw new Error('Expected external Provider connection');
-      const settingsSecretsReadKey = new Uint8Array(32).fill(43);
-      const settings = AccountSettingsSchema.parse({
-        providerSettingsV1: {
-          ...baseSettings,
-          secretBindingsByConnectionId: { 'fixture-connection': { account: { apiKey: 'fixture-secret' } } },
-          accountGrants: [{ v: 1, connectionId: 'fixture-connection', connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint, confirmedAt: 1 }],
-        },
-        secrets: [{ id: 'fixture-secret', name: 'Fixture', kind: 'apiKey', encryptedValue: { _isSecretValue: true, encryptedValue: encryptSecretStringV1('fixture-upstream-key', settingsSecretsReadKey, (length) => new Uint8Array(length).fill(47)) }, createdAt: 1, updatedAt: 1 }],
+      const providerSettings = ProviderSettingsV1Schema.parse({
+        ...baseSettings,
+        secretBindingsByConnectionId: { 'fixture-connection': { account: { apiKey: formatSharedSavedSecretRefV1('fixture-secret') } } },
+        accountGrants: [{ v: 1, connectionId: 'fixture-connection', connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint, confirmedAt: 1 }],
       });
+      const { catalog, defaults } = splitProviderSettingsV1(providerSettings);
+      const snapshot: ActiveAccountSettingsSnapshot = {
+        source: 'cache', settings: AccountSettingsSchema.parse({ providerDefaultModelSelectionsByAgentTargetKeyV1: defaults }),
+        providerConnectionsCatalog: { status: 'ready', revision: 1, catalog },
+        savedSecretCatalogState: 'ready',
+        savedSecretResources: [{ resourceId: 'fixture-secret', ownerAccountId: 'broker-account', displayName: 'Fixture',
+          kind: 'apiKey', encryptionMode: 'plain', revision: 1, materialStatus: 'ready',
+          storedContent: sealSavedSecretResourceStoredContentV1({ resourceId: 'fixture-secret', mode: 'plain',
+            content: { v: 1, name: 'Fixture', kind: 'apiKey', value: 'fixture-upstream-key' } }) }],
+        settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+        scopeKey: resolveAccountSettingsScopeKeyForToken('broker-account'),
+      };
       // Account settings, DNS and persisted observation storage are boundaries;
       // catalog assembly, compatibility, registry lookup and eligibility are real.
       let state = createEmptyProviderRuntimeStateFileV1('broker-machine');
@@ -243,8 +273,8 @@ describe('production Runner broker readiness', () => {
         machineId: 'broker-machine', happyHomeDir: brokerHome, registry, runtimeStore,
         featureGate: { isEnabled: () => true },
         resolveAddresses: async () => ['1.1.1.1'],
-        acquireRuntimeLease: async () => (await acquire(brokerHome)).lease,
-        getAccountSettingsSnapshot: () => ({ source: 'cache', settings, settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [settingsSecretsReadKey] }),
+        acquireRuntimeLease: () => acquireAuthoritativePluginRuntimeRegistryLease({ happyHomeDir: brokerHome, controller: brokerController }),
+        getAccountSettingsSnapshot: () => snapshot,
         modelSettingsMutation: async (intent) => ({ status: 'success', action: intent.action }),
       });
       const source = { v: 1 as const, kind: 'provider_connection' as const, connectionId: ProviderConnectionIdSchema.parse('fixture-connection'), connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint, credentialSlotId: 'apiKey' };
@@ -273,7 +303,7 @@ describe('production Runner broker readiness', () => {
         binding, claim,
         // Unrelated authoring fields have already crossed the sealed-manifest
         // boundary; this fixture exercises the real readiness/registry corridor.
-        manifest: { preparedAuthoring: { authoring: { agentTarget } }, credentialSelectionBinding: selection, reviewedProviderModel: { selection: { modelId: row.descriptor.id } } } as never,
+        manifest: { preparedAuthoring: { authoring: { agentTarget } }, credentialSelectionBinding: selection, reviewedProviderModel: { selection: { modelId: row.descriptor.id }, descriptor: row.descriptor } } as never,
         launchManifestCommitment: encodeBase64(new Uint8Array(32).fill(89), 'base64url'),
         activationSecretKey: activation.secretKey, installationSecretKey: installation.secretKey,
         preparation: { managed: { resolution: { command: '/managed/codex' } }, pluginRuntime: runner },
@@ -286,10 +316,13 @@ describe('production Runner broker readiness', () => {
           return { kind: await currentness() };
         },
       };
-      expect(await checkProductionRunnerBrokerReadiness(checkInput)).toMatchObject({ status: 'ready', readiness: { payload: { installation: { agentRuntimeId: 'codex', executablePath: '/managed/codex' } } } });
+      const readiness = await checkProductionRunnerBrokerReadiness(checkInput);
+      expect(readiness.status, readiness.status === 'ready' ? 'ready' : readiness.reason).toBe('ready');
+      expect(readiness).toMatchObject({ status: 'ready', readiness: { payload: { installation: { agentRuntimeId: 'codex', executablePath: '/managed/codex' } } } });
       resource.enabled = false;
       expect(await checkProductionRunnerBrokerReadiness(checkInput)).toEqual({ status: 'denied', reason: 'source_unavailable' });
     } finally {
+      await broker?.dispose();
       await runner?.release();
       await rm(root, { recursive: true, force: true });
     }

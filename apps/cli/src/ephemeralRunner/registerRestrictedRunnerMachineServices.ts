@@ -162,7 +162,7 @@ export function registerRestrictedRunnerMachineServices(input: Readonly<{
         sizeBytes: resolved.source.sizeBytes,
       };
     },
-    releaseExportSession: async (transferId) => directTransferLifecycle.clearPublishedTransfer(transferId),
+    releaseExportSession: async (transferId) => { await directTransferLifecycle.clearPublishedTransfer(transferId); },
   });
 
   return Object.freeze({

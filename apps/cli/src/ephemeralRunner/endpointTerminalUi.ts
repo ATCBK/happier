@@ -622,7 +622,7 @@ function displayMcpMaterial(
   if (value == null) return t('value.none');
   return displayValue({
     strictMode: value.strictMode,
-    selection: value.selection,
+    capabilitySelection: value.capabilitySelection,
     servers: value.servers.map((server) => ({
       serverId: server.serverId,
       serverRevision: server.serverRevision,

@@ -5,7 +5,7 @@ import {
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { StartPeerMediationLoopbackInput } from '@/daemon/peer/mediation/rpc/startLoopback';
+import type { StartPeerMediationLoopbackInput, StartedPeerMediationLoopback } from '@/daemon/peer/mediation/rpc/startLoopback';
 
 import { startRestrictedRunnerMachineIrohIngress } from './startRestrictedRunnerMachineIrohIngress';
 
@@ -83,14 +83,17 @@ function createFixture() {
   let loopbackInput: StartPeerMediationLoopbackInput | null = null;
   const startLoopback = vi.fn(async (input: StartPeerMediationLoopbackInput) => {
     loopbackInput = input;
+    const endpoint: StartedPeerMediationLoopback['endpoint'] = {
+      v: 1,
+      routeKind: 'loopback_direct',
+      url: 'http://127.0.0.1:47001',
+      endpointFingerprint: 'pmrpc_fixture',
+      expiresAt: Date.now() + 60_000,
+    };
     return {
-      endpoint: {
-        v: 1 as const,
-        routeKind: 'loopback_direct' as const,
-        url: 'http://127.0.0.1:47001',
-        endpointFingerprint: 'pmrpc_fixture',
-        expiresAt: Date.now() + 60_000,
-      },
+      endpoint,
+      readEndpoint: () => endpoint,
+      subscribeEndpointChanges: () => () => {},
       activeFlows: { machine_rpc: true as const },
       stop: loopbackStop,
     };

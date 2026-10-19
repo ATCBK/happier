@@ -1,5 +1,5 @@
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
-import { isSocketRpcActionApiServerOriginAuthorizationContext, parseSocketRpcAuthorizationContext } from '@happier-dev/protocol/rpc';
+import { isSocketRpcActionApiServerOriginAuthorizationContext, parseSocketRpcAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import { resolveEphemeralRunnerMachineRpcAuthority } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
 import type { SocketRpcAuthorizationContext } from '@happier-dev/protocol/rpc';
 import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, ExternalActionDaemonPlacementV1Schema } from '@happier-dev/protocol/actions/externalActionApi';

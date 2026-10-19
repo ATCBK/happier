@@ -26,7 +26,7 @@ const preparedAuthoring = {
   mcpMaterial: {
     v: 1 as const,
     strictMode: true,
-    selection: { v: 1 as const, managedServersEnabled: false, forceIncludeServerIds: ['mcp-review'], forceExcludeServerIds: [] },
+    capabilitySelection: { mcp: { v: 1 as const, managedServersEnabled: false, forceIncludeServerIds: ['mcp-review'], forceExcludeServerIds: [] } },
     servers: [{
       serverId: 'mcp-review', serverRevision: 2, bindingId: 'binding-review', bindingRevision: 4,
       savedSecretRevisions: [{ secretId: 'mcp-token', revision: 5 }],
@@ -162,7 +162,11 @@ describe('ephemeral Runner terminal endpoint presentation', () => {
       directory: '/Users/bob/Projects/widget',
     });
     const facts = presentation.sections.flatMap((section) => section.facts);
-    const valueOf = (id: string) => facts.find((fact) => fact.id === id)?.value;
+    const valueOf = (id: string) => {
+      const fact = facts.find((entry) => entry.id === id);
+      if (!fact) throw new Error(`Missing reviewed fact: ${id}`);
+      return fact.value;
+    };
 
     expect(presentation.heading).toBe('Happier Runner');
     expect(presentation.title).toBe('Review the exact request');
@@ -193,6 +197,7 @@ describe('ephemeral Runner terminal endpoint presentation', () => {
     expect(valueOf('mcp')).toContain('mcp-review');
     expect(valueOf('mcp_material')).toContain('/runner/bin/reviewed-mcp');
     expect(valueOf('mcp_material')).toContain('mcp-token');
+    expect(JSON.parse(valueOf('mcp_material')).capabilitySelection).toEqual(preparedAuthoring.mcpMaterial.capabilitySelection);
     expect(valueOf('mcp_material')).not.toContain('mcp-sealed-secret');
     expect(valueOf('mcp_material')).not.toContain('mcp-argument-secret');
     expect(valueOf('connected_services')).toContain('dev.happier.github/github');
