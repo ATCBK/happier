@@ -28,6 +28,24 @@ function lifetime(accountId: string) {
 afterEach(() => { boundary.rpc.mockReset(); vi.useRealTimers(); });
 
 describe('machine capabilities cache races at the RPC boundary', () => {
+    it('settles one capability set across mounts even when the daemon omits a requested optional fact, and probes a new readiness epoch', async () => {
+        const optionalRequest: CapabilitiesDetectRequest = { requests: [{ id: 'cli.codex', params: { includeLatestVersion: true } }] };
+        boundary.rpc.mockResolvedValue({ protocolVersion: 1, results: {
+            'cli.codex': { ok: true, checkedAt: 1, data: { updateSupported: true } },
+        } });
+        const target = { machineId: 'settled-optional-fact', serverId: 'settled-home', request: optionalRequest, enabled: true };
+        for (let mount = 0; mount < 6; mount++) {
+            const hook = await renderHook(() => useMachineCapabilitiesCache({ ...target, cacheKeySalt: 1 }));
+            expect(hook.getCurrent().state.status).toBe('loaded');
+            await hook.unmount();
+        }
+        expect(boundary.rpc).toHaveBeenCalledTimes(1);
+        const invalidated = await renderHook(() => useMachineCapabilitiesCache({ ...target, cacheKeySalt: 2 }));
+        expect(invalidated.getCurrent().state.status).toBe('loaded');
+        expect(boundary.rpc).toHaveBeenCalledTimes(2);
+        await invalidated.unmount();
+    });
+
     it('settles each cancelled reader without aborting a joined read, then recovers after the last reader leaves', async () => {
         const account = lifetime('consumer-signals');
         const firstController = new AbortController();

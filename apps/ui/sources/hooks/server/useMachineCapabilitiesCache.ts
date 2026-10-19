@@ -24,6 +24,8 @@ type CacheEntry = {
     state: MachineCapabilitiesCacheState;
     updatedAt: number;
     inFlightToken?: number;
+    /** Successful requests can omit optional facts; mounting again is not an invalidation. */
+    settledRequestKeys?: ReadonlySet<string>;
 };
 
 const cache = new Map<string, CacheEntry>();
@@ -350,7 +352,7 @@ function detectRequestKey(request: CapabilitiesDetectRequest): string {
     });
 }
 
-function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, request: CapabilitiesDetectRequest): boolean {
+function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, request: CapabilitiesDetectRequest, settledRequest = false): boolean {
     const snapshot =
         state.status === 'loaded'
             ? state.snapshot
@@ -363,6 +365,14 @@ function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, requ
 
     const results = snapshot.response.results;
     const requests = Array.isArray(request.requests) ? request.requests : [];
+    if (settledRequest) {
+        // An answered request may omit optional facts, but an actual failed
+        // latest-version probe still follows the existing failure retry policy.
+        return requests.some(entry => entry.id.startsWith('cli.')
+            && Boolean((entry.params as { includeLatestVersion?: unknown } | undefined)?.includeLatestVersion)
+            && results[entry.id]?.ok === false
+            && isAgentLatestVersionMissing(results, entry.id));
+    }
     const overrideEntries = isPlainObject(request.overrides)
         ? Object.entries(request.overrides as Record<string, { params?: Record<string, unknown> }>)
         : [];
@@ -536,6 +546,7 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
             state: { status: 'loading', ...(prevSnapshot ? { snapshot: prevSnapshot } : {}) },
             updatedAt: Date.now(),
             inFlightToken: token,
+            settledRequestKeys: existing?.settledRequestKeys,
         });
 
         let result: MachineCapabilitiesDetectResult;
@@ -557,6 +568,7 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
             setEntry(cacheKey, {
                 state: prevSnapshot ? ({ status: 'error', snapshot: prevSnapshot } as const) : ({ status: 'error' } as const),
                 updatedAt: failedAt,
+                settledRequestKeys: existing?.settledRequestKeys,
             });
             scheduleObservedErrorRetry(cacheKey, currentReaders(), failedAt);
             return;
@@ -593,6 +605,9 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
         setEntry(cacheKey, {
             state: nextState,
             updatedAt,
+            settledRequestKeys: result.supported
+                ? new Set([...(existing?.settledRequestKeys ?? []), requestKey])
+                : existing?.settledRequestKeys,
         });
         if (nextState.status === 'error') scheduleObservedErrorRetry(cacheKey, currentReaders(), updatedAt);
     });
@@ -656,7 +671,9 @@ export function prefetchMachineCapabilitiesIfStale(params: {
             signal: params.signal,
         });
     }
-    if (requestNeedsRefetchFromState(existing.state, params.request)) {
+    if (existing.state.status !== 'error'
+        && requestNeedsRefetchFromState(existing.state, params.request,
+            existing.settledRequestKeys?.has(detectRequestKey(params.request)))) {
         return fetchAndMerge({
             machineId: params.machineId,
             serverId: params.serverId,
