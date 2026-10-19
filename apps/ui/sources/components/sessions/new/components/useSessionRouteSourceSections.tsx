@@ -35,7 +35,8 @@ export function RouteSourceChevron() {
 
 function routeSourceSubtitle(row: SessionRouteSourceRow): string {
     if (row.worksWith) return t('connectedServices.authChip.worksWith', { agents: row.worksWith.join(', ') });
-    const models = t('settingsProviders.detail.modelCount', { count: row.modelCount ?? 0 });
+    if (row.modelCount === null) return t('agentInput.model.browseSource', { source: row.label });
+    const models = t('settingsProviders.detail.modelCount', { count: row.modelCount });
     return row.hiddenFromPicker ? `${models} · ${t('agentInput.model.hiddenFromMainPicker')}` : models;
 }
 
