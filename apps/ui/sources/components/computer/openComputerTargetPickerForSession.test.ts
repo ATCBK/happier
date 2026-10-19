@@ -4,6 +4,7 @@ import { getAgentCore } from '@/agents/catalog/catalog';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { getStorage } from '@/sync/domains/state/storage';
 import { t } from '@/text';
+import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 
 import { resolveComputerTargetPickerForSession } from './openComputerTargetPickerForSession';
 
@@ -13,16 +14,16 @@ describe('resolveComputerTargetPickerForSession', () => {
     getStorage().setState({
       profileScope: previous.profileScope,
       sessions: previous.sessions,
+      sessionListRowsByServerId: previous.sessionListRowsByServerId,
     });
   });
 
-  it('names the Session agent from its Home-qualified live record when the list row carries no agent', () => {
+  it('names the Session agent from its Home-qualified display row without requiring a hydrated record', () => {
     const serverId = 'srv-picker-agent';
     const sessionId = 'picker-agent-session';
     getStorage()
       .getState()
       .activateProfileScope({ serverId, accountId: 'picker-agent-account' });
-    // Layout v1: the shared metadata names the agent; the owner view (what list rows read) does not.
     getStorage()
       .getState()
       .applySessions([
@@ -30,15 +31,16 @@ describe('resolveComputerTargetPickerForSession', () => {
           id: sessionId,
           serverId,
           metadataLayoutVersion: 1,
-          metadata: { v: 1, agentPresentation: { agentId: 'claude' } } as never,
+          metadata: parseDecryptedSessionMetadata({ v: 1, agentPresentation: { agentId: 'claude' } }, 1),
           ownerMetadataView: {
             name: 'Check the sign-in flow',
             path: '/work/happier',
             host: 'devbox',
             machineId: 'machine-1',
-          } as never,
+          },
         }),
       ]);
+    getStorage().setState({ sessions: {} });
 
     const request = resolveComputerTargetPickerForSession({
       sessionId,

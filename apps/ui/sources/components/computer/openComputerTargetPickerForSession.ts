@@ -3,10 +3,8 @@ import type { ComputerAccessV1, ComputerSelectedTargetResponseV1 } from '@happie
 import { getAgentCore, type AgentId } from '@/agents/catalog/catalog';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { findSessionListLookupSession } from '@/sync/domains/session/listing/sessionListLookupState';
-import { selectHomeQualifiedSession } from '@/sync/domains/session/selectHomeQualifiedSession';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { noteSessionComputerMachine } from '@/sync/domains/computer/sessionComputerMachines';
-import { getStorage } from '@/sync/domains/state/storage';
+import { getStorage, selectSessionDisplayNameSource } from '@/sync/domains/state/storage';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
@@ -67,11 +65,8 @@ export function resolveComputerTargetPickerForSession(params: ComputerTargetPick
         ? { serverId, sessionId: params.sessionId }
         : params.sessionId)?.machineId ?? null;
     const refusalCode = sessionMachineId && sessionMachineId !== params.machineId ? 'computer_machine_mismatch' : null;
-    // A list row carries the owner view, not the shared agent presentation: the Agent's name comes
-    // from the same Home-qualified live record the viewer names it from, so both say the same name.
-    const liveSession = selectHomeQualifiedSession(state, params.sessionId, serverId ?? undefined, getActiveServerSnapshot().serverId);
-    const agentId = (session ? readSessionPresentationAgentId(session) : null)
-        ?? (liveSession ? readSessionPresentationAgentId(liveSession) : null);
+    const displaySource = selectSessionDisplayNameSource(state, params.sessionId, serverId);
+    const agentId = displaySource ? readSessionPresentationAgentId(displaySource) : null;
     const core = agentId ? getAgentCore(agentId as AgentId) : null;
     const sessionName = session ? getSessionName(session, serverId) : null;
     const project = session ? readProjectLabel(getSessionSubtitle(session, serverId)) : null;
