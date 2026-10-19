@@ -236,11 +236,13 @@ it('withdraws mounted effect admission on exact Artifact publication before a de
     const publication = { id: artifactId, title: 'Named', isDecrypted: true as const, ownerAccountId: 'owner', access: 'view' as const,
         storageMode: 'plain' as const, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
     let revoked = false;
+    let readFails = false;
     let releaseRead: (() => void) | undefined;
     let waitForRead = false;
     const transport: HomeHubArtifactTransportV1 = {
         read: async () => {
             if (waitForRead) await new Promise<void>(resolve => { releaseRead = resolve; });
+            if (readFails) throw new Error('Artifact read failed');
             if (!revoked) storage.getState().applyArtifacts([{ ...publication }]);
             return revoked ? null : row;
         },
@@ -269,7 +271,13 @@ it('withdraws mounted effect admission on exact Artifact publication before a de
     expect(admitted.isCurrent()).toBe(false);
     expect(admitted.isReadPending()).toBe(true);
     expect(hook.getCurrent().state.status).toBe('ready'); // Last admitted layout remains during the read.
+    // A transient failure cannot keep admission after its exact publication has changed.
+    readFails = true;
     await act(async () => { waitForRead = false; releaseRead?.(); });
+    await flushHookEffects();
+    expect(hook.getCurrent().state).toMatchObject({ status: 'unavailable', reasonCode: 'widget_area_unavailable' });
+    readFails = false;
+    await act(async () => { await hook.getCurrent().reload(); });
     await flushHookEffects();
     const renewed = hook.getCurrent().state;
     if (renewed.status !== 'ready') throw new Error('Expected read to renew admission');

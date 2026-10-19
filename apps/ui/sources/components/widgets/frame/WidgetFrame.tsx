@@ -44,7 +44,7 @@ import { shadowLevelStyle } from '@/shadowElevation';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { MiddleEllipsisText } from '@/components/ui/text/MiddleEllipsisText';
-import { WidgetFrameResourceActivityContext } from './widgetFrameResourceActivity';
+import { isWidgetResourceQuietRefresh, WidgetFrameResourceActivityContext } from './widgetFrameResourceActivity';
 import { WidgetFrameBodyRowsContext } from './widgetFrameBody';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { resolveVerticalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
@@ -243,18 +243,28 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     // A widget lays itself out from its measured room (columns, strips, plot height). On the web a layout event
     // reaches it only after the first paint, and a busy page can hold that event for seconds, so the first commit
     // reads the room itself: nothing paints in a layout it is about to leave.
-    const viewportRef = React.useRef<View | null>(null);
     const viewportContentRef = React.useRef<View | null>(null);
-    React.useLayoutEffect(() => {
-        if (Platform.OS !== 'web' || geometry !== undefined) return;
-        // A fixed body's viewport is the scroll area that holds its content row.
-        const content = viewportContentRef.current as unknown as Element | null;
-        const room = readViewportRoom(viewportRef.current ?? content?.closest?.(`[data-testid="${props.testID}.viewport"]`) ?? null);
-        if (room) setGeometry(room);
-    }, [geometry, props.testID]);
     const inset = resolveHappierWidgetFrameInsetPx(props.frameStyle);
     // Inside a group nothing clips (A6): a grid cell keeps its rows' room and grows; a phone's stack is its content.
     const bodyHeight = props.bodyHeight ?? (props.grouped ? phone ? 'content' : 'grow' : 'fixed');
+    // A body that sizes itself (a grown or content-height cell) is told its own room: the box its content takes, at
+    // least the rows a grown cell keeps. Never the band's: a frame stretched by a taller partner column, or by a
+    // partner that grows while it refreshes, leaves that space empty instead of handing it to a chart (lab wgusage-CD).
+    const declaredBodyHeight = bodyHeight === 'grow' ? props.viewportHeight ?? rows * rowHeight : 0;
+    const onBodyBoxLayout = React.useCallback((event: HappierLayoutChangeEvent) => {
+        const { width, height } = event.nativeEvent.layout;
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+        const room = Math.max(height, declaredBodyHeight);
+        setGeometry(previous => previous?.width === width && previous.height === room ? previous : { width, height: room });
+    }, [declaredBodyHeight]);
+    React.useLayoutEffect(() => {
+        if (Platform.OS !== 'web' || geometry !== undefined) return;
+        // A fixed body's viewport is the scroll area that holds its content row; a sizing body's room is its own box.
+        const content = viewportContentRef.current as unknown as Element | null;
+        const room = readViewportRoom(bodyHeight !== 'fixed' && props.widgetPresentation ? content
+            : content?.closest?.(`[data-testid="${props.testID}.viewport"]`) ?? null);
+        if (room) setGeometry(bodyHeight !== 'fixed' ? { ...room, height: Math.max(room.height, declaredBodyHeight) } : room);
+    }, [geometry, props.testID, props.widgetPresentation, bodyHeight, declaredBodyHeight]);
     // A fixed body whose rows run past it fades at the cut edge, so no line reads as cut off mid-height.
     const bodyFades = useScrollEdgeFades({ enabledEdges: FIXED_BODY_FADE_EDGES });
     const onFixedViewportLayout = React.useCallback((event: HappierLayoutChangeEvent) => {
@@ -282,7 +292,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     // A refresh nobody asked for is quiet work however long it runs: the glyph alone. The frame owns the one
     // refresh button the person presses (the footer's Retry), so only a refresh that button started says the word.
     const [retrying, setRetrying] = React.useState(false);
-    const refreshingWords = refreshing && retrying;
+    const refreshingWords = refreshing && !isWidgetResourceQuietRefresh(true, retrying);
     const retryFooter = footer?.kind === 'refreshFailed' ? footer.onRetry : undefined;
     const onRetry = React.useMemo(() => retryFooter ? () => {
         setRetrying(true);
@@ -297,7 +307,9 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             <ActivitySpinner size={ICON_SIZE.xs - 2} color={theme.colors.text.tertiary} />
         </View>
     ) : undefined;
-    const meta = !refreshing ? props.meta : (
+    // A frame drawn headerless (`title={null}`: a page section that owns its title) stays headerless: a refresh
+    // never grows an empty header row around a lone spinner; the body's own freshness line speaks for it.
+    const meta = !refreshing || props.title === null ? props.meta : (
         <View testID={`${props.testID}.refreshing`} style={styles.refreshing} accessibilityLiveRegion="polite"
             accessible accessibilityLabel={t('widgetDefinition.refreshing')}>
             <ActivitySpinner size={ICON_SIZE.xs - 2} color={theme.colors.text.tertiary} />
@@ -433,10 +445,14 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                 {props.widgetPresentation && bodyHeight !== 'fixed' ? (
                     // Nothing clips or scrolls here: the body is measured (its size and width still
                     // reach it) and the frame takes the height that results. A frame stretched by its band
-                    // (a group's shorter column) hands the extra height to this viewport, so the body fills it.
-                    <View ref={viewportRef} testID={`${props.testID}.viewport`} onLayout={onViewportLayout}
+                    // (a group's shorter column) grows this viewport, but the body keeps its own box: the
+                    // extra height stays empty under it, so nothing it draws stretches or jumps.
+                    <View testID={`${props.testID}.viewport`}
                         style={{ minHeight: bodyHeight === 'grow' ? props.viewportHeight ?? rows * rowHeight : undefined, flexGrow: 1, minWidth: 0 }}>
-                        <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
+                        <View ref={viewportContentRef} testID={`${props.testID}.viewportBody`} onLayout={onBodyBoxLayout}
+                            style={{ minWidth: 0, ...(bodyHeight === 'grow' ? { minHeight: declaredBodyHeight } : {}) }}>
+                            <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
+                        </View>
                     </View>
                 ) : props.widgetPresentation ? (
                     <HappierScrollArea testID={`${props.testID}.viewport`} onLayout={onFixedViewportLayout}

@@ -150,8 +150,11 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
         }
         if (!mounted.current || signal?.aborted || current !== generation.current || binding.current !== capturedBinding) return;
         if (admittedLifetime && !admittedLifetime.isCurrent()) next = { status: 'unavailable', reasonCode: 'widget_area_scope_retired' };
-        setState(previous => next.status === 'loading' && previous.status === 'ready' && previous.isCurrent()
-            ? previous : reconcile(previous, next));
+        // A retryable read failure says nothing new about the admitted layout. Keep it while
+        // its Account and exact Artifact publication are still current; explicit refusal or
+        // retired authority still clears it through the normal unavailable state.
+        setState(previous => (next.status === 'loading' || next.status === 'unavailable' && next.reasonCode === 'widget_area_unavailable')
+            && previous.status === 'ready' && previous.isCurrent() ? previous : reconcile(previous, next));
     }, [context, port]);
 
     // The native Host API keeps its identity through Machine readiness changes. Re-observe its

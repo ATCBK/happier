@@ -11,6 +11,7 @@ import { useWorkBoardSummaries } from '@/components/boards/model/useWorkBoards';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
 import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
 import { resolvePluginAppPages, selectPluginAppPagePlacements } from '@/components/appShell/plugins/pluginAppPages';
@@ -35,8 +36,10 @@ export type WidgetAboutSource = Readonly<{
     machine: string | null;
     /** Each viewer's own connection is used for it. */
     usesViewerConnection: boolean;
-    /** The exact declared read. Its saved query text is shown only if the plugin itself exposes it. */
+    /** The declared read as words ("Bound count"). */
     read: string;
+    /** The exact admitted Resource, qualified by its plugin ("acme.checks/bound-count"); the declaration exposes no saved query text. */
+    identity: string;
 }>;
 
 /** Read metadata uses the admitted target's projection, never the containing page's machine. */
@@ -59,6 +62,7 @@ export function readWidgetAboutSources(input: Readonly<{
         const machine = origin?.machineId ? resolveServerScopedMachine(state, origin.serverId, origin.machineId) : null;
         return {
             key: `${resource.pluginId}/${resource.localId}`,
+            identity: `${resource.pluginId}/${resource.localId}`,
             plugin: projection?.installedPackagesById[resource.pluginId]?.displayName ?? installed?.pluginName ?? resource.pluginId,
             machine: getMachineDisplayName(machine),
             usesViewerConnection: (declaration?.connectedAccountPurposes?.length ?? 0) > 0,
@@ -217,7 +221,10 @@ export function WidgetAboutPanel(props: Readonly<{
             {sources.length > 0 ? (
                 <WidgetFactRow label={t('widgetDefinition.aboutReads')} testID={`${props.testID}.reads`}>
                     {sources.map((source) => (
-                        <Text key={source.key} style={text.primary}>{t('widgetDefinition.readsResource', { read: source.read, plugin: source.plugin })}</Text>
+                        <View key={source.key}>
+                            <Text style={text.primary}>{t('widgetDefinition.readsResource', { read: source.read, plugin: source.plugin })}</Text>
+                            <Text style={[text.secondary, Typography.mono()]} testID={`${props.testID}.reads.identity`}>{source.identity}</Text>
+                        </View>
                     ))}
                     <Text style={text.secondary}>{t('widgetDefinition.cannotRunAnythingElse')}</Text>
                 </WidgetFactRow>

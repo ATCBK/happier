@@ -8,6 +8,7 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -80,7 +81,11 @@ export function WidgetFlowPanel(props: Readonly<{
     const styles = stylesheet;
     const devicePhone = useDeviceType() === 'phone';
     const phone = props.phone ?? devicePhone;
-    const message = props.error ?? (props.primary?.busy === true ? props.primary.busyNote : undefined) ?? props.primary?.blockedReason ?? props.note ?? null;
+    const busyNote = props.primary?.busy === true ? props.primary.busyNote : undefined;
+    const message = props.error ?? busyNote ?? props.primary?.blockedReason ?? props.note ?? null;
+    // The busy word ("Saving…") is short and the spinner already speaks: it stays beside the buttons, so pressing
+    // the primary never moves it. Any other message in a narrow surface takes its own line.
+    const messageOwnsLine = message !== null && (props.error != null || busyNote === undefined);
     const caret = props.onBack ?? (phone ? props.onClose ?? props.onCancel : undefined);
     const closeInHeader = !phone && !props.onBack && !props.onCancel ? props.onClose : undefined;
     const mark = props.mark === undefined ? null
@@ -88,8 +93,8 @@ export function WidgetFlowPanel(props: Readonly<{
         : props.mark;
     const note = props.footerStart ?? (
         <Text
-            style={[styles.note, phone ? null : styles.noteWrap, props.error ? styles.noteError : null]}
-            numberOfLines={2}
+            style={[styles.note, phone ? null : messageOwnsLine ? styles.noteWrap : null, props.error ? styles.noteError : null]}
+            numberOfLines={3}
             testID={props.noteTestID ?? `${props.testID}.note`}
             accessibilityLiveRegion="polite"
         >
@@ -116,7 +121,7 @@ export function WidgetFlowPanel(props: Readonly<{
     const bounded = heightBound !== null && !props.fill;
     return (
         <View testID={props.testID} accessibilityLabel={props.title}
-            style={[styles.root, props.fill ? styles.rootFill : null, bounded ? { maxHeight: heightBound } : null]}>
+            style={[styles.root, phone ? styles.rootPhone : null, props.fill ? styles.rootFill : null, bounded ? { maxHeight: heightBound } : null]}>
             {phone && props.onBack && props.backLabel ? (
                 <HappierPressable
                     testID={`${props.testID}.back`}
@@ -144,7 +149,7 @@ export function WidgetFlowPanel(props: Readonly<{
                 {mark ? <View style={styles.mark}>{mark}</View> : null}
                 <View style={styles.titleBlock}>
                     <Text style={styles.title} accessibilityRole="header" numberOfLines={2}>{props.title}</Text>
-                    {props.hint ? <Text style={styles.hint} numberOfLines={2}>{props.hint}</Text> : null}
+                    {props.hint ? <Text style={styles.hint} numberOfLines={3}>{props.hint}</Text> : null}
                     {props.provenance ? <Text testID={`${props.testID}.provenance`} style={styles.provenance} numberOfLines={1}>{props.provenance}</Text> : null}
                 </View>
                 {closeInHeader ? (
@@ -278,6 +283,8 @@ export const widgetFlowText = StyleSheet.create((theme) => ({
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: { paddingHorizontal: theme.space.s6, paddingTop: theme.space.s6, paddingBottom: theme.space.s8 },
+    // A phone's sheet keeps the page metrics' sheet inset on every edge (header, body, footer add their own s4).
+    rootPhone: { paddingHorizontal: PAGE_LIST_METRICS.sheetInsetPx - theme.space.s4 },
     // A phone's pushed step: "‹ Widgets" on its own line, as the navigation bar would draw it.
     backRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: theme.space.s2, paddingVertical: theme.space.s6, paddingRight: theme.space.s8, marginLeft: -2, marginBottom: theme.space.s4, borderRadius: MENU_ROW_METRICS.radiusPx },
     backLabel: { ...Typography.default(), ...happierPageTextMetrics('rowTitle'), color: theme.colors.text.link },
@@ -312,8 +319,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
     },
-    // In a narrow surface (a rail, a card's popover) the note takes its own line above the buttons instead of
-    // being crushed beside them; Cancel and the primary action wrap together, never apart.
+    // In a narrow surface (a rail, a card's popover) a note with something to say takes its own line above the buttons
+    // instead of being crushed beside them; a silent note sits beside them, so it never leaves a blank line above the
+    // buttons. Cancel and the primary action wrap together, never apart.
     footerWrap: { flexWrap: 'wrap', justifyContent: 'flex-end' },
     noteWrap: { flexGrow: 1, flexShrink: 1, flexBasis: 180 },
     footerActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },

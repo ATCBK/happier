@@ -142,10 +142,7 @@ function describeWidgetDefinitionMaker(candidate: WidgetCandidate): string | nul
     }
 }
 
-/**
- * The candidates a surface can host, for its Add: a checkout widget (Project built-ins) only where
- * a Project supplies the checkout. The target owner (`isWidgetTargetHostableV1`) decides.
- */
+/** Gallery and Actions share declared-target admission; setup still requires an authorized target. */
 export function selectHostableWidgetCandidates<T extends Parameters<typeof isWidgetTargetHostableV1>[0]>(
     candidates: readonly T[],
     surface: WidgetSurfaceRefV1['owner']['kind'],

@@ -46,12 +46,13 @@ export function SaveWidgetGroupPanel(props: Readonly<{
                 blockedReason: trimmed.length === 0 ? t('widgetDefinition.nameNeeded') : null }}
             testID={props.testID}
         >
-            <ListPresentationProvider value="page">
+            <ListPresentationProvider value="page" pageInsets="contained">
                 <ItemGroup surface="none" density="compact">
                     <Item
                         testID={`${props.testID}.name`}
                         title={t('widgetDefinition.name')}
                         showChevron={false}
+                        accessoryLayout="stacked"
                         rightElement={(
                             <FieldTextInput testID={`${props.testID}.nameInput`} accessibilityLabel={t('widgetDefinition.name')}
                                 value={name} onChangeText={setName} editable={state.kind !== 'busy'} autoFocus selectTextOnFocus

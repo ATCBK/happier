@@ -204,7 +204,7 @@ describe('WidgetFrame', () => {
             widgetPresentation={{ size: 'small', footprint: { columns: 2, columnSpan: 1, rowSpan: 1, height: 'compact', width: 'half' } }}
             body={{ kind: 'content', children: <Body /> }} />);
         expect(screen.root.findAllByType(HappierScrollArea)).toHaveLength(0);
-        await act(async () => { screen.findByTestId('grouped.viewport')!.props.onLayout({ nativeEvent: { layout: { width: 330, height: 240 } } }); });
+        await act(async () => { screen.findByTestId('grouped.viewportBody')!.props.onLayout({ nativeEvent: { layout: { width: 330, height: 240 } } }); });
         expect(observed).toMatchObject({ size: 'small', geometry: { width: 330, height: 240 } });
     });
     it('keeps a background refresh to the glyph, and says Refreshing in words only for the refresh the person started with Retry', async () => {
@@ -254,8 +254,40 @@ describe('WidgetFrame', () => {
             body={{ kind: 'content', children: <Body /> }} />);
         // No fixed-height scroll viewport: the row is as tall as what it shows.
         expect(screen.root.findAllByType(HappierScrollArea)).toHaveLength(0);
-        await act(async () => { screen.findByTestId('core.viewport')!.props.onLayout({ nativeEvent: { layout: { width: 900, height: 412 } } }); });
+        await act(async () => { screen.findByTestId('core.viewportBody')!.props.onLayout({ nativeEvent: { layout: { width: 900, height: 412 } } }); });
         expect(observed).toMatchObject({ size: 'wide', footprint: { columnSpan: 2 }, geometry: { width: 900, height: 412 } });
+    });
+    it('keeps a headerless frame headerless while its body refreshes: no empty header row, no lone spinner above the body', async () => {
+        const { useWidgetFrameResourceActivity } = await import('./widgetFrameResourceActivity');
+        function Refreshing() { useWidgetFrameResourceActivity(true); return <>capacity</>; }
+        const screen = await renderScreen(<WidgetFrame testID="embed" frameStyle="plain" grouped placement="home" title={null} bodyHeight="content"
+            widgetPresentation={{ size: 'medium', footprint: { columns: 2, columnSpan: 1, rowSpan: 2, height: 'regular', width: 'half' } }}
+            body={{ kind: 'content', children: <Refreshing /> }} />);
+        await flushHookEffects({ cycles: 2 });
+        expect(screen.findByTestId('embed.refreshing')).toBeNull();
+        expect(screen.getTextContent()).toContain('capacity');
+    });
+    it('tells a body stretched by its band its own height, never the band\'s, so a chart keeps its height and the cell keeps the space', async () => {
+        let observed: ReturnType<typeof useWidgetPresentation>;
+        function Body() { observed = useWidgetPresentation(); return <>a sized plot</>; }
+        const screen = await renderScreen(<WidgetFrame testID="daily" frameStyle="plain" grouped placement="home" title="Daily usage" bodyHeight="content"
+            widgetPresentation={{ size: 'medium', footprint: { columns: 2, columnSpan: 1, rowSpan: 2, height: 'regular', width: 'half' } }}
+            body={{ kind: 'content', children: <Body /> }} />);
+        // The body lays out at its own height first; then the taller partner column stretches the viewport.
+        await act(async () => { screen.findByTestId('daily.viewportBody')?.props.onLayout({ nativeEvent: { layout: { width: 560, height: 300 } } }); });
+        await act(async () => { screen.findByTestId('daily.viewport')!.props.onLayout?.({ nativeEvent: { layout: { width: 560, height: 700 } } }); });
+        expect(observed?.geometry).toEqual({ width: 560, height: 300 });
+        // A refresh that briefly grows the partner never ratchets the body's room up with it.
+        await act(async () => { screen.findByTestId('daily.viewport')!.props.onLayout?.({ nativeEvent: { layout: { width: 560, height: 888 } } }); });
+        expect(observed?.geometry).toEqual({ width: 560, height: 300 });
+    });
+    it('does not say the source again when the title already names it', async () => {
+        const named = await renderFrame({ title: 'New in PRs & Issues', source: 'PRs & Issues' });
+        // One mention in the header; the accessible name still carries the source.
+        expect(named.getTextContent().split('PRs & Issues')).toHaveLength(2);
+        expect(named.findByTestId('frame')?.props.accessibilityLabel).toBe('New in PRs & Issues, PRs & Issues');
+        const distinct = await renderFrame({ title: 'Latest runs', source: 'Automations' });
+        expect(distinct.getTextContent()).toContain('Automations');
     });
     it('keeps the suffix that tells near-identical machines apart when a bound source is too long for its header', async () => {
         const screen = await renderFrame({ source: 'Following group · NLDW6-3-11-20 · 0371' });

@@ -15,6 +15,13 @@ import type { WidgetAddSection } from '../add/widgetAddModel';
  * real Account Artifact store; only the network and the credential store are replaced.
  */
 const harness = createHomeGovernanceHarness();
+// Only physical confirmation is substituted; the real Action policy and its Inbox custody remain.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+// A native virtual list needs layout callbacks the host renderer cannot supply.
+vi.mock('@legendapp/list/react-native', async importOriginal =>
+    (await import('@/dev/testkit/mocks/legendList')).createCapturingLegendListMock({
+        original: await importOriginal<Record<string, unknown>>(), renderItems: true,
+    }).module);
 installHomeGovernanceBoundaries(harness);
 // The fixture Home is reachable. Deliver only the external transport event;
 // the real connection owner still establishes scoped request authority.
@@ -31,8 +38,9 @@ const { BoardWidgetAddPopover } = await import('../add/BoardWidgetAddPopover');
 const ACCOUNT_ID = 'account-a';
 let restoreUuid: (() => void) | null = null;
 
-async function addDefinitionHome(): Promise<string> {
-    const serverId = await harness.addHome({ name: 'Home A', serverUrl: 'https://definitions-home.example', accountId: ACCOUNT_ID });
+async function addDefinitionHome(portable = false): Promise<string> {
+    const serverId = await harness.addHome({ name: 'Home A', serverUrl: 'https://definitions-home.example',
+        ...(portable ? { publicServerUrl: 'https://definitions-home.example', serverIdentityId: 'srv_definitions' } : {}), accountId: ACCOUNT_ID });
     const { storage } = await import('@/sync/domains/state/storage');
     storage.setState({ profileScope: { serverId, accountId: ACCOUNT_ID }, settingsScope: { serverId, accountId: ACCOUNT_ID } });
     harness.answer(serverId, '/v1/auth/ping', { body: { success: true } });
@@ -76,6 +84,7 @@ describe('widget definition flows', () => {
     it.each(['home', 'project'] as const)('copies resolved page inputs to %s through the shared menu and the existing Add Action approval path', async destinationKind => {
         const serverId = await addDefinitionHome();
         await harness.requireUiApproval(serverId, 'widgets.item.add');
+        const disconnect = await applyDefinitionHomeConnection();
         const React = await import('react');
         const { View } = await import('react-native');
         const { act } = await import('react-test-renderer');
@@ -142,7 +151,7 @@ describe('widget definition flows', () => {
             expect(body.actionArgs.instance.id).not.toBe(source.id);
             expect(source.bindings.period).toEqual({ kind: 'context', slot: 'period' });
             expect(source.bindings.breakdown).toEqual({ kind: 'value', value: ['agent'] });
-        } finally { await screen.unmount(); }
+        } finally { await screen.unmount(); await disconnect(); }
     });
 
     it('discovers setup metadata through the list Action without opening definition bodies', async () => {
@@ -256,6 +265,7 @@ describe('widget definition flows', () => {
     it('offers saved widgets on a shared Board and submits an admitted inline copy to real approval custody', async () => {
         const serverId = await addDefinitionHome();
         await harness.requireUiApproval(serverId, 'widgets.item.add');
+        const disconnect = await applyDefinitionHomeConnection();
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const { storage } = await import('@/sync/domains/state/storage');
         const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
@@ -314,7 +324,7 @@ describe('widget definition flows', () => {
                 expect(refused).toMatchObject({ ok: false });
                 expect(harness.artifacts(serverId).list()).toHaveLength(before.size + 1);
             } finally { await act(async () => { screen.tree.unmount(); }); }
-        } finally { storage.setState(previousScopes); }
+        } finally { await disconnect(); storage.setState(previousScopes); }
     });
 
     it('keeps authored gallery fields when the installed contribution declares different fields', async () => {
@@ -440,6 +450,7 @@ describe('widget definition flows', () => {
 
     it('projects the saved definition name and updated inputs from the existing Artifact header', async () => {
         const serverId = await addDefinitionHome();
+        const disconnect = await applyDefinitionHomeConnection();
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const executor = createDefaultActionExecutor();
         const account = { serverId, accountId: ACCOUNT_ID };
@@ -464,11 +475,12 @@ describe('widget definition flows', () => {
             await act(async () => { expect(await executor.execute('widgets.definition.update', { account, artifactId: 'checks-definition', patch: { name: 'Updated checks' } },
                 { serverId, surface: 'ui', authority: 'present_user', bypassApprovals: true })).toMatchObject({ ok: true, result: { definition: { name: 'Updated checks' } } }); });
             await vi.waitFor(() => { expect(screen.getTextContent()).toContain('Updated checks'); });
-        } finally { await act(async () => { screen.tree.unmount(); }); storage.setState(previousScopes); }
+        } finally { await screen.unmount(); await disconnect(); storage.setState(previousScopes); }
     });
 
     it.each(['companion', 'area'] as const)('names the retained %s frame and its setup controls from the saved header without opening its body', async (placement) => {
         const serverId = await addDefinitionHome();
+        const disconnect = await applyDefinitionHomeConnection();
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const { storage } = await import('@/sync/domains/state/storage');
         const account = { serverId, accountId: ACCOUNT_ID };
@@ -526,7 +538,7 @@ describe('widget definition flows', () => {
                 expect(menu.props.actions.some((action: { id: string }) => action.id === 'editInputs')).toBe(true);
                 expect(harness.requests.slice(before).some(request => request.path === '/v1/artifacts/checks-definition')).toBe(false);
             } finally { await act(async () => { screen.tree.unmount(); }); }
-        } finally { storage.setState(previousScopes); }
+        } finally { await disconnect(); storage.setState(previousScopes); }
     });
 
     it('describes placements in already opened WorkBoards without opening unrelated Board records', async () => {
@@ -545,7 +557,8 @@ describe('widget definition flows', () => {
             expect(await executor.execute('boards.apply', { intent: { kind: 'create', board: { id: 'board-a', name: 'Checks board' } } }, context)).toMatchObject({ ok: true });
             const ref = { surface: { ...account, owner: { kind: 'workBoard', boardId: 'board-a' } }, instanceId: 'copy-a' } as const;
             const instance = { v: 1, id: 'copy-a', definition: { kind: 'artifact', artifactId: 'checks-definition' }, bindings: { repo: { kind: 'value', value: 'main' } } } as const;
-            expect(await executor.execute('boards.apply', { intent: { kind: 'widget_add', boardId: 'board-a', ref, instance } }, context)).toEqual(expect.objectContaining({ ok: true }));
+            const placed = await executor.execute('boards.apply', { intent: { kind: 'widget_add', boardId: 'board-a', ref, instance } }, context);
+            expect(placed, JSON.stringify(placed)).toMatchObject({ ok: true });
             const before = harness.requests.length;
             const opened = await executor.execute('widgets.definition.get', { account, artifactId: 'checks-definition' }, context);
             expect(opened).toMatchObject({ ok: true, result: { placementSummary: { placements: expect.arrayContaining([ref]), unavailableScopes: expect.arrayContaining(['workBoard']) } } });
@@ -806,7 +819,7 @@ describe('widget definition flows', () => {
         try {
             const save = screen.tree.root.findAllByType(ItemRowActions).flatMap(menu => menu.props.actions)
                 .find((action: { id: string }) => action.id === 'saveAsYours');
-            expect(save).toBeDefined();
+            expect(save, screen.getTextContent()).toBeDefined();
             const onPress = save?.onPress;
             if (!onPress) throw new Error('Missing Save as yours widget action handler');
             await act(async () => { onPress(); });
@@ -838,13 +851,13 @@ describe('widget definition flows', () => {
             machineId: 'machine-b', serverId: 'home', platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' as const },
             reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} };
         expect(readWidgetAboutSources({ definition: null, descriptor, resolution: { status: 'ready', runtime, target: { kind: 'app' }, input: {} } }))
-            .toEqual([{ key: 'acme.checks/bound-count', plugin: 'Admitted source B', machine: null, usesViewerConnection: false, read: 'Bound count' }]);
+            .toEqual([{ key: 'acme.checks/bound-count', plugin: 'Admitted source B', machine: null, usesViewerConnection: false, read: 'Bound count', identity: 'acme.checks/bound-count' }]);
         expect(readWidgetAboutSources({ definition: null, descriptor, resolution: { status: 'denied', reasonCode: 'widget_session_access_denied' } })
             .every(source => source.machine === null && !source.usesViewerConnection)).toBe(true);
     });
 
     it.each(['hostedHtml', 'builtin'] as const)('keeps the saved %s copy on its original Home while a refused link is retried after switching Homes', async kind => {
-        const serverId = await addDefinitionHome();
+        const serverId = await addDefinitionHome(true);
         if (kind === 'builtin') await harness.requireUiApproval(serverId, 'widgets.definition.saveFromSession');
         const disconnect = kind === 'builtin' ? await applyDefinitionHomeConnection() : null;
         const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
@@ -932,7 +945,7 @@ describe('widget definition flows', () => {
             const artifactId = harness.artifacts(serverId).list().at(-1)!.id;
             harness.answer(serverId, `GET /v1/public-shares?subjectKind=artifact&subjectId=${artifactId}`, { body: { publicShares: [] } });
             await screen.pressByTestIdAsync('copyHandoff.share:document-share-public-link');
-            await vi.waitFor(() => expect(screen.findByTestId('session-public-link-create')).not.toBeNull());
+            await vi.waitFor(() => expect(screen.findByTestId('session-public-link-create'), screen.getTextContent()).not.toBeNull());
             await screen.pressByTestIdAsync('session-public-link-create');
             await screen.pressByTestIdAsync('session-public-link-options-cancel');
             expect(harness.requestsFor('/v1/public-shares').filter(request => request.input)).toHaveLength(0);
@@ -967,7 +980,8 @@ describe('widget definition flows', () => {
         const { SessionSurfaceItemV1Schema } = await import('@happier-dev/protocol/sessions/board');
         const { artifactHtmlBundleFromBodyV1, ARTIFACT_HTML_BUNDLE_MIME_V1 } = await import('@happier-dev/protocol/artifacts/artifactHtmlV1');
         const { decodePlainArtifactStoredContent } = await import('@happier-dev/protocol');
-        const session = createSessionFixture({ id: 'shared-html', serverId, encryptionMode: 'plain' });
+        // This copy needs no workspace; avoid giving its fixture an unrelated Project identity.
+        const session = createSessionFixture({ id: 'shared-html', serverId, encryptionMode: 'plain', metadata: null });
         storage.getState().applySessions([session]);
         const bundle = artifactHtmlBundleFromBodyV1('<p>Original HTML</p>');
         const item = SessionSurfaceItemV1Schema.parse({ v: 1, destination: 'transcript', title: 'Original HTML', frame: 'card',

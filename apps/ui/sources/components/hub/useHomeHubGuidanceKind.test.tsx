@@ -16,12 +16,12 @@ afterEach(async () => {
 });
 
 it('retains only this Account lifetime’s committed hub during a reach failure and preserves fresh setup', async () => {
-    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://home-continuity.test', accountId: 'account-a' }] });
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://home-continuity.test', accountId: 'account-a' }], route: () => undefined });
     const server = home.homes.a!;
     publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
     storage.setState({ profileScope: { serverId: server.id, accountId: 'account-a' } });
     type Input = { kind: SessionGettingStartedDecisionKind; unavailable: boolean };
-    const hook = await renderHook(({ kind, unavailable }: Input) => useHomeHubGuidanceKind(kind, unavailable),
+    const hook = await renderHook<ReturnType<typeof useHomeHubGuidanceKind>, Input>(({ kind, unavailable }) => useHomeHubGuidanceKind(kind, unavailable),
         { initialProps: { kind: 'start_daemon', unavailable: true } satisfies Input });
     expect(hook.getCurrent()).toBe('start_daemon');
     await hook.rerender({ kind: 'select_session', unavailable: false });

@@ -20,9 +20,12 @@ vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
 let actionPolicy = normalizeActionsSettingsV1({ v: 1 });
+let artifactReadFails = false;
 const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init) => {
     const path = new URL(String(url)).pathname;
     if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: { actionsSettingsV1: actionPolicy } }, version: 0 });
+    if (artifactReadFails && /^\/v1\/artifacts\/[^/]+$/.test(path) && (init?.method ?? 'GET') === 'GET')
+        return Response.json({ error: 'Failed to get artifact' }, { status: 500 });
     return artifacts.handle(path, init);
 } });
 function setActionPolicy(policy: ReturnType<typeof normalizeActionsSettingsV1>) {
@@ -48,11 +51,39 @@ beforeAll(async () => {
 afterAll(() => disposeActionLoader?.());
 beforeEach(() => {
     artifacts.clear(); retirePresentationNotice();
+    artifactReadFails = false;
     // These layout-owner scenarios exercise acknowledged edits under the user's explicit policy.
     setActionPolicy(normalizeActionsSettingsV1({ v: 1,
         approvalWaivedSurfaces: { 'widgets.item.rename': ['ui'], 'widgets.item.move': ['ui'],
             'widgets.area.layout.create': ['ui'], 'widgets.area.layout.reset': ['ui'], 'widgets.area.layout.undo': ['ui'] },
     }));
+});
+
+it('retains an admitted core-page area through a transient Artifact HTTP failure and admits recovery', async () => {
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
+        { id: 'overview', name: 'Overview', items: [{ kind: 'widget' as const, instance: {
+            v: 1 as const, id: 'displayed', definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: {},
+        } }] },
+    ] };
+    const hook = await renderHook(() => {
+        const binding = useCorePageWidgetAreaBinding(input);
+        return { binding, layout: useWidgetAreaLayout(binding.port!, input.context) };
+    });
+    try {
+        await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', placements: [{ instance: { id: 'displayed' } }] }));
+        const admitted = hook.getCurrent().layout.state;
+        artifactReadFails = true;
+        await act(async () => { await hook.getCurrent().layout.reload(); });
+        expect(hook.getCurrent().layout.state).toBe(admitted);
+        expect(admitted.status === 'ready' && admitted.isCurrent()).toBe(true);
+        artifactReadFails = false;
+        await act(async () => {
+            expect(await hook.getCurrent().binding.port!.execute({ actionId: 'widgets.item.rename', instanceId: 'displayed', displayName: 'Recovered' }))
+                .toMatchObject({ ok: true });
+            await hook.getCurrent().layout.reload();
+        });
+        await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', placements: [{ instance: { displayName: 'Recovered' } }] }));
+    } finally { artifactReadFails = false; await hook.unmount(); }
 });
 
 it('renews named layouts after same-Account activation without a Profile scope change', async () => {

@@ -5,7 +5,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { instantiateWidgetLayoutFragmentGroupV1 } from '@happier-dev/protocol/widgets';
+import { instantiateWidgetLayoutFragmentGroupV1, WidgetLayoutFragmentDraftV1Schema } from '@happier-dev/protocol/widgets';
 import * as uuidBoundary from '@/platform/randomUUID';
 import { Pressable } from 'react-native';
 
@@ -36,9 +36,9 @@ const { renderHook } = await import('@/dev/testkit');
 const { filterWidgetAddSections } = await import('../add/widgetAddModel');
 
 const ACCOUNT_ID = 'account-a';
-const DRAFT = { name: 'Release checks', inputs: { fields: [] }, inputSchema: { type: 'object' },
+const DRAFT = WidgetLayoutFragmentDraftV1Schema.parse({ name: 'Release checks', inputs: { fields: [] }, inputSchema: { type: 'object' },
     group: { width: 'full', frameStyle: 'card', dividers: 'hairline', children: [{ kind: 'widget',
-        instance: { v: 1, definition: { kind: 'builtin', id: 'summary' }, bindings: {} } }] } } as const;
+        instance: { v: 1, definition: { kind: 'builtin', id: 'summary' }, bindings: {} } }] } });
 const NO_INSTANCES = Object.freeze([]);
 const LABELS = { count: String, submit: 'Add' };
 const addInstance = async () => ({ ok: true as const });
@@ -141,8 +141,7 @@ describe('saved-group Gallery management', () => {
         restoreUuid = () => uuid.mockRestore();
         await screen.pressByTestIdAsync('terminal-save.saveGroup.panel.submit');
         await flushHookEffects({ cycles: 2 });
-        expect(screen.tree.root.findByType(WidgetFlowPanel).props.primary.busy).toBe(false);
-        expect(screen.tree.root.findByType(WidgetFlowPanel).props.primary.label).toBe('Retry');
+        expect(screen.tree.root.findByType(WidgetFlowPanel).props.primary).toMatchObject({ busy: false, label: 'Retry' });
         expect(screen.findByTestId('terminal-save.saveGroup.panel')).not.toBeNull();
         await screen.pressByTestIdAsync('terminal-save.saveGroup.panel.submit');
         await vi.waitFor(() => expect(screen.findByTestId('terminal-save.saveGroup.panel')).toBeNull());

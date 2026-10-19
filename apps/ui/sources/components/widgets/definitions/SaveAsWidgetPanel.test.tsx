@@ -313,10 +313,131 @@ describe('Session widget placement through the destination setup', () => {
             await vi.waitFor(() => expect(screen.tree.root.findAllByType(WidgetSetupStep), screen.getTextContent()).toHaveLength(1), { timeout: 8000 });
             return screen.tree.root.findByType(WidgetSetupStep).props.setup;
         };
-        return { account, sessionId, screen, placeAt, saveTo, savedDefinitions, copies, disconnect: connected.disconnect };
+        return { account, sessionId, screen, placeAt, saveTo, savedDefinitions, copies, credentials: connected.credentials, disconnect: connected.disconnect };
     }
 
     const sessionValue = (sessionId: string, serverId: string): WidgetInputBindingsV1 => ({ session: { kind: 'value', value: { serverId, sessionId } } });
+
+    it.each(['save', 'addTo'] as const)('%s reconciles a committed definition after lost acknowledgement and failed readback before placing it', async via => {
+        const home = await openSessionHome({ key: `lost-definition-${via}`, builtinId: 'session_summary',
+            bindings: { session: { kind: 'context', slot: 'session' } } });
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        let readsUnavailable = false;
+        setRuntimeFetch((input, init) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+            if (readsUnavailable && new URL(url).pathname.startsWith('/v1/artifacts/'))
+                return Promise.resolve(new Response('{}', { status: 503 }));
+            return harness.request(input, init);
+        });
+        harness.artifacts(home.account.serverId).afterNextCreate(async () => {
+            readsUnavailable = true;
+            throw new TypeError('Connection lost after commit');
+        });
+        try {
+            let setup: React.ComponentProps<typeof WidgetSetupStep>['setup'] | undefined;
+            if (via === 'save') {
+                await home.screen.pressByTestIdAsync('openSave');
+                await home.screen.pressByTestIdAsync('placement.save.primary');
+                await vi.waitFor(() => expect(home.screen.getTextContent()).toContain(t('widgetDefinition.saveFailed')));
+            } else {
+                setup = await home.placeAt('addTo');
+                let first: unknown;
+                await act(async () => { first = await setup!.submit(setup!.initial); });
+                expect(first).toMatchObject({ ok: false });
+            }
+            expect(home.savedDefinitions()).toHaveLength(1);
+            const originalId = home.savedDefinitions()[0]!.id;
+            readsUnavailable = false;
+            if (via === 'save') {
+                await home.screen.pressByTestIdAsync('placement.save.primary');
+                await vi.waitFor(() => expect(home.screen.findByTestId('placement.save.primary')).toBeNull(), { timeout: 8000 });
+            } else {
+                // A render between attempts must not allocate another create or placement.
+                setup = home.screen.tree.root.findByType(WidgetSetupStep).props.setup;
+                let retried: unknown;
+                await act(async () => { retried = await setup!.submit(setup!.initial); });
+                expect(retried).toEqual({ ok: true });
+            }
+            expect(home.savedDefinitions().map(row => row.id)).toEqual([originalId]);
+            const placed = (await home.copies()).filter(copy => copy.definition.kind === 'artifact');
+            expect(placed).toHaveLength(1);
+            expect(placed[0]!.definition).toEqual({ kind: 'artifact', artifactId: originalId });
+        } finally { await home.screen.unmount(); await home.disconnect(); }
+    });
+
+    it('Add-to reconciles an unknown committed placement without creating another copy', async () => {
+        const home = await openSessionHome({ key: 'lost-placement', builtinId: 'session_summary',
+            bindings: { session: { kind: 'context', slot: 'session' } } });
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        let readsUnavailable = false;
+        setRuntimeFetch((input, init) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+            if (readsUnavailable && new URL(url).pathname.startsWith('/v1/artifacts/'))
+                return Promise.resolve(new Response('{}', { status: 503 }));
+            return harness.request(input, init);
+        });
+        harness.artifacts(home.account.serverId).afterNextCreate(async () => {
+            // The first create is the definition; the next is its Home layout.
+            harness.artifacts(home.account.serverId).afterNextCreate(async () => {
+                readsUnavailable = true;
+                throw new TypeError('Connection lost after placement commit');
+            });
+        });
+        try {
+            const setup = await home.placeAt('addTo');
+            let first: unknown;
+            await act(async () => { first = await setup.submit(setup.initial); });
+            expect(first).toMatchObject({ ok: false });
+            readsUnavailable = false;
+            expect((await home.copies()).filter(copy => copy.definition.kind === 'artifact')).toHaveLength(1);
+            let retried: unknown;
+            await act(async () => { retried = await home.screen.tree.root.findByType(WidgetSetupStep).props.setup.submit(setup.initial); });
+            expect(retried).toEqual({ ok: true });
+            expect(home.savedDefinitions()).toHaveLength(1);
+            expect((await home.copies()).filter(copy => copy.definition.kind === 'artifact')).toHaveLength(1);
+        } finally { await home.screen.unmount(); await home.disconnect(); }
+    });
+
+    it('Duplicate resumes its unknown definition and allocates a new identity only for the next intentional copy', async () => {
+        const home = await openSessionHome({ key: 'lost-duplicate', builtinId: 'session_summary',
+            bindings: { session: { kind: 'context', slot: 'session' } } });
+        let aboutScreen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        try {
+            await home.saveTo();
+            const instance = (await home.copies()).find(copy => copy.definition.kind === 'artifact');
+            if (!instance) throw new Error('Expected the saved placement');
+            const { View, Pressable } = await import('react-native');
+            function Card() {
+                const flows = useWidgetDefinitionFlows({ instance: instance!, scope: { ...home.account, owner: { kind: 'home' } },
+                    anchorRef: React.useRef(null), testID: 'library' });
+                return <View><Pressable testID="openAbout" onPress={flows.about} />{flows.panel}</View>;
+            }
+            aboutScreen = await renderScreen(<InjectedAuthProvider credentials={home.credentials}><Card /></InjectedAuthProvider>);
+            await aboutScreen.pressByTestIdAsync('openAbout');
+            await vi.waitFor(() => expect(aboutScreen!.findByTestId('library.about.duplicate')).not.toBeNull(), { timeout: 8000 });
+            const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+            let readsUnavailable = false;
+            setRuntimeFetch((input, init) => {
+                const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+                if (readsUnavailable && new URL(url).pathname.startsWith('/v1/artifacts/'))
+                    return Promise.resolve(new Response('{}', { status: 503 }));
+                return harness.request(input, init);
+            });
+            harness.artifacts(home.account.serverId).afterNextCreate(async () => {
+                readsUnavailable = true;
+                throw new TypeError('Connection lost after duplicate commit');
+            });
+            await aboutScreen.pressByTestIdAsync('library.about.duplicate');
+            await vi.waitFor(() => expect(aboutScreen!.getTextContent()).toContain(t('widgetDefinition.duplicateFailed')));
+            expect(home.savedDefinitions()).toHaveLength(2);
+            readsUnavailable = false;
+            await aboutScreen.pressByTestIdAsync('library.about.duplicate');
+            await vi.waitFor(() => expect(aboutScreen!.getTextContent()).not.toContain(t('widgetDefinition.duplicateFailed')));
+            expect(home.savedDefinitions()).toHaveLength(2);
+            await aboutScreen.pressByTestIdAsync('library.about.duplicate');
+            await vi.waitFor(() => expect(home.savedDefinitions()).toHaveLength(3));
+        } finally { await aboutScreen?.unmount(); await home.screen.unmount(); await home.disconnect(); }
+    });
 
     it.each([
         ['save', 'home'], ['save', 'project'], ['addTo', 'home'], ['addTo', 'project'],
@@ -385,13 +506,12 @@ describe('Session widget placement through the destination setup', () => {
         } finally { await home.screen.unmount(); await home.disconnect(); }
     });
 
-    it.each(['save', 'addTo'] as const)('%s offers no destination the widget cannot be hosted on', async via => {
+    it.each(['save', 'addTo'] as const)('%s offers Home and Project for a checkout-backed widget', async via => {
         const home = await openSessionHome({ key: 'workspace-only', builtinId: 'project_about',
             bindings: { checkout: { kind: 'context', slot: 'checkout' } } });
         try {
             await home.screen.pressByTestIdAsync(via === 'save' ? 'openSave' : 'openAdd');
-            // A workspace-target widget is hostable on a Project only; Home is not offered.
-            expect(home.screen.findByTestId(`placement.${via}.destination.home`)).toBeNull();
+            expect(home.screen.findByTestId(`placement.${via}.destination.home`)).not.toBeNull();
             if (via === 'addTo') {
                 expect(home.screen.findByTestId('placement.addTo.destination.project:destination-project')).not.toBeNull();
             } else {

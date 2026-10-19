@@ -8,7 +8,7 @@ import { createSessionFixture, flushHookEffects, renderScreen, standardCleanup }
 import { createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1, SessionCurrentProjectionRecordV1Schema, SessionListQueryResponseV1Schema, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
-import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { createHomeHubArtifactHttpBoundary, createLayoutArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
@@ -114,7 +114,9 @@ describe('Home Customize entity reorder binding', () => {
         const mountedChooser = chooser;
         await act(async () => { mountedChooser.props.onOpenChange(true); });
         const { t } = await import('@/text');
-        const chooserProps: React.ComponentProps<typeof EntityDragGripChooser> = mountedChooser.props;
+        const chooserProps: Pick<React.ComponentProps<typeof EntityDragGripChooser>, 'sections' | 'onSelect'> = {
+            sections: mountedChooser.props.sections, onSelect: mountedChooser.props.onSelect,
+        };
         const option = chooserProps.sections.flatMap(section => section.options)
             .find(entry => entry.label === t('entityDragDrop.preview.moveAbove', { target: t('settingsOverview.homeStartSection') }));
         if (!option || option.disabled) throw new Error('Expected Move above Start a session to be available');
@@ -221,7 +223,25 @@ describe('Home Customize entity reorder binding', () => {
             body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Checks' } } } });
         const artifact = createHomeHubArtifactHttpBoundary('account-a');
         artifact.seed({ v: 1, items: [{ kind: 'widget', instance: { v: 1, id: 'copy', definition: { kind: 'artifact', artifactId: definition.id }, bindings: {} } }], order: [], hidden: [] });
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-size-header.test', accountId: 'account-a', request: artifact.request });
+        const definitionArtifact = createLayoutArtifactHttpBoundary('account-a', { artifactId: definition.id, kind: 'widget-definition.v1',
+            defaultLayout: definition, parseLayout: value => WidgetDefinitionV1Schema.parse(value), buildHeader: buildWidgetDefinitionArtifactHeaderV1 });
+        definitionArtifact.seed(definition);
+        let definitionBodyReads = 0;
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-size-header.test', accountId: 'account-a', request: async (url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/artifacts' && (!init?.method || init.method === 'GET')) {
+                // A complete census must include the retained definition; omission means deletion to the real sync owner.
+                const homeRows: unknown = await (await artifact.request(url, init)).json();
+                const definitionRows: unknown = await (await definitionArtifact.request(url, init)).json();
+                if (!Array.isArray(homeRows) || !Array.isArray(definitionRows)) throw new Error('Expected Artifact inventory arrays');
+                return Response.json([...homeRows, ...definitionRows]);
+            }
+            if (path === `/v1/artifacts/${definition.id}`) {
+                definitionBodyReads += 1;
+                return definitionArtifact.request(url, init);
+            }
+            return artifact.request(url, init);
+        } });
         const scope = { serverId: connection.home.id, accountId: 'account-a' };
         storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope, artifacts: { ...storage.getState().artifacts,
             [definition.id]: { id: definition.id, ownerAccountId: scope.accountId, isDecrypted: true, title: definition.name,
@@ -231,6 +251,7 @@ describe('Home Customize entity reorder binding', () => {
         await renderScreen(<AccountShell><Probe /></AccountShell>);
         await flushHookEffects({ cycles: 3 });
         expect(layout!.sections.find(section => section.id === 'copy')).toMatchObject({ size: sizeDeclaration.defaultSize });
+        expect(definitionBodyReads).toBe(0);
         expect(artifact.writes).toHaveLength(0);
         expect(artifact.layout().sections).toBeUndefined();
     });
@@ -309,7 +330,7 @@ describe('Home Customize entity reorder binding', () => {
         expect(states()).toEqual([[false, false], [false, false]]);
         hold = true;
         try {
-            await act(async () => { rows()[0]!.findByType(Switch).props.onValueChange(true); });
+            await act(async () => { rows()[0]!.findByType(Switch).props.onValueChange?.(true); });
             expect(states()).toEqual([[true, true], [true, true]]);
             expect(artifact.writes).toHaveLength(0);
             await act(async () => { screen.update(editors(false)); });
@@ -317,7 +338,7 @@ describe('Home Customize entity reorder binding', () => {
             await act(async () => { screen.update(editors(true)); });
             expect(states()).toEqual([[true, true], [true, true]]);
             // Both newly mounted and existing observers must suppress duplicate writes.
-            await act(async () => { for (const row of rows()) row.findByType(Switch).props.onValueChange(false); });
+            await act(async () => { for (const row of rows()) row.findByType(Switch).props.onValueChange?.(false); });
             expect(states()).toEqual([[true, true], [true, true]]);
             await act(async () => { release(); });
             await flushHookEffects({ cycles: 3 });

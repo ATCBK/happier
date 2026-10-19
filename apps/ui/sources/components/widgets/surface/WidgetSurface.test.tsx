@@ -50,6 +50,7 @@ import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeature
 import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
 import { createWorkBoardAccountStore } from '@/components/boards/model/workBoardAccountStore';
 import { useBoardWidgets } from '@/components/boards/model/useBoardContent';
+import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 
 // Statically imported surface consumers reach Sync; install its external Socket boundary before that graph loads.
 vi.mock('socket.io-client', async importOriginal =>
@@ -408,9 +409,12 @@ it.each([
     const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null, phase: 'current' as const,
         interactionEnabled: true, machineId: null, serverId: null, platform: 'web' as const,
         accountLifetime: captureActiveServerAccountScopeLifetime() };
+    let layoutCurrent = true;
+    let layoutPending = false;
     const body = (context: ReturnType<typeof readUsageWidgetPageContext>) => <InjectedAuthProvider credentials={connection.credentials}>
         <WidgetSurface scope={scope} instance={{ v: 1, id: 'usage-admission', definition, bindings }} descriptor={descriptor}
-            providedContext={context} appRuntime={runtime} recordRevision="fixture:1" presentation="content" testID="usage-admission" />
+            providedContext={context} appRuntime={runtime} recordRevision="fixture:1" presentation="content" testID="usage-admission"
+            isCurrent={() => layoutCurrent} isReadPending={() => layoutPending} />
     </InjectedAuthProvider>;
     const pageContext = readUsageWidgetPageContext(readUsageWidgetPageScope(query));
     const providedContext = host === 'home' ? {} : host === 'project' ? { projects: pageContext.projects! } : pageContext;
@@ -451,6 +455,20 @@ it.each([
             }
         }
         if (bindingKind === 'follow') {
+            // The layout keeps its admitted context while its Artifact is reread.
+            // That observation must not unmount the already populated Usage Resource.
+            const metrics = screen.tree.root.findAllByType(HappierDataMetric);
+            const reads = usageReads;
+            layoutCurrent = false;
+            layoutPending = true;
+            await screen.update(body(providedContext));
+            await flushHookEffects({ cycles: 10 });
+            const refreshingMetrics = screen.tree.root.findAllByType(HappierDataMetric);
+            expect(refreshingMetrics).toHaveLength(metrics.length);
+            refreshingMetrics.forEach((metric, index) => expect(metric).toBe(metrics[index]));
+            expect(usageReads).toBe(reads);
+            layoutCurrent = true;
+            layoutPending = false;
             // The page can retain a selected Agent absent from this period's choice inventory.
             const changed = normalizeUsageQuery({ ...query, agents: ['claude'] });
             await screen.update(body(readUsageWidgetPageContext(readUsageWidgetPageScope(changed))));
@@ -660,7 +678,7 @@ it('renders an HTML copy through the shared sandbox with its copied policy and r
     } finally { await screen?.unmount(); await connection.dispose(); vi.unstubAllGlobals(); }
 });
 
-it('renders a declared native app-read fixture and removes it when its Account read retires', async () => {
+it('retains an admitted native body during layout refresh and removes it when its Account read retires', async () => {
     const http = createHomeHubArtifactHttpBoundary('actor');
     const connection = await restoreServerAccountForTest({ serverUrl: 'http://native-app-widget.test', accountId: 'actor', request: http.request });
     const scope: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'home' } };
@@ -670,21 +688,34 @@ it('renders a declared native app-read fixture and removes it when its Account r
         inputSchema: { type: 'object', properties: { period: { type: 'integer' } }, required: ['period'], additionalProperties: false } };
     const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null, phase: 'current' as const,
         interactionEnabled: true, machineId: null, serverId: null, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime() };
-    let current = true;
-    let pending = false;
-    const body = () => <WidgetSurface scope={scope} instance={instance} descriptor={descriptor}
+    let current = false;
+    let pending = true;
+    let shownScope: WidgetSurfaceRefV1 = scope;
+    const body = () => <WidgetSurface scope={shownScope} instance={instance} descriptor={descriptor}
         providedContext={{}} appRuntime={runtime} presentation="content" recordRevision="same-instance" isCurrent={() => current} isReadPending={() => pending}
         reference={<Text testID="native-app-read">7 days</Text>} testID="native-app-widget" />;
     const screen = await renderScreen(body());
     try {
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' })).toHaveLength(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-widget-state-rows' }).length).toBeGreaterThan(0);
+        current = true;
+        pending = false;
+        await screen.update(body());
         expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' }).length).toBeGreaterThan(0);
         current = false;
         pending = true;
         await screen.update(body());
-        expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' })).toHaveLength(0);
-        // A read still pending keeps the card's first-load rows (one loading look per card), never a state card.
-        expect(screen.tree.root.findAllByProps({ testID: 'native-app-widget-state-rows' }).length).toBeGreaterThan(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' }).length).toBeGreaterThan(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-widget-state-rows' })).toHaveLength(0);
         expect(screen.tree.root.findAllByType(SurfaceStateCard)).toHaveLength(0);
+        shownScope = { ...scope, owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };
+        await screen.update(body());
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' })).toHaveLength(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-widget-state-rows' }).length).toBeGreaterThan(0);
+        shownScope = scope;
+        await screen.update(body());
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' })).toHaveLength(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-widget-state-rows' }).length).toBeGreaterThan(0);
         pending = false;
         await screen.update(body());
         expect(screen.tree.root.findByType(SurfaceStateCard).props.kind).toBe('unavailable');
@@ -695,6 +726,7 @@ it('does not mount native readers while the containing document admission is sus
     const http = createHomeHubArtifactHttpBoundary('actor');
     const connection = await restoreServerAccountForTest({ serverUrl: 'http://native-widget.test', accountId: 'actor', request: http.request });
     const checkout = { id: 'checkout', serverId: connection.home.id, machineId: 'machine', rootPath: '/repo', createdAtMs: 1 };
+    applyProjectAccountRowsFixture(storage, { workspaceRefs: [checkout] });
     const scope: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'project', projectId: 'project' } };
     const instance: WidgetInstanceV1 = { v: 1, id: 'about', definition: { kind: 'builtin', id: 'project_about' },
         bindings: { checkout: { kind: 'context', slot: 'checkout' } } };

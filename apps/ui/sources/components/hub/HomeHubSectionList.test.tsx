@@ -40,12 +40,19 @@ function cellSpans(screen: Awaited<ReturnType<typeof renderList>>, gridTestID: s
 }
 
 describe('HomeHubSectionList (the column contract)', () => {
-    it.each(['hide/show', 'remove', 'reorder', 'span'] as const)(
+    it.each(['hide/show', 'remove', 'reorder', 'span', 'setup'] as const)(
         'preserves a sibling card mount and local state when its first neighbour changes (%s)', async change => {
         let mounts = 0;
+        let reads = 0;
+        let releases = 0;
         function StatefulCard(props: Readonly<{ id: string; ownsRow: boolean }>) {
             const [value, setValue] = React.useState(0);
-            React.useEffect(() => { if (props.id === 'b') mounts++; }, []);
+            React.useEffect(() => {
+                if (props.id !== 'b' && props.id !== 'other') return;
+                mounts++;
+                reads++;
+                return () => { releases++; };
+            }, []);
             return <Pressable testID={`card-${props.id}`} onPress={() => setValue(current => current + 1)}>
                 <Text>{`${props.id}:${value}:${props.ownsRow}`}</Text>
             </Pressable>;
@@ -53,8 +60,8 @@ describe('HomeHubSectionList (the column contract)', () => {
         const a = widget('a');
         const b = widget('b');
         const c = widget('c');
-        const render = (cards: ReadonlyArray<ReturnType<typeof widget>>) => <HomeHubSectionList
-            sections={[builtin('start'), ...cards, builtin('setup'), widget('other')]}
+        const render = (cards: ReadonlyArray<ReturnType<typeof widget>>, setupHidden = false) => <HomeHubSectionList
+            sections={[builtin('start'), ...cards, { ...builtin('setup'), hidden: setupHidden }, widget('other')]}
             renderSection={(section, _index, placement) => <StatefulCard id={section.id} ownsRow={placement.ownsRow} />}
         />;
         const initial = change === 'span' ? [a, b] : [a, b, c];
@@ -63,15 +70,29 @@ describe('HomeHubSectionList (the column contract)', () => {
             && String(node.props.testID).startsWith('home-hub.cards:'))[0]!;
         await act(async () => grid.props.onLayout({ nativeEvent: { layout: { width: 1440, height: 800 } } }));
         await act(async () => screen.findByTestId('card-b')!.props.onPress());
+        await act(async () => screen.findByTestId('card-other')!.props.onPress());
         expect(screen.getTextContent()).toContain('b:1:false');
         const next = change === 'hide/show' ? [{ ...a, hidden: true }, b, c]
-            : change === 'remove' ? [b, c] : change === 'reorder' ? [b, a, c] : [widget('a', 'wide'), b];
-        await act(async () => { screen.update(render(next)); });
-        expect(mounts).toBe(1);
+            : change === 'remove' ? [b, c] : change === 'reorder' ? [b, a, c]
+                : change === 'setup' ? initial : [widget('a', 'wide'), b];
+        await act(async () => { screen.update(render(next, change === 'setup')); });
+        expect(mounts).toBe(2);
+        expect(reads).toBe(2);
+        expect(releases).toBe(0);
         expect(screen.getTextContent()).toContain(`b:1:${change === 'span'}`);
+        expect(screen.getTextContent()).toContain('other:1:');
+        // Hiding Setup retains both logical card runs and their full-row/paired packing.
+        if (change === 'setup') {
+            expect(screen.getTextContent()).not.toContain('setup:');
+            expect(cellSpans(screen, 'home-hub.cards:after:setup')).toContain('row');
+            expect(cellSpans(screen, 'home-hub.cards:after:start')).toContain(undefined);
+        }
         await act(async () => { screen.update(render(initial)); });
-        expect(mounts).toBe(1);
+        expect(mounts).toBe(2);
+        expect(reads).toBe(2);
+        expect(releases).toBe(0);
         expect(screen.getTextContent()).toContain('b:1:false');
+        expect(screen.getTextContent()).toContain('other:1:');
     });
     it('lays two consecutive cards out as one two-up row, and every other block on its own', async () => {
         const screen = await renderList([builtin('start'), widget('widget:a/latest'), builtin('automations'), builtin('usage')]);
