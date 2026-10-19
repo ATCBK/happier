@@ -40,6 +40,7 @@ import {
     isSessionBoardEmpty,
     resolveSessionBoardExecutableCurrentness,
     resolveSessionBoardReferenceProjection,
+    resolveSessionBoardRetainedFreshness,
     type SessionBoardItemProjection,
     type SessionBoardMountHost,
     type SessionBoardPrimaryMountResolver,
@@ -838,13 +839,9 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
     // Nothing retained is never a stale line over an empty body (pane-states): it is a state card.
     const hasRetainedContent = snapshot.itemsById.size > 0;
     const offline = snapshot.reachability === 'offline';
-    const freshnessLabel = !hasRetainedContent
-        ? null
-        : offline
-            ? t('sessionBoard.board.offline')
-            : snapshot.freshness === 'stale'
-                ? t('sessionBoard.board.stale')
-                : null;
+    const retainedFreshness = resolveSessionBoardRetainedFreshness(snapshot);
+    const freshnessLabel = retainedFreshness === 'offline' ? t('sessionBoard.board.offline')
+        : retainedFreshness === 'stale' ? t('sessionBoard.board.stale') : null;
     const offlineEmptyCard = offline && !hasRetainedContent ? (
         <SurfaceStateCard
             testID={`${testID}-offline`}
