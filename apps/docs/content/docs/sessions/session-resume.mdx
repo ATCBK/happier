@@ -203,6 +203,8 @@ For those sessions:
 
 ## Things to check if resume is unavailable
 
+Development builds preserve the Claude account directory saved by the session's CLI when the daemon resumes it. An explicit account-directory override on the new launch takes precedence. This saves the directory selection only, not API keys or other shell environment variables. Older sessions may lack the saved selection; start those from a terminal with the original account environment when needed.
+
 If a session does not resume, check:
 
 - is the session inactive rather than already running?

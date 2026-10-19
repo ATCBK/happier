@@ -341,6 +341,11 @@ Currently allowlisted keys:
 
 All other keys are ignored.
 
+In unreleased 0.3 SDK-driven Sessions and detached Runs, Happier keeps permission
+prompts on its host callback. `permissionPromptToolName` cannot redirect those
+approvals. A custom native prompt tool applies only when no host callback is
+installed.
+
 ## File checkpointing and `/rewind`
 
 When **File checkpointing + /rewind** is enabled, Happier captures checkpoint IDs and exposes a rewind command:

@@ -155,6 +155,20 @@ Configured ACP backend models can also be favorited from the new-session engine 
 
 For the full user-facing guide, see [Model and engine selection](/agents/model-and-engine-selection).
 
+### Retained detached Runs
+
+In unreleased 0.3 development builds, a configured Agent needs
+`runtime.permissionModeMapping` in its ACP catalog definition to accept retained
+detached Workflow inputs. Map Happier's permission intent to a native mode whose
+behavior you have verified for that CLI. A default mode or a capability hint
+does not establish that permission policy.
+
+An absent or null mapping refuses the input before prompting the Agent. Happier
+does not silently start a fresh conversation or retain a broader native policy.
+Existing definitions without a mapping still load; they do not gain an inferred
+mapping. Agent-assisted configuration uses the normal backend Actions to save
+the definition, with their existing validation and approval policy.
+
 ## Profiles and defaults
 
 Profiles can target custom ACP backends just like built-in backends.
