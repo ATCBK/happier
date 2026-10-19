@@ -106,10 +106,10 @@ it('does not offer setup until the configured-source read settles, or when that 
   const calls: string[] = [];
   const execute: ExecuteAction = ({ action }) => { calls.push(action); throw new Error('No write expected'); };
   const first = await mountSurface(renderSettings, execute, undefined, pending.client);
-  await expect(first.fixture.press(await first.fixture.getByRole('button', { name: 'Use Happier tasks' }))).rejects.toThrow();
+  await expect(first.fixture.queryByRole('button', { name: 'Turn on' })).resolves.toBeUndefined();
   await act(async () => { finishRead(); });
   const second = await mountSurface(renderSettings, execute, undefined, failed.client);
-  await expect(second.fixture.press(await second.fixture.getByRole('button', { name: 'Use Happier tasks' }))).rejects.toThrow();
+  await expect(second.fixture.queryByRole('button', { name: 'Turn on' })).resolves.toBeUndefined();
   expect(calls).toEqual([]);
 });
 
@@ -133,11 +133,13 @@ it.each(['active', 'retired', 'unrelated'] as const)('reads %s personal-source c
   const calls: string[] = [];
   const { fixture } = await mountSurface(renderSettings, ({ action }) => { calls.push(action); throw new Error('No write expected'); }, undefined, client);
   if (kind === 'active') {
-    await expect(fixture.getByRole('button', { name: 'Ready' })).resolves.toBeDefined();
-    await expect(fixture.press(await fixture.getByRole('button', { name: 'Ready' }))).rejects.toThrow();
+    await expect(fixture.getByText('On')).resolves.toBeDefined();
+    await expect(fixture.queryByRole('button', { name: 'Turn on' })).resolves.toBeUndefined();
   } else {
-    await expect(fixture.getByRole('button', { name: 'Use Happier tasks' })).resolves.toBeDefined();
-    await expect(fixture.queryByRole('button', { name: 'Ready' })).resolves.toBeUndefined();
+    await expect(fixture.getByRole('button', { name: 'Turn on' })).resolves.toBeDefined();
+    await expect(fixture.queryByText('On')).resolves.toBeUndefined();
+    // The row says what turning it on does.
+    await expect(fixture.getByText('Your existing tasks and linked Sessions appear in Tasks.')).resolves.toBeDefined();
   }
   expect(calls).toEqual([]);
 });
@@ -147,19 +149,19 @@ it('retires personal-source state on Account replacement and ignores the retired
   seedPersonalSource(original.corpus);
   const calls: string[] = [];
   const surface = await mountSurface(renderSettings, ({ action }) => { calls.push(action); throw new Error('No write expected'); }, undefined, original.client);
-  await expect(surface.fixture.getByRole('button', { name: 'Ready' })).resolves.toBeDefined();
+  await expect(surface.fixture.getByText('On')).resolves.toBeDefined();
 
   let finishRead!: () => void;
   const pending = accountData({ waitForSources: new Promise<void>(resolve => { finishRead = resolve; }) });
   seedPersonalSource(pending.corpus);
   await act(async () => { await surface.updateDataClient(pending.client); });
-  await expect(surface.fixture.queryByRole('button', { name: 'Ready' })).resolves.toBeUndefined();
-  await expect(surface.fixture.press(await surface.fixture.getByRole('button', { name: 'Use Happier tasks' }))).rejects.toThrow();
+  await expect(surface.fixture.queryByText('On')).resolves.toBeUndefined();
+  await expect(surface.fixture.queryByRole('button', { name: 'Turn on' })).resolves.toBeUndefined();
 
   await act(async () => { await surface.updateDataClient(accountData().client); });
   await act(async () => { finishRead(); });
-  await expect(surface.fixture.queryByRole('button', { name: 'Ready' })).resolves.toBeUndefined();
-  await expect(surface.fixture.getByRole('button', { name: 'Use Happier tasks' })).resolves.toBeDefined();
+  await expect(surface.fixture.queryByText('On')).resolves.toBeUndefined();
+  await expect(surface.fixture.getByRole('button', { name: 'Turn on' })).resolves.toBeDefined();
   expect(calls).toEqual([]);
 });
 
@@ -172,11 +174,12 @@ it('configures only on user intent, once while pending and after successful setu
     return response;
   });
   expect(calls).toEqual([]);
-  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Use Happier tasks' })); });
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Turn on' })); });
   expect(calls).toEqual([{ action: 'internal/tasks/configure-v1', input: { v: 1 } }]);
-  await expect(fixture.press(await fixture.getByRole('button', { name: 'Use Happier tasks' }))).rejects.toThrow();
+  await expect(fixture.press(await fixture.getByRole('button', { name: 'Turn on' }))).rejects.toThrow();
   await act(async () => { settle(createTriageSourceV1Fixture().administrationResult); });
-  await expect(fixture.press(await fixture.getByRole('button', { name: 'Ready' }))).rejects.toThrow();
+  await expect(fixture.getByText('On')).resolves.toBeDefined();
+  await expect(fixture.queryByRole('button', { name: 'Turn on' })).resolves.toBeUndefined();
   expect(calls).toHaveLength(1);
 });
 
@@ -184,8 +187,8 @@ it('enables setup for a replacement host without mount writes or accepting an ol
   const calls: string[] = [];
   const result = createTriageSourceV1Fixture().administrationResult;
   const original = await mountSurface(renderSettings, ({ action }) => { calls.push(`original:${action}`); return result; });
-  await act(async () => { await original.fixture.press(await original.fixture.getByRole('button', { name: 'Use Happier tasks' })); });
-  await expect(original.fixture.getByRole('button', { name: 'Ready' })).resolves.toBeDefined();
+  await act(async () => { await original.fixture.press(await original.fixture.getByRole('button', { name: 'Turn on' })); });
+  await expect(original.fixture.getByText('On')).resolves.toBeDefined();
   let settleOld!: (value: unknown) => void;
   const next = await mountSurface(renderSettings, ({ action }) => {
     calls.push(`next:${action}`);
@@ -193,7 +196,7 @@ it('enables setup for a replacement host without mount writes or accepting an ol
   });
   await act(async () => { await original.updateHostApi(next.fixture.context.hostApi); });
   expect(calls).toEqual(['original:internal/tasks/configure-v1']);
-  await act(async () => { await original.fixture.press(await original.fixture.getByRole('button', { name: 'Use Happier tasks' })); });
+  await act(async () => { await original.fixture.press(await original.fixture.getByRole('button', { name: 'Turn on' })); });
   let settleCurrent!: (value: unknown) => void;
   const successor = await mountSurface(renderSettings, ({ action }) => {
     calls.push(`successor:${action}`);
@@ -201,13 +204,13 @@ it('enables setup for a replacement host without mount writes or accepting an ol
   });
   await act(async () => { await original.updateHostApi(successor.fixture.context.hostApi); });
   expect(calls).toEqual(['original:internal/tasks/configure-v1', 'next:internal/tasks/configure-v1']);
-  await expect(original.fixture.queryByRole('button', { name: 'Ready' })).resolves.toBeUndefined();
-  await act(async () => { await original.fixture.press(await original.fixture.getByRole('button', { name: 'Use Happier tasks' })); });
+  await expect(original.fixture.queryByText('On')).resolves.toBeUndefined();
+  await act(async () => { await original.fixture.press(await original.fixture.getByRole('button', { name: 'Turn on' })); });
   await act(async () => { settleOld(result); });
-  await expect(original.fixture.queryByRole('button', { name: 'Ready' })).resolves.toBeUndefined();
-  await expect(original.fixture.press(await original.fixture.getByRole('button', { name: 'Use Happier tasks' }))).rejects.toThrow();
+  await expect(original.fixture.queryByText('On')).resolves.toBeUndefined();
+  await expect(original.fixture.press(await original.fixture.getByRole('button', { name: 'Turn on' }))).rejects.toThrow();
   await act(async () => { settleCurrent(result); });
-  await expect(original.fixture.getByRole('button', { name: 'Ready' })).resolves.toBeDefined();
+  await expect(original.fixture.getByText('On')).resolves.toBeDefined();
   expect(calls).toEqual(['original:internal/tasks/configure-v1', 'next:internal/tasks/configure-v1', 'successor:internal/tasks/configure-v1']);
 });
 

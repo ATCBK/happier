@@ -7,6 +7,7 @@ import {
   readTriageWindowStatementV1,
 } from './continuation.js';
 import {
+  formatTriageCompactAgeV1,
   readTriageAgentBadgeV1,
   readTriageRowPlaceV1,
   readTriageRowBylinePlaceV1,
@@ -57,6 +58,16 @@ function displayRow(
     ...overrides,
   };
 }
+
+describe('the table\u2019s compact Age', () => {
+  const DAY_MS = 86_400_000;
+  it('counts in weeks up to a year, then in years, never hundreds of weeks', () => {
+    expect(formatTriageCompactAgeV1('en', 0, 18 * 60_000)).toBe('18m');
+    expect(formatTriageCompactAgeV1('en', 0, 3 * DAY_MS)).toBe('3d');
+    expect(formatTriageCompactAgeV1('en', 0, 70 * DAY_MS)).toBe('10w');
+    expect(formatTriageCompactAgeV1('en', 0, 548 * 7 * DAY_MS)).toBe('11y');
+  });
+});
 
 describe('a PRs & Issues entry row\u2019s secondary actions', () => {
   it('offers Pin by its short verb and leaves Select to the shared row menu', () => {

@@ -836,7 +836,9 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       />
 
       {pinActions ? null : actionRegion}
-      <TriageEditTaskFields key={selected === null ? 'unavailable' : deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}
+      {/* Keyed per entry instance like the action region beside it, under its own name: one key for two siblings
+          made React drop or duplicate one of them on update. */}
+      <TriageEditTaskFields key={`task-fields:${selected === null ? 'unavailable' : deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}`}
         row={row} disabled={props.sourceWritesDisabled === true || detail?.kind !== 'ready'} onApplied={completePostMutation} />
       {actionRegionShown ? null : sourceActions}
       </Stack>

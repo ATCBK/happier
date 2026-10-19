@@ -3,7 +3,7 @@ import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifest';
 import type { CurrentUiCommandDeclarationV1 } from '@happier-dev/plugin-sdk/ui';
 import type { TriageSourceWorkflowSubjectV1, TriageLinkedSessionProjectionV1 } from '@happier-dev/triage-protocol/v1';
-import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
+import { formatTriageTimestampV1, TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
 import {
   Banner,
   Button,
@@ -488,7 +488,13 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
    * moment it printed arrive, or a reader who waits out the stated deadline is
    * left with a control this render disabled and nothing to re-enable it.
    */
-  const eligibilityNowMs = useTriageRefreshEligibilityNowV1(window.snapshot.refreshBlocked);
+  // The toolbar's resting line states the read's age (lab "Updated just now") from the freshness owner's one
+  // completion time. It is shown, and so wakes the clock each minute, only while no other line speaks: not while
+  // refreshing, and not while "Showing the last known list" (or the body's own failure) says the window is behind.
+  const readAgeAtMs = state.kind === 'window' && !state.refreshing && !(state.showReadWarning && state.failure == null)
+    ? window.snapshot.completedAtMs
+    : undefined;
+  const eligibilityNowMs = useTriageRefreshEligibilityNowV1(window.snapshot.refreshBlocked, readAgeAtMs);
   const refreshState = resolveTriageListRefreshV1(window.snapshot, eligibilityNowMs);
 
   // The named page-view producers (`core/CORPUS.md` §4.1): mount, then every
@@ -1894,16 +1900,29 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
    * It is the same toolbar before the first pass has answered, so Refresh and
    * the lens are reachable from the very first frame.
    */
+  // At rest the toolbar states the read's age, quietly and without a mark: "Up to date" stops being true the moment
+  // the window ages, while "Updated 5 minutes ago" stays true and sits beside the Refresh that renews it.
+  // Muted: healthy is quiet, so on a phone it folds under Refresh in ⋯ (lab `merged-list-phone` shows no age).
+  const readAge = readAgeAtMs === undefined ? null : {
+    tone: 'muted' as const,
+    pulsing: false,
+    indicator: false,
+    label: eligibilityNowMs - readAgeAtMs < 60_000
+      ? text('plugins.triage.surface.updatedJustNow', 'Updated just now')
+      : text('plugins.triage.surface.updatedAgo', 'Updated {age}', {
+        age: formatTriageTimestampV1(surfaceContext.locale, readAgeAtMs, 'relative', eligibilityNowMs),
+      }),
+  };
   const freshness = state.kind !== 'window' ? null : state.refreshing
     ? { tone: 'neutral' as const, pulsing: true, indicator: true, label: text('plugins.triage.surface.refreshing', 'Refreshing') }
     : state.showReadWarning
       // "The last known list" is a claim about rows on screen. With none, the body's failure state is the
       // whole answer, and this line would be false and a second voice for one cause.
-      // Over rows, a failed connection's notice already says whose list stopped and why; the line does not repeat it.
-      ? rowCount === 0 || state.failure != null ? null : { tone: 'warning' as const, pulsing: false, indicator: true, label: text('plugins.triage.surface.lastKnown', 'Showing the last known list') }
-      // Healthy is quiet: at rest the toolbar says nothing. A window ages past the refresh interval with nothing on
-      // screen changing, so a resting "Up to date" soon stops being true; Refresh stays one press away.
-      : null;
+      // Over rows, a failed connection's notice already says whose list stopped and why; the line keeps only the
+      // read's age, which the notice does not say.
+      ? rowCount === 0 ? null : state.failure != null ? readAge
+        : { tone: 'warning' as const, pulsing: false, indicator: true, label: text('plugins.triage.surface.lastKnown', 'Showing the last known list') }
+      : readAge;
   const moreLabel = text('plugins.triage.surface.more', 'More');
   const activeFilterCount = facets.reduce(
     (count, facet) => count + facet.options.filter((option) => option.selected).length,
@@ -2003,44 +2022,6 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
       } })}
     />
   );
-
-  if (state.kind === 'unavailable') {
-    // Nothing about the reader could be read. The page stays the page — its
-    // toolbar keeps the lens and Refresh — and the failure is said in words.
-    // The host's code is a diagnostic behind Details, and a retry is offered
-    // only when the host says one can succeed.
-    return (
-      <Screen safeArea style={TRIAGE_FILL_STYLE_V1}>
-        <Stack gap="medium" style={TRIAGE_FILL_STYLE_V1}>
-          {renderListToolbar()}
-          <ErrorState
-            titleKey="plugins.triage.surface.listFailed"
-            title="The list could not be read"
-            {...(state.retryable
-              ? {
-                  descriptionKey: 'plugins.triage.surface.listFailed.retryable',
-                  description: 'Happier could not reach your sources or your saved views just now. Try again in a moment.',
-                  action: (
-                    <Button
-                      titleKey="plugins.triage.surface.tryAgain"
-                      title="Try again"
-                      variant="secondary"
-                      busy={refreshState.kind === 'running'}
-                      disabled={refreshState.kind === 'blocked'}
-                      onPress={refresh}
-                    />
-                  ),
-                }
-              : {
-                  descriptionKey: 'plugins.triage.surface.listFailed.permanent',
-                  description: 'Trying again will not fix this. The details below can help support find out why.',
-                })}
-            {...(state.detail === undefined ? {} : { details: state.detail })}
-          />
-        </Stack>
-      </Screen>
-    );
-  }
 
   /**
    * The assembled window, when there is one. The chrome below serves both it
@@ -2554,7 +2535,35 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
               onDismiss={dismissBulkSelection}
             />
           )}
-          empty={empty === null ? null : empty.kind === 'sourceFailure' ? (
+          // Nothing about the reader could be read. The page stays the page: the same one header (its name, search,
+          // lens, Refresh and Run on) leads, and the failure is said in words in the list's own place. The host's code
+          // is a diagnostic behind Details, and a retry is offered only when the host says one can succeed.
+          empty={state.kind === 'unavailable' ? (
+            <ErrorState
+              titleKey="plugins.triage.surface.listFailed"
+              title="The list could not be read"
+              {...(state.retryable
+                ? {
+                    descriptionKey: 'plugins.triage.surface.listFailed.retryable',
+                    description: 'Happier could not reach your sources or your saved views just now. Try again in a moment.',
+                    action: (
+                      <Button
+                        titleKey="plugins.triage.surface.tryAgain"
+                        title="Try again"
+                        variant="secondary"
+                        busy={refreshState.kind === 'running'}
+                        disabled={refreshState.kind === 'blocked'}
+                        onPress={refresh}
+                      />
+                    ),
+                  }
+                : {
+                    descriptionKey: 'plugins.triage.surface.listFailed.permanent',
+                    description: 'Trying again will not fix this. The details below can help support find out why.',
+                  })}
+              {...(state.detail === undefined ? {} : { details: state.detail })}
+            />
+          ) : empty === null ? null : empty.kind === 'sourceFailure' ? (
             <ErrorState
               title={empty.title}
               description={empty.description}

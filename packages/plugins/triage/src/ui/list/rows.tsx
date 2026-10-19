@@ -277,7 +277,7 @@ export function triageListRowItemProps(
 
 
 /**
- * A compact, locale-owned age for the table's tabular Age column ("18m", "2h", "3d"). The row's accessible
+ * A compact, locale-owned age for the table's tabular Age column ("18m", "2h", "3d", "10w", "2y"). The row's accessible
  * description keeps the full relative phrase; this is only what fits the column.
  */
 export function formatTriageCompactAgeV1(locale: string, atMs: number, nowMs: number): string {
@@ -288,7 +288,10 @@ export function formatTriageCompactAgeV1(locale: string, atMs: number, nowMs: nu
       ? [Math.round(seconds / 3_600), 'hour' as const]
       : seconds < 30 * 86_400
         ? [Math.round(seconds / 86_400), 'day' as const]
-        : [Math.round(seconds / (7 * 86_400)), 'week' as const];
+        // Weeks up to a year, then years: a narrow month ("3m") would read as minutes in this column.
+        : seconds < 365 * 86_400
+          ? [Math.round(seconds / (7 * 86_400)), 'week' as const]
+          : [Math.round(seconds / (365 * 86_400)), 'year' as const];
   return new Intl.NumberFormat(locale, { style: 'unit', unit, unitDisplay: 'narrow' }).format(value);
 }
 
@@ -381,7 +384,8 @@ function TriageListPeek(props: Readonly<{ item: TriageListItemV1 }>): React.Reac
           <Button
             // The same destination and words as the detail header's Open at the source.
             title={text('plugins.triage.surface.detail.openAtSource', 'Open at the source')}
-            variant="plain"
+            // A peer of Pin in the peek's one row of chips (lab `merged-list`): Open leads, the rest are equal.
+            variant="secondary"
             size="small"
             onPress={() => { void hostApi.openExternalLink(webUrl); }}
           />

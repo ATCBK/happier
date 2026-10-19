@@ -303,7 +303,9 @@ const leadStyle: HappierPortableStyle = {
   flexBasis: 'auto',
   minWidth: 0,
 };
-const trailStyle: HappierPortableStyle = { maxWidth: '100%', minWidth: 0 };
+// It keeps the toolbar's trailing edge when it wraps below the leading controls (a list narrowed beside a detail
+// pane): freshness, Refresh, the switch and Run on stay where the eye finds them, never stranded on the left.
+const trailStyle: HappierPortableStyle = { maxWidth: '100%', minWidth: 0, marginLeft: 'auto', justifyContent: 'flex-end' };
 const compactLeadStyle: HappierPortableStyle = { flexShrink: 1, minWidth: 0 };
 /** The sheet's quiet Clear and its one primary end the footer together. */
 const sheetFooterStyle: HappierPortableStyle = { flexGrow: 1 };
