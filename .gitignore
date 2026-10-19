@@ -209,6 +209,11 @@ _.env.pipeline.production.local
 # dependencies into whatever root it builds, and `examples/**` must stay free of
 # them so cross-package source tests resolve the workspace SDK.
 /packages/plugin-sdk/.example-builds/
+# Authoring CLI scaffold copies of the skill are local QA preparation output.
+/packages/plugin-sdk/fixtures/qa-plugin-authoring/created/*/.agents/skills/happier-plugin-authoring/
+/packages/plugin-sdk/fixtures/qa-plugin-authoring/qa-capabilities/.agents/skills/happier-plugin-authoring/
+# This fixture regenerates its cold manifest before development builds and packing.
+/packages/tests/fixtures/plugin-platform/composer-external-dogfood/.happier-plugin/plugin.json
 /packages/protocol/src/**/*.d.ts.map
 # Native source-entry packages consume their authored TypeScript directly.
 /packages/audio-stream-native/src/*.d.ts
