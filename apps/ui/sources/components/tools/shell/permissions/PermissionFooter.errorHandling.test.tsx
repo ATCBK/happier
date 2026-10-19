@@ -209,13 +209,16 @@ describe('PermissionFooter action error handling', () => {
             expect(findButton(screen, 'permission-footer.allow').props.disabled).toBe(false);
         });
 
-        it('clears the unconfirmed state when the read says the request has settled', async () => {
+        it('keeps a settled request non-answerable: the source publishes the Session and the card, not the check, ends the state', async () => {
             readRequestOutcome.mockResolvedValueOnce('settled');
             const screen = await renderUnknownFooter('p-unknown-settled');
 
             await pressTestInstanceAsync(findButton(screen, 'permission-footer.check-again'), 'check again');
 
-            expect(unconfirmedNotices(screen)).toHaveLength(0);
+            expect(readRequestOutcome).toHaveBeenCalledExactlyOnceWith('p-unknown-settled');
+            expect(findButton(screen, 'permission-footer.allow').props.disabled, 'a settled exact read must not offer another answer').toBe(true);
+            await pressTestInstanceAsync(findButton(screen, 'permission-footer.allow'), 'allow after settled check');
+            expect(ops.approve).toHaveBeenCalledTimes(1);
         });
 
         it('keeps the answer withheld, and says the check failed, when the read fails or cannot tell', async () => {

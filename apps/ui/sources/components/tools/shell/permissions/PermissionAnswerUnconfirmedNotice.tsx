@@ -11,8 +11,9 @@ import { clearPermissionAnswerUnconfirmed } from './permissionActionFailure';
 
 /**
  * The one presentation of "the answer may already be applied" for permission footers and question cards.
- * "Check again" reads the exact request through the source's scoped reader and releases the controls only
- * when that read answers; when it cannot, the answer stays unconfirmed and the notice says so.
+ * "Check again" reads the exact request through the source's scoped reader. A request still waiting releases
+ * the controls; a settled one is published by the source and ends with its card; when the read cannot tell,
+ * the answer stays unconfirmed and the notice says so.
  */
 export function PermissionAnswerUnconfirmedNotice(props: Readonly<{
     requestKey: string;
@@ -35,10 +36,11 @@ export function PermissionAnswerUnconfirmedNotice(props: Readonly<{
         setChecking(true);
         setCouldNotCheck(false);
         try {
-            await readOutcome(props.requestId);
-            // Still waiting means the answer never landed, so answering again is no longer blind;
-            // settled means nothing is left to answer. Either way nothing is unconfirmed any more.
-            clearPermissionAnswerUnconfirmed(props.requestKey);
+            // Still waiting means the answer never landed, so answering again is no longer blind.
+            // Settled means the source already published the fresh Session; the card leaves the waiting
+            // state with it, and the owning card ends the unconfirmed state then. Until it does, the
+            // controls stay withheld, so a settled request is never offered another answer.
+            if (await readOutcome(props.requestId) === 'pending') clearPermissionAnswerUnconfirmed(props.requestKey);
         } catch {
             log.log('[PermissionAnswerUnconfirmedNotice] request re-read failed');
             if (mounted.current) setCouldNotCheck(true);

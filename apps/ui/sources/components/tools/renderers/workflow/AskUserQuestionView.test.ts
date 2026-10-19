@@ -517,6 +517,24 @@ describe('AskUserQuestionView', () => {
         });
     });
 
+    describe('when Check again finds the question already settled', () => {
+        it('keeps the form withheld until the card itself leaves the waiting state', async () => {
+            const requestId = 'toolu_unknown_outcome_settled';
+            activeAskUserQuestionRequestId = requestId;
+            sessionAllowWithAnswers.mockRejectedValueOnce(new HappyError('The outcome is unknown', false, { code: RPC_ERROR_CODES.OUTCOME_UNKNOWN }));
+            const screen = await renderView(makeTool({ permission: { id: requestId, status: 'pending' } }));
+            await chooseOptionAndSubmit(screen, 'A');
+
+            readRequestOutcome.mockResolvedValueOnce('settled');
+            await pressTestInstanceAsync(screen.findByProps({ testID: 'ask-user-question.check-again' }), 'check again');
+
+            expect(readRequestOutcome).toHaveBeenCalledExactlyOnceWith(requestId);
+            expect(screen.findByProps({ testID: 'ask-user-question.submit' }).props.accessibilityState.disabled).toBe(true);
+            await pressPressableByLabel(screen, 'tools.askUserQuestion.submit');
+            expect(sessionAllowWithAnswers).toHaveBeenCalledTimes(1);
+        });
+    });
+
     it('exposes question choices and submit progress with their current accessible state', async () => {
         const approval = createDeferred<void>();
         sessionAllowWithAnswers.mockImplementationOnce(() => approval.promise);

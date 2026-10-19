@@ -27,7 +27,9 @@ export type SessionTranscriptActions = Readonly<{
     abort(): Promise<void>;
     /**
      * Reads the exact Session on its own Home and says whether the request is still waiting for an answer
-     * or has settled. Rejects when the read fails or cannot tell; absent where the source has no authority to read.
+     * or has settled; a settled answer means the fresh Session is already published through the store owner.
+     * Rejects when the read fails, cannot tell, or the Account it was bound to is no longer current; absent where the
+     * source has no authority to read.
      */
     readRequestOutcome?(requestId: string): Promise<SessionRequestReadOutcome>;
     submitMessage(text: string, options?: SessionTranscriptSubmitOptions): Promise<void>;
