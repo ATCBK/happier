@@ -633,4 +633,37 @@ describe('runSocketReconnectCatchUpViaChanges', () => {
             shouldPersistCursor: true,
         });
     });
+
+    it('adopts the current cursor for a device with no baseline instead of replaying the Account history', async () => {
+        const order: string[] = [];
+        const checkpoints: string[] = [];
+        const applyPlanned = vi.fn(async () => {});
+        const fetchChanges = vi.fn<FetchChangesFn>(async ({ afterCursor }) => {
+            order.push(`changes:${afterCursor}`);
+            // The first page of a long-lived Account's history; applying it would re-materialize
+            // entities the snapshot is about to read anyway.
+            return afterCursor === '0'
+                ? { status: 'ok' as const, nextCursor: '15430', changes: [{ cursor: 15430, kind: 'session', entityId: 's1', changedAt: 1 }] }
+                : { status: 'ok' as const, changes: [], nextCursor: String(afterCursor) };
+        });
+
+        const res = await runSocketReconnectCatchUpViaChanges({
+            credentials,
+            accountId: 'a',
+            afterCursor: null,
+            changesPageLimit: 200,
+            forceSnapshotRefresh: false,
+            fetchChanges,
+            fetchCurrentCursor: async () => { order.push('cursor'); return { status: 'ok' as const, cursor: '2424129' }; },
+            checkpointCursor: cursor => { checkpoints.push(cursor); return true; },
+            applyPlanned,
+            snapshotRefresh: async () => { order.push('snapshot'); return { status: 'complete' as const }; },
+        });
+
+        expect(applyPlanned).not.toHaveBeenCalled();
+        // The base cursor is read before the snapshot so later changes stay replayable.
+        expect(order.slice(0, 2)).toEqual(['cursor', 'snapshot']);
+        expect(checkpoints).toEqual(['2424129']);
+        expect(res).toEqual({ status: 'ok', nextCursor: '2424129', shouldPersistCursor: false });
+    });
 });

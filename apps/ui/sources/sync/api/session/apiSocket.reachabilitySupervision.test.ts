@@ -5,6 +5,11 @@ import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
 
 function createSocketStub() { return createSocketIoBoundaryStub().socket; }
 
+// Prepare the source graph before the per-case mock/connection lifecycle.
+// Each case still receives its fresh module graph and the original time budget.
+await import('./apiSocket');
+vi.resetModules();
+
 afterEach(async () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();

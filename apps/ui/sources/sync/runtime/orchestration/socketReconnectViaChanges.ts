@@ -41,7 +41,7 @@ export type ChangesCursorBlockedContext = Readonly<{
 }>;
 
 export type SnapshotBaseCursorFetchFailedContext = Readonly<{
-    trigger: 'cursor-gone' | 'forced-snapshot' | 'page-budget';
+    trigger: 'cursor-gone' | 'forced-snapshot' | 'page-budget' | 'no-baseline';
     fallbackCursor: string;
     error: string;
 }>;
@@ -74,6 +74,7 @@ function parseNumericCursor(cursor: string): number | null {
 export async function runSocketReconnectCatchUpViaChanges(params: {
     credentials: AuthCredentials | null;
     accountId: string | null;
+    /** `null` is a device with no baseline for this Account: it adopts the current cursor instead of replaying history. */
     afterCursor: string | null;
     changesPageLimit: number;
     maxChangesPagesPerResume?: number;
@@ -221,6 +222,17 @@ export async function runSocketReconnectCatchUpViaChanges(params: {
         return { status: 'ok', cursor: snapshotBaseCursor, checkpointPersisted: false };
     };
 
+    if (params.afterCursor === null && params.fetchCurrentCursor) {
+        // The Account's whole history is not this device's backlog: its snapshot reads current
+        // state, so replaying every old change would only re-materialize what the snapshot reads.
+        const snapshot = await runSnapshotRepair('0', 'no-baseline');
+        if (snapshot.status === 'fallback') return snapshot;
+        return {
+            status: 'ok',
+            nextCursor: snapshot.cursor,
+            shouldPersistCursor: !snapshot.checkpointPersisted,
+        };
+    }
     let afterCursor = params.afterCursor ?? '0';
     const maxPages = Math.max(1, Math.trunc(params.maxChangesPagesPerResume ?? 5));
     let forceSnapshotRefresh = params.forceSnapshotRefresh;
