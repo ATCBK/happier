@@ -3,7 +3,7 @@ import { join, posix, win32 } from 'node:path';
 import { ensureDir, readTextOrEmpty } from '../utils/fs/ops.mjs';
 import { createEnvFileExclusive, ensureEnvFileUpdated } from '../utils/env/env_file.mjs';
 import { parseEnvToObject } from '../utils/env/dotenv.mjs';
-import { getWorkspaceDir, resolveStackEnvPath } from '../utils/paths/paths.mjs';
+import { getRepoDir, getWorkspaceDir, resolveStackEnvPath } from '../utils/paths/paths.mjs';
 import { stackExistsSync } from '../utils/stack/stacks.mjs';
 import {
   STACK_WRAPPER_CLEAR_UNPREFIXED_KEYS,
@@ -131,6 +131,12 @@ export async function withStackEnv({
     // One-shot overrides (e.g. --repo=...) win over stack env file.
     ...extraEnv,
   };
+  // Preparation belongs to the caller's checkout, including transient --repo
+  // selections. A stack name alone cannot attest a different checkout.
+  if (process.env.HAPPIER_STACK_REPO_DIR?.trim()
+      && getRepoDir(null, process.env) !== getRepoDir(null, env)) {
+    delete env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD;
+  }
   env = applyStackActiveServerScopeEnv({
     env,
     stackName,

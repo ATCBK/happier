@@ -10,6 +10,10 @@ import { resolveStackServerEndpoint } from '../utils/server/urls.mjs';
 import { applyStackCacheEnv } from '../utils/proc/pm.mjs';
 import { resolveCommandPath } from '../utils/proc/commands.mjs';
 import { spawnProc } from '../utils/proc/proc.mjs';
+import { ensureMinimalMonorepoLayout } from '../testkit/core/minimal_monorepo_layout.mjs';
+import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
+import { runNodeCapture } from '../testkit/core/run_node_capture.mjs';
+import { resolveTransientRepoOverrides } from './transient_repo_overrides.mjs';
 
 async function withTempStackEnvFixture(fn, { includeServerPort = true } = {}) {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-stack-env-sanitize-'));
@@ -579,10 +583,11 @@ test('withStackEnv replaces a foreign daemon lifecycle scope with the selected s
 
 test('withStackEnv preserves runtime mode and source admission for the selected stack', async () => {
   await withTempStackEnvFixture(async ({ stackName }) => {
-    const keys = ['HAPPIER_STACK_STACK', 'HAPPIER_STACK_RUNTIME_MODE', 'HAPPIER_STACK_PREPARED_SOURCE_RELOAD'];
+    const keys = ['HAPPIER_STACK_STACK', 'HAPPIER_STACK_REPO_DIR', 'HAPPIER_STACK_RUNTIME_MODE', 'HAPPIER_STACK_PREPARED_SOURCE_RELOAD'];
     const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
 
     process.env.HAPPIER_STACK_STACK = stackName;
+    process.env.HAPPIER_STACK_REPO_DIR = '/tmp/happier';
     process.env.HAPPIER_STACK_RUNTIME_MODE = 'require';
     process.env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD = '1';
 
@@ -601,6 +606,54 @@ test('withStackEnv preserves runtime mode and source admission for the selected 
       }
     }
   });
+});
+
+test('withStackEnv scopes prepared source reload to the effective checkout through the child loader', async () => {
+  await withTempStackEnvFixture(async ({ stackName, storageDir }) => {
+    const oldRepo = join(storageDir, 'old-repo');
+    const newRepo = join(storageDir, 'new-repo');
+    await Promise.all([ensureMinimalMonorepoLayout(oldRepo), ensureMinimalMonorepoLayout(newRepo)]);
+    const envPath = join(storageDir, stackName, 'env');
+    await writeFile(envPath, `HAPPIER_STACK_REPO_DIR=${oldRepo}\n`, 'utf8');
+    const restore = withPatchedProcessEnv(null, {
+      HAPPIER_STACK_STACK: stackName,
+      HAPPIER_STACK_ENV_FILE: envPath,
+      HAPPIER_STACK_REPO_DIR: oldRepo,
+      HAPPIER_STACK_PREPARED_SOURCE_RELOAD: '1',
+      HAPPIER_STACK_HOME_DIR: join(storageDir, 'home'),
+      HAPPIER_STACK_CLI_ROOT_DISABLE: '1',
+    });
+    const loader = new URL('../utils/env/env.mjs', import.meta.url).href;
+    const readChildEnv = (extraEnv = {}) => withStackEnv({
+      stackName,
+      extraEnv,
+      reconcileDaemonRuntimeState: false,
+      fn: ({ env }) => runNodeCapture(['--input-type=module', '-e', `
+        await import(${JSON.stringify(loader)});
+        console.log(JSON.stringify({ repo: process.env.HAPPIER_STACK_REPO_DIR,
+          prepared: process.env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD ?? null }));
+      `], { env }),
+    }).then(result => {
+      assert.equal(result.code, 0, result.stderr);
+      return JSON.parse(result.stdout);
+    });
+    try {
+      assert.deepEqual(await readChildEnv(), { repo: oldRepo, prepared: '1' });
+      const override = resolveTransientRepoOverrides({
+        rootDir: oldRepo, kv: new Map([['--repo', newRepo]]),
+      });
+      assert.deepEqual(await readChildEnv(override), { repo: newRepo, prepared: null });
+      await writeFile(envPath, `HAPPIER_STACK_REPO_DIR=${newRepo}\n`, 'utf8');
+      assert.deepEqual(await readChildEnv(), { repo: newRepo, prepared: null });
+      // A repeated wrapper hop in the already-prepared transient checkout
+      // retains its preparation even though the persisted stack points elsewhere.
+      await writeFile(envPath, `HAPPIER_STACK_REPO_DIR=${oldRepo}\n`, 'utf8');
+      process.env.HAPPIER_STACK_REPO_DIR = newRepo;
+      assert.deepEqual(await readChildEnv(override), { repo: newRepo, prepared: '1' });
+    } finally {
+      restore();
+    }
+  }, { includeServerPort: false });
 });
 
 test('withStackEnv does not carry foreign stack runtime or Expo selections into the selected stack', async () => {
