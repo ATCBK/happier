@@ -21,7 +21,6 @@ import { createTestExecutionRunHostRuntime } from './testkit';
 import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import { RetainedExecutionRunRecordSchema, projectExecutionRunHostLoss, projectRetainedExecutionRunState } from './retainedState';
 import { buildReviewFindingsV2Payload } from '@/agent/reviews/normalize/buildReviewFindingsV2Payload';
-import integrationConfig from '../../../../../vitest.integration.config';
 
 // The observation transport is unavailable after the host has died. All
 // retained-state parsing, ownership and fallback selection remain real.
@@ -116,9 +115,16 @@ describe('execution lifecycle restart recovery', () => {
       child!.once('exit', (code) => reject(new Error(`Retained host exited before ${phase} (${code}): ${stderr}`)));
     });
 
-    // Cold source loading is fixture setup. Reuse the integration lane's hook
-    // budget; the actual host-loss assertions retain the unit test budget.
-    beforeEach(async () => {
+    afterEach(async () => {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, 'exit');
+        child.kill('SIGKILL');
+        await exited;
+      }
+    });
+
+    it.each(['ephemeral', 'resumable'] as const)('reconciles actual process death after an earlier empty baseline (%s)', async (retentionPolicy) => {
+      // Readiness and process death share the original unit-test allowance.
       phase = 'recovering empty baseline';
       completed = false;
       stderr = '';
@@ -136,17 +142,6 @@ describe('execution lifecycle restart recovery', () => {
       });
       child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
       expect(await waitForHostMessage('readiness')).toBe('ready');
-    }, integrationConfig.test?.hookTimeout);
-
-    afterEach(async () => {
-      if (child && child.exitCode === null && child.signalCode === null) {
-        const exited = once(child, 'exit');
-        child.kill('SIGKILL');
-        await exited;
-      }
-    });
-
-    it.each(['ephemeral', 'resumable'] as const)('reconciles actual process death after an earlier empty baseline (%s)', async (retentionPolicy) => {
       const host = child!;
       phase = 'retaining child state';
       const retained = waitForHostMessage('retaining state');
