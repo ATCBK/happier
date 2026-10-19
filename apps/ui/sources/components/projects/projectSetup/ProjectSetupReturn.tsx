@@ -26,7 +26,7 @@ import { useSessionSelector, useServerScopedMachine } from '@/sync/store/hooks';
 import { selectProjectLastAuthoringSessionId } from '@/sync/store/selectProjectLastAuthoringSessionId';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 
@@ -155,7 +155,7 @@ function useProjectSetupDraftTarget(origin: PluginUiNewSessionSeedOriginV1) {
     project: scripts.destination.kind === 'ready'
       ? resolveWorkspaceRefDisplayName(scripts.destination.workspaceRef)
       : resolveWorkspacePathBasenameV1(origin.workspace.rootPath) ?? origin.workspace.rootPath,
-    machine: getMachineDisplayName(machine) ?? origin.workspace.machineId,
+    machine: machine ? getMachineSentenceName(machine) : origin.workspace.machineId,
   };
 }
 

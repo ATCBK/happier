@@ -1,3 +1,4 @@
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import * as React from 'react';
 
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
@@ -33,7 +34,7 @@ export const ProjectActionApprovalNotice = React.memo(
         onOpenApproval={() => {
           props.onDismiss();
           router.push(
-            `/inbox/approvals/${encodeURIComponent(artifactId)}?serverId=${encodeURIComponent(serverId)}`,
+            buildApprovalHref(artifactId, serverId),
           );
         }}
       />

@@ -162,7 +162,8 @@ export function useWidgetAreaLayouts(
       outcome = await run('widgets.area.layout.list', { surface });
     } catch (error) {
       if (!isCurrent() || current !== generation.current || interest.controller.signal.aborted) return null;
-      throw error;
+      outcome = { ok: false, errorCode: error instanceof Error && 'code' in error && typeof error.code === 'string'
+        ? error.code : 'widget_area_unavailable', error: t('errors.operationFailed') };
     }
     const parsed = outcome.ok
       ? WidgetInstanceActionOutputSchemasV1[

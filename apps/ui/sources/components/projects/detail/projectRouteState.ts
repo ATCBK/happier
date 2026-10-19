@@ -245,7 +245,7 @@ export function buildProjectRouteHref(input: Readonly<{
     companion?: PluginUiNewSessionSeedOriginV1['companion'] | null;
     /** A newly selected Details destination replaces the old Details and initial-resource intent. */
     details?: SessionPaneUrlDetailsTarget | null;
-}> & ProjectRouteContext): string {
+}> & ProjectRouteContext): ReturnType<typeof resolveProjectRoutePathForSurface> {
     const resourceParams: Record<string, string> = {};
     if (input.showWorktrees) resourceParams.showWorktrees = '1';
     const routeParams = { ...input.routeParams };
@@ -290,7 +290,7 @@ export function buildProjectRouteHref(input: Readonly<{
 }
 
 export function replaceProjectRouteSelection(input: Parameters<typeof buildProjectRouteHref>[0] & Readonly<{
-    router: { replace: (href: string) => void };
+    router: { replace: (href: ReturnType<typeof buildProjectRouteHref>) => void };
 }>): void {
     input.router.replace(buildProjectRouteHref(input));
 }
@@ -305,7 +305,7 @@ export function resolveProjectOpenHref(input: Readonly<{
     persistedMobileSurface?: string | null;
     persistedActiveRootPath?: string | null;
     persistedWorktreeId?: string | null;
-}>): string {
+}>): ReturnType<typeof resolveProjectRoutePathForSurface> {
     const activeRootPath = readProjectRouteStringParam(input.persistedActiveRootPath ?? undefined) ?? input.workspaceRef.rootPath;
     const surface = input.deviceType === 'phone' ? resolveProjectMobileSurfaceIntent({
         routeKind: 'index', activeRightTabId: input.rememberedRightTabId, persistedSurface: input.persistedMobileSurface,
@@ -338,7 +338,7 @@ export function resolveProjectRouteHeaderTitle(workspaceRef: WorkspaceRefV1, act
 }
 
 export type ProjectAuthoringReturn =
-    | Readonly<{ kind: 'ready'; origin: PluginUiNewSessionSeedOriginV1; workspaceRef: WorkspaceRefV1; href: string }>
+    | Readonly<{ kind: 'ready'; origin: PluginUiNewSessionSeedOriginV1; workspaceRef: WorkspaceRefV1; href: ReturnType<typeof buildProjectRouteHref> }>
     | Readonly<{ kind: 'unavailable'; reason: 'origin_invalid' | 'scope_unavailable' | 'workspace_unavailable' }>;
 
 /** Project route/pane facts become a closed origin, never an arbitrary href/query bag. */

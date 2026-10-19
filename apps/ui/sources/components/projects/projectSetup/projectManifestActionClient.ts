@@ -17,7 +17,7 @@ import {
 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import type { ActionOperationProjectScriptSelection } from '@/sync/domains/actionOperations/qualifiedActionOperation';
-import type { z } from 'zod';
+import { safeParse, type core } from 'zod/mini';
 
 import {
   awaitActionApprovalResult,
@@ -25,6 +25,8 @@ import {
   type ActionApprovalRegistration,
 } from '@/components/approvals/actionApprovalContinuation';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { randomUUID } from '@/platform/randomUUID';
+import { HappyError } from '@/utils/errors/errors';
 
 type Execute = (
   actionId: 'projects.inspect' | 'projects.manifest.update' | 'projects.script.run' | 'projects.prepare',
@@ -74,17 +76,18 @@ export function createProjectManifestActionClient(
       | 'projects.script.run'
       | 'projects.prepare',
     actionInput: unknown,
-    schema: z.ZodType<T>,
+    schema: core.$ZodType<T>,
   ): Promise<T> {
+    const actionContext = { ...context, actionRequestId: randomUUID() };
     const outcome = await awaitActionApprovalResult<unknown, Outcome<T>>({
       execute: async (callbacks) => {
-        const result = await execute(actionId, actionInput, context);
+        const result = await execute(actionId, actionInput, actionContext);
         if (!result.ok) {
           // A typed D18 setup review keeps its safe review facts for the review surface.
           const consent = readProjectSetupConsentFailureV1(result);
-          if (consent) throw Object.assign(new Error(consent.errorCode), { code: consent.errorCode, consent: consent.details });
+          if (consent) throw Object.assign(new HappyError(consent.errorCode, false, { code: consent.errorCode }), { consent: consent.details });
           const worker = readProjectWorkerNoAcceptanceFailureV1(result);
-          if (worker) throw Object.assign(new Error(worker.errorCode), { code: worker.errorCode, workerRefusal: worker.details });
+          if (worker) throw Object.assign(new HappyError(worker.errorCode, false, { code: worker.errorCode }), { workerRefusal: worker.details });
           return { ok: false, code: result.errorCode };
         }
         const approval = ActionApprovalRequestCreatedResultSchema.safeParse(
@@ -104,13 +107,13 @@ export function createProjectManifestActionClient(
           );
           return { approvalPending: true };
         }
-        const parsed = schema.safeParse(result.result);
+        const parsed = safeParse(schema, result.result);
         return parsed.success
           ? { ok: true, value: parsed.data }
           : { ok: false, code: 'invalid_action_output' };
       },
       succeeded: (value) => {
-        const parsed = schema.safeParse(value);
+        const parsed = safeParse(schema, value);
         return parsed.success
           ? { ok: true, value: parsed.data }
           : { ok: false, code: 'invalid_action_output' };
@@ -123,7 +126,7 @@ export function createProjectManifestActionClient(
       ...(input.signal ? { signal: input.signal } : {}),
     });
     if (!outcome.ok)
-      throw Object.assign(new Error(outcome.code), { code: outcome.code,
+      throw Object.assign(new HappyError(outcome.code, false, { code: outcome.code }), {
         ...(outcome.workerRefusal ? { workerRefusal: outcome.workerRefusal } : {}) });
     return outcome.value;
   }
@@ -136,7 +139,7 @@ export function createProjectManifestActionClient(
         context,
       );
       if (!result.ok)
-        throw Object.assign(new Error(result.error), {
+        throw new HappyError(result.error, false, {
           code: result.errorCode,
         });
       return ProjectDefinitionInspectOutputSchema.parse(result.result);
@@ -154,9 +157,7 @@ export function createProjectManifestActionClient(
           expectedBasis: request.expectedBasis,
           bytes: request.bytes,
         },
-        ProjectManifestUpdateResultSchema as unknown as z.ZodType<
-          z.infer<typeof ProjectManifestUpdateResultSchema>
-        >,
+        ProjectManifestUpdateResultSchema,
       );
     },
     runScript(selection: ProjectScriptSelection, choice?: ProjectExecutionChoiceV1) {

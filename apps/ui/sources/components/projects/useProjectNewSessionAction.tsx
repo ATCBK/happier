@@ -1,3 +1,4 @@
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import * as React from 'react';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { SessionAuthoringOpenResultV1Schema, type PluginUiNewSessionSeedV1 } from '@happier-dev/protocol/plugins/ui';
@@ -73,12 +74,10 @@ export function useProjectNewSessionAction(input: Readonly<{
         try {
             const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
             if (!current()) return;
-            const prepared = await createFrontDoorActionExecute(createDefaultActionExecutor()).prepare('session.authoring.open', { seed }, {
+            const result = await createFrontDoorActionExecute(createDefaultActionExecutor())('session.authoring.open', { seed }, {
                 surface: 'ui', authority: 'present_user', serverId: lifetime.scope.serverId,
                 expectedAccountId: lifetime.scope.accountId,
             });
-            if (!current()) return;
-            const result = prepared.kind === 'settled' ? prepared.result : await prepared.invocation.run();
             if (!current()) return;
             if (!result.ok) { unavailable(); return; }
             const pending = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
@@ -90,7 +89,7 @@ export function useProjectNewSessionAction(input: Readonly<{
     const approvalId = approval.approvalId;
     const approvalNotice = approval.approvalPending && approvalId
         ? <ActionApprovalPendingNotice message={t('approvals.status.open')} testID="project-new-session-approval"
-            onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(approvalId)}?serverId=${encodeURIComponent(target.serverId)}`)} />
+            onOpenApproval={() => router.push(buildApprovalHref(approvalId, target.serverId))} />
         : null;
     return { open, approvalNotice };
 }

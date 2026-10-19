@@ -20,7 +20,7 @@ import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/use
 import { useProjectSurfaceActions } from '@/components/projects/detail/useProjectSurfaceActions';
 import { useProjectSurfaceController } from '@/components/projects/detail/useProjectSurfaceController';
 import { useProjectRouteSurfaceSync } from '@/components/projects/detail/useProjectRouteSurfaceSync';
-import { CheckoutReachabilityLine } from '@/components/workspaces/reachability/checkoutReachability';
+import { CheckoutReachabilityLine, CheckoutReachabilityScope } from '@/components/workspaces/reachability/checkoutReachability';
 import type { ProjectMobileSurface, ProjectAttachedDashboardSelection } from './projectCockpitState';
 
 type ProjectCockpitShellProps = Readonly<{
@@ -40,10 +40,13 @@ type ProjectCockpitShellProps = Readonly<{
  * once here, above every page; the surfaces below inherit it (see `checkoutReachability`).
  */
 export const ProjectCockpitShell = React.memo((props: ProjectCockpitShellProps) => (
-    <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-        <CheckoutReachabilityLine scope={props.workspaceRef} testID="project-checkout-reachability" />
-        <ProjectCockpitSurface {...props} />
-    </View>
+    <CheckoutReachabilityScope scope={props.workspaceRef}>
+        <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+            {/* Context leads with its own header, so it places the line beneath it (`ProjectContextBody`). */}
+            {props.surface === 'context' ? null : <CheckoutReachabilityLine scope={props.workspaceRef} testID="project-checkout-reachability" />}
+            <ProjectCockpitSurface {...props} />
+        </View>
+    </CheckoutReachabilityScope>
 ));
 
 const ProjectCockpitSurface = React.memo((props: ProjectCockpitShellProps) => {

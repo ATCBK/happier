@@ -8,7 +8,7 @@ import { SessionDraftAddressV2Schema } from '@happier-dev/protocol/drafts/sessio
 import { workspaceAddressFromRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { randomUUID } from '@/platform/randomUUID';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { ensureSessionDraftRepositoryHydrated, flushProjectOpenDraftLocally } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { ensureSessionDraftRepositoryHydrated, flushSessionDraftLocally } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 
 import {
   useLocalSearchParams,
@@ -20,7 +20,7 @@ import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { KeyboardStickyFooter } from '@/components/ui/keyboardAvoidance/KeyboardStickyFooter';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
-import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
+import { PagePinnedBar } from '@/components/ui/layout/PagePinnedBar';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -46,7 +46,7 @@ import {
 } from '@/utils/sessions/machineUtils';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { resolveMachineActionCandidates } from '@/utils/sessions/resolveMachineActionCandidates';
-import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import { formatRelativeTime } from '@/utils/time/formatShortRelativeTime';
 import { useProjectSourceAddress } from '../sources/useProjectSourceAddress';
@@ -120,7 +120,7 @@ export const ProjectOpenScreen = React.memo(function ProjectOpenScreen(
     if (!scope || !scopeKey) return;
     let mounted = true;
     void (async () => {
-      await flushProjectOpenDraftLocally({ scope, draftId });
+      await flushSessionDraftLocally({ scope });
       // Remote unavailability does not discard or hide locally retained chooser state.
       await ensureSessionDraftRepositoryHydrated(scope).catch(() => {});
     })().then(() => {
@@ -232,11 +232,14 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
   const setSubjectRef = React.useRef(setSubject);
   setSubjectRef.current = setSubject;
 
+  // The Machine in a sentence: its resolved name, "this machine" while it loads or is locked, else the id.
+  function sentenceMachineName(machineId: string): string {
+    const known = machines.find((candidate) => candidate.id === machineId);
+    return known ? getMachineSentenceName(known, machineNames.get(machineId)) : machineId;
+  }
+
   function opened(result: Extract<OpenProjectResultV1, { kind: 'opened' }>) {
-      const machineName =
-        machineNames.get(result.workspace.machineId) ?? getMachineDisplayName(
-          machines.find((candidate) => candidate.id === result.workspace.machineId) ?? null,
-        ) ?? result.workspace.machineId;
+      const machineName = sentenceMachineName(result.workspace.machineId);
       const projectName = result.directory.split(/[\\/]/u).filter(Boolean).pop() ?? result.directory;
       // One notice says what is true where the person lands: no agent runs, and setup's own state.
       publishPresentationNotice({
@@ -298,14 +301,15 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
     kind: 'card' as const,
     footer: (
       <ProjectOpenFooter
-        layout="row"
+        // A narrow card takes the phone composition: the note on its own line, then one full-width Open project.
+        layout={twoPanes ? 'row' : 'stacked'}
         disabled={submitDisabled}
         loading={open.pending}
         onCancel={() => actionsRef.current.cancel()}
         onSubmit={() => { void actionsRef.current.submit(); }}
       />
     ),
-  } : null), [dialog, open.pending, submitDisabled]);
+  } : null), [dialog, open.pending, submitDisabled, twoPanes]);
   useModalCardChrome(props.setChrome, dialogChrome);
 
   const selectedSourceId = subject?.kind === 'source' ? subject.source.id : null;
@@ -338,6 +342,7 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
   };
 
   const machineName = machine ? (machineNames.get(machine.id) ?? getMachineDisplayName(machine)) : null;
+  const machineSentenceName = machine ? sentenceMachineName(machine.id) : '';
   const checkoutsHere = options.find((option) => option.use === 'existing')?.candidates.length ?? 0;
   const whereStatus: ProjectOpenWhereStatus = !machine || !machineName
     ? { kind: 'none' }
@@ -375,7 +380,7 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
     } : {}),
     ...describeProjectOpenUse({
       use: option.use,
-      machineName: machineName ?? '',
+      machineName: machineSentenceName,
       fromPath: option.from
         ? formatPathRelativeToHome(option.from.rootPath, choiceBase.machineHomeDir ?? undefined)
         : null,
@@ -496,6 +501,7 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
           /> : null}
           <ProjectOpenOutcome open={open} gitRef={ref}
             machineName={(id) => machineNames.get(id) ?? getMachineDisplayName(machines.find((candidate) => candidate.id === id) ?? null) ?? id}
+            sentenceMachineName={sentenceMachineName}
             onChooseCandidate={candidate => {
             const checkout = workspaceAddressFromRefV1(candidate);
             if (!open.draft) return;
@@ -525,7 +531,8 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
  */
 function ProjectOpenFooter(
   props: Readonly<{
-    layout: 'row' | 'phone';
+    /** `stacked`: a narrow dialog card; the phone composition without the page's sticky, inset footer. */
+    layout: 'row' | 'stacked' | 'phone';
     disabled: boolean;
     loading: boolean;
     onCancel: () => void;
@@ -533,11 +540,10 @@ function ProjectOpenFooter(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const insets = useChromeSafeAreaInsets();
   const note = (
-    <View style={styles.footerNoteRow}>
+    <View style={[styles.footerNoteRow, props.layout === 'stacked' ? styles.footerNoteRowStacked : null]}>
       <Icon name="info" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
-      <Text numberOfLines={props.layout === 'phone' ? 1 : undefined}
+      <Text numberOfLines={props.layout === 'row' ? undefined : 1}
         style={[styles.footerNote, { color: theme.colors.text.secondary }]}>
         {t('projects.open.setupDisclosure')}
       </Text>
@@ -546,7 +552,7 @@ function ProjectOpenFooter(
   const submit = (
     <RoundButton
       testID="projects.open.submit"
-      size={props.layout === 'phone' ? 'normal' : 'small'}
+      size={props.layout === 'row' ? 'small' : 'normal'}
       title={t('projects.open.submit')}
       disabled={props.disabled}
       loading={props.loading}
@@ -555,12 +561,22 @@ function ProjectOpenFooter(
   );
   if (props.layout === 'phone') {
     return (
-      <KeyboardStickyFooter
-        style={[styles.phoneFooter, { borderTopColor: theme.colors.border.subtle, paddingBottom: Math.max(insets.bottom, 12) }]}
-      >
+      <KeyboardStickyFooter>
+        <PagePinnedBar style={styles.phoneFooter}>
+          {note}
+          {submit}
+        </PagePinnedBar>
+      </KeyboardStickyFooter>
+    );
+  }
+  if (props.layout === 'stacked') {
+    // The phone composition inside the card's own footer slot: the note, then the one full-width
+    // Open project. The card's close button is the cancel; the slot already sits above the keyboard.
+    return (
+      <View style={[styles.footerStacked, { borderTopColor: theme.colors.border.subtle }]}>
         {note}
         {submit}
-      </KeyboardStickyFooter>
+      </View>
     );
   }
   return (
@@ -746,6 +762,7 @@ function describeProjectOpenUse(
 /** What the last confirmation came to, while it stays on this screen: its step, or the outcome and next action. */
 function ProjectOpenOutcome(props: Readonly<{ open: ReturnType<typeof useProjectOpen>; gitRef: string | null;
     machineName(machineId: string): string;
+    sentenceMachineName(machineId: string): string;
     onChooseCandidate(candidate: Parameters<typeof workspaceAddressFromRefV1>[0]): void }>) {
     const result = props.open.result;
     if (props.open.pending) return <AttentionBanner testID="projects.open.pending" tone="neutral" title={t('projects.open.resolving')} />;
@@ -764,7 +781,7 @@ function ProjectOpenOutcome(props: Readonly<{ open: ReturnType<typeof useProject
         case 'opened':
             // Accepted but not focused here: the only next step is to go to it ("prepared" is readiness, not setup success).
             return props.open.focusUnavailable ? <AttentionBanner testID="projects.open.acceptedUnfocused" tone="neutral"
-              title={t('projects.open.opened', { machine: props.machineName(result.workspace.machineId) })}
+              title={t('projects.open.opened', { machine: props.sentenceMachineName(result.workspace.machineId) })}
               description={result.directory} details={[result.setup]}
               action={{ label: t('projects.open.focus'), onPress: () => props.open.submit() }} /> : null;
         case 'ambiguous':
@@ -815,13 +832,16 @@ const styles = StyleSheet.create(() => ({
     paddingVertical: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  phoneFooter: {
+  // Inside the card's footer slot, which already carries the card's edge inset: the note and the
+  // button line up with the sheets above.
+  footerStacked: {
     gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingVertical: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
+  phoneFooter: { gap: 10 },
   footerNoteRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
+  footerNoteRowStacked: { flex: 0 },
   footerNote: { ...Typography.variant('meta'), flexShrink: 1 },
   address: { ...Typography.mono() },
 }));

@@ -428,7 +428,7 @@ describe('Projects › Sources', () => {
     const foreignHome = homes.homes.foreign!.id;
     const surface = { accountId: 'dashboard-owner', serverId: foreignHome, owner: { kind: 'project' as const, projectId: 'owners-project' } };
     const artifactId = buildWidgetSurfaceArtifactIdV1(surface);
-    const layout = { v: 1 as const, surface, name: 'Foreign release', items: [] };
+    const layout = WidgetAreaLayoutV1Schema.parse({ v: 1, surface, name: 'Foreign release', items: [] });
     const document = createLayoutArtifactHttpBoundary('dashboard-owner', { artifactId, kind: 'widget-area-layout.v1', defaultLayout: layout,
       parseLayout: value => WidgetAreaLayoutV1Schema.parse(value), buildHeader: buildWidgetSurfaceArtifactHeaderV1 });
     document.seed(layout);

@@ -47,7 +47,7 @@ const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init
         const current = artifacts.read(decodeURIComponent(path.split('/')[3] ?? ''));
         return Response.json({ success: false, error: 'version-mismatch',
             ...(current ? { currentHeaderVersion: current.headerVersion + 1, currentHeader: current.header,
-                currentBodyVersion: current.bodyVersion + 1, currentBody: current.body } : {}) });
+                currentBodyVersion: (current.bodyVersion ?? 0) + 1, currentBody: current.body } : {}) });
     }
     const grantMatch = /^\/v1\/artifacts\/([^/]+)\/access\/grants$/.exec(path);
     if (grantMatch && init?.method === 'PUT') {
@@ -205,7 +205,8 @@ describe('ProjectDashboardHeader', () => {
             owner: { kind: 'project' as const, projectId: 'project-key', layoutId: 'release' } };
         const screen = await renderScreen(header(null, {
             attachedDashboard: { sourceId: 'team-source', artifactId: 'attached-shared-dashboard' },
-            sharedDashboard: { artifactId: 'attached-shared-dashboard', surface, name: 'Release', access, revision: 3 },
+            sharedDashboard: { artifactId: 'attached-shared-dashboard', surface, name: 'Release', access,
+                viewerScope: { serverId: runtime.serverId, accountId: 'account-a' }, revision: { headerVersion: 3, bodyVersion: 3 } },
         }));
         const bar = () => screen.findAllByType(WidgetAreaLayoutBar)[0]!;
         await vi.waitFor(() => expect(bar().props.selectedId).toBe('attached-shared-dashboard'));

@@ -3,15 +3,16 @@ import * as React from 'react';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { ProjectWorkerActionError, type ProjectWorkerActionOptions } from '@/sync/ops/actions/projectWorkerActions';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 type ReadyObservation = Readonly<{ status: 'ready' }>;
-type RefusedRead = Readonly<{ status: 'locked' | 'invalid' | 'unavailable' }>;
+type RefusedRead = Readonly<{ status: 'locked' | 'invalid' | 'unavailable'; reasonCode?: string }>;
 
 export type ObservedWorkerSettingState<TReady extends ReadyObservation> =
   | Readonly<{ kind: 'loading' }>
   | Readonly<{ kind: 'ready'; value: TReady }>
-  | Readonly<{ kind: 'refused'; status: RefusedRead['status'] }>
-  | Readonly<{ kind: 'error' }>;
+  | Readonly<{ kind: 'refused'; status: RefusedRead['status']; reasonCode?: string }>
+  | Readonly<{ kind: 'error'; reasonCode?: string }>;
 
 /**
  * What the last write said, beside the value that is still observed:
@@ -104,12 +105,14 @@ export function useObservedWorkerSetting<TReady extends ReadyObservation, TDraft
           state:
             result.status === 'ready'
               ? { kind: 'ready', value: result as TReady }
-              : { kind: 'refused', status: (result as RefusedRead).status },
+              : { kind: 'refused', status: (result as RefusedRead).status,
+                ...((result as RefusedRead).reasonCode ? { reasonCode: (result as RefusedRead).reasonCode } : {}) },
         });
       },
-      () => {
+      (error: unknown) => {
         if (!current || !binding.isCurrent()) return;
-        setObservation({ key, state: { kind: 'error' } });
+        const reasonCode = error instanceof ProjectWorkerActionError ? error.errorCode : readRpcErrorCode(error);
+        setObservation({ key, state: { kind: 'error', ...(reasonCode ? { reasonCode } : {}) } });
       },
     );
     return () => {

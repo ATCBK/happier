@@ -32,7 +32,9 @@ import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
+import { CheckoutReachabilityLine } from '@/components/workspaces/reachability/checkoutReachability';
 import { resolveWorkspaceRefDisplayName } from '../resolveWorkspaceRefDisplayName';
+import { ProjectCapabilitiesSection } from './ProjectCapabilitiesSection';
 import {
   useProjectContext,
   type ProjectContextOutcome,
@@ -63,6 +65,7 @@ export const ProjectContextBody = React.memo(function ProjectContextBody(
   const router = useRouter();
   const model = useProjectContext(props.workspaceRef);
   const projectRef = React.useMemo(() => projectWorkspaceRefV1(props.workspaceRef), [props.workspaceRef]);
+  const memorySearchScope = React.useMemo(() => ({ type: 'project' as const, projectRef }), [projectRef]);
   const { shared, personal, teamName } = model;
   const entries = React.useMemo(() => [...shared.entries, ...personal.entries], [shared.entries, personal.entries]);
   const presentations = usePromptStackEntryPresentations(entries, projectRef.serverId);
@@ -364,7 +367,6 @@ export const ProjectContextBody = React.memo(function ProjectContextBody(
   ]);
 
   const memoryReadOnly = memory ? presentations(memory).access === 'view' : false;
-  const memoryShared = memoryLayer === 'shared' && teamName !== null;
   const memoryBudgetEditable =
     memory !== null && (memoryLayer === 'personal' || shared.canManage);
 
@@ -378,6 +380,7 @@ export const ProjectContextBody = React.memo(function ProjectContextBody(
         })}
         meta={meta}
       />
+      <CheckoutReachabilityLine scope={props.workspaceRef} testID="project-checkout-reachability" />
       {refusal ? (
         <SurfaceFreshnessLine
           testID={`${testID}.${refusal}`}
@@ -388,25 +391,16 @@ export const ProjectContextBody = React.memo(function ProjectContextBody(
       <ContextMemorySection
         testID={`${testID}.memory`}
         title={t('contextPages.project.memoryTitle')}
-        description={
-          memoryShared
-            ? t('contextPages.project.memoryDescriptionTeam', {
-                team: teamName ?? '',
-              })
-            : t('contextPages.project.memoryDescription')
-        }
+        description={t('contextPages.project.memoryDescription')}
         serverId={model.serverId}
         entry={memory}
+        searchScope={memorySearchScope}
         scopeTarget={(!hasSource && personal.available) || (hasSource && shared.canManage)
           ? { scope: 'project', projectRef }
           : undefined}
-        footer={
-          memoryShared
-            ? `${t('contextPages.project.sharedWith', { team: teamName ?? '' })} · ${t('memoryContext.memory.writesAskFirst')}`
-            : memoryReadOnly
-              ? `${t('contextPages.project.canRead')} · ${t('memoryContext.memory.writesAskFirst')}`
-              : t('memoryContext.memory.accessPrivate')
-        }
+        footer={shared => shared === null ? undefined : shared
+          ? `${t('memoryContext.memory.accessShared')} · ${t('memoryContext.memory.writesAskFirst')}`
+          : t('memoryContext.memory.accessPrivate')}
         emptyText={t('contextPages.project.memoryEmpty')}
         readOnly={memoryReadOnly}
         onBudgetChange={memoryBudgetEditable ? setMemoryBudget : undefined}
@@ -419,6 +413,12 @@ export const ProjectContextBody = React.memo(function ProjectContextBody(
             ? () => remove(memoryLayer, memory, t('contextPages.project.memoryTitle'))
             : undefined
         }
+      />
+      <ProjectCapabilitiesSection
+        testID={`${testID}.capabilities`}
+        projectKey={projectRef.projectKey}
+        projectName={projectName}
+        teamName={teamName}
       />
       {hasSource ? (
         <ItemGroup

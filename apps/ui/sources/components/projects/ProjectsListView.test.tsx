@@ -346,7 +346,7 @@ describe('ProjectsListView', () => {
         await act(async () => { await menu.props.onSaveAsSource(menu.props.workspaceRef); });
 
         const sheet = shownModals.find((config) => (config as { chrome?: { testID?: string } }).chrome?.testID === 'projects-save-as-source') as
-            | Readonly<{ props: Readonly<{ controller: { getSnapshot(): { creationDraft: { name: string } | null } }; discard(): void }> }>
+            | Readonly<{ props: Readonly<{ controller: { getSnapshot(): { creationDraft: { name: string } | null; addressSaveDisabledReason: string | null } }; discard(): void }> }>
             | undefined;
         expect(sheet).toBeTruthy();
         expect(sheet!.props.controller.getSnapshot().creationDraft?.name).toBe('Repo');
@@ -379,8 +379,8 @@ describe('ProjectsListView', () => {
 
         await act(async () => {
             storage.getState().applyLocalSettings({ projectLastMobileSurfaceByWorkspaceRefId: mobileSurfaces() }, { persist: false });
-            screen.tree.update(<AppPaneProvider><ProjectsListView /></AppPaneProvider>);
         });
+        await screen.update(<AppPaneProvider><ProjectsListView /></AppPaneProvider>);
 
         const secondDropdown = screen.findAllByType(DropdownMenu)[0];
         expect(secondDropdown?.props?.items).toBe(firstItems);

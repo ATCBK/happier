@@ -122,9 +122,16 @@ async function setup(
   home.replace(options.row ?? null);
   fixture = await createPlainArtifactHomeFixture(
     'https://worker-settings.test',
-    { handleRequest: home.handle },
+    { handleRequest: home.handle, currentAccount: true },
   );
-  if (options.askFirst !== true) {
+  if (options.askFirst === true) {
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    const settingsScope = storage.getState().settingsScope;
+    if (!settingsScope) throw new Error('expected_settings_scope');
+    storage.getState().applySettingsForScope(settingsScope, settingsParse({ ...storage.getState().settings,
+      actionsSettingsV1: { v: 1, actions: { 'projects.worker.preferences.set': { approvalRequiredSurfaces: ['ui'] } } },
+    }), (storage.getState().settingsVersion ?? 0) + 1);
+  } else {
     // Ask first is the Action default; these cases waive it in the Account's canonical settings.
     const { settingsParse } = await import('@/sync/domains/settings/settings');
     const settingsScope = storage.getState().settingsScope;

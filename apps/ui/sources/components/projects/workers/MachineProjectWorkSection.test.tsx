@@ -130,7 +130,7 @@ async function setup(
   const { loadSyncSingletonForTests } =
     await import('@/dev/testkit/harness/syncSingletonLoader');
   await loadSyncSingletonForTests();
-  fixture = await createPlainArtifactHomeFixture('https://machine-work.test');
+  fixture = await createPlainArtifactHomeFixture('https://machine-work.test', { currentAccount: true });
   machineHttp.read = () =>
     new Response(
       JSON.stringify({
@@ -170,7 +170,9 @@ async function setup(
       ...storage.getState().settings,
       actionsSettingsV1: {
         v: 1,
-        actions: {},
+        actions: options.waive?.includes('projects.worker.copy.retire') ? {} : {
+          'projects.worker.copy.retire': { approvalRequiredSurfaces: ['ui'] },
+        },
         approvalWaivedSurfaces: Object.fromEntries(
           ['machines.worker.policy.set', ...(options.waive ?? [])].map(
             (surface) => [surface, ['ui']],

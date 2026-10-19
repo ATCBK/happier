@@ -1,6 +1,6 @@
 import { OpenProjectDraftSelectionV1Schema, type OpenProjectDraftSelectionV1 } from '@happier-dev/protocol/projects/openProjectDraftV1';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { writeProjectOpenDraft, flushProjectOpenDraftLocally, type SessionDraftRepository } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { writeProjectOpenDraft, flushSessionDraftLocally, type SessionDraftRepository } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { randomUUID } from '@/platform/randomUUID';
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
@@ -14,7 +14,7 @@ export async function seedAndOpenProjectDraft(params: Readonly<{
     selection: OpenProjectDraftSelectionV1;
     lifetime: ServerAccountScopeLifetime;
     navigate(route: RetainedProjectOpenRoute): void;
-    repository?: Pick<SessionDraftRepository, 'writeProjectOpenDraft' | 'flushProjectOpenDraftLocally'>;
+    repository?: Pick<SessionDraftRepository, 'writeProjectOpenDraft' | 'flushSessionDraftLocally'>;
     randomUUID?: () => string;
 }>): Promise<boolean> {
     const parsed = OpenProjectDraftSelectionV1Schema.parse(params.selection);
@@ -29,12 +29,12 @@ export async function seedAndOpenProjectDraft(params: Readonly<{
     };
     if (!params.lifetime.isCurrent() || !areServerProfileIdentifiersEquivalent(params.lifetime.scope.serverId, selection.serverId)) return false;
     const draftId = (params.randomUUID ?? randomUUID)();
-    const repository = params.repository ?? { writeProjectOpenDraft, flushProjectOpenDraftLocally };
+    const repository = params.repository ?? { writeProjectOpenDraft, flushSessionDraftLocally };
     // The incumbent browser record adapter must load retained custody before any writer.
-    await repository.flushProjectOpenDraftLocally({ scope: params.lifetime.scope, draftId });
+    await repository.flushSessionDraftLocally({ scope: params.lifetime.scope });
     if (!params.lifetime.isCurrent()) return false;
     repository.writeProjectOpenDraft({ scope: params.lifetime.scope, draftId, patch: { selection }, materializationIntent: 'seeded' });
-    await repository.flushProjectOpenDraftLocally({ scope: params.lifetime.scope, draftId });
+    await repository.flushSessionDraftLocally({ scope: params.lifetime.scope });
     if (!params.lifetime.isCurrent()) return false;
     params.navigate({ pathname: '/projects/open', params: { draftId, serverId: selection.serverId } });
     return true;

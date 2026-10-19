@@ -46,7 +46,7 @@ it('renews one mounted inventory read when the same Account lifetime retires', a
     } finally { retireActiveServerAccountScopeLifetime(); storage.setState(previous); await home.dispose(); }
 });
 
-it.each(['network_error', 'denied', 'permission_denied'])(
+it.each(['network_error', 'thrown_network_error', 'denied', 'permission_denied', 'thrown_permission_denied'])(
     'retains only authorized Account inventory across %s and a warm mount with an unanswered read', async errorCode => {
     const previous = storage.getState();
     const home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://layout-retention.test', accountId: 'account' }], route: () => undefined });
@@ -68,18 +68,24 @@ it.each(['network_error', 'denied', 'permission_denied'])(
         widgetSurfaceActions: { corePage: createWidgetAreaActionPortV1(target => createWidgetSurfaceArtifactPortV1(transport, { surface: target, isCurrent: () => true })) },
         widgetAreaLayouts: { list: () => owner.list(), create: unused, rename: unused, delete: unused, reorder: unused, reset: unused, undo: unused } }));
     // The Action invocation is the transport boundary; successful reads still use the real Artifact/Action owners.
-    const execute: WidgetAreaLayoutsExecute = (actionId, args) => failure
-        ? Promise.resolve({ ok: false, errorCode, error: errorCode })
-        : executor.execute(actionId, args, {
+    const execute: WidgetAreaLayoutsExecute = async (actionId, args) => {
+        if (failure) {
+            if (errorCode === 'thrown_network_error') throw new Error('Home transport unavailable');
+            if (errorCode === 'thrown_permission_denied') throw Object.assign(new Error('Access denied'), { code: 'permission_denied' });
+            return { ok: false, errorCode, error: errorCode };
+        }
+        return executor.execute(actionId, args, {
         surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId, authority: 'present_user', actionCaller: { kind: 'host' },
-    });
+        });
+    };
     try {
         const cold = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
         await vi.waitFor(() => expect(cold.getCurrent().state.dashboards.map(row => row.name)).toEqual(['My usage']));
         failure = true;
-        await act(async () => { await cold.getCurrent().reload(); });
-        const expectedNames = errorCode === 'network_error' ? ['My usage'] : [];
-        expect(cold.getCurrent().state).toEqual({ status: 'offline', dashboards: errorCode === 'network_error'
+        await act(async () => { await expect(cold.getCurrent().reload()).resolves.toBeNull(); });
+        const transient = errorCode === 'network_error' || errorCode === 'thrown_network_error';
+        const expectedNames = transient ? ['My usage'] : [];
+        expect(cold.getCurrent().state).toEqual({ status: 'offline', dashboards: transient
             ? expect.arrayContaining([expect.objectContaining({ name: 'My usage' })]) : [] });
         await cold.unmount();
         failure = false;

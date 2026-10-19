@@ -40,7 +40,7 @@ import { useDeviceType } from '@/utils/platform/responsive';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useServerScopedMachine } from '@/sync/store/hooks';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { t } from '@/text';
 
 import { ProjectCommandOutputHost, useProjectCommandOutputOpener } from '@/components/inbox/actionOperations/projectCommandOutputHost';
@@ -119,7 +119,14 @@ export function ProjectScriptsBody({
   const accountId = binding?.isCurrent() ? binding.accountId : null;
   const key = projectDefinitionInspectionKey(workspace);
   const { read, retry } = useProjectDefinitionInspection(workspace, binding);
-  const controller = useProjectScriptsController(workspace, retry, binding);
+  const runChoiceKeys = React.useMemo(() => {
+    if (!read || !('value' in read)) return undefined;
+    const document = read.value.definition.document;
+    return document?.status === 'valid' ? Object.entries(document.manifest.scripts ?? {})
+      .filter(([, declaration]) => declaration.execution === 'portable')
+      .map(([name]) => projectScriptRowKey(workspace, name)) : [];
+  }, [read, workspace]);
+  const controller = useProjectScriptsController(workspace, retry, binding, { runChoiceKeys });
   const [editor, setEditor] = React.useState<EditorState>(null);
   // Workers settings open in place, like the editor: Scripts › Workers and Run on › Worker settings….
   const [workersKey, setWorkersKey] = React.useState<string | null>(null);
@@ -370,7 +377,7 @@ function DeclaredScripts(
     props.workspace.machineId,
   );
   const machineName =
-    (machine ? getMachineDisplayName(machine) : null) ??
+    (machine ? getMachineSentenceName(machine) : null) ??
     props.workspace.machineId;
   const scripts = Object.entries(props.manifest.scripts ?? {});
   const hasPortable = scripts.some(([, declaration]) => declaration.execution === 'portable');
@@ -587,6 +594,8 @@ function DeclaredScriptRow(
       compact={props.compact}
       showDivider={props.showDivider}
       defaultChoice={resolvedChoice.status === 'resolved' ? resolvedChoice.choice : null}
+      runChoice={props.controller.runChoices[rowKey]}
+      onRunChoiceChange={(choice) => props.controller.chooseRunDestination(rowKey, choice)}
       memoryDemand={props.memoryDemand}
       initialManagedConfiguration={props.initialManagedConfiguration}
       choiceRequired={props.controller.choiceRequired?.key === rowKey}

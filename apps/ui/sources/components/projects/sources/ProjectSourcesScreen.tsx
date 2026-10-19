@@ -10,6 +10,7 @@ import {
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { CollectionDraftTitleScope } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useTeamsDirectory } from '@/hooks/teams/useTeamsDirectory';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
@@ -59,7 +60,7 @@ export const ProjectSourcesScreen = React.memo(function ProjectSourcesScreen() {
       </ItemList>
     );
   }
-  return <ProjectSourcesCollection scope={scope} />;
+  return <CollectionDraftTitleScope><ProjectSourcesCollection scope={scope} /></CollectionDraftTitleScope>;
 });
 
 const ProjectSourcesCollection = React.memo(function ProjectSourcesCollection(

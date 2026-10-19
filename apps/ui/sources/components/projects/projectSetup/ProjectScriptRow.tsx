@@ -28,10 +28,11 @@ import { openWorkspaceSyncRelationshipDetails } from '@/components/workspaces/sy
 import { readProjectWorkerNoAcceptanceFailureV1, type ProjectWorkerNoAcceptanceFailureDetailsV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { useServerScopedMachine } from '@/sync/store/hooks';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
 import type { ManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
+import type { ProjectScriptRunChoice } from './useProjectScriptsController';
 import type { ManagedMachineConfigurationContinuation } from '@/components/sessions/new/components/machineSelection/ManagedMachineSelectionOffers';
 
 import {
@@ -58,6 +59,8 @@ export type ProjectScriptRowProps = Readonly<{
   showDivider?: boolean;
   /** Where this checkout sends portable runs by default (its worker preference), for the Run on check. */
   defaultChoice?: ProjectExecutionChoiceV1 | null;
+  runChoice?: ProjectScriptRunChoice | null;
+  onRunChoiceChange?: (choice: ProjectScriptRunChoice) => void;
   memoryDemand?: ProjectMemoryDemandV1;
   /** The current Run needs an exact target; choosing resumes that intent, not a later Run. */
   choiceRequired?: boolean;
@@ -98,7 +101,7 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
   // The checkout's own Machine: "This checkout" in the target menu is the Source, never a past target.
   const source = useServerScopedMachine(props.workspace.serverId, props.workspace.machineId);
   // The actual target, never the operation's custody Machine.
-  const targetName = (target ? getMachineDisplayName(target) : null) ?? attachment?.machineId ?? null;
+  const targetName = (target ? getMachineSentenceName(target) : null) ?? attachment?.machineId ?? null;
   const presentation = presentProjectRun(props.operation, targetName, props.idleText);
   const stop = useActionOperationStopControl(props.operation);
   const [expanded, setExpanded] = React.useState(false);
@@ -122,7 +125,7 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
   const statusText = creationPresentation && !creationPresentation.failed
     ? creationPresentation.label
     : wake === 'starting' && wakeTargetId
-    ? `${t('managedWake.starting', { machine: (wakeTarget ? getMachineDisplayName(wakeTarget) : null) ?? wakeTargetId })} · ${t('projectWorkers.scriptStartsWhenReady', { script: props.name })}`
+    ? `${t('managedWake.starting', { machine: (wakeTarget ? getMachineSentenceName(wakeTarget) : null) ?? wakeTargetId })} · ${t('projectWorkers.scriptStartsWhenReady', { script: props.name })}`
     : workerRefusal
     ? t('projectWorkers.empty')
     : props.failureCode
@@ -212,6 +215,8 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
             testID={`${props.testID}.run`}
             workspace={props.workspace}
             defaultChoice={props.defaultChoice ?? null}
+            runChoice={props.runChoice}
+            onRunChoiceChange={props.onRunChoiceChange}
             memoryDemand={props.memoryDemand}
             initialManagedConfiguration={props.initialManagedConfiguration}
             choiceRequired={props.choiceRequired}
@@ -222,7 +227,7 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
             presentation={presentation}
             portable={props.portable}
             machineName={
-              (source ? getMachineDisplayName(source) : null) ??
+              (source ? getMachineSentenceName(source) : null) ??
               props.workspace.machineId
             }
             pending={props.pending || stop.pending || stop.stopRequested}
@@ -384,7 +389,7 @@ function NoWorkerBanner(
     missingCopy?.targetMachineId ?? props.workspace.machineId,
   );
   if (missingCopy) {
-    const machine = (copyTarget ? getMachineDisplayName(copyTarget) : null) ?? missingCopy.targetMachineId;
+    const machine = (copyTarget ? getMachineSentenceName(copyTarget) : null) ?? missingCopy.targetMachineId;
     return (
       <View style={styles.refusal}>
         <AttentionBanner
@@ -501,6 +506,8 @@ function RunControl(
     testID: string;
     workspace: WorkspaceAddressV1;
     defaultChoice: ProjectExecutionChoiceV1 | null;
+    runChoice?: ProjectScriptRunChoice | null;
+    onRunChoiceChange?: (choice: ProjectScriptRunChoice) => void;
     memoryDemand?: ProjectMemoryDemandV1;
     initialManagedConfiguration?: ManagedMachineConfigurationContinuation;
     choiceRequired?: boolean;
@@ -520,10 +527,8 @@ function RunControl(
   const { theme } = useUnistyles();
   const anchorRef = React.useRef<View>(null);
   const [open, setOpen] = React.useState(false);
-  // An invocation-only choice: it changes this Run's input, never the saved preference.
-  const [choice, setChoice] = React.useState<ProjectExecutionChoiceV1 | null>(null);
-  const [managedChoice, setManagedChoice] = React.useState<ManagedMachineSelectionDraft | null>(null);
-  React.useEffect(() => { setChoice(null); setManagedChoice(null); }, [props.workspace.serverId, props.workspace.workspaceId, props.workspace.rootPath]);
+  const choice = props.runChoice?.kind === 'existing' ? props.runChoice.choice : null;
+  const managedChoice = props.runChoice?.kind === 'managed' ? props.runChoice.draft : null;
   const pickerOpen = open || props.choiceRequired === true;
   const selected: ProjectExecutionChoiceV1 = choice ?? props.defaultChoice ?? { kind: 'primary' };
   const poolSelection = selected.kind === 'workers' && selected.destination.kind === 'pool'
@@ -616,12 +621,11 @@ function RunControl(
             selected={selected}
             selectedManagedMachine={managedChoice}
             initialManagedConfiguration={props.initialManagedConfiguration}
-            onChooseManagedMachine={(draft) => { setChoice(null); setManagedChoice(draft); setOpen(false); }}
+            onChooseManagedMachine={(draft) => { props.onRunChoiceChange?.({ kind: 'managed', draft }); setOpen(false); }}
             onChoose={(next) => {
-              setManagedChoice(null);
               setOpen(false);
               if (props.choiceRequired) props.onChooseForRun?.(next);
-              else setChoice(next);
+              else props.onRunChoiceChange?.({ kind: 'existing', choice: next });
             }}
             trailingSections={trailingSections}
             footer={(

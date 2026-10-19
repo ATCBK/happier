@@ -54,7 +54,20 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
     if (actionId === 'projects.inspect')
       return { ok: true, result: shared.inspectionPending ? await shared.inspectionPending : shared.inspection };
     if (shared.failures[actionId]) return shared.failures[actionId];
-    if (actionId === 'projects.execution.output.open') await options?.actionOperationOpenOutput?.(input);
+    if (actionId === 'projects.execution.output.open') {
+      const { executeActionOperationActionV1 } = await import('@happier-dev/protocol/actions/executor/actionOperationActions');
+      const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
+      const result = await executeActionOperationActionV1({ actionId, input,
+        // The Machine transport mirrors the fixture's real retained operation.
+        // Keep lookup/validation and the presentation callback contract real.
+        transport: async () => {
+          const found = [...actionOperationStore.getSnapshot().operationsByKey.values()]
+            .find(value => value.snapshot.operationId === input.operationId && value.snapshot.scope.machineId === input.machineId);
+          return found ? { kind: 'found', operation: found.snapshot } : { kind: 'not_found' };
+        }, openOutput: async address => { await options?.actionOperationOpenOutput?.(address); },
+      });
+      return { ok: true, result };
+    }
     return { ok: true, result: await (shared.responses[actionId] ?? {}) };
   },
 }));

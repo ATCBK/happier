@@ -68,9 +68,9 @@ export function resolveProjectRoutePathForSurface(input: Readonly<{
     page?: ProjectPageV1;
     rawWorktreeId?: string | null;
     rawActiveRootPath?: string | null;
-}> & ProjectRouteContext): string {
+}> & ProjectRouteContext): `/projects/${string}/${ProjectPageV1}` | `/projects/${string}/${ProjectPageV1}?${string}` {
     const page = input.page ?? resolveProjectPageForSurface(input.surface);
-    const basePath = `/projects/${encodeURIComponent(input.workspaceRefId)}/${page}`;
+    const basePath: `/projects/${string}/${ProjectPageV1}` = `/projects/${encodeURIComponent(input.workspaceRefId)}/${page}`;
     const searchParams = new URLSearchParams();
     for (const [key, raw] of Object.entries(input.routeParams ?? {})) {
         if (key === 'workspaceRefId' || key === 'pageId' || key === 'worktreeId' || key === 'activeRootPath' || key === 'mobileSurface') continue;

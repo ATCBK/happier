@@ -1,3 +1,4 @@
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import * as React from 'react';
 import { useRouter } from 'expo-router';
 import { View } from 'react-native';
@@ -30,7 +31,7 @@ import { useServerScopedMachine } from '@/sync/store/hooks';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { executeProjectWorkerActionV1 } from '@/sync/ops/actions/projectWorkerActions';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { presentProjectRun } from '@/components/projects/projectSetup/projectScriptPresentation';
 
 import { useObservedWorkerSetting } from './useObservedWorkerSetting';
@@ -110,7 +111,7 @@ function RunningHereRow(
       subtitle={[
         source
           ? t('projectWorkers.yours', {
-              machine: getMachineDisplayName(source) ?? '',
+              machine: getMachineSentenceName(source),
             })
           : null,
         presentation.text,
@@ -168,7 +169,7 @@ function FreshCopyRow(
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const source = useServerScopedMachine(props.serverId, props.copy.sourceMachineId);
-  const from = source ? t('projectWorkers.copyFrom', { machine: getMachineDisplayName(source) ?? '' }) : null;
+  const from = source ? t('projectWorkers.copyFrom', { machine: getMachineSentenceName(source) }) : null;
   const time =
     props.copy.lastCleanSyncAtMs === null
       ? null
@@ -306,7 +307,7 @@ function FreshCopyRow(
                   testID: `${props.testID}.approval`,
                   onPress: () =>
                     router.push(
-                      `/inbox/approvals/${encodeURIComponent(approvalId)}?serverId=${encodeURIComponent(props.serverId)}`,
+                      buildApprovalHref(approvalId, props.serverId),
                     ),
                 }
               : ownDependency

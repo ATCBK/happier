@@ -9,7 +9,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { createUiProjectAccountRowsClient } from '@/sync/api/projects/projectAccountRowsClient';
-import { getSessionDraftSnapshot, subscribeSessionDraft, writeProjectOpenDraft, flushProjectOpenDraftLocally, flushProjectOpenDraftForAdmission,
+import { getSessionDraftSnapshot, subscribeSessionDraft, writeProjectOpenDraft, flushSessionDraftLocally, flushProjectOpenDraftForAdmission,
     captureSessionDraftCurrentness } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 
 export type UseProjectOpenOptions = Readonly<{
@@ -33,7 +33,7 @@ export function useProjectOpen(options: UseProjectOpenOptions) {
     openExistingRef.current = openExistingProject;
     const controller = React.useMemo<ProjectOpenController>(() => createProjectOpenController({
             initialDraft: options.initialDraft, seedIfMissing: options.seedIfMissing, scope: options.scope, draftId: options.draftId,
-            repository: { getSessionDraftSnapshot, subscribeSessionDraft, writeProjectOpenDraft, flushProjectOpenDraftLocally, flushProjectOpenDraftForAdmission,
+            repository: { getSessionDraftSnapshot, subscribeSessionDraft, writeProjectOpenDraft, flushSessionDraftLocally, flushProjectOpenDraftForAdmission,
                 captureSessionDraftCurrentness },
             executor: createDefaultActionExecutor(), captureLifetime: captureActiveServerAccountScopeLifetime,
             getCheckouts: () => Array.isArray(checkoutsRef.current) ? checkoutsRef.current : [],

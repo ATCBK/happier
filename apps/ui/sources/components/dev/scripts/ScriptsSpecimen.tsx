@@ -258,6 +258,8 @@ function controller(frame: string): ProjectScriptsController {
     managedCreations: {},
     resumeManagedRun: noop,
     cancelRun: () => {},
+    runChoices: {},
+    chooseRunDestination: () => {},
     retainedOperation: null,
     choiceRequired: null,
     dismissChoice: () => {},

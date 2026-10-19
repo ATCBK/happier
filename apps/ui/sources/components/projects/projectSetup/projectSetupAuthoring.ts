@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { safeParse, type core } from 'zod/mini';
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteFailure, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ProjectDefinitionInspectOutputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import { ProjectWorkerActionOutputSchemasV1 } from '@happier-dev/protocol/actions/specs/projectWorkers';
@@ -51,14 +51,14 @@ async function readProjectSetupAgentGuidanceCurrent(input: ProjectSetupAgentGuid
                 : resolveCurrentProjectAuthoringReturn(origin).kind !== 'ready'
                     ? { kind: 'unavailable', reason: 'origin_unavailable' } : null;
         async function read<T>(actionId: 'projects.inspect' | 'projects.worker.preferences.get' | 'projects.worker.status' | 'machines.pools.resolve',
-            request: unknown, schema: z.ZodType<T>): Promise<{ ok: true; value: T } | ActionExecuteFailure> {
+            request: unknown, schema: core.$ZodType<T>): Promise<{ ok: true; value: T } | ActionExecuteFailure> {
             const result = await executor.execute(actionId, request, context);
             // Only redacted public diagnostics enter the user prompt, not failure details or transport prose.
             if (!result.ok) return { ok: false, errorCode: result.errorCode, error: result.errorCode };
             if (ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) {
                 return { ok: false, errorCode: 'approval_required', error: 'approval_required' };
             }
-            const parsed = schema.safeParse(result.result);
+            const parsed = safeParse(schema, result.result);
             return parsed.success ? { ok: true, value: parsed.data }
                 : { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
         }
