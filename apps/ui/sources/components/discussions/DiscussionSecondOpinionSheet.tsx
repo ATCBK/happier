@@ -66,6 +66,11 @@ export function presentDiscussionSecondOpinion(
       header: 'none',
       title: sheetTitle(props.intent),
       phonePresentation: 'sheet',
+      // The dialog keeps inside the window like the other share sheets: the reviewer list scrolls and the
+      // footer's Ask stays in reach however many Sessions there are.
+      scrollHost: 'bounded',
+      bodyScroll: 'none',
+      dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.92, size: 'md' },
     },
   });
   return () => {
@@ -344,6 +349,22 @@ function BoundForm(
           reviewerLabel={reviewerLabel}
         />
       ) : null}
+      {/* The question sits with the answer it is about; on a real Account the list of Sessions to ask runs
+          long, and the question must not fall below it. */}
+      {!discuss && !done ? (
+        <FieldItem
+          label={t('session.collaboration.discussion.secondOpinion.question')}
+        >
+          <FieldTextInput
+            testID="second-opinion.question"
+            accessibilityLabel={t(
+              'session.collaboration.discussion.secondOpinion.question',
+            )}
+            value={question}
+            onChangeText={setQuestion}
+          />
+        </FieldItem>
+      ) : null}
       {!discuss && !done ? (
         <View>
           <View style={styles.groupRow}>
@@ -426,20 +447,6 @@ function BoundForm(
             />
           ) : null}
         </View>
-      ) : null}
-      {!discuss && !done ? (
-        <FieldItem
-          label={t('session.collaboration.discussion.secondOpinion.question')}
-        >
-          <FieldTextInput
-            testID="second-opinion.question"
-            accessibilityLabel={t(
-              'session.collaboration.discussion.secondOpinion.question',
-            )}
-            value={question}
-            onChangeText={setQuestion}
-          />
-        </FieldItem>
       ) : null}
       {unavailable ? (
         <SurfaceStateCard
@@ -834,8 +841,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   footerSpacer: { flex: 1 },
   modalBody: {
-    width: HAPPIER_PAGE_METRICS.dialogWidthPx.default,
-    maxWidth: '100%',
+    width: '100%',
     flexShrink: 1,
   },
 }));

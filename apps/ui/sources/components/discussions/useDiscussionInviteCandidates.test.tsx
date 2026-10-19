@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
@@ -88,6 +89,8 @@ describe('Discussion Invite source composition', () => {
         expect(option.subtitle).toContain('review-box');
         // How a session takes part is said once, beside the section title, not repeated on every row.
         expect(option.subtitle).not.toContain('Answers with its own setup');
+        // The row leads with the Agent's own mark, the identity its byline names, not a generic robot.
+        expect((option.icon as React.ReactElement<{ agentId?: string }>).props.agentId).toBe('codex');
         option.onSelect?.();
         expect(choose).toHaveBeenCalledWith({ kind: 'session', session: { serverId: home, sessionId: 'same-id' } });
         // When no Agent/Machine identity is recorded, the list's public recency still distinguishes rows.
@@ -103,6 +106,7 @@ describe('Discussion Invite source composition', () => {
             .find(option => option.id === 'session:same-id')!;
         expect(unnamedOption.subtitle).toContain(formatAsOfTime(activityAt));
         expect(unnamedOption.subtitle).not.toContain('review-box');
+        expect((unnamedOption.icon as React.ReactElement<{ name?: string }>).props.name).toBe('robot');
     });
     it('uses captured-Home people paging and the real existing Session roster without borrowing the focused Home', async () => {
         const [homeA, homeB] = boundary.serverIds as [string, string, string];

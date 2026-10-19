@@ -50,7 +50,7 @@ export function useDiscussionRunChips(
   const [chosen, setChosen] = React.useState<WorkflowAuthoringTarget | null>(
     null,
   );
-  const contextual = React.useMemo(
+  const resolved = React.useMemo(
     () =>
       resolveContextualWorkflowProjectTarget({
         machines,
@@ -61,6 +61,11 @@ export function useDiscussionRunChips(
       }),
     [machines, params.accountLifetime, recentMachinePaths],
   );
+  // The contextual default is a value: keep one identity per Machine and folder, so the Run chip and the
+  // composer's chip rail do not change on every recent-paths read.
+  const contextualKey = resolved ? JSON.stringify([resolved.machineId, resolved.directory]) : null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const contextual = React.useMemo(() => resolved, [contextualKey]);
   const target = chosen ?? contextual;
   const project =
     target &&

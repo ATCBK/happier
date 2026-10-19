@@ -144,9 +144,10 @@ export function CommittedMessageActions(props: Props) {
             /></View>;
         })}
     </MessageActionRow>;
+    // A Discussion started on this answer (lab T3-D) stays under the answer, ahead of its hover actions.
+    const markers = <DiscussionSourceMarkers source={committedMessage} navigate={source.navigate} />;
     const contents = <>
-        {props.children(row)}
-        <DiscussionSourceMarkers source={committedMessage} navigate={source.navigate} />
+        {props.children(<>{markers}{row}</>)}
         {hasNativeMenu ? <ContextMenu
             open={menuOpen} onOpenChange={setMenuOpen} anchorRef={anchorRef}
             items={items} onSelect={perform} placement="auto" variant="slim" showCategoryTitles={false}
