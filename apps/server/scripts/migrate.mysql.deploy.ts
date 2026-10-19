@@ -118,6 +118,24 @@ export const MYSQL_TRIGGER_MIGRATIONS: ReadonlyArray<MysqlTriggerMigration> = [
             },
         ],
     },
+    {
+        migrationName: "20261008143000_add_managed_machine_authority",
+        requiredPrivileges: [{ privilege: "TRIGGER", tableName: "ManagedMachinePreset" }],
+        triggers: [
+            {
+                name: "ManagedMachinePreset_owner_insert",
+                timing: "BEFORE",
+                event: "INSERT",
+                tableName: "ManagedMachinePreset",
+            },
+            {
+                name: "ManagedMachinePreset_owner_update",
+                timing: "BEFORE",
+                event: "UPDATE",
+                tableName: "ManagedMachinePreset",
+            },
+        ],
+    },
 ];
 
 type QueryRows = ReadonlyArray<Record<string, unknown>>;
