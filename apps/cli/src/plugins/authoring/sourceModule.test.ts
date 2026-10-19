@@ -8,6 +8,7 @@ import { defineAccountCollection } from '@happier-dev/plugin-sdk/collections';
 import { defineContributionProtocol } from '@happier-dev/plugin-sdk/contributions';
 import { defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 import { serializeCanonicalPluginManifest } from '@/plugins/manifest/serialize';
+import { classifyPluginAuthorDaemonBuild } from './toolchain';
 import { evaluatePluginDevelopmentCandidate, evaluatePluginAuthorStagingSource, evaluatePluginAuthorSource, projectEvaluatedPluginDevelopmentSource, projectPluginAuthorModule, resolvePluginAuthorStagingModule, resolvePluginAuthoringSource, resolvePluginAuthorSourceEntrypoint } from './sourceModule';
 
 function projectDefinedPlugin(defined: ReturnType<typeof definePlugin>) {
@@ -20,6 +21,19 @@ function projectDefinedPlugin(defined: ReturnType<typeof definePlugin>) {
 }
 
 describe('plugin author source module owner', () => {
+  it('admits the external Composer author manifest to the public daemon build path', async () => {
+    const fixtureRoot = fileURLToPath(new URL('../../../../../packages/tests/fixtures/plugin-platform/composer-external-dogfood/', import.meta.url));
+    const evaluated = await evaluatePluginAuthorSource({ locator: fixtureRoot });
+    const root = await mkdtemp(join(tmpdir(), 'happier-composer-author-manifest-'));
+    try {
+      await mkdir(join(root, '.happier-plugin'));
+      await writeFile(join(root, '.happier-plugin/plugin.json'), evaluated.canonicalManifestJson, 'utf8');
+      await expect(classifyPluginAuthorDaemonBuild(root)).resolves.toBe('required');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('diagnoses an executable protocol declaration spread into an Action through real source evaluation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-plugin-author-schema-diagnostic-'));
     const entryPath = join(root, 'plugin.ts');
