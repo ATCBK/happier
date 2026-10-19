@@ -4281,7 +4281,10 @@ function createReviewCommentActionSpec(actionId: ReviewCommentActionIdV1): PreNo
     || actionId === 'reviews.comments.edit' || actionId === 'reviews.comments.reply';
   const isPublicCommentAction = actionId !== 'reviews.comments.claimPublicationDispatch';
   return {
-    id: actionId, approval: { result: 'none' },
+    // A publication handler awaits its claim correlations before
+    // provider dispatch. Keep that nested plugin invocation on the existing
+    // approval waiter instead of returning an approval Artifact as a claim.
+    id: actionId, approval: { result: actionId === 'reviews.comments.claimPublicationDispatch' ? 'required' : 'none' },
     executionPlacement: 'account',
     title: REVIEW_COMMENT_ACTION_TITLES[actionId],
     description: 'Operate on durable review comments through the shared review-comment substrate.',
