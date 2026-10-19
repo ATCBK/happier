@@ -67,6 +67,7 @@ describe('workspace route identity round trips', () => {
             placement: { kind: 'rail', region: 'app' }, routePath: '/discussions', activation: 'navigate',
         });
         for (const href of ['/discussions?serverId=home-a', '/discussions/new?serverId=home-a',
+            '/discussions/new?serverId=home-a&draftId=00000000-0000-5000-8000-000000000001',
             '/discussions/same-id?serverId=home-a', '/discussions/same-id?serverId=home-b']) {
             const target = resolveDestinationRefFromHref(catalog, href);
             expect(target).toMatchObject({ kind: 'discussions' });

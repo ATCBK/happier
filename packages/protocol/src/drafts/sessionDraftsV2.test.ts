@@ -75,6 +75,29 @@ function discussionDocument(kind: 'discussion' | 'newDiscussion') {
 }
 
 describe('session draft V2 addresses', () => {
+  it('isolates keyed new Discussion drafts without aliasing the retained singleton', () => {
+    const draftId = '00000000-0000-4000-8000-00000000000a';
+    const address = { kind: 'newDiscussion' as const, draftId };
+    const parsed = SessionDraftAddressV2Schema.safeParse(address);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error('Expected a keyed new Discussion address');
+    expect(parsed.data).toEqual(address);
+    const canonical = `new-discussion/${draftId}`;
+    expect(canonicalSessionDraftAddressV2(parsed.data)).toBe(canonical);
+    expect(parseCanonicalSessionDraftAddressV2(canonical)).toEqual(address);
+    expect(isAccountOwnedDraftAddressV2(parsed.data)).toBe(true);
+    expect(SessionDraftPrivatePayloadV2Schema.parse({ v: 2, address, document: discussionDocument('newDiscussion') }).address)
+      .toEqual(address);
+    expect(SessionDraftAddressV1Schema.safeParse(address).success).toBe(false);
+    expect(SessionDraftAddressV2Schema.safeParse({ ...address, draftId: 'not-a-uuid' }).success).toBe(false);
+    for (const invalid of ['new-discussion/', 'new-discussion/not-a-uuid', `${canonical}/extra`,
+      `new-discussion/%30${draftId.slice(1)}`]) {
+      expect(parseCanonicalSessionDraftAddressV2(invalid)).toBeNull();
+    }
+    expect(canonicalSessionDraftAddressV2({ kind: 'newDiscussion' })).toBe('new-discussion');
+    expect(parseCanonicalSessionDraftAddressV2('new-discussion')).toEqual({ kind: 'newDiscussion' });
+  });
+
   it('addresses Discussion drafts under the captured Account without a Session', () => {
     const existing = SessionDraftAddressV2Schema.safeParse({ kind: 'discussion', discussionId: 'discussion-a' });
     const creating = SessionDraftAddressV2Schema.safeParse({ kind: 'newDiscussion' });

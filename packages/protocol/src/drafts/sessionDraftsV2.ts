@@ -59,6 +59,7 @@ const DiscussionDraftAddressSchema = z.strictObject({
 });
 const NewDiscussionDraftAddressSchema = z.strictObject({
   kind: z.literal('newDiscussion'),
+  draftId: z.optional(SessionDraftAddressV1Schema._zod.def.options[0].shape.draftId),
 });
 
 export const ProjectOpenDraftAddressV2Schema = z.strictObject({
@@ -107,7 +108,8 @@ export function canonicalSessionDraftAddressV2(address: SessionDraftAddressV2): 
   if (address.kind === 'discussion') {
     return `discussion/${encodeURIComponent(address.discussionId)}`;
   }
-  if (address.kind === 'newDiscussion') return NEW_DISCUSSION_SEGMENT;
+  if (address.kind === 'newDiscussion') return address.draftId === undefined
+    ? NEW_DISCUSSION_SEGMENT : `${NEW_DISCUSSION_SEGMENT}/${address.draftId}`;
   return `session/${encodeURIComponent(address.sessionId)}/run/${encodeURIComponent(address.runId)}`;
 }
 
@@ -133,6 +135,9 @@ export function parseCanonicalSessionDraftAddressV2(value: string): SessionDraft
       return { kind: 'projectOpen', draftId: value.slice('project-open/'.length) };
     }
     if (value === NEW_DISCUSSION_SEGMENT) return { kind: 'newDiscussion' };
+    if (value.startsWith(`${NEW_DISCUSSION_SEGMENT}/`)) {
+      return { kind: 'newDiscussion', draftId: value.slice(NEW_DISCUSSION_SEGMENT.length + 1) };
+    }
     if (value.startsWith('discussion/')) {
       const discussionId = decodeSegment(value.slice('discussion/'.length));
       return discussionId === null ? null : { kind: 'discussion', discussionId };

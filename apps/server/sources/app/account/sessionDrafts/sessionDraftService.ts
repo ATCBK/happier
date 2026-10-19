@@ -9,7 +9,7 @@ import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/ac
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
 import { eventRouter } from "@/app/events/eventRouter";
-import { applyUserKvMutationsInTx } from "@/app/kv/kvMutate";
+import { acquireUserKvRowLockInTx, applyUserKvMutationsInTx, UserKvMutationConflictError } from "@/app/kv/kvMutate";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { afterTx, inTx, type Tx } from "@/storage/inTx";
@@ -440,6 +440,15 @@ export async function matchNewSessionDraftsAccountMigrationPostStateInTx(
     return { status: "matched", records };
 }
 
+/** Serializes consumers of an existing draft with its canonical KV mutations. */
+export async function acquireSessionDraftLockInTx(tx: Tx, params: Readonly<{
+    accountId: string;
+    address: SessionDraftAddressV2;
+}>): Promise<boolean> {
+    const key = sessionDraftPhysicalKey(params.address);
+    return key !== null && await acquireUserKvRowLockInTx(tx, { accountId: params.accountId, key });
+}
+
 export async function readSessionDraftInTx(tx: Tx, params: Readonly<{
     accountId: string;
     address: SessionDraftAddressV2;
@@ -581,14 +590,14 @@ export async function mutateSessionDraft(params: Readonly<{
     const ownSession = sessionId !== null && !params.authentication.sessionRuntimePrincipal
         && await db.session.findFirst({ where: { id: sessionId, accountId: params.accountId }, select: { id: true } }) !== null;
     const accountLocal = accountOwned || ownSession;
-    return await inTx(async (tx) => {
+    return await inTx(async (tx): Promise<SessionDraftMutationServiceResult> => {
         if (params.epoch === "v1" && (!isSessionDraftAddressV1(params.address) || !isSessionDraftContentV1(params.content))) {
             return { status: "epochUnavailable" };
         }
         if (accountLocal) {
             const account = await tx.account.findUnique({ where: { id: params.accountId }, select: { id: true } });
             if (!account) return { status: "sessionUnavailable" };
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "content");
             if (ownSession && sessionId !== null && !await tx.session.findFirst({ where: { id: sessionId, accountId: params.accountId }, select: { id: true } })) {
                 return { status: "sessionUnavailable" };
             }
@@ -646,5 +655,12 @@ export async function mutateSessionDraft(params: Readonly<{
         // Shared Session access and runner authority depend on other writers.
         ...(accountLocal ? {} : { isolationLevel: "Serializable" as const }),
         transactionClass: accountLocal ? "session-draft.account-mutate" : "session-draft.session-mutate",
+    }).catch(async (error: unknown): Promise<SessionDraftMutationServiceResult> => {
+        if (!(error instanceof UserKvMutationConflictError)) throw error;
+        // The failed batch must roll back before recovering its public conflict.
+        // Read through the draft owner so V1 cannot disclose a successor shape.
+        const current = await readSessionDraft(params);
+        if (current.status === "epochUnavailable") return current;
+        return { status: "conflict", current: current.status === "absent" ? { status: "absent" } : current.record };
     });
 }

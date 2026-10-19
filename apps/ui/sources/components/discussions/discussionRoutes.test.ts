@@ -1,10 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildDiscussionRouteHref, buildDiscussionsRouteHref, readAnchoredDiscussionSourceLinks, readDiscussionRouteAnchor } from './discussionRoutes';
+import { buildDiscussionRouteHref, buildDiscussionsRouteHref, readAnchoredDiscussionSourceLinks, readDiscussionRouteAnchor, readDiscussionRouteDraftId } from './discussionRoutes';
 import { upsertServerProfile, setServerProfileIdentityForUrl, areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { TriageEntryRefV1Schema } from '@happier-dev/protocol/tasks/entryRefV1';
 
 describe('Discussion routes', () => {
+    it('roundtrips a keyed new draft and refuses an invalid supplied identity instead of opening the singleton', () => {
+        const draftId = '00000000-0000-5000-8000-000000000001';
+        const href = buildDiscussionRouteHref({ target: { kind: 'new', address: { serverId: 'home' }, draftId } });
+        const url = new URL(href, 'https://home.invalid');
+        expect(url.searchParams.get('draftId')).toBe(draftId);
+        expect(readDiscussionRouteDraftId(url.searchParams.get('draftId')!)).toBe(draftId);
+        expect(readDiscussionRouteDraftId(undefined)).toBeUndefined();
+        for (const invalid of ['', ' ', 'not-a-uuid', `${draftId}/other`, [draftId, draftId]]) {
+            expect(readDiscussionRouteDraftId(invalid)).toBeNull();
+        }
+        expect(() => buildDiscussionRouteHref({ target: { kind: 'new', address: { serverId: 'home' }, draftId: 'unsupported' } })).toThrow();
+    });
     it('round-trips a canonical Task anchor without turning its identity into source access or a provider URL', () => {
         const anchor = { kind: 'task' as const, entry: TriageEntryRefV1Schema.parse({ source: { pluginId: 'acme.tasks', localId: 'issues' },
             kindId: 'issue', collisionScope: 'project', entryId: 'task/42' }) };

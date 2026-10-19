@@ -1360,7 +1360,7 @@ describe('sessionDraftRepository', () => {
         expect(restored.readSessionDraftLaunchCurrentness({ scope, address, userAttemptId: 'attempt-a' })).toEqual(launchCurrentness);
     });
 
-    it('preserves the immutable create anchor and invited people with the same retry IDs after reload', () => {
+    it('preserves the immutable create anchor and concrete Account and Session invitations with the same retry IDs after reload', () => {
         const storage = createMemoryStorage();
         const address = { kind: 'newDiscussion' } as const;
         const cipher = createSessionDraftCipher({ accountMode: 'plain', accountCryptoMaterial: null,
@@ -1369,7 +1369,8 @@ describe('sessionDraftRepository', () => {
         repository.writeDiscussionSessionDraft({ scope, address, patch: { text: 'same question', title: 'same title' } });
         const attempt = { kind: 'create' as const, creationLocalId: 'create-local', messageLocalId: 'message-local',
             anchor: { kind: 'session' as const, sessionId: 'source-session', messageId: 'source-message' },
-            participants: [{ kind: 'account' as const, accountId: 'invited-account' }],
+            participants: [{ kind: 'account' as const, accountId: 'invited-account' },
+                { kind: 'session' as const, sessionId: 'resolved-session' }],
             currentness: repository.captureSessionDraftCurrentness({ scope, address }) };
         repository.writeSessionDraftLocalSupplement({ scope, address, patch: { discussionMutationAttempt: attempt } });
 

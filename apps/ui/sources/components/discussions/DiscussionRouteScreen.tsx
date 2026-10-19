@@ -23,7 +23,7 @@ import { createDiscussionClient } from '@/sync/api/discussions/discussionActions
 import { getDiscussionRepository } from '@/sync/ops/discussions/discussionRepositoryRegistry';
 import { useDiscussionRepositorySnapshot } from '@/sync/ops/discussions/useDiscussionRepositorySnapshot';
 import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { buildDiscussionRouteHref, buildDiscussionsRouteHref, readDiscussionRouteAnchor } from './discussionRoutes';
+import { buildDiscussionRouteHref, buildDiscussionsRouteHref, readDiscussionRouteAnchor, readDiscussionRouteDraftId } from './discussionRoutes';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { Text } from '@/components/ui/text/Text';
 import { artifactViewRoute } from '@/components/artifacts/artifactBrowserModel';
@@ -62,6 +62,7 @@ export function DiscussionRouteScreen(props: Readonly<{
         anchorSessionId?: string | string[];
         anchorMessageId?: string | string[];
         returnArtifactId?: string | string[];
+        draftId?: string | string[];
     }>();
     const explicitServerId = readSessionRouteServerId(params);
     // An unqualified Home launcher captures its destination once. Changing the
@@ -78,6 +79,7 @@ export function DiscussionRouteScreen(props: Readonly<{
     const address = React.useMemo(() => serverId ? { serverId } : null, [serverId]);
     const discussionId = readParam(params.discussionId);
     const messageId = readParam(params.messageId);
+    const draftId = readDiscussionRouteDraftId(params.draftId);
     const anchorSessionId = readParam(params.anchorSessionId);
     const anchorMessageId = readParam(params.anchorMessageId);
     const anchorParam = readParam(params.anchor);
@@ -94,16 +96,16 @@ export function DiscussionRouteScreen(props: Readonly<{
     const fallbackHref = returnArtifactId ? artifactViewRoute(returnArtifactId)
         : serverId ? buildDiscussionsRouteHref({ serverId }) : '/';
     React.useEffect(() => {
-        if (explicitServerId || !address || anchor === null) return;
+        if (explicitServerId || !address || anchor === null || props.kind === 'new' && draftId === null) return;
         const href = props.kind === 'list'
             ? buildDiscussionsRouteHref(address)
             : props.kind === 'new'
-                ? buildDiscussionRouteHref({ target: { kind: 'new', address, ...(anchor ? { anchor } : {}) }, sourceSurface })
+                ? buildDiscussionRouteHref({ target: { kind: 'new', address, ...(draftId ? { draftId } : {}), ...(anchor ? { anchor } : {}) }, sourceSurface })
                 : discussionId
                     ? buildDiscussionRouteHref({ target: { kind: 'discussion', address, discussionId, ...(messageId ? { messageId } : {}) }, sourceSurface })
                     : null;
         if (href) router.replace(href as Href);
-    }, [address, anchor, discussionId, messageId, explicitServerId, props.kind, router, sourceSurface]);
+    }, [address, anchor, discussionId, draftId, messageId, explicitServerId, props.kind, router, sourceSurface]);
     const onBack = React.useCallback(() => safeRouterBack({
         router,
         navigation,
@@ -143,7 +145,7 @@ export function DiscussionRouteScreen(props: Readonly<{
             <Stack.Screen options={screenOptions} />
             {/* Beside the column the Discussion is a page; without it (a phone) it takes the phone step. */}
             <SurfaceStateSizeProvider size={columnVisible ? 'page' : 'phone'}>
-            {!address || (props.kind === 'new' && anchor === null) || (props.kind === 'discussion' && !discussionId) ? (
+            {!address || (props.kind === 'new' && (anchor === null || draftId === null)) || (props.kind === 'discussion' && !discussionId) ? (
                 <SurfaceStateCard kind="unavailable" title={t('common.unavailable')} />
             ) : props.kind === 'list' ? (
                 !columnVisible
@@ -154,7 +156,7 @@ export function DiscussionRouteScreen(props: Readonly<{
             ) : (
                 <DiscussionDetailsView
                     target={props.kind === 'new'
-                        ? { kind: 'new', address, ...(anchor ? { anchor } : {}) }
+                        ? { kind: 'new', address, ...(draftId ? { draftId } : {}), ...(anchor ? { anchor } : {}) }
                         : { kind: 'discussion', address, discussionId: discussionId!, ...(messageId ? { messageId } : {}) }}
                     active={routeFocused}
                     standaloneSurface

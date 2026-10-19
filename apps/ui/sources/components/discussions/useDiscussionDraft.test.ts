@@ -26,6 +26,29 @@ afterEach(() => {
 });
 
 describe('useDiscussionDraft', () => {
+    it('switches keyed route drafts without borrowing subscriptions or clearing another draft submission', async () => {
+        const firstAddress = { kind: 'newDiscussion' as const, draftId: '00000000-0000-5000-8000-000000000001' };
+        const secondAddress = { kind: 'newDiscussion' as const, draftId: '00000000-0000-5000-8000-000000000002' };
+        for (const [address, text] of [[newAddress, 'Unrelated singleton'], [firstAddress, 'First passage'], [secondAddress, 'Second passage']] as const) {
+            writeDiscussionSessionDraft({ scope, address, patch: { text, mentions: [] } });
+        }
+        const hook = await renderHook(({ address }) => useDiscussionDraft({ scope, address }), { initialProps: { address: firstAddress } });
+        let first: DiscussionDraftSubmission | undefined;
+        act(() => { first = hook.getCurrent().captureSubmittedCurrentness({ kind: 'create', creationLocalId: 'first-create', messageLocalId: 'first-message' }); });
+        await hook.rerender({ address: secondAddress });
+        expect(hook.getCurrent().text).toBe('Second passage');
+        act(() => { hook.getCurrent().captureSubmittedCurrentness({ kind: 'create', creationLocalId: 'second-create', messageLocalId: 'second-message' }); });
+        await act(async () => { expect(await hook.getCurrent().clearAfterObservedSuccess(first!)).toBe(false); });
+        expect(hook.getCurrent().text).toBe('Second passage');
+        expect(hook.getCurrent().pendingMutationAttempt).toMatchObject({ creationLocalId: 'second-create' });
+        await hook.rerender({ address: firstAddress });
+        expect(hook.getCurrent().pendingMutationAttempt).toMatchObject({ creationLocalId: 'first-create' });
+        await act(async () => { await hook.getCurrent().clearAfterObservedSuccess(first!); });
+        expect(hook.getCurrent().text).toBe('');
+        expect(getSessionComposerDraftSnapshot(scope, secondAddress)?.composer.text.value).toBe('Second passage');
+        expect(getSessionComposerDraftSnapshot(scope, newAddress)?.composer.text.value).toBe('Unrelated singleton');
+        await hook.unmount();
+    });
     it('retains a qualified passage and retry identity across remount, then clears only the submitted basis', async () => {
         const passage = { ref: { kind: 'doc' as const, artifactId: 'notes', serverId: scope.serverId },
             revision: { headerVersion: 2, bodyVersion: 4 }, range: { start: 12, end: 18 }, quote: 'second' };

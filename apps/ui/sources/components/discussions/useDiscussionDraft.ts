@@ -3,7 +3,7 @@ import type {
     SessionDraftAddressV2,
     StrictJsonValue,
 } from '@happier-dev/protocol';
-import { DiscussionDraftDocumentV2Schema, type DiscussionDraftSubmittedContentV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { canonicalSessionDraftAddressV2, DiscussionDraftDocumentV2Schema, type DiscussionDraftSubmittedContentV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 import type { DiscussionMessageContentV1 } from '@happier-dev/protocol/discussions/content';
 
@@ -117,9 +117,7 @@ function mentionValues(mentions: readonly DiscussionMentionSpan[]): readonly Str
 }
 
 function sameAddress(left: DiscussionDraftAddress, right: DiscussionDraftAddress): boolean {
-    if (left.kind !== right.kind) return false;
-    return left.kind === 'newDiscussion'
-        || (right.kind === 'discussion' && left.discussionId === right.discussionId);
+    return canonicalSessionDraftAddressV2(left) === canonicalSessionDraftAddressV2(right);
 }
 
 function sameScope(left: ServerAccountScope, right: ServerAccountScope): boolean {
@@ -160,10 +158,8 @@ export function useDiscussionDraft(params: Readonly<{
         serverId: params.scope.serverId,
         accountId: params.scope.accountId,
     }), [params.scope.accountId, params.scope.serverId]);
-    const address = React.useMemo<DiscussionDraftAddress>(() => params.address, [
-        params.address.kind,
-        params.address.kind === 'discussion' ? params.address.discussionId : null,
-    ]);
+    const addressKey = canonicalSessionDraftAddressV2(params.address);
+    const address = React.useMemo<DiscussionDraftAddress>(() => params.address, [addressKey]);
     const subscribe = React.useCallback(
         (listener: () => void) => subscribeSessionDraft(scope, address, listener),
         [address, scope],
