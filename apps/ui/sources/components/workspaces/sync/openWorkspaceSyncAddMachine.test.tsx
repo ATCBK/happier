@@ -13,12 +13,26 @@ import { createWorkspaceSyncHarness, type WorkspaceSyncRpcRequest } from '@/dev/
 const shownModal = vi.hoisted(() => vi.fn());
 const confirmModal = vi.hoisted(() => vi.fn(async () => false));
 const daemonRpc = vi.hoisted(() => vi.fn<(request: WorkspaceSyncRpcRequest) => unknown>());
+const projectsOpenOutcome = vi.hoisted(() => ({ current: null as unknown }));
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
     translate: (key, vars) => vars ? key + ':' + JSON.stringify(vars) : key,
 }));
+// Genuine boundary: the Home-side `projects.open` Action. Every other Action keeps the real executor.
+vi.mock('@/sync/ops/actions/defaultActionExecutor', async importOriginal => {
+    const real = await importOriginal<typeof import('@/sync/ops/actions/defaultActionExecutor')>();
+    return {
+        ...real,
+        createDefaultActionExecutor: (...args: Parameters<typeof real.createDefaultActionExecutor>) => {
+            const executor = real.createDefaultActionExecutor(...args);
+            return { ...executor, execute: (...call: Parameters<typeof executor.execute>) => (
+                call[0] === 'projects.open' && projectsOpenOutcome.current ? Promise.resolve(projectsOpenOutcome.current) : executor.execute(...call)
+            ) } as typeof executor;
+        },
+    };
+});
 vi.mock('@/modal', async () => {
     const boundary = (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
         confirmResult: true, spies: { confirm: confirmModal },
@@ -88,6 +102,7 @@ beforeEach(async () => {
     pendingPreflight = deferred();
     requireApproval = false;
     holdPreflight = false;
+    projectsOpenOutcome.current = null;
     const machines = [['machine-a', 'Source', '/home/source'], ['machine-b', 'Target', '/home/target']].map(([id, displayName, homeDir]) => {
         const machine = createMachineFixture({ id, activeAt: Date.now() });
         return { ...machine, metadata: { ...machine.metadata!, displayName, homeDir } };
@@ -299,6 +314,31 @@ describe('Project Add machine modal', () => {
             await act(async () => { modal.submit().props.onPress(); });
             await vi.waitFor(() => expect(confirmModal).toHaveBeenCalledOnce());
             expect(storedApproval().actionArgs).toMatchObject({ sourceWorkspaceRefId: source().id, targetMachineId: 'machine-a', targetPath: '/source-copy' });
+        });
+    });
+
+    describe('refusing to attach the source checkout', () => {
+        const attachSource = async (outcome: unknown) => {
+            projectsOpenOutcome.current = outcome;
+            const { id: _linked, ...unlinked } = source();
+            owner.openWorkspaceSyncAddMachine(unlinked, vi.fn());
+            const modal = await renderOpenedModal();
+            await chooseTarget(modal.screen);
+            await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+            await act(async () => { modal.submit().props.onPress(); });
+            return modal;
+        };
+
+        it('names an unreachable source Machine instead of a generic save failure', async () => {
+            const modal = await attachSource({ ok: true, result: { kind: 'refused', code: 'machine_unreachable' } });
+            await vi.waitFor(() => expect(modal.screen.getTextContent()).toContain('workspaceSync.start.blocked.targetMachineOffline'));
+            expect(modal.screen.getTextContent()).not.toContain('common.saveError');
+            expect(callsFor(RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE)).toEqual([]);
+        });
+
+        it('keeps the generic message for an Action failure without a Project Open refusal', async () => {
+            const modal = await attachSource({ ok: false, errorCode: 'server_unreachable', error: 'server_unreachable' });
+            await vi.waitFor(() => expect(modal.screen.getTextContent()).toContain('common.saveError'));
         });
     });
 

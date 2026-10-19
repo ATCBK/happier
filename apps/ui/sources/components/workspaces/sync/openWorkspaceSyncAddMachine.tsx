@@ -6,6 +6,7 @@ import { OpenProjectResultV1Schema } from '@happier-dev/protocol/projects/openPr
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { ProjectWorkerNoAcceptanceFailureDetailsV1Schema } from '@happier-dev/protocol/actions/projectActionFamily';
 
+import { projectOpenRefusalPresentation } from '@/components/projects/activation/projectOpenRefusalPresentation';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
@@ -237,6 +238,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
                 }, { surface: 'ui', serverId: props.source.serverId, signal: controller.signal });
                 if (!opened.ok) throw new Error(t('common.saveError'));
                 const accepted = OpenProjectResultV1Schema.parse(opened.result);
+                if (accepted.kind === 'refused') throw new Error(projectOpenRefusalPresentation(accepted.code, null).title);
                 if (accepted.kind === 'outcomeUnknown') setInspectRequired(true);
                 if (accepted.kind !== 'opened' || accepted.workspace.serverId !== props.source.serverId
                     || accepted.workspace.machineId !== props.source.machineId) throw new Error(t('common.saveError'));

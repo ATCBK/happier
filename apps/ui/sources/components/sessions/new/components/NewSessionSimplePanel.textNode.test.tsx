@@ -367,12 +367,15 @@ describe('NewSessionSimplePanel', () => {
         );
 
         const notice = screen.findByTestId('composer-notice');
+        // The composer sits inside its own band (the atmosphere boundary), so host content stacks
+        // directly above the band while staying on the page ground.
         const composer = screen.findByType('AgentInput' as React.ElementType);
         if (!notice) throw new Error('Expected composer notice');
         const siblings = notice.parent?.children.filter((child) => typeof child === 'object') ?? [];
+        const band = siblings[siblings.indexOf(notice) + 1];
         // Compare identity without asking Vitest to diff the complete React fiber graphs on failure.
-        expect(notice.parent === composer.parent).toBe(true);
-        expect(siblings.indexOf(composer)).toBe(siblings.indexOf(notice) + 1);
+        expect(typeof band === 'object' && band.props.testID === 'new-session-composer-band').toBe(true);
+        expect(typeof band === 'object' && band.findAll((node) => node === composer).length > 0).toBe(true);
         // The host's actions reach the composer's status row (beside the floating composer's own capsules).
         expect(screen.findByTestId('status-actions')).toBeTruthy();
         await screen.unmount();
