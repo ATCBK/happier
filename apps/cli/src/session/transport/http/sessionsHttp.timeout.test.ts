@@ -61,12 +61,12 @@ describe('sessionControl.sessionsHttp timeouts', () => {
     }
   }
 
-  it('accepts archive and unarchive responses beyond ten seconds within the session-control budget', async () => {
-    process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS = '30000';
+  it('lets archive and unarchive finish beyond the unrelated session-control HTTP cutoff', async () => {
+    process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS = '1000';
     vi.resetModules();
     const { archiveSession, unarchiveSession } = await import('./sessionsHttp');
     const { runWithServerHttpBaseUrl } = await import('@/api/client/serverHttpBaseUrl');
-    await withArchiveServer(10_100, async (origin, paths) => {
+    await withArchiveServer(1_500, async (origin, paths) => {
       const results = await runWithServerHttpBaseUrl(origin, () => Promise.allSettled([
         archiveSession({ token: 'fixture-token', sessionId: 's1' }),
         unarchiveSession({ token: 'fixture-token', sessionId: 's1' }),
@@ -82,19 +82,23 @@ describe('sessionControl.sessionsHttp timeouts', () => {
     });
   });
 
-  it('honors a shorter configured session-control budget for both archive mutations', async () => {
-    process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS = '1000';
+  it('retires both HTTP mutations when the containing caller cancels and reports their uncertain outcome', async () => {
+    process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS = '30000';
     vi.resetModules();
     const { archiveSession, unarchiveSession } = await import('./sessionsHttp');
     const { runWithServerHttpBaseUrl } = await import('@/api/client/serverHttpBaseUrl');
-    await withArchiveServer(1_500, async origin => {
-      const results = await runWithServerHttpBaseUrl(origin, () => Promise.allSettled([
-        archiveSession({ token: 'fixture-token', sessionId: 's1' }),
-        unarchiveSession({ token: 'fixture-token', sessionId: 's1' }),
+    const controller = new AbortController();
+    await withArchiveServer(1_500, async (origin, paths) => {
+      const settled = runWithServerHttpBaseUrl(origin, () => Promise.allSettled([
+        archiveSession({ token: 'fixture-token', sessionId: 's1', signal: controller.signal }),
+        unarchiveSession({ token: 'fixture-token', sessionId: 's1', signal: controller.signal }),
       ]));
+      await vi.waitFor(() => expect(paths).toHaveLength(2));
+      controller.abort();
+      const results = await settled;
       expect(results).toMatchObject([
-        { status: 'rejected', reason: { code: 'outcome_unknown', cause: { code: 'ECONNABORTED' } } },
-        { status: 'rejected', reason: { code: 'outcome_unknown', cause: { code: 'ECONNABORTED' } } },
+        { status: 'rejected', reason: { code: 'outcome_unknown', cause: { code: 'ERR_CANCELED' } } },
+        { status: 'rejected', reason: { code: 'outcome_unknown', cause: { code: 'ERR_CANCELED' } } },
       ]);
     });
   });

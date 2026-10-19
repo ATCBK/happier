@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { Console } from 'node:console';
+import { createServer } from 'node:http';
 import axios from 'axios';
 import { decodeBase64, decrypt, encodeBase64, encrypt } from '@/api/encryption';
 import { socketRpcCodec, type SocketRpcContent } from '@happier-dev/sync-client';
@@ -16,6 +17,8 @@ import { createMachineSessionStopLifecycleActionExecutor } from '@/session/actio
 import { accountSettingsParse } from '@happier-dev/protocol';
 import { resolveCliAgentStartContextV1 } from '@/session/actions/resolveCliAgentStartContextV1';
 import { logger } from '@/ui/logger';
+import { reloadConfiguration } from '@/configuration';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 const boundary = vi.hoisted(() => ({ socket: null as unknown, mode: 'timeout', connections: 0 }));
 vi.mock('socket.io-client', () => ({ io: () => { boundary.connections++; return boundary.socket; } }));
@@ -183,6 +186,60 @@ describe('requestSessionStop machine transport', () => {
     expect(readPersistedStop()).toMatchObject({ requestId: issuedRequestIds[0] });
   });
 
+  it('completes explicit Stop after a real metadata PATCH outlives the generic HTTP cutoff', async () => {
+    vi.useRealTimers();
+    boundary.mode = 'stopped';
+    active = false;
+    const get = vi.mocked(axios.get).getMockImplementation()!;
+    const patch = vi.mocked(axios.patch).getMockImplementation()!;
+    vi.mocked(axios.get).mockRestore();
+    vi.mocked(axios.patch).mockRestore();
+    const previousTimeout = process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS;
+    process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS = '1000';
+    reloadConfiguration();
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const url = `http://fixture${request.url}`;
+      const result = request.method === 'PATCH'
+        ? await new Promise<Awaited<ReturnType<typeof patch>>>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              timers.delete(timer);
+              const body = SessionMetadataTuplePatchV1Schema.parse(JSON.parse(Buffer.concat(chunks).toString()));
+              if (body.mode === 'owner' && body.sharedMetadata.expectedVersion !== metadataVersion) {
+                resolve({ status: 409, data: { code: 'session_metadata_version_conflict', metadataLayoutVersion: 1,
+                  sharedMetadata: { version: metadataVersion }, agentState: { version: 1 } } });
+                return;
+              }
+              void patch(url, body).then(resolve, reject);
+            }, 1500);
+            timers.add(timer);
+          })
+        : await get(url);
+      response.writeHead(result.status, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(result.data));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing Stop fixture address');
+    try {
+      await expect(runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, () =>
+        requestSessionStop({ credentials, idOrPrefix: sessionId }))).resolves.toMatchObject({
+        ok: true, sessionId, stopped: true,
+      });
+      expect(readPersistedStop()).toMatchObject({ cause: 'explicit_stop' });
+      expect(issuedMethods).toEqual(['owning-machine:stop-session']);
+    } finally {
+      for (const timer of timers) clearTimeout(timer);
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      if (previousTimeout === undefined) delete process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS;
+      else process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS = previousTimeout;
+      reloadConfiguration();
+    }
+  });
+
   it('retains the persisted person Stop across a fresh automatic-admission read after an ambiguous acknowledgement', async () => {
     boundary.mode = 'disconnect';
     await expect(requestSessionStop({ credentials, idOrPrefix: sessionId })).resolves.toMatchObject({
@@ -192,6 +249,23 @@ describe('requestSessionStop machine transport', () => {
     expect(stop).toMatchObject({ v: 1, cause: 'explicit_stop', requestId: expect.any(String) });
     expect(resolveSessionAutoResumeAdmissionV1({ metadata: { sessionExplicitStopV1: stop },
       archivedAt: null, machineAvailable: true, authorityAvailable: true })).toBe('held_by_person');
+  });
+
+  it('ends the issued physical Stop wait when the ordinary caller lifetime is cancelled', async () => {
+    boundary.mode = 'slow_stop';
+    const controller = new AbortController();
+    const result = requestSessionStop({ credentials, idOrPrefix: sessionId, ...{ signal: controller.signal } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(issuedMethods).toEqual(['owning-machine:stop-session']);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    // Cancellation after emission cannot prove whether the receiver stopped.
+    const observed: unknown[] = [];
+    void result.then(value => observed.push(value));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(observed).toMatchObject([{
+      ok: true, stopped: false, stopOutcome: { status: 'physical_stop_unconfirmed', reason: 'transport_ambiguous' },
+    }]);
   });
 
   it('keeps incidental lifecycle cleanup outside the persisted person Stop contract', async () => {

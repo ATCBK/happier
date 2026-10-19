@@ -670,6 +670,7 @@ async function updateLegacyMetadataWithHttpRetry(params: Readonly<{
     await verifySessionMetadataMutationCurrentness(params.currentness);
     const result = await patchSessionMetadata({
       token: params.token,
+      ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
       ...(params.resolveAuthorizationHeaders
         ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
         : {}),
@@ -921,6 +922,7 @@ export async function updateSessionMetadataEnvelopeTupleWithRetry(
         await verifySessionMetadataMutationCurrentness(params.currentness);
         const result = await patchSessionMetadataEnvelopeTuple({
           token: params.token,
+          ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
           ...(params.resolveAuthorizationHeaders
             ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
             : {}),
@@ -976,6 +978,7 @@ export async function updateSessionMetadataEnvelopeTupleWithRetry(
         if (!owner) {
           const sharedRaw = await fetchSessionByIdCompat({
             token: params.token,
+            ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
             ...(params.resolveAuthorizationHeaders
               ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
               : {}),
@@ -1012,6 +1015,7 @@ export async function updateSessionMetadataEnvelopeTupleWithRetry(
           await Promise.all([
             fetchSessionByIdCompat({
               token: params.token,
+              ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
               ...(params.resolveAuthorizationHeaders
                 ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
                 : {}),
@@ -1020,6 +1024,7 @@ export async function updateSessionMetadataEnvelopeTupleWithRetry(
             }),
             fetchAccountEncryptionCurrentness({
               token: params.token,
+              ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
               ...(params.resolveAuthorizationHeaders
                 ? {
                     authorizationHeaders: params.resolveAuthorizationHeaders({
@@ -1155,6 +1160,7 @@ export async function updateSessionMetadataWithRetry(params: Readonly<{
   const accountEncryptionCurrentness = params.accountEncryptionCurrentness
     ?? await fetchAccountEncryptionCurrentness({
       token: params.token,
+      ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
       ...(params.resolveAuthorizationHeaders
         ? {
             authorizationHeaders: params.resolveAuthorizationHeaders({

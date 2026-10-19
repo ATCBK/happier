@@ -102,6 +102,13 @@ result remains ambiguous during construction, the host publishes
 retry startup with the retained initial input. This applies to bundled and
 external Agent plugins without a provider-specific retry path.
 
+Metadata PATCH transport uses that mutation's caller lifetime and cancellation,
+including explicit Stop intent and terminal-control retirement. The generic
+Session HTTP read timeout does not shorten a metadata mutation. CLI and UI Stop
+both reach the owning daemon's physical Stop owner; persisting an explicit Stop
+hold must succeed before the CLI issues that physical operation. A lost receipt
+or cancellation after emission remains uncertain and does not prove retirement.
+
 Admitted Follow originals retain their server-validated input admission receipt
 through canonical and legacy message projections. A required original's transient
 Home source-read failure uses the same pre-turn preparation wait, retaining the

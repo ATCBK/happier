@@ -2206,6 +2206,7 @@ describe('createSpawnedSession settlement', () => {
     expect(requestSessionStop).toHaveBeenCalledWith({
       credentials,
       idOrPrefix: 'session-abandoned',
+      stopIntent: 'lifecycle_control',
     });
     expect(requestSessionStop).toHaveBeenCalledOnce();
     expect(cleanupOrder).toEqual(['stop', 'archive']);

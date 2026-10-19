@@ -305,6 +305,109 @@ describe('Goal RPC acknowledgement lifetime through the CLI owner', () => {
   });
 });
 
+describe('permission-response lifetime through the CLI Action owner', () => {
+  const sessionId = 'c123456789012345678901234';
+  const requestId = 'exec-permission-1';
+  const turnId = 'native-turn-permission-1';
+
+  function createPermissionExecutor(mode: 'plain' | 'e2ee' = 'plain') {
+    const key = new Uint8Array(32).fill(4);
+    const credentials = { token: 'permission-account-token', encryption: mode === 'plain'
+      ? null : { type: 'legacy' as const, secret: key } };
+    const content: SocketRpcContent = mode === 'plain' ? { mode } : { mode, cipher: {
+      encryptRaw: async value => encodeBase64(encrypt(key, 'legacy', value)),
+      decryptRaw: async value => decrypt(key, 'legacy', decodeBase64(value)),
+    } };
+    const metadata = { machineId: 'permission-machine', path: '/repo' };
+    const session = createSessionRecordFixture({ id: sessionId, encryptionMode: mode, active: true,
+      metadata: mode === 'plain' ? JSON.stringify(metadata) : encodeBase64(encrypt(key, 'legacy', metadata)) });
+    // Only Home HTTP and Socket.IO are replaced; the Action, target resolution,
+    // permission payload producer and response codec remain real.
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (String(url).endsWith('/v1/account/encryption/currentness')) {
+        return { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode }) };
+      }
+      if (String(url).includes(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session } };
+      throw new Error(`Unexpected Home HTTP boundary: ${url}`);
+    });
+    configureNextSocket = socket => { socket.ackMode = 'never'; };
+    const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
+      sessionId, ...(mode === 'plain' ? { mode, ctx: null } : { mode, ctx: { encryptionKey: key, encryptionVariant: 'legacy' as const } }) }));
+    return { executor, content };
+  }
+
+  function respond(executor: ReturnType<typeof createActionExecutor>, actionId: 'session.permission.respond' | 'session.user_action.answer', signal: AbortSignal) {
+    return executor.execute(actionId, { sessionId, requestId, ...(actionId === 'session.permission.respond'
+      ? { decision: 'allow', turnId } : { decision: 'approve' }) }, { surface: 'cli', authority: 'present_user', signal });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    nextRpcAck = null;
+    nextSocket = null;
+    configureNextSocket = null;
+  });
+
+  it.each([
+    ['session.permission.respond', 'plain'],
+    ['session.permission.respond', 'e2ee'],
+    ['session.user_action.answer', 'plain'],
+  ] as const)('waits for a delayed exact %s %s receipt without resending', async (actionId, mode) => {
+    const { executor, content } = createPermissionExecutor(mode);
+    vi.useFakeTimers();
+    const cancellation = new AbortController();
+    let settled = false;
+    const pending = respond(executor, actionId, cancellation.signal).then(result => { settled = true; return result; });
+    try {
+      await vi.waitFor(() => expect(nextSocket?.delayedAck).toBeTypeOf('function'));
+      // The incident's runner acknowledged after 31,759 ms, beyond the CLI's
+      // implicit 20-second cutoff and the relay's legacy 30-second default.
+      await vi.advanceTimersByTimeAsync(31_759);
+      expect(settled, 'A pending permission response is not a failed decision').toBe(false);
+      const packet = nextSocket?.emitted.find(call => call.event === 'rpc-call')?.data;
+      const decoded = await socketRpcCodec.decodeRequestParams(content, packet.params, packet.method);
+      expect(decoded.params).toMatchObject({ id: requestId, approved: true,
+        ...(actionId === 'session.permission.respond' ? { turnId } : {}) });
+      nextSocket?.delayedAck?.({ ok: true, result: await socketRpcCodec.encodeResponse(content, undefined, decoded.callId) });
+      expect(await pending).toEqual({ ok: true, result: { ok: true } });
+      expect(packet.timeoutMs).toBeNull();
+      expect(nextSocket?.emitted.filter(call => call.event === 'rpc-call')).toHaveLength(1);
+      expect(nextSocket?.emitted.some(call => call.event === 'rpc-cancel')).toBe(false);
+    } finally {
+      cancellation.abort();
+      await pending;
+    }
+  });
+
+  it.each(['session.permission.respond', 'session.user_action.answer'] as const)(
+    'retires an unanswered %s wait with typed cancellation and no resend', async actionId => {
+      const { executor } = createPermissionExecutor();
+      const cancellation = new AbortController();
+      const pending = respond(executor, actionId, cancellation.signal);
+      await vi.waitFor(() => expect(nextSocket?.delayedAck).toBeTypeOf('function'));
+      const rpcId = nextSocket?.emitted.find(call => call.event === 'rpc-call')?.data.requestId;
+      cancellation.abort();
+      expect(await pending).toMatchObject({ ok: false, errorCode: 'SOCKET_RPC_ABORTED' });
+      expect(nextSocket?.emitted).toContainEqual({ event: 'rpc-cancel', data: { requestId: rpcId } });
+      expect(nextSocket?.emitted.filter(call => call.event === 'rpc-call')).toHaveLength(1);
+      nextSocket?.delayedAck?.({ ok: true, result: null });
+    },
+  );
+
+  it.each(['session.permission.respond', 'session.user_action.answer'] as const)(
+    'reports a disconnected %s as outcome unknown without resending', async actionId => {
+      const { executor } = createPermissionExecutor();
+      const pending = respond(executor, actionId, new AbortController().signal);
+      await vi.waitFor(() => expect(nextSocket?.delayedAck).toBeTypeOf('function'));
+      nextSocket?.trigger('disconnect', 'transport close');
+      expect(await pending).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+      expect(nextSocket?.emitted.filter(call => call.event === 'rpc-call')).toHaveLength(1);
+    },
+  );
+});
+
 describe('current-turn cancellation through the CLI Action owner', () => {
   const sessionId = 'c000000000000000000000000';
   const home = { serverId: 'cancel-home', serverHttpBaseUrl: 'https://cancel-home.test' };

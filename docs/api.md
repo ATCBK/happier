@@ -1649,8 +1649,9 @@ gate.
 
 In current 0.3 source, archive and unarchive acknowledge the committed transaction before
 post-commit badge/realtime publication finishes. Publication failures are logged without changing
-that receipt. The CLI uses the existing session-control HTTP budget; a lost mutation response
-reports `outcome_unknown`, so a timeout is not evidence that the archive did not happen.
+that receipt. The CLI keeps Archive and Unarchive HTTP requests within the containing caller's
+cancellation lifetime, without imposing the generic session-control HTTP cutoff. A lost response
+or cancellation after dispatch reports `outcome_unknown`, because either can follow a commit.
 The private MCP, ACP, prompt-library and Connected Account catalogs preserve the Home's typed
 `database_transaction_conflict_exhausted` response for a confirmed rollback. An unclassified
 server failure after a catalog mutation was issued reports `outcome_unknown` rather than

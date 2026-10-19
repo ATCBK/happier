@@ -678,6 +678,7 @@ export async function fetchSessionByIdCompat(params: Readonly<{
 
 export async function patchSessionMetadata(params: Readonly<{
   token: string;
+  signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{
     method: 'PATCH'; path: string; body: unknown;
   }>) => Readonly<Record<string, string>> | null;
@@ -718,7 +719,10 @@ export async function patchSessionMetadata(params: Readonly<{
         ...authorizationHeaders,
         'Content-Type': 'application/json',
       },
-      timeout: configuration.sessionControlHttpTimeoutMs,
+      // The metadata mutation/currentness owner governs this operation, including
+      // Stop intent and retirement. A transport cutoff cannot shorten its lifetime.
+      timeout: 0,
+      ...(params.signal ? { signal: params.signal } : {}),
       validateStatus: () => true,
     },
   );
@@ -849,6 +853,7 @@ export type PatchSessionMetadataEnvelopeTupleResult =
  */
 export async function patchSessionMetadataEnvelopeTuple(params: Readonly<{
   token: string;
+  signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{
     method: 'PATCH'; path: string; body: unknown;
   }>) => Readonly<Record<string, string>> | null;
@@ -874,7 +879,8 @@ export async function patchSessionMetadataEnvelopeTuple(params: Readonly<{
         ...authorizationHeaders,
         'Content-Type': 'application/json',
       },
-      timeout: configuration.sessionControlHttpTimeoutMs,
+      timeout: 0,
+      ...(params.signal ? { signal: params.signal } : {}),
       validateStatus: () => true,
     },
   );
@@ -1691,8 +1697,10 @@ async function postArchiveMutation(params: Readonly<{
   token: string;
   sessionId: string;
   op: 'archive' | 'unarchive';
+  signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{ method: 'POST'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
 }>): Promise<{ archivedAt: number | null }> {
+  params.signal?.throwIfAborted();
   const serverUrl = resolveServerHttpBaseUrl();
   const path = `/v2/sessions/${encodeSessionIdPathSegment(params.sessionId)}/${params.op}`;
   const body = {};
@@ -1708,11 +1716,14 @@ async function postArchiveMutation(params: Readonly<{
         ...authorizationHeaders,
         'Content-Type': 'application/json',
       },
-      timeout: configuration.sessionControlHttpTimeoutMs,
+      // Archive can wait on the Home's transaction. The containing invocation
+      // owns cancellation; the generic read/control cutoff cannot settle it.
+      timeout: 0,
+      ...(params.signal ? { signal: params.signal } : {}),
       validateStatus: () => true,
     },
   ).catch((cause: unknown) => {
-    const disposition = classifyHomeDomainHttpMutationFailureV1({ error: cause, issued: true, aborted: false });
+    const disposition = classifyHomeDomainHttpMutationFailureV1({ error: cause, issued: true, aborted: params.signal?.aborted === true });
     throw Object.assign(new Error('Session archive mutation transport failed'), {
       code: disposition === 'not_dispatched' ? 'server_unreachable' : 'outcome_unknown', cause,
     });
@@ -1751,6 +1762,7 @@ async function postArchiveMutation(params: Readonly<{
 
 export async function archiveSession(params: Readonly<{
   token: string; sessionId: string;
+  signal?: AbortSignal;
   resolveAuthorizationHeaders?: Parameters<typeof postArchiveMutation>[0]['resolveAuthorizationHeaders'];
 }>): Promise<{ archivedAt: number }> {
   const res = await postArchiveMutation({ ...params, op: 'archive' });
@@ -1762,6 +1774,7 @@ export async function archiveSession(params: Readonly<{
 
 export async function unarchiveSession(params: Readonly<{
   token: string; sessionId: string;
+  signal?: AbortSignal;
   resolveAuthorizationHeaders?: Parameters<typeof postArchiveMutation>[0]['resolveAuthorizationHeaders'];
 }>): Promise<{ archivedAt: null }> {
   const res = await postArchiveMutation({ ...params, op: 'unarchive' });

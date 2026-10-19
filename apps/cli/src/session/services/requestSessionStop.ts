@@ -57,11 +57,13 @@ type StopSessionAttemptResult = StopSessionResult | Readonly<{
 async function readSessionInactive(params: Readonly<{
   token: string;
   sessionId: string;
+  signal?: AbortSignal;
   resolveAuthorizationHeaders?: Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders'];
 }>): Promise<boolean | null> {
   const session = await fetchSessionByIdCompat({
     token: params.token,
     sessionId: params.sessionId,
+    ...(params.signal ? { signal: params.signal } : {}),
     ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
   }).catch(() => null);
   return session ? session.active === false : null;
@@ -72,6 +74,7 @@ async function stopOutcomeFromAttemptResult(params: Readonly<{
   token: string;
   sessionId: string;
   targetKind?: 'caller_local' | 'owning_machine';
+  signal?: AbortSignal;
   resolveAuthorizationHeaders?: Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders'];
 }>): Promise<SessionStopOutcome> {
   const { result } = params;
@@ -119,6 +122,7 @@ async function stopSessionOnOwningMachine(params: Readonly<{
   sessionId: string;
   machineId: string;
   requestId: string;
+  signal?: AbortSignal;
   externalAction?: Parameters<typeof callMachineRpc>[0]['externalAction'];
 }>): Promise<StopSessionAttemptResult | ActionExecuteFailure> {
   try {
@@ -132,7 +136,7 @@ async function stopSessionOnOwningMachine(params: Readonly<{
       timeoutMs: null,
       request: { sessionId: params.sessionId },
       ...(params.externalAction ? { externalAction: params.externalAction } : {}),
-      ...(params.externalAction?.context.signal ? { signal: params.externalAction.context.signal } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
       authorization: {
         kind: SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_WRITE,
         sessionId: params.sessionId,
@@ -192,6 +196,7 @@ async function stopSessionOnOwningMachine(params: Readonly<{
 async function waitForSessionStopResult(params: Readonly<{
   token: string;
   sessionId: string;
+  signal?: AbortSignal;
   resolveAuthorizationHeaders?: Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders'];
 }>): Promise<boolean> {
   const deadlineMs = Date.now() + resolveSessionControlStopTimeoutMs();
@@ -203,7 +208,7 @@ async function waitForSessionStopResult(params: Readonly<{
     while (true) {
       const revision = events.currentRevision();
       if (await readSessionInactive(params) === true) return true;
-      if (!(await events.waitForChange(revision, { deadlineMs }))) return false;
+      if (!(await events.waitForChange(revision, { deadlineMs, ...(params.signal ? { signal: params.signal } : {}) }))) return false;
     }
   } finally {
     await events.close();
@@ -312,6 +317,7 @@ export async function requestSessionStop(params: Readonly<{
   /** Cleanup, handoff, and recovery stop the process without creating a person Stop hold. */
   stopIntent?: 'explicit_stop' | 'lifecycle_control';
   actionContext?: ActionExecutorContext;
+  signal?: AbortSignal;
   credentials: StoredCredentials;
   idOrPrefix: string;
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
@@ -325,11 +331,12 @@ export async function requestSessionStop(params: Readonly<{
   const actionId = params.externalAction?.effectActionId ?? 'session.stop';
   const rootRequestId = params.externalAction?.context.actionRequestId;
   const stopRequestId = rootRequestId ?? randomUUID();
+  const signal = params.signal ?? params.actionContext?.signal ?? params.externalAction?.context.signal;
   const resolved = await runTracedExternalActionStage(actionId, rootRequestId, 'stop.resolve_session', () => resolveSessionIdOrPrefix({
     credentials: params.credentials,
     idOrPrefix: params.idOrPrefix,
     ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
-    ...(params.externalAction?.context.signal ? { signal: params.externalAction.context.signal } : {}),
+    ...(signal ? { signal } : {}),
     ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
   }));
   if (!resolved.ok) {
@@ -345,6 +352,7 @@ export async function requestSessionStop(params: Readonly<{
     const rawSession = resolved.rawSession ?? await fetchSessionByIdCompat({
       token: params.credentials.token,
       sessionId: resolved.sessionId,
+      ...(signal ? { signal } : {}),
       ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
       ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     });
@@ -370,7 +378,7 @@ export async function requestSessionStop(params: Readonly<{
       ? await fetchAccountEncryptionCurrentness({
           token: params.credentials.token,
           ...(currentnessHeaders ? { authorizationHeaders: currentnessHeaders } : {}),
-          ...(params.externalAction?.context.signal ? { signal: params.externalAction.context.signal } : {}),
+          ...(signal ? { signal } : {}),
         })
       : null;
     phase = 'resolve_owning_machine';
@@ -407,7 +415,7 @@ export async function requestSessionStop(params: Readonly<{
         actionContext: params.actionContext ?? params.externalAction?.context,
         ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
         ...(accountCurrentness ? { accountEncryptionCurrentness: accountCurrentness } : {}),
-        ...(params.externalAction?.context.signal ? { signal: params.externalAction.context.signal } : {}),
+        ...(signal ? { signal } : {}),
       });
     }
     if (machineId) {
@@ -417,6 +425,7 @@ export async function requestSessionStop(params: Readonly<{
         sessionId: resolved.sessionId,
         machineId,
         requestId: stopRequestId,
+        ...(signal ? { signal } : {}),
         ...(params.externalAction ? { externalAction: params.externalAction } : {}),
       }));
       if ('ok' in physicalStopResult) return { ...physicalStopResult, code: physicalStopResult.errorCode };
@@ -430,6 +439,7 @@ export async function requestSessionStop(params: Readonly<{
             token: params.credentials.token,
             sessionId: resolved.sessionId,
             targetKind: 'owning_machine',
+            ...(signal ? { signal } : {}),
             ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
           }),
         };
@@ -438,6 +448,7 @@ export async function requestSessionStop(params: Readonly<{
       const stopped = await runTracedExternalActionStage(actionId, rootRequestId, 'stop.inactive_projection', () => waitForSessionStopResult({
         token: params.credentials.token,
         sessionId: resolved.sessionId,
+        ...(signal ? { signal } : {}),
         ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
       }));
       return stopped
@@ -459,10 +470,13 @@ export async function requestSessionStop(params: Readonly<{
     }
     phase = 'read_local_attachment';
     const exactAttachmentIdBeforeDaemonStop = await readExactTerminalAttachmentId(resolved.sessionId);
+    signal?.throwIfAborted();
     let physicalStopResult: StopSessionAttemptResult;
     phase = 'stop_local_daemon';
     try {
-      physicalStopResult = await stopDaemonSession(resolved.sessionId);
+      physicalStopResult = signal
+        ? await stopDaemonSession(resolved.sessionId, { signal })
+        : await stopDaemonSession(resolved.sessionId);
     } catch {
       physicalStopResult = { status: 'incomplete', reason: 'transport_ambiguous' };
     }
@@ -472,7 +486,7 @@ export async function requestSessionStop(params: Readonly<{
     const mayRunExactAmbiguousFallback = physicalStopResult.status === 'incomplete'
       && physicalStopResult.reason === 'transport_ambiguous'
       && exactAttachmentIdBeforeDaemonStop !== null;
-    if (physicalStopResult.status === 'not_found' || mayRunExactAmbiguousFallback) {
+    if (!signal?.aborted && (physicalStopResult.status === 'not_found' || mayRunExactAmbiguousFallback)) {
       phase = 'stop_local_markers';
       physicalStopResult = await stopSessionViaMarkersBestEffort({
         credentials: params.credentials,
@@ -493,6 +507,7 @@ export async function requestSessionStop(params: Readonly<{
           result: physicalStopResult,
           token: params.credentials.token,
           sessionId: resolved.sessionId,
+          ...(signal ? { signal } : {}),
         }),
       };
     }
@@ -500,6 +515,7 @@ export async function requestSessionStop(params: Readonly<{
     const stopped = await waitForSessionStopResult({
       token: params.credentials.token,
       sessionId: resolved.sessionId,
+      ...(signal ? { signal } : {}),
     });
     if (stopped) {
       await cleanupStoppedSessionMarkersBestEffort(resolved.sessionId).catch(() => undefined);

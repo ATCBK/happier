@@ -7808,11 +7808,12 @@ export function createCliActionDeps(params: Readonly<{
         : { ok: false, status: 'partial_failure', sessionId, diagnostics: { errorCode: 'invalid_response' } };
     },
 
-    sessionStop: async ({ sessionId, context }) => {
+    sessionStop: async ({ sessionId, context, signal }) => {
       if (!params.credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
       return await requestSessionStop({ credentials: params.credentials, idOrPrefix: sessionId,
+        ...(signal ? { signal } : {}),
         ...(context ? { actionContext: context } : {}),
         resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'session.stop', request),
         ...(context?.externalActionExecutionAuthorization && params.externalActionMachineRequestPrivateKey
@@ -8138,6 +8139,7 @@ export function createCliActionDeps(params: Readonly<{
       }
       const effectActionId = archived ? 'session.archive' : 'session.unarchive';
       return await setSessionArchivedState({ credentials: params.credentials, idOrPrefix: sessionId, archived: archived === true,
+        ...(context?.signal ? { signal: context.signal } : {}),
         resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, effectActionId, request),
         ...(context?.externalActionExecutionAuthorization && params.externalActionMachineRequestPrivateKey
           && params.externalActionMachineInstallationId ? { externalAction: { context, effectActionId,
@@ -8764,6 +8766,8 @@ export function createCliActionDeps(params: Readonly<{
           token: params.credentials.token,
           sessionId: transport.sessionId,
           method: `${transport.sessionId}:session.permission.respond`,
+          // A decision can await durable publication beyond the generic ACK budget.
+          timeoutMs: null,
           ...(externalRequest && context && params.externalActionMachineRequestPrivateKey
             && params.externalActionMachineInstallationId ? { externalAction: {
               context, effectActionId: 'session.permission.respond',
@@ -8788,7 +8792,8 @@ export function createCliActionDeps(params: Readonly<{
       } catch (error) {
         return {
           ok: false,
-          errorCode: readRpcErrorCode(error) ?? 'permission_update_failed',
+          errorCode: readRpcErrorCode(error) ?? (readRpcRequestDisposition(error) === 'outcomeUnknown'
+            ? RPC_ERROR_CODES.OUTCOME_UNKNOWN : 'permission_update_failed'),
           errorMessage: error instanceof Error ? error.message : 'permission_update_failed',
           sessionId: transport.sessionId,
         };
@@ -8911,6 +8916,7 @@ export function createCliActionDeps(params: Readonly<{
           token: params.credentials.token,
           sessionId: transport.sessionId,
           method: `${transport.sessionId}:session.user_action.answer`,
+          timeoutMs: null,
           ...(externalRequest && context && params.externalActionMachineRequestPrivateKey
             && params.externalActionMachineInstallationId ? { externalAction: {
               context, effectActionId: 'session.user_action.answer',
@@ -8924,7 +8930,8 @@ export function createCliActionDeps(params: Readonly<{
       } catch (error) {
         return {
           ok: false,
-          errorCode: readRpcErrorCode(error) ?? 'permission_update_failed',
+          errorCode: readRpcErrorCode(error) ?? (readRpcRequestDisposition(error) === 'outcomeUnknown'
+            ? RPC_ERROR_CODES.OUTCOME_UNKNOWN : 'permission_update_failed'),
           errorMessage: error instanceof Error ? error.message : 'permission_update_failed',
           sessionId: transport.sessionId,
         };
