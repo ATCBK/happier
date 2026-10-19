@@ -18,7 +18,8 @@ export async function runRemoteStackOperation({ rootDir, stackName, placed, oper
       sshArgs,
     }) });
   if (result.code !== 0) throw new Error(result.err || `[stack] remote ${operation} failed (code=${result.code})`);
-  if (operation === 'daemon' && passthrough.includes('restart') && runtimeMode === 'source-snapshot') {
+  if (operation === 'daemon' && (passthrough.includes('start') || passthrough.includes('restart'))
+    && runtimeMode === 'source-snapshot') {
     const observation = await runDevTargetControlProcess({ command: 'ssh', env,
       args: [...sshArgs, '-o', 'BatchMode=yes', target.ssh,
         buildRemoteRuntimeSnapshotProbeCommand(target, { stackName, runtimeMode, services: { daemon: true } })] });
@@ -29,8 +30,12 @@ export async function runRemoteStackOperation({ rootDir, stackName, placed, oper
       throw new Error('[stack] restarted source daemon identity is not loaded');
     }
     await recordStackRuntimeUpdate(env.HAPPIER_STACK_RUNTIME_STATE_PATH, {
+      placement: { daemon: target.name },
       sourceRuntimeIdentities,
-      remoteTargets: { [target.name]: { sourceRuntimeIdentities } },
+      // The next server-only start consumes observed daemon custody, not just
+      // its configured target or a source identity without a recorded role.
+      remoteTargets: { [target.name]: { runtimeMode, services: { daemon: true },
+        serviceStatus: { daemon: 'running' }, sourceRuntimeIdentities } },
     });
   }
   process.stdout.write(result.out || '');

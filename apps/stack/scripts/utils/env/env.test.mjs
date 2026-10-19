@@ -138,6 +138,7 @@ test('env loader detaches an unreadable inherited stack env when an explicit rep
           'process.stdout.write(JSON.stringify({',
           '  envFile: process.env.HAPPIER_STACK_ENV_FILE ?? null,',
           '  stackName: process.env.HAPPIER_STACK_STACK ?? null,',
+          '  preparedSourceReload: process.env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD ?? null,',
           '  repoDir: process.env.HAPPIER_STACK_REPO_DIR ?? null,',
           '  cliHomeDir: process.env.HAPPIER_STACK_CLI_HOME_DIR ?? null,',
           '  homeDir: process.env.HAPPIER_HOME_DIR ?? null,',
@@ -156,6 +157,7 @@ test('env loader detaches an unreadable inherited stack env when an explicit rep
           HAPPIER_STACK_CLI_ROOT_DISABLE: '1',
           HAPPIER_STACK_ENV_FILE: unreadableEnvPath,
           HAPPIER_STACK_STACK: 'stale-stack',
+          HAPPIER_STACK_PREPARED_SOURCE_RELOAD: '1',
           HAPPIER_STACK_REPO_DIR: freshRepoDir,
           HAPPIER_STACK_CLI_HOME_DIR: join(staleStackDir, 'cli'),
           HAPPIER_HOME_DIR: '/stale/home',
@@ -168,6 +170,7 @@ test('env loader detaches an unreadable inherited stack env when an explicit rep
     const payload = JSON.parse(res.stdout);
     assert.equal(payload.envFile, null);
     assert.equal(payload.stackName, null);
+    assert.equal(payload.preparedSourceReload, null);
     assert.equal(payload.repoDir, freshRepoDir);
     assert.equal(payload.cliHomeDir, null);
     assert.equal(payload.homeDir, null);

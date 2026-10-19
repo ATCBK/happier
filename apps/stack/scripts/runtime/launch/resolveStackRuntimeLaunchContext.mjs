@@ -1,7 +1,7 @@
 import { getRepoDir, getRootDir, getStackName, resolveStackBaseDir } from '../../utils/paths/paths.mjs';
 import { join } from 'node:path';
 import { pathExists } from '../../utils/fs/fs.mjs';
-import { readStackRuntimeStateFile, recordStackRuntimeUpdate } from '../../utils/stack/runtime_state.mjs';
+import { readActiveStackRuntimeStateFile, readStackRuntimeStateFile, recordStackRuntimeUpdate } from '../../utils/stack/runtime_state.mjs';
 import { resolveCliRuntimeLaunchSpec } from './resolveCliRuntimeLaunchSpec.mjs';
 import { resolveStackRuntimeMode } from '../shared/runtime_mode.mjs';
 import { resolveActiveRuntimeSnapshot } from './resolveActiveRuntimeSnapshot.mjs';
@@ -103,10 +103,14 @@ export async function resolveNativeDaemonRuntimeSnapshot({ stackName, env = proc
   throw new Error(inspection.errors[0] ?? `[runtime] producer ${authority.producerStackName} has no native daemon runtime snapshot for ${target.platform}/${target.arch}. Build it through the repository producer with --daemon.`);
 }
 
-export async function resolveStackRuntimeLaunchContext({ argv = [], env = process.env, activeRuntimeState = null, target,
+export async function resolveStackRuntimeLaunchContext({ argv = [], env = process.env, activeRuntimeState, target,
   requiredComponents, purpose = 'cli', placement, hostTarget = { platform: process.platform, arch: process.arch } } = {}) {
   const stackName = (env.HAPPIER_STACK_STACK ?? '').toString().trim() || getStackName(env);
   const { baseDir: stackBaseDir } = resolveStackBaseDir(stackName, env);
+  if (activeRuntimeState === undefined) {
+    activeRuntimeState = purpose === 'cli'
+      ? await readActiveStackRuntimeStateFile(join(stackBaseDir, 'stack.runtime.json'), { stackName }) : null;
+  }
   const runtimeMode = resolveStackRuntimeMode({ argv, env, activeRuntimeState });
   if (runtimeMode.mode === 'source-snapshot') {
     if (purpose === 'deployment') return { stackName, stackBaseDir, runtimeMode, snapshot: null };
@@ -114,6 +118,12 @@ export async function resolveStackRuntimeLaunchContext({ argv = [], env = proces
     const recorded = activeRuntimeState ?? await readStackRuntimeStateFile(statePath);
     let sourceRuntimeLaunch = recorded?.sourceRuntimeLaunch;
     if (!sourceRuntimeLaunch?.entrypoint || !await pathExists(sourceRuntimeLaunch.entrypoint)) {
+      // A remote daemon's loaded graph belongs to its target. Controller CLI
+      // commands acquire credentials locally; the supervisor seeds that target.
+      const remoteDaemon = recorded?.remoteTargets?.[recorded?.placement?.daemon]?.services?.daemon === true;
+      if (activeRuntimeState?.sourceRuntimeIdentities?.daemon?.loaded && !remoteDaemon) {
+        throw new Error('[happier] loaded source CLI is unavailable; restore the recorded source runtime before using this stack.');
+      }
       const { buildSourceRuntimeBundle } = await import('../../build/build_source_runtime.mjs');
       const built = await buildSourceRuntimeBundle({ repoDir: getRepoDir(getRootDir(import.meta.url), env),
         stackBaseDir, component: 'daemon', env, reuseSelected: 'if-available' });

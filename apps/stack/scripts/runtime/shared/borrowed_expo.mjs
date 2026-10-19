@@ -10,6 +10,7 @@ import { resolveRuntimeRemoteServiceObservation } from '../../utils/tui/runtime_
 import { resolveProcessTeeLogPath } from '../../utils/proc/proc.mjs';
 import { assertCanonicalManagedStackName } from '../../utils/stack/names.mjs';
 import { normalizeStackRuntimeOwnerStartedAt } from '../../utils/stack/runtime_owner_incarnation.mjs';
+import { preferStackLocalhostUrl } from '../../utils/paths/localhost_host.mjs';
 
 function toPort(value) {
   const port = Number(value);
@@ -135,4 +136,30 @@ export async function resolveBorrowedExpoRuntime(
     localEndpoint,
     remoteEndpointRunning,
   });
+}
+
+export async function projectBorrowedExpoWebappEnv({
+  rootDir,
+  consumerStackName,
+  producerStackName,
+  env = process.env,
+}, boundary = {}) {
+  if (String(env.HAPPIER_WEBAPP_URL ?? '').trim()) return env;
+  if (!isBorrowedExpoConsumer({ consumerStackName, producerStackName })) return env;
+
+  const borrowedExpo = await resolveBorrowedExpoRuntime({
+    rootDir,
+    producerStackName,
+    env,
+  }, boundary);
+  // The producer's recorded port is the selected runtime fact. Endpoint
+  // liveness remains diagnostic and recoverable; one busy Metro probe must not
+  // erase the consumer origin for the lifetime of this Stack controller.
+  if (!toPort(borrowedExpo?.port)) return env;
+
+  const webappUrl = await preferStackLocalhostUrl(`http://localhost:${borrowedExpo.port}`, {
+    stackName: consumerStackName,
+    env,
+  });
+  return { ...env, HAPPIER_WEBAPP_URL: new URL(webappUrl).origin };
 }

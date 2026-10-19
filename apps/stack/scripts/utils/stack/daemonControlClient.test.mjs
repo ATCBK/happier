@@ -4,6 +4,9 @@ import http from 'node:http';
 import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { once } from 'node:events';
+import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { spawnTestProcess } from '../../testkit/core/spawn_test_process.mjs';
 
 import {
   daemonControlPost,
@@ -30,6 +33,61 @@ async function writeDaemonState({ cliHomeDir, serverUrl, env, state }) {
   const { statePath } = resolvePreferredStackDaemonStatePaths({ cliHomeDir, serverUrl, env });
   await mkdir(dirname(statePath), { recursive: true });
   await writeFile(statePath, JSON.stringify(state), 'utf8');
+}
+
+for (const outcome of ['ready', 'exited', 'wrong-fingerprint']) {
+  test(`restart confirmation follows a live successor lock past its checkpoint until ${outcome}`, { timeout: 10_000 }, async (t) => {
+    const { root: cliHomeDir } = await createTempFixture(t, { prefix: 'hstack-restart-checkpoint-' });
+    const successor = spawnTestProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+    t.after(async () => {
+      if (successor.exitCode !== null || successor.signalCode !== null) return;
+      const exited = once(successor, 'exit');
+      successor.kill();
+      await exited;
+    });
+    const serverUrl = 'http://127.0.0.1:3009';
+    const { lockPath } = resolvePreferredStackDaemonStatePaths({ cliHomeDir, serverUrl });
+    let elapsed = 0;
+    await withServer(async (req, res) => {
+      if (req.headers['x-happier-daemon-token'] !== 'state-token') {
+        res.writeHead(401).end();
+        return;
+      }
+      if (req.url === '/restart') {
+        await writeFile(lockPath, String(successor.pid));
+        res.writeHead(202, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'restarting' }));
+      } else if (req.url === '/ping') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+          status: 'ok', distClosureFingerprint: outcome === 'wrong-fingerprint' ? '0000000000000000' : 'abcdef1234567890',
+        }));
+      } else res.writeHead(404).end();
+    }, async ({ port }) => {
+      const publish = (pid) => writeDaemonState({ cliHomeDir, serverUrl,
+        state: { pid, httpPort: port, controlToken: 'state-token' } });
+      await publish(process.pid);
+      const result = restartDaemonViaControlServer({
+        cliHomeDir, serverUrl, timeoutMs: 100, pollMs: 50,
+        successorDistClosureFingerprint: 'abcdef1234567890',
+        nowImpl: () => elapsed,
+        delayImpl: async () => {
+          elapsed += 50;
+          if (elapsed === 150 && outcome === 'exited') {
+            const exited = once(successor, 'exit');
+            successor.kill();
+            await exited;
+          }
+          if (elapsed === 200 && outcome !== 'exited') await publish(successor.pid);
+        },
+      });
+      if (outcome === 'ready') {
+        assert.equal((await result).pid, successor.pid);
+        assert.equal(elapsed, 200);
+      } else {
+        await assert.rejects(result, /replacement was not confirmed/);
+        assert.equal(elapsed, 200);
+      }
+    });
+  });
 }
 
 test('session cleanup can await the daemon lifecycle without a shorter HTTP cutoff', async () => {
@@ -421,6 +479,50 @@ test('restartDaemonViaControlServer posts the normalized successor dist fingerpr
   });
 
   assert.deepEqual(observedBodies, [{ successorDistClosureFingerprint: 'abc123def4567890' }]);
+});
+
+test('restartDaemonViaControlServer posts only the explicit successor server URL binding', async () => {
+  const observedBodies = [];
+  let readCount = 0;
+
+  await restartDaemonViaControlServer({
+    cliHomeDir: '/tmp/hstack-home',
+    internalServerUrl: 'http://127.0.0.1:3009',
+    successorServerUrls: {
+      serverUrl: 'http://127.0.0.1:4301',
+      webappUrl: 'http://qa-stack.localhost:4301',
+    },
+    timeoutMs: 100,
+    pollMs: 1,
+    delayImpl: async () => {},
+    readDaemonControlStateImpl: async () => {
+      readCount += 1;
+      const pid = readCount < 3 ? 111 : 222;
+      return {
+        ok: true,
+        statePath: '/tmp/daemon.state.json',
+        state: { pid, httpPort: 5000 + readCount, controlToken: 'state-token' },
+        pid,
+        httpPort: 5000 + readCount,
+        controlToken: 'state-token',
+      };
+    },
+    daemonControlPostImpl: async ({ path, body }) => {
+      if (path === '/restart') {
+        observedBodies.push(body);
+        return { status: 'restarting' };
+      }
+      if (path === '/ping') return { status: 'ok' };
+      throw new Error(`unexpected path ${path}`);
+    },
+  });
+
+  assert.deepEqual(observedBodies, [{
+    successorServerUrls: {
+      serverUrl: 'http://127.0.0.1:4301',
+      webappUrl: 'http://qa-stack.localhost:4301',
+    },
+  }]);
 });
 
 test('restartDaemonViaControlServer rejects malformed successor fingerprints before control mutation', async () => {

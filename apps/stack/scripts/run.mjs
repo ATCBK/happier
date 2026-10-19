@@ -81,11 +81,11 @@ import { spawnStackOwnerDeathWatchdog } from './utils/stack/owner_death_watchdog
 import { completeInterruptedStackStopBeforeStart } from './utils/stack/stop.mjs';
 import { decideDevStartupTopology, observeDevServerStartupTopology, reclaimDevServerStartupOrphan } from './utils/dev/devStartupTopology.mjs';
 import { resolveDevServerConnection } from './utils/dev/resolveDevServerConnection.mjs';
-import { isBorrowedExpoConsumer, resolveSourceQaUiMode } from './runtime/shared/borrowed_expo.mjs';
+import { isBorrowedExpoConsumer, projectBorrowedExpoWebappEnv, resolveSourceQaUiMode } from './runtime/shared/borrowed_expo.mjs';
 import { resolveServerMigrationsEnabled } from '@happier-dev/cli-common/firstPartyRuntime/selfHostServerEnv';
 import { persistControlledServerPlacement, resolveControlledRuntimePlacement } from './utils/dev_targets/service_placement.mjs';
 import { resolveStackRuntimeMode } from './runtime/shared/runtime_mode.mjs';
-import { beginPendingSourceStart, emitSourcePreparationPhase } from './runtime/shared/pending_source_start.mjs';
+import { beginPendingSourceStart, emitSourcePreparationPhase, emitSourceStartSuperseded } from './runtime/shared/pending_source_start.mjs';
 import { readJsonIfExists } from './utils/fs/json.mjs';
 import { resolvePreservedDaemonTargetPlans, startStackDevTargets } from './utils/dev_targets/supervisor.mjs';
 import { resolveRemoteServerRuntimeConfig } from './utils/dev_targets/remote_commands.mjs';
@@ -103,6 +103,19 @@ import { recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
 async function main() {
   const argv = process.argv.slice(2);
   const { flags, kv } = parseArgs(argv);
+  const preparedBorrowedWebappOrigin = String(kv.get('--prepared-borrowed-webapp-origin') ?? '').trim();
+  if (preparedBorrowedWebappOrigin) {
+    // The wrapper projects the borrowed origin for cold starts as well as reloads.
+    if (resolveStackRuntimeMode({ argv, env: process.env }).mode !== 'source-snapshot') {
+      throw new Error('[reload] borrowed webapp origin handoff is restricted to source snapshot starts');
+    }
+    const parsedBorrowedWebappOrigin = new URL(preparedBorrowedWebappOrigin);
+    if (!['http:', 'https:'].includes(parsedBorrowedWebappOrigin.protocol)
+        || parsedBorrowedWebappOrigin.origin !== preparedBorrowedWebappOrigin) {
+      throw new Error('[reload] borrowed webapp origin handoff must be an HTTP(S) origin');
+    }
+    process.env.HAPPIER_WEBAPP_URL = preparedBorrowedWebappOrigin;
+  }
   const json = wantsJson(argv, { flags });
   if (wantsHelp(argv, { flags })) {
     printResult({
@@ -217,7 +230,7 @@ async function main() {
   const reuseSourceRuntime = flags.has('--reuse-source-runtime') || preparedSourceReload;
   if (flags.has('--reuse-source-runtime') && (!sourceSnapshot || !flags.has('--no-dev-targets')
       || (process.env.HAPPIER_DEV_TARGET_EXECUTION !== '1' && !preparedSourceReload))) {
-    throw new Error('[source-bundle] runtime reuse is restricted to remote source recovery');
+    throw new Error('[source-bundle] runtime reuse is restricted to prepared source reloads or remote source recovery');
   }
   const sourceUi = sourceSnapshot ? resolveSourceQaUiMode({ uiMode: kv.get('--ui') ?? (flags.has('--ui') ? '' : undefined),
     noUi: flags.has('--no-ui'), consumerStackName: autostart.stackName,
@@ -459,10 +472,19 @@ async function main() {
 	  let daemonAutostarter = null;
 	  let daemonLifecycleReconciler = null;
   let sourceRemoteController;
+  let ownerDeathWatchdog;
 	  installExitCleanup({ label: 'local', children });
-	  const baseEnv = { ...process.env };
+	  let baseEnv = { ...process.env };
 	  const stackCtx = resolveStackContext({ env: baseEnv, autostart });
 	  const { stackMode, runtimeStatePath, stackName, envPath, ephemeral } = stackCtx;
+	  if (borrowedExpo && !sourceSnapshot) {
+	    baseEnv = await projectBorrowedExpoWebappEnv({
+	      rootDir,
+	      consumerStackName: stackName,
+	      producerStackName: borrowedExpoProducerStackName,
+	      env: baseEnv,
+	    });
+	  }
 	  const daemonScopeEnv = applyStackActiveServerScopeEnv({ env: { ...baseEnv, ...sourceRuntimeEnv }, stackName, cliIdentity: 'default' });
 	  const serviceMode = (daemonScopeEnv.HAPPIER_STACK_SERVICE_MODE ?? '').toString().trim() === '1';
   const terminalIsInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
@@ -646,7 +668,7 @@ async function main() {
     });
     const startedRuntime = pendingSourceStart
       ? await pendingSourceStart.publish(publishRuntimeStart) : await publishRuntimeStart();
-    spawnStackOwnerDeathWatchdog({
+    ownerDeathWatchdog = spawnStackOwnerDeathWatchdog({
       rootDir,
       stackName,
       baseDir: autostart.baseDir,
@@ -1075,6 +1097,7 @@ async function main() {
         });
       }, env: { ...daemonScopeEnv, HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH: '1' },
     });
+    void sourceRemoteController.superseded.then(() => dispatchShutdown('source-start-superseded'));
   }
   if (startupDecision.startExpo) {
     const expoRes = await ensureDevExpoServer({
@@ -1102,10 +1125,13 @@ async function main() {
       return;
     }
     shuttingDown = true;
+    if (sourceRemoteController?.isSuperseded && ownerDeathWatchdog) {
+      await killProcessTree(ownerDeathWatchdog, 'SIGTERM');
+    }
     await pendingSourceStart?.dispose();
     let shutdownRequest = null;
     let expectedStopState = null;
-    if (runtimeStatePath) {
+    if (runtimeStatePath && !sourceRemoteController?.isSuperseded) {
       shutdownRequest = (await readStackRuntimeStateFile(runtimeStatePath).catch(() => null))?.stopRequest ?? null;
       expectedStopState = await captureStackRuntimeStopSnapshot(runtimeStatePath).catch(() => null);
     }
@@ -1139,7 +1165,7 @@ async function main() {
       // ignore
     }
 
-    const preserveDaemonOnShutdown = shutdownRequest?.preserveDaemon === true;
+    const preserveDaemonOnShutdown = sourceRemoteController?.isSuperseded || shutdownRequest?.preserveDaemon === true;
     await sourceRemoteController?.close({ preserveDaemon: preserveDaemonOnShutdown });
 
 	    if (startDaemon && !preserveDaemonOnShutdown) {
@@ -1189,7 +1215,7 @@ async function main() {
       }
     }
 
-    await maybeResetTailscaleServe();
+    if (!sourceRemoteController?.isSuperseded) await maybeResetTailscaleServe();
     if (runtimeStatePath && expectedStopState) {
       await finalizeStackRuntimeStop(runtimeStatePath, {
         expected: expectedStopState,
@@ -1219,6 +1245,19 @@ async function main() {
 async function runControlledRemoteStack({ rootDir, flags, json, autostart, runtimeSnapshot, runtimeLaunchContext, placement, serverComponentName, sourceSnapshot = false, sourceUi = null, pendingSourceStart = null }) {
   let env = { ...process.env, HAPPIER_STACK_DAEMON_WAIT_FOR_AUTH: '1' };
   const context = resolveStackContext({ env, autostart });
+  const borrowedExpoProducerStackName = !sourceSnapshot || sourceUi === 'borrowed'
+    ? String(env.HAPPIER_STACK_EXPO_SOURCE_STACK ?? '').trim() : '';
+  if (!sourceSnapshot && isBorrowedExpoConsumer({
+    consumerStackName: context.stackName,
+    producerStackName: borrowedExpoProducerStackName,
+  })) {
+    env = await projectBorrowedExpoWebappEnv({
+      rootDir,
+      consumerStackName: context.stackName,
+      producerStackName: borrowedExpoProducerStackName,
+      env,
+    });
+  }
   const serverPort = await selectLocalServerPortCandidateForStack({ env, stackMode: true,
     stackName: context.stackName, runtimeStatePath: context.runtimeStatePath, defaultPort: 3005 });
   const urls = await resolveServerUrls({ env, serverPort, allowEnable: false });
@@ -1278,7 +1317,7 @@ async function runControlledRemoteStack({ rootDir, flags, json, autostart, runti
       expo: (!sourceSnapshot || sourceUi === 'borrowed') && env.HAPPIER_STACK_EXPO_SOURCE_STACK ? 'borrowed' : 'disabled' } });
   const started = pendingSourceStart
     ? await pendingSourceStart.publish(publishRuntimeStart) : await publishRuntimeStart();
-  spawnStackOwnerDeathWatchdog({ rootDir, stackName: context.stackName, baseDir: autostart.baseDir,
+  const ownerDeathWatchdog = spawnStackOwnerDeathWatchdog({ rootDir, stackName: context.stackName, baseDir: autostart.baseDir,
     envPath: context.envPath, runtimeStatePath: context.runtimeStatePath, ownerPid: process.pid, ownerStartedAt: started.startedAt, env });
   let controller;
   let daemonAutostarter;
@@ -1299,8 +1338,7 @@ async function runControlledRemoteStack({ rootDir, flags, json, autostart, runti
       sourceSnapshot,
       sourceStartRequestId: pendingSourceStart?.requestId,
       ...(sourceSnapshot ? { sourceUi } : {}),
-      borrowedExpoProducerStackName: !sourceSnapshot || sourceUi === 'borrowed'
-        ? String(env.HAPPIER_STACK_EXPO_SOURCE_STACK ?? '').trim() : '',
+      borrowedExpoProducerStackName,
       activeServerId: resolveStackActiveServerId({ env, stackName: context.stackName }), credentialPath, cliHomeDir,
       remoteServerRuntimeConfig: resolveRemoteServerRuntimeConfig({ serverComponentName, env }),
       targetPlans, syncTargets: placement.config.targets,
@@ -1316,7 +1354,7 @@ async function runControlledRemoteStack({ rootDir, flags, json, autostart, runti
         });
       }, env,
     });
-    if (localCli) {
+    if (localCli && !controller.isSuperseded) {
       const daemonOptions = { cliBin: join(localCli.cliDir, 'bin/happier.mjs'), cliEntrypoint: localCli.entrypoint,
         cliNodeEntrypoint: localCli.nodeEntrypoint, cliCommand: localCli.command, cliCommandArgs: localCli.args,
         cliHomeDir, internalServerUrl, publicServerUrl: urls.publicServerUrl, runtimeStatePath: context.runtimeStatePath,
@@ -1345,22 +1383,25 @@ async function runControlledRemoteStack({ rootDir, flags, json, autostart, runti
       });
     }
     console.log(`[runtime] ${context.stackName}: ${sourceSnapshot ? 'source snapshot' : runtimeSnapshot.snapshotId} on ${placement.target.name}; server ${urls.publicServerUrl}`);
-    await stopRequested;
+    await Promise.race([stopRequested, controller.superseded]);
   } finally {
     shuttingDown = true;
+    // This watchdog belongs to this controller. Its owner-death sweep must not
+    // retire a native runtime that explicitly superseded our source request.
+    if (controller?.isSuperseded && ownerDeathWatchdog) await killProcessTree(ownerDeathWatchdog, 'SIGTERM');
     daemonAutostarter?.stop();
     daemonReconciler?.close();
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
-    const shutdownRequest = (await readStackRuntimeStateFile(context.runtimeStatePath))?.stopRequest;
-    const preserveDaemonOnShutdown = shutdownRequest?.preserveDaemon === true;
+    const shutdownRequest = controller?.isSuperseded ? null : (await readStackRuntimeStateFile(context.runtimeStatePath))?.stopRequest;
+    const preserveDaemonOnShutdown = controller?.isSuperseded || shutdownRequest?.preserveDaemon === true;
     try {
       if (localCli && !preserveDaemonOnShutdown) await stopLocalDaemon({ cliBin: join(localCli.cliDir, 'bin/happier.mjs'),
         cliNodeEntrypoint: localCli.nodeEntrypoint, cliCommand: localCli.command, cliCommandArgs: localCli.args,
         cliHomeDir, internalServerUrl, runtimeStatePath: context.runtimeStatePath, env,
         stackName: context.stackName, cliIdentity: 'default' });
     } finally { await controller?.close({ preserveDaemon: preserveDaemonOnShutdown }); }
-    const expected = await captureStackRuntimeStopSnapshot(context.runtimeStatePath);
+    const expected = controller?.isSuperseded ? null : await captureStackRuntimeStopSnapshot(context.runtimeStatePath);
     if (expected) await finalizeStackRuntimeStop(context.runtimeStatePath, { expected, preserveDaemon: preserveDaemonOnShutdown, cleanupResults: [] });
   }
 }
@@ -1375,7 +1416,7 @@ function resolveStackCredentialFingerprint({ cliHomeDir, serverUrl, env }) {
 }
 
 main().catch((err) => {
-  if (err?.code === 'ESOURCESTARTSUPERSEDED' || err?.cause?.code === 'ESOURCESTARTSUPERSEDED') {
+  if (emitSourceStartSuperseded(err)) {
     console.log('[local] pending source start superseded by a newer start for this stack');
     process.exit(0);
   }

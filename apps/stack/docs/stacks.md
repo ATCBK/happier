@@ -119,6 +119,10 @@ against scratch SQLite or PGlite data on an available loopback port, and loads
 the export in an isolated browser. Preparation runs on each actual service
 host, under the existing resource admission policy. Compiler services are
 released before browser smoke; the live Stack database is never used by smoke.
+For a light server backed by PostgreSQL, smoke loads the real server entry and
+its startup imports in an isolated process with database credentials removed,
+then returns before database initialization. A module-load failure refuses the
+replacement. This verifies imports, not PostgreSQL migrations or connectivity.
 
 Only successful checks permit selection and the existing restart owner's
 cutover. Startup then reuses the checked bundles and export. Failed or cancelled
@@ -126,6 +130,26 @@ preparation preserves the loaded runtime; build/smoke failures preserve its
 selection too. `stack info` reports `runtime.sourceReload`, including the failure
 and its `run.reload.*.log` path. Selection and loaded process identity remain
 separate facts.
+
+A remote source worker failure retries through this preparation path against
+the synchronized current source. Readiness must come from the successor runtime
+owner, even when it uses the same bundle. Transport-only SSH or tunnel loss
+retains the existing loaded source selection for recovery.
+
+A source start superseded by a newer start is terminal for the older controller.
+It closes its own SSH workers, forwards and owner-death watchdog without retiring
+the replacement runtime or publishing another retry.
+
+Source-based remote control helpers use the command executor's mirror admission
+and freshness barrier. A missing or unhealthy mirror leaves browser retirement
+unconfirmed with a target-specific warning; cleanup does not execute stale helper
+code from that mirror. A reachable helper failure still prevents stop finalization,
+and both JSON and console output retain its sanitized cause.
+
+Use `local` placement for services on the controller. A separate mirror on the
+same host must remain outside the authoritative checkout: the synchronization
+producer rejects equal, nested or enclosing destinations before creating a mirror,
+including symlink aliases. Identical paths on different hosts remain valid.
 
 During preparation, source-stack health reports `runtime_preparing`; after
 selection it reports `runtime_identity_pending` until the replacement identity
@@ -139,8 +163,9 @@ daemon lock and registers no second Machine. It detects broken imports and
 command loading, but cannot prove authenticated Machine registration or code
 executed only after daemon startup. The browser check covers initial rendering,
 script delivery and boot exceptions, not later authenticated routes or tooltip
-interactions. Full-server infrastructure and external Postgres/MySQL smoke
-databases are not provisioned by this path; such reloads fail before retirement.
+interactions. Full-server infrastructure and external PostgreSQL/MySQL smoke
+databases are not provisioned by this path. Full-server and MySQL reloads fail
+before retirement; light PostgreSQL reloads use the database-free import check.
 The complete named-Stack cutover remains a manual validation step for the
 operator applying these development tooling changes.
 

@@ -29,6 +29,7 @@ import {
 import { buildStubHappierServerSetSource } from './testkit/core/stub_happier_cli_server_set.mjs';
 import { resolveStackCredentialPaths } from './utils/auth/credentials_paths.mjs';
 import { inspectDependencyRefresh } from './utils/proc/dependency_refresh.mjs';
+import { DaemonControlPostError } from './utils/stack/daemonControlClient.mjs';
 import { readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -36,7 +37,7 @@ const rootDir = dirname(scriptsDir);
 const DAEMON_TEST_PROCESS_HELPER_PATH = join(rootDir, 'scripts', 'testkit', 'core', 'spawn_daemon_like_process.mjs');
 const PROCESS_BACKED_DAEMON_FIXTURE_TIMEOUT_MS = '15000';
 
-test('source restart uses empty authenticated control restart and attests the actual selected entrypoint', async (t) => {
+test('source restart gives the successor the stack-owned server URLs before create-path attestation', async (t) => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-source-reload-control-', registerCleanup: false });
   const cliHomeDir = fixture.path('cli');
   await mkdir(cliHomeDir, { recursive: true });
@@ -62,9 +63,12 @@ test('source restart uses empty authenticated control restart and attests the ac
     await fixture.cleanup();
   });
   const serverUrl = 'http://127.0.0.1:4301';
+  const publicServerUrl = 'http://source-control-reload.localhost:4301';
+  const staleServerUrl = 'http://127.0.0.1:59671';
   const env = { ...process.env, HAPPIER_STACK_STACK: stackName,
     HAPPIER_STACK_ENV_FILE: fixture.path('env'), HAPPIER_HOME_DIR: cliHomeDir,
-    HAPPIER_STACK_PROCESS_KIND: 'daemon', HAPPIER_SERVER_URL: serverUrl,
+    HAPPIER_STACK_PROCESS_KIND: 'daemon', HAPPIER_SERVER_URL: staleServerUrl,
+    HAPPIER_WEBAPP_URL: 'http://stale.localhost:59671',
     HAPPIER_STACK_AUTO_AUTH_SEED: '0', HAPPIER_STACK_MIGRATE_CREDENTIALS: '0',
     HAPPIER_STACK_RUNTIME_STATE_PATH: runtimeStatePath,
     HAPPIER_STACK_DAEMON_START_VERIFY_TIMEOUT_MS: PROCESS_BACKED_DAEMON_FIXTURE_TIMEOUT_MS };
@@ -90,12 +94,21 @@ const server = createServer((req, res) => {
   req.on('end', () => {
     res.setHeader('content-type', 'application/json');
     if (req.url === '/ping') { res.end('{"ok":true}'); return; }
-    writeFileSync(${JSON.stringify(requestPath)}, JSON.stringify({ path: req.url, body: JSON.parse(raw) }));
+    const body = JSON.parse(raw);
+    writeFileSync(${JSON.stringify(requestPath)}, JSON.stringify({ path: req.url, body }));
     if (req.url !== '/restart') { res.writeHead(409); res.end('{}'); return; }
     const state = JSON.parse(readFileSync(${JSON.stringify(runtimeStatePath)}, 'utf8'));
     const entrypoint = state.sourceRuntimeIdentities.daemon.selected === 'unloaded' ? ${JSON.stringify(selected)} : state.sourceRuntimeLaunch.entrypoint;
     const staleDataArgs = state.sourceRuntimeIdentities.daemon.selected === 'unloaded' ? [state.sourceRuntimeLaunch.entrypoint] : [];
-    const child = spawn(process.execPath, [entrypoint, 'daemon', 'start-sync', ...staleDataArgs], { env: process.env, detached: true, stdio: 'ignore' });
+    const child = spawn(process.execPath, [entrypoint, 'daemon', 'start-sync', ...staleDataArgs], {
+      env: {
+        ...process.env,
+        HAPPIER_SERVER_URL: body.successorServerUrls?.serverUrl ?? process.env.HAPPIER_SERVER_URL,
+        HAPPIER_WEBAPP_URL: body.successorServerUrls?.webappUrl ?? process.env.HAPPIER_WEBAPP_URL,
+      },
+      detached: true,
+      stdio: 'ignore',
+    });
     child.unref();
     res.end('{"status":"restarting"}');
     res.once('finish', () => server.close());
@@ -120,11 +133,14 @@ server.listen(0, '127.0.0.1', () => {
   children.push(initial);
   await once(initial, 'message');
   const options = { cliBin: incumbent, cliEntrypoint: selected, cliHomeDir,
-    internalServerUrl: serverUrl, publicServerUrl: serverUrl, stackName, runtimeStatePath, env,
+    internalServerUrl: serverUrl, publicServerUrl, stackName, runtimeStatePath, env,
     forceRestart: true, preserveSessionsOnRestart: true,
     sourceRuntimeLaunchUpdate: { launch: { entrypoint: selected, cliDir: fixture.root }, identity: 'next' } };
   const result = await startLocalDaemonWithAuth(options).catch(error => ({ error }));
-  assert.deepEqual(JSON.parse(await readFile(requestPath, 'utf8')), { path: '/restart', body: {} });
+  assert.deepEqual(JSON.parse(await readFile(requestPath, 'utf8')), {
+    path: '/restart',
+    body: { successorServerUrls: { serverUrl, webappUrl: publicServerUrl } },
+  });
   assert.equal(result.ok, true, result.error?.message);
   assert.doesNotThrow(() => process.kill(runner.pid, 0));
   let state = await readStackRuntimeStateFile(runtimeStatePath);
@@ -135,6 +151,96 @@ server.listen(0, '127.0.0.1', () => {
   }), /selected source daemon.*not loaded/);
   state = await readStackRuntimeStateFile(runtimeStatePath);
   assert.equal(state.sourceRuntimeIdentities.daemon.loaded, null);
+});
+
+test('source restart exposes an HTTP 400 as a typed control failure without replacing the daemon', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-reload-control-failure-', registerCleanup: false });
+  const cliHomeDir = fixture.path('cli');
+  await mkdir(cliHomeDir, { recursive: true });
+  await writeFile(join(cliHomeDir, 'access.key'), 'fixture-credential\n');
+  const stackName = 'source-control-failure-reload';
+  const statePath = join(cliHomeDir, 'servers', `stack_${stackName}__id_default`, 'daemon.state.json');
+  const runtimeStatePath = fixture.path('stack.runtime.json');
+  const requestsPath = fixture.path('requests.jsonl');
+  const incumbent = fixture.path('incumbent.mjs');
+  const selected = fixture.path('selected.mjs');
+  const children = [];
+  t.after(async () => {
+    if (existsSync(statePath)) {
+      const { pid } = JSON.parse(await readFile(statePath, 'utf8'));
+      try { process.kill(pid, 'SIGTERM'); } catch {}
+    }
+    for (const child of children) {
+      if (child.exitCode !== null || child.signalCode !== null) continue;
+      const exited = once(child, 'exit');
+      child.kill('SIGTERM');
+      await exited;
+    }
+    await fixture.cleanup();
+  });
+  const serverUrl = 'http://127.0.0.1:4301';
+  const publicServerUrl = 'http://source-control-failure-reload.localhost:4301';
+  const staleServerUrl = 'http://127.0.0.1:59671';
+  const env = { ...process.env, HAPPIER_STACK_STACK: stackName,
+    HAPPIER_STACK_ENV_FILE: fixture.path('env'), HAPPIER_HOME_DIR: cliHomeDir,
+    HAPPIER_STACK_PROCESS_KIND: 'daemon', HAPPIER_SERVER_URL: staleServerUrl,
+    HAPPIER_WEBAPP_URL: 'http://stale.localhost:59671',
+    HAPPIER_STACK_AUTO_AUTH_SEED: '0', HAPPIER_STACK_MIGRATE_CREDENTIALS: '0',
+    HAPPIER_STACK_RUNTIME_STATE_PATH: runtimeStatePath,
+    HAPPIER_STACK_DAEMON_START_VERIFY_TIMEOUT_MS: PROCESS_BACKED_DAEMON_FIXTURE_TIMEOUT_MS,
+    HAPPIER_STACK_DAEMON_START_VERIFY_STABLE_MS: '0' };
+  const script = `
+import { createServer } from 'node:http';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+const statePath = ${JSON.stringify(statePath)};
+if (process.argv[2] !== 'daemon' || process.argv[3] !== 'start-sync') process.exit(1);
+const server = createServer((req, res) => {
+  if (req.headers['x-happier-daemon-token'] !== 'fixture-token') { res.writeHead(401); res.end(); return; }
+  let raw = '';
+  req.on('data', chunk => raw += chunk);
+  req.on('end', () => {
+    appendFileSync(${JSON.stringify(requestsPath)}, JSON.stringify({ path: req.url, body: JSON.parse(raw) }) + '\\n');
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/ping') { res.end('{"ok":true}'); return; }
+    if (req.url === '/restart') { res.writeHead(400); res.end('{"error":"unknown field successorServerUrls"}'); return; }
+    res.writeHead(404); res.end('{}');
+  });
+});
+server.listen(0, '127.0.0.1', () => {
+  mkdirSync(dirname(statePath), { recursive: true });
+  writeFileSync(statePath, JSON.stringify({ pid: process.pid, httpPort: server.address().port, controlToken: 'fixture-token' }));
+  process.send?.('ready'); process.disconnect?.();
+});
+`;
+  await writeFile(incumbent, script);
+  await writeFile(selected, script);
+  await recordStackRuntimeUpdate(runtimeStatePath, { stackName, processes: {},
+    sourceRuntimeLaunch: { entrypoint: incumbent, cliDir: fixture.root },
+    sourceRuntimeIdentities: { server: { selected: 'server', loaded: 'server' }, daemon: { selected: 'old', loaded: 'old' } } });
+  const runner = spawnTestProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+  children.push(runner);
+  const initial = spawnTestProcess(process.execPath, [incumbent, 'daemon', 'start-sync'], {
+    env, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
+  children.push(initial);
+  await once(initial, 'message');
+
+  await assert.rejects(
+    startLocalDaemonWithAuth({ cliBin: incumbent, cliEntrypoint: selected, cliHomeDir,
+      internalServerUrl: serverUrl, publicServerUrl, stackName, runtimeStatePath, env,
+      forceRestart: true, preserveSessionsOnRestart: true,
+      sourceRuntimeLaunchUpdate: { launch: { entrypoint: selected, cliDir: fixture.root }, identity: 'next' } }),
+    (error) => error instanceof DaemonControlPostError && error.status === 400,
+  );
+  assert.doesNotThrow(() => process.kill(runner.pid, 0));
+  assert.deepEqual((await readStackRuntimeStateFile(runtimeStatePath)).sourceRuntimeIdentities.daemon,
+    { selected: 'next', loaded: null });
+  const requests = (await readFile(requestsPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(requests, [{
+    path: '/restart',
+    body: { successorServerUrls: { serverUrl, webappUrl: publicServerUrl } },
+  }]);
 });
 
 test('source launch retires unpublished daemon generations before starting and replacing its successor', async (t) => {
@@ -349,7 +455,7 @@ test('matchDaemonEnvLine identifies which daemon env binding differs', () => {
     'node',
     'HAPPIER_HOME_DIR=/tmp/happier-stack/cli',
     'HAPPIER_SERVER_URL=http://127.0.0.1:52753',
-    'HAPPIER_WEBAPP_URL=http://stale.localhost:52753',
+    'HAPPIER_WEBAPP_URL=http://stale.example.com:52753',
   ].join(' ');
 
   assert.deepEqual(matchDaemonEnvLine({
@@ -363,6 +469,22 @@ test('matchDaemonEnvLine identifies which daemon env binding differs', () => {
     key: 'HAPPIER_WEBAPP_URL',
     expected: 'http://happier-stack.localhost:52753',
   });
+});
+
+test('matchDaemonEnvLine treats canonical loopback server URL spellings as the same identity', () => {
+  const line = [
+    'node',
+    'HAPPIER_HOME_DIR=/tmp/happier-stack/cli',
+    'HAPPIER_SERVER_URL=http://qa-stack.localhost:52753/path?ignored=true',
+    'HAPPIER_WEBAPP_URL=http://127.0.0.1:52753/',
+  ].join(' ');
+
+  assert.deepEqual(matchDaemonEnvLine({
+    line,
+    cliHomeDir: '/tmp/happier-stack/cli',
+    internalServerUrl: 'http://127.0.0.1:52753',
+    publicServerUrl: 'http://localhost:52753',
+  }), { matches: true });
 });
 
 function runNode(args, { cwd, env }) {
@@ -2509,7 +2631,7 @@ try {
   }
 });
 
-test('startLocalDaemonWithAuth accepts a repaired background-service-owned daemon when stack home matches even without explicit server env vars', async () => {
+test('startLocalDaemonWithAuth keeps a background-service-owned daemon when the selected webapp origin differs from the API origin', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const rootDir = dirname(scriptsDir);
 
@@ -2547,11 +2669,14 @@ import { spawnDaemonLikeProcess } from ${JSON.stringify(DAEMON_TEST_PROCESS_HELP
 const cliHomeDir = ${JSON.stringify(cliHomeDir)};
 const internalServerUrl = 'http://127.0.0.1:4301';
 const publicServerUrl = 'http://localhost:4301';
+const selectedWebappOrigin = 'http://happier-dev.localhost:19364';
 
 const statePath = join(cliHomeDir, 'servers', 'stack_dev__id_default', 'daemon.state.json');
 const dummy = spawnDaemonLikeProcess({
   cliHomeDir,
   statePaths: [statePath],
+  internalServerUrl: 'http://qa-stack.localhost:4301/path?ignored=true',
+  publicServerUrl: selectedWebappOrigin,
   env: {
     HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
     HAPPIER_DAEMON_SERVICE_LABEL: 'com.happier.cli.daemon.default',
@@ -2561,6 +2686,8 @@ const dummy = spawnDaemonLikeProcess({
 try {
   await startLocalDaemonWithAuth({
     cliBin: ${JSON.stringify(cliBin)},
+    cliCommand: process.execPath,
+    cliCommandArgs: [${JSON.stringify(join(cliDir, 'dist', 'index.mjs'))}],
     cliHomeDir,
     internalServerUrl,
     publicServerUrl,
@@ -2572,6 +2699,7 @@ try {
       HAPPIER_STACK_AUTO_AUTH_SEED: '0',
       HAPPIER_STACK_MIGRATE_CREDENTIALS: '0',
       HAPPIER_STACK_CLI_BUILD: '1',
+      HAPPIER_WEBAPP_URL: selectedWebappOrigin,
     },
     stackName: 'dev',
     cliIdentity: 'default',
@@ -2595,14 +2723,17 @@ try {
     });
 
     assert.equal(result.code, 0, `expected exit 0, got ${result.code}\nstderr:\n${result.stderr}\nstdout:\n${result.stdout}`);
-    assert.equal(existsSync(cliCommandLogPath), false, 'expected no daemon stop/start command when the service-owned daemon already matches the stack home');
+    const serviceCommands = existsSync(cliCommandLogPath)
+      ? await readFile(cliCommandLogPath, 'utf-8')
+      : '';
+    assert.doesNotMatch(serviceCommands, /^daemon (?:stop|start)$/m);
     assert.match(result.stdout, /daemon already running for stack home/);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
 });
 
-test('startLocalDaemonWithAuth still restarts a background-service-owned daemon when ps exposes a different server URL', async () => {
+test('startLocalDaemonWithAuth refuses to replace a background-service-owned daemon for a genuinely different server URL', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const rootDir = dirname(scriptsDir);
 
@@ -2678,26 +2809,33 @@ const existing = spawnDaemonLikeProcess({
 });
 
 try {
-  await startLocalDaemonWithAuth({
-    cliBin: ${JSON.stringify(cliBin)},
-    cliHomeDir,
-    internalServerUrl,
-    publicServerUrl,
-    isShuttingDown: () => false,
-    forceRestart: false,
-    env: {
-      ...process.env,
-      HAPPIER_STACK_STACK: 'dev',
-      HAPPIER_STACK_AUTO_AUTH_SEED: '0',
-      HAPPIER_STACK_MIGRATE_CREDENTIALS: '0',
-      HAPPIER_STACK_CLI_BUILD: '1',
-    },
-    stackName: 'dev',
-    cliIdentity: 'default',
-  });
+  await assert.rejects(
+    startLocalDaemonWithAuth({
+      cliBin: ${JSON.stringify(cliBin)},
+      cliCommand: process.execPath,
+      cliCommandArgs: [${JSON.stringify(join(cliDir, 'dist', 'index.mjs'))}],
+      cliHomeDir,
+      internalServerUrl,
+      publicServerUrl,
+      isShuttingDown: () => false,
+      forceRestart: false,
+      env: {
+        ...process.env,
+        HAPPIER_STACK_STACK: 'dev',
+        HAPPIER_STACK_AUTO_AUTH_SEED: '0',
+        HAPPIER_STACK_MIGRATE_CREDENTIALS: '0',
+        HAPPIER_STACK_CLI_BUILD: '0',
+      },
+      stackName: 'dev',
+      cliIdentity: 'default',
+    }),
+    (error) => error?.code === 'ESTACKDAEMONENVIRONMENTMISMATCH'
+      && /hstack stack daemon dev restart/.test(error.message),
+  );
 
   const currentState = JSON.parse(readFileSync(statePath, 'utf-8'));
-  assert.notEqual(currentState.pid, existing.pid);
+  assert.equal(currentState.pid, existing.pid);
+  process.kill(existing.pid, 0);
 } finally {
   try {
     process.kill(-existing.pid, 'SIGKILL');
@@ -2726,11 +2864,7 @@ try {
     });
 
     assert.equal(result.code, 0, `expected exit 0, got ${result.code}\nstderr:\n${result.stderr}\nstdout:\n${result.stdout}`);
-    const serviceCommands = await readFile(cliCommandLogPath, 'utf-8');
-    assert.match(serviceCommands, /^daemon stop$/m);
-    assert.match(serviceCommands, /^daemon start$/m);
-    assert.match(result.stderr, /daemon is running with a different stack HAPPIER_SERVER_URL mismatch; restarting/);
-    assert.doesNotMatch(result.stderr, /ownership could not be proven/);
+    assert.equal(existsSync(cliCommandLogPath), false, 'expected no daemon stop/start command for an ordinary invocation mismatch');
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

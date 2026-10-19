@@ -53,7 +53,9 @@ import {
 } from './utils/stack/runtime_state.mjs';
 import { applyCliRuntimeLaunchProvenanceEnv, resolveCliRuntimeLaunchSpec } from './runtime/launch/resolveCliRuntimeLaunchSpec.mjs';
 import { killPidOwnedByStack, listPidsWithEnvNeedles } from './utils/proc/ownership.mjs';
+import { isPidAlive } from './utils/proc/pids.mjs';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
+import { createServerUrlComparableKey } from '@happier-dev/protocol/server/urls/serverUrlComparableKey';
 import {
   pingDaemon,
   restartDaemonViaControlServer,
@@ -504,15 +506,6 @@ function resolveFallbackRunningDaemon(cliHomeDir, allowAnyRunningFallback, alive
   return findRunningDaemonStateInHome(cliHomeDir, alive);
 }
 
-function isPidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function readDaemonStateStartedAtMs({ cliHomeDir, serverUrl = '', env = process.env }) {
   const { statePath } = resolvePreferredStackDaemonStatePaths({ cliHomeDir, serverUrl, env });
   try {
@@ -671,8 +664,20 @@ export function matchDaemonEnvLine({ line, cliHomeDir, internalServerUrl, public
   const server = String(internalServerUrl ?? '').trim();
   const web = String(publicServerUrl ?? '').trim();
   const backgroundServiceOwned = raw.includes('HAPPIER_DAEMON_STARTUP_SOURCE=background-service');
-  const daemonServerUrlPresent = raw.includes('HAPPIER_SERVER_URL=');
-  const daemonWebappUrlPresent = raw.includes('HAPPIER_WEBAPP_URL=');
+  const readEnvValue = (key) => {
+    const prefix = `${key}=`;
+    const token = raw.split(/\s+/u).find((part) => part.startsWith(prefix));
+    return token ? token.slice(prefix.length) : null;
+  };
+  const daemonServerUrl = readEnvValue('HAPPIER_SERVER_URL');
+  const daemonWebappUrl = readEnvValue('HAPPIER_WEBAPP_URL');
+  const urlsHaveSameIdentity = (actual, expected) => {
+    try {
+      return createServerUrlComparableKey(actual) === createServerUrlComparableKey(expected);
+    } catch {
+      return false;
+    }
+  };
 
   // Must be for the same stack home dir.
   if (home && !raw.includes(`HAPPIER_HOME_DIR=${home}`)) {
@@ -681,16 +686,16 @@ export function matchDaemonEnvLine({ line, cliHomeDir, internalServerUrl, public
   // If we have a desired server URL, require it (prevents ephemeral port mismatches).
   if (
     server
-    && !raw.includes(`HAPPIER_SERVER_URL=${server}`)
-    && (!backgroundServiceOwned || daemonServerUrlPresent)
+    && (!backgroundServiceOwned || daemonServerUrl !== null)
+    && (daemonServerUrl === null || !urlsHaveSameIdentity(daemonServerUrl, server))
   ) {
     return { matches: false, reason: 'server', key: 'HAPPIER_SERVER_URL', expected: server };
   }
   // Public URL mismatch is less fatal, but prefer it stable too when provided.
   if (
     web
-    && !raw.includes(`HAPPIER_WEBAPP_URL=${web}`)
-    && (!backgroundServiceOwned || daemonWebappUrlPresent)
+    && (!backgroundServiceOwned || daemonWebappUrl !== null)
+    && (daemonWebappUrl === null || !urlsHaveSameIdentity(daemonWebappUrl, web))
   ) {
     return { matches: false, reason: 'webapp', key: 'HAPPIER_WEBAPP_URL', expected: web };
   }
@@ -1854,7 +1859,7 @@ export function getDaemonEnv({
   return {
     ...scopedEnv,
     HAPPIER_SERVER_URL: internalServerUrl,
-    HAPPIER_WEBAPP_URL: publicServerUrl,
+    HAPPIER_WEBAPP_URL: String(scopedEnv.HAPPIER_WEBAPP_URL ?? '').trim() || publicServerUrl,
     HAPPIER_HOME_DIR: cliHomeDir,
     HAPPIER_DAEMON_STARTUP_SOURCE: startupSource,
     HAPPIER_DAEMON_SERVICE_LABEL: explicitServiceLabel,
@@ -2256,37 +2261,43 @@ export async function startLocalDaemonWithAuth({
     const replacement = await restartDaemonViaControlServer({
       cliHomeDir, internalServerUrl, serverUrl: internalServerUrl,
       stackName: resolvedStackName, env: daemonEnv,
+      successorServerUrls: {
+        serverUrl: daemonEnv.HAPPIER_SERVER_URL,
+        webappUrl: daemonEnv.HAPPIER_WEBAPP_URL,
+      },
     });
-    const fingerprint = readProcessInstanceFingerprintSync(replacement.pid);
-    let selectedEntrypointLoaded = false;
-    if (process.platform === 'linux') {
-      const argv = readFileSync(`/proc/${replacement.pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
-      const scriptIndex = argv.findIndex((arg, index) => index > 0 && !arg.startsWith('-'));
-      selectedEntrypointLoaded = argv[scriptIndex] === launch.entrypoint
-        && argv[scriptIndex + 1] === 'daemon' && argv[scriptIndex + 2] === 'start-sync'
-        && argv.length === scriptIndex + 3;
-    } else {
-      const command = process.platform === 'win32'
-        ? await runCapture('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-          `(Get-CimInstance Win32_Process -Filter "ProcessId = ${replacement.pid}").CommandLine`])
-        : await runCapture('ps', ['-p', String(replacement.pid), '-o', 'command=']);
-      selectedEntrypointLoaded = [launch.entrypoint, `"${launch.entrypoint}"`, `'${launch.entrypoint}'`]
-        .some(entrypoint => command.trim().endsWith(`${entrypoint} daemon start-sync`));
+    if (replacement) {
+      const fingerprint = readProcessInstanceFingerprintSync(replacement.pid);
+      let selectedEntrypointLoaded = false;
+      if (process.platform === 'linux') {
+        const argv = readFileSync(`/proc/${replacement.pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+        const scriptIndex = argv.findIndex((arg, index) => index > 0 && !arg.startsWith('-'));
+        selectedEntrypointLoaded = argv[scriptIndex] === launch.entrypoint
+          && argv[scriptIndex + 1] === 'daemon' && argv[scriptIndex + 2] === 'start-sync'
+          && argv.length === scriptIndex + 3;
+      } else {
+        const command = process.platform === 'win32'
+          ? await runCapture('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+            `(Get-CimInstance Win32_Process -Filter "ProcessId = ${replacement.pid}").CommandLine`])
+          : await runCapture('ps', ['-p', String(replacement.pid), '-o', 'command=']);
+        selectedEntrypointLoaded = [launch.entrypoint, `"${launch.entrypoint}"`, `'${launch.entrypoint}'`]
+          .some(entrypoint => command.trim().endsWith(`${entrypoint} daemon start-sync`));
+      }
+      if (!fingerprint || !selectedEntrypointLoaded
+        || readProcessInstanceFingerprintSync(replacement.pid, { expectedFingerprint: fingerprint }) !== fingerprint) {
+        throw new Error('[stack] selected source daemon is not loaded after /restart; the incumbent may need one initial load of the source-selection launch owner. Sessions were not stopped.');
+      }
+      const attestation = await mutateStackRuntimeDaemonMembership(runtimeStatePath, current => {
+        if (current.sourceRuntimeLaunch?.entrypoint !== launch.entrypoint
+          || current.sourceRuntimeIdentities?.daemon?.selected !== identity) return null;
+        return { patch: { sourceRuntimeIdentities: { daemon: { loaded: identity } } }, result: { loaded: true } };
+      });
+      if (!attestation.loaded) throw new Error('[stack] selected source daemon changed before its loaded identity could be confirmed.');
+      await recordStackRuntimeDaemonPid(runtimeStatePath, replacement.pid, {
+        daemonDistFingerprint: null, daemonProcessInstanceFingerprint: fingerprint,
+      });
+      return { ok: true, started: true, ...replacement };
     }
-    if (!fingerprint || !selectedEntrypointLoaded
-      || readProcessInstanceFingerprintSync(replacement.pid, { expectedFingerprint: fingerprint }) !== fingerprint) {
-      throw new Error('[stack] selected source daemon is not loaded after /restart; the incumbent may need one initial load of the source-selection launch owner. Sessions were not stopped.');
-    }
-    const attestation = await mutateStackRuntimeDaemonMembership(runtimeStatePath, current => {
-      if (current.sourceRuntimeLaunch?.entrypoint !== launch.entrypoint
-        || current.sourceRuntimeIdentities?.daemon?.selected !== identity) return null;
-      return { patch: { sourceRuntimeIdentities: { daemon: { loaded: identity } } }, result: { loaded: true } };
-    });
-    if (!attestation.loaded) throw new Error('[stack] selected source daemon changed before its loaded identity could be confirmed.');
-    await recordStackRuntimeDaemonPid(runtimeStatePath, replacement.pid, {
-      daemonDistFingerprint: null, daemonProcessInstanceFingerprint: fingerprint,
-    });
-    return { ok: true, started: true, ...replacement };
   }
   const reconcileServerProfile = async () => {
     if (existsSync(join(cliHomeDir, 'settings.json'))) {
@@ -2610,7 +2621,14 @@ export async function startLocalDaemonWithAuth({
 
   if (!forceRestart && existing.status === 'running') {
     const pid = existing.pid;
-    const envMatch = await readDaemonEnvMatch({ pid, cliHomeDir, internalServerUrl, publicServerUrl });
+    // getDaemonEnv owns the effective web-app origin. It may preserve an
+    // explicitly selected borrowed UI instead of the server's API origin.
+    const envMatch = await readDaemonEnvMatch({
+      pid,
+      cliHomeDir,
+      internalServerUrl,
+      publicServerUrl: daemonEnv.HAPPIER_WEBAPP_URL,
+    });
     const matches = envMatch ? envMatch.matches === true : null;
     const distRestartReason = resolveDaemonDistRestartReason({
       distEntrypoint: runnerDistEntrypoint,
@@ -2644,11 +2662,15 @@ export async function startLocalDaemonWithAuth({
       const expectedLine = envMatch?.expected
         ? `[local] expected ${envMatch.key}: ${envMatch.expected}\n`
         : `[local] expected server URL: ${internalServerUrl}\n`;
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[local] daemon is running with a different stack ${mismatchLabel}; restarting (pid=${pid}).\n` +
-          expectedLine
+      const error = new Error(
+        `[local] daemon is running with a different stack ${mismatchLabel} (pid=${pid}).\n` +
+          expectedLine +
+          `[local] Refusing to replace a live daemon from this command. ` +
+          `Run "hstack stack daemon ${resolvedStackName} restart" to restart it explicitly.`
       );
+      error.name = 'StackDaemonEnvironmentMismatchError';
+      error.code = 'ESTACKDAEMONENVIRONMENTMISMATCH';
+      throw error;
     } else {
       // unknown: best-effort keep running to avoid killing an unrelated process
       // eslint-disable-next-line no-console

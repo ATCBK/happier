@@ -110,7 +110,7 @@ import {
   resolveMobileReachableServerUrl,
 } from './utils/server/mobile_api_url.mjs';
 import { hasExplicitStackRuntimeModeArg, resolveStackRuntimeMode } from './runtime/shared/runtime_mode.mjs';
-import { isBorrowedExpoConsumer } from './runtime/shared/borrowed_expo.mjs';
+import { isBorrowedExpoConsumer, projectBorrowedExpoWebappEnv } from './runtime/shared/borrowed_expo.mjs';
 
  /**
   * Dev mode stack:
@@ -244,7 +244,7 @@ async function main() {
 
 	  const cliBin = join(cliDir, 'bin', 'happier.mjs');
   const autostart = getDefaultAutostartPaths();
-  const baseEnv = { ...process.env };
+  let baseEnv = { ...process.env };
   baseEnv.HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS = '1';
   const repoDir = getRepoDir(rootDir, baseEnv);
   const parentServerRestartPreflightAlreadyDone = String(
@@ -258,6 +258,14 @@ async function main() {
     consumerStackName: stackName,
     producerStackName: borrowedExpoProducerStackName,
   });
+  if (borrowedExpo) {
+    baseEnv = await projectBorrowedExpoWebappEnv({
+      rootDir,
+      consumerStackName: stackName,
+      producerStackName: borrowedExpoProducerStackName,
+      env: baseEnv,
+    });
+  }
   const startOwnedExpo = Boolean((startUi || startMobile) && !borrowedExpo);
   const devTargetsEnabled = !flags.has('--no-dev-targets');
   const loadedDevTargets = await loadDevTargetsConfig({ stackName, env: baseEnv, allowMissing: true });

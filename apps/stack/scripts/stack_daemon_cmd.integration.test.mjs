@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -20,7 +21,7 @@ import { sanitizeStackTestRunnerEnv } from './utils/test/test_env.mjs';
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = dirname(scriptsDir);
 
-for (const action of ['status', 'restart']) {
+for (const action of ['status', 'start', 'restart']) {
 test(`stack daemon ${action} reaches the observed remote daemon without local launch`, { skip: process.platform === 'win32' }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-daemon-placement-' });
   const stackName = 'remote-daemon';
@@ -42,7 +43,7 @@ test(`stack daemon ${action} reaches the observed remote daemon without local la
     placement: { daemon: target.name, server: 'local' }, runtimeMode: 'source-snapshot',
     sourceRuntimeLaunch: { entrypoint: incumbent, cliDir: fixture.path('cli') },
     sourceRuntimeIdentities: { server: { selected: 'server', loaded: 'server' }, daemon: { selected: 'incumbent', loaded: 'incumbent' } },
-    remoteTargets: { [target.name]: { runtimeMode: 'source-snapshot', services: { daemon: true }, status: 'running' } } });
+    remoteTargets: { [target.name]: { runtimeMode: 'source-snapshot', services: { server: true, daemon: true }, status: 'running' } } });
   const runtime = resolveDevTargetMutagenRuntime({ stackBaseDir: baseDir, sourceDir: repoDir, env });
   await mkdir(dirname(runtime.projectFile), { recursive: true });
   await writeFile(runtime.projectFile, '# fixture producer\n');
@@ -65,8 +66,12 @@ test(`stack daemon ${action} reaches the observed remote daemon without local la
   const state = JSON.parse(await readFile(join(baseDir, 'stack.runtime.json'), 'utf8'));
   assert.deepEqual(state.sourceRuntimeIdentities.server, { selected: 'server', loaded: 'server' });
   assert.deepEqual(state.sourceRuntimeIdentities.daemon,
-    action === 'restart' ? { selected: 'current', loaded: 'current' } : { selected: 'incumbent', loaded: 'incumbent' });
-  if (action === 'restart') {
+    action !== 'status' ? { selected: 'current', loaded: 'current' } : { selected: 'incumbent', loaded: 'incumbent' });
+  if (action !== 'status') {
+    assert.equal(state.placement.daemon, target.name);
+    assert.equal(state.remoteTargets[target.name].services.server, true);
+    assert.equal(state.remoteTargets[target.name].services.daemon, true);
+    assert.equal(state.remoteTargets[target.name].serviceStatus?.daemon, 'running');
     assert.deepEqual(state.remoteTargets[target.name].sourceRuntimeIdentities.daemon, { selected: 'current', loaded: 'current' });
   }
 });
@@ -660,8 +665,13 @@ test('hstack stack daemon <name> start uses runtime server port when env port is
   await fixture.writeStackEnv({ port: '' });
 
   // Create a runtime state file that indicates the stack server is running on fixture.serverPort.
-  const serverStub = spawnTestProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-    stdio: 'ignore',
+  const serverStub = spawnTestProcess(process.execPath, ['-e', `
+    require('node:http').createServer((_request, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.end('{"status":"ok"}');
+    }).listen(${fixture.serverPort}, '127.0.0.1', () => process.send({ ready: true }));
+  `], {
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     env: {
       ...fixture.baseEnv,
       HAPPIER_STACK_STACK: fixture.stackName,
@@ -676,23 +686,17 @@ test('hstack stack daemon <name> start uses runtime server port when env port is
       // ignore
     }
   });
+  await Promise.race([
+    once(serverStub, 'message'),
+    once(serverStub, 'exit').then(() => { throw new Error('Owned server fixture exited before listening'); }),
+  ]);
 
   const runtimePath = join(fixture.storageDir, fixture.stackName, 'stack.runtime.json');
-  await writeFile(
-    runtimePath,
-    JSON.stringify(
-      {
-        version: 1,
-        stackName: fixture.stackName,
-        ephemeral: true,
-        ports: { server: fixture.serverPort },
-        processes: { serverPid: serverStub.pid },
-      },
-      null,
-      2
-    ) + '\n',
-    'utf-8'
-  );
+  await recordStackRuntimeStart(runtimePath, {
+    stackName: fixture.stackName,
+    ports: { server: fixture.serverPort },
+    processes: { serverPid: serverStub.pid },
+  });
 
   registerDaemonCleanup(t, { env: fixture.baseEnv, stackName: fixture.stackName });
 

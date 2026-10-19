@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -191,38 +190,25 @@ test('source snapshot auth recovery preserves source start even for Expo login',
 });
 
 test('guided stack auth login rejects generic runtime-backed HTML without the Happier readiness marker', async (t) => {
-  const server = createServer((_, res) => {
-    res.statusCode = 200;
-    res.setHeader('content-type', 'text/html');
-    res.end('<!doctype html><html><body>wrong origin</body></html>');
+  const timeoutMs = 20;
+  let clock = Date.now();
+  t.mock.method(Date, 'now', () => clock);
+  // Exercise the real readiness classifier without making its deadline depend on
+  // localhost connection scheduling; transport and time are system boundaries.
+  t.mock.method(globalThis, 'fetch', async () => {
+    clock += timeoutMs;
+    return new Response('<!doctype html><html><body>wrong origin</body></html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    });
   });
 
-  try {
-    await new Promise((resolvePromise, rejectPromise) => {
-      server.once('error', rejectPromise);
-      server.listen(0, '127.0.0.1', resolvePromise);
-    });
-  } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'EPERM') {
-      t.skip('sandbox disallows binding localhost test server (EPERM)');
-      return;
-    }
-    throw error;
-  }
-
-  const port = server.address()?.port;
-  assert.ok(Number.isFinite(port) && port > 0, `expected listening port, got ${String(port)}`);
-
-  try {
-    await assert.rejects(
-      () => assertGuidedAuthWebappReadyOrThrow({
-        kind: 'server',
-        webappUrl: `http://127.0.0.1:${port}`,
-        timeoutMs: 20,
-      }),
-      /missing Happier UI readiness marker/i
-    );
-  } finally {
-    await new Promise((resolvePromise) => server.close(resolvePromise));
-  }
+  await assert.rejects(
+    () => assertGuidedAuthWebappReadyOrThrow({
+      kind: 'server',
+      webappUrl: 'http://guided-login.test',
+      timeoutMs,
+    }),
+    /missing Happier UI readiness marker/i
+  );
 });

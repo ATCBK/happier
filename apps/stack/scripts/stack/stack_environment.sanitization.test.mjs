@@ -577,19 +577,21 @@ test('withStackEnv replaces a foreign daemon lifecycle scope with the selected s
   });
 });
 
-test('withStackEnv preserves runtime mode when the caller already targets the selected stack', async () => {
+test('withStackEnv preserves runtime mode and source admission for the selected stack', async () => {
   await withTempStackEnvFixture(async ({ stackName }) => {
-    const keys = ['HAPPIER_STACK_STACK', 'HAPPIER_STACK_RUNTIME_MODE'];
+    const keys = ['HAPPIER_STACK_STACK', 'HAPPIER_STACK_RUNTIME_MODE', 'HAPPIER_STACK_PREPARED_SOURCE_RELOAD'];
     const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
 
     process.env.HAPPIER_STACK_STACK = stackName;
     process.env.HAPPIER_STACK_RUNTIME_MODE = 'require';
+    process.env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD = '1';
 
     try {
       await withStackEnv({
         stackName,
         fn: async ({ env }) => {
           assert.equal(env.HAPPIER_STACK_RUNTIME_MODE, 'require');
+          assert.equal(env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD, '1');
         },
       });
     } finally {
@@ -607,6 +609,7 @@ test('withStackEnv does not carry foreign stack runtime or Expo selections into 
       'HAPPIER_STACK_STACK',
       'HAPPIER_STACK_ENV_FILE',
       'HAPPIER_STACK_RUNTIME_MODE',
+      'HAPPIER_STACK_PREPARED_SOURCE_RELOAD',
       'HAPPIER_STACK_EXPO_SOURCE_STACK',
       'HAPPIER_STACK_EXPO_DEV_PORT',
       'HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY',
@@ -618,6 +621,7 @@ test('withStackEnv does not carry foreign stack runtime or Expo selections into 
     process.env.HAPPIER_STACK_STACK = 'source-stack';
     process.env.HAPPIER_STACK_ENV_FILE = join(storageDir, 'source-stack', 'env');
     process.env.HAPPIER_STACK_RUNTIME_MODE = 'require';
+    process.env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD = '1';
     process.env.HAPPIER_STACK_EXPO_SOURCE_STACK = 'source-expo-owner';
     process.env.HAPPIER_STACK_EXPO_DEV_PORT = '18829';
     process.env.HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY = 'stable';
@@ -630,6 +634,7 @@ test('withStackEnv does not carry foreign stack runtime or Expo selections into 
         fn: async ({ env }) => {
           assert.equal(env.HAPPIER_STACK_STACK, stackName);
           assert.equal(env.HAPPIER_STACK_RUNTIME_MODE, undefined);
+          assert.equal(env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD, undefined);
           assert.equal(env.HAPPIER_STACK_EXPO_SOURCE_STACK, undefined);
           assert.equal(env.HAPPIER_STACK_EXPO_DEV_PORT, undefined);
           assert.equal(env.HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY, undefined);

@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
@@ -1341,6 +1340,7 @@ test('local source restart attests an admitted replacement to the inner run owne
       writeFile(join(rootDir, 'apps', 'cli', 'package.json'), '{"name":"@happier-dev/cli","private":true}\n', 'utf8'),
       writeFile(join(rootDir, 'apps', 'ui', 'package.json'), '{"name":"@happier-dev/app","private":true}\n', 'utf8'),
       writeFile(join(rootDir, 'scripts', 'run.mjs'), `import {writeFile} from 'node:fs/promises';
+        await import(${JSON.stringify(new URL('./utils/env/env.mjs', import.meta.url).href)});
         await writeFile(${JSON.stringify(markerPath)}, JSON.stringify({args:process.argv.slice(2),prepared:process.env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD??null}));\n`, 'utf8'),
       writeFile(join(baseDir, 'env'), [
         `HAPPIER_STACK_REPO_DIR=${rootDir}`,

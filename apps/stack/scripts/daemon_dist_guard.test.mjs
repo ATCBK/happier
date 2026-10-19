@@ -6,11 +6,13 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 
 import {
   DEFAULT_STACK_DAEMON_START_VERIFY_TIMEOUT_MS,
   applyDaemonDistClosureRuntimeEnv,
   assertFinalSourceDaemonDistAdmission,
+  checkDaemonState,
   checkDaemonStatePingAware,
   ensureHappierCliDistExists,
   getDaemonEnv,
@@ -32,6 +34,8 @@ import { buildStubHappierServerSetSource } from './testkit/core/stub_happier_cli
 import { resolvePreferredStackDaemonStatePaths } from './utils/auth/credentials_paths.mjs';
 import { resolveCliDistBuildLockPath, withCliDistBuildLock } from './utils/proc/cliDistBuildLock.mjs';
 import { withPatchedProcessEnv } from './testkit/core/env_scope.mjs';
+import { installWorkspaceAdmissionProcessFixture } from './testkit/core/native_admission_fixture.mjs';
+import { spawnTestProcess } from './testkit/core/spawn_test_process.mjs';
 import {
   PINNED_RUNNER_MANAGED_PROVIDER_RUNTIME_RELATIVE_PATH,
   resolveNewestReadyPinnedRunnerSnapshot,
@@ -66,6 +70,49 @@ function buildDaemonDistGuardEnv(overrides = {}) {
     ...overrides,
   };
 }
+
+test('daemon state and retirement reject a real unreaped departed process', { skip: process.platform !== 'linux' }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'hstack-daemon-departed-owner-'));
+  const releasePath = join(root, 'release-parent');
+  const childScript = "process.stdin.once('data', () => process.exit(0)); process.stdout.write('ready');";
+  // Block this fixture parent's event loop, as in the JSON-lock owner test.
+  // Its real child exits while libuv cannot reap it, preserving kernel state Z.
+  const parentScript = `import {spawn} from 'node:child_process'; import {existsSync} from 'node:fs';
+    const child=spawn(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:['pipe','pipe','inherit']});
+    child.stdout.once('data',()=>{process.stdout.write(String(child.pid)+'\\n');child.stdin.end('exit');
+      const state=new Int32Array(new SharedArrayBuffer(4));
+      while(!existsSync(process.argv[1]))Atomics.wait(state,0,0,10);
+    });`;
+  const parent = spawnTestProcess(process.execPath, ['--input-type=module', '-e', parentScript, releasePath], {
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  const exited = new Promise(resolve => parent.once('close', resolve));
+  try {
+    const [chunk] = await once(parent.stdout, 'data', { signal: t.signal });
+    const pid = Number(String(chunk).trim());
+    assert.ok(pid > 1);
+    while (true) {
+      t.signal.throwIfAborted();
+      const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
+      if (stat.slice(stat.lastIndexOf(') ') + 2).startsWith('Z ')) break;
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.doesNotThrow(() => process.kill(pid, 0), 'the OS still exposes the departed process');
+    const env = buildDaemonDistGuardEnv({ HAPPIER_SERVER_URL: '', HAPPIER_WEBAPP_URL: '' });
+    const { statePath } = resolvePreferredStackDaemonStatePaths({ cliHomeDir: root, env });
+    await mkdir(dirname(statePath), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ pid: parent.pid }));
+    assert.deepEqual(checkDaemonState(root, { env }), { status: 'running', pid: parent.pid }, 'a live owner still remains running');
+    await writeFile(statePath, JSON.stringify({ pid }));
+    assert.deepEqual(checkDaemonState(root, { env }), { status: 'stale_state', pid });
+    await stopLocalDaemon({ cliBin: join(root, 'missing-cli'), cliHomeDir: root, internalServerUrl: '', env });
+    assert.equal(parent.exitCode, null, 'retirement must preserve the unrelated live fixture parent');
+  } finally {
+    await writeFile(releasePath, 'release');
+    assert.equal(await exited, 0, 'the fixture parent resumes and reaps its child');
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('missing local CLI dist recovery forwards the authoritative environment to the build owner', async (t) => {
   const repoDir = await mkdtemp(join(tmpdir(), 'hstack-cli-dist-recovery-env-'));
@@ -2277,17 +2324,18 @@ test('source daemon cold start uses an unchanged runnable prior dist when the cu
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
   await writeFile(
     join(cliDir, 'package.json'),
-    JSON.stringify({ name: 'fake-cli', private: true, scripts: { build: 'exit 47' } }) + '\n',
+    JSON.stringify({ name: 'fake-cli', private: true, scripts: { build: 'exit 47', 'build:prepared': 'exit 47' } }) + '\n',
     'utf-8',
   );
   const fakeBinDir = join(tmp, 'fake-bin');
   const yarnPath = join(fakeBinDir, 'yarn');
+  const buildFailurePath = join(tmp, 'build-failure-code');
   await mkdir(fakeBinDir, { recursive: true });
   await writeFile(
     yarnPath,
     `#!${process.execPath}\n` +
       `if (process.argv.includes('--version')) { console.log('1.22.22'); process.exit(0); }\n` +
-      `if (process.argv.includes('build')) process.exit(47);\n` +
+      `if (process.argv.includes('build:prepared')) { require('node:fs').writeFileSync(${JSON.stringify(buildFailurePath)}, '47\\n'); process.exit(47); }\n` +
       `process.exit(0);\n`,
     'utf-8',
   );
@@ -2299,17 +2347,21 @@ test('source daemon cold start uses an unchanged runnable prior dist when the cu
   await writeFile(join(cliHomeDir, 'settings.json'), JSON.stringify({ machineId: 'test-machine' }) + '\n', 'utf-8');
   const priorDistSource = await readFile(join(cliDir, 'dist', 'index.mjs'), 'utf-8');
   const priorDistManifest = await readFile(join(cliDir, 'dist', '.build-manifest.json'), 'utf-8');
-  const env = buildDaemonDistGuardEnv({
-    HAPPIER_STACK_REPO_DIR: tmp,
-    HAPPIER_HOME_DIR: cliHomeDir,
-    HAPPIER_STACK_HOME_DIR: join(tmp, 'hstack-home'),
-    HAPPIER_STACK_CLI_BUILD: '1',
-    HAPPIER_STACK_CLI_BUILD_MODE: 'always',
-    HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
-    HAPPIER_STACK_DAEMON_START_VERIFY_TIMEOUT_MS: '5000',
-    HAPPIER_STACK_DAEMON_START_VERIFY_POLL_MS: '25',
-    HAPPIER_STACK_DAEMON_START_VERIFY_STABLE_MS: '0',
-    PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+  const { env } = await installWorkspaceAdmissionProcessFixture(t, tmp, {
+    env: buildDaemonDistGuardEnv({
+      HAPPIER_STACK_REPO_DIR: tmp,
+      HAPPIER_HOME_DIR: cliHomeDir,
+      HAPPIER_STACK_HOME_DIR: join(tmp, 'hstack-home'),
+      HAPPIER_STACK_CLI_BUILD: '1',
+      HAPPIER_STACK_CLI_BUILD_MODE: 'always',
+      HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
+      HAPPIER_STACK_DAEMON_START_VERIFY_TIMEOUT_MS: '5000',
+      HAPPIER_STACK_DAEMON_START_VERIFY_POLL_MS: '25',
+      HAPPIER_STACK_DAEMON_START_VERIFY_STABLE_MS: '0',
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+      npm_execpath: '',
+      npm_node_execpath: '',
+    }),
   });
   const warnings = [];
   const originalWarn = console.warn;
@@ -2364,6 +2416,7 @@ test('source daemon cold start uses an unchanged runnable prior dist when the cu
   );
   assert.equal(await readFile(join(cliDir, 'dist', 'index.mjs'), 'utf-8'), priorDistSource);
   assert.equal(await readFile(join(cliDir, 'dist', '.build-manifest.json'), 'utf-8'), priorDistManifest);
+  assert.equal(await readFile(buildFailurePath, 'utf8'), '47\n', 'fallback must follow the intended package-manager failure');
 });
 
 test('CLI-root-only source dist admission consumes the current build result', async (t) => {
@@ -2405,11 +2458,11 @@ test('startLocalDaemonWithAuth requires daemon control ping before accepting run
   try {
     const { internalServerUrl, publicServerUrl } = await reserveLoopbackServerUrls();
     const cliDir = join(tmp, 'apps', 'cli');
-    // A live startup is allowed to continue past a readiness checkpoint. End the
-    // OS-process fixture without publishing a control ping so failure is terminal.
+    // Keep the real PID-only process pending until startup observes it and the
+    // caller cancels. Preparation uses the owner's ordinary deadline.
     const cliBin = await writePidOnlyFalseReadyStubHappyCli({
       cliDir,
-      daemonProcessSource: 'setTimeout(() => process.exit(0), 1000)',
+      daemonProcessSource: 'setInterval(() => {}, 1000)',
     });
     await writeFile(join(tmp, 'package.json'), '{}\n', 'utf-8');
     runGit(['init'], tmp);
@@ -2424,7 +2477,6 @@ test('startLocalDaemonWithAuth requires daemon control ping before accepting run
     await writeFile(join(cliHomeDir, 'settings.json'), JSON.stringify({ machineId: 'test-machine' }) + '\n', 'utf-8');
     const env = buildDaemonDistGuardEnv({
       HAPPIER_STACK_CLI_BUILD: '1',
-      HAPPIER_STACK_DAEMON_START_VERIFY_TIMEOUT_MS: '250',
       HAPPIER_STACK_DAEMON_START_VERIFY_POLL_MS: '25',
       HAPPIER_STACK_DAEMON_START_VERIFY_STABLE_MS: '0',
     });
@@ -2476,7 +2528,7 @@ test('startLocalDaemonWithAuth requires daemon control ping before accepting run
         (error) => ({ status: 'failed', error }),
       ),
     ]);
-    assert.equal(observation.status, 'unready', 'PID-only daemon must remain unready until control ping succeeds');
+    assert.equal(observation.status, 'unready', observation.error?.stack ?? 'PID-only daemon must remain unready until control ping succeeds');
     assert.equal(observation.state.reason, 'missing_http_port');
     shouldShutdown = true;
     await assert.rejects(startPromise, /startup was cancelled before readiness/i);
@@ -2844,7 +2896,7 @@ test('resolveGuardedLocalCliDistSelection canonicalizes stale symlinked dist to 
   }
 });
 
-test('startLocalDaemonWithAuth waits on the active checkout lock for stale symlinked dist', async () => {
+test('startLocalDaemonWithAuth waits on the active checkout lock for stale symlinked dist', async t => {
   const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-daemon-stale-symlink-lock-'));
   let lockHolder = null;
   let fixturePid = null;
@@ -2862,6 +2914,12 @@ test('startLocalDaemonWithAuth waits on the active checkout lock for stale symli
     await rm(join(staleCliDir, 'dist'), { recursive: true, force: true });
     await symlink(join(activeCliDir, 'dist'), join(staleCliDir, 'dist'), 'dir');
     await prepareCurrentSourceCliFixture(activeRoot, activeCliDir);
+    const { env } = await installWorkspaceAdmissionProcessFixture(t, tmp, {
+      env: buildDaemonDistGuardEnv({
+        HAPPIER_STACK_REPO_DIR: activeRoot,
+        HAPPIER_STACK_CLI_BUILD: '1',
+      }),
+    });
 
     await writeFile(join(activeCliDir, 'dist', 'index.mjs'), "import './missing-active-build-chunk.mjs';\n", 'utf-8');
 
@@ -2892,11 +2950,6 @@ test('startLocalDaemonWithAuth waits on the active checkout lock for stale symli
     await mkdir(cliHomeDir, { recursive: true });
     await writeFile(join(cliHomeDir, 'access.key'), 'dummy\n', 'utf-8');
     await writeFile(join(cliHomeDir, 'settings.json'), JSON.stringify({ machineId: 'test-machine' }) + '\n', 'utf-8');
-
-    const env = buildDaemonDistGuardEnv({
-      HAPPIER_STACK_REPO_DIR: activeRoot,
-      HAPPIER_STACK_CLI_BUILD: '1',
-    });
 
     await Promise.race([
       startLocalDaemonWithAuth({
@@ -3295,7 +3348,7 @@ test('startLocalDaemonWithAuth prefers guarded source dist/index.mjs over packag
   }
 });
 
-test('startLocalDaemonWithAuth repoints stale fixture cliBin to the active checkout dist', async () => {
+test('startLocalDaemonWithAuth repoints stale fixture cliBin to the active checkout dist', async t => {
   const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-daemon-active-checkout-repoint-'));
   try {
     const { internalServerUrl, publicServerUrl } = await reserveLoopbackServerUrls();
@@ -3318,11 +3371,13 @@ test('startLocalDaemonWithAuth repoints stale fixture cliBin to the active check
     await writeFile(join(cliHomeDir, 'access.key'), 'dummy\n', 'utf-8');
     await writeFile(join(cliHomeDir, 'settings.json'), JSON.stringify({ machineId: 'test-machine' }) + '\n', 'utf-8');
 
-    const env = buildDaemonDistGuardEnv({
-      HAPPIER_STACK_REPO_DIR: activeRoot,
-      HAPPIER_STACK_CLI_BUILD: '1',
-      HAPPIER_TEST_DAEMON_SOURCE_MARKER: markerPath,
-      HAPPIER_TEST_DAEMON_LOCK_MARKER: lockMarkerPath,
+    const { env } = await installWorkspaceAdmissionProcessFixture(t, tmp, {
+      env: buildDaemonDistGuardEnv({
+        HAPPIER_STACK_REPO_DIR: activeRoot,
+        HAPPIER_STACK_CLI_BUILD: '1',
+        HAPPIER_TEST_DAEMON_SOURCE_MARKER: markerPath,
+        HAPPIER_TEST_DAEMON_LOCK_MARKER: lockMarkerPath,
+      }),
     });
 
     try {
@@ -3411,7 +3466,7 @@ test('startLocalDaemonWithAuth rejects symlinked active dist outside the active 
   }
 });
 
-test('stopLocalDaemon uses active checkout dist when stale cliBin dist is missing', async () => {
+test('stopLocalDaemon uses active checkout dist when stale cliBin dist is missing', async t => {
   const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-daemon-active-stop-repoint-'));
   let daemonPid = null;
   try {
@@ -3434,10 +3489,12 @@ test('stopLocalDaemon uses active checkout dist when stale cliBin dist is missin
     await writeFile(join(cliHomeDir, 'access.key'), 'dummy\n', 'utf-8');
     await writeFile(join(cliHomeDir, 'settings.json'), JSON.stringify({ machineId: 'test-machine' }) + '\n', 'utf-8');
 
-    const env = buildDaemonDistGuardEnv({
-      HAPPIER_STACK_REPO_DIR: activeRoot,
-      HAPPIER_STACK_CLI_BUILD: '1',
-      HAPPIER_TEST_DAEMON_EVENTS_PATH: eventsPath,
+    const { env } = await installWorkspaceAdmissionProcessFixture(t, tmp, {
+      env: buildDaemonDistGuardEnv({
+        HAPPIER_STACK_REPO_DIR: activeRoot,
+        HAPPIER_STACK_CLI_BUILD: '1',
+        HAPPIER_TEST_DAEMON_EVENTS_PATH: eventsPath,
+      }),
     });
 
     await startLocalDaemonWithAuth({

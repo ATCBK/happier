@@ -6,10 +6,21 @@ import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { spawnDetachedInlineNodeTestProcess } from '../../testkit/core/spawn_test_process.mjs';
-import { completeInterruptedStackStopBeforeStart, stopStackWithEnv as stopStackWithEnvOwner } from './stop.mjs';
+import { completeInterruptedStackStopBeforeStart, stopStackWithEnv as stopStackWithEnvImpl } from './stop.mjs';
+import { captureDevTargetSyncFixture } from '../../testkit/core/dev_target_sync.mjs';
+import { runCaptureResult } from '../proc/proc.mjs';
 import { readStackRuntimeStateFile, recordStackRuntimeStart, recordStackRuntimeUpdate } from './runtime_state.mjs';
 import { resolveMutagenSessionName } from '../dev_targets/mutagen_project.mjs';
 import { resolveRuntimeBuildAuthority } from '../../runtime/shared/runtime_build_authority.mjs';
+
+function stopStackWithEnvOwner(input, dependencies = {}) {
+  const capture = dependencies.runCaptureResultImpl;
+  if (!capture) return stopStackWithEnvImpl(input, dependencies);
+  // Browser cleanup now admits authored source through the same real mirror
+  // owner as ordinary commands. Only the external Mutagen response is a fixture.
+  return stopStackWithEnvImpl(input, { ...dependencies, runCaptureResultImpl: (command, args, options) =>
+    captureDevTargetSyncFixture(command, args) ?? capture(command, args, options) });
+}
 
 function stopStackWithEnv(input, dependencies = {}) {
   const capture = dependencies.runCaptureResultImpl;
@@ -339,7 +350,7 @@ test('parent stop releases recorded local forwards after remote retirement and p
     linux1: { status: 'stopped', serviceStatus: { daemon: 'stopped' }, forwardPid: owned.child.pid },
     stale: { services: {}, status: 'stopped', forwardPid: other.child.pid },
   } });
-  const stopped = await stopStackWithEnv(f.input);
+  const stopped = await stopStackWithEnv(f.input, { runCaptureResultImpl: runCaptureResult });
   assert.equal(owned.child.exitCode != null || owned.child.signalCode != null, true,
     'remote service retirement must not leave its controller-local forward alive');
   assert.equal(other.child.exitCode, null, 'a stale PID record grants no authority over another stack');
@@ -356,8 +367,8 @@ test('parent stop releases recorded local forwards after remote retirement and p
 test('parent stop retires a native target without a healthy source synchronization', async t => {
   const f = await fixture(t);
   let nativeAlive = true;
-  const result = await stopStackWithEnv(f.input, { runCaptureResultImpl: async (_command, args) => {
-    if (args.includes('mutagen')) return { ok: false, exitCode: 1, err: 'beta transition problem' };
+  const result = await stopStackWithEnvImpl(f.input, { runCaptureResultImpl: async (commandName, args) => {
+    if (commandName === 'mutagen' || args.includes('mutagen')) return { ok: false, exitCode: 1, err: 'beta transition problem' };
     const command = String(args.at(-1));
     if (command.includes('stack stop')) {
       nativeAlive = false;
@@ -367,6 +378,7 @@ test('parent stop retires a native target without a healthy source synchronizati
   } });
   assert.equal(nativeAlive, false);
   assert.equal(result.finalization.finalized, true);
+  assert.match(result.browsers.warnings[0].error, /beta transition problem/);
   assert.equal(await readStackRuntimeStateFile(f.statePath), null);
 });
 

@@ -1,4 +1,5 @@
 import './utils/env/env.mjs';
+import { emitSourceStartSuperseded } from './runtime/shared/pending_source_start.mjs';
 import { chmod, copyFile, mkdir, readFile, readdir, rename } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
@@ -49,6 +50,8 @@ import { resolveRequestedRepoCheckoutDir } from './stack/repo_checkout_resolutio
 import { resolveTransientRepoOverrides } from './stack/transient_repo_overrides.mjs';
 import { hasExplicitStackRuntimeModeArg } from './runtime/shared/runtime_mode.mjs';
 import { DEFAULT_QA_TARGET_NAMES } from './utils/dev_targets/service_placement.mjs';
+import { loadDevTargetsConfig, parseDevTargetsConfig } from './utils/dev_targets/config.mjs';
+import { writeJsonAtomic } from './utils/fs/json.mjs';
 import { resolveRepoStackIdentity } from './utils/stack/repo_stack_identity.mjs';
 import { ensureEnvFileMutated, ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { listAllStackNames, stackExistsSync } from './utils/stack/stacks.mjs';
@@ -317,7 +320,8 @@ async function cmdNew({ rootDir, argv, emit = true }) {
     // fall back to auto-seeding credentials from main.
     stackEnv.HAPPIER_STACK_AUTO_AUTH_SEED = '0';
   }
-  if (flags.has('--qa') || stackName.startsWith('agent-qa-')) {
+  const isQaStack = flags.has('--qa') || stackName.startsWith('agent-qa-') || stackName.startsWith('qa-');
+  if (isQaStack) {
     // Initial candidates only. The placement owner persists one explicit
     // Machine host before runtime selection; subsequent starts use that pin.
     stackEnv.HAPPIER_STACK_QA_DAEMON_TARGETS = DEFAULT_QA_TARGET_NAMES.join(',');
@@ -436,11 +440,31 @@ async function cmdNew({ rootDir, argv, emit = true }) {
     stackEnv.HAPPIER_STACK_REPO_DIR = monoRoot;
   }
 
-  if (flags.has('--qa') || stackName.startsWith('agent-qa-')) {
-    stackEnv.HAPPIER_STACK_EXPO_SOURCE_STACK = resolveRepoStackIdentity({
+  let qaPlacementConfig;
+  if (isQaStack) {
+    const producerStackName = resolveRepoStackIdentity({
       repoRoot: stackEnv.HAPPIER_STACK_REPO_DIR,
       createIfMissing: true,
     }).stackName;
+    stackEnv.HAPPIER_STACK_EXPO_SOURCE_STACK = producerStackName;
+    const { env: producerEnv } = await readStackEnvObject(producerStackName);
+    const target = String(producerEnv.HAPPIER_STACK_QA_DEFAULT_TARGET ?? '').trim();
+    if (target) {
+      const { config: producerConfig } = await loadDevTargetsConfig({ stackName: producerStackName });
+      // Seed the existing placement contract once; the service owner still
+      // resolves hosts and preserves each consumer's subsequent explicit pins.
+      qaPlacementConfig = parseDevTargetsConfig({ version: 3, targets: producerConfig.targets,
+        runtimePlacement: {
+          server: { mode: 'prefer-target', target, fallback: 'error' },
+          daemon: { mode: 'prefer-target', target },
+          qa: { mode: 'prefer-target', targets: [target] },
+          expo: { mode: 'local' },
+        },
+        commandExecution: { mode: 'prefer-target', target },
+      });
+      stackEnv.HAPPIER_STACK_QA_DAEMON_TARGETS = qaPlacementConfig.runtimePlacement.daemon.target;
+      stackEnv.HAPPIER_STACK_QA_BROWSER_TARGETS = qaPlacementConfig.runtimePlacement.daemon.target;
+    }
   }
 
   if (copyAuth) {
@@ -474,6 +498,7 @@ async function cmdNew({ rootDir, argv, emit = true }) {
   if (!created) {
     throw stackAlreadyExistsError(stackName);
   }
+  if (qaPlacementConfig) await writeJsonAtomic(join(baseDir, 'dev-targets.json'), qaPlacementConfig);
   const res = { ok: true, stackName, envPath, port: port ?? null, serverComponent, portsMode: port == null ? 'ephemeral' : 'pinned' };
   if (emit) {
     printResult({
@@ -2717,6 +2742,7 @@ async function main() {
 }
 
 main().catch((err) => {
+  emitSourceStartSuperseded(err);
   const message = err instanceof Error ? err.message : String(err);
   console.error('[stack] failed:', message);
   if (process.env.DEBUG && err instanceof Error && err.stack) {

@@ -1,10 +1,12 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { parseDaemonLockSnapshot } from '@happier-dev/cli-common/process';
 
 import { resolvePreferredStackDaemonStatePaths } from '../auth/credentials_paths.mjs';
 import { applyStackDaemonLifecycleScopeEnv } from '../auth/stable_scope_id.mjs';
 import { resolvePidStackOwnership } from '../proc/ownership.mjs';
+import { isPidAlive } from '../proc/pids.mjs';
 import { readStackRuntimeStateFile } from './runtime_state.mjs';
 import { STACK_LISTENER_OBSERVATION_TIMEOUT_MS } from '../server/listener_ownership.mjs';
 import {
@@ -37,6 +39,27 @@ function normalizeSuccessorDistClosureFingerprint(value) {
     throw new Error('successor dist closure fingerprint must be exactly 16 hexadecimal characters');
   }
   return fingerprint;
+}
+
+function normalizeSuccessorServerUrls(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('successor server URLs must be an object');
+  }
+  const serverUrl = String(value.serverUrl ?? '').trim();
+  const webappUrl = String(value.webappUrl ?? '').trim();
+  for (const [label, candidate] of [['server', serverUrl], ['webapp', webappUrl]]) {
+    let parsed;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      throw new Error(`successor ${label} URL must be a valid URL`);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`successor ${label} URL must use http or https`);
+    }
+  }
+  return { serverUrl, webappUrl };
 }
 
 export async function daemonControlPost({ httpPort, path, body = {}, controlToken = '', timeoutMs = DEFAULT_DAEMON_CONTROL_POST_TIMEOUT_MS }) {
@@ -107,12 +130,11 @@ async function readDaemonProcessInstanceFingerprint({ pid, cliHomeDir, env } = {
   return null;
 }
 
-export async function readDaemonControlState({
+function resolveDaemonControlStatePaths({
   cliHomeDir,
   serverUrl,
   env = process.env,
   stackName = null,
-  resolvePidStackOwnershipImpl = resolvePidStackOwnership,
 }) {
   const resolvedStackName = String(stackName ?? '').trim();
   const stateEnv = resolvedStackName
@@ -122,7 +144,17 @@ export async function readDaemonControlState({
         cliIdentity: String(env?.HAPPIER_STACK_CLI_IDENTITY ?? '').trim() || 'default',
       })
     : env;
-  const { statePath } = resolvePreferredStackDaemonStatePaths({ cliHomeDir, serverUrl, env: stateEnv });
+  return resolvePreferredStackDaemonStatePaths({ cliHomeDir, serverUrl, env: stateEnv });
+}
+
+export async function readDaemonControlState({
+  cliHomeDir,
+  serverUrl,
+  env = process.env,
+  stackName = null,
+  resolvePidStackOwnershipImpl = resolvePidStackOwnership,
+}) {
+  const { statePath } = resolveDaemonControlStatePaths({ cliHomeDir, serverUrl, env, stackName });
   if (!existsSync(statePath)) {
     return { ok: false, reason: 'missing_state', statePath };
   }
@@ -330,6 +362,7 @@ export async function restartDaemonViaControlServer({
   requestTimeoutMs = DEFAULT_DAEMON_CONTROL_POST_TIMEOUT_MS,
   pollMs = DEFAULT_RESTART_CONFIRM_POLL_MS,
   successorDistClosureFingerprint = null,
+  successorServerUrls = null,
   readDaemonControlStateImpl = readDaemonControlState,
   daemonControlPostImpl = daemonControlPost,
   pingDaemonImpl = null,
@@ -341,6 +374,7 @@ export async function restartDaemonViaControlServer({
   const normalizedSuccessorDistClosureFingerprint = normalizeSuccessorDistClosureFingerprint(
     successorDistClosureFingerprint,
   );
+  const normalizedSuccessorServerUrls = normalizeSuccessorServerUrls(successorServerUrls);
   const confirmTimeoutMs = resolveDaemonRestartConfirmTimeoutMs(env, timeoutMs);
   const controlPostTimeoutMs = Math.max(100, Number(requestTimeoutMs) || DEFAULT_DAEMON_CONTROL_POST_TIMEOUT_MS);
   const controlStateInput = {
@@ -368,12 +402,17 @@ export async function restartDaemonViaControlServer({
   if (!windowsProof.ok) {
     throw new Error(`daemon control /restart unavailable (${windowsProof.reason})`);
   }
+  const restartBody = {};
+  if (normalizedSuccessorDistClosureFingerprint) {
+    restartBody.successorDistClosureFingerprint = normalizedSuccessorDistClosureFingerprint;
+  }
+  if (normalizedSuccessorServerUrls) {
+    restartBody.successorServerUrls = normalizedSuccessorServerUrls;
+  }
   const restartResult = await daemonControlPostImpl({
     httpPort: controlState.httpPort,
     path: '/restart',
-    body: normalizedSuccessorDistClosureFingerprint
-      ? { successorDistClosureFingerprint: normalizedSuccessorDistClosureFingerprint }
-      : {},
+    body: restartBody,
     controlToken: controlState.controlToken,
     timeoutMs: controlPostTimeoutMs,
   });
@@ -391,7 +430,7 @@ export async function restartDaemonViaControlServer({
         daemonControlPostImpl,
         readProcessInstanceFingerprintImpl,
       });
-  const deadline = nowImpl() + Math.max(100, confirmTimeoutMs);
+  let deadline = nowImpl() + Math.max(100, confirmTimeoutMs);
   let lastReason = 'state_unchanged';
   while (true) {
     // /ping is the daemon's authenticated readiness signal. Always sample it once
@@ -429,9 +468,22 @@ export async function restartDaemonViaControlServer({
           replacementState.processInstanceFingerprint ?? null,
       };
     }
-    if (nowImpl() >= deadline) break;
+    if (nowImpl() >= deadline) {
+      // A successor takes the daemon lock before publishing authenticated control.
+      // Its live startup extends this reporting checkpoint, never readiness itself.
+      let startupPid = null;
+      if (['missing_state', 'pid_unchanged', 'daemon_not_running', 'ping_failed'].includes(lastReason)) {
+        const { lockPath } = resolveDaemonControlStatePaths(controlStateInput);
+        try {
+          startupPid = parseDaemonLockSnapshot(await readFile(lockPath, 'utf8')).pid;
+        } catch { }
+      }
+      if (!startupPid || startupPid === previousPid || !isPidAlive(startupPid)) break;
+      console.warn(`[stack] replacement daemon is still starting (pid=${startupPid}); waiting for authenticated readiness`);
+      deadline = nowImpl() + Math.max(100, confirmTimeoutMs);
+    }
     await delayImpl(pollMs);
   }
 
-  throw new Error(`daemon control /restart replacement was not confirmed within ${Math.max(100, confirmTimeoutMs)}ms (${lastReason})`);
+  throw new Error(`daemon control /restart replacement was not confirmed at the ${Math.max(100, confirmTimeoutMs)}ms readiness checkpoint (${lastReason})`);
 }

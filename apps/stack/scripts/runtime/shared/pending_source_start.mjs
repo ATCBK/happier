@@ -9,6 +9,14 @@ import { isPidAlive, observePidLiveness } from '../../utils/proc/pids.mjs';
 
 const preparationPhases = new Set(['preparing', 'queued', 'building', 'prepared', 'checking']);
 const phaseEventPrefix = 'HSTACK_SOURCE_PREPARATION_PHASE=';
+export const SOURCE_START_SUPERSEDED_MARKER = 'HSTACK_SOURCE_START_SUPERSEDED';
+
+/** Carry the canonical admission result over the existing worker stdout. */
+export function emitSourceStartSuperseded(error, write = line => process.stdout.write(line)) {
+  if (error?.code !== 'ESOURCESTARTSUPERSEDED' && error?.cause?.code !== 'ESOURCESTARTSUPERSEDED') return false;
+  write(`${SOURCE_START_SUPERSEDED_MARKER}\n`);
+  return true;
+}
 
 export function readSourcePreparationPhase(value) {
   if (!value || !preparationPhases.has(value.phase)) return null;
@@ -51,7 +59,7 @@ export async function updatePendingSourcePreparationPhase({ stackBaseDir, reques
   }, { lockPath: `${markerPath}.lock`, signal });
 }
 
-function supersededError() {
+export function supersededError() {
   const error = new Error('Source Stack start superseded by a newer start for this stack');
   error.name = 'AbortError';
   error.code = 'ESOURCESTARTSUPERSEDED';

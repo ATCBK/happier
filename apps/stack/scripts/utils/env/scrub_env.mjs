@@ -65,6 +65,8 @@ export const STACK_WRAPPER_PRESERVE_KEYS = [
   'HAPPIER_STACK_OWNER',
   'HAPPIER_STACK_REPO_DIR',
   'HAPPIER_STACK_RUNTIME_MODE',
+  // The restart wrapper admits selected source before the inner run loads its env.
+  'HAPPIER_STACK_PREPARED_SOURCE_RELOAD',
   'HAPPIER_STACK_RUNTIME_STATE_PATH',
   'HAPPIER_STACK_DAEMON',
   // The selected stack owns child-process logs across the runtime env-loader hop.
