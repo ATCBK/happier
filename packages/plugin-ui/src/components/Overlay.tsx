@@ -747,7 +747,7 @@ function FloatingScrollSurface(props: Readonly<{ maxHeight: number; floatingRole
   const scrollMaxHeight = Math.max(0, props.maxHeight - 2);
   return (
     <HAPPIER_PAGE_CHROME_CONTEXT_INTERNAL.Provider value={null}>
-      <Surface padding="none" materialRole="floating" floatingRole={props.floatingRole}>
+      <Surface padding="none" materialRole="floating">
         <HappierScrollArea style={{ maxHeight: scrollMaxHeight }} contentContainerStyle={FLOATING_SURFACE_SCROLL_INSET}>
           <HappierStack gap={4}>{props.children}</HappierStack>
         </HappierScrollArea>
