@@ -46,6 +46,7 @@ it('resolves rule Session followers through the captured own-Account census and 
         scope: 'all_accessible', startedBy: ['you', 'agents', 'triggers'] }), policy: { preset: 'quiet' } };
     homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [
         { ruleId: 'personal', receiver: { kind: 'account' }, version: 0, content: { t: 'plain', v: definition } },
+        { ruleId: 'self', receiver: { kind: 'session', sessionId: 'source' }, version: 0, content: { t: 'plain', v: definition } },
         { ruleId: 'coordinator', receiver: { kind: 'session', sessionId: 'rule-receiver' }, version: 0, content: { t: 'plain', v: definition } },
     ] } });
     const executor = createDefaultActionExecutor();
