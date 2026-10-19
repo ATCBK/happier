@@ -435,84 +435,102 @@ function resolveMaxScanPages(): number {
   return Math.max(1, maxPages);
 }
 
-async function findExistingSessionIdByTag(params: Readonly<{
+function createExistingSessionTagLookup(params: Readonly<{
   credentials: StoredCredentials;
   accountEncryptionMode: AccountEncryptionCurrentnessResponse['mode'];
-  tag: string;
   signal?: AbortSignal;
-  metadataMatches?: (
-    metadata: Readonly<Record<string, unknown>>,
-    row: RawSessionListRow,
-  ) => boolean;
-  metadataIdentityMatches?: (
-    metadata: Readonly<Record<string, unknown>>,
-    row: RawSessionListRow,
-  ) => boolean;
-}>): Promise<Readonly<{
-  sessionId: string;
-  persistedTag: string;
-  metadata: Readonly<Record<string, unknown>>;
-  currentStorageState: RawSessionListRow['currentStorageState'];
-  currentStorageStateWasOmitted: boolean;
-}> | null> {
-  const maxPages = resolveMaxScanPages();
-
-  const scan = async (archivedOnly: boolean): Promise<Readonly<{
+}>) {
+  // Released-tag recovery examines the same Account inventory in priority
+  // order. Reuse each page and owner view only within this link operation;
+  // the selected live link is still re-read and identity-checked before refresh.
+  const pages = new Map<string, ReturnType<typeof fetchSessionsPage>>();
+  const metadataByRow = new WeakMap<RawSessionListRow, ReturnType<typeof tryDecryptSessionOwnerMetadataView>>();
+  return async (lookup: Readonly<{
+    tag: string;
+    metadataMatches?: (
+      metadata: Readonly<Record<string, unknown>>,
+      row: RawSessionListRow,
+    ) => boolean;
+    metadataIdentityMatches?: (
+      metadata: Readonly<Record<string, unknown>>,
+      row: RawSessionListRow,
+    ) => boolean;
+  }>): Promise<Readonly<{
     sessionId: string;
     persistedTag: string;
     metadata: Readonly<Record<string, unknown>>;
     currentStorageState: RawSessionListRow['currentStorageState'];
     currentStorageStateWasOmitted: boolean;
   }> | null> => {
-    let cursor: string | undefined;
-    for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
-      const page = await fetchSessionsPage({
-        token: params.credentials.token,
-        cursor,
-        limit: 200,
-        archivedOnly,
-        ...(params.signal ? { signal: params.signal } : {}),
-      });
-      for (const row of page.sessions) {
-        const meta = tryDecryptSessionOwnerMetadataView({
-          credentials: params.credentials,
-          rawSession: row,
-          accountEncryptionMode: params.accountEncryptionMode,
-        });
-        const rowTagRaw = meta?.['tag'];
-        const rowTag = typeof rowTagRaw === 'string' ? rowTagRaw.trim() : '';
-        if (meta !== null && rowTag === params.tag) {
-          const linked = resolveLinkedExternalSessionMetadataV1(meta, 'stored');
-          if (!linked.ok && linked.error !== 'linked_session_not_found') {
-            throw new ExternalSessionProviderFailureError({
-              code: 'conflict',
-              message: linked.error,
-              operation: 'externalSession.lookupByTags',
-            });
+    const maxPages = resolveMaxScanPages();
+    const scan = async (archivedOnly: boolean): Promise<Readonly<{
+      sessionId: string;
+      persistedTag: string;
+      metadata: Readonly<Record<string, unknown>>;
+      currentStorageState: RawSessionListRow['currentStorageState'];
+      currentStorageStateWasOmitted: boolean;
+    }> | null> => {
+      let cursor: string | undefined;
+      for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+        if (params.signal?.aborted) {
+          throw new ExternalSessionProviderFailureError({
+            code: 'cancelled', message: 'external_session_link_cancelled', operation: 'externalSession.lookupByTags',
+          });
+        }
+        const key = JSON.stringify([archivedOnly, cursor ?? null]);
+        let pending = pages.get(key);
+        if (!pending) {
+          pending = fetchSessionsPage({
+            token: params.credentials.token,
+            cursor,
+            limit: 200,
+            archivedOnly,
+            ...(params.signal ? { signal: params.signal } : {}),
+          });
+          pages.set(key, pending);
+        }
+        const page = await pending;
+        for (const row of page.sessions) {
+          if (!metadataByRow.has(row)) metadataByRow.set(row, tryDecryptSessionOwnerMetadataView({
+            credentials: params.credentials,
+            rawSession: row,
+            accountEncryptionMode: params.accountEncryptionMode,
+          }));
+          const meta = metadataByRow.get(row) ?? null;
+          const rowTagRaw = meta?.['tag'];
+          const rowTag = typeof rowTagRaw === 'string' ? rowTagRaw.trim() : '';
+          if (meta !== null && rowTag === lookup.tag) {
+            const linked = resolveLinkedExternalSessionMetadataV1(meta, 'stored');
+            if (!linked.ok && linked.error !== 'linked_session_not_found') {
+              throw new ExternalSessionProviderFailureError({
+                code: 'conflict',
+                message: linked.error,
+                operation: 'externalSession.lookupByTags',
+              });
+            }
+          }
+          if (meta !== null && (
+            (rowTag && rowTag === lookup.tag && (!lookup.metadataMatches || lookup.metadataMatches(meta, row)))
+            || lookup.metadataIdentityMatches?.(meta, row) === true
+          )) {
+            return {
+              sessionId: row.id,
+              persistedTag: rowTag || lookup.tag,
+              metadata: meta,
+              currentStorageState: row.currentStorageState,
+              currentStorageStateWasOmitted: !Object.prototype.hasOwnProperty.call(row, 'currentStorageState'),
+            };
           }
         }
-        if (meta !== null && (
-          (rowTag && rowTag === params.tag && (!params.metadataMatches || params.metadataMatches(meta, row)))
-          || params.metadataIdentityMatches?.(meta, row) === true
-        )) {
-          return {
-            sessionId: row.id,
-            persistedTag: rowTag || params.tag,
-            metadata: meta,
-            currentStorageState: row.currentStorageState,
-            currentStorageStateWasOmitted: !Object.prototype.hasOwnProperty.call(row, 'currentStorageState'),
-          };
-        }
+        if (!page.hasNext || !page.nextCursor) break;
+        cursor = page.nextCursor;
       }
-      if (!page.hasNext || !page.nextCursor) break;
-      cursor = page.nextCursor;
-    }
-    return null;
+      return null;
+    };
+    const activeHit = await scan(false);
+    if (activeHit) return activeHit;
+    return await scan(true);
   };
-
-  const activeHit = await scan(false);
-  if (activeHit) return activeHit;
-  return await scan(true);
 }
 
 export type ExternalSessionIndexedTagLookupProof = Extract<
@@ -1048,12 +1066,14 @@ export async function ensureExternalSessionLink(params: Readonly<{
   const shouldScanLegacyMetadata =
     indexedLookup.state === 'unavailable'
     || indexedAbsenceNeedsLegacyMetadataRecovery;
+  const findExistingSessionIdByTag = createExistingSessionTagLookup({
+    credentials: params.credentials,
+    accountEncryptionMode: accountEncryptionCurrentness.mode,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
   let existingSession = shouldScanLegacyMetadata
     ? await findExistingSessionIdByTag({
-        credentials: params.credentials,
-        accountEncryptionMode: accountEncryptionCurrentness.mode,
         tag,
-        ...(params.signal ? { signal: params.signal } : {}),
         ...(indexedAbsenceNeedsLegacyMetadataRecovery
           ? {
               metadataMatches: (metadata: Readonly<Record<string, unknown>>) =>
@@ -1103,10 +1123,7 @@ export async function ensureExternalSessionLink(params: Readonly<{
       if (legacyLookup.kind === 'connected-service-group-predecessor') continue;
       if (existingSession) break;
       existingSession = await findExistingSessionIdByTag({
-        credentials: params.credentials,
-        accountEncryptionMode: accountEncryptionCurrentness.mode,
         tag: legacyLookup.tag,
-        ...(params.signal ? { signal: params.signal } : {}),
         metadataMatches: (metadata) => metadataProvesExternalSessionIdentity(metadata, {
           machineId: params.machineId,
           agentId: params.agentId,
@@ -1130,10 +1147,7 @@ export async function ensureExternalSessionLink(params: Readonly<{
     );
     if (predecessor) {
       existingSession = await findExistingSessionIdByTag({
-        credentials: params.credentials,
-        accountEncryptionMode: accountEncryptionCurrentness.mode,
         tag: predecessor.tag,
-        ...(params.signal ? { signal: params.signal } : {}),
         metadataMatches: (metadata) => metadataProvesConnectedServiceGroup(
           metadata,
           predecessor.expectedConnectedServiceGroupId,

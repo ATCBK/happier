@@ -9,11 +9,22 @@ import type { ExternalSessionContentSearchControl } from '@happier-dev/plugin-sd
 type DirectoryEntry = Pick<Dirent, 'name' | 'isDirectory' | 'isFile' | 'isSymbolicLink'>;
 const RefSchema = z.strictObject({ home: z.number().check(z.int(), z.nonnegative()), path: z.string() });
 const FileMetadataSchema = z.strictObject({ mtimeMs: z.number(), birthtimeMs: z.number(), generation: z.string() });
+const RootInventorySchema = z.strictObject({
+  home: z.number().check(z.int(), z.nonnegative()),
+  requestedIds: z.array(z.string()),
+  sourceGeneration: z.array(z.string()),
+  afterPath: z.nullable(z.string()),
+  complete: z.boolean(),
+  files: z.array(z.strictObject({
+    ref: RefSchema, matchingIds: z.array(z.string()), generation: z.string(), sortMs: z.number(), mtimeMs: z.number(),
+  })),
+});
 const PreparationSchema = z.strictObject({
   roots: z.string(),
   directories: z.array(z.strictObject({ ref: RefSchema, generation: z.string(), entries: z.array(z.strictObject({ name: z.string(), kind: z.enum(['directory', 'file', 'other']) })) })),
   files: z.array(z.strictObject({ ref: RefSchema, metadata: FileMetadataSchema })),
   identities: z.array(z.strictObject({ ref: RefSchema, value: z.nullable(z.strictObject({ id: z.optional(z.string()), session_id: z.optional(z.string()) })) })),
+  rootInventories: z.optional(z.array(RootInventorySchema)),
 });
 export type CodexRolloutPreparationState = z.infer<typeof PreparationSchema>;
 
@@ -31,6 +42,9 @@ export function parseCodexRolloutPreparationState(value: unknown): CodexRolloutP
   return [state.directories, state.files, state.identities].every(uniqueRefs)
     && [...state.directories, ...state.files, ...state.identities].every(({ ref }) => safeRelativePath(ref.path))
     && state.directories.every(({ entries }) => entries.every(({ name }) => safeRelativePath(name) && !name.includes('/')))
+    && (state.rootInventories ?? []).every(inventory => (inventory.afterPath === null || safeRelativePath(inventory.afterPath))
+      && inventory.files.every(file => file.ref.home === inventory.home && safeRelativePath(file.ref.path)
+        && file.matchingIds.every(id => inventory.requestedIds.includes(id))))
     ? state : null;
 }
 
@@ -48,20 +62,38 @@ export class CodexRolloutPreparation {
   private readonly files = new Map<string, CodexRolloutPreparationState['files'][number]>();
   private readonly identities = new Map<string, CodexRolloutPreparationState['identities'][number]>();
 
-  constructor(private readonly homes: readonly string[], private readonly control: ExternalSessionContentSearchControl,
+  constructor(private readonly homes: readonly string[], readonly control: ExternalSessionContentSearchControl,
     state?: CodexRolloutPreparationState, private readonly assertActive: () => void = () => {}, private readonly sourceChanged: () => never = changed) {
     const roots = createHash('sha256').update(JSON.stringify(homes)).digest('base64url');
     if (state && state.roots !== roots) this.invalidate();
     if (state && [...state.directories, ...state.files, ...state.identities].some(({ ref }) => ref.home >= homes.length)) this.invalidate();
+    if (state?.rootInventories?.some(inventory => inventory.home >= homes.length)) this.invalidate();
     this.state = state ?? { roots, directories: [], files: [], identities: [] };
     for (const entry of this.state.directories) this.directories.set(this.key(entry.ref), entry);
     for (const entry of this.state.files) this.files.set(this.key(entry.ref), entry);
     for (const entry of this.state.identities) this.identities.set(this.key(entry.ref), entry);
   }
 
+  /** Only selected families and a native frontier survive an interrupted inventory. */
+  rootInventory(homePath: string, requestedIds: readonly string[], sourceGeneration: readonly string[]): z.infer<typeof RootInventorySchema> {
+    const home = this.homes.indexOf(homePath);
+    if (home < 0) return this.invalidate();
+    const inventories = this.state.rootInventories ??= [];
+    const remembered = inventories.find(inventory => inventory.home === home);
+    if (remembered) {
+      if (JSON.stringify(remembered.sourceGeneration) !== JSON.stringify(sourceGeneration)) this.invalidate();
+      if (requestedIds.every(id => remembered.requestedIds.includes(id))) return remembered;
+      inventories.splice(inventories.indexOf(remembered), 1);
+    }
+    const inventory = { home, requestedIds: [...requestedIds], sourceGeneration: [...sourceGeneration],
+      afterPath: null, complete: false, files: [] } satisfies z.infer<typeof RootInventorySchema>;
+    inventories.push(inventory);
+    return inventory;
+  }
+
   private key(ref: z.infer<typeof RefSchema>): string { return `${ref.home}:${ref.path}`; }
 
-  private invalidate(): never { this.invalidated = true; return this.sourceChanged(); }
+  invalidate(): never { this.invalidated = true; return this.sourceChanged(); }
 
   assertNotYielded(): void {
     if (this.invalidated) this.sourceChanged();

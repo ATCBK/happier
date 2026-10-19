@@ -287,6 +287,103 @@ describe('Codex candidate conversation search', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it.each([false, true])('resumes root-family preparation without re-opening its completed prefix (nested=%s)', async (nested) => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-content-family-resume-'));
+    try {
+      const day = join(root, 'sessions', '2026', '07', '23');
+      await mkdir(day, { recursive: true });
+      const target = 'ffffffff-1111-1111-1111-111111111111';
+      const unrelated = new Set<string>();
+      for (let index = 0; index < 12; index += 1) {
+        const directory = nested ? join(day, index < 6 ? 'a' : 'a.jsonl') : day;
+        await mkdir(directory, { recursive: true });
+        const path = join(directory, `rollout-2026-07-23T00-00-${String(index).padStart(2, '0')}-aaaaaaaa-1111-1111-1111-${String(index).padStart(12, '0')}.jsonl`);
+        unrelated.add(path);
+        await writeFile(path, JSON.stringify({ type: 'session_meta', payload: { id: `unrelated-${index}` } }) + '\n');
+      }
+      await writeFile(join(day, `rollout-2026-07-23T23-00-00-${target}.jsonl`), [
+        { type: 'session_meta', payload: { id: target } },
+        { type: 'event_msg', payload: { type: 'agent_message', message: 'harbor family resume' } },
+      ].map(row => JSON.stringify(row)).join('\n') + '\n');
+      let nowMs = 1000;
+      vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+      const opens = new Map<string, number>();
+      rolloutFsProbe.onOpen = path => {
+        if (typeof path !== 'string' || !unrelated.has(path)) return;
+        opens.set(path, (opens.get(path) ?? 0) + 1);
+        nowMs += 1000;
+      };
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
+      let cursor: string | undefined;
+      let hit: string | undefined;
+      for (let page = 0; page < unrelated.size + 1 && !hit; page += 1) {
+        const deadlineAtMs = nowMs + 5000;
+        const result = await contribution.listCandidates({
+          source: { kind: 'codexHome', home: 'user', homePath: root },
+          searchTarget: 'content', searchTerm: 'harbor', maxItems: 1,
+          maxSerializedBytes: 1024 * 1024, exec: {} as ExecService,
+          signal: new AbortController().signal, deadlineAtMs, cursor,
+          ripgrep: { run: async ({ paths }) => ({ stdout: paths.join('\0') + '\0', stderr: '', exitCode: 0 }) },
+        });
+        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+        expect(nowMs).toBeLessThan(deadlineAtMs);
+        hit = result.value.candidates[0]?.remoteSessionId;
+        if (!hit) {
+          expect(result.value.contentCoverage).toBe('partial');
+          expect(result.value.nextCursor).toBeTruthy();
+          expect(result.value.nextCursor).not.toBe(cursor);
+          cursor = result.value.nextCursor!;
+        }
+      }
+      expect(hit).toBe(target);
+      expect([...opens.values()]).toEqual(Array.from({ length: unrelated.size }, () => 1));
+    } finally {
+      rolloutFsProbe.onOpen = null;
+      vi.restoreAllMocks();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects replacement of a retained root-family member before returning a resumed hit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-content-family-replacement-'));
+    try {
+      const day = join(root, 'sessions', '2026', '07', '23');
+      await mkdir(day, { recursive: true });
+      const target = 'ffffffff-1111-1111-1111-111111111111';
+      const childDirectory = join(day, 'a');
+      await mkdir(childDirectory);
+      const childPath = join(childDirectory, 'rollout-child.jsonl');
+      const childText = JSON.stringify({ type: 'session_meta', payload: { id: 'child', session_id: target } }) + '\n';
+      await writeFile(childPath, childText);
+      await writeFile(join(day, `rollout-2026-07-23T23-00-00-${target}.jsonl`), [
+        { type: 'session_meta', payload: { id: target } },
+        { type: 'event_msg', payload: { type: 'agent_message', message: 'harbor replacement' } },
+      ].map(row => JSON.stringify(row)).join('\n') + '\n');
+      const slowPath = join(childDirectory, 'rollout-unrelated.jsonl');
+      await writeFile(slowPath, JSON.stringify({ type: 'session_meta', payload: { id: 'unrelated' } }) + '\n');
+      let nowMs = 1000;
+      vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+      rolloutFsProbe.onOpen = path => { if (path === slowPath) nowMs += 3000; };
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
+      const request = { source: { kind: 'codexHome' as const, home: 'user' as const, homePath: root },
+        searchTarget: 'content' as const, searchTerm: 'harbor', maxItems: 1,
+        maxSerializedBytes: 1024 * 1024, exec: {} as ExecService, signal: new AbortController().signal,
+        ripgrep: { run: async ({ paths }: { paths: readonly string[] }) => ({ stdout: paths.join('\0') + '\0', stderr: '', exitCode: 0 }) } };
+      const first = await contribution.listCandidates({ ...request, deadlineAtMs: nowMs + 5000 });
+      if (!first.ok) throw new Error(`${first.code}: ${first.message}`);
+      expect(first.value).toMatchObject({ candidates: [], nextCursor: expect.any(String), contentCoverage: 'partial' });
+      await rename(childPath, `${childPath}.old`);
+      await writeFile(childPath, childText);
+      rolloutFsProbe.onOpen = null;
+      const resumed = await contribution.listCandidates({ ...request, cursor: first.value.nextCursor!, deadlineAtMs: nowMs + 5000 });
+      expect(resumed).toMatchObject({ ok: false, code: 'source_invalid' });
+    } finally {
+      rolloutFsProbe.onOpen = null;
+      vi.restoreAllMocks();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('finishes content continuation while the active day gains a newer rollout between every page', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codex-content-live-day-'));
     try {

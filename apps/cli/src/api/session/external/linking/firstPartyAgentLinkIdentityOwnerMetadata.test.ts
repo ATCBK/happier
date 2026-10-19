@@ -315,6 +315,7 @@ describe('first-party Agent link identities and host owner metadata', () => {
       let creationTimeout: number | undefined;
       let releaseCreation: (() => void) | undefined;
       let completed: Promise<void> | undefined;
+      const inventoryReads = { active: 0, archived: 0 };
       const interceptor = axios.interceptors.request.use(config => {
         if (config.url?.endsWith('/v1/sessions')) creationTimeout = config.timeout;
         return config;
@@ -331,6 +332,7 @@ describe('first-party Agent link identities and host owner metadata', () => {
         } else if (request.url === '/v2/sessions/lookup-by-tags') {
           response.end(JSON.stringify({ sessions: [] }));
         } else if (request.url && ['/v2/sessions', '/v2/sessions/archived'].includes(new URL(request.url, 'http://fixture').pathname)) {
+          inventoryReads[new URL(request.url, 'http://fixture').pathname.endsWith('/archived') ? 'archived' : 'active'] += 1;
           response.end(JSON.stringify(createSessionListResponseFixture([])));
         } else if (request.url === '/v1/sessions') {
           creationResponse = response;
@@ -370,6 +372,9 @@ describe('first-party Agent link identities and host owner metadata', () => {
         // Axios is the real HTTP boundary: the containing operation owns cancellation,
         // so this phase must not activate its standalone 60-second deadline.
         expect(creationTimeout).toBe(0);
+        // Legacy-tag recovery must not refetch the same Account inventory for
+        // every released tag before opening a new native conversation.
+        expect(inventoryReads).toEqual({ active: 1, archived: 1 });
         if (outcomeKind === 'cancel') {
           controller.abort();
           await vi.waitFor(() => expect(outcome).toMatchObject({ code: 'outcome_unknown', cause: { code: 'ERR_CANCELED' } }));

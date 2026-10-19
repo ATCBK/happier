@@ -131,8 +131,15 @@ describe('openExternalSessionCandidate', () => {
         })).toBe('ignored');
         expect(await openExternalSessionCandidate({ ...params, offline: true })).toBe('ignored');
         expect(boundary.ensure).not.toHaveBeenCalled();
-        expect(await openExternalSessionCandidate({ ...params, offline: true, candidate: { ...params.candidate, linkedSessionId: 'already-linked' } })).toBe('opened');
-        expect(params.openSession).toHaveBeenCalledWith('already-linked', params.resolveCurrentTarget(), undefined);
+        expect(await openExternalSessionCandidate({ ...params, offline: true, candidate: { ...params.candidate, linkedSessionId: 'already-linked' },
+            find: { query: 'body-only phrase', sourceItemId: 'record-uuid' },
+        })).toBe('opened');
+        expect(params.openSession).toHaveBeenCalledWith('already-linked', params.resolveCurrentTarget(), {
+            query: 'body-only phrase', options: { matchCase: false, regex: false },
+            target: { kind: 'route-message-id', routeMessageId: `server:${makeExternalSessionHistoricalImportLocalId({
+                agentId: 'fixture-agent', remoteSessionId: 'native-session', directItemId: 'record-uuid',
+            })}` },
+        });
     });
 
     it('retires navigation and alerts on an Account switch and rejects overlapping link requests', async () => {

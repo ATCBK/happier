@@ -695,7 +695,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
             } : {}),
             openSession: (sessionId, target, find) => {
                 const authority = props.accountLifetime ?? (target.serverId
-                    ? paneContext?.fileFindSeedAccountBindings.get(target.serverId) : null);
+                    ? paneContext?.fileFindSeedAccountBindings.get(resolveServerProfileScopeIdForIdentifier(target.serverId)) : null);
                 return openChatWithFindSeed({
                     handoff: paneContext?.fileFindSeedHandoff,
                     destination: { sessionId, serverId: target.serverId ?? '' }, seed: find, authority,
