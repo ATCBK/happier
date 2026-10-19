@@ -74,7 +74,7 @@ import {
   resolveLocalVoiceAdapterSettings,
   resolveLocalConversationControlSessionId,
 } from './localVoiceSettings';
-import { sendVoiceTextTurn as sendVoiceTextTurnImpl } from './sendVoiceTextTurn';
+import { sendVoiceTextTurn as sendVoiceTextTurnImpl, VoiceTextTurnError } from './sendVoiceTextTurn';
 import {
   bindCurrentUiContextVoiceToolPortToAdmission,
   type VoiceCurrentUiToolPort,
@@ -829,15 +829,22 @@ async function runVoiceTurnWithSendFailureHandling(
     if (isAbortedVoiceTurnError(error)) {
       return;
     }
-    if (admission && captureAttempt && startsPlaybackCapture
-      && isCaptureAttemptCurrent(admission, captureAttempt)
-      && localVoiceCaptureOwner.isCaptureActive(sessionId)) {
-      await localVoiceCaptureOwner.stopCapture({ provider: captureAttempt.provider, sessionId });
-      resetInputLevel();
+    if (admission && captureAttempt) {
+      if (!isCaptureAttemptCurrent(admission, captureAttempt)) throw error;
+      // Endpoint finalization can stop STT while retaining the admitted mic
+      // facade. Retire the whole capture, including an incumbent producer,
+      // before the failure projects disconnected without a Stop control.
+      detachCaptureCurrentUiContext(sessionId);
+      abortCaptureAdmission(sessionId);
+      await localVoiceCaptureOwner.stopSession(sessionId);
+      if (!isCaptureAdmissionCurrent(admission)) throw error;
+      closeInputLevel();
+      releaseCaptureAdmission(sessionId);
     }
     transitionVoiceRuntimeToIdle({
       controlSessionId: sessionId,
       reason: readSafeVoiceRuntimeFailureCode(error) ?? 'send_failed',
+      ...(error instanceof VoiceTextTurnError ? { kind: error.kind } : {}),
       cause: error,
     });
     throw error;
@@ -1090,7 +1097,7 @@ export async function sendLocalVoiceAgentTextTurn(
   const settings = storage.getState().settings as any;
   const resolvedSessionId = resolveLocalConversationControlSessionId(settings, sessionId);
   const currentUiContext = readCaptureCurrentUiContext(resolvedSessionId);
-  await runVoiceTurnWithSendFailureHandling(sessionId, (signal) =>
+  await runVoiceTurnWithSendFailureHandling(resolvedSessionId, (signal) =>
     sendVoiceTextTurnImpl({
       sessionId: resolvedSessionId,
       settings,
@@ -1115,7 +1122,7 @@ export async function sendLocalVoiceAgentTextUpdate(sessionId: string, update: s
   const settings = storage.getState().settings as any;
   const resolvedSessionId = resolveLocalConversationControlSessionId(settings, sessionId);
   const currentUiContext = readCaptureCurrentUiContext(resolvedSessionId);
-  await runVoiceTurnWithSendFailureHandling(sessionId, (signal) =>
+  await runVoiceTurnWithSendFailureHandling(resolvedSessionId, (signal) =>
     sendVoiceTextTurnImpl({
       sessionId: resolvedSessionId,
       settings,

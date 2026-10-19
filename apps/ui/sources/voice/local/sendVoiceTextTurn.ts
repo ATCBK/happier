@@ -11,8 +11,8 @@ import {
 } from '@/voice/transcript/voiceConversationTranscript';
 import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
 import { transitionVoiceRuntimeToIdle } from '@/voice/runtime/machine/voiceConversationRuntimeHelpers';
-import { readSafeVoiceRuntimeFailureCode } from '@/voice/runtime/voiceRuntimeFailureCode';
 import { classifyVoiceMachineError } from '@/voice/runtime/machine/voiceMachineError';
+import type { VoiceMachineErrorKind } from '@/voice/runtime/machine/voiceConversationRuntimeTypes';
 import { voiceOutputStatusStore } from '@/voice/runtime/outputStatus/voiceOutputStatusStore';
 import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/playback/VoicePlaybackController';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
@@ -48,6 +48,13 @@ type VoiceAgentSessionsLike = Readonly<{
     opts?: VoiceAgentSendTurnOptions,
   ) => Promise<{ assistantText: string; actions?: ReadonlyArray<unknown> }>;
 }>;
+
+/** Carries playback failure facts to the lifecycle owner without ending its mic. */
+export class VoiceTextTurnError extends Error {
+  constructor(readonly kind: VoiceMachineErrorKind, readonly code: string, cause: unknown) {
+    super(code, { cause });
+  }
+}
 
 export async function sendVoiceTextTurn(params: {
   sessionId: string;
@@ -466,20 +473,8 @@ export async function sendVoiceTextTurn(params: {
           kind: 'tts_failed',
           reason: 'tts_failed',
         });
-        transitionVoiceRuntimeToIdleIfCurrent({
-          controlSessionId: sessionId,
-          kind: machineError.kind,
-          reason: machineError.reason,
-        });
-        throw streamingPlaybackError instanceof Error
-          ? streamingPlaybackError
-          : Object.assign(new Error(machineError.reason), machineError);
+        throw new VoiceTextTurnError(machineError.kind, machineError.reason, streamingPlaybackError);
       }
-      transitionVoiceRuntimeToIdleIfCurrent({
-        controlSessionId: sessionId,
-        reason: readSafeVoiceRuntimeFailureCode(error) ?? 'send_failed',
-        cause: error,
-      });
       throw error instanceof Error ? error : new Error('send_failed');
     } finally {
       for (const turnId of canonicalOutputTurnIds) {
@@ -511,12 +506,6 @@ export async function sendVoiceTextTurn(params: {
       hostAdmissionOrigin: 'voice',
     });
     submittedUserLocalId = submission.localId;
-  } catch (error) {
-    transitionVoiceRuntimeToIdleIfCurrent({
-      controlSessionId: sessionId,
-      reason: 'send_failed',
-    });
-    throw error;
   } finally {
     releaseReplyConsumer?.();
   }
