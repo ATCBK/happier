@@ -37,6 +37,16 @@ closed (an unmet catalog dependency, an inactive persistence contract, an absent
 - `capabilities` may contain configuration, details, diagnostics, or explanations, but clients must not use it as a gate.
 - Treat missing or malformed server enabled bits as disabled. Call-site checks must be `readServerEnabledBit(payload, featureId) === true`, never `!== false`.
 
+### Artifact kind filtering (0.3 development)
+
+The 0.3 development `artifacts.kindFiltering` server bit negotiates plaintext
+coarse Artifact kind writes, metadata backfill, and filtered inventory queries.
+The current Home advertises support by default. Clients send these new inputs
+only when `readServerEnabledBit(payload, 'artifacts.kindFiltering') === true`;
+missing or malformed bits retain full scans and the old write shape. This is a
+mixed-version HTTP boundary, not a second library availability decision. A
+filtered response with unclassified rows also falls back to the full scan.
+
 ### UI discovery across reloads
 
 In current 0.3 UI source, `apps/ui/sources/sync/api/capabilities/serverFeaturesClient.ts` owns

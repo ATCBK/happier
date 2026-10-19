@@ -93,3 +93,36 @@ export function readSkillOutsideReferencesV1(
   }
   return [...found];
 }
+
+/**
+ * The skill folders in the same source tree that a skill's outside references point at, as tree-relative
+ * paths: `../b/SKILL.md` names `b`, and `../b/`, `../b` or `../b/references/x.md` name the folder one level
+ * below where this skill's path and the reference part. Whether such a folder really holds a `SKILL.md` is
+ * the caller's check against the tree it has.
+ */
+export function readSiblingSkillPathsV1(skillPath: string, references: readonly string[]): string[] {
+  const own = skillPath.split('/').filter(Boolean);
+  const siblings = new Set<string>();
+  for (const reference of references) {
+    const target = [...own];
+    let climbed = true;
+    for (const segment of reference.split('/')) {
+      if (segment === '' || segment === '.') continue;
+      if (segment !== '..') target.push(segment);
+      else if (target.pop() === undefined) {
+        climbed = false;
+        break;
+      }
+    }
+    if (!climbed) continue;
+    let shared = 0;
+    while (shared < own.length && shared < target.length && own[shared] === target[shared]) shared++;
+    // Inside this skill's own folder (a missing file), or an ancestor of it: not a sibling.
+    if (shared === own.length || shared === target.length) continue;
+    if (target.at(-1) === 'SKILL.md') target.pop();
+    else if (target.length === shared + 1 && target[shared]!.includes('.')) continue;
+    else target.length = shared + 1;
+    siblings.add(target.join('/'));
+  }
+  return [...siblings];
+}

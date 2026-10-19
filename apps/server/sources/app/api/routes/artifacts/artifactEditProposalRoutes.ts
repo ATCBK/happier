@@ -32,7 +32,7 @@ function publishAcceptedArtifact(result: Extract<ArtifactEditProposalDecisionRes
     if (!updated?.body || !artifactId) return;
     for (const recipient of updated.recipientUpdates) {
         eventRouter.emitUpdate({ userId: recipient.accountId,
-            payload: buildUpdateArtifactUpdate(artifactId, recipient.cursor, randomKeyNaked(12), undefined,
+            payload: buildUpdateArtifactUpdate(artifactId, recipient.cursor.resolveCursor(), randomKeyNaked(12), undefined,
                 { value: privacyKit.encodeBase64(new Uint8Array(updated.body.bytes)), version: updated.body.version }, recipient),
             recipientFilter: { type: 'user-scoped-only' } });
     }

@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { ArtifactCoarseKindV1Schema } from './artifactKindV1.js';
 
 import { PrincipalRefV1Schema } from '../teams/principal.js';
 import { AccountEncryptionModeSchema } from '../features/payload/capabilities/encryptionCapabilities.js';
@@ -107,6 +108,7 @@ export type ArtifactAccessErrorCodeV1 = z.infer<typeof ArtifactAccessErrorCodeV1
 export const ArtifactHttpReadV1Schema = lazyZodSchema(() => z.strictObject({
   id: z.string().check(z.minLength(1)), ownerAccountId: z.string().check(z.minLength(1)), access: ArtifactCallerAccessV1Schema,
   encryptionMode: AccountEncryptionModeSchema,
+  kind: z.optional(z.nullable(ArtifactCoarseKindV1Schema)),
   header: z.string(), headerVersion: z.number(), body: z.string(), bodyVersion: z.number(),
   publicAudience: z.enum(['retained', 'none']),
   provenance: z.optional(z.nullable(z.string())), provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),

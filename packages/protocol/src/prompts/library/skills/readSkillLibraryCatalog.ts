@@ -1,6 +1,7 @@
 import { readSkillBundleContentV1, readReadOnlySkillContentV1 } from '../promptBundleSchemas.js';
 import { FIRST_PARTY_SKILLS_V1, type ReadOnlySkillV1 } from './firstPartySkillsV1.js';
 import { isPluginSkillIdV1 } from './skillLibraryItemV1.js';
+import type { ArtifactCoarseKindV1 } from '../../../artifacts/artifactKindV1.js';
 
 /** Plugin source outages may omit list rows, but never authorize retirement or GC. */
 export async function readAvailablePluginSkillItemsV1<T>(
@@ -24,7 +25,7 @@ export type SkillLibraryInventoryArtifactV1 = Readonly<{
 }>;
 export type SkillLibraryInventoryPortV1<T extends SkillLibraryInventoryArtifactV1 = SkillLibraryInventoryArtifactV1> = Readonly<{
   readPluginSkills?(signal?: AbortSignal, skillIds?: readonly string[]): Promise<readonly ReadOnlySkillV1[]>;
-  list(options: Readonly<{ includeBody: boolean; limit?: number; cursor?: string; signal?: AbortSignal }>): Promise<Readonly<{
+  list(options: Readonly<{ includeBody: boolean; limit?: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; signal?: AbortSignal }>): Promise<Readonly<{
     items: readonly T[]; coverage: 'complete' | 'partial'; nextCursor?: string;
   }>>;
 }>;
@@ -38,7 +39,7 @@ export async function readCompleteSkillLibraryInventoryV1<T extends SkillLibrary
   do {
     options.signal?.throwIfAborted();
     // The Artifact API admits at most 500 rows per request; continue until exhausted.
-    const page = await store.list({ ...options, limit: 500, ...(cursor ? { cursor } : {}) });
+    const page = await store.list({ ...options, limit: 500, coarseKind: 'skill', ...(cursor ? { cursor } : {}) });
     options.signal?.throwIfAborted();
     if (page.coverage !== 'complete') throw Object.assign(new Error('Skill library unavailable'), { code: 'catalog_unavailable' });
     for (const artifact of page.items) {

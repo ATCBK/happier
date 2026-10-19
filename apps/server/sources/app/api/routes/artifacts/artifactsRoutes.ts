@@ -1,5 +1,6 @@
 import { createArtifactHttpMutation, updateArtifactHttpMutation } from '@/app/artifacts/artifactMutationHttpResponse';
 import { registerArtifactUploadRoutes } from './registerArtifactUploadRoutes';
+import { ArtifactCoarseKindV1Schema, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { registerArtifactEditProposalRoutes } from './artifactEditProposalRoutes';
 import { readArtifactAccountEncryptionMigrationInventoryInTx } from '@/app/artifacts/artifactAccountEncryptionMigrationInventory';
 import { eventRouter, buildNewArtifactUpdate, buildUpdateArtifactUpdate, buildDeleteArtifactUpdate } from "@/app/events/eventRouter";
@@ -14,6 +15,7 @@ import {
     removeArtifactAccessGrantInTx,
     setArtifactAccessGrantInTx,
     type ArtifactForCaller,
+    type ArtifactListItemForCaller,
 } from "@/app/artifacts/artifactAccessService";
 import { ArtifactHttpReadV1Schema, ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema,
     type ArtifactReadBatchResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
@@ -40,10 +42,30 @@ import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access
 
 const DEFAULT_ARTIFACT_LIST_LIMIT = 500;
 
+const artifactListItemSchema = z.object({
+    id: z.string(), kind: z.nullable(ArtifactCoarseKindV1Schema), header: z.string(), headerVersion: z.number(),
+    body: z.optional(z.string()), bodyVersion: z.number(), provenance: z.optional(z.nullable(z.string())),
+    provenanceDataEncryptionKey: z.optional(z.nullable(z.string())), dataEncryptionKey: z.string(), seq: z.number(),
+    createdAt: z.number(), updatedAt: z.number(), ownerAccountId: z.string(), access: ArtifactCallerAccessV1Schema,
+    encryptionMode: ArtifactAccessRecipientCensusResponseV1Schema.shape.encryptionMode,
+});
+
+function projectArtifactListItem(artifact: ArtifactListItemForCaller) {
+    return {
+        id: artifact.id, kind: artifact.kind, ownerAccountId: artifact.ownerAccountId, access: artifact.access,
+        encryptionMode: artifact.encryptionMode, header: privacyKit.encodeBase64(artifact.header), headerVersion: artifact.headerVersion,
+        ...(artifact.body === undefined ? {} : { body: privacyKit.encodeBase64(artifact.body) }), bodyVersion: artifact.bodyVersion,
+        provenance: artifact.provenance ? privacyKit.encodeBase64(artifact.provenance) : null,
+        provenanceDataEncryptionKey: artifact.provenanceDataEncryptionKey ? privacyKit.encodeBase64(artifact.provenanceDataEncryptionKey) : null,
+        dataEncryptionKey: privacyKit.encodeBase64(artifact.dataEncryptionKey), seq: artifact.seq,
+        createdAt: artifact.createdAt.getTime(), updatedAt: artifact.updatedAt.getTime(),
+    };
+}
+
 /** Both read transports project the same caller-authorized bytes and exposure facts. */
 function projectArtifactHttpRead(artifact: ArtifactForCaller & { publicAudience: 'retained' | 'none' }) {
     return {
-        id: artifact.id, ownerAccountId: artifact.ownerAccountId, access: artifact.access, encryptionMode: artifact.encryptionMode,
+        id: artifact.id, kind: artifact.kind, ownerAccountId: artifact.ownerAccountId, access: artifact.access, encryptionMode: artifact.encryptionMode,
         header: privacyKit.encodeBase64(artifact.header), headerVersion: artifact.headerVersion,
         body: privacyKit.encodeBase64(artifact.body), bodyVersion: artifact.bodyVersion, publicAudience: artifact.publicAudience,
         provenance: artifact.provenance ? privacyKit.encodeBase64(artifact.provenance) : null,
@@ -167,7 +189,7 @@ export function artifactsRoutes(app: Fastify) {
         preHandler: app.authenticate,
         schema: {
             params: z.object({ id: z.string(), bodyVersion: z.coerce.number().check(z.int(), z.minimum(1)) }),
-            body: z.strictObject({ header: z.string(), body: z.optional(z.string()),
+            body: z.strictObject({ header: z.string(), body: z.optional(z.string()), kind: z.optional(ArtifactCoarseKindV1Schema),
                 provenance: z.optional(z.nullable(z.string())), provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),
                 expectedHeaderVersion: z.number().check(z.int(), z.minimum(1)), expectedBodyVersion: z.number().check(z.int(), z.minimum(1)) }),
             response: {
@@ -184,6 +206,7 @@ export function artifactsRoutes(app: Fastify) {
         },
     }, async (request, reply) => {
         const result = await restoreArtifactBodyRevision({ actorUserId: request.userId, artifactId: request.params.id,
+            kind: request.body.kind,
             bodyVersion: request.params.bodyVersion, header: privacyKit.decodeBase64(request.body.header),
             ...(request.body.body !== undefined ? { body: privacyKit.decodeBase64(request.body.body) } : {}),
             ...(request.body.provenance == null ? {} : { provenance: privacyKit.decodeBase64(request.body.provenance) }),
@@ -202,7 +225,7 @@ export function artifactsRoutes(app: Fastify) {
         if (!result.header || !result.body) return reply.code(500).send({ error: 'Failed to restore artifact' });
         for (const recipient of result.recipientUpdates) {
             eventRouter.emitUpdate({ userId: recipient.accountId,
-                payload: buildUpdateArtifactUpdate(request.params.id, recipient.cursor, randomKeyNaked(12),
+                payload: buildUpdateArtifactUpdate(request.params.id, recipient.cursor.resolveCursor(), randomKeyNaked(12),
                     { value: privacyKit.encodeBase64(new Uint8Array(result.header.bytes)), version: result.header.version },
                     { value: privacyKit.encodeBase64(new Uint8Array(result.body.bytes)), version: result.body.version }, recipient),
                 recipientFilter: { type: 'user-scoped-only' } });
@@ -221,56 +244,27 @@ export function artifactsRoutes(app: Fastify) {
                 limit: z.optional(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(500))),
                 cursor: z.optional(z.string().check(z.minLength(1))),
                 includeBody: z.optional(z.literal('true')),
+                kind: z.optional(ArtifactCoarseKindV1Schema),
             }),
             response: {
-                200: z.array(z.object({
-                    id: z.string(),
-                    header: z.string(),
-                    headerVersion: z.number(),
-                    body: z.optional(z.string()),
-                    bodyVersion: z.number(),
-                    provenance: z.optional(z.nullable(z.string())),
-                    provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),
-                    dataEncryptionKey: z.string(),
-                    seq: z.number(),
-                    createdAt: z.number(),
-                    updatedAt: z.number(),
-                    ownerAccountId: z.string(),
-                    access: ArtifactCallerAccessV1Schema,
-                    encryptionMode: ArtifactAccessRecipientCensusResponseV1Schema.shape.encryptionMode,
-                })),
+                200: z.union([z.array(artifactListItemSchema), z.object({ items: z.array(artifactListItemSchema), hasUnclassified: z.boolean() })]),
                 400: z.object({ error: z.literal('Failed to get artifacts') }),
             }
         }
     }, async (request, reply) => {
         const userId = request.userId;
-        const query = request.query as { limit?: number; cursor?: string; includeBody?: 'true' };
+        const query = request.query as { limit?: number; cursor?: string; includeBody?: 'true'; kind?: ArtifactCoarseKindV1 };
         const listLimit = typeof query.limit === "number" ? query.limit : DEFAULT_ARTIFACT_LIST_LIMIT;
         const cursor = parseArtifactListCursor(query.cursor);
         if (query.cursor && !cursor) return reply.code(400).send({ error: 'Failed to get artifacts' });
 
         const artifacts = await listArtifactHeadersForCaller({ actorAccountId: userId, limit: listLimit, cursor,
-            includeBody: query.includeBody === 'true' });
+            includeBody: query.includeBody === 'true', kind: query.kind });
 
-        const projected = artifacts.map((artifact) => {
-            return {
-                id: artifact.id,
-                ownerAccountId: artifact.ownerAccountId,
-                access: artifact.access,
-                encryptionMode: artifact.encryptionMode,
-                header: privacyKit.encodeBase64(artifact.header),
-                headerVersion: artifact.headerVersion,
-                ...(artifact.body === undefined ? {} : { body: privacyKit.encodeBase64(artifact.body) }),
-                bodyVersion: artifact.bodyVersion,
-                provenance: artifact.provenance ? privacyKit.encodeBase64(artifact.provenance) : null,
-                provenanceDataEncryptionKey: artifact.provenanceDataEncryptionKey ? privacyKit.encodeBase64(artifact.provenanceDataEncryptionKey) : null,
-                dataEncryptionKey: privacyKit.encodeBase64(artifact.dataEncryptionKey),
-                seq: artifact.seq,
-                createdAt: artifact.createdAt.getTime(),
-                updatedAt: artifact.updatedAt.getTime(),
-            };
-        });
-        return reply.send(projected);
+        const projected = artifacts.map(projectArtifactListItem);
+        if (query.kind === undefined) return reply.send(projected);
+        const unclassified = await listArtifactHeadersForCaller({ actorAccountId: userId, limit: 1, cursor: null, kind: null });
+        return reply.send({ items: projected, hasUnclassified: unclassified.length > 0 });
     });
 
     // Selected details and current recipient facts share a read-only capture.
@@ -388,6 +382,7 @@ export function artifactsRoutes(app: Fastify) {
         schema: {
             body: z.strictObject({
                 id: z.string().check(z.uuid()),
+                kind: z.optional(ArtifactCoarseKindV1Schema),
                 header: z.string(),
                 body: z.string(),
                 dataEncryptionKey: z.string(),
@@ -399,6 +394,7 @@ export function artifactsRoutes(app: Fastify) {
             response: {
                 200: z.object({
                     id: z.string(),
+                    kind: z.nullable(ArtifactCoarseKindV1Schema),
                     header: z.string(),
                     headerVersion: z.number(),
                     body: z.string(),
@@ -444,6 +440,7 @@ export function artifactsRoutes(app: Fastify) {
             }),
             body: z.strictObject({
                 header: z.optional(z.string()),
+                kind: z.optional(ArtifactCoarseKindV1Schema),
                 expectedHeaderVersion: z.optional(z.number().check(z.int(), z.minimum(0))),
                 body: z.optional(z.string()),
                 expectedBodyVersion: z.optional(z.number().check(z.int(), z.minimum(0))),
@@ -533,7 +530,7 @@ export function artifactsRoutes(app: Fastify) {
                 return reply.code(500).send({ error: 'Failed to delete artifact' });
             }
 
-            const deletePayload = buildDeleteArtifactUpdate(id, result.cursor, randomKeyNaked(12));
+            const deletePayload = buildDeleteArtifactUpdate(id, result.cursor.resolveCursor(), randomKeyNaked(12));
             eventRouter.emitUpdate({
                 userId,
                 payload: deletePayload,

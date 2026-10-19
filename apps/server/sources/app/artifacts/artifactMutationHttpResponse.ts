@@ -6,12 +6,13 @@ import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 import { log } from '@/utils/logging/log';
 import * as privacyKit from 'privacy-kit';
 import type { ArtifactBlobWriteV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
+import type { ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 
 export type ArtifactHttpMutationResult = Awaited<ReturnType<typeof createArtifactHttpMutation | typeof updateArtifactHttpMutation>>;
-export type ArtifactCreateHttpInput = Readonly<{ id: string; header: string; body: string; dataEncryptionKey: string; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1; memoryDecisionSource?: CoordinationMessageRefV1 }>;
-export type ArtifactUpdateHttpInput = Readonly<{ header?: string; expectedHeaderVersion?: number; body?: string; expectedBodyVersion?: number; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1 | null; memoryDecisionSource?: CoordinationMessageRefV1 }>;
+export type ArtifactCreateHttpInput = Readonly<{ id: string; kind?: ArtifactCoarseKindV1; header: string; body: string; dataEncryptionKey: string; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1; memoryDecisionSource?: CoordinationMessageRefV1 }>;
+export type ArtifactUpdateHttpInput = Readonly<{ kind?: ArtifactCoarseKindV1; header?: string; expectedHeaderVersion?: number; body?: string; expectedBodyVersion?: number; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1 | null; memoryDecisionSource?: CoordinationMessageRefV1 }>;
 
 function memoryDecisionHttpFailure(error: string) {
     if (error === 'memory_decision_source_unavailable') return { statusCode: 404 as const, body: { error: 'memory_decision_source_unavailable' as const } };
@@ -28,6 +29,7 @@ export async function createArtifactHttpMutation(userId: string, input: Artifact
             const result = await createArtifact({
                 actorUserId: userId,
                 artifactId: id,
+                kind: input.kind,
                 header: privacyKit.decodeBase64(header),
                 body: privacyKit.decodeBase64(body),
                 dataEncryptionKey: privacyKit.decodeBase64(dataEncryptionKey),
@@ -54,7 +56,7 @@ export async function createArtifactHttpMutation(userId: string, input: Artifact
             }
 
             if (result.didWrite) {
-                const newArtifactPayload = buildNewArtifactUpdate(result.artifact, result.cursor, randomKeyNaked(12));
+                const newArtifactPayload = buildNewArtifactUpdate(result.artifact, result.cursor.resolveCursor(), randomKeyNaked(12));
                 eventRouter.emitUpdate({
                     userId,
                     payload: newArtifactPayload,
@@ -69,6 +71,7 @@ export async function createArtifactHttpMutation(userId: string, input: Artifact
             const artifact = read.artifact;
             return { statusCode: 200 as const, body: {
                 id: artifact.id,
+                kind: artifact.kind,
                 ownerAccountId: artifact.ownerAccountId,
                 access: artifact.access,
                 encryptionMode: artifact.encryptionMode,
@@ -108,13 +111,15 @@ export async function updateArtifactHttpMutation(userId: string, artifactId: str
                 ? { bytes: privacyKit.decodeBase64(body), expectedVersion: expectedBodyVersion }
                 : undefined;
 
-            if (!headerParam && !bodyParam) {
+            if (!headerParam && !bodyParam && (input.kind === undefined || expectedHeaderVersion === undefined)) {
                 return { statusCode: 400 as const, body: { error: 'Invalid parameters' as const } };
             }
 
             const result = await updateArtifact({
                 actorUserId: userId,
                 artifactId: id,
+                kind: input.kind,
+                expectedHeaderVersion,
                 header: headerParam,
                 body: bodyParam,
                 provenance: input.provenance == null ? undefined : privacyKit.decodeBase64(input.provenance),
@@ -141,7 +146,7 @@ export async function updateArtifactHttpMutation(userId: string, artifactId: str
                     return { statusCode: 200 as const, body: {
                         success: false as const,
                         error: 'version-mismatch' as const,
-                        ...(headerParam && result.current && {
+                        ...((headerParam || input.kind !== undefined) && result.current && {
                             currentHeaderVersion: result.current.headerVersion,
                             currentHeader: Buffer.from(result.current.header).toString('base64'),
                         }),
@@ -164,7 +169,7 @@ export async function updateArtifactHttpMutation(userId: string, artifactId: str
             for (const recipient of result.recipientUpdates) {
                 eventRouter.emitUpdate({
                     userId: recipient.accountId,
-                    payload: buildUpdateArtifactUpdate(id, recipient.cursor, randomKeyNaked(12), headerUpdate, bodyUpdate, recipient),
+                    payload: buildUpdateArtifactUpdate(id, recipient.cursor.resolveCursor(), randomKeyNaked(12), headerUpdate, bodyUpdate, recipient),
                     recipientFilter: { type: 'user-scoped-only' }
                 });
             }

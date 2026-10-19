@@ -37,6 +37,7 @@ import { redactBugReportSensitiveText } from '../../bugs/reports/redaction.js';
 import type { ReadOnlySkillV1 } from './skills/firstPartySkillsV1.js';
 import type { ArtifactCallerAccessV1 } from '../../artifacts/artifactAccessV1.js';
 import type { CoordinationMessageRefV1 } from '../../discussions/messageRefs.js';
+import type { ArtifactCoarseKindV1 } from '../../artifacts/artifactKindV1.js';
 
 export type PromptLibraryStoredArtifact = Readonly<{
   id: string;
@@ -51,7 +52,7 @@ export type PromptLibraryStoredArtifact = Readonly<{
 export type PromptLibraryArtifactStore = Readonly<{
   organization?: ArtifactFolderActionPortV1;
   /** Header inventory only. Unreadable ranges must not be reported as complete. */
-  list?(options?: Readonly<{ limit?: number; cursor?: string; signal?: AbortSignal }>): Promise<Readonly<{
+  list?(options?: Readonly<{ limit?: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; signal?: AbortSignal }>): Promise<Readonly<{
     items: readonly Readonly<{ id: string; header: Readonly<Record<string, unknown>> | null; updatedAtMs: number; owned?: boolean }>[];
     coverage: 'complete' | 'partial' | 'unavailable';
     nextCursor?: string;

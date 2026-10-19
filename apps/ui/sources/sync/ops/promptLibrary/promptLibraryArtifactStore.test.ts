@@ -22,6 +22,8 @@ import { resolvePromptStackSystemAppendBlocksV1 } from './resolvePromptStackSyst
 import { expandPromptTemplateInvocation } from '@/sync/domains/input/slashCommands/expandPromptTemplateInvocation';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createDeferred } from '@/dev/testkit';
+import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { encodeBase64 } from '@/encryption/base64';
 
 // The third-party markdown renderer is outside this Artifact-only journey.
 vi.mock(
@@ -40,6 +42,7 @@ afterEach(async () => {
   fixture = undefined;
   resetRuntimeFetch();
   vi.restoreAllMocks();
+  resetServerFeaturesClientForTests();
 });
 
 async function home(
@@ -75,6 +78,34 @@ async function home(
 }
 
 describe('UI qualified prompt-library Artifact authority', () => {
+  it.each([true, false])('reads Skills through captured filtered pages with truthful unclassified fallback (%s)', async hasUnclassified => {
+    const catalog = createPromptLibraryCatalogBoundary();
+    const inventoryQueries: string[] = [];
+    const f = await home('prompt_bundle.v2', JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1,
+      entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+        contentBase64: encodeBase64(new TextEncoder().encode('---\nname: current\ndescription: Current skill\n---\n# Current'), 'base64') }] }), {
+      serverFeatures: { features: { artifacts: { kindFiltering: { enabled: true } } }, capabilities: {} },
+      handleRequest: async (path, init) => {
+        if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') {
+          inventoryQueries.push(path);
+          const rows = f.boundary.list();
+          const headers = rows.map(({ body: _body, ...row }) => row);
+          return Response.json(new URL(path, 'https://home.test').searchParams.has('kind')
+            ? { items: headers, hasUnclassified } : headers);
+        }
+        return catalog.handle(path, init);
+      },
+    });
+    const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+    await withUiPromptLibraryArtifactStore(async (_store, account) => {
+      const result = await executeDefaultActionInCapturedAccount(account, 'skills.list', {},
+        { surface: 'ui', authority: 'present_user', serverId: f.home.id, expectedAccountId: account.accountId });
+      expect(result).toMatchObject({ ok: true, result: { items: expect.arrayContaining([expect.objectContaining({ skillId: 'current' })]) } });
+    }, { serverId: f.home.id });
+    expect(inventoryQueries).toEqual(hasUnclassified
+      ? ['/v1/artifacts?limit=500&kind=skill', '/v1/artifacts?limit=500']
+      : ['/v1/artifacts?limit=500&kind=skill']);
+  });
   it.each(['complete', 'incomplete', 'unreadable', 'failed', 'different-account', 'different-credentials', 'cancelled'] as const)(
     'joins only an eligible cold inventory attempt through skills.list (%s)', async scenario => {
       const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');

@@ -7,6 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./artifacts/artifactKindV1": {
+      "happier-source": "./src/artifacts/artifactKindV1.ts",
+      "types": "./dist/artifacts/artifactKindV1.d.ts",
+      "default": "./dist/artifacts/artifactKindV1.js"
+    },
     "./sessions/personal/readState": {
       "happier-source": "./src/sessions/personal/readState.ts",
       "types": "./dist/sessions/personal/readState.d.ts",

@@ -50,6 +50,40 @@ second test pipeline. Remove this ingress when support for those released 0.2
 clients testing against an upgraded daemon ends. The moving predecessor at
 `f18aba940c5c56e5b24454e176c836c171098a2d` still produces that request.
 
+## Coarse Artifact kind (0.3 development)
+
+Artifact kind filtering is an additive HTTP and persistence extension, negotiated
+by `artifacts.kindFiltering`. Current readers send the optional `kind` query and
+write metadata only after an explicit enabled bit. Otherwise they retain the
+unfiltered array response and previous write shape. The inspected immutable
+`server-v0.2.16-preview.1` source (`22ac8263cfdbcdb845441b9044ff18199cf7652e`)
+and moving 0.2 predecessor (`077db90d049ee283ef99196c45c6074a3160c91d`, relevant
+Artifact route clean) have no coarse-kind contract. This observation is source
+provenance, not a claim about a currently deployed Home.
+
+This field negotiation alone does not establish complete 0.3-client/0.2-Home
+Artifact compatibility: those 0.2 list/read projections omit `ownerAccountId`,
+`access`, and `encryptionMode`, which the current keyholding readers require.
+They continue to refuse missing authority. Supporting that older projection
+requires a provenance-bound adapter at the Artifact transport owner; it must not
+fabricate access or infer Account mode from key presence.
+
+Old writers remain accepted by the new Home. Historical writes have null kind;
+an opaque header edit without kind invalidates its previous classification. New
+writers derive the coarse hint through Protocol's `deriveArtifactCoarseKindV1`.
+The filtered response reports readable unclassified rows, and the shared
+`listArtifactHeadersV1` owner restarts a full scan while any remain. Header
+decryption, content validation and access remain authoritative. The client
+inventory backfill uses an authorized header-version-fenced metadata-only write;
+it does not convert envelopes or change content versions.
+
+The new nullable column and Account/kind index require an additive migration
+before loading the new server Prisma projection. Migration deployment and shared
+Prisma client generation belong to the environment owner; source validation may
+generate private clients for disposable test databases without changing live
+clients. The old full-scan path remains until unsupported Homes and unclassified
+rows are no longer reachable.
+
 ## Map the seam
 
 For the changed concept, identify:

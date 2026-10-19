@@ -9,6 +9,12 @@ function defineFeatureCatalog<
 }
 
 const FEATURE_CATALOG_DEFINITION = {
+  'artifacts.kindFiltering': {
+    description: 'Plaintext coarse Artifact kind writes and filtered inventory reads.',
+    defaultFailMode: 'fail_closed',
+    dependencies: [],
+    representation: 'server',
+  },
   teams: {
     description: 'Team membership, governance, and administration surfaces.',
     defaultFailMode: 'fail_closed',

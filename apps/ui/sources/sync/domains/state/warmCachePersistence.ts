@@ -1,4 +1,5 @@
 import { MMKV } from 'react-native-mmkv';
+import { ArtifactCoarseKindV1Schema } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { MachineKindFromLegacyProjectionSchema } from '@happier-dev/protocol/machines/machineKind';
 import { ExternalSessionsSourceSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
@@ -25,6 +26,7 @@ import { prepareWarmCacheEncryptionKey, readResolvedWarmCacheEncryptionKey } fro
 import { SESSION_CONTENT_AVAILABILITIES } from '@/sync/domains/session/encryptedContentAvailability';
 import { MachineLockedReasonSchema } from './storageTypes';
 import { isServerProfilePersistenceSuspendedForDemo } from '@/sync/domains/server/serverProfiles';
+import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
 
 /**
  * The same predicate the rest of this corridor uses (`state/persistence.ts`,
@@ -220,6 +222,51 @@ const MACHINE_DISPLAY_WARM_CACHE_PREFIX = 'machine-display-warm-cache-v1';
  * unencrypted instance, so there is nothing there to retire.
  */
 const PLUGIN_UI_PROJECTION_WARM_CACHE_PREFIX = 'plugin-ui-projection-warm-cache-v1';
+const ARTIFACT_INVENTORY_WARM_CACHE_PREFIX = 'artifact-inventory-warm-cache-v1';
+
+// Header-only projection: never persist content keys, key envelopes, bodies or
+// private revision provenance. Storage placement remains the warm-cache owner's.
+const ArtifactInventoryWarmCacheSchema = z.object({
+    binding: z.string(),
+    cursor: z.string().check(z.regex(/^\d+$/)),
+    artifacts: z.array(z.object({
+        id: z.string().check(z.minLength(1)),
+        kind: z.optional(z.nullable(ArtifactCoarseKindV1Schema)),
+        rawHeader: z.nullable(z.record(z.string(), z.unknown())),
+        isDecrypted: z.boolean(),
+        lockedReason: z.optional(z.enum(['encryption_material_unavailable', 'decryption_failed', 'invalid_stored_content'])),
+        storageMode: z.enum(['plain', 'e2ee']),
+        access: z.optional(z.enum(['owner', 'view', 'edit', 'admin'])),
+        ownerAccountId: z.optional(z.string()),
+        headerVersion: z.number().check(z.int(), z.nonnegative()),
+        bodyVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
+        seq: z.number(), createdAt: z.number(), updatedAt: z.number(),
+    })),
+});
+export type ArtifactInventoryWarmCache = z.infer<typeof ArtifactInventoryWarmCacheSchema>;
+
+export function loadArtifactInventoryWarmCache(serverId: string, accountId: string, binding: string): ArtifactInventoryWarmCache | null {
+    const key = buildScopedKey(ARTIFACT_INVENTORY_WARM_CACHE_PREFIX, serverId, accountId);
+    const entry = loadScopedRecord(key, ArtifactInventoryWarmCacheSchema);
+    if (entry?.binding === binding) return entry;
+    if (entry && key) { getWarmCacheStorage()?.delete(key); warmCacheSavedValueByKey.delete(key); }
+    return null;
+}
+
+export function saveArtifactInventoryWarmCache(serverId: string, accountId: string, entry: ArtifactInventoryWarmCache): void {
+    saveScopedRecord(buildScopedKey(ARTIFACT_INVENTORY_WARM_CACHE_PREFIX, serverId, accountId), ArtifactInventoryWarmCacheSchema.parse(entry));
+}
+
+subscribeHomeCredentialMutations(event => {
+    if (event.kind !== 'credentials_removed') return;
+    const prefix = `${ARTIFACT_INVENTORY_WARM_CACHE_PREFIX}:${event.serverId}:`;
+    const storage = getWarmCacheStorage();
+    for (const key of storage?.getAllKeys() ?? []) {
+        if (!key.startsWith(prefix)) continue;
+        storage?.delete(key);
+        warmCacheSavedValueByKey.delete(key);
+    }
+});
 /**
  * The prefixes older native builds wrote into the shared unencrypted instance. Moving to a new id
  * would only orphan those bytes; the plaintext titles and paths would still be sitting in the old

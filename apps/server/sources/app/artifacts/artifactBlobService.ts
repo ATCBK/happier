@@ -70,7 +70,7 @@ export async function openArtifactBlobBytes(accountId: string, row: ArtifactBlob
 }
 
 async function isArtifactUploadAccountActiveInTx(tx: Tx, accountId: string): Promise<boolean> {
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "content");
     const account = await tx.account.findUnique({ where: { id: accountId }, select: { status: true } });
     return fence.status === 'ready' && account?.status === 'active';
 }

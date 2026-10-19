@@ -3430,6 +3430,7 @@ model Artifact {
     keyEnvelopes ArtifactKeyEnvelope[]
     id                String   @id // UUID provided by client
     accountId         String
+    kind              String?
     account           Account  @relation(fields: [accountId], references: [id])
     header            Bytes // Encrypted header (can contain JSON)
     headerVersion     Int      @default(0)
@@ -3449,6 +3450,7 @@ model Artifact {
 
     @@index([accountId])
     @@index([accountId, updatedAt])
+    @@index([accountId, kind])
 }
 
 model ArtifactRevision {

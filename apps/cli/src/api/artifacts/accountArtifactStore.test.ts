@@ -636,6 +636,11 @@ describe('createAccountArtifactStore', () => {
     const server = createServer((request, response) => {
       request.resume();
       const path = new URL(request.url ?? '/', 'http://localhost').pathname;
+      if (path === '/v1/features') {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ features: {}, capabilities: {} }));
+        return;
+      }
       if (path === '/v1/artifacts/cancel') { cancelled.abort(); return; }
       if (path === '/v1/artifacts/network-failure') { request.socket.destroy(); return; }
       const data = request.method === 'DELETE' ? {}

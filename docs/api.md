@@ -2226,6 +2226,16 @@ Artifact bytes and grants. See the
 [Source storage disclosure](encryption.md#project-source-metadata-03-development).
 
 ### Artifacts
+- In 0.3 development, Homes advertise `features.artifacts.kindFiltering.enabled`.
+  Only an explicit `true` admits coarse kind inputs. `GET /v1/artifacts?kind=skill`
+  (also `prompt`, `plugin_ui`, or `other`) returns
+  `{items: [...], hasUnclassified: boolean}` with the same authorized header
+  projection and paging as the unfiltered list. `hasUnclassified` covers null-kind
+  rows readable by the caller, including grants, independently of the current page.
+  A true flag makes clients restart with the full inventory; a missing or malformed
+  feature bit keeps the existing full scan without sending the new query parameter.
+  Omitting `kind` preserves the array response. Rows expose nullable plaintext
+  `kind`; clients still open and validate their private header before using content.
 - `GET /v1/artifacts?limit=...&cursor=...` lists Artifact headers in
   stable `updatedAt`, `id` order. The optional opaque cursor resumes after the
   last observed row, allowing typed clients to continue through sparse pages
@@ -2268,6 +2278,17 @@ Artifact bytes and grants. See the
 - `POST /v1/artifacts`
 - `POST /v1/artifacts/:id` (versioned update)
 - `DELETE /v1/artifacts/:id`
+
+The development kind-filtering extension accepts optional coarse `kind` on
+Artifact JSON create/update and restore writes (`artifactKind` in the framed binary
+upload metadata, whose `kind` already identifies create/update). Writers derive it
+from the logical header with Protocol's `deriveArtifactCoarseKindV1`, and omit the
+field against a Home that does not advertise support. Older writers remain valid;
+an opaque header write without kind clears the previous hint. The existing update
+route also accepts `{kind, expectedHeaderVersion}` alone for best-effort backfill.
+It requires header-edit authority and the current header version, and changes no
+header/body bytes or content versions. These changes are development-only and
+require the additive Artifact-kind migration before the new server is loaded.
 
 The in-progress 0.3 ordinary binary extension uses a strict body reference
 `{blobId,mime,sizeBytes,sha256}` within the normal plain/E2EE body envelope.

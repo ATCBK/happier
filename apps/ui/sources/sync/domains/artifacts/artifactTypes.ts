@@ -3,6 +3,7 @@ import type { ArtifactOrganizationHeaderV1 } from '@happier-dev/protocol/artifac
 import type { ArtifactPublicAudienceV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import type { ArtifactHtmlBundleV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+import type { ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 
 /** Opened private bytes stay separate from the Home's isolated shell location. */
 export type ArtifactHtmlPreview = Readonly<{ url: string; bundle: ArtifactHtmlBundleV1 }>;
@@ -13,6 +14,7 @@ export type ArtifactBodyInput = ArtifactBodyV1 | null | Readonly<{ bytes: Uint8A
  * Encrypted artifact from API
  */
 export interface Artifact {
+    kind?: ArtifactCoarseKindV1 | null;
     id: string;
     /** Authenticated sharing and owner Account-mode projection from HTTP. */
     ownerAccountId: string;
@@ -69,6 +71,8 @@ export type ArtifactLockedReason =
     | 'invalid_stored_content';
 
 export interface DecryptedArtifactBase {
+    /** Server-visible coarse kind; absence retains unknown classification across warm reloads. */
+    kind?: ArtifactCoarseKindV1 | null;
     /** HTTP grant projection; content-only socket events do not carry authority. */
     access?: 'owner' | 'view' | 'edit' | 'admin';
     ownerAccountId?: string;
@@ -128,6 +132,7 @@ export type DecryptedArtifact =
  * Request to create a new artifact
  */
 export interface ArtifactCreateRequest {
+    kind?: ArtifactCoarseKindV1;
     memoryDecisionSource?: CoordinationMessageRefV1;
     id: string;  // UUID generated client-side
     header: string;  // Base64 encoded encrypted header
@@ -142,6 +147,7 @@ export interface ArtifactCreateRequest {
  * Request to update an existing artifact
  */
 export interface ArtifactUpdateRequest {
+    kind?: ArtifactCoarseKindV1;
     memoryDecisionSource?: CoordinationMessageRefV1;
     provenance?: string | null;
     provenanceDataEncryptionKey?: string | null;

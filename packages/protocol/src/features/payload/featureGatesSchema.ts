@@ -12,6 +12,9 @@ const VoiceGateSchema = lazyZodSchema(() => z.object({
 }));
 
 export const FeatureGatesSchema = lazyZodSchema(() => z.object({
+  artifacts: z.catch(z._default(z.optional(z.object({
+    kindFiltering: z.catch(z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED), DEFAULT_GATE_DISABLED),
+  })), { kindFiltering: DEFAULT_GATE_DISABLED }), { kindFiltering: DEFAULT_GATE_DISABLED }),
   teams: z._default(z.optional(z.extend(FeatureGateSchema, {
     credentialResources: z._default(z.optional(z.extend(FeatureGateSchema, {
       externalApi: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
