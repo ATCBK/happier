@@ -12,6 +12,7 @@ import { normalizeSessionHandoffWorkspaceRootPath } from '@happier-dev/protocol/
 import type { HandoffTargetReplacementApprovalV1 } from '@happier-dev/protocol';
 import type { WorkspaceRootOwnershipHandle, WorkspaceRootOwnershipManager } from './workspaceSyncRootOwnership';
 import {
+  abortWorkspaceTargetMaterializationAfterFailure,
   beginWorkspaceTargetMaterialization,
   recoverInterruptedWorkspaceTargetMaterialization,
   rehydrateWorkspaceTargetMaterializationFromReceiptPath,
@@ -312,7 +313,7 @@ export async function prepareWorkspaceSyncGitTarget(input: Readonly<{
     }, { inspectWorkspaceLocation: dependencies.inspectWorkspaceLocation });
     return targetMaterialization.custody;
   } catch (error) {
-    await targetMaterialization.custody.abort();
+    await abortWorkspaceTargetMaterializationAfterFailure(targetMaterialization.custody, error);
     throw error;
   }
 }

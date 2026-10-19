@@ -9,6 +9,7 @@ import { createScmBackendRegistry } from '@/scm/registry';
 import { computeWorkspaceSyncRootFingerprint, readWorkspaceSyncRootObjectIdentity } from '@/workspaces/sync/workspaceSyncRootIdentity';
 import { buildScmWorkspaceIntegrationWorkspaceExportArtifactsWithBlobProviderFromTransferEntries } from './workspaceExportArtifacts';
 import {
+    abortWorkspaceTargetMaterializationAfterFailure,
     beginWorkspaceTargetMaterialization,
     inspectCommittedWorkspaceTargetMaterialization,
     materializeWorkspaceExportArtifactsWithScmWorkspace,
@@ -704,6 +705,74 @@ describe('workspace export materialization custody', () => {
             await materialization.custody.bindPromotedTarget();
             await materialization.custody.abort();
             await expect(access(target)).rejects.toMatchObject({ code: 'ENOENT' });
+        } finally {
+            await rm(fixture, { recursive: true, force: true });
+        }
+    });
+
+    it('restores the replaced target when rollback runs before the promoted target is bound', async () => {
+        const fixture = await mkdtemp(join(tmpdir(), 'workspace-export-custody-unbound-abort-'));
+        try {
+            const target = join(fixture, 'target');
+            const receiptPath = join(fixture, 'receipt.json');
+            await mkdir(target);
+            await writeFile(join(target, 'old.txt'), 'old');
+            const materialization = await beginWorkspaceTargetMaterialization({
+                targetPath: target,
+                backupDirectoryPrefix: '.backup',
+                receiptPath,
+            });
+            await expect(access(target)).rejects.toMatchObject({ code: 'ENOENT' });
+
+            await materialization.custody.abort();
+
+            await expect(readFile(join(target, 'old.txt'), 'utf8')).resolves.toBe('old');
+            expect((await readdir(fixture)).some((name) => name.startsWith('.backup.'))).toBe(false);
+            await expect(access(receiptPath)).rejects.toMatchObject({ code: 'ENOENT' });
+        } finally {
+            await rm(fixture, { recursive: true, force: true });
+        }
+    });
+
+    it('keeps a foreign object that appeared at the target before the promotion was bound', async () => {
+        const fixture = await mkdtemp(join(tmpdir(), 'workspace-export-custody-unbound-foreign-'));
+        try {
+            const target = join(fixture, 'target');
+            const materialization = await beginWorkspaceTargetMaterialization({
+                targetPath: target,
+                backupDirectoryPrefix: '.backup',
+            });
+            await mkdir(target);
+            await writeFile(join(target, 'user.txt'), 'unrelated');
+
+            await expect(materialization.custody.abort()).rejects.toMatchObject({
+                code: 'workspace_target_materialization_manual_recovery',
+            });
+            await expect(readFile(join(target, 'user.txt'), 'utf8')).resolves.toBe('unrelated');
+        } finally {
+            await rm(fixture, { recursive: true, force: true });
+        }
+    });
+
+    it('reports the failure that triggered rollback even when rollback needs manual recovery', async () => {
+        const fixture = await mkdtemp(join(tmpdir(), 'workspace-export-custody-failure-report-'));
+        try {
+            const target = join(fixture, 'target');
+            const materialization = await beginWorkspaceTargetMaterialization({
+                targetPath: target,
+                backupDirectoryPrefix: '.backup',
+            });
+            await mkdir(target);
+            const original = new Error('git worktree add failed');
+
+            const reported = await abortWorkspaceTargetMaterializationAfterFailure(materialization.custody, original)
+                .then(() => null, (error: unknown) => error);
+
+            expect(reported).toMatchObject({
+                message: 'git worktree add failed',
+                code: 'workspace_target_materialization_manual_recovery',
+                cause: original,
+            });
         } finally {
             await rm(fixture, { recursive: true, force: true });
         }
