@@ -323,7 +323,8 @@ async function publishMutationInTx(tx: Tx, impacts: Awaited<ReturnType<typeof mu
 }
 /** Fence existing and prospective recipients before authority, key or grant reads. */
 export async function acquireMachineAccessPublicationLocksInTx(tx: Tx, machineId: string, principal?: PrincipalRefV1): Promise<void> {
-    if (getDbProviderFromEnv(process.env, 'postgres') === 'sqlite') return;
+    const provider = getDbProviderFromEnv(process.env, 'postgres');
+    if (provider === 'sqlite') return;
     const readAudience = async () => {
         const accountIds = await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId);
         if (principal?.kind === 'account') accountIds.push(principal.accountId);
@@ -340,6 +341,12 @@ export async function acquireMachineAccessPublicationLocksInTx(tx: Tx, machineId
     };
     const captured = new Set(await readAudience());
     await acquireAccountChangePublicationLocksInTx(tx, [...captured], { includeSingleAccount: true });
+    if (provider === 'postgres') {
+        // Content Account admission permits peer Machine writes. Stabilize the
+        // expected content/key basis before grant and recipient-tuple work;
+        // MySQL's existing exclusive Account admission already excludes peers.
+        await tx.$queryRawUnsafe('SELECT "id" FROM "Machine" WHERE "id" = $1 FOR NO KEY UPDATE', machineId);
+    }
     // ReadCommitted can observe audience growth during the wait. Replay through
     // inTx rather than extending a sorted lock set with a lower-id recipient.
     if ((await readAudience()).some(accountId => !captured.has(accountId))) {
