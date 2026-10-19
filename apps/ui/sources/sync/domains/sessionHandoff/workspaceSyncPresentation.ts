@@ -126,6 +126,8 @@ export function resolveWorkspaceSyncErrorTranslationKey(value: unknown): Workspa
         case 'workspace_sync_partial_route_blocked':
             return 'sessionHandoff.failure.partialLinked';
         case 'engine_problems':
+        case 'relationship_not_ready':
+        case 'workspace_root_in_use':
             return 'workspaceSync.error.needsAttention';
         default:
             return null;

@@ -172,14 +172,20 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
     const lastCheckedLabel = status?.lastCycleObservedAtMs == null
         ? null
         : t('workspaceSync.lastChecked', {
-            at: formatWithCachedDateTimeFormatter(status.lastCycleObservedAtMs, undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+            // One unbreakable unit: a wrapped subtitle never strands "PM" alone on a line.
+            at: formatWithCachedDateTimeFormatter(status.lastCycleObservedAtMs, undefined, { dateStyle: 'medium', timeStyle: 'short' }).replace(/\s/g, '\u00A0'),
         });
+    // Two folders on one machine: the title already tells them apart, so the machine is named once.
+    const alphaMachineId = props.summary.alpha.workspaceRef?.machineId;
+    const bothOnOneMachine = alphaMachineId !== undefined && alphaMachineId === props.summary.beta.workspaceRef?.machineId;
     const machineDirectionLabel = props.summary.alpha.machineName || props.summary.beta.machineName
-        ? formatWorkspaceSyncRelationshipTitle({
-            alphaLabel: props.summary.alpha.machineName ?? props.summary.alpha.name,
-            betaLabel: props.summary.beta.machineName ?? props.summary.beta.name,
-            mode: props.summary.relationship.mode,
-        })
+        ? bothOnOneMachine
+            ? props.summary.alpha.machineName ?? props.summary.alpha.name
+            : formatWorkspaceSyncRelationshipTitle({
+                alphaLabel: props.summary.alpha.machineName ?? props.summary.alpha.name,
+                betaLabel: props.summary.beta.machineName ?? props.summary.beta.name,
+                mode: props.summary.relationship.mode,
+            })
         : null;
 
     const subtitle = [

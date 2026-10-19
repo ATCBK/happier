@@ -252,6 +252,25 @@ describe('WorkspaceSyncRelationshipRow', () => {
         expect(titles[1]).toContain('Beta');
     });
 
+    it('names the machine once when both folders live on the same machine', async () => {
+        const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
+        const summary = createSummary(0, 'keep_synced');
+        const onOneMachine = {
+            ...summary,
+            beta: {
+                ...summary.beta,
+                workspaceRef: { ...summary.beta.workspaceRef!, machineId: summary.alpha.workspaceRef!.machineId },
+                machineName: summary.alpha.machineName,
+            },
+        };
+        const screen = await renderScreen(<WorkspaceSyncRelationshipRow summary={onOneMachine} />);
+
+        const subtitle = screen.findByTestId('workspace-sync-relationship-relationship-1')?.props.subtitle as string;
+        expect(subtitle).toContain('Alpha Mac');
+        expect(subtitle).not.toContain('Alpha Mac → Alpha Mac');
+        expect(subtitle).not.toContain('Alpha Mac · Alpha Mac');
+    });
+
     it('keeps a generic attention message for an unmapped daemon error code', async () => {
         const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
         const summary = createSummary(0);

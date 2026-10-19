@@ -402,4 +402,22 @@ describe('workspace sync UI operations', () => {
         machineRpcWithServerScope.mockResolvedValueOnce({ status });
         await expect(disableWorkspaceSyncRelationship(scope)).rejects.toThrow('Unsupported response');
     });
+
+    it('keeps the daemon\'s typed refusal of a lifecycle command from the transport to the Action result', async () => {
+        const scope = {
+            controllerMachineId: 'machine-controller',
+            serverId: actionServerId,
+            relationshipId: 'relationship-1',
+        };
+        // An encrypted transport delivers a handler refusal as the response value, not as a thrown error.
+        machineRpcWithServerScope.mockResolvedValue({ error: 'Workspace relationship is unavailable', errorCode: 'relationship_not_ready' });
+
+        await expect(disableWorkspaceSyncRelationship(scope)).rejects.toMatchObject({ rpcErrorCode: 'relationship_not_ready' });
+        await expect(enableWorkspaceSyncRelationship(scope)).rejects.toMatchObject({ rpcErrorCode: 'relationship_not_ready' });
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        await expect(createDefaultActionExecutor().execute('workspace.sync.relationship.disable', {
+            controllerMachineId: scope.controllerMachineId,
+            relationshipId: scope.relationshipId,
+        }, { serverId: actionServerId, surface: 'ui' })).resolves.toMatchObject({ ok: false, errorCode: 'relationship_not_ready' });
+    });
 });
