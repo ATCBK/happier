@@ -128,8 +128,13 @@ export async function waitForReplacementDaemon(params: Readonly<{
         }
         return false;
       },
-      shouldAbort: () => params.startupProcess !== undefined
-        && hasObservableDaemonStartProcessExited(params.startupProcess),
+      shouldAbort: () => (
+        lastObserved?.pid === (params.startupProcess?.detachedDaemonPid ?? params.startupProcess?.pid)
+        && (lastObserved?.reason === 'version_mismatch' || lastObserved?.reason === 'runtime_mismatch')
+      ) || (
+        params.startupProcess !== undefined
+        && hasObservableDaemonStartProcessExited(params.startupProcess)
+      ),
       isStillStarting,
       onStillStarting: () => logger.debug('[DAEMON RUN] Replacement daemon is still starting; waiting for authenticated readiness'),
       timeoutMs,
