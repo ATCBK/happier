@@ -28,6 +28,8 @@ const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init
         return Response.json({ error: 'Failed to get artifact' }, { status: 500 });
     return artifacts.handle(path, init);
 } });
+// Load the rendered area graph after installing HTTP boundaries, outside the timed Account journey.
+const { WidgetArea } = await import('./WidgetArea');
 function setActionPolicy(policy: ReturnType<typeof normalizeActionsSettingsV1>) {
     actionPolicy = policy;
     storage.setState({ settingsScope: { serverId: runtime.serverId, accountId: 'account-a' },
@@ -37,7 +39,6 @@ let disposeActionLoader: (() => void) | undefined;
 let useCorePageWidgetAreaBinding: typeof import('./useCorePageWidgetAreaBinding')['useCorePageWidgetAreaBinding'];
 let useWidgetAreaLayouts: typeof import('@/components/projects/overview/useProjectDashboards')['useWidgetAreaLayouts'];
 let useWidgetAreaLayout: typeof import('./useWidgetAreaLayout')['useWidgetAreaLayout'];
-let WidgetArea: typeof import('./WidgetArea')['WidgetArea'];
 let WidgetAreaPresetLine: typeof import('./WidgetAreaPresetLine')['WidgetAreaPresetLine'];
 let useUsageWidgetAreaBinding: typeof import('@/components/settings/usage/useUsageWidgetAreaBinding')['useUsageWidgetAreaBinding'];
 beforeAll(async () => {
@@ -46,7 +47,6 @@ beforeAll(async () => {
     ({ useCorePageWidgetAreaBinding } = await import('./useCorePageWidgetAreaBinding'));
     ({ useWidgetAreaLayouts } = await import('@/components/projects/overview/useProjectDashboards'));
     ({ useWidgetAreaLayout } = await import('./useWidgetAreaLayout'));
-    ({ WidgetArea } = await import('./WidgetArea'));
     ({ WidgetAreaPresetLine } = await import('./WidgetAreaPresetLine'));
     ({ useUsageWidgetAreaBinding } = await import('@/components/settings/usage/useUsageWidgetAreaBinding'));
 });

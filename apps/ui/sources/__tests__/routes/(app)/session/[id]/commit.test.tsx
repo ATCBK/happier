@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createPlainSessionByIdResponseFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
@@ -31,19 +31,14 @@ let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
 let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
 let hydrateReady = true;
 const pendingHydrationReads = new Set<() => void>();
-let operations: typeof import('@/sync/ops');
-let DiffFilesListView: typeof import('@/components/ui/code/diff/DiffFilesListView')['DiffFilesListView'];
-let ActivitySpinner: typeof import('@/components/ui/feedback/ActivitySpinner')['ActivitySpinner'];
-let SessionCommitDetailsView: typeof import('@/components/sessions/files/views/SessionCommitDetailsView')['SessionCommitDetailsView'];
-beforeAll(async () => {
-    await prepareSessionFilesViewTestkit();
-    operations = await import('@/sync/ops');
-    vi.spyOn(operations, 'sessionScmDiffCommit');
-    vi.spyOn(operations, 'sessionScmCommitBackout');
-    ({ DiffFilesListView } = await import('@/components/ui/code/diff/DiffFilesListView'));
-    ({ ActivitySpinner } = await import('@/components/ui/feedback/ActivitySpinner'));
-    ({ SessionCommitDetailsView } = await import('@/components/sessions/files/views/SessionCommitDetailsView'));
-});
+// Prepare the one-time module graph during collection, before case-owned Account lifetimes.
+await prepareSessionFilesViewTestkit();
+const operations = await import('@/sync/ops');
+vi.spyOn(operations, 'sessionScmDiffCommit');
+vi.spyOn(operations, 'sessionScmCommitBackout');
+const { DiffFilesListView } = await import('@/components/ui/code/diff/DiffFilesListView');
+const { ActivitySpinner } = await import('@/components/ui/feedback/ActivitySpinner');
+const { SessionCommitDetailsView } = await import('@/components/sessions/files/views/SessionCommitDetailsView');
 
 describe('CommitScreen', () => {
     beforeEach(async () => {
@@ -84,9 +79,9 @@ describe('CommitScreen', () => {
         browser?.restore();
     });
     async function renderCommitScreen(Screen: React.ComponentType) {
-        route.params = searchParams;
+        route.params = { ...searchParams, serverId: fixture.scope.serverId };
         fixture.storage.getState().applySettingsLocal({ experiments: true, featureToggles: {
-            ...fixture.storage.getState().settings.featureToggles, 'scm.write': scmWriteEnabled,
+            ...fixture.storage.getState().settings.featureToggles, 'scm.writeOperations': scmWriteEnabled,
         } });
         fixture.storage.setState({ localSettings: { ...fixture.storage.getState().localSettings, uiMultiPanePanelsEnabled: false } });
         const screen = await fixture.render(<Screen />);

@@ -64,6 +64,9 @@ vi.mock('@/sync/sync', async () => (
   (await import('@/dev/testkit/harness/chatListHarness')).createChatListHarnessSyncModuleMock()
 ));
 
+// Compile the real transcript graph during collection, after installing its boundaries.
+await import('./ChatList');
+
 describe('ChatList (turn grouping mode)', () => {
   beforeEach(() => {
     resetChatListHarness({

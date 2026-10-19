@@ -3,9 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SESSION_ACTION_EDIT_TAGS_ID } from '@/components/sessions/actions/sessionActionIds';
-import { createSessionFixture, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
-import { createModelBackedSessionItemTestComponent } from './sessionItemRowViewModelTestFixture';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -68,6 +66,11 @@ installSessionShellCommonModuleMocks({
 vi.doUnmock('@/sync/domains/state/storage');
 vi.doUnmock('@/hooks/session/useDraft');
 vi.doUnmock('@/agents/registry/registryUiBehavior');
+
+// Configure the native boundary before runtime-bearing render/row consumers
+// can cache the common helper's default web platform.
+const { createSessionFixture, invokeTestInstanceHandler, renderScreen, standardCleanup } = await import('@/dev/testkit');
+const { createModelBackedSessionItemTestComponent } = await import('./sessionItemRowViewModelTestFixture');
 
 async function importSessionItem() {
     const { SessionItem } = await import('./SessionItem');

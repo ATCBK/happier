@@ -17,6 +17,9 @@ vi.mock('react-native', async () => {
 
 installShippedNativeFrameScheduler();
 
+// Collect the real component graph before the interaction-test deadline starts.
+await import('../SelectionList');
+
 /**
  * RUX-5: scrolling-edge indicators on the SelectionListBody scroll container.
  *

@@ -42,6 +42,9 @@ vi.mock('@/modal', () => ({
     Modal: { alert: (...args: unknown[]) => modalAlertSpy(...args) },
 }));
 
+// Collect the real component graph before the interaction-test deadline starts.
+await import('./SessionActionConfirmationPromptCard');
+
 function actionRequest(overrides: Partial<PendingPermissionRequest> = {}): PendingPermissionRequest {
     return {
         id: 'action:request-1',
