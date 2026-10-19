@@ -48,7 +48,7 @@ test('one root owner admits package outputs before taking the shared publication
   });
 
   assert.deepEqual(events, [
-    ['admit', '/repo', ['@happier-dev/cli-common'], true, true],
+    ['admit', '/repo', ['@happier-dev/cli-common'], undefined, true],
     ['resolve', '/repo/packages/example'],
     ['admit', '/repo', ['@happier-dev/protocol', '@happier-dev/agents'], true, true],
     ['lock', '/repo/.project/tmp/workspace-bundle.lock'],
@@ -83,7 +83,7 @@ test('live publication remains incremental and preserves an already-held lock id
   });
 
   assert.deepEqual(admissions, [
-    { packageNames: ['@happier-dev/cli-common'], force: false },
+    { packageNames: ['@happier-dev/cli-common'], force: undefined },
     { packageNames: ['@happier-dev/protocol'], force: undefined },
   ]);
 });
