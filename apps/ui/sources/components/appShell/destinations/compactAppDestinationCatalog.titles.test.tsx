@@ -13,7 +13,6 @@ import { readApprovalActionTitle } from '@/components/approvals/approvalRequestT
 import { formatApprovalStatusLabel } from '@/components/approvals/approvalStatusLabel';
 
 import { projectArtifactHeaderForDisplay } from '@/sync/encryption/artifactEncryption';
-import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
 import { storage } from '@/sync/domains/state/storage';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { t } from '@/text';
@@ -32,7 +31,10 @@ import {
     useDestinationInstanceTitles,
 } from './compactAppDestinationCatalog';
 
-installPanelCommonModuleMocks();
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+// Keep real translations throughout this graph: late panel mocks split the title
+// readers already loaded by fixture imports from this suite's translation binding.
 // Catalog titles never access the Session-envelope HTTP boundary.
 vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
     const unused = () => { throw new Error('Unexpected Session-envelope HTTP request in catalog title test'); };
@@ -102,7 +104,11 @@ describe('Project destination instance titles', () => {
             key: String(index), ref: destination(href),
         }));
         const hook = await renderHook(() => useDestinationInstanceTitles(catalog, entries));
-        expect(hook.getCurrent().size).toBe(0);
+        const pending = entries.map(entry => readDestinationInstanceTitle(catalog, entry.ref));
+        expect([...hook.getCurrent().values()]).toEqual(pending);
+        expect(pending.every(title => typeof title === 'string' && title.length > 0)).toBe(true);
+        expect(pending[0]).not.toBe(t('projects.detail.notFoundTitle'));
+        expect(pending[1]).not.toBe(t('artifacts.notFound'));
         await act(async () => {
             applyProjectAccountRowsFixture(storage, { workspaceRefs: [lumen, atlas] });
             storage.getState().applyArtifacts([], storage.getState().artifacts);
@@ -223,9 +229,9 @@ describe('Project destination instance titles', () => {
         })).toBe('Unsaved edit');
         expect(readDestinationInstanceTitle(catalog, entries[0]!.ref, {
             publishedTitle: { ref: entries[0]!.ref, title: null },
-        })).toBeNull();
+        })).toBe(t('common.unavailable'));
         expect(readDestinationInstanceTitle(catalog, { ...entries[1]!.ref,
-            params: { ...entries[1]!.ref.params, serverId: 'other-home' } })).toBeNull();
+            params: { ...entries[1]!.ref.params, serverId: 'other-home' } })).toBe(t('common.unavailable'));
         const unchanged = hook.getCurrent();
         await act(async () => storage.setState({ isDataReady: true }));
         expect(hook.getCurrent()).toBe(unchanged);
@@ -249,10 +255,8 @@ describe('Project destination instance titles', () => {
         expect(readDestinationInstanceTitle(catalog, entries[0]!.ref)).toBe('After rename');
         await hook.unmount();
     });
-    it('does not name a nested screen after its parent area before its title supplier loads', () => {
-        for (const href of ['/session/example/info', '/session/example/files', '/artifacts/example', '/settings/prompts/docs/example']) {
-            expect(readDestinationInstanceTitle(catalog, destination(href)), href).toBeNull();
-        }
+    it('gives an unnamed restored Session an honest fallback without mounting its title supplier', () => {
+        expect(readDestinationInstanceTitle(catalog, destination('/session/example/info'))).toBe(t('session.untitled'));
         expect(readDestinationInstanceTitle(catalog, destination('/'))).toBe(t('common.home'));
         expect(readDestinationInstanceTitle(catalog, destination('/settings/appearance'))).toBe(t('settings.appearance'));
     });
@@ -270,10 +274,10 @@ describe('Project destination instance titles', () => {
             .toBe(`Lumen · ${t('settings.terminal')}`);
     });
 
-    it('settles absent Projects while leaving ambiguous or another-Home identities unnamed', () => {
+    it('settles absent Projects while giving ambiguous or another-Home identities only the category title', () => {
         expect(readDestinationInstanceTitle(catalog, destination('/projects/not-loaded/code?serverId=home-a'))).toBe(t('projects.detail.notFoundTitle'));
-        expect(readDestinationInstanceTitle(catalog, destination('/projects/checkout'))).toBeNull();
-        expect(readDestinationInstanceTitle(catalog, destination('/projects/checkout?serverId=unknown-home'))).toBeNull();
+        expect(readDestinationInstanceTitle(catalog, destination('/projects/checkout'))).toBe(t('tabs.projects'));
+        expect(readDestinationInstanceTitle(catalog, destination('/projects/checkout?serverId=unknown-home'))).toBe(t('tabs.projects'));
     });
 
     it('updates retained and duplicate tab titles through rename and refresh without changing their keys', async () => {
@@ -285,6 +289,7 @@ describe('Project destination instance titles', () => {
         expect([...hook.getCurrent()]).toEqual([
             ['first', `Lumen · ${t('projects.pages.code')}`],
             ['explicit-duplicate', `Lumen · ${t('projects.pages.code')}`],
+            ['loading', t('tabs.projects')],
         ]);
         const unchanged = hook.getCurrent();
         await act(async () => { storage.setState({ isDataReady: false }); });
@@ -295,14 +300,14 @@ describe('Project destination instance titles', () => {
         });
         expect(hook.getCurrent().get('first')).toBe(`Lumen renamed · ${t('projects.pages.code')}`);
         expect(hook.getCurrent().get('explicit-duplicate')).toBe(hook.getCurrent().get('first'));
-        expect(hook.getCurrent().has('loading')).toBe(false);
+        expect(hook.getCurrent().get('loading')).toBe(t('tabs.projects'));
         await act(async () => {
             applyProjectAccountRowsFixture(storage, { workspaceRefs: [{ ...lumen, label: null }, atlas] });
         });
         expect(hook.getCurrent().get('first')).toBe(`lumen · ${t('projects.pages.code')}`);
         await act(async () => { storage.getState().activateProfileScope({ ...scope, accountId: 'account-b' }); });
-        expect(hook.getCurrent().size).toBe(0);
-        expect(readDestinationInstanceTitle(catalog, ref)).toBeNull();
+        expect([...hook.getCurrent()]).toEqual(entries.map(entry => [entry.key, t('tabs.projects')]));
+        expect(readDestinationInstanceTitle(catalog, ref)).toBe(t('tabs.projects'));
         await hook.unmount();
     });
 });
