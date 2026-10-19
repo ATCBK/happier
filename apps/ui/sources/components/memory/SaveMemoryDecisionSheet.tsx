@@ -3,12 +3,8 @@ import { Platform, ScrollView, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import {
   HAPPIER_PAGE_METRICS,
-  resolveHappierFutureLocalDateTime,
-  toHappierLocalDateTimeDraft,
-  type HappierLocalDateTimeDraft,
 } from '@happier-dev/plugin-ui/presentation';
 import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
-import { MemoryDecisionSourceErrorCodeV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { LocalDateTimeEditor } from '@/components/ui/dateTime/LocalDateTimeEditor';
@@ -25,25 +21,11 @@ import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessL
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal, type CustomModalInjectedProps } from '@/modal';
-import { useSessionSelector } from '@/sync/store/hooks';
-import {
-  memoryDocumentActions,
-  readMemoryActionOutcome,
-  readMemoryDuplicateReview,
-  readMemoryCreationReceipt,
-  type MemoryCreationReceipt,
-} from '@/sync/ops/promptLibrary/memoryDocuments';
+import type { MemoryCreationReceipt } from '@/sync/ops/promptLibrary/memoryDocuments';
 import { t } from '@/text';
 
-import {
-  leadingCandidateId,
-  MemoryDuplicateChoice,
-  type DuplicateChoiceKind,
-  type DuplicateReview,
-} from './MemoryDocumentBody';
-
-/** A fresh date expiry starts a month out; the person picks the real day. */
-const INITIAL_EXPIRY_OFFSET_MS = 30 * 24 * 60 * 60 * 1000;
+import { MemoryDuplicateChoice } from './MemoryDocumentBody';
+import { useSaveMemoryDecision } from './useSaveMemoryDecision';
 
 /** What opens the sheet: the exact committed message, and what to prefill from it. */
 export type SaveMemoryDecisionSeed = Readonly<{
@@ -61,13 +43,6 @@ type FormProps = Readonly<{
   onCreatedMemory?: (receipt: MemoryCreationReceipt) => void;
 }>;
 
-type Notice =
-  | 'pending'
-  | 'conflict'
-  | 'refused'
-  | 'disclosure'
-  | 'sourceUnavailable'
-  | null;
 type Expiry = 'never' | 'date';
 
 /** First line of the answer as the decision, the rest as its reason; both stay editable. */
@@ -87,17 +62,6 @@ export function seedMemoryDecisionFromMessage(
   };
 }
 
-/** The server's own source refusals say why nothing was saved; any other refusal stays the generic one. */
-function readMemoryDecisionSourceRefusal(errorCode: unknown): 'disclosure' | 'sourceUnavailable' | null {
-  const code = MemoryDecisionSourceErrorCodeV1Schema.safeParse(errorCode);
-  if (!code.success) return null;
-  return code.data === 'memory_decision_disclosure_denied'
-    ? 'disclosure'
-    : code.data === 'memory_decision_source_unavailable'
-      ? 'sourceUnavailable'
-      : null;
-}
-
 /**
  * Save as decision (lab K2 `S`/`Sd`, C6 §5): the decision, its reason, the exact message it was decided
  * in and an expiry (Never or a date). It saves through `memory.decision.save`: a Session's message to that
@@ -105,143 +69,8 @@ function readMemoryDecisionSourceRefusal(errorCode: unknown): 'disclosure' | 'so
  * form leads with it and asks Update / Replace / Keep both, keeping everything typed.
  */
 export function SaveMemoryDecisionForm(props: FormProps) {
-  const { seed } = props;
-  const source = seed.sourceMessageRef;
-  const sessionSource = source.kind === 'session' ? source.session : null;
-  const serverId = sessionSource?.serverId ?? (source.kind === 'discussion' ? source.discussion.serverId : '');
-  const sessionId = sessionSource?.sessionId ?? '';
-  const sessionMetadataVersion = useSessionSelector(
-    sessionId,
-    serverId,
-    (session) => session?.metadataVersion ?? null,
-  );
-  // A Session's save needs its current metadata revision; a Discussion's goes to the person's memory.
-  const ready = source.kind === 'discussion' || sessionMetadataVersion !== null;
-  const [text, setText] = React.useState(seed.text);
-  const [reason, setReason] = React.useState(seed.reason ?? '');
-  const [expiry, setExpiry] = React.useState<Expiry>('never');
-  const [nowMs] = React.useState(() => Date.now());
-  const [expiryDraft, setExpiryDraft] =
-    React.useState<HappierLocalDateTimeDraft>(() =>
-      toHappierLocalDateTimeDraft(new Date(nowMs + INITIAL_EXPIRY_OFFSET_MS)),
-    );
-  const [review, setReview] = React.useState<DuplicateReview | null>(null);
-  const [choice, setChoice] = React.useState<DuplicateChoiceKind>('replace');
-  const [candidateId, setCandidateId] = React.useState<string | null>(null);
-  const [notice, setNotice] = React.useState<Notice>(null);
-  const [busy, setBusy] = React.useState(false);
-  const [creationReceipt, setCreationReceipt] = React.useState<MemoryCreationReceipt | null>(null);
-  const [controller] = React.useState(() => new AbortController());
-  React.useEffect(() => () => controller.abort(), [controller]);
-  const expiresAtMs =
-    expiry === 'date'
-      ? resolveHappierFutureLocalDateTime(expiryDraft, nowMs)
-      : null;
-  const canSave =
-    !busy &&
-    creationReceipt === null &&
-    notice !== 'pending' &&
-    text.trim().length > 0 &&
-    reason.trim().length > 0 &&
-    ready &&
-    (expiry === 'never' || expiresAtMs !== null);
-
-  const save = React.useCallback(async () => {
-    if (!canSave) return;
-    setBusy(true);
-    setNotice(null);
-    const choiceFactId = review
-      ? (candidateId ?? leadingCandidateId(review))
-      : null;
-    try {
-      const draft = {
-          text: text.trim(),
-          reason: reason.trim(),
-          sourceMessageRef: source,
-          ...(expiresAtMs !== null ? { expiresAtMs } : {}),
-          ...(review
-            ? {
-                reviewedTarget: {
-                  ref: review.ref,
-                  expectedRevision: review.revision,
-                },
-                duplicateChoice:
-                  choice === 'keep_both' || choiceFactId === null
-                    ? {
-                        kind: 'keep_both' as const,
-                        expectedRevision: review.revision,
-                      }
-                    : {
-                        kind: choice,
-                        factId: choiceFactId,
-                        expectedRevision: review.revision,
-                      },
-              }
-            : {}),
-      };
-      const result =
-        sessionSource !== null && sessionMetadataVersion !== null
-          ? await memoryDocumentActions.saveDecisionInSession(
-              {
-                sessionId: sessionSource.sessionId,
-                serverId: sessionSource.serverId,
-                expectedMetadataRevision: sessionMetadataVersion,
-              },
-              draft,
-              controller.signal,
-            )
-          : await memoryDocumentActions.saveDecisionInScope(
-              { scope: 'account' },
-              draft,
-              serverId,
-              controller.signal,
-            );
-      if (controller.signal.aborted) return;
-      const found = readMemoryDuplicateReview(result);
-      if (found) {
-        setReview(found);
-        setCandidateId(leadingCandidateId(found));
-        return;
-      }
-      const outcome = readMemoryActionOutcome(result);
-      const sourceRefusal = result.ok ? null : readMemoryDecisionSourceRefusal(result.errorCode);
-      if (sourceRefusal) {
-        setNotice(sourceRefusal);
-        return;
-      }
-      const receipt = readMemoryCreationReceipt(result);
-      if (receipt) {
-        setCreationReceipt(receipt);
-        props.onCreatedMemory?.(receipt);
-      }
-      if (outcome === 'applied') props.onSaved();
-      else setNotice(outcome === 'review' || outcome === 'saved_unattached' ? null : outcome);
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        setNotice(
-          readMemoryDecisionSourceRefusal(
-            typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined,
-          ) ?? 'refused',
-        );
-      }
-    } finally {
-      if (!controller.signal.aborted) setBusy(false);
-    }
-  }, [
-    canSave,
-    candidateId,
-    choice,
-    controller,
-    expiresAtMs,
-    props,
-    reason,
-    review,
-    serverId,
-    sessionMetadataVersion,
-    sessionSource,
-    source,
-    text,
-  ]);
+  const { text, setText, reason, setReason, expiry, setExpiry, nowMs, expiryDraft, setExpiryDraft,
+    review, choice, setChoice, candidateId, setCandidateId, notice, busy, canSave, save, sessionSource } = useSaveMemoryDecision(props);
 
   const expiryOptions = React.useMemo(
     (): ReadonlyArray<SegmentedChoiceOption<Expiry>> => [

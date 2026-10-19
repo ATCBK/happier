@@ -52,7 +52,8 @@ describe('memory Action receipts', () => {
       expect(saved).toHaveLength(1);
       if (unavailable) {
         const receipt = readMemoryCreationReceipt(result);
-        expect(receipt).toMatchObject({ attachment: 'conflict', attachmentFailure: failure });
+        expect(receipt).toMatchObject({ attachment: 'conflict', attachmentFailure: failure,
+          factId: expect.any(String) });
         expect(readMemoryActionOutcome(result)).toBe('saved_unattached');
         expect(source.attachments).toEqual([]);
         if (!receipt) throw new Error('Expected saved document receipt');
