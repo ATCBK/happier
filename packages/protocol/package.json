@@ -7,6 +7,16 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./sessions/personal/readState": {
+      "happier-source": "./src/sessions/personal/readState.ts",
+      "types": "./dist/sessions/personal/readState.d.ts",
+      "default": "./dist/sessions/personal/readState.js"
+    },
+    "./sessions/personal/relevance": {
+      "happier-source": "./src/sessions/personal/relevance.ts",
+      "types": "./dist/sessions/personal/relevance.d.ts",
+      "default": "./dist/sessions/personal/relevance.js"
+    },
     "./sessions/follow/sessionFollowListV1": {
       "happier-source": "./src/sessions/follow/sessionFollowListV1.ts",
       "types": "./dist/sessions/follow/sessionFollowListV1.d.ts",

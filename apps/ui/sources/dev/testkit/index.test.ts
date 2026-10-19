@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 describe('UI testkit barrel', () => {
-    it('loads hook and transcript native boundaries without UI Settings or plugin catalogs', async () => {
+    it('loads hook and transcript native boundaries without the full Protocol, UI Settings or plugin catalogs', async () => {
         const { renderHook } = await import('./index');
         const hook = await renderHook(() => 'ready');
         expect(hook.getCurrent()).toBe('ready');
@@ -20,7 +20,8 @@ describe('UI testkit barrel', () => {
         expect(cache).toBeDefined();
         const loaded = [...cache!].filter(([id, entry]) => !id.startsWith('mock:') && entry.exports)
             .map(([id]) => id.replaceAll('\\', '/'));
-        expect(loaded.filter(id => id.endsWith('/sync/domains/settings/settings.ts')
+        expect(loaded.filter(id => id.endsWith('/packages/protocol/src/index.ts')
+            || id.endsWith('/sync/domains/settings/settings.ts')
             || id.endsWith('/agents/registry/registryCore.ts')
             || id.endsWith('/voice/registry/generatedBundledVoiceEntries.ts'))).toEqual([]);
     });
