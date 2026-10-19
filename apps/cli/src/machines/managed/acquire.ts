@@ -422,13 +422,15 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                     admission = await client.post('/v1/machines/managed/controller/admit-control', request, ManagedAdmissionOutputV1Schema);
                 } catch (error) {
                     // Lost transport/schema acknowledgement cannot establish that
-                    // this write rolled back. Home's named acquisition/rollback
-                    // refusals and pre-request currentness failures remain definite.
+                    // this write rolled back. database_connection_unavailable also
+                    // covers raw pool errors without pre-commit evidence. Only the
+                    // transaction owner's confirmed rollback refusal is definite;
+                    // pre-request currentness failures retain their own boundary.
                     if (!executesIntent || !operationId || !(error instanceof ManagedMachineControllerError)) throw error;
                     const details = error.details;
                     const unknown = details && (details.category === 'transport' || details.category === 'schema'
                         || details.category === 'status' && (details.status ?? 0) >= 500
-                            && error.code !== 'database_connection_unavailable' && error.code !== 'database_transaction_conflict_exhausted');
+                            && error.code !== 'database_transaction_conflict_exhausted');
                     if (!unknown) throw error;
                     const managedId = 'managedMachineId' in request.input ? request.input.managedMachineId : request.input.managedId;
                     options.context?.operationOwnerUpdate?.update({ domainRef: { kind: 'managedMachine', id: managedId } });

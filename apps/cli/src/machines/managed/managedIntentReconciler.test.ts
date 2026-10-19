@@ -46,6 +46,7 @@ import { ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/o
 import { ActionOperationGetV1ResponseSchema as PredecessorOperationGetSchema } from '@/daemon/actionOperations/testFixtures/predecessorActionOperationV1';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
+import { doesManagedNativeObservationSettleIntent } from '../../../../server/sources/app/machines/managed/managedNativeObservation';
 
 const unavailable = async (): Promise<never> => { throw new Error('Unexpected credential transport'); };
 function signedIdle(machine: ReturnType<typeof ManagedMachineV1Schema.parse>, since: number, confirmedAt: number) {
@@ -166,6 +167,7 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
         ...machine.desiredWhen === 'after-idle' ? { when: 'after-idle', intent: 'delete', afterMs: machine.desiredAfterMs } : { when: 'now', intent: 'delete', expectedRevision: machine.intentRevision },
         reviewedDependencies: true }, { ...options, ...(signal ? { signal } : {}) });
     return { effects, nativeInputs, reports, post, readActivity, confirmIdle, reopen, waitForChange, run, driver, driverInput, options, installationKeys,
+        retireNative: native.retire,
         readMachine: () => machine,
         setMachine: (update: Partial<typeof machine>) => { machine = { ...machine, ...update }; },
     };
@@ -173,6 +175,43 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('unused Stop through guest drain and controller operation custody', () => {
+    it.each(['native-currentness', 'private-currentness', 'private-admission'] as const)(
+        'settles a definite pre-handler refusal at %s without a phantom native effect', async boundary => {
+        const test = setup(undefined, undefined, 'start');
+        const machine = test.readMachine();
+        const home = test.post.getMockImplementation()!;
+        let submittedReads = 0;
+        test.post.mockImplementation(async (url, body, config) => {
+            if (String(url).endsWith('/current') && test.readMachine().submittedNativeEffect) {
+                submittedReads += 1;
+                // The first read is the reconciler's post-submit check; the next
+                // belongs to native.invoke, then to private Action custody.
+                if (submittedReads === (boundary === 'private-currentness' ? 3 : 2)) {
+                    if (boundary === 'private-admission') test.retireNative();
+                    else return { status: 503, data: { error: 'database_connection_unavailable' } };
+                }
+            }
+            return await home(url, body, config);
+        });
+        const input = { homeId: machine.homeId, managedId: machine.id, intent: 'start', when: 'now', expectedRevision: 1 };
+        const operations = createHostActionOperationRuntime({ machineId: machine.controller.machineId,
+            resolveAccountId: async () => 'owner', generateOperationId: () => 'not-run' });
+        let work: ReturnType<typeof test.driver.execute> | undefined;
+        await operations.observeExecution({ actionId: 'machines.managed.power.set', input, actionRequestId: 'control',
+            execute: async context => {
+                work = test.driver.execute('machines.managed.power.set', input, { requestId: 'control', context, signal: context.signal });
+                const result = await work;
+                const failure = ActionExecuteFailureSchema.safeParse(result);
+                return failure.success ? failure.data : { ok: true, result };
+            } });
+        const code = boundary === 'private-admission' ? 'plugin_managed_provider_operation_custody_invalid' : 'database_connection_unavailable';
+        await expect(work).rejects.toMatchObject({ code });
+        expect(test.reports).toEqual([expect.objectContaining({ result: { kind: 'refused', code } })]);
+        expect(test.readMachine().submittedNativeEffect).toBeUndefined();
+        expect(test.effects).toEqual([]);
+        expect(ActionOperationGetV1ResponseSchema.parse(await operations.handlers.getV2({ operationId: 'not-run' })))
+            .toMatchObject({ kind: 'found', operation: { state: 'failed', error: { errorCode: code }, settledAt: expect.any(Number) } });
+    });
     it.each([
         { intent: 'start', role: 'power', action: 'machines.managed.power.set' },
         { intent: 'delete', role: 'destroy', action: 'machines.managed.delete' },
@@ -263,8 +302,14 @@ describe('unused Stop through guest drain and controller operation custody', () 
                 const failure = ActionExecuteFailureSchema.safeParse(result);
                 return failure.success ? failure.data : { ok: true, result };
             } });
-        if (boundary === 'admit-control') {
+        const uncertainAdmission = boundary === 'admit-control' && code === 'database_connection_unavailable';
+        if (boundary === 'admit-control' && !uncertainAdmission) {
             await expect(observed).rejects.toMatchObject({ code });
+        } else if (uncertainAdmission) {
+            await expect(observed).resolves.toMatchObject({ ok: false, errorCode: 'action_outcome_unknown' });
+            await expect(work).resolves.toMatchObject({ ok: false, errorCode: 'action_outcome_unknown', details: {
+                path: '/v1/machines/managed/controller/admit-control', status: 503, code,
+            } });
         } else {
             await expect(observed).resolves.toMatchObject({ ok: true, result: { kind: 'accepted', managedId: machine.id } });
             await expect(work).resolves.toMatchObject({ ok: false, errorCode: 'action_outcome_unknown', details: {
@@ -275,7 +320,7 @@ describe('unused Stop through guest drain and controller operation custody', () 
         expect(ActionOperationGetV1ResponseSchema.parse(await operations.handlers.getV2({ operationId: `unavailable-${boundary}` })))
             .toMatchObject({ kind: 'found', operation: {
                 domainRef: { kind: 'managedMachine', id: machine.id },
-                ...(boundary === 'submit-intent'
+                ...(boundary === 'submit-intent' || uncertainAdmission
                     ? { state: 'running', observation: { kind: 'outcome_uncertain', code: 'action_outcome_unknown' } }
                     : { state: 'failed', error: { errorCode: code } }),
             } });
@@ -1074,6 +1119,43 @@ describe('managed native intent through the accepted Action', () => {
         }, test.options)).resolves.toMatchObject({ ok: false, errorCode: 'action_outcome_unknown' });
         expect(test.effects).toEqual(['power']);
         expect(test.readMachine().submittedNativeEffect).toMatchObject({ intentRevision: 2, requestId: 'control', intent: 'start' });
+    });
+    it.each(['stopped', 'running', 'unknown', 'stale'] as const)(
+        'settles retained Start from %s native observation before proceeding with the newer Stop', async power => {
+        const test = setup(undefined, { kind: 'confirmed' }, 'stop', {
+            observedAt: power === 'stale' ? 9 : 20, availability: 'present', power: power === 'stale' ? 'stopped' : power,
+        });
+        const original = test.readMachine();
+        test.setMachine({ intentRevision: 2, observation: { observedAt: 10, availability: 'present', power: 'stopped' },
+            submittedNativeEffect: { intentRevision: 1, requestId: 'old-start', intent: 'start', controller: original.controller } });
+        const home = test.post.getMockImplementation()!;
+        test.post.mockImplementation(async (url, body, config) => {
+            if (String(url).endsWith('/report-intent')) {
+                const report = ManagedControllerIntentReportV1Schema.parse(body);
+                const current = test.readMachine();
+                // Home HTTP is the substituted system boundary. Its settlement
+                // decision runs the same real owner consumed by reportManagedIntent.
+                if (doesManagedNativeObservationSettleIntent(current.submittedNativeEffect!.intent,
+                    report.observation, current.observation)) test.setMachine({ submittedNativeEffect: undefined });
+            }
+            return await home(url, body, config);
+        });
+        const work = test.driver.execute('machines.managed.power.set', { homeId: original.homeId, managedId: original.id,
+            intent: 'stop', when: 'now', expectedRevision: 2 }, test.options);
+        if (power === 'unknown' || power === 'stale') {
+            await expect(work).resolves.toMatchObject({ ok: false, errorCode: 'action_outcome_unknown' });
+            expect(test.readMachine().submittedNativeEffect).toMatchObject({ intent: 'start', intentRevision: 1, requestId: 'old-start' });
+            expect(test.effects).toEqual([]);
+        } else {
+            await expect(work).resolves.toMatchObject({ kind: 'accepted', intentRevision: 2 });
+            expect(test.effects).toEqual(['power']);
+            expect(test.reports).toMatchObject([
+                { expectedIntentRevision: 1, requestId: 'old-start', observation: { power } },
+                { expectedIntentRevision: 2, requestId: 'control', result: { kind: 'confirmed' } },
+            ]);
+            expect(test.readMachine().submittedNativeEffect?.intent).not.toBe('start');
+            expect(test.readMachine()).toMatchObject({ desired: 'stop', intentRevision: 2 });
+        }
     });
     it('does not settle a new Start after only inspecting an older unknown Stop on the same resource', async () => {
         const test = setup({ kind: 'idle', since: 0 }, { kind: 'confirmed' }, 'start');
