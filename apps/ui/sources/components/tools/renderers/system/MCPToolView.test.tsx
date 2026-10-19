@@ -97,6 +97,17 @@ describe('MCPToolView', () => {
         expect(rendered).toContain('Created issue LIN-42');
     });
 
+    it('titles a Happier Action call by the Action it runs, through action_execute or its own binding', async () => {
+        const { formatMCPTitle } = await import('./MCPToolView');
+        const input = { actionId: 'workspace.sync.relationship.terminate', input: { relationshipId: 'relationship_1' } };
+        expect(formatMCPTitle('mcp__happier__action_execute', undefined, input)).toBe('Stop workspace sync');
+        expect(formatMCPTitle('mcp__happier__workspace_sync_relationship_terminate', undefined, { relationshipId: 'r' }))
+            .toBe('Stop workspace sync');
+        expect(formatMCPTitle('mcp__happier__action_execute', undefined, { actionId: 'not.an.action' }))
+            .toBe('MCP: Happier Action Execute');
+        expect(formatMCPTitle('mcp__linear__create_issue', undefined, input)).toBe('MCP: Linear Create Issue');
+    });
+
     it('renders nothing in title mode', async () => {
         const screen = await renderView(makeMcpTool(), 'title');
         expect(screen.findAllByType('Text' as any)).toHaveLength(0);

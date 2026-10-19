@@ -14,6 +14,9 @@ import { ProjectCommandToolBody } from './ProjectCommandToolBody';
 import { readTranscriptMachineResourcesCall } from '@/components/sessions/transcript/references/transcriptMachineResourcesReference';
 import { MachineResourcesToolBody } from './MachineResourcesToolBody';
 import { ResolvedMcpToolIdentityV1Schema, type ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import { getActionSpec } from '@happier-dev/protocol/actions';
+import { readHappierActionCallId } from '@/components/sessions/transcript/references/happierActionToolResult';
+import { resolveActionTitle } from '@/text/actionTitles';
 
 
 /**
@@ -31,7 +34,10 @@ function snakeToPascalWithSpaces(str: string): string {
  * Formats MCP tool name to display title
  * Example: "mcp__linear__create_issue" -> "MCP: Linear Create Issue"
  */
-export function formatMCPTitle(toolName: string, mcpTool?: ResolvedMcpToolIdentityV1): string {
+export function formatMCPTitle(toolName: string, mcpTool?: ResolvedMcpToolIdentityV1, input?: unknown): string {
+    // A Happier Action reads as the Action it runs ("Stop workspace sync"), never as its transport tool.
+    const actionId = readHappierActionCallId(toolName, input);
+    if (actionId) return resolveActionTitle(actionId, getActionSpec(actionId));
     const identity = ResolvedMcpToolIdentityV1Schema.safeParse(mcpTool);
     if (identity.success) return `${identity.data.toolTitle ?? identity.data.tool} · ${identity.data.serverTitle}`;
     // Remove "mcp__" prefix
@@ -117,7 +123,7 @@ function getResultText(result: unknown): string | null {
 
 function getMCPDisplay(tool: ToolViewProps['tool']) {
     return {
-        title: formatMCPTitle(tool.name),
+        title: formatMCPTitle(tool.name, undefined, tool.input),
         subtitle: formatMCPSubtitle(tool.input),
         input: JSON.stringify(maybeParseJson(tool.input), null, 2) ?? '',
         output: JSON.stringify(maybeParseJson(tool.result), null, 2) ?? '',
