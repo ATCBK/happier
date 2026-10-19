@@ -2312,7 +2312,13 @@ and plugin adapters supply their presentation context and theme. Standalone
 groups and footer-bearing actions retain cards. Public `CountedDisclosureItem`
 binds the shared `HappierCountedDisclosure` fold state and count/summary header;
 the app wrapper binds its existing `ExpandableItem` disclosure/reveal frame.
-No second motion or lazy-body owner is introduced. Public `List` expansion remains
+No second motion or lazy-body owner is introduced. Public `TechnicalDetailsDisclosure`
+binds `HappierTechnicalDetailsDisclosure` (label-over-mono-value reference lines, nothing
+when empty) over that same counted fold; the app's approval and Run step binding passes its
+counted row, section inset and typography. Balanced two-line wrapping of centred state copy and
+capsule titles is one web-only fact, `HAPPIER_BALANCED_TEXT_WRAP`, applied by `HappierInfoTile`'s
+string slots and the capsule title runs; core's own tile text spreads the same constant.
+Public `List` expansion remains
 the controlled collection-item capability. Authors import these adapters from
 `@happier-dev/plugin-ui/components`; shared `presentation` implementations are
 host-internal. Field-box presentation and segmented radio choices remain available through `Select`;

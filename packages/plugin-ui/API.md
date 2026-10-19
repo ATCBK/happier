@@ -185,6 +185,7 @@ Declaration: `dist/index.d.ts`
 - value `FreshnessLine` from `dist/index.d.ts`
 - type `FreshnessLineProps` from `dist/index.d.ts`
 - value `HAPPIER_BADGE_METRICS` from `dist/index.d.ts`
+- value `HAPPIER_BALANCED_TEXT_WRAP` from `dist/index.d.ts`
 - value `HAPPIER_CARRIED_PREVIEW_OFFSET` from `dist/index.d.ts`
 - value `HAPPIER_CARRIED_SOURCE_OPACITY` from `dist/index.d.ts`
 - value `HAPPIER_COLLECTION_DETAIL_SLIDE` from `dist/index.d.ts`
@@ -238,6 +239,9 @@ Declaration: `dist/index.d.ts`
 - value `HAPPIER_RADIO_MARK_METRICS` from `dist/index.d.ts`
 - value `HAPPIER_RAISED_EDGE_SIDE` from `dist/index.d.ts`
 - value `HAPPIER_RELEASE_PREVIEW_METRICS` from `dist/index.d.ts`
+- value `HAPPIER_REVIEW_SEVERITY_METRICS` from `dist/index.d.ts`
+- value `HAPPIER_REVIEW_SEVERITY_RANK` from `dist/index.d.ts`
+- value `HAPPIER_REVIEW_SEVERITY_TONE` from `dist/index.d.ts`
 - value `HAPPIER_ROW_TITLE_META_GAP_PX` from `dist/index.d.ts`
 - value `HAPPIER_SCENE_ART_METRICS` from `dist/index.d.ts`
 - value `HAPPIER_SCENE_IDS` from `dist/index.d.ts`
@@ -260,6 +264,7 @@ Declaration: `dist/index.d.ts`
 - value `HAPPIER_STATE_SIZE_METRICS` from `dist/index.d.ts`
 - value `HAPPIER_SUNBURST_SMALLER_SUFFIX` from `dist/index.d.ts`
 - value `HAPPIER_SWITCH_METRICS` from `dist/index.d.ts`
+- value `HAPPIER_TECHNICAL_DETAILS_METRICS` from `dist/index.d.ts`
 - value `HAPPIER_TEXT_INPUT_FOCUS_RESET_STYLE` from `dist/index.d.ts`
 - value `HAPPIER_TEXT_INPUT_WEB_MARKER` from `dist/index.d.ts`
 - value `HAPPIER_TONE_COLOR_TOKEN` from `dist/index.d.ts`
@@ -668,6 +673,9 @@ Declaration: `dist/index.d.ts`
 - type `HappierResolvedSceneLayer` from `dist/index.d.ts`
 - type `HappierResolvedSceneMark` from `dist/index.d.ts`
 - type `HappierResolvedScenePlanet` from `dist/index.d.ts`
+- type `HappierReviewSeverity` from `dist/index.d.ts`
+- value `HappierReviewSeveritySign` from `dist/index.d.ts`
+- type `HappierReviewSeveritySignProps` from `dist/index.d.ts`
 - value `HappierRoleMark` from `dist/index.d.ts`
 - type `HappierRoleRunsAsKind` from `dist/index.d.ts`
 - type `HappierRovingEntry` from `dist/index.d.ts`
@@ -827,6 +835,12 @@ Declaration: `dist/index.d.ts`
 - type `HappierTabPanelActivity` from `dist/index.d.ts`
 - type `HappierTabRetention` from `dist/index.d.ts`
 - value `HappierTabs` from `dist/index.d.ts`
+- type `HappierTechnicalDetailsContentProps` from `dist/index.d.ts`
+- value `HappierTechnicalDetailsDisclosure` from `dist/index.d.ts`
+- type `HappierTechnicalDetailsDisclosureProps` from `dist/index.d.ts`
+- type `HappierTechnicalDetailsLine` from `dist/index.d.ts`
+- type `HappierTechnicalDetailsSpace` from `dist/index.d.ts`
+- type `HappierTechnicalDetailsTextRender` from `dist/index.d.ts`
 - value `HappierText` from `dist/index.d.ts`
 - value `HappierTextField` from `dist/index.d.ts`
 - type `HappierTextFieldProps` from `dist/index.d.ts`
@@ -1064,6 +1078,8 @@ Declaration: `dist/index.d.ts`
 - type `ReviewCommentProposalQueryV1` from `dist/index.d.ts`
 - type `ReviewCommentProposalReadV1` from `dist/index.d.ts`
 - type `ReviewCommentProposalWithBodyV1` from `dist/index.d.ts`
+- value `ReviewSeverity` from `dist/index.d.ts`
+- type `ReviewSeverityProps` from `dist/index.d.ts`
 - value `Row` from `dist/index.d.ts`
 - type `RowProps` from `dist/index.d.ts`
 - type `ScaleTextStyleOptions` from `dist/index.d.ts`
@@ -1143,6 +1159,9 @@ Declaration: `dist/index.d.ts`
 - type `TabsProps` from `dist/index.d.ts`
 - value `TargetedSurface` from `dist/index.d.ts`
 - type `TargetedSurfaceProps` from `dist/index.d.ts`
+- value `TechnicalDetailsDisclosure` from `dist/index.d.ts`
+- type `TechnicalDetailsDisclosureProps` from `dist/index.d.ts`
+- type `TechnicalDetailsLine` from `dist/index.d.ts`
 - value `Text` from `dist/index.d.ts`
 - value `TextField` from `dist/index.d.ts`
 - type `TextFieldProps` from `dist/index.d.ts`
@@ -1324,6 +1343,7 @@ Declaration: `dist/index.d.ts`
 - value `resolveHappierPopoverPlacement` from `dist/index.d.ts`
 - value `resolveHappierProgressPercentage` from `dist/index.d.ts`
 - value `resolveHappierRaisedEdge` from `dist/index.d.ts`
+- value `resolveHappierReviewSeverityColor` from `dist/index.d.ts`
 - value `resolveHappierRoleGlyph` from `dist/index.d.ts`
 - value `resolveHappierRoleRunsAsPresentation` from `dist/index.d.ts`
 - value `resolveHappierRovingSelection` from `dist/index.d.ts`
@@ -1635,6 +1655,7 @@ Declaration: `dist/components/index.d.ts`
 - value `FreshnessLine` from `dist/components/index.d.ts`
 - type `FreshnessLineProps` from `dist/components/index.d.ts`
 - value `HAPPIER_BADGE_METRICS` from `dist/components/index.d.ts`
+- value `HAPPIER_BALANCED_TEXT_WRAP` from `dist/components/index.d.ts`
 - value `HAPPIER_CARRIED_PREVIEW_OFFSET` from `dist/components/index.d.ts`
 - value `HAPPIER_CARRIED_SOURCE_OPACITY` from `dist/components/index.d.ts`
 - value `HAPPIER_COLLECTION_DETAIL_SLIDE` from `dist/components/index.d.ts`
@@ -1688,6 +1709,9 @@ Declaration: `dist/components/index.d.ts`
 - value `HAPPIER_RADIO_MARK_METRICS` from `dist/components/index.d.ts`
 - value `HAPPIER_RAISED_EDGE_SIDE` from `dist/components/index.d.ts`
 - value `HAPPIER_RELEASE_PREVIEW_METRICS` from `dist/components/index.d.ts`
+- value `HAPPIER_REVIEW_SEVERITY_METRICS` from `dist/components/index.d.ts`
+- value `HAPPIER_REVIEW_SEVERITY_RANK` from `dist/components/index.d.ts`
+- value `HAPPIER_REVIEW_SEVERITY_TONE` from `dist/components/index.d.ts`
 - value `HAPPIER_ROW_TITLE_META_GAP_PX` from `dist/components/index.d.ts`
 - value `HAPPIER_SCENE_ART_METRICS` from `dist/components/index.d.ts`
 - value `HAPPIER_SCENE_IDS` from `dist/components/index.d.ts`
@@ -1710,6 +1734,7 @@ Declaration: `dist/components/index.d.ts`
 - value `HAPPIER_STATE_SIZE_METRICS` from `dist/components/index.d.ts`
 - value `HAPPIER_SUNBURST_SMALLER_SUFFIX` from `dist/components/index.d.ts`
 - value `HAPPIER_SWITCH_METRICS` from `dist/components/index.d.ts`
+- value `HAPPIER_TECHNICAL_DETAILS_METRICS` from `dist/components/index.d.ts`
 - value `HAPPIER_TEXT_INPUT_FOCUS_RESET_STYLE` from `dist/components/index.d.ts`
 - value `HAPPIER_TEXT_INPUT_WEB_MARKER` from `dist/components/index.d.ts`
 - value `HAPPIER_TONE_COLOR_TOKEN` from `dist/components/index.d.ts`
@@ -2118,6 +2143,9 @@ Declaration: `dist/components/index.d.ts`
 - type `HappierResolvedSceneLayer` from `dist/components/index.d.ts`
 - type `HappierResolvedSceneMark` from `dist/components/index.d.ts`
 - type `HappierResolvedScenePlanet` from `dist/components/index.d.ts`
+- type `HappierReviewSeverity` from `dist/components/index.d.ts`
+- value `HappierReviewSeveritySign` from `dist/components/index.d.ts`
+- type `HappierReviewSeveritySignProps` from `dist/components/index.d.ts`
 - value `HappierRoleMark` from `dist/components/index.d.ts`
 - type `HappierRoleRunsAsKind` from `dist/components/index.d.ts`
 - type `HappierRovingEntry` from `dist/components/index.d.ts`
@@ -2277,6 +2305,12 @@ Declaration: `dist/components/index.d.ts`
 - type `HappierTabPanelActivity` from `dist/components/index.d.ts`
 - type `HappierTabRetention` from `dist/components/index.d.ts`
 - value `HappierTabs` from `dist/components/index.d.ts`
+- type `HappierTechnicalDetailsContentProps` from `dist/components/index.d.ts`
+- value `HappierTechnicalDetailsDisclosure` from `dist/components/index.d.ts`
+- type `HappierTechnicalDetailsDisclosureProps` from `dist/components/index.d.ts`
+- type `HappierTechnicalDetailsLine` from `dist/components/index.d.ts`
+- type `HappierTechnicalDetailsSpace` from `dist/components/index.d.ts`
+- type `HappierTechnicalDetailsTextRender` from `dist/components/index.d.ts`
 - value `HappierText` from `dist/components/index.d.ts`
 - value `HappierTextField` from `dist/components/index.d.ts`
 - type `HappierTextFieldProps` from `dist/components/index.d.ts`
@@ -2488,6 +2522,8 @@ Declaration: `dist/components/index.d.ts`
 - type `RankedRowsProps` from `dist/components/index.d.ts`
 - value `ReplyQuote` from `dist/components/index.d.ts`
 - type `ReplyQuoteProps` from `dist/components/index.d.ts`
+- value `ReviewSeverity` from `dist/components/index.d.ts`
+- type `ReviewSeverityProps` from `dist/components/index.d.ts`
 - value `Row` from `dist/components/index.d.ts`
 - type `RowProps` from `dist/components/index.d.ts`
 - type `ScaleTextStyleOptions` from `dist/components/index.d.ts`
@@ -2565,6 +2601,9 @@ Declaration: `dist/components/index.d.ts`
 - type `TabsProps` from `dist/components/index.d.ts`
 - value `TargetedSurface` from `dist/components/index.d.ts`
 - type `TargetedSurfaceProps` from `dist/components/index.d.ts`
+- value `TechnicalDetailsDisclosure` from `dist/components/index.d.ts`
+- type `TechnicalDetailsDisclosureProps` from `dist/components/index.d.ts`
+- type `TechnicalDetailsLine` from `dist/components/index.d.ts`
 - value `Text` from `dist/components/index.d.ts`
 - value `TextField` from `dist/components/index.d.ts`
 - type `TextFieldProps` from `dist/components/index.d.ts`
@@ -2744,6 +2783,7 @@ Declaration: `dist/components/index.d.ts`
 - value `resolveHappierPopoverPlacement` from `dist/components/index.d.ts`
 - value `resolveHappierProgressPercentage` from `dist/components/index.d.ts`
 - value `resolveHappierRaisedEdge` from `dist/components/index.d.ts`
+- value `resolveHappierReviewSeverityColor` from `dist/components/index.d.ts`
 - value `resolveHappierRoleGlyph` from `dist/components/index.d.ts`
 - value `resolveHappierRoleRunsAsPresentation` from `dist/components/index.d.ts`
 - value `resolveHappierRovingSelection` from `dist/components/index.d.ts`

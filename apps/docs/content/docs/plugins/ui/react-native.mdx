@@ -1419,6 +1419,31 @@ component.
 />
 ```
 
+Use `TechnicalDetailsDisclosure` for the exact ids, codes and raw causes behind
+a readable page, the way Happier's approval and Run step pages fold theirs. Pass
+a translated `title` and `lines`, each `{ key, label, value }`. The row stays
+folded until the person opens it; each value is then selectable in mono under
+its label. With no lines it draws nothing, so you can always render it. Put the
+readable outcome on the page and keep the code here.
+
+```tsx
+<TechnicalDetailsDisclosure
+  title={t('Technical details')}
+  lines={[
+    { key: 'code', label: t('Failure code'), value: failure.code },
+    { key: 'run', label: t('Run ID'), value: run.id },
+  ]}
+/>
+```
+
+Centred state copy and capsule titles that need two lines split them evenly on
+the web rather than leaving one word alone on the last line. `EmptyState`,
+`LoadingState`, `ErrorState` and the capsules do this for you. For centred text
+of your own, add `HAPPIER_BALANCED_TEXT_WRAP` from
+`@happier-dev/plugin-ui/components` to its style; it is `null` on native.
+Hosted HTML pages don't run these components: use a `<details>` element with a
+`<summary>` for technical details, and CSS `text-wrap: balance` for centred copy.
+
 These additions describe the current 0.3 development source. Check the installed
 API inventory before using them in a published plugin.
 

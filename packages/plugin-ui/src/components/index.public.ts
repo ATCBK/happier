@@ -54,6 +54,9 @@ export {
   type ItemProps, type ListItemProps, type ListAccessibilityPattern, type ItemGroupProps,
 } from './List.js';
 export { CountedDisclosureItem, type CountedDisclosureItemProps } from './CountedDisclosureItem.js';
+export {
+  TechnicalDetailsDisclosure, type TechnicalDetailsDisclosureProps, type TechnicalDetailsLine,
+} from './TechnicalDetailsDisclosure.js';
 export { ItemAddRow, type ItemAddRowProps } from './ItemAddRow.js';
 export * from './NavigationList.js';
 export * from './PageHeader.js';
@@ -116,6 +119,12 @@ export {
 export { resolveFloatingFrameRect, type FrameRect } from '../presentation/layout/floatingFrameGeometry.js';
 export { resolveFloatingFrameResizeRect } from '../presentation/layout/floatingFrameGeometry.js';
 export { HAPPIER_MIDDLE_ELLIPSIS_STYLE, splitForWebMiddleEllipsis } from '../presentation/text/middleEllipsis.js';
+export { HAPPIER_BALANCED_TEXT_WRAP } from '../presentation/text/balancedTextWrap.js';
+export {
+  HAPPIER_TECHNICAL_DETAILS_METRICS, HappierTechnicalDetailsDisclosure,
+  type HappierTechnicalDetailsContentProps, type HappierTechnicalDetailsDisclosureProps, type HappierTechnicalDetailsLine,
+  type HappierTechnicalDetailsSpace, type HappierTechnicalDetailsTextRender,
+} from '../presentation/collection/TechnicalDetailsDisclosure.js';
 export {
   HAPPIER_MODAL_HEADER_METRICS, HappierModalHeader, resolveHappierModalHeaderLayout,
   type HappierModalHeaderLayout, type HappierModalHeaderProps, type HappierModalHeaderSpace,
@@ -1305,6 +1314,15 @@ export {
   HappierStatus,
   type HappierStatusProps,
 } from '../presentation/status/Status.js';
+export {
+  HAPPIER_REVIEW_SEVERITY_METRICS,
+  HAPPIER_REVIEW_SEVERITY_RANK,
+  HAPPIER_REVIEW_SEVERITY_TONE,
+  HappierReviewSeveritySign,
+  resolveHappierReviewSeverityColor,
+  type HappierReviewSeverity,
+  type HappierReviewSeveritySignProps,
+} from '../presentation/status/ReviewSeverity.js';
 export {
   HappierIdentityCapsule,
   HappierStatusCapsule,

@@ -29,7 +29,10 @@ import {
   WidgetFrame,
 } from '@happier-dev/plugin-ui';
 import { useHappierUiAccessibility, useHappierUiLocalization } from '@happier-dev/plugin-ui/environment';
-import { CountedDisclosureItem, ItemAddRow, FloatingFrame as AuthorFloatingFrame } from '@happier-dev/plugin-ui/components';
+import {
+  CountedDisclosureItem, ItemAddRow, FloatingFrame as AuthorFloatingFrame, TechnicalDetailsDisclosure, HAPPIER_BALANCED_TEXT_WRAP,
+  type TechnicalDetailsLine,
+} from '@happier-dev/plugin-ui/components';
 import {
   HappierFloatingFrame as FloatingFrame, HappierStack, HappierText, resolveFloatingFrameRect, resolveHappierTreeFocusKey,
   useHappierCollection, type FrameRect, type HappierTreeNode,
@@ -40,6 +43,11 @@ const externalReviews = Object.freeze([
   Object.freeze({ id: 'terminal', title: 'Terminal review' }),
   Object.freeze({ id: 'release', title: 'Release review' }),
 ]);
+const externalReviewReferences: readonly TechnicalDetailsLine[] = externalReviews.map((review) => ({
+  key: review.id,
+  label: review.title,
+  value: review.id,
+}));
 
 const externalTreeNodes = [{
   key: 'review-root', parentKey: null, depth: 0, kind: 'branch', expanded: false,
@@ -271,6 +279,8 @@ function ExternalAuthoringSemanticSurface() {
       <CountedDisclosureItem title="Older reviews" count={externalReviews.length - 1} testID="external-older-reviews">
         {externalReviews.slice(1).map((review) => <Item key={review.id} title={review.title} />)}
       </CountedDisclosureItem>
+      <TechnicalDetailsDisclosure title="Technical details" lines={externalReviewReferences} testID="external-review-technical" />
+      <HappierText style={[{ textAlign: 'center' }, HAPPIER_BALANCED_TEXT_WRAP]}>Opening the review on the reviewer's Machine</HappierText>
       <WidgetFrame
         frameStyle="card"
         placement="board"

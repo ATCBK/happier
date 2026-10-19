@@ -16,6 +16,8 @@ export type {
   HappierStyleProp,
   HappierTextSelection,
 } from './portableTypes.js';
+export { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from './layout/pageMetrics.js';
+export { resolveHappierRowTitleMetaPlacement } from './layout/pageRowMetrics.js';
 export { HappierRowOperationContext } from './collection/rowOperation.js';
 export {
   HappierItemAddRow,
@@ -327,6 +329,15 @@ export {
   type HappierCountedDisclosureProps,
 } from './collection/CountedDisclosure.js';
 export {
+  HAPPIER_TECHNICAL_DETAILS_METRICS,
+  HappierTechnicalDetailsDisclosure,
+  type HappierTechnicalDetailsContentProps,
+  type HappierTechnicalDetailsDisclosureProps,
+  type HappierTechnicalDetailsLine,
+  type HappierTechnicalDetailsSpace,
+  type HappierTechnicalDetailsTextRender,
+} from './collection/TechnicalDetailsDisclosure.js';
+export {
   HappierListOverflowFooter,
   leadHappierListRows,
   type HappierListOverflowFooterLabels,
@@ -455,6 +466,7 @@ export {
   HAPPIER_META_COLUMN_V1,
 } from './text/metaColumn.js';
 export { HAPPIER_MIDDLE_ELLIPSIS_STYLE, splitForWebMiddleEllipsis } from './text/middleEllipsis.js';
+export { HAPPIER_BALANCED_TEXT_WRAP } from './text/balancedTextWrap.js';
 export { HAPPIER_TYPE_SCALE, HAPPIER_TYPE_WEIGHT, resolveHappierTypeScale, type HappierTypeRole, type HappierTypeEmphasis, type HappierTypeScaleStep } from './text/typeScale.js';
 export {
   resolveHappierDiffViewerRequest,
@@ -523,6 +535,15 @@ export {
   type HappierStatusDotProps,
 } from './status/StatusDot.js';
 export { HappierStatus, type HappierStatusProps } from './status/Status.js';
+export {
+  HAPPIER_REVIEW_SEVERITY_METRICS,
+  HAPPIER_REVIEW_SEVERITY_RANK,
+  HAPPIER_REVIEW_SEVERITY_TONE,
+  HappierReviewSeveritySign,
+  resolveHappierReviewSeverityColor,
+  type HappierReviewSeverity,
+  type HappierReviewSeveritySignProps,
+} from './status/ReviewSeverity.js';
 export {
   HappierRowActionRevealSlot,
   type HappierRowActionRevealSlotProps,

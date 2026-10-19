@@ -173,6 +173,8 @@ export type HappierPortableStyle = Readonly<{
   textShadowOffset?: Readonly<{ width: number; height: number }>;
   textShadowRadius?: number;
   textTransform?: 'none' | 'capitalize' | 'uppercase' | 'lowercase';
+  /** Web only (RNW passes it to CSS): `HAPPIER_BALANCED_TEXT_WRAP`'s even two-line split. */
+  textWrap?: 'balance';
   top?: HappierDimension;
   /** The numeric placement tracks shared by Collection motion and floating frames. */
   transform?: Array<{ translateX: number } | { translateY: number }>;

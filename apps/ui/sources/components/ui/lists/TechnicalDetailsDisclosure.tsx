@@ -1,83 +1,59 @@
 import * as React from 'react';
-import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
-
 import {
-  ExpandableItem,
-  ExpandableItemCaret,
-} from '@/components/ui/lists/ExpandableItem';
-import { Item } from '@/components/ui/lists/Item';
+    HappierTechnicalDetailsDisclosure,
+    happierPageTextMetrics,
+    type HappierTechnicalDetailsContentProps,
+    type HappierTechnicalDetailsLine,
+    type HappierTechnicalDetailsTextRender,
+} from '@happier-dev/plugin-ui/presentation';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+
+import { CountedDisclosureItem } from '@/components/ui/lists/CountedDisclosureItem';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
-export type TechnicalDetailsLine = Readonly<{
-  key: string;
-  label: string;
-  value: string;
-}>;
+export type TechnicalDetailsLine = HappierTechnicalDetailsLine;
+
+function TechnicalDetailsBody(props: Readonly<{ children: React.ReactNode }>) {
+    return <SectionContentRow>{props.children}</SectionContentRow>;
+}
+
+// Core's text adapter, so the `uiFontScale` local setting applies to the reference lines.
+const renderTechnicalDetailsText: HappierTechnicalDetailsTextRender = (input) => input.role === 'value' ? (
+    <Text selectable style={styles.value}>{input.text}</Text>
+) : (
+    <Text style={styles.label}>{input.text}</Text>
+);
 
 /**
- * The one "Technical details" disclosure: exact identifiers and codes, one tap away from the readable
- * page. The readable outcome leads the page; its code and raw cause wait here (approvals, Run steps).
+ * Happier core's binding of the shared "Technical details" disclosure (approvals, Run steps): its
+ * counted-disclosure row, section content inset, density-scaled spacing and typography. The
+ * composition is `HappierTechnicalDetailsDisclosure` in `@happier-dev/plugin-ui`.
  */
-export function TechnicalDetailsDisclosure(
-  props: Readonly<{
-    title: string;
-    lines: readonly TechnicalDetailsLine[];
-    testID?: string;
-  }>,
-) {
-  const [expanded, setExpanded] = React.useState(false);
-  if (props.lines.length === 0) return null;
-  return (
-    <ExpandableItem
-      testID={props.testID}
-      expanded={expanded}
-      onExpandedChange={setExpanded}
-      showDivider={false}
-      header={({ headerProps, expanded: open }) => (
-        <Item
-          {...headerProps}
-          title={props.title}
-          showChevron={false}
-          rightElement={<ExpandableItemCaret expanded={open} />}
+export function TechnicalDetailsDisclosure(props: HappierTechnicalDetailsContentProps) {
+    const { theme } = useUnistyles();
+    const space = React.useMemo(() => ({ s4: theme.space.s4 }), [theme.space.s4]);
+    return (
+        <HappierTechnicalDetailsDisclosure
+            {...props}
+            Disclosure={CountedDisclosureItem}
+            Body={TechnicalDetailsBody}
+            renderText={renderTechnicalDetailsText}
+            space={space}
         />
-      )}
-    >
-      {/* Quiet reference lines: a label, then its exact value in mono. */}
-      <SectionContentRow>
-        <View style={styles.lines}>
-          {props.lines.map((line) => (
-            <View key={line.key} style={styles.line}>
-              <Text style={styles.label}>{line.label}</Text>
-              <Text selectable style={styles.value}>
-                {line.value}
-              </Text>
-            </View>
-          ))}
-        </View>
-      </SectionContentRow>
-    </ExpandableItem>
-  );
+    );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  lines: {
-    gap: theme.space.s4,
-  },
-  line: {
-    gap: 1,
-  },
-  label: {
-    ...happierPageTextMetrics('rowDescription'),
-    color: theme.colors.text.tertiary,
-  },
-  value: {
-    ...happierPageTextMetrics('rowDescription'),
-    ...Typography.mono(),
-    minWidth: 0,
-    color: theme.colors.text.secondary,
-  },
+    label: {
+        ...happierPageTextMetrics('rowDescription'),
+        color: theme.colors.text.tertiary,
+    },
+    value: {
+        ...happierPageTextMetrics('rowDescription'),
+        ...Typography.mono(),
+        minWidth: 0,
+        color: theme.colors.text.secondary,
+    },
 }));

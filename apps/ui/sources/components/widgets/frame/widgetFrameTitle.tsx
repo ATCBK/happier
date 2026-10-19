@@ -23,7 +23,7 @@ export function readWidgetInstanceName(instance: WidgetInstanceV1, candidate: Re
  * current yet); and, once that has settled with no name, the generic kind word. A card whose surface cannot mount
  * here is thus named by what it belongs to or by its kind, never by a placeholder or a loading line that never ends.
  */
-export function useWidgetFrameTitle(instance: WidgetInstanceV1, candidate: Readonly<{ title: string }> | null | undefined): React.ReactNode {
+export function useWidgetFrameTitle(instance: WidgetInstanceV1, candidate: Readonly<{ title: string }> | null | undefined): string | React.ReactElement {
     const { pluginUiProjection, phase } = useAppShellPluginUiProjection();
     const own = readWidgetInstanceName(instance, candidate);
     const installedName = own === null && instance.definition.kind === 'installed'

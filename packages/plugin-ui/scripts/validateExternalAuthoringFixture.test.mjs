@@ -52,7 +52,7 @@ test('the author components and root expose neutral owners while excluding mount
     'HappierItemGroupSelectionContext', 'HappierLiveStreamAvccInput', 'HappierLiveStreamPlayerDiagnostic',
     'HappierLiveStreamPlayerDisplayState', 'HappierLiveStreamPlayerHost', 'HappierLiveStreamPlayerRendererEvent',
     'HappierLiveStreamPlayerRenderEvent', 'HappierLiveStreamInputLayer', 'HappierLiveStreamPlayer',
-    'HappierPageChrome', 'HappierPageChromeProvider', 'HappierSpinnerHost', 'useHappierSpinnerKeyframes',
+    'HappierPageChrome', 'HappierPageChromeProvider', 'HappierColumnEdgeContext', 'HappierSpinnerHost', 'useHappierSpinnerKeyframes',
   ]);
   for (const name of hostControls) {
     assert.ok(!components.has(name), `components exposes mounted host control ${name}`);

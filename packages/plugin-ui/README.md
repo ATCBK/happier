@@ -241,6 +241,33 @@ actions, or on a wide card, everything stays on one row. Happier core's
 />
 ```
 
+### Technical details and balanced wrapping
+
+`TechnicalDetailsDisclosure` is the "Technical details" row Happier's own
+approvals and Run steps draw: the exact ids, codes and raw causes behind a
+readable page, folded one tap away. Pass a localized `title` and `lines`, each
+`{ key, label, value }`; an open row shows each label quietly above its
+selectable mono value, and with no lines it draws nothing. Lead the page with
+the readable outcome and keep the code here. It binds the shared
+`HappierTechnicalDetailsDisclosure` owner over `CountedDisclosureItem`, which
+Happier core binds with its own row and typography.
+
+```tsx
+<TechnicalDetailsDisclosure
+  title="Technical details"
+  lines={[{ key: 'code', label: 'Failure code', value: 'storage_unavailable' }]}
+/>
+```
+
+Short centred and capsule copy that needs two lines splits them evenly on the
+web instead of leaving one word alone. `EmptyState`, `LoadingState`,
+`ErrorState`, the shared `HappierInfoTile` and the capsules' titles apply it
+already; for your own centred text, add `HAPPIER_BALANCED_TEXT_WRAP` (from
+`./components`) to its style. It is `null` on native, which has no balanced
+wrapping. Hosted HTML pages, which do not run these components, use a native
+`<details>`/`<summary>` for technical details and CSS `text-wrap: balance` for
+the same effect.
+
 ### Advanced trusted-author tier
 
 Use the root tier for ordinary surfaces. When a curated component does not fit

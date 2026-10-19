@@ -6,6 +6,7 @@ import { useHappierPageSection } from '../layout/PageSection.js';
 import { useHappierColumnEdgePx } from '../layout/columnEdge.js';
 import { HAPPIER_COLLECTION_LIST_METRICS } from '../collection/CollectionList.js';
 import { HappierText } from '../text/Text.js';
+import { HAPPIER_BALANCED_TEXT_WRAP } from '../text/balancedTextWrap.js';
 import type { HappierTone } from '../semantics.js';
 import { HappierPressable } from '../interaction/Pressable.js';
 import { HAPPIER_MENU_ROW_METRICS } from '../interaction/Menu.js';
@@ -387,7 +388,7 @@ function renderSlot(
     <HappierText
       variant={semantic.variant}
       tone={semantic.tone}
-      style={{ textAlign: 'center', marginBottom: semantic.gap, ...semantic.type }}
+      style={{ textAlign: 'center', marginBottom: semantic.gap, ...semantic.type, ...HAPPIER_BALANCED_TEXT_WRAP }}
     >
       {slot}
     </HappierText>

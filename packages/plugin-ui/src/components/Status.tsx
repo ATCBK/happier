@@ -2,6 +2,12 @@ import type { ReactElement, ReactNode } from 'react';
 
 import { HappierStatus } from '../presentation/status/Status.js';
 import {
+  HAPPIER_REVIEW_SEVERITY_TONE,
+  HappierReviewSeveritySign,
+  type HappierReviewSeverity,
+} from '../presentation/status/ReviewSeverity.js';
+import { Badge } from './Foundation.js';
+import {
   type PluginUiFocusTarget,
   usePluginUiFocusTargetBindingInternal,
 } from './Focus.js';
@@ -79,4 +85,31 @@ export function Status({ tone, label, labelKey, value, valueKey, pulsing, presen
       testID={testID}
     />
   );
+}
+
+export type ReviewSeverityProps = Readonly<{
+  severity: HappierReviewSeverity;
+  /** The severity in words ("High"); your translated copy. */
+  label: string;
+  /** A key from this plugin's declared translation bundle; `label` is its fallback. */
+  labelKey?: string;
+  /**
+   * `label` (default): its dot and word in its colour ("● High"). `badge`: a tinted chip, for a finding
+   * listed among other facts. `dot`: the mark alone (a contents row), named by `label`.
+   */
+  presentation?: 'label' | 'badge' | 'dot';
+  testID?: string;
+}>;
+
+/**
+ * A review finding's severity, drawn the way Happier's own review surfaces draw it: one colour role per
+ * severity (`HAPPIER_REVIEW_SEVERITY_TONE`), your words.
+ */
+export function ReviewSeverity({ severity, label, labelKey, presentation = 'label', testID }: ReviewSeverityProps): ReactElement {
+  const theme = usePluginTheme();
+  const resolvedLabel = resolveAuthorText(usePluginTranslation(), label, labelKey) ?? label;
+  if (presentation === 'badge') {
+    return <Badge variant="tinted" tone={HAPPIER_REVIEW_SEVERITY_TONE[severity]} value={resolvedLabel} {...(testID === undefined ? {} : { testID })} />;
+  }
+  return <HappierReviewSeveritySign severity={severity} label={resolvedLabel} theme={theme} presentation={presentation} {...(testID === undefined ? {} : { testID })} />;
 }

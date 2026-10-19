@@ -18,7 +18,6 @@ import {
     useOverlayMotionAnimation,
     useOverlayPresence,
 } from '@/components/ui/overlays/motion/overlayMotion';
-import { BALANCED_TEXT_WRAP } from '@/components/ui/text/balancedTextWrap';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
@@ -91,7 +90,7 @@ function CapsuleText(props: React.ComponentProps<HappierCapsuleHost['Text']>): R
     return (
         <Text
             numberOfLines={props.numberOfLines}
-            style={[role, props.role === 'title' ? BALANCED_TEXT_WRAP : null, props.color ? { color: props.color } : null, props.style as React.ComponentProps<typeof Text>['style']]}
+            style={[role, props.color ? { color: props.color } : null, props.style as React.ComponentProps<typeof Text>['style']]}
         >
             {props.children}
         </Text>

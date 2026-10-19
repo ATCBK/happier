@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 
 import type { HappierPortableStyle } from '../portableTypes.js';
 import type { HappierCapsuleColors, HappierCapsuleHost } from '../status/capsuleHost.js';
+import { HAPPIER_BALANCED_TEXT_WRAP } from '../text/balancedTextWrap.js';
 
 /**
  * Who is in control of a surface an agent can drive. `controlEpoch` is the owner's counter that moves
@@ -112,6 +113,8 @@ const DOCK_COMPACT_STYLE: HappierPortableStyle = {
 };
 
 const STRIP_TEXT_STYLE: HappierPortableStyle = { minWidth: 0, flex: 1 };
+/** A two-line title splits evenly on the web rather than leaving one word alone (the shared rule). */
+const TITLE_WRAP: HappierPortableStyle | undefined = HAPPIER_BALANCED_TEXT_WRAP ?? undefined;
 
 const styles = StyleSheet.create({
   inline: {
@@ -298,13 +301,13 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
         {strip && !(compact && observationRecovery) ? (
           // One line: what, then where or what it is doing.
           <host.Text numberOfLines={1} style={STRIP_TEXT_STYLE}>
-            <host.Text role="title" color={colors.text}>{title}</host.Text>
+            <host.Text role="title" color={colors.text} style={TITLE_WRAP}>{title}</host.Text>
             {detail ? <host.Text role="meta" color={detailColor}>{`  ${detail}`}</host.Text> : null}
           </host.Text>
         ) : (
           <View style={[styles.text, compact || props.placement !== 'dock' ? styles.textCompact : null]}>
             {/* A narrow capsule wraps the sentence rather than clip the Machine or window it names. */}
-            <host.Text role="title" color={colors.text} numberOfLines={2}>{title}</host.Text>
+            <host.Text role="title" color={colors.text} numberOfLines={2} style={TITLE_WRAP}>{title}</host.Text>
             {detail ? (
               // The warning is the one line that must be read whole, so it may wrap.
               <host.Text role="meta" color={detailColor} numberOfLines={mayHaveLanded ? 2 : 1}>{detail}</host.Text>
