@@ -14929,6 +14929,7 @@ settingsSession: {
       readOnlyProjectionUnavailable: "Els detalls dels connectors en memòria cau són de només lectura: aquest dispositiu és accessible, però no s'ha pogut carregar el seu registre de connectors. Torna-ho a provar per gestionar els connectors.",
       installedEmpty: "No hi ha connectors instal·lats en aquesta màquina",
       installationReadUnavailable: "No s’han pogut consultar els connectors instal·lats en aquesta màquina. Torna-ho a provar per comprovar-ne l’estat actual.",
+        noMachine: "Afegeix o connecta una màquina per fer-ho servir aquí.",
       readOnlyRefreshing: "S’estan actualitzant els connectors. La informació anterior continua visible; les accions esperen l’estat actual.",
       readOnlyAccountRecovery: "Els detalls del compte del connector estan disponibles, però els detalls específics de la màquina no estaran disponibles fins que hi hagi una instal·lació de connector compatible.",
       readOnlySnapshot: "Els detalls dels connectors en memòria cau són de només lectura mentre aquest dispositiu està desconnectat. Torna a connectar-lo per gestionar els connectors.",

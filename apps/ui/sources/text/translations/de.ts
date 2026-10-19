@@ -17093,6 +17093,7 @@ settingsSession: {
       developmentEditWithAgent: "Mit Agent bearbeiten",
       developmentEditWithAgentSubtitle: "Öffnet eine gewöhnliche Sitzung im Quellordner dieses Plugins.",
       developmentCreateWithAgentPrompt: ({ pluginId }: { pluginId: string }) => `Lege das Happier-Plugin '${pluginId}' in diesem Ordner weiter an. Benutze die Fähigkeit happier-plugin-authoring und nur öffentliche 'happier plugins'-Befehle und öffentliche SDK-Importe; neue Berechtigungen oder Zugangsdaten bleiben meine Entscheidung.`,
+        noMachine: "Füge einen Rechner hinzu oder verbinde einen, um dies hier zu nutzen.",
       developmentEditWithAgentPrompt: ({ pluginId }: { pluginId: string }) => `Dies ist die aktuelle Entwicklungsquelle des Happier-Plugins '${pluginId}'. Benutze für die Änderung, um die ich dich bitte, die Fähigkeit happier-plugin-authoring und nur öffentliche 'happier plugins'-Befehle und öffentliche SDK-Importe; neue Berechtigungen oder Zugangsdaten bleiben meine Entscheidung.`,
       developmentSourcePathLabel: ({ path }: { path: string }) => `Pfad: ${path}`,
       developmentSourceInstall: "Ein lokales Plugin entwickeln",

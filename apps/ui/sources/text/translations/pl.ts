@@ -16007,6 +16007,7 @@ settingsSession: {
             chooseAnother: "Wybierz inną",
             clear: "Wyczyść wybór",
             locked: "Szczegóły maszyny są zablokowane. Wybierz inną maszynę.",
+            noMachine: "Dodaj lub połącz maszynę, aby używać tego tutaj.",
             missing: "Nie znaleziono. Wybierz inną maszynę.",
             replaced: "Zastąpiono. Wybierz zamiennik jawnie.",
             revoked: "Dostęp cofnięty. Wybierz inną maszynę.",

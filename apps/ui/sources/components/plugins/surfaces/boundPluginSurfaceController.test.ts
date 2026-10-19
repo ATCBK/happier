@@ -342,6 +342,18 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         }
     });
 
+    it('says once what to do when no Machine exists at all, instead of naming a Machine that is not there', async () => {
+        const controller = createBoundPluginSurfaceController({ facts: {
+            ...FACTS, machineId: null, machineDisplayName: null, occurrenceId: null, executionOrigin: null,
+            daemonInteractionEnabled: false, executionOriginSelectionKind: 'unavailable',
+        } });
+        try {
+            await expect(controller.dispatchAction({ pluginId: FACTS.pluginId, localId: 'refresh-index' })).resolves.toMatchObject({
+                code: 'unavailable', message: t('settingsPlugins.targetSelection.noMachine'),
+            });
+        } finally { controller.dispose(); }
+    });
+
     it('lends the Machine sentence it gave a refusal to the enclosing widget frame, and withdraws it when the mount ends', async () => {
         const lend = vi.fn();
         const hook = await renderHook(() => useBoundPluginSurfaceController({ facts: {

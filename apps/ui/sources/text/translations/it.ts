@@ -16987,6 +16987,7 @@ settingsSession: {
       installationReadUnavailable: "Impossibile leggere i plugin installati su questa macchina. Riprova per verificarne lo stato attuale.",
       readOnlyRefreshing: "Aggiornamento dei plugin. Le informazioni precedenti restano visibili; le azioni attendono lo stato attuale.",
     readOnlyAccountRecovery: "I dettagli dell'account del plugin sono disponibili, ma i dettagli specifici della macchina non saranno disponibili finché non sarà disponibile un'installazione del plugin compatibile.",
+      noMachine: "Aggiungi o collega una macchina per usarlo qui.",
     readOnlySnapshot: "I dettagli dei plugin nella cache sono di sola lettura mentre questo dispositivo è disconnesso. Riconnettilo per gestire i plugin.",
     viewSelectorLabel: "Viste di gestione dei plugin",
     views: { installed: "Installati", discover: "Scopri", development: "Sviluppo", diagnostics: "Diagnostica" },

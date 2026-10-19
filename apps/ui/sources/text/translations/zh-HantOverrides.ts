@@ -13100,6 +13100,7 @@ settingsSession: {
     ...pluginSettingsPresentationTranslations['zh-Hant'],
     ...eventAutomationComposerTranslations['zh-Hant'],
     subtitle: "從 npm 與已設定的來源探索外掛程式，並管理這台機器上已安裝的外掛程式。",
+      noMachine: "新增或連接一台機器後即可在此使用。",
     appPanelsTitle: "外掛程式面板",
     appPanelsSubtitle: "開啟已安裝外掛程式提供的應用程式面板。",
     executionOriginReleaseContentConflict: "發行內容不符。請發行新版本。",

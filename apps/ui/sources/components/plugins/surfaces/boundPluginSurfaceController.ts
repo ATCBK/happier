@@ -1185,6 +1185,8 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         const machine = input.facts.machineDisplayName?.trim() || t('machine.thisMachineInSentence');
         return daemonUnavailable
             ? t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine })
+            // No Machine can run it at all: say what to do, not that "this machine" cannot.
+            if (kind === 'unavailable') return t('settingsPlugins.targetSelection.noMachine');
             : undefined;
     };
     const widgetArea = createPluginWidgetAreaHostHandler({ facts: input.facts, isCurrent, lifetimeSignal: mountLifetime.signal, hostAction, callerBinding,

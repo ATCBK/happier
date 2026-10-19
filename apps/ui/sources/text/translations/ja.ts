@@ -16889,6 +16889,7 @@ settingsSession: {
       installationReadUnavailable: "このマシンのインストール済みプラグインを読み取れませんでした。再試行して現在の状態を確認してください。",
       readOnlyRefreshing: "プラグインの情報を更新中です。以前の情報は表示されますが、操作は現在の状態を確認するまで待機します。",
     readOnlyAccountRecovery: "プラグインのアカウント詳細は利用できますが、互換性のあるプラグインのインストールが利用可能になるまで、この端末固有の詳細は利用できません。",
+      noMachine: "ここで使うには、マシンを追加するか接続してください。",
     readOnlySnapshot: "この端末が切断されている間、キャッシュされたプラグインの詳細は読み取り専用です。プラグインを管理するには再接続してください。",
     viewSelectorLabel: "プラグイン管理ビュー",
     views: { installed: "インストール済み", discover: "見つける", development: "開発", diagnostics: "診断" },

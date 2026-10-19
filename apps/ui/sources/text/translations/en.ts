@@ -20669,6 +20669,7 @@ const enSettingsPlugins = {
     machine: string;
     server: string;
   }) =>
+    noMachine: 'Add or connect a machine to use this here.',
     `Happier will build and run code from:\n\n${path} on ${machine} (${server})\n\nFor a project folder, Happier may install its declared dependencies. Only continue if you trust this source and its dependencies.`,
   developmentTrustProjectSourceConfirm: 'Trust source',
   pendingChangesTitle: 'Waiting for your decision',

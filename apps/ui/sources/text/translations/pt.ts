@@ -17092,6 +17092,7 @@ settingsSession: {
     },
     readOnlyProjectionUnavailable: "Os detalhes dos plugins em cache são somente leitura: este dispositivo está acessível, mas não foi possível carregar o registro de plugins dele. Tente novamente para gerenciar plugins.",
       installedEmpty: "Nenhum plugin instalado nesta máquina",
+      noMachine: "Adicione ou ligue uma máquina para usar isto aqui.",
       installationReadUnavailable: "Não foi possível consultar os plugins instalados nesta máquina. Tente novamente para verificar o estado atual.",
       readOnlyRefreshing: "Atualizando os plugins. As informações anteriores permanecem visíveis; as ações aguardam o estado atual.",
     readOnlyAccountRecovery: "Os detalhes da conta do plugin estão disponíveis, mas os detalhes específicos da máquina não estarão disponíveis até que uma instalação compatível do plugin esteja disponível.",

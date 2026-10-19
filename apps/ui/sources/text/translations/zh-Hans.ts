@@ -16586,6 +16586,7 @@ settingsSession: {
     developmentCreate: "创建插件",
     developmentCreateSubtitle: "在此机器上创建本地插件脚手架。",
     developmentCreateSucceeded: "插件脚手架已创建。",
+      noMachine: "添加或连接一台机器后即可在此使用。",
     developmentCreateWithAgent: "使用智能体创建",
     developmentCreateWithAgentSubtitle: "创建插件脚手架，然后在其文件夹中打开普通会话，让智能体与你一起构建。",
     developmentEditWithAgent: "使用智能体编辑",

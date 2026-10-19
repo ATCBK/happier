@@ -16926,6 +16926,7 @@ settingsSession: {
     developmentCreate: "Создать плагин",
     developmentCreateSubtitle: "Создаёт локальный шаблон плагина на этой машине.",
     developmentCreateSucceeded: "Шаблон плагина создан.",
+      noMachine: "Добавьте или подключите машину, чтобы пользоваться этим здесь.",
     developmentCreateWithAgent: "Создать с агентом",
     developmentCreateWithAgentSubtitle: "Создаёт шаблон плагина, затем открывает обычную сессию в его папке, чтобы агент мог построить его вместе с вами.",
     developmentEditWithAgent: "Изменить с агентом",
