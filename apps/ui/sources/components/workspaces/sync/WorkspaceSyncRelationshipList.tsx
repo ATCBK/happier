@@ -114,11 +114,14 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
                 settled(await enableWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute));
             }
         } catch (caught) {
+            // A Stop removes the relationship before it settles, so the list can drop this row and retire its
+            // mounted Action interest mid-flight; that cancelled settle is not a failed Action.
+            if (!actionExecution.isCurrent()) return;
             Modal.alert(t('common.error'), presentWorkspaceSyncFailure(caught) ?? t('errors.operationFailed'));
         } finally {
             setPendingAction(null);
         }
-    }, [actionExecution.execute, actionInput, scope]);
+    }, [actionExecution.execute, actionExecution.isCurrent, actionInput, scope]);
 
     // Both folders can live on one machine; the machine alone would then name each action identically.
     const sameMachine = (props.summary.alpha.machineName ?? props.summary.alpha.name) === (props.summary.beta.machineName ?? props.summary.beta.name);
@@ -169,12 +172,13 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
         }
     }, [props.summary.alpha, props.summary.beta, revealableEndpoint, router, runAction]);
 
+    // One unbreakable unit: a wrapped subtitle moves the whole "Last checked <time>" to the next
+    // line instead of stranding "Last checked" or "PM" alone.
     const lastCheckedLabel = status?.lastCycleObservedAtMs == null
         ? null
         : t('workspaceSync.lastChecked', {
-            // One unbreakable unit: a wrapped subtitle never strands "PM" alone on a line.
-            at: formatWithCachedDateTimeFormatter(status.lastCycleObservedAtMs, undefined, { dateStyle: 'medium', timeStyle: 'short' }).replace(/\s/g, '\u00A0'),
-        });
+            at: formatWithCachedDateTimeFormatter(status.lastCycleObservedAtMs, undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+        }).replace(/\s/g, '\u00A0');
     // Two folders on one machine: the title already tells them apart, so the machine is named once.
     const alphaMachineId = props.summary.alpha.workspaceRef?.machineId;
     const bothOnOneMachine = alphaMachineId !== undefined && alphaMachineId === props.summary.beta.workspaceRef?.machineId;

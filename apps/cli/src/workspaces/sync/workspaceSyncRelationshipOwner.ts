@@ -595,6 +595,10 @@ export function createWorkspaceSyncRelationshipOwner(
           await options.removeCommittedRelationshipTarget!(terminated, retirement.removeTargetCopy, signal, retirement.approval);
         }
       } catch (error) {
+        // A plain stop is committed once the graph mutation settles: while the sync agent restarts, runtime
+        // reconciliation refuses with a "not ready yet" code and converges by itself. Removing a worker-copy
+        // target needs that reconciliation to have finished, so that path keeps reporting the refusal.
+        if (!retirement?.removeTargetCopy && isReconcilingRefusal(error)) return;
         const failure = typeof error === 'object' && error !== null
           ? error
           : new Error('Workspace relationship retirement settlement failed', { cause: error });

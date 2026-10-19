@@ -17,6 +17,7 @@ const relationshipActionSpies = vi.hoisted(() => ({
     terminate: vi.fn(async () => ({ ok: true, v: 1, relationshipId: 'relationship-1', terminated: true })),
 }));
 const mountedExecuteSpy = vi.hoisted(() => vi.fn());
+const mountedExecution = vi.hoisted(() => ({ current: true }));
 
 installSessionHandoffCommonModuleMocks({
     modal: async () => {
@@ -39,7 +40,7 @@ installSessionHandoffCommonModuleMocks({
 });
 
 vi.mock('@/components/approvals/useMountedActionExecution', () => ({
-    useMountedActionExecution: () => ({ execute: mountedExecuteSpy, ready: true, isCurrent: () => true }),
+    useMountedActionExecution: () => ({ execute: mountedExecuteSpy, ready: true, isCurrent: () => mountedExecution.current }),
 }));
 
 vi.mock('@/sync/ops/actions/workspaceSyncRelationshipActions', () => ({
@@ -170,6 +171,28 @@ describe('WorkspaceSyncRelationshipRow', () => {
         relationshipActionSpies.enable.mockResolvedValueOnce({ ok: false, errorCode: 'something_unmapped', error: 'x' } as never);
         await act(async () => { menu?.props.onSelect('enable'); });
         await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalledWith('common.error', 'errors.operationFailed'));
+    });
+
+    it('presents nothing when the row left the list before its own Stop settled', async () => {
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.alert).mockClear();
+        const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
+        const screen = await renderScreen(<WorkspaceSyncRelationshipRow summary={createSummary(0)} />);
+        const menu = screen.findAllByType('DropdownMenu')[0];
+
+        // The daemon removes the relationship before its Stop settles, so the list drops the row and
+        // retires the row's mounted Action interest; the cancelled settle is not a failed Stop.
+        relationshipActionSpies.terminate.mockImplementationOnce(async () => {
+            mountedExecution.current = false;
+            return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' } as never;
+        });
+        try {
+            await act(async () => { menu?.props.onSelect('terminate'); });
+            await vi.waitFor(() => expect(relationshipActionSpies.terminate).toHaveBeenCalled());
+        } finally {
+            mountedExecution.current = true;
+        }
+        expect(Modal.alert).not.toHaveBeenCalled();
     });
 
     it('opens general details from every row while keeping conflict attention and actions row-scoped', async () => {
