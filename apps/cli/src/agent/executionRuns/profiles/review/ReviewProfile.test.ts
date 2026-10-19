@@ -77,7 +77,7 @@ describe('ReviewProfile', () => {
     expect(payload).not.toHaveProperty('materialization');
     expect(payload).not.toHaveProperty('triage');
   });
-  it('preserves partial review truth and uses newly materialized findings for the narration input', async () => {
+  it.each(['partial', 'failed'] as const)('preserves %s review truth and uses newly materialized findings for the narration input', async (reviewOutcome) => {
     const cwd = await mkdtemp(join(tmpdir(), 'happier-review-partial-'));
     const comparison = ScmComparisonSchema.parse({ id: 'partial-comparison', source: { kind: 'workingTree' },
       repository: { rootPath: cwd }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } });
@@ -88,13 +88,14 @@ describe('ReviewProfile', () => {
         metadata: { source: comparison.source, sourceKey: comparison.id }, outputs: ['walkthrough'], source: comparison.source } };
     try {
       const first = await ReviewProfile.onTurnComplete?.({ start, turnId: 'review', finishedAtMs: 2,
-        rawText: JSON.stringify({ status: 'partial', summary: 'Review incomplete', findings: [] }) });
-      expect(first?.structuredMeta?.payload).toMatchObject({ reviewOutcome: 'partial' });
+        rawText: JSON.stringify({ reviewOutcome, summary: 'Review incomplete', findings: [] }) });
+      expect(first?.structuredMeta?.payload).toMatchObject({ reviewOutcome });
+      expect(first?.status).toBe(reviewOutcome === 'failed' ? 'failed' : 'succeeded');
       const input = first!.nextInput!.intentInput as Record<string, unknown>;
       const narration = input.reviewNarration as Record<string, unknown>;
       const current = { ...input, reviewNarration: { ...narration, reviewFindings: [{ commentIds: ['persisted-comment'] }] } };
       expect(ReviewProfile.buildInitialInputContext?.({ start: { ...start, intentInput: current } })).toContain('persisted-comment');
-      expect(narration.provenance).toMatchObject({ reviewedRuns: [{ reviewOutcome: 'partial' }] });
+      expect(narration.provenance).toMatchObject({ reviewedRuns: [{ reviewOutcome }] });
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
   it.each([false, true])('publishes findings before narration, including when its saved generator is replaced (%s)', async (replaced) => {

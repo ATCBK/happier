@@ -74,6 +74,16 @@ Capture comparison evidence first, then optionally ask one analysis Run for
 `summary`, `walkthrough`, `commitPlan`, or a combination. Capture requires no
 model. Opening a Walkthrough destination does not start generation; Start does.
 
+Review output reports inspection separately from its findings array. The shared
+Review normalizer preserves an explicit `reviewOutcome` of `complete`, `partial`
+or `failed`; omission stays partial rather than establishing a clean review.
+Reported failure, truncated findings and incomplete captured inventory cannot
+be promoted to complete. The common review brief requires this outcome and
+directs reviewers to available read-only workspace/SCM tools when shell
+inspection fails. Unavailable inspection is failed, and partial inspection
+retains supported findings. These are unreleased source semantics; previously
+saved reports are not rewritten by this normalization change.
+
 The host generation Action reads the Account's Explain setting before capturing
 or reading comparison evidence, saving a result, or admitting a Run. Disabled
 generation returns `SCM_DIFF_SUMMARY_DISABLED` for Session, detached and automatic

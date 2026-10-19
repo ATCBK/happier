@@ -274,6 +274,7 @@ describe('activate', () => {
     }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(readStructuredOutput(events)).toMatchObject({
       runRef: { runId: 'run-1', callId: 'deepsec:run-1' },
+      reviewOutcome: 'complete',
       findings: [expect.objectContaining({
         severity: 'blocker',
         category: 'security',
@@ -307,6 +308,7 @@ describe('activate', () => {
     expect(readStructuredOutput(events)).toMatchObject({
       status: 'failed',
       error: { code: 'deepsec_process_failed' },
+      reviewOutcome: 'failed',
       diagnostics: [{
         code: 'deepsec_process_failed',
         severity: 'error',
@@ -335,6 +337,7 @@ describe('activate', () => {
       ['scan'],
       expect.arrayContaining(['process', '--comment-out']),
     ]);
+    expect(readStructuredOutput(events)).toMatchObject({ reviewOutcome: 'complete', findings: [] });
   });
 
   it('publishes required cost confirmation as a structured failed outcome', async () => {
@@ -396,6 +399,7 @@ describe('activate', () => {
     expect(events.at(-1)?.kind).toBe('run-complete');
     expect(readStructuredOutput(events)).toMatchObject({
       summary: 'DeepSec review partially completed with 1 finding(s).',
+      reviewOutcome: 'partial',
       findings: [expect.objectContaining({ filePath: 'src/auth.ts', startLine: 2 })],
       diagnostics: [{
         code: 'deepsec_process_failed',

@@ -7,6 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./messages/markdownPlainText": {
+      "happier-source": "./src/messages/markdownPlainText.ts",
+      "types": "./dist/messages/markdownPlainText.d.ts",
+      "default": "./dist/messages/markdownPlainText.js"
+    },
     "./activity/live/apnsDelivery": {
       "happier-source": "./src/activity/live/apnsDelivery.ts",
       "types": "./dist/activity/live/apnsDelivery.d.ts",

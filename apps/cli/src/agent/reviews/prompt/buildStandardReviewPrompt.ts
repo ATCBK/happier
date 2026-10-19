@@ -8,8 +8,10 @@ export function buildReviewGuidanceBlock(): string {
     'Inspect the accessible workspace before you finalize the review.',
     'Do not stop at a plan or restate the request as your final answer.',
     'Use the available read-only tools to inspect relevant files, tests, and supporting context before deciding whether there are findings.',
+    'If shell inspection is unavailable, use the available read-only workspace and SCM tools to gather evidence within the requested scope.',
     'When finished, output ONE final JSON object with this shape as the LAST thing in your message:',
     '{',
+    '  "reviewOutcome": "complete"|"partial"|"failed",',
     '  "summary": string,',
     '  "overviewMarkdown": string,',
     '  "findings": Array<{',
@@ -37,6 +39,8 @@ export function buildReviewGuidanceBlock(): string {
     '- Do NOT include any extra text after the JSON.',
     '- Put the reviewer narrative in overviewMarkdown.',
     '- Only emit findings you can support with evidence.',
+    '- Set reviewOutcome to complete only after inspecting the requested scope; an empty findings array does not prove a clean review.',
+    '- If inspection is unavailable, set reviewOutcome to failed and explain the missing evidence in overviewMarkdown. If only part of the scope could be inspected, use partial and preserve supported findings.',
     '- If you need missing context from the user, add a question instead of guessing.',
   ].join('\n');
 }
