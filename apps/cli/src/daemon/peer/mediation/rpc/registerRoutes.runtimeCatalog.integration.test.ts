@@ -47,6 +47,7 @@ import { createBrowserCdpScreencastProducer } from '../../../browser/capture/cdp
 import { registerBrowserLiveCapture } from '../../../browser/capture/registration';
 import { createMachineLiveStreamCaptureRegistry } from '../stream/captureRegistry';
 import { createMachineLiveStreamRelayTerminator } from '../stream/relay';
+import { createDaemonMachineLiveStreamCaptureAdapter } from '../stream/captureAdapter';
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import { registerDaemonMachineVitalsRpcHandlers } from '@/rpc/handlers/daemonMachineVitals';
 import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
@@ -214,11 +215,12 @@ function createApp(input: Readonly<{
     return app;
 }
 
-function createMachine(): Machine {
+function createMachine(encryptionMode: 'plain' | 'e2ee' = 'e2ee'): Machine {
     return {
         id: 'machine_1',
-        encryptionKey: new Uint8Array(32).fill(7),
-        encryptionVariant: 'legacy',
+        ...(encryptionMode === 'plain' ? { encryptionMode } : {
+            encryptionMode, encryptionKey: new Uint8Array(32).fill(7), encryptionVariant: 'legacy' as const,
+        }),
         metadata: null,
         metadataVersion: 0,
         daemonState: null,
@@ -260,7 +262,7 @@ describe('registerPeerMediationMachineRpcDirectRoutes V2 grant admission', () =>
     it('composes signed direct vitals with installed Machine admission and refuses revoked access', async () => {
         const native = await createLinuxVitalsFixture();
         const boundary = installPeerMachineBoundary();
-        const client = new ApiMachineClient('token', { ...createMachine(), encryptionMode: 'plain' });
+        const client = new ApiMachineClient('token', createMachine('plain'));
         const sampler = createMachineVitalsSampler({ readers: createLinuxMachineVitalsReader({ root: native.root }),
             historyStore: await createMinuteHistoryStore({ directory: join(native.root, 'history') }) });
         const manager = (client as unknown as Readonly<{ rpcHandlerManager: RpcHandlerRegistrar }>).rpcHandlerManager;
@@ -387,7 +389,7 @@ describe('registerPeerMediationMachineRpcDirectRoutes V2 grant admission', () =>
         const registry = createMachineLiveStreamCaptureRegistry();
         const registration = registerBrowserLiveCapture({ registry, contextCapture, producer, automation: () => null,
             resolveInputControl: () => control });
-        const relay = createMachineLiveStreamRelayTerminator({ registry, machineId: 'machine_1', nowMs: () => 2_000, emitEnvelope: () => {} });
+        const relay = createMachineLiveStreamRelayTerminator({ captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry), machineId: 'machine_1', nowMs: () => 2_000, emitEnvelope: () => {} });
         registerDaemonLiveStreamRelayHandlers(rpc, { relay });
         const app = createApp({ nowMs: () => 2_000, invokeLocal: rpc.invokeLocal.bind(rpc) });
         const view = { browserSessionId: 'browser', viewId: 'view' };
@@ -601,7 +603,7 @@ describe('registerPeerMediationMachineRpcDirectRoutes V2 grant admission', () =>
         const actionId = 'acme.direct/run';
         const occurrenceId = createPluginRuntimeOccurrenceId('acme.direct');
         const boundary = installPeerMachineBoundary();
-        const client = new ApiMachineClient('token', { ...createMachine(), encryptionMode: 'plain' });
+        const client = new ApiMachineClient('token', createMachine('plain'));
         const actionStarted = createDeferred<void>();
         const actionAborted = createDeferred<boolean>();
         let releaseAction = () => {};

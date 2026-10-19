@@ -9,6 +9,7 @@ import {
 } from '@happier-dev/protocol';
 
 import type { MachineLiveStreamCaptureAdapter, MachineLiveStreamCaptureStartInput, MachineLiveStreamCaptureStartResult } from './captureAdapter';
+import { createDaemonMachineLiveStreamCaptureAdapter } from './captureAdapter';
 import { createMachineLiveStreamCaptureRegistry } from './captureRegistry';
 import { createMachineLiveStreamRelayTerminator } from './relay';
 
@@ -106,7 +107,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
         request.authorization!.payload.sourceId = 'source_1';
         register();
         const emitted: MachineLiveStreamRelayEnvelopeV1[] = [];
-        const terminator = createMachineLiveStreamRelayTerminator({ machineId: 'machine_source', registry,
+        const terminator = createMachineLiveStreamRelayTerminator({ machineId: 'machine_source', captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000, emitEnvelope: envelope => emitted.push(envelope) });
         expect(await terminator.start(request)).toEqual({ ok: false, reasonCode: 'capture_source_unavailable' });
         expect(captureInput).toBeNull();
@@ -163,7 +164,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
         request.sourceId = 'source_2';
         request.authorization!.payload.sourceId = 'source_2';
         const terminator = createMachineLiveStreamRelayTerminator({
-            machineId: 'machine_source', registry, nowMs: () => 1_000,
+            machineId: 'machine_source', captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry), nowMs: () => 1_000,
             emitEnvelope: (envelope) => emitted.push(envelope),
         });
         expect(await terminator.start(request)).toEqual({ ok: true, streamId: 'stream_1' });
@@ -438,7 +439,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: (envelope) => emitted.push(envelope),
         });
@@ -481,7 +482,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: (envelope) => emitted.push(envelope),
         });
@@ -520,7 +521,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: (envelope) => emitted.push(envelope),
         });
@@ -543,7 +544,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
     it('fails closed when the requested stream family has no registered capture source', async () => {
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry: registryMod.createMachineLiveStreamCaptureRegistry(),
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registryMod.createMachineLiveStreamCaptureRegistry()),
             nowMs: () => 1_000,
             emitEnvelope: () => undefined,
         });
@@ -580,7 +581,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: (envelope) => emitted.push(envelope),
         });
@@ -622,7 +623,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: () => undefined,
         });
@@ -672,7 +673,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: () => undefined,
         });
@@ -735,7 +736,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_100,
             emitEnvelope: () => undefined,
             readActiveControlLease: ({ streamId, sourceId }) => ({
@@ -805,7 +806,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: () => undefined,
         });
@@ -852,7 +853,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: () => undefined,
         });
@@ -934,7 +935,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: (envelope) => emitted.push(envelope),
         });
@@ -977,7 +978,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: (envelope) => emitted.push(envelope),
             observability: {
@@ -1044,7 +1045,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: (envelope) => emitted.push(envelope),
             observability: {
@@ -1143,7 +1144,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: () => undefined,
             observability: {
@@ -1209,7 +1210,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: () => undefined,
             observability: {
@@ -1272,7 +1273,7 @@ describe('createMachineLiveStreamRelayTerminator', () => {
 
         const terminator = relayMod.createMachineLiveStreamRelayTerminator({
             machineId: 'machine_source',
-            registry,
+            captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry),
             nowMs: () => 1_000,
             emitEnvelope: () => undefined,
             observability: {
